@@ -19,6 +19,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from compress_blobs import compress, compress_many, default_workers, verify_round_trip
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry
@@ -218,9 +219,11 @@ def _remove_partial_stage_on_error(*paths):
 STAGE_TARGET_BYTES=256*1024
 STAGE_MAX_MEMBER_BYTES=64*1024*1024
 STAGE_PARALLEL_MAX_BYTES=8*1024*1024
+STAGE_PARALLEL_PART_WORKERS=4
+STAGE_PART_QUEUE_BYTES=512*1024*1024
 
 
-def _stage_seekable_dump(items, downloads, scratch, metadata=None):
+def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None):
     """Repack full-namespace dumps into bounded, page-aligned Zstandard frames.
 
     The downloaded meta-current parts are not indexed by page. A whole part can
@@ -321,6 +324,180 @@ def _stage_seekable_dump(items, downloads, scratch, metadata=None):
                          'index_size':index.stat().st_size,'index_sha256':sha256_file(index)})
     print(f'Staged Zstandard dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
     return dump
+
+
+class _SplitPageAcrossParts(Exception):
+    pass
+
+
+class _CancelledParallelStage(Exception):
+    pass
+
+
+class _PartFrameQueue:
+    def __init__(self, cancelled, capacity):
+        self.items=deque()
+        self.bytes=0
+        self.capacity=capacity
+        self.cancelled=cancelled
+        self.condition=threading.Condition()
+
+    def put_frame(self, frame):
+        with self.condition:
+            while self.bytes+len(frame)>self.capacity and not self.cancelled.is_set():
+                self.condition.wait(timeout=0.1)
+            if self.cancelled.is_set(): raise _CancelledParallelStage()
+            self.items.append(frame)
+            self.bytes+=len(frame)
+            self.condition.notify_all()
+
+    def put_control(self, value):
+        with self.condition:
+            self.items.append(value)
+            self.condition.notify_all()
+
+    def get(self):
+        with self.condition:
+            while not self.items and not self.cancelled.is_set():
+                self.condition.wait(timeout=0.1)
+            if not self.items: raise _CancelledParallelStage()
+            item=self.items.popleft()
+            if isinstance(item,bytes): self.bytes-=len(item)
+            self.condition.notify_all()
+            return item
+
+    def wake(self):
+        with self.condition: self.condition.notify_all()
+
+
+def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
+    """Decode independent bzip2 parts concurrently into bounded frame queues.
+
+    At most four part queues can hold frames, each capped at 512 MiB. The
+    writer drains the current queue while its producer runs and preserves the
+    original part order. No uncompressed or compressed intermediate reaches
+    disk. Split XML pages use the existing serial framer instead.
+    """
+    if zstd is None:
+        raise RuntimeError('Python 3.14 compression.zstd is required for staged Zstandard dumps')
+    parts=[]
+    for item in sorted(items,key=lambda x:x['name']):
+        source=downloads/item['wiki']/item['date']/item['name']
+        with source.open('rb',buffering=0) as stream:
+            if stream.read(3)!=b'BZh': raise ValueError(f'Expected bzip2 dump part: {source}')
+        parts.append(source)
+    if len(parts)<2: return _stage_seekable_dump_serial(items,downloads,scratch,metadata)
+    started=time.monotonic()
+    dump=scratch/'pages.xml.zst'
+    index=scratch/'pages-index.txt.bz2'
+    open_tag=b'<page>'
+    close_tag=b'</page>'
+    cancelled=threading.Event()
+    queues=[_PartFrameQueue(cancelled,STAGE_PART_QUEUE_BYTES) for _ in parts]
+
+    def stage_part(source,output):
+        try:
+            if cancelled.is_set(): return
+            pending=bytearray()
+            batch=bytearray()
+            pages=xml_bytes=0
+            def flush():
+                if not batch: return
+                raw=bytes(batch)
+                frame=zstd.compress(raw,level=1)
+                info=zstd.get_frame_info(frame)
+                if info.decompressed_size!=len(raw) or zstd.get_frame_size(frame)!=len(frame):
+                    raise ValueError('Staged Zstandard member is not one known-size frame')
+                output.put_frame(frame)
+                batch.clear()
+
+            with bz2.open(source,'rb') as inp:
+                while chunk:=inp.read(1024*1024):
+                    xml_bytes+=len(chunk)
+                    pending.extend(chunk)
+                    consumed=0
+                    while (end:=pending.find(close_tag,consumed))>=0:
+                        start=pending.find(open_tag,consumed)
+                        if start<0 or start>end: raise _SplitPageAcrossParts(source)
+                        cut=end+len(close_tag)
+                        page_bytes=cut-consumed
+                        if page_bytes>STAGE_MAX_MEMBER_BYTES:
+                            raise ValueError(f'XML page exceeds bounded Zstandard member: {source}')
+                        if len(batch)+page_bytes>STAGE_MAX_MEMBER_BYTES: flush()
+                        batch.extend(memoryview(pending)[consumed:cut])
+                        consumed=cut
+                        pages+=1
+                        if len(batch)>=STAGE_TARGET_BYTES: flush()
+                    del pending[:consumed]
+                    if len(pending)>STAGE_MAX_MEMBER_BYTES:
+                        raise ValueError(f'Unterminated or oversized XML page: {source}')
+            if b'<page>' in pending or any(pending.endswith(open_tag[:n]) for n in range(1,len(open_tag))):
+                raise _SplitPageAcrossParts(source)
+            if len(batch)+len(pending)>STAGE_MAX_MEMBER_BYTES: flush()
+            batch.extend(pending)
+            flush()
+            output.put_control((pages,xml_bytes))
+        except BaseException as exc:
+            output.put_control(exc)
+
+    try:
+        with (concurrent.futures.ThreadPoolExecutor(max_workers=STAGE_PARALLEL_PART_WORKERS) as pool,
+              _remove_partial_stage_on_error(dump,index),
+              dump.open('wb',buffering=0) as out,
+              bz2.open(index,'wb',compresslevel=1) as offsets_out):
+            members=pages=xml_bytes=0
+            dump_hash=hashlib.sha256()
+            futures=[]
+            try:
+                for i in range(min(STAGE_PARALLEL_PART_WORKERS,len(parts))):
+                    futures.append(pool.submit(stage_part,parts[i],queues[i]))
+                for part_index,output in enumerate(queues):
+                    while True:
+                        item=output.get()
+                        if isinstance(item,bytes):
+                            offsets_out.write(f'{out.tell()}:{members+1}:member{members}\n'.encode())
+                            if out.write(item)!=len(item): raise OSError('Short staged dump write')
+                            dump_hash.update(item)
+                            members+=1
+                        elif isinstance(item,BaseException):
+                            raise item
+                        else:
+                            part_pages,part_xml_bytes=item
+                            pages+=part_pages
+                            xml_bytes+=part_xml_bytes
+                            break
+                    next_index=part_index+STAGE_PARALLEL_PART_WORKERS
+                    if next_index<len(parts):
+                        futures.append(pool.submit(stage_part,parts[next_index],queues[next_index]))
+                for future in futures: future.result()
+                if members==0:
+                    frame=zstd.compress(b'',level=1)
+                    if zstd.get_frame_info(frame).decompressed_size!=0 or zstd.get_frame_size(frame)!=len(frame):
+                        raise ValueError('Empty Zstandard frame lacks known size')
+                    offsets_out.write(b'0:1:member0\n')
+                    if out.write(frame)!=len(frame): raise OSError('Short staged dump write')
+                    dump_hash.update(frame)
+                    members=1
+            except BaseException:
+                cancelled.set()
+                for output in queues: output.wake()
+                for future in futures: future.cancel()
+                raise
+        if metadata is not None:
+            metadata.update({'source_pages':pages,'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
+                             'dump_size':dump.stat().st_size,'dump_sha256':dump_hash.hexdigest(),
+                             'index_size':index.stat().st_size,'index_sha256':sha256_file(index)})
+        print(f'Staged parallel Zstandard dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
+        return dump
+    except _SplitPageAcrossParts:
+        dump.unlink(missing_ok=True)
+        index.unlink(missing_ok=True)
+        print('XML page crosses archive part boundary; using serial stage',flush=True)
+        return _stage_seekable_dump_serial(items,downloads,scratch,metadata)
+
+
+def _stage_seekable_dump(items, downloads, scratch, metadata=None):
+    return _stage_seekable_dump_parallel(items,downloads,scratch,metadata)
 
 
 def phase_identity(items):
@@ -705,7 +882,7 @@ INTERWIKI_SHA_NAME = '.interwiki-map.sha256'
 AUXILIARY_SHA_NAME = '.auxiliary-snapshots.sha256.json'
 # Bump this when page framing, member encoding or index semantics change; the
 # input cache identity and published artifacts both include this contract.
-DUMP_STAGING_VERSION = 'page-aligned-zstd-v1'
+DUMP_STAGING_VERSION = 'page-aligned-zstd-parallel-v2'
 VERIFIED_CONTENT = f'dump-staging-version={DUMP_STAGING_VERSION}\n'
 
 def require_current_staging_version(path, version):

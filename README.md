@@ -90,10 +90,13 @@ file. Compressed staging targets 256 KiB per frame, with a 64 MiB hard cap for
 large pages. All XML bytes and page order are preserved across multipart and
 concatenated-stream inputs. This requires recompression and compressed scratch
 writes; staging uses Zstandard level 1 and reports page counts, byte counts and
-elapsed time. Small frames reduce decompression work for random page reads. Up to four
-ordinary members compress concurrently, with at most 32 MiB of input queued.
-Larger members drain the queue and compress synchronously. Staging removes both
-partial outputs if any queued compression or output write fails.
+elapsed time. Small frames reduce decompression work for random page reads.
+Up to four archive parts decode and compress concurrently into ordered memory
+queues, each capped at 512 MiB. The writer submits the next part only after
+draining an earlier part, bounding queued compressed data to 2 GiB without
+intermediate files. A page split across archive parts uses the serial framer;
+that path compresses up to four ordinary frames concurrently with at most
+32 MiB of raw input queued. Staging removes partial outputs on failure.
 
 The build pipeline:
 
@@ -153,7 +156,12 @@ PSS and task counts, stops the build above 8 GiB or 256 tasks, restricts it to f
 CPUs at low priority, and imposes a two-hour deadline. PSS excludes unmapped file
 cache, and sampling can overshoot between checks. This mode cannot disable build
 swap. It retains per-process address-space limits and records peaks and the stop
-reason in `.tmp/build-watchdog-report.json`. The cgroup mode remains the default.
+reason in `.tmp/build-watchdog-report.json`. A separate bounded guardian watches
+the supervisor and cleans up its identified process tree if the supervisor dies;
+the supervisor also aborts if the guardian dies. Monitoring processes share the
+selected CPU set, and their memory and tasks count toward the sampled limits.
+This remains best-effort process supervision, with a kernel cgroup required for
+hard aggregate limits. The cgroup mode remains the default.
 
 With watchdog mode and one edition job, `--expansion-workers` can explicitly
 request up to eight page workers while `--threads` keeps compiler and other
@@ -180,6 +188,11 @@ requires identical emitted bitcode, compiler identity, target and flags; changin
 the Zig runtime still compiles and links a fresh worker. Every cached asset is
 hashed before reuse, incomplete generations are rejected, and successful corpus
 publication removes the staging workspace and these transient caches.
+
+The runtime worker object compiles concurrently with extraction and Lua emission.
+It depends only on repository sources; linking waits for that object and the
+generated module objects. The parser reserves execution slots while the worker
+compiler and extractor are active.
 
 The worker keeps module globals sparse and initializes module-state pages on
 first use. A bounded read-only `mw.loadData` cache can reuse results from isolated

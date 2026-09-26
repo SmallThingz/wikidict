@@ -162,10 +162,14 @@ const Extraction = struct {
     }
 };
 
-fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump: []const u8, root: []const u8, llvm_dir: []const u8, workers: usize) !void {
+fn boundedParseWorkers(requested: usize, cpu_limit: usize, worker_running: bool, extractor_running: bool) usize {
+    const reserved = @as(usize, @intFromBool(worker_running)) + @as(usize, @intFromBool(extractor_running));
+    return @min(requested, @max(@as(usize, 1), cpu_limit -| reserved));
+}
+
+fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump: []const u8, root: []const u8, llvm_dir: []const u8, workers: usize, cpu_limit: usize, worker_job: *const WorkerObjectJob) !void {
     const ready = try std.fs.path.join(a, &.{ root, "compiler-inputs.ready" });
     const manifest = try std.fs.path.join(a, &.{ root, "manifest.jsonl" });
-    const worker_text = try std.fmt.allocPrint(a, "{d}", .{workers});
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "extract compiler inputs" });
     var extraction: Extraction = .{
         .io = io,
@@ -187,6 +191,8 @@ fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump:
         }
         try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     }
+    const parse_workers = boundedParseWorkers(workers, cpu_limit, !worker_job.done.load(.acquire), !extraction.done.load(.acquire));
+    const worker_text = try std.fmt.allocPrint(a, "{d}", .{parse_workers});
     try stage(io, marker, "parse/analyze Lua while finalizing corpus index", &.{ paths.llvm, manifest, root, llvm_dir, "--parse-workers", worker_text });
     // The title index is required by expansion, even if LLVM emission finishes
     // first. The deferred join also covers all error paths.
@@ -257,6 +263,13 @@ fn installSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: [
     // fallback for platforms or filesystems where symlinks are unavailable.
     if (std.Io.Dir.cwd().symLink(io, target, destination, .{})) |_| return else |_| {}
     try std.Io.Dir.cwd().copyFile(source, .cwd(), destination, io, .{});
+}
+
+test "worker overlap reserves compile slots without reducing completed jobs" {
+    try std.testing.expectEqual(@as(usize, 4), boundedParseWorkers(4, 4, false, false));
+    try std.testing.expectEqual(@as(usize, 3), boundedParseWorkers(4, 4, true, false));
+    try std.testing.expectEqual(@as(usize, 2), boundedParseWorkers(4, 4, true, true));
+    try std.testing.expectEqual(@as(usize, 1), boundedParseWorkers(4, 1, true, true));
 }
 
 test "snapshot install resolves relative sources before linking" {
@@ -576,6 +589,45 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     return output;
 }
 
+// The Zig runtime worker object depends on repository sources only. It can
+// compile while extraction and Lua emission prepare the program objects.
+const WorkerObjectJob = struct {
+    io: std.Io,
+    marker: []const u8,
+    llvm_dir: []const u8,
+    arena: std.heap.ArenaAllocator,
+    thread: ?std.Thread = null,
+    done: std.atomic.Value(bool) = .init(false),
+    result: ?[]const u8 = null,
+    failure: ?anyerror = null,
+
+    fn run(self: *WorkerObjectJob) void {
+        defer self.done.store(true, .release);
+        self.result = compileWorkerObject(self.io, self.arena.allocator(), self.marker, self.llvm_dir) catch |err| {
+            self.failure = err;
+            return;
+        };
+    }
+
+    fn start(self: *WorkerObjectJob) !void {
+        self.thread = try std.Thread.spawn(.{}, run, .{self});
+    }
+
+    fn finish(self: *WorkerObjectJob) ![]const u8 {
+        if (self.thread) |thread| {
+            thread.join();
+            self.thread = null;
+        }
+        if (self.failure) |err| return err;
+        return self.result orelse error.WorkerObjectMissing;
+    }
+
+    fn deinit(self: *WorkerObjectJob) void {
+        if (self.thread) |thread| thread.join();
+        self.arena.deinit();
+    }
+};
+
 fn appendResponseArg(out: *std.ArrayList(u8), a: std.mem.Allocator, arg: []const u8) !void {
     try out.append(a, '"');
     for (arg) |byte| {
@@ -618,6 +670,7 @@ fn compileNativeWorker(
     llvm_dir: []const u8,
     llvm_workers: usize,
     object_cache_root: ?[]const u8,
+    worker: []const u8,
 ) !void {
     const cache_hit = if (object_cache_root) |cache|
         try objectCacheCommand(io, a, "probe-objects", cache, llvm_dir)
@@ -631,7 +684,6 @@ fn compileNativeWorker(
             _ = try objectCacheCommand(io, a, "publish-objects", cache, llvm_dir);
         break :blk compiled;
     };
-    const worker = try compileWorkerObject(io, a, marker, llvm_dir);
     const main_c = try sourcePath(a, "src/lua/bundle_worker_main.c");
     const output = try std.fs.path.join(a, &.{ publish_root, "dict-bundle-expander" });
     try linkNativeWorker(io, a, marker, llvm_dir, main_c, worker, lua_objects.items, output);
@@ -758,16 +810,26 @@ pub fn main(init: std.process.Init) !void {
 
     const llvm_dir = try std.fs.path.join(a, &.{ expander_root, "llvm" });
     try std.Io.Dir.cwd().createDirPath(init.io, llvm_dir);
+    const worker_marker = try std.fs.path.join(a, &.{ llvm_dir, "worker-object.stage" });
+    var worker_job: WorkerObjectJob = .{
+        .io = init.io,
+        .marker = worker_marker,
+        .llvm_dir = llvm_dir,
+        .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
+    };
+    defer worker_job.deinit();
+    try worker_job.start();
     const cache_hit = if (options.extraction_cache_root) |cache|
         try extractionCacheCommand(init.io, a, "probe", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root)
     else
         false;
     if (cache_hit) {
         const manifest = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
-        const worker_text = try std.fmt.allocPrint(a, "{d}", .{options.parse_workers});
+        const parse_workers = boundedParseWorkers(options.parse_workers, cpu_limit, !worker_job.done.load(.acquire), false);
+        const worker_text = try std.fmt.allocPrint(a, "{d}", .{parse_workers});
         try stage(init.io, marker, "parse/analyze Lua from verified extraction cache", &.{ paths.llvm, manifest, expander_root, llvm_dir, "--parse-workers", worker_text });
     } else {
-        try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers);
+        try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers, cpu_limit, &worker_job);
         // compiler-inputs.ready precedes title-index finalization. Publish
         // only after the extractor has exited successfully.
         if (options.extraction_cache_root) |cache|
@@ -776,7 +838,8 @@ pub fn main(init: std.process.Init) !void {
 
     // The native worker is a transient bundle compiler. It never belongs in the
     // shipped dictionary; full builds consume it immediately and delete .bundle-expander/.
-    try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir, llvm_workers, options.extraction_cache_root);
+    const worker_object = try worker_job.finish();
+    try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir, llvm_workers, options.extraction_cache_root, worker_object);
     // Keep native build artifacts available if corpus expansion fails. The
     // entire transient tree is deleted together only after successful encoding.
     try std.Io.Dir.cwd().deleteFile(init.io, expander_marker);

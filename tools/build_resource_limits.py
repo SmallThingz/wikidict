@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import ctypes
 import json
+import math
 import resource
 import signal
 import subprocess
@@ -413,6 +414,27 @@ def _write_watchdog_report(path, report):
     temporary.replace(path)
 
 
+def _monitor_usage(pid, start):
+    """PSS/tasks for one live controller process, with exact PID identity."""
+    try:
+        raw = Path('/proc', str(pid), 'stat').read_text()
+        fields = raw[raw.rfind(')') + 2:].split()
+        if int(fields[19]) != start or fields[0] in ('Z', 'X'):
+            raise ContainmentUnavailable(f'Build monitor {pid} exited or changed identity')
+        values = {}
+        for line in Path('/proc', str(pid), 'smaps_rollup').read_text().splitlines():
+            key, _, rest = line.partition(':')
+            if key in ('Pss', 'Rss'):
+                values[key] = int(rest.split()[0]) * 1024
+        status = Path('/proc', str(pid), 'status').read_text().splitlines()
+        threads = next(int(line.split()[1]) for line in status if line.startswith('Threads:'))
+        if not {'Pss', 'Rss'} <= values.keys() or threads < 1:
+            raise ValueError('Missing monitor accounting fields')
+        return {'pss_bytes': values['Pss'], 'rss_bytes': values['Rss'], 'tasks': threads}
+    except (OSError, ValueError, IndexError, StopIteration) as error:
+        raise ContainmentUnavailable(f'Cannot measure build monitor {pid}: {error}') from error
+
+
 def _watchdog_cpu_set(max_cpus, available):
     if type(max_cpus) is not int or not 1 <= max_cpus <= 8:
         raise ContainmentUnavailable('Invalid watchdog CPU limit')
@@ -448,11 +470,16 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
         raise ContainmentUnavailable('Invalid watchdog wall limit')
     if not 0 < memory_limit_bytes <= MAX_BUILD_MEMORY or not 0 < max_tasks <= MAX_BUILD_PIDS:
         raise ContainmentUnavailable('Invalid watchdog resource limit')
-    cpus = _watchdog_cpu_set(max_cpus, os.sched_getaffinity(0))
+    original_affinity = os.sched_getaffinity(0)
+    cpus = _watchdog_cpu_set(max_cpus, original_affinity)
     report_path = Path('.tmp/build-watchdog-report.json') if report_path is None else Path(report_path)
     token = uuid.uuid4().hex
     proof_read, proof_write = os.pipe()
     child = None
+    guardian = None
+    guardian_liveness_read = guardian_liveness_write = None
+    guardian_identity_read = guardian_identity_write = None
+    guardian_ack_read = guardian_ack_write = None
     old_int = old_term = None
     old_mask = None
     signals_masked = False
@@ -469,6 +496,8 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
               'peak_rss_bytes': 0, 'peak_tasks': 0, 'termination_reason': 'starting'}
     reason = None
     try:
+        # The supervisor and guardian share the build's selected CPU set.
+        os.sched_setaffinity(0, cpus)
         if libc.prctl(37, ctypes.byref(was_subreaper), 0, 0, 0) != 0 or \
            libc.prctl(36, 1, 0, 0, 0) != 0:
             raise ContainmentUnavailable('Cannot enable watchdog child reaping')
@@ -479,10 +508,57 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
         env = os.environ.copy()
         env.update({WATCHDOG_TOKEN: token, WATCHDOG_PARENT_PID: str(os.getpid()),
                     WATCHDOG_PROOF_FD: str(proof_read)})
+        guardian_liveness_read, guardian_liveness_write = os.pipe()
+        guardian_identity_read, guardian_identity_write = os.pipe()
+        guardian_ack_read, guardian_ack_write = os.pipe()
+        guardian_report = report_path.with_name(report_path.stem + '-guardian.json')
+        guardian_log = report_path.with_name(report_path.stem + '-guardian.log')
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        guardian_script = Path(__file__).with_name('build_watchdog_guardian.py')
+        if not guardian_script.is_file() or not hasattr(os, 'pidfd_open') or \
+                not hasattr(signal, 'pidfd_send_signal'):
+            raise ContainmentUnavailable('Independent watchdog guardian is unavailable')
+        supervisor_stat = Path('/proc/self/stat').read_text()
+        supervisor_start = int(supervisor_stat[supervisor_stat.rfind(')') + 2:].split()[19])
+        guardian_cpu = cpus[-1]
+        guardian_command = [sys.executable, '-B', str(guardian_script),
+                            '--supervisor-pid', str(os.getpid()),
+                            '--supervisor-start', str(supervisor_start),
+                            '--liveness-fd', str(guardian_liveness_read),
+                            '--identity-fd', str(guardian_identity_read),
+                            '--identity-ack-fd', str(guardian_ack_write),
+                            '--wall-seconds', str(max(1, math.ceil(wall_seconds))),
+                            '--observer-cpu', str(guardian_cpu),
+                            '--report', str(guardian_report)]
+        with guardian_log.open('ab', buffering=0) as output:
+            guardian = subprocess.Popen(
+                guardian_command, stdin=subprocess.DEVNULL, stdout=output,
+                stderr=subprocess.STDOUT, start_new_session=True,
+                pass_fds=(guardian_liveness_read, guardian_identity_read,
+                          guardian_ack_write))
+        os.close(guardian_liveness_read)
+        guardian_liveness_read = None
+        os.close(guardian_identity_read)
+        guardian_identity_read = None
+        os.close(guardian_ack_write)
+        guardian_ack_write = None
+        guardian_info = _process_table().get(guardian.pid)
+        if guardian_info is None or guardian.poll() is not None:
+            raise ContainmentUnavailable('Independent watchdog guardian did not start')
+        report['guardian_pid'] = guardian.pid
+        report['guardian_start_time_ticks'] = guardian_info['start']
+        report['guardian_report'] = str(guardian_report)
+        report['guardian_cpu'] = guardian_cpu
         preexisting = frozenset((pid, info['start']) for pid, info in _process_table().items()
                                 if info['ppid'] == os.getpid())
         def child_setup():
             signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+            # The guardian receives identity before exec; the child cannot
+            # begin native work before its private session is known.
+            if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+                os._exit(125)
+            if os.getppid() != int(env[WATCHDOG_PARENT_PID]):
+                os._exit(125)
             os.sched_setaffinity(0, cpus)
             os.nice(15)
             def bound_rlimit(name, requested):
@@ -494,13 +570,28 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             bound_rlimit(resource.RLIMIT_NOFILE, 512)
             cpu_limit = max(1, min(WATCHDOG_WALL_SECONDS, int(wall_seconds)))
             bound_rlimit(resource.RLIMIT_CPU, cpu_limit)
+            child_stat = Path('/proc/self/stat').read_text()
+            child_start = int(child_stat[child_stat.rfind(')') + 2:].split()[19])
+            os.write(guardian_identity_write, f'{os.getpid()} {child_start}\n'.encode())
+            os.close(guardian_identity_write)
+            if os.read(guardian_ack_read, 1) != b'1':
+                os._exit(125)
+            os.close(guardian_ack_read)
         command = [sys.executable, *(sys.argv if argv is None else argv)]
         old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
         signals_masked = True
         old_int = signal.signal(signal.SIGINT, _interrupt)
         old_term = signal.signal(signal.SIGTERM, _interrupt)
-        child = subprocess.Popen(command, env=env, pass_fds=(proof_read,),
+        if guardian.poll() is not None:
+            raise ContainmentUnavailable('Independent watchdog guardian exited before build launch')
+        child = subprocess.Popen(command, env=env,
+                                 pass_fds=(proof_read, guardian_identity_write,
+                                           guardian_ack_read),
                                  start_new_session=True, preexec_fn=child_setup)
+        os.close(guardian_identity_write)
+        guardian_identity_write = None
+        os.close(guardian_ack_read)
+        guardian_ack_read = None
         signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
         signals_masked = False
         report['child_pid'] = child.pid
@@ -515,14 +606,37 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
         last_report = 0.0
         while True:
             sample = _owned_sample(child.pid, child_start, known, os.getpid(), preexisting)
+            if guardian.poll() is not None:
+                reason = 'guardian_lost'
+                report['error'] = f'Independent guardian exited {guardian.returncode}'
+                break
+            supervisor_usage = _monitor_usage(os.getpid(), supervisor_start)
+            try:
+                guardian_usage = _monitor_usage(guardian.pid, guardian_info['start'])
+            except ContainmentUnavailable:
+                if guardian.poll() is not None:
+                    reason = 'guardian_lost'
+                    report['error'] = f'Independent guardian exited {guardian.returncode}'
+                    break
+                raise
+            overhead_pss = supervisor_usage['pss_bytes'] + guardian_usage['pss_bytes']
+            overhead_rss = supervisor_usage['rss_bytes'] + guardian_usage['rss_bytes']
+            overhead_tasks = supervisor_usage['tasks'] + guardian_usage['tasks']
+            aggregate_pss = sample['pss_bytes'] + overhead_pss
+            aggregate_rss = sample['rss_bytes'] + overhead_rss
+            aggregate_tasks = sample['tasks'] + overhead_tasks
             elapsed = time.monotonic() - started
-            report['peak_pss_bytes'] = max(report['peak_pss_bytes'], sample['pss_bytes'])
-            report['peak_rss_bytes'] = max(report['peak_rss_bytes'], sample['rss_bytes'])
-            report['peak_tasks'] = max(report['peak_tasks'], sample['tasks'])
+            report['peak_child_pss_bytes'] = max(
+                report.get('peak_child_pss_bytes', 0), sample['pss_bytes'])
+            report['peak_watchdog_overhead_pss_bytes'] = max(
+                report.get('peak_watchdog_overhead_pss_bytes', 0), overhead_pss)
+            report['peak_pss_bytes'] = max(report['peak_pss_bytes'], aggregate_pss)
+            report['peak_rss_bytes'] = max(report['peak_rss_bytes'], aggregate_rss)
+            report['peak_tasks'] = max(report['peak_tasks'], aggregate_tasks)
             report['elapsed_seconds'] = elapsed
-            if sample['pss_bytes'] > memory_limit_bytes:
+            if aggregate_pss > memory_limit_bytes:
                 reason = 'sampled_pss_limit'
-            elif sample['tasks'] > max_tasks:
+            elif aggregate_tasks > max_tasks:
                 reason = 'task_limit'
             elif elapsed >= wall_seconds:
                 reason = 'wall_limit'
@@ -594,12 +708,40 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             reason = 'cleanup_error'
             report['error'] = str(error)
         finally:
+            for fd in (guardian_identity_read, guardian_identity_write,
+                       guardian_ack_read, guardian_ack_write, guardian_liveness_read):
+                if fd is not None:
+                    try: os.close(fd)
+                    except OSError: pass
+            if guardian_liveness_write is not None:
+                try:
+                    if guardian is not None and guardian.poll() is None and \
+                            reason != 'cleanup_error' and child is not None and \
+                            child.poll() is not None:
+                        os.write(guardian_liveness_write, b'DONE\n')
+                except OSError as error:
+                    reason = 'cleanup_error'
+                    report['error'] = f'Could not disarm independent guardian: {error}'
+                finally:
+                    os.close(guardian_liveness_write)
+            if guardian is not None:
+                try:
+                    guardian.wait(timeout=5)
+                    report['guardian_exit_status'] = guardian.returncode
+                    if guardian.returncode != 0:
+                        if reason != 'guardian_lost':
+                            reason = 'cleanup_error'
+                        report['guardian_error'] = f'Independent guardian exited {guardian.returncode}'
+                except subprocess.TimeoutExpired:
+                    reason = 'cleanup_error'
+                    report['error'] = 'Independent guardian did not finish cleanup'
             for fd in (proof_read, proof_write):
                 if fd is not None:
                     try: os.close(fd)
                     except OSError: pass
             if subreaper_set:
                 libc.prctl(36, was_subreaper.value, 0, 0, 0)
+            os.sched_setaffinity(0, original_affinity)
             if old_int is not None:
                 signal.signal(signal.SIGINT, old_int)
             if old_term is not None:

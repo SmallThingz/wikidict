@@ -1,4 +1,5 @@
 import bz2
+import concurrent.futures
 from compression import zstd
 import hashlib
 import io
@@ -9,6 +10,7 @@ import sys
 import threading
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import build_wiktionaries as b
@@ -351,7 +353,135 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(decode_staged_dump(dump),b''.join(bz2.decompress(member) for member in members))
             index=dump.with_name('pages-index.txt.bz2')
             rows=bz2.decompress(index.read_bytes()).decode().splitlines()
-            self.assertEqual(rows,['0:1:member0'])
+            self.assertEqual(len(rows),2)
+            self.assertEqual([row.split(':',1)[1] for row in rows],['1:member0','2:member1'])
+
+    def test_parallel_part_decode_preserves_input_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            items=[];parts=[]
+            for i in range(4):
+                name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
+                raw=b'<mediawiki><page>'+bytes([65+i])*4096+b'</page></mediawiki>'
+                (folder/name).write_bytes(bz2.compress(raw));parts.append(raw)
+                items.append(dict(wiki='testwiktionary',date='20260901',name=name))
+            barrier=threading.Barrier(4)
+            original=zstd.compress
+            seen=[];lock=threading.Lock()
+            def concurrent_compress(raw,level=1):
+                with lock: seen.append(threading.current_thread().name)
+                barrier.wait(timeout=10)
+                return original(raw,level=level)
+            scratch=root/'scratch';scratch.mkdir()
+            metadata={}
+            with patch.object(b.zstd,'compress',side_effect=concurrent_compress):
+                dump=b.stage_seekable_dump(items,root,scratch,metadata)
+            self.assertEqual(len(set(seen)),4)
+            self.assertEqual(decode_staged_dump(dump),b''.join(parts))
+            packed=dump.read_bytes();index=(scratch/'pages-index.txt.bz2').read_bytes()
+            rows=bz2.decompress(index).decode().splitlines()
+            self.assertEqual(len(rows),4)
+            offsets=[int(row.split(':',1)[0]) for row in rows]+[len(packed)]
+            self.assertEqual(offsets,sorted(offsets))
+            for start,end in zip(offsets,offsets[1:]):
+                self.assertEqual(zstd.get_frame_size(packed[start:end]),end-start)
+            self.assertEqual(metadata['source_pages'],4)
+            self.assertEqual(metadata['dump_size'],len(packed))
+            self.assertEqual(metadata['dump_sha256'],hashlib.sha256(packed).hexdigest())
+            self.assertEqual(metadata['index_size'],len(index))
+            self.assertEqual(metadata['index_sha256'],hashlib.sha256(index).hexdigest())
+
+    def test_parallel_part_boundary_page_uses_serial_framer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            parts=(b'<mediawiki><page>abc',b'def</page></mediawiki>')
+            items=[]
+            for i,raw in enumerate(parts):
+                name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
+                (folder/name).write_bytes(bz2.compress(raw))
+                items.append(dict(wiki='testwiktionary',date='20260901',name=name))
+            scratch=root/'scratch';scratch.mkdir()
+            dump=b.stage_seekable_dump(items,root,scratch)
+            self.assertEqual(decode_staged_dump(dump),b''.join(parts))
+            self.assertEqual(len(bz2.decompress((scratch/'pages-index.txt.bz2').read_bytes()).splitlines()),1)
+
+    def test_parallel_nine_part_submission_stays_within_ordered_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            items=[];parts=[]
+            for i in range(9):
+                name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
+                raw=b'<page>'+bytes([65+i])*4096+b'</page>'
+                (folder/name).write_bytes(bz2.compress(raw))
+                items.append(dict(wiki='testwiktionary',date='20260901',name=name))
+                parts.append(raw)
+            completed=0
+            original_get=b._PartFrameQueue.get
+            def tracked_get(queue):
+                nonlocal completed
+                value=original_get(queue)
+                if isinstance(value,tuple): completed+=1
+                return value
+            base=concurrent.futures.ThreadPoolExecutor
+            class WindowCheckingPool(base):
+                submissions=0
+                def submit(self,*args,**kwargs):
+                    index=self.submissions
+                    self.submissions+=1
+                    if index>=4:
+                        if completed<index-3:
+                            raise AssertionError('producer submitted ahead of ordered window')
+                    return super().submit(*args,**kwargs)
+            original_compress=zstd.compress
+            def skewed_compress(raw,level=1):
+                if b'<page>AAAA' in raw: time.sleep(0.05)
+                return original_compress(raw,level=level)
+            scratch=root/'scratch';scratch.mkdir()
+            with patch.object(b._PartFrameQueue,'get',tracked_get), \
+                 patch.object(b.concurrent.futures,'ThreadPoolExecutor',WindowCheckingPool), \
+                 patch.object(b.zstd,'compress',side_effect=skewed_compress):
+                dump=b.stage_seekable_dump(items,root,scratch)
+            self.assertEqual(completed,9)
+            self.assertEqual(decode_staged_dump(dump),b''.join(parts))
+
+    def test_parallel_submit_failure_cancels_blocked_producer_and_removes_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            items=[]
+            for i in range(2):
+                name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
+                (folder/name).write_bytes(bz2.compress(b'<page>body</page>'))
+                items.append(dict(wiki='testwiktionary',date='20260901',name=name))
+            base=concurrent.futures.ThreadPoolExecutor
+            class FailSecondSubmit(base):
+                def __init__(self,*args,**kwargs):
+                    super().__init__(*args,**kwargs);self.submissions=0
+                def submit(self,*args,**kwargs):
+                    self.submissions+=1
+                    if self.submissions==2: raise OSError('injected second submission failure')
+                    return super().submit(*args,**kwargs)
+            scratch=root/'scratch';scratch.mkdir()
+            started=time.monotonic()
+            with patch.object(b.concurrent.futures,'ThreadPoolExecutor',FailSecondSubmit), \
+                 patch.object(b,'STAGE_PART_QUEUE_BYTES',1):
+                with self.assertRaisesRegex(OSError,'injected second submission failure'):
+                    b.stage_seekable_dump(items,root,scratch)
+            self.assertLess(time.monotonic()-started,5)
+            self.assertFalse((scratch/'pages.xml.zst').exists())
+            self.assertFalse((scratch/'pages-index.txt.bz2').exists())
+
+    def test_parallel_empty_parts_emit_one_known_size_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            items=[]
+            for i in range(2):
+                name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
+                (folder/name).write_bytes(bz2.compress(b''))
+                items.append(dict(wiki='testwiktionary',date='20260901',name=name))
+            scratch=root/'scratch';scratch.mkdir()
+            dump=b.stage_seekable_dump(items,root,scratch)
+            self.assertEqual(decode_staged_dump(dump),b'')
+            self.assertEqual(bz2.decompress((scratch/'pages-index.txt.bz2').read_bytes()),b'0:1:member0\n')
 
     def test_single_part_seekable_dump_preserves_xml(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -678,7 +808,7 @@ class BuildTest(unittest.TestCase):
                 changed_items=[dict(items[0],sha1='0'*40)]
                 b.cached_shard_dump(changed_items,root,workspace)
                 self.assertEqual(stage.call_count,7)
-                with patch.object(b,'DUMP_STAGING_VERSION','page-aligned-zstd-v2'):
+                with patch.object(b,'DUMP_STAGING_VERSION','page-aligned-zstd-parallel-v3'):
                     b.cached_shard_dump(changed_items,root,workspace)
                 self.assertEqual(stage.call_count,8)
 
