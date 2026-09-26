@@ -4,6 +4,7 @@ const rt = @import("zig_runtime");
 
 const max_key_bytes = 8 * 1024;
 const max_entries = 32768;
+// Counts owned key/name slices; hash-map bucket allocations are bounded separately by max_entries.
 const max_owned_bytes = 8 * 1024 * 1024;
 
 const Key = struct {
@@ -72,6 +73,66 @@ const Entry = struct {
     sampled_host_unobserved_cpu_ns: u64 = 0,
 };
 
+const FunctionKey = struct {
+    module_id: ?u32,
+    module_name: []const u8,
+    function_name: []const u8,
+
+    fn eql(a: FunctionKey, b: FunctionKey) bool {
+        if (a.module_id != b.module_id) return false;
+        if (a.module_id == null and !std.mem.eql(u8, a.module_name, b.module_name)) return false;
+        return std.mem.eql(u8, a.function_name, b.function_name);
+    }
+};
+
+const FunctionKeyContext = struct {
+    pub fn hash(_: @This(), key: FunctionKey) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(&.{@intFromBool(key.module_id != null)});
+        if (key.module_id) |id| {
+            h.update(std.mem.asBytes(&id));
+        } else {
+            const len: usize = key.module_name.len;
+            h.update(std.mem.asBytes(&len));
+            h.update(key.module_name);
+        }
+        const len: usize = key.function_name.len;
+        h.update(std.mem.asBytes(&len));
+        h.update(key.function_name);
+        return h.final();
+    }
+
+    pub fn eql(_: @This(), a: FunctionKey, b: FunctionKey) bool {
+        return FunctionKey.eql(a, b);
+    }
+};
+
+const FunctionGroupMap = std.HashMapUnmanaged(FunctionKey, FunctionGroup, FunctionKeyContext, 80);
+const FunctionGroup = struct {
+    module_id: ?u32,
+    module_name: []u8,
+    function_name: []u8,
+    invokes: u64 = 0,
+    timed_invokes: u64 = 0,
+    exclusive_timed_invokes: u64 = 0,
+    inclusive_cpu_ns: u64 = 0,
+    exclusive_cpu_ns: u64 = 0,
+
+    fn key(self: *const FunctionGroup) FunctionKey {
+        return .{ .module_id = self.module_id, .module_name = self.module_name, .function_name = self.function_name };
+    }
+};
+
+// This frame stays on invokeFresh's stack, so nested calls need no heap allocation.
+pub const FunctionProbe = struct {
+    parent: ?*@This() = null,
+    key: ?FunctionKey = null,
+    start_ns: ?u64 = null,
+    child_ns: u64 = 0,
+    child_clock_failed: bool = false,
+    depth: usize = 0,
+};
+
 pub const Ticket = struct {
     key: []const u8,
     repeated_after_success: bool,
@@ -81,7 +142,21 @@ pub const Ticket = struct {
 pub const Stats = struct {
     a: std.mem.Allocator,
     entries: std.StringHashMapUnmanaged(Entry) = .empty,
+    function_groups: FunctionGroupMap = .empty,
+    function_group_limit: usize = max_entries,
+    active_function: ?*FunctionProbe = null,
     owned_bytes: usize = 0,
+    function_owned_bytes: usize = 0,
+    function_invokes: u64 = 0,
+    function_drops: u64 = 0,
+    function_timed_invokes: u64 = 0,
+    function_exclusive_timed_invokes: u64 = 0,
+    function_inclusive_cpu_ns: u64 = 0,
+    function_exclusive_cpu_ns: u64 = 0,
+    function_clock_drops: u64 = 0,
+    function_exclusive_drops: u64 = 0,
+    function_stack_errors: u64 = 0,
+    function_max_depth: usize = 0,
     attempts: u64 = 0,
     unsupported_parent: u64 = 0,
     unsupported_args: u64 = 0,
@@ -107,6 +182,117 @@ pub const Stats = struct {
             self.a.free(entry.function_name);
         }
         self.entries.deinit(self.a);
+        var groups = self.function_groups.valueIterator();
+        while (groups.next()) |group| {
+            self.a.free(group.module_name);
+            self.a.free(group.function_name);
+        }
+        self.function_groups.deinit(self.a);
+    }
+
+    pub fn beginFunction(
+        self: *Stats,
+        probe: *FunctionProbe,
+        module_id: ?u32,
+        module_name: []const u8,
+        function_name: []const u8,
+    ) void {
+        const start = rt.work_stats.processCpuNow();
+        probe.* = .{
+            .parent = self.active_function,
+            .start_ns = start,
+            .depth = if (self.active_function) |parent| parent.depth +| 1 else 1,
+        };
+        self.active_function = probe;
+        self.function_max_depth = @max(self.function_max_depth, probe.depth);
+        self.function_invokes +|= 1;
+        if (start == null) self.function_clock_drops +|= 1;
+
+        const lookup = FunctionKey{ .module_id = module_id, .module_name = module_name, .function_name = function_name };
+        if (self.function_groups.getPtr(lookup)) |group| {
+            group.invokes +|= 1;
+            probe.key = group.key();
+            return;
+        }
+
+        const needed = module_name.len +| function_name.len;
+        if (self.function_groups.count() >= self.function_group_limit or
+            needed > max_owned_bytes - self.owned_bytes - self.function_owned_bytes)
+        {
+            self.function_drops +|= 1;
+            return;
+        }
+        const owned_module = self.a.dupe(u8, module_name) catch {
+            self.function_drops +|= 1;
+            return;
+        };
+        const owned_function = self.a.dupe(u8, function_name) catch {
+            self.a.free(owned_module);
+            self.function_drops +|= 1;
+            return;
+        };
+        const stored = FunctionKey{ .module_id = module_id, .module_name = owned_module, .function_name = owned_function };
+        self.function_groups.put(self.a, stored, .{
+            .module_id = module_id,
+            .module_name = owned_module,
+            .function_name = owned_function,
+            .invokes = 1,
+        }) catch {
+            self.a.free(owned_module);
+            self.a.free(owned_function);
+            self.function_drops +|= 1;
+            return;
+        };
+        self.function_owned_bytes += needed;
+        probe.key = stored;
+    }
+
+    pub fn finishFunction(self: *Stats, probe: *FunctionProbe) void {
+        self.finishFunctionAt(probe, rt.work_stats.processCpuNow());
+    }
+
+    fn finishFunctionAt(self: *Stats, probe: *FunctionProbe, stop: ?u64) void {
+        if (self.active_function != probe) {
+            self.function_stack_errors +|= 1;
+            self.active_function = probe.parent;
+            if (probe.parent) |parent| parent.child_clock_failed = true;
+            return;
+        }
+        self.active_function = probe.parent;
+        const start = probe.start_ns orelse {
+            if (probe.parent) |parent| parent.child_clock_failed = true;
+            return;
+        };
+        const end = stop orelse {
+            self.function_clock_drops +|= 1;
+            if (probe.parent) |parent| parent.child_clock_failed = true;
+            return;
+        };
+        if (end < start) {
+            self.function_clock_drops +|= 1;
+            if (probe.parent) |parent| parent.child_clock_failed = true;
+            return;
+        }
+        const inclusive = end - start;
+        self.function_timed_invokes +|= 1;
+        self.function_inclusive_cpu_ns +|= inclusive;
+        if (probe.parent) |parent| parent.child_ns +|= inclusive;
+        const group = if (probe.key) |key| self.function_groups.getPtr(key) else null;
+        if (group) |value| {
+            value.timed_invokes +|= 1;
+            value.inclusive_cpu_ns +|= inclusive;
+        }
+        if (probe.child_clock_failed or probe.child_ns > inclusive) {
+            self.function_exclusive_drops +|= 1;
+            return;
+        }
+        const exclusive = inclusive - probe.child_ns;
+        self.function_exclusive_timed_invokes +|= 1;
+        self.function_exclusive_cpu_ns +|= exclusive;
+        if (group) |value| {
+            value.exclusive_timed_invokes +|= 1;
+            value.exclusive_cpu_ns +|= exclusive;
+        }
     }
 
     pub fn observe(
@@ -148,7 +334,7 @@ pub const Stats = struct {
             return .{ .key = entry.key, .repeated_after_success = reusable, .start_ns = if (reusable and sampled) rt.work_stats.processCpuNow() else null };
         }
         const needed = key.len +| module_name.len +| function_name.len;
-        if (self.entries.count() >= max_entries or needed > max_owned_bytes - self.owned_bytes) {
+        if (self.entries.count() >= max_entries or needed > max_owned_bytes - self.owned_bytes - self.function_owned_bytes) {
             self.capacity_drops +|= 1;
             return null;
         }
@@ -284,6 +470,42 @@ pub const Stats = struct {
                 group.module_name[0..@min(group.module_name.len, 256)], group.function_name[0..@min(group.function_name.len, 256)],
             });
         }
+        self.logFunctionGroups();
+    }
+
+    fn logFunctionGroups(self: *Stats) void {
+        rt.work_stats.logLine("invoke function diagnostic: invokes={d} groups={d} owned_bytes={d} group_drops={d} timed_invokes={d} exclusive_timed_invokes={d} inclusive_cpu_ns={d} exclusive_cpu_ns={d} clock_drops={d} exclusive_drops={d} stack_errors={d} max_depth={d} timing=all_profiled_invokes\n", .{
+            self.function_invokes,       self.function_groups.count(),          self.function_owned_bytes,      self.function_drops,
+            self.function_timed_invokes, self.function_exclusive_timed_invokes, self.function_inclusive_cpu_ns, self.function_exclusive_cpu_ns,
+            self.function_clock_drops,   self.function_exclusive_drops,         self.function_stack_errors,     self.function_max_depth,
+        });
+        var prior: [16]FunctionKey = undefined;
+        var selected: usize = 0;
+        while (selected < prior.len) : (selected += 1) {
+            var best: ?FunctionKey = null;
+            var it = self.function_groups.iterator();
+            while (it.next()) |group| {
+                var used = false;
+                for (prior[0..selected]) |key| if (FunctionKey.eql(key, group.key_ptr.*)) {
+                    used = true;
+                    break;
+                };
+                if (used) continue;
+                if (best) |key| {
+                    const prev = self.function_groups.get(key).?;
+                    if (group.value_ptr.exclusive_cpu_ns < prev.exclusive_cpu_ns or
+                        (group.value_ptr.exclusive_cpu_ns == prev.exclusive_cpu_ns and group.value_ptr.invokes <= prev.invokes)) continue;
+                }
+                best = group.key_ptr.*;
+            }
+            const key = best orelse break;
+            prior[selected] = key;
+            const group = self.function_groups.get(key).?;
+            rt.work_stats.logLine("invoke function top: rank={d} invokes={d} timed_invokes={d} inclusive_cpu_ns={d} exclusive_timed_invokes={d} exclusive_cpu_ns={d} module={s} function={s}\n", .{
+                selected + 1,                  group.invokes,          group.timed_invokes,                                    group.inclusive_cpu_ns,
+                group.exclusive_timed_invokes, group.exclusive_cpu_ns, group.module_name[0..@min(group.module_name.len, 256)], group.function_name[0..@min(group.function_name.len, 256)],
+            });
+        }
     }
 };
 
@@ -316,6 +538,77 @@ test "exact invocation diagnostic counts only identical successful prior keys" {
     stats.finish(failed_before, true, false);
     try std.testing.expect(stats.observe(3, "Module:labels", "show", &args, .nil, null, null, false) == null);
     try std.testing.expectEqual(@as(u64, 1), stats.unsupported_parent);
+}
+
+test "function diagnostic counts all invokes and subtracts nested CPU" {
+    const a = std.testing.allocator;
+    var stats = Stats.init(a);
+    defer stats.deinit();
+    var parent: FunctionProbe = .{};
+    stats.beginFunction(&parent, 7, "Module:seven", "show");
+    parent.start_ns = 100;
+    var child: FunctionProbe = .{};
+    stats.beginFunction(&child, 8, "Module:eight", "show");
+    child.start_ns = 110;
+    stats.finishFunctionAt(&child, 130);
+    stats.finishFunctionAt(&parent, 150);
+    try std.testing.expectEqual(@as(u64, 2), stats.function_invokes);
+    try std.testing.expectEqual(@as(u64, 2), stats.function_timed_invokes);
+    try std.testing.expectEqual(@as(u64, 2), stats.function_exclusive_timed_invokes);
+    try std.testing.expectEqual(@as(u64, 70), stats.function_inclusive_cpu_ns);
+    try std.testing.expectEqual(@as(u64, 50), stats.function_exclusive_cpu_ns);
+    try std.testing.expectEqual(@as(usize, 2), stats.function_max_depth);
+    try std.testing.expectEqual(@as(usize, 2), stats.function_groups.count());
+    try std.testing.expectEqual(@as(u64, 30), stats.function_groups.get(parent.key.?).?.exclusive_cpu_ns);
+    try std.testing.expectEqual(@as(u64, 20), stats.function_groups.get(child.key.?).?.exclusive_cpu_ns);
+}
+
+test "function groups respect entry and shared owned-byte limits" {
+    const a = std.testing.allocator;
+    var entry_limited = Stats.init(a);
+    defer entry_limited.deinit();
+    entry_limited.function_group_limit = 1;
+    var first: FunctionProbe = .{};
+    entry_limited.beginFunction(&first, 1, "Module:one", "show");
+    entry_limited.finishFunction(&first);
+    var second: FunctionProbe = .{};
+    entry_limited.beginFunction(&second, 2, "Module:two", "show");
+    entry_limited.finishFunction(&second);
+    try std.testing.expectEqual(@as(u64, 1), entry_limited.function_drops);
+    try std.testing.expectEqual(@as(usize, 1), entry_limited.function_groups.count());
+
+    var name_budget = Stats.init(a);
+    defer name_budget.deinit();
+    name_budget.owned_bytes = max_owned_bytes;
+    var no_group: FunctionProbe = .{};
+    name_budget.beginFunction(&no_group, 1, "Module:one", "show");
+    name_budget.finishFunction(&no_group);
+    try std.testing.expectEqual(@as(u64, 1), name_budget.function_drops);
+
+    var exact_budget = Stats.init(a);
+    defer exact_budget.deinit();
+    exact_budget.function_owned_bytes = max_owned_bytes;
+    var args: rt.Table = .{};
+    defer args.deinit(a);
+    try std.testing.expect(exact_budget.observe(1, "Module:one", "show", &args, null, null, null, false) == null);
+    try std.testing.expectEqual(@as(u64, 1), exact_budget.capacity_drops);
+}
+
+test "function diagnostic drops exclusive timing when child clock fails" {
+    const a = std.testing.allocator;
+    var stats = Stats.init(a);
+    defer stats.deinit();
+    var parent: FunctionProbe = .{};
+    stats.beginFunction(&parent, 7, "Module:seven", "show");
+    parent.start_ns = 100;
+    var child: FunctionProbe = .{};
+    stats.beginFunction(&child, 8, "Module:eight", "show");
+    child.start_ns = null;
+    stats.finishFunctionAt(&child, 130);
+    stats.finishFunctionAt(&parent, 150);
+    try std.testing.expectEqual(@as(u64, 1), stats.function_timed_invokes);
+    try std.testing.expectEqual(@as(u64, 0), stats.function_exclusive_timed_invokes);
+    try std.testing.expectEqual(@as(u64, 1), stats.function_exclusive_drops);
 }
 
 test "exact invocation diagnostic rejects oversized keys and nonstring arguments" {

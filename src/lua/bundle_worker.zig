@@ -13,6 +13,12 @@ const work_stats = lua_program.work_stats;
 const A = std.mem.Allocator;
 const L = std.os.linux;
 const expansion_memory_headroom_bytes: u64 = 512 * 1024 * 1024;
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+
+fn expansionProfileEnabled() !bool {
+    const raw = getenv("WIKIDICT_EXPANSION_PROFILE") orelse return false;
+    return work_stats.profileEnabledFromEnv(std.mem.span(raw));
+}
 
 pub const Request = protocol.Request;
 
@@ -61,8 +67,9 @@ const Engine = struct {
     program: lua_program.Program,
     provider: pages.Provider,
     load_data_cache: lua_program.SharedLoadDataCache,
-    root_profile: work_stats.RootProfile,
-    invoke_reuse: InvokeReuseStats = InvokeReuseStats.init(std.heap.smp_allocator),
+    profile_enabled: bool,
+    root_profile: ?work_stats.RootProfile = null,
+    invoke_reuse: ?InvokeReuseStats = null,
     native_failures: work_stats.NativeFailures = .{},
     missing_data_requests: work_stats.MissingDataRequests = .{},
     measured_pages: u64 = 0,
@@ -72,13 +79,16 @@ const Engine = struct {
     totals: work_stats.Page = .{},
 
     fn record(self: *Engine, page: *const work_stats.Page) void {
+        if (!self.profile_enabled) return;
         const bucket: usize = if (page.invokes == 0) 0 else if (page.invokes == 1) 1 else if (page.invokes < 4) 2 else if (page.invokes < 8) 3 else 4;
         self.invoke_histogram[bucket] +|= 1;
         const hits = self.load_data_cache.hits -| page.cache_hits_before;
         const hit_bucket: usize = if (hits == 0) 0 else if (hits == 1) 1 else if (hits < 4) 2 else 3;
         self.cache_hit_histogram[hit_bucket] +|= 1;
         if (page.sampled) self.sampled_pages +|= 1;
-        if (page.root_sampled) self.root_profile.sampled_pages +|= 1;
+        if (page.root_sampled) {
+            if (self.root_profile) |*profile| profile.sampled_pages +|= 1;
+        }
         inline for (.{ "invokes", "invoke_attempts", "module_roots", "static_roots", "scan_calls", "scan_bytes", "constructs", "comment_bytes", "template_preprocess_calls", "template_preprocess_bytes", "context_ns", "expand_ns", "comments_ns", "template_preprocess_ns", "invoke_ns", "root_exclusive_ns" }) |field| {
             @field(self.totals, field) +|= @field(page.*, field);
         }
@@ -93,7 +103,7 @@ const Engine = struct {
         return true;
     }
 
-    fn init(io: std.Io, a: A, requested_root: []const u8, requested_dump: []const u8, requested_now_unix: i64) !Engine {
+    fn init(io: std.Io, a: A, requested_root: []const u8, requested_dump: []const u8, requested_now_unix: i64, profile_enabled: bool) !Engine {
         const marker = try std.fs.path.join(a, &.{ requested_root, ".incomplete" });
         if (try fileExists(io, marker)) return error.BundleAssetsIncomplete;
         const manifest = try std.fs.path.join(a, &.{ requested_root, "manifest.jsonl" });
@@ -107,8 +117,11 @@ const Engine = struct {
             lua_program.loadDataCacheability(&program),
         );
         errdefer load_data_cache.deinit();
-        var root_profile = try work_stats.RootProfile.init(std.heap.smp_allocator, program.module_count);
-        errdefer root_profile.deinit();
+        var root_profile: ?work_stats.RootProfile = if (profile_enabled)
+            try work_stats.RootProfile.init(std.heap.smp_allocator, program.module_count)
+        else
+            null;
+        errdefer if (root_profile) |*profile| profile.deinit();
         return .{
             .io = io,
             .requested_root = try a.dupe(u8, requested_root),
@@ -117,30 +130,34 @@ const Engine = struct {
             .program = program,
             .provider = provider,
             .load_data_cache = load_data_cache,
+            .profile_enabled = profile_enabled,
             .root_profile = root_profile,
+            .invoke_reuse = if (profile_enabled) InvokeReuseStats.init(std.heap.smp_allocator) else null,
         };
     }
 
     fn deinit(self: *Engine) void {
-        work_stats.logLine("worker work: pages={d} samples={d} invokes={d} attempts={d} roots={d} static_roots={d} scan_calls={d} scan_bytes={d} constructs={d} comments_bytes={d} template_preprocess_calls={d} template_preprocess_bytes={d}\n", .{
-            self.measured_pages, self.sampled_pages, self.totals.invokes, self.totals.invoke_attempts, self.totals.module_roots, self.totals.static_roots, self.totals.scan_calls, self.totals.scan_bytes, self.totals.constructs, self.totals.comment_bytes, self.totals.template_preprocess_calls, self.totals.template_preprocess_bytes,
-        });
-        work_stats.logLine("worker invoke histogram: zero={d} one={d} two_three={d} four_seven={d} eight_plus={d}\n", .{
-            self.invoke_histogram[0], self.invoke_histogram[1], self.invoke_histogram[2], self.invoke_histogram[3], self.invoke_histogram[4],
-        });
-        work_stats.logLine("worker cache hit histogram: zero={d} one={d} two_three={d} four_plus={d}\n", .{
-            self.cache_hit_histogram[0], self.cache_hit_histogram[1], self.cache_hit_histogram[2], self.cache_hit_histogram[3],
-        });
-        work_stats.logLine("worker sampled cpu ns: interval=32 context={d} expand={d} comments={d} template_preprocess={d} invoke_inclusive={d}\n", .{
-            self.totals.context_ns, self.totals.expand_ns, self.totals.comments_ns, self.totals.template_preprocess_ns, self.totals.invoke_ns,
-        });
-        self.root_profile.logTop(self.program.module_names, self.totals.root_exclusive_ns);
-        self.invoke_reuse.log();
-        self.invoke_reuse.deinit();
+        if (self.profile_enabled) {
+            work_stats.logLine("worker work: pages={d} samples={d} invokes={d} attempts={d} roots={d} static_roots={d} scan_calls={d} scan_bytes={d} constructs={d} comments_bytes={d} template_preprocess_calls={d} template_preprocess_bytes={d}\n", .{
+                self.measured_pages, self.sampled_pages, self.totals.invokes, self.totals.invoke_attempts, self.totals.module_roots, self.totals.static_roots, self.totals.scan_calls, self.totals.scan_bytes, self.totals.constructs, self.totals.comment_bytes, self.totals.template_preprocess_calls, self.totals.template_preprocess_bytes,
+            });
+            work_stats.logLine("worker invoke histogram: zero={d} one={d} two_three={d} four_seven={d} eight_plus={d}\n", .{
+                self.invoke_histogram[0], self.invoke_histogram[1], self.invoke_histogram[2], self.invoke_histogram[3], self.invoke_histogram[4],
+            });
+            work_stats.logLine("worker cache hit histogram: zero={d} one={d} two_three={d} four_plus={d}\n", .{
+                self.cache_hit_histogram[0], self.cache_hit_histogram[1], self.cache_hit_histogram[2], self.cache_hit_histogram[3],
+            });
+            work_stats.logLine("worker sampled cpu ns: interval=32 context={d} expand={d} comments={d} template_preprocess={d} invoke_inclusive={d}\n", .{
+                self.totals.context_ns, self.totals.expand_ns, self.totals.comments_ns, self.totals.template_preprocess_ns, self.totals.invoke_ns,
+            });
+            if (self.root_profile) |*profile| profile.logTop(self.program.module_names, self.totals.root_exclusive_ns);
+            if (self.invoke_reuse) |*stats| stats.log();
+        }
+        if (self.invoke_reuse) |*stats| stats.deinit();
         self.native_failures.log();
         self.missing_data_requests.log();
         self.load_data_cache.logDiagnostics(self.program.module_names);
-        self.root_profile.deinit();
+        if (self.root_profile) |*profile| profile.deinit();
         self.load_data_cache.deinit();
         self.provider.deinit();
         self.program.deinit();
@@ -152,9 +169,9 @@ const Engine = struct {
         if (request.now_unix != self.requested_now_unix) return error.BundleTimeChanged;
         if (!self.provider.isCanonicalPage(request.title, request.page_ordinal)) return null;
         var page_work = work_stats.Page{
-            .sampled = (self.measured_pages & 31) == 0,
-            .root_sampled = (self.measured_pages & 31) == 0,
-            .root_profile = &self.root_profile,
+            .sampled = self.profile_enabled and (self.measured_pages & 31) == 0,
+            .root_sampled = self.profile_enabled and (self.measured_pages & 31) == 0,
+            .root_profile = if (self.root_profile) |*profile| profile else null,
             .native_failures = &self.native_failures,
             .missing_data_requests = &self.missing_data_requests,
             .cache_hits_before = self.load_data_cache.hits,
@@ -169,7 +186,7 @@ const Engine = struct {
         page_work.context_ns +|= work_stats.elapsed(context_start);
         defer ctx.deinit();
         var expander = lua_program.initExpanderShared(&ctx, self.provider.api(), &self.load_data_cache);
-        expander.invoke_reuse = &self.invoke_reuse;
+        expander.invoke_reuse = if (self.invoke_reuse) |*stats| stats else null;
         stage.* = "expand";
         const expand_start = work_stats.cpuNow();
         const output = expander.expandFragment(request.title, request.source, self.requested_now_unix) catch |err| {
@@ -186,6 +203,7 @@ const Engine = struct {
 };
 
 pub fn run(io: std.Io, persistent: A) !void {
+    const profile_enabled = try expansionProfileEnabled();
     const worker_cpu_start = work_stats.processCpuNow();
     defer {
         if (worker_cpu_start) |start| {
@@ -221,7 +239,7 @@ pub fn run(io: std.Io, persistent: A) !void {
             continue;
         };
         if (engine == null) {
-            engine = Engine.init(io, persistent, request.root, request.dump, request.now_unix) catch |err| {
+            engine = Engine.init(io, persistent, request.root, request.dump, request.now_unix, profile_enabled) catch |err| {
                 try protocol.writeError(&output.interface, "assets", @errorName(err), "");
                 continue;
             };

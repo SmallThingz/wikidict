@@ -3,6 +3,23 @@
 const std = @import("std");
 const linux = std.os.linux;
 
+/// The expansion profile is inherited by child workers. Only an explicit 1
+/// enables per-invoke diagnostics and sampled CPU timing.
+pub fn profileEnabledFromEnv(value_opt: ?[]const u8) !bool {
+    const value = value_opt orelse return false;
+    if (std.mem.eql(u8, value, "1")) return true;
+    if (std.mem.eql(u8, value, "0")) return false;
+    return error.InvalidExpansionProfile;
+}
+
+test "expansion profile requires an explicit one flag" {
+    try std.testing.expect(!(try profileEnabledFromEnv(null)));
+    try std.testing.expect(!(try profileEnabledFromEnv("0")));
+    try std.testing.expect(try profileEnabledFromEnv("1"));
+    try std.testing.expectError(error.InvalidExpansionProfile, profileEnabledFromEnv(""));
+    try std.testing.expectError(error.InvalidExpansionProfile, profileEnabledFromEnv("true"));
+}
+
 /// Emit one bounded stderr record so concurrent workers cannot interleave its bytes.
 pub fn logLine(comptime format: []const u8, args: anytype) void {
     var buffer: [4096]u8 = undefined;

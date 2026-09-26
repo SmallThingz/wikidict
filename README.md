@@ -211,6 +211,13 @@ row, page ID and revision, returns a private copy to each caller, and preserves
 the current page's in-memory source override. Shutdown diagnostics report page
 and compressed-member cache activity, including decompressed byte counts.
 
+Set `WIKIDICT_EXPANSION_PROFILE=1` to collect detailed expansion diagnostics.
+This records CPU time for every invocation, subtracts nested invocation time
+for per-function exclusive totals, and samples module-root timing. It also
+tracks exact invocation-key repeats without reusing their results. Profiling is
+off by default; worker CPU totals and native-error diagnostics remain enabled.
+Profiled and unprofiled runs should be compared separately when measuring speed.
+
 Performance reports must distinguish extraction, compilation, page expansion and
 publication, and identify which caches were reused. Page coverage and whole-page
 fallback counts do not count embedded per-template Lua errors; inspect those

@@ -3,7 +3,8 @@ const work_stats = rt.work_stats;
 const rt = @import("zig_runtime");
 const host_api = @import("host.zig");
 const frame_lib = @import("frame.zig");
-const InvokeReuseStats = @import("invoke_reuse_stats.zig").Stats;
+const invoke_reuse_stats = @import("invoke_reuse_stats.zig");
+const InvokeReuseStats = invoke_reuse_stats.Stats;
 const namespace_lib = @import("namespaces.zig");
 const preprocess = @import("lua_wikitext_preprocess");
 const parser_expr = @import("lua_wikitext_expression");
@@ -1305,12 +1306,16 @@ pub const Expander = struct {
         parent_args: ?*rt.Table,
     ) anyerror![]const u8 {
         if (work_stats.current()) |work| work.invoke_attempts +|= 1;
+        var function_probe: invoke_reuse_stats.FunctionProbe = undefined;
+        if (self.invoke_reuse) |stats| stats.beginFunction(&function_probe, module_id, module_name, function_name);
+        defer if (self.invoke_reuse) |stats| stats.finishFunction(&function_probe);
         const invoke_start = work_stats.cpuNow();
         defer {
             if (work_stats.current()) |work| work.invoke_ns +|= work_stats.elapsed(invoke_start);
         }
         var completed = false;
-        var host_probe: host_api.InvokeHostProbe = .{};
+        var host_probe: host_api.InvokeHostProbe = undefined;
+        if (self.invoke_reuse != null) host_probe = .{};
         const ticket = if (self.invoke_reuse) |stats| stats.observe(
             module_id,
             module_name,
@@ -1348,8 +1353,8 @@ pub const Expander = struct {
             break :blk try frame_lib.makeFrameFromTable(&child, title, copied_parent_args, null);
         } else null;
         const frame = try frame_lib.makeFrameFromTable(&child, module_name, copied_invoke_args, parent);
-        host_api.beginInvokeHostProbe(&host_probe);
-        defer host_api.endInvokeHostProbe(&host_probe);
+        if (self.invoke_reuse != null) host_api.beginInvokeHostProbe(&host_probe);
+        defer if (self.invoke_reuse != null) host_api.endInvokeHostProbe(&host_probe);
         const result = if (module_id) |id|
             frame_lib.invokeModuleId(&child, id, module_name, function_name, frame) catch |err| {
                 try outer_runtime.adoptFailure(&child);
