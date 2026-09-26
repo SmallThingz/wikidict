@@ -10,12 +10,6 @@ fn one(_: std.mem.Allocator, v: Value) ![]const Value {
     out[0] = v;
     return out;
 }
-fn two(_: std.mem.Allocator, x: Value, y: Value) ![]const Value {
-    const out = try std.heap.smp_allocator.alloc(Value, 2);
-    out[0] = x;
-    out[1] = y;
-    return out;
-}
 fn bufferedOne(buffer: ?[]Value, v: Value) ![]const Value {
     const out = try rt.returnBuffer(buffer, 1);
     rt.storeReturn(out, 0, v);
@@ -26,6 +20,14 @@ fn bufferedTwo(buffer: ?[]Value, x: Value, y: Value) ![]const Value {
     rt.storeReturn(out, 0, x);
     rt.storeReturn(out, 1, y);
     return out;
+}
+fn copyBufferedValues(buffer: []Value, values: []const Value) void {
+    const count = @min(buffer.len, values.len);
+    if (count == 0) return;
+    if (@intFromPtr(buffer.ptr) > @intFromPtr(values.ptr))
+        std.mem.copyBackwards(Value, buffer[0..count], values[0..count])
+    else
+        std.mem.copyForwards(Value, buffer[0..count], values[0..count]);
 }
 fn num(v: Value) !f64 {
     return rt.toNumber(v) orelse error.NumberExpected;
@@ -80,10 +82,10 @@ fn strictNewIndex(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]cons
     return error.LuaRaised;
 }
 
-fn strictIndex(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn strictIndex(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len < 2 or args[0] != .table) return error.TableExpected;
     if (args[1] == .string and std.mem.eql(u8, args[1].string, "arg"))
-        return one(ctx.allocator, args[0].table.rawGet(args[1]) orelse .nil);
+        return bufferedOne(result_buffer, args[0].table.rawGet(args[1]) orelse .nil);
     ctx.last_error = .{ .string = try std.fmt.allocPrint(
         ctx.allocator,
         "variable '{s}' is not declared",
@@ -96,7 +98,7 @@ fn installStrict(ctx: *rt.Context) !Value {
     const global = ctx.global_table orelse return error.GlobalTableNotBound;
     const mt = global.metatable orelse try ctx.newTable();
     try mt.rawSet(ctx.allocator, .{ .string = "__newindex" }, try ctx.newNative(null, strictNewIndex));
-    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNative(null, strictIndex));
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNativeBuffered(null, strictIndex));
     global.metatable = mt;
     const result = Value{ .boolean = true };
     const loaded = ctx.package_loaded orelse return error.MissingPackageLoaded;
@@ -117,22 +119,22 @@ fn baseRequire(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buf
 const ModuleLoaderCtx = struct { module_id: u32 };
 const MainModuleLoaderCtx = struct { cache: *rt.Table };
 
-fn moduleLoader(raw: ?*anyopaque, ctx: *rt.Context, _: []const Value) ![]const Value {
+fn moduleLoader(raw: ?*anyopaque, ctx: *rt.Context, _: []const Value, result_buffer: ?[]Value) ![]const Value {
     const loader: *ModuleLoaderCtx = @ptrCast(@alignCast(raw orelse return error.MissingModuleLoader));
-    return one(ctx.allocator, try ctx.loadModule(loader.module_id, null));
+    return bufferedOne(result_buffer, try ctx.loadModule(loader.module_id, null));
 }
 
-fn mainModuleLoader(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn mainModuleLoader(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     const state: *MainModuleLoaderCtx = @ptrCast(@alignCast(raw orelse return error.MissingModuleLoader));
-    const module_id = ctx.resolveModule(args[0].string) catch return one(ctx.allocator, .nil);
+    const module_id = ctx.resolveModule(args[0].string) catch return bufferedOne(result_buffer, .nil);
     const key: Value = .{ .number = @floatFromInt(module_id) };
-    if (state.cache.rawGet(key)) |loader| return one(ctx.allocator, loader);
+    if (state.cache.rawGet(key)) |loader| return bufferedOne(result_buffer, loader);
     const loader_ctx = try ctx.allocator.create(ModuleLoaderCtx);
     loader_ctx.* = .{ .module_id = module_id };
-    const loader = try ctx.newNative(loader_ctx, moduleLoader);
+    const loader = try ctx.newNativeBuffered(loader_ctx, moduleLoader);
     try state.cache.rawSet(ctx.allocator, key, loader);
-    return one(ctx.allocator, loader);
+    return bufferedOne(result_buffer, loader);
 }
 
 fn valueTypeName(value: Value) []const u8 {
@@ -146,54 +148,49 @@ fn valueTypeName(value: Value) []const u8 {
     };
 }
 
-fn baseType(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    return one(ctx.allocator, .{ .string = if (args.len == 0) "nil" else valueTypeName(args[0]) });
+fn baseType(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    return bufferedOne(result_buffer, .{ .string = if (args.len == 0) "nil" else valueTypeName(args[0]) });
 }
-fn baseAssert(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn baseAssert(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len != 0 and args[0].truthy()) {
-        const out = try std.heap.smp_allocator.alloc(Value, args.len);
-        @memcpy(out, args);
+        const out = try rt.returnBuffer(result_buffer, args.len);
+        copyBufferedValues(out, args);
         return out;
     }
     const runtime = ctx;
-    runtime.last_error = if (args.len > 1) args[1] else .{ .string = "assertion failed!" };
+    runtime.setLuaError(if (args.len > 1) args[1] else .{ .string = "assertion failed!" });
     return error.LuaRaised;
 }
 fn baseError(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     const runtime = ctx;
-    runtime.last_error = if (args.len != 0) args[0] else .nil;
+    runtime.setLuaError(if (args.len != 0) args[0] else .nil);
     return error.LuaRaised;
 }
-fn baseRawEqual(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
-    return one(a, .{ .boolean = args.len >= 2 and rt.rawEqual(args[0], args[1]) });
+fn baseRawEqual(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    return bufferedOne(result_buffer, .{ .boolean = args.len >= 2 and rt.rawEqual(args[0], args[1]) });
 }
-fn baseRawGet(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn baseRawGet(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len < 2 or args[0] != .table) return error.TableExpected;
-    return one(a, args[0].table.rawGet(args[1]) orelse .nil);
+    return bufferedOne(result_buffer, args[0].table.rawGet(args[1]) orelse .nil);
 }
-fn baseRawSet(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn baseRawSet(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len < 3 or args[0] != .table) return error.TableExpected;
     try args[0].table.rawSet(ctx.allocator, args[1], args[2]);
-    return one(a, args[0]);
+    return bufferedOne(result_buffer, args[0]);
 }
-fn baseGetMetatable(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
-    if (args.len == 0) return one(a, .nil);
+fn baseGetMetatable(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    if (args.len == 0) return bufferedOne(result_buffer, .nil);
     const runtime = ctx;
     const mt: ?*rt.Table = switch (args[0]) {
         .table => |t| t.metatable,
         .string => runtime.string_metatable,
         else => null,
     };
-    const actual = mt orelse return one(a, .nil);
-    if (actual.rawGet(.{ .string = "__metatable" })) |v| return one(a, v);
-    return one(a, .{ .table = actual });
+    const actual = mt orelse return bufferedOne(result_buffer, .nil);
+    if (actual.rawGet(.{ .string = "__metatable" })) |v| return bufferedOne(result_buffer, v);
+    return bufferedOne(result_buffer, .{ .table = actual });
 }
-fn baseSetMetatable(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn baseSetMetatable(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len < 2 or args[0] != .table) return error.TableExpected;
     if (args[0].table.metatable) |old| if (old.rawGet(.{ .string = "__metatable" }) != null) return error.ProtectedMetatable;
     args[0].table.metatable = switch (args[1]) {
@@ -201,10 +198,10 @@ fn baseSetMetatable(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]co
         .table => |t| t,
         else => return error.TableExpected,
     };
-    return one(a, args[0]);
+    return bufferedOne(result_buffer, args[0]);
 }
 
-fn baseToString(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn baseToString(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     const runtime = ctx;
     const v = if (args.len == 0) Value.nil else args[0];
@@ -216,7 +213,7 @@ fn baseToString(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const 
         const out = try runtime.callValue(mm, &.{v});
         defer rt.freeResults(out);
         if (out.len == 0 or out[0] != .string) return error.StringExpected;
-        return one(a, out[0]);
+        return bufferedOne(result_buffer, out[0]);
     }
     const s: []const u8 = switch (v) {
         .nil => "nil",
@@ -226,7 +223,7 @@ fn baseToString(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const 
         .table => |p| try std.fmt.allocPrint(a, "table: 0x{x}", .{@intFromPtr(p)}),
         .callable => |f| try std.fmt.allocPrint(a, "function: 0x{x}", .{f.identity}),
     };
-    return one(a, .{ .string = s });
+    return bufferedOne(result_buffer, .{ .string = s });
 }
 fn explicitBaseDigit(c: u8) ?u8 {
     return if (c >= '0' and c <= '9')
@@ -275,20 +272,19 @@ fn parseExplicitBase(a: std.mem.Allocator, value: Value, base: i64) !?f64 {
     return @floatFromInt(number);
 }
 
-fn baseToNumber(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn baseToNumber(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
-    if (args.len == 0) return one(a, .nil);
+    if (args.len == 0) return bufferedOne(result_buffer, .nil);
     if (args.len < 2 or args[1] == .nil) {
-        return one(a, if (rt.toNumber(args[0])) |n| .{ .number = n } else .nil);
+        return bufferedOne(result_buffer, if (rt.toNumber(args[0])) |n| .{ .number = n } else .nil);
     }
     const base = try integer(args[1]);
     if (base < 2 or base > 36) return error.BadBase;
-    return one(a, if (try parseExplicitBase(a, args[0], base)) |n| .{ .number = n } else .nil);
+    return bufferedOne(result_buffer, if (try parseExplicitBase(a, args[0], base)) |n| .{ .number = n } else .nil);
 }
-fn baseSelect(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn baseSelect(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0) return error.MissingArgument;
-    if (args[0] == .string and std.mem.eql(u8, args[0].string, "#")) return one(a, .{ .number = @floatFromInt(args.len - 1) });
+    if (args[0] == .string and std.mem.eql(u8, args[0].string, "#")) return bufferedOne(result_buffer, .{ .number = @floatFromInt(args.len - 1) });
     var idx = try integer(args[0]);
     const n: @TypeOf(idx) = @intCast(args.len - 1);
     if (idx == 0 or idx < -n) {
@@ -297,17 +293,17 @@ fn baseSelect(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
     }
     if (idx < 0) idx = n + idx + 1;
     if (idx > n) return &.{};
-    const out = try std.heap.smp_allocator.alloc(Value, @intCast(n - idx + 1));
-    @memcpy(out, args[@intCast(idx)..]);
+    const out = try rt.returnBuffer(result_buffer, @intCast(n - idx + 1));
+    copyBufferedValues(out, args[@intCast(idx)..]);
     return out;
 }
-fn baseUnpack(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+fn baseUnpack(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
     const t = args[0].table;
     const i: i64 = if (args.len > 1 and args[1] != .nil) try integer(args[1]) else 1;
     const j: i64 = if (args.len > 2 and args[2] != .nil) try integer(args[2]) else @intCast(t.rawLen());
     if (j < i) return &.{};
-    const out = try std.heap.smp_allocator.alloc(Value, @intCast(j - i + 1));
+    const out = try rt.returnBuffer(result_buffer, @intCast(j - i + 1));
     for (out, 0..) |*v, k| v.* = t.rawGet(.{ .number = @floatFromInt(i + @as(i64, @intCast(k))) }) orelse .nil;
     return out;
 }
@@ -343,10 +339,10 @@ fn baseNext(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer
     ctx.next_iteration_hint = .{ .table = t, .key = next_key, .position = it.position() };
     return bufferedTwo(result_buffer, next_key, entry.value_ptr.*);
 }
-fn iteratorTripleFromCall(runtime: *rt.Context, callable: Value, object: Value) ![]const Value {
+fn iteratorTripleFromCall(runtime: *rt.Context, callable: Value, object: Value, result_buffer: ?[]Value) ![]const Value {
     const values = try runtime.callValue(callable, &.{object});
     defer rt.freeResults(values);
-    const out = try std.heap.smp_allocator.alloc(Value, 3);
+    const out = try rt.returnBuffer(result_buffer, 3);
     for (out, 0..) |*slot, i| slot.* = if (i < values.len) values[i] else .nil;
     return out;
 }
@@ -357,15 +353,16 @@ fn iterationMetamethod(object: Value, name: []const u8) ?Value {
     return metatable.rawGet(.{ .string = name });
 }
 
-fn basePairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn basePairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
-    if (iterationMetamethod(args[0], "__pairs")) |method|
-        return iteratorTripleFromCall(ctx, method, args[0]);
+    const object = args[0];
+    if (iterationMetamethod(object, "__pairs")) |method|
+        return iteratorTripleFromCall(ctx, method, object, result_buffer);
     if (ctx.builtin_next != .callable) return error.MissingBuiltinNext;
-    const out = try std.heap.smp_allocator.alloc(Value, 3);
-    out[0] = ctx.builtin_next;
-    out[1] = args[0];
-    out[2] = .nil;
+    const out = try rt.returnBuffer(result_buffer, 3);
+    rt.storeReturn(out, 0, ctx.builtin_next);
+    rt.storeReturn(out, 1, object);
+    rt.storeReturn(out, 2, .nil);
     return out;
 }
 fn ipairsIter(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
@@ -374,15 +371,16 @@ fn ipairsIter(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer
     const v = args[0].table.rawGetNumber(@floatFromInt(i)) orelse return bufferedOne(result_buffer, .nil);
     return bufferedTwo(result_buffer, .{ .number = @floatFromInt(i) }, v);
 }
-fn baseIpairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn baseIpairs(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
-    if (iterationMetamethod(args[0], "__ipairs")) |method|
-        return iteratorTripleFromCall(ctx, method, args[0]);
+    const object = args[0];
+    if (iterationMetamethod(object, "__ipairs")) |method|
+        return iteratorTripleFromCall(ctx, method, object, result_buffer);
     const iter = try ctx.newNativeBuffered(null, ipairsIter);
-    const out = try std.heap.smp_allocator.alloc(Value, 3);
-    out[0] = iter;
-    out[1] = args[0];
-    out[2] = .{ .number = 0 };
+    const out = try rt.returnBuffer(result_buffer, 3);
+    rt.storeReturn(out, 0, iter);
+    rt.storeReturn(out, 1, object);
+    rt.storeReturn(out, 2, .{ .number = 0 });
     return out;
 }
 fn protectedPairsProbe(_: ?*anyopaque, ctx: *rt.Context, _: []const Value) ![]const Value {
@@ -396,81 +394,80 @@ fn protectedPairsProbe(_: ?*anyopaque, ctx: *rt.Context, _: []const Value) ![]co
 }
 
 fn protectedErrorValue(ctx: *rt.Context, err: anyerror) !Value {
-    if (ctx.last_error != .nil) return ctx.last_error;
+    if (ctx.last_error_present or ctx.last_error != .nil) return ctx.last_error;
     if (ctx.aotErrorName()) |name| return .{ .string = try ctx.allocator.dupe(u8, name) };
     return .{ .string = @errorName(err) };
 }
 
-fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     // A later evaluation could catch allocation failure even if this one did
     // not. Protected calls therefore exclude dynamic cross-page admission.
     rt.markLoadDataEffect();
     if (args.len == 0) return error.MissingArgument;
     const saved_error = ctx.last_error;
+    const saved_error_present = ctx.last_error_present;
     const saved_aot_error_name = ctx.aot_error_name;
-    ctx.last_error = .nil;
+    defer {
+        ctx.last_error = saved_error;
+        ctx.last_error_present = saved_error_present;
+        ctx.aot_error_name = saved_aot_error_name;
+    }
+    ctx.clearLuaError();
     ctx.clearAotErrorName();
     const result = ctx.callValue(args[0], args[1..]) catch |err| {
         // A protected error can expose allocator pressure (including OOM) as
         // Lua data. Such a result cannot be shared between page evaluations.
         rt.markLoadDataEffect();
-        const out = try std.heap.smp_allocator.alloc(Value, 2);
-        out[0] = .{ .boolean = false };
-        out[1] = try protectedErrorValue(ctx, err);
-        ctx.last_error = saved_error;
-        ctx.aot_error_name = saved_aot_error_name;
+        const out = try rt.returnBuffer(result_buffer, 2);
+        const error_value = try protectedErrorValue(ctx, err);
+        rt.storeReturn(out, 0, .{ .boolean = false });
+        rt.storeReturn(out, 1, error_value);
         return out;
     };
-    ctx.last_error = saved_error;
-    ctx.aot_error_name = saved_aot_error_name;
     defer rt.freeResults(result);
-    const out = try std.heap.smp_allocator.alloc(Value, result.len + 1);
-    out[0] = .{ .boolean = true };
-    @memcpy(out[1..], result);
+    const out = try rt.returnBuffer(result_buffer, result.len + 1);
+    rt.storeReturn(out, 0, .{ .boolean = true });
+    rt.copyReturnTail(out, 1, result);
     return out;
 }
 
-fn baseXpcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn baseXpcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     rt.markLoadDataEffect();
     if (args.len < 2) return error.MissingArgument;
     const saved_error = ctx.last_error;
+    const saved_error_present = ctx.last_error_present;
     const saved_aot_error_name = ctx.aot_error_name;
-    ctx.last_error = .nil;
+    defer {
+        ctx.last_error = saved_error;
+        ctx.last_error_present = saved_error_present;
+        ctx.aot_error_name = saved_aot_error_name;
+    }
+    ctx.clearLuaError();
     ctx.clearAotErrorName();
     const result = ctx.callValue(args[0], &.{}) catch |err| {
         rt.markLoadDataEffect();
         const original_error = try protectedErrorValue(ctx, err);
-        ctx.last_error = .nil;
+        ctx.clearLuaError();
         ctx.clearAotErrorName();
         const handled = ctx.callValue(args[1], &.{original_error}) catch {
             rt.markLoadDataEffect();
-            const out = try std.heap.smp_allocator.alloc(Value, 2);
-            out[0] = .{ .boolean = false };
-            out[1] = .{ .string = "error in error handling" };
-            ctx.last_error = saved_error;
-            ctx.aot_error_name = saved_aot_error_name;
+            const out = try bufferedTwo(result_buffer, .{ .boolean = false }, .{ .string = "error in error handling" });
             return out;
         };
         defer rt.freeResults(handled);
-        const out = try std.heap.smp_allocator.alloc(Value, 2);
-        out[0] = .{ .boolean = false };
-        out[1] = if (handled.len == 0) .nil else handled[0];
-        ctx.last_error = saved_error;
-        ctx.aot_error_name = saved_aot_error_name;
+        const out = try bufferedTwo(result_buffer, .{ .boolean = false }, if (handled.len == 0) .nil else handled[0]);
         return out;
     };
-    ctx.last_error = saved_error;
-    ctx.aot_error_name = saved_aot_error_name;
     defer rt.freeResults(result);
-    const out = try std.heap.smp_allocator.alloc(Value, result.len + 1);
-    out[0] = .{ .boolean = true };
-    @memcpy(out[1..], result);
+    const out = try rt.returnBuffer(result_buffer, result.len + 1);
+    rt.storeReturn(out, 0, .{ .boolean = true });
+    rt.copyReturnTail(out, 1, result);
     return out;
 }
 
 fn installDynamicBase(runtime: *rt.Context) !void {
     const global = runtime.global_table orelse return;
-    try global.rawSet(runtime.allocator, .{ .string = "xpcall" }, try runtime.newNative(null, baseXpcall));
+    try global.rawSet(runtime.allocator, .{ .string = "xpcall" }, try runtime.newNativeBuffered(null, baseXpcall));
 }
 
 fn tableInsert(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
@@ -488,21 +485,20 @@ fn tableInsert(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const V
     try t.rawSet(ctx.allocator, .{ .number = @floatFromInt(pos) }, args[2]);
     return &.{};
 }
-fn tableRemove(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn tableRemove(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
     const t = args[0].table;
     const n: i64 = @intCast(t.rawLen());
-    if (n == 0) return one(a, .nil);
+    if (n == 0) return bufferedOne(result_buffer, .nil);
     const pos = if (args.len > 1 and args[1] != .nil) try integer(args[1]) else n;
-    if (pos < 1 or pos > n) return one(a, .nil);
+    if (pos < 1 or pos > n) return bufferedOne(result_buffer, .nil);
     const removed = t.rawGet(.{ .number = @floatFromInt(pos) }) orelse .nil;
     var i = pos;
     while (i < n) : (i += 1) try t.rawSet(ctx.allocator, .{ .number = @floatFromInt(i) }, t.rawGet(.{ .number = @floatFromInt(i + 1) }) orelse .nil);
     try t.rawSet(ctx.allocator, .{ .number = @floatFromInt(n) }, .nil);
-    return one(a, removed);
+    return bufferedOne(result_buffer, removed);
 }
-fn tableConcat(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn tableConcat(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
     const t = args[0].table;
@@ -529,17 +525,16 @@ fn tableConcat(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const V
             p += sep.len;
         }
     }
-    return one(a, .{ .string = out });
+    return bufferedOne(result_buffer, .{ .string = out });
 }
-fn tableMaxn(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn tableMaxn(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0 or args[0] != .table) return error.TableExpected;
     var max: f64 = 0;
     var it = args[0].table.iterator();
     while (it.next()) |e| {
         if (e.key_ptr.* == .number and e.key_ptr.number > max) max = e.key_ptr.number;
     }
-    return one(a, .{ .number = max });
+    return bufferedOne(result_buffer, .{ .number = max });
 }
 fn tableSortLess(runtime: *rt.Context, cmp: Value, a: Value, b: Value) !bool {
     if (cmp == .nil) return runtime.comparison(.lt, a, b);
@@ -589,14 +584,14 @@ fn tableSort(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Val
     return &.{};
 }
 
-fn stringLen(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringLen(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
-    return one(a, .{ .number = @floatFromInt((try str(a, args[0])).len) });
+    return bufferedOne(result_buffer, .{ .number = @floatFromInt((try str(a, args[0])).len) });
 }
 fn normIndex(i: i64, n: i64) i64 {
     return if (i < 0) n + i + 1 else i;
 }
-fn stringSub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringSub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     const s = try str(a, args[0]);
     const n: i64 = @intCast(s.len);
@@ -604,35 +599,35 @@ fn stringSub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Val
     var j = normIndex(if (args.len > 2 and args[2] != .nil) try integer(args[2]) else -1, n);
     i = @max(@as(i64, 1), i);
     j = @min(n, j);
-    if (i > j or i > n) return one(a, .{ .string = "" });
-    return one(a, .{ .string = s[@intCast(i - 1)..@intCast(j)] });
+    if (i > j or i > n) return bufferedOne(result_buffer, .{ .string = "" });
+    return bufferedOne(result_buffer, .{ .string = s[@intCast(i - 1)..@intCast(j)] });
 }
-fn stringLower(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringLower(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     const s = try str(a, args[0]);
     const out = try a.dupe(u8, s);
     for (out) |*c| c.* = std.ascii.toLower(c.*);
-    return one(a, .{ .string = out });
+    return bufferedOne(result_buffer, .{ .string = out });
 }
-fn stringUpper(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringUpper(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     const s = try str(a, args[0]);
     const out = try a.dupe(u8, s);
     for (out) |*c| c.* = std.ascii.toUpper(c.*);
-    return one(a, .{ .string = out });
+    return bufferedOne(result_buffer, .{ .string = out });
 }
-fn stringReverse(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringReverse(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     const s = try str(a, args[0]);
     const out = try a.alloc(u8, s.len);
     for (s, 0..) |c, i| out[s.len - 1 - i] = c;
-    return one(a, .{ .string = out });
+    return bufferedOne(result_buffer, .{ .string = out });
 }
-fn stringRep(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringRep(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     const s = try str(a, args[0]);
     const n = try integer(args[1]);
-    if (n <= 0) return one(a, .{ .string = "" });
+    if (n <= 0) return bufferedOne(result_buffer, .{ .string = "" });
     const total = try std.math.mul(usize, s.len, @intCast(n));
     const out = try a.alloc(u8, total);
     var p: usize = 0;
@@ -640,9 +635,9 @@ fn stringRep(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Val
         @memcpy(out[p .. p + s.len], s);
         p += s.len;
     }
-    return one(a, .{ .string = out });
+    return bufferedOne(result_buffer, .{ .string = out });
 }
-fn stringChar(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringChar(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     const out = try a.alloc(u8, args.len);
     for (args, 0..) |v, i| {
@@ -650,7 +645,7 @@ fn stringChar(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Va
         if (x < 0 or x > 255) return error.ByteOutOfRange;
         out[i] = @intCast(x);
     }
-    return one(a, .{ .string = out });
+    return bufferedOne(result_buffer, .{ .string = out });
 }
 fn stringByte(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
@@ -728,19 +723,18 @@ fn stringMatch(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buf
     return captureResultsBuffered(source, m, result_buffer);
 }
 const GmatchCtx = struct { iterator: pattern.Iterator };
-fn gmatchNext(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
-    const a = runtime.allocator;
+fn gmatchNext(ctx_raw: ?*anyopaque, _: *rt.Context, _: []const Value, result_buffer: ?[]Value) ![]const Value {
     const state: *GmatchCtx = @ptrCast(@alignCast(ctx_raw.?));
     const m = try state.iterator.next() orelse return &.{};
-    return captureResults(a, state.iterator.source, m);
+    return captureResultsBuffered(state.iterator.source, m, result_buffer);
 }
 
-fn stringGmatch(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringGmatch(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
     if (args.len < 2) return error.MissingArgument;
     const state = try ctx.allocator.create(GmatchCtx);
     state.* = .{ .iterator = .{ .source = try str(a, args[0]), .pattern = try str(a, args[1]) } };
-    return one(a, try ctx.newNative(state, gmatchNext));
+    return bufferedOne(result_buffer, try ctx.newNativeBuffered(state, gmatchNext));
 }
 
 fn captureReplacementText(a: std.mem.Allocator, source: []const u8, m: pattern.Match, digit: u8) ![]const u8 {
@@ -810,9 +804,9 @@ fn replacementValue(runtime: *rt.Context, replacement: Value, source: []const u8
     };
 }
 
-fn stringFormat(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn stringFormat(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
-    return one(a, .{ .string = try lua_format.format(a, args) });
+    return bufferedOne(result_buffer, .{ .string = try lua_format.format(a, args) });
 }
 
 fn stringGsub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
@@ -856,14 +850,16 @@ fn stringGsub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buff
         if (anchored) break;
         if (m.end > m.start) search = m.end else if (m.end < source.len) search = m.end + 1 else search = source.len + 1;
     }
+    // Lua strings are immutable and the source bytes outlive this result.
+    // A miss (or a zero replacement limit) can reuse the original value.
+    if (count == 0) return bufferedTwo(result_buffer, .{ .string = source }, .{ .number = 0 });
     try out.appendSlice(a, source[cursor..]);
     const rendered = try out.toOwnedSlice(a);
     return bufferedTwo(result_buffer, .{ .string = rendered }, .{ .number = @floatFromInt(count) });
 }
 
 const MathOp = enum { abs, ceil, floor, sqrt, exp, log, log10, sin, cos, tan, asin, acos, atan, deg, rad };
-fn mathUnary(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn mathUnary(raw: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const op: *MathOp = @ptrCast(@alignCast(raw.?));
     const x = try num(args[0]);
     const y = switch (op.*) {
@@ -883,44 +879,38 @@ fn mathUnary(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const V
         .deg => x * 180 / std.math.pi,
         .rad => x * std.math.pi / 180,
     };
-    return one(a, .{ .number = y });
+    return bufferedOne(result_buffer, .{ .number = y });
 }
-fn mathMin(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn mathMin(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0) return error.MissingArgument;
     var x = try num(args[0]);
     for (args[1..]) |v| x = @min(x, try num(v));
-    return one(a, .{ .number = x });
+    return bufferedOne(result_buffer, .{ .number = x });
 }
-fn mathMax(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn mathMax(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0) return error.MissingArgument;
     var x = try num(args[0]);
     for (args[1..]) |v| x = @max(x, try num(v));
-    return one(a, .{ .number = x });
+    return bufferedOne(result_buffer, .{ .number = x });
 }
-fn mathPow(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
-    return one(a, .{ .number = std.math.pow(f64, try num(args[0]), try num(args[1])) });
+fn mathPow(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    return bufferedOne(result_buffer, .{ .number = std.math.pow(f64, try num(args[0]), try num(args[1])) });
 }
-fn mathFmod(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn mathFmod(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const x = try num(args[0]);
     const y = try num(args[1]);
-    return one(a, .{ .number = @rem(x, y) });
+    return bufferedOne(result_buffer, .{ .number = @rem(x, y) });
 }
-fn mathModf(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
+fn mathModf(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const x = try num(args[0]);
     const ip = @trunc(x);
     var fp: f64 = if (std.math.isInf(x)) 0.0 else x - ip;
     if (fp == 0 and std.math.signbit(x)) fp = -0.0;
-    return two(a, .{ .number = ip }, .{ .number = fp });
+    return bufferedTwo(result_buffer, .{ .number = ip }, .{ .number = fp });
 }
 
-fn debugTraceback(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-    const a = ctx.allocator;
-    return one(a, if (args.len != 0 and args[0] == .string) args[0] else .{ .string = "" });
+fn debugTraceback(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    return bufferedOne(result_buffer, if (args.len != 0 and args[0] == .string) args[0] else .{ .string = "" });
 }
 
 const MathRandomState = struct {
@@ -966,7 +956,7 @@ fn randomBound(value: Value) !i32 {
     if (n < std.math.minInt(i32) or n > std.math.maxInt(i32)) return error.RandomBoundOutOfRange;
     return @intCast(n);
 }
-fn mathRandomCall(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn mathRandomCall(raw: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const state: *MathRandomState = @ptrCast(@alignCast(raw orelse return error.MissingRandomState));
     const rand_max: u32 = 2147483647;
     const sample = state.next() % rand_max;
@@ -987,7 +977,7 @@ fn mathRandomCall(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]co
         },
         else => return error.WrongArgumentCount,
     };
-    return one(ctx.allocator, .{ .number = result });
+    return bufferedOne(result_buffer, .{ .number = result });
 }
 fn mathRandomSeedCall(raw: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0) return error.MissingArgument;
@@ -999,7 +989,7 @@ fn installMathRandom(runtime: *rt.Context, math: *rt.Table) !void {
     const state = try runtime.allocator.create(MathRandomState);
     state.* = .{};
     state.seed(1);
-    try math.rawSetNativeField(.math, "random", try runtime.newNative(state, mathRandomCall));
+    try math.rawSetNativeField(.math, "random", try runtime.newNativeBuffered(state, mathRandomCall));
     try math.rawSetNativeField(.math, "randomseed", try runtime.newNative(state, mathRandomSeedCall));
 }
 
@@ -1014,7 +1004,7 @@ pub fn resetMathRandom(runtime: *rt.Context) !void {
 fn addMath(runtime: *rt.Context, t: *rt.Table, name: []const u8, op: MathOp) !void {
     const ctx = try runtime.allocator.create(MathOp);
     ctx.* = op;
-    try t.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNative(ctx, mathUnary));
+    try t.rawSet(runtime.allocator, .{ .string = name }, try runtime.newNativeBuffered(ctx, mathUnary));
 }
 
 fn bit32Value(value: Value) !u32 {
@@ -1026,22 +1016,22 @@ fn bit32Value(value: Value) !u32 {
     return @intFromFloat(wrapped);
 }
 
-fn bit32Band(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn bit32Band(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     var result: u32 = std.math.maxInt(u32);
     for (args) |arg| result &= try bit32Value(arg);
-    return one(ctx.allocator, .{ .number = @floatFromInt(result) });
+    return bufferedOne(result_buffer, .{ .number = @floatFromInt(result) });
 }
 
-fn bit32Bor(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+fn bit32Bor(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     var result: u32 = 0;
     for (args) |arg| result |= try bit32Value(arg);
-    return one(ctx.allocator, .{ .number = @floatFromInt(result) });
+    return bufferedOne(result_buffer, .{ .number = @floatFromInt(result) });
 }
 
 fn makeBit32(runtime: *rt.Context) !*rt.Table {
     const bit32 = try runtime.newTable();
-    try setNative(runtime, bit32, "band", bit32Band);
-    try setNative(runtime, bit32, "bor", bit32Bor);
+    try setNativeBuffered(runtime, bit32, "band", bit32Band);
+    try setNativeBuffered(runtime, bit32, "bor", bit32Bor);
     return bit32;
 }
 
@@ -1128,7 +1118,7 @@ fn installPackage(runtime: *rt.Context) !void {
     try loaded.rawSet(runtime.allocator, .{ .string = "libraryUtil" }, .{ .table = try makeLibraryUtil(runtime) });
     const loader_state = try runtime.allocator.create(MainModuleLoaderCtx);
     loader_state.* = .{ .cache = try runtime.newTable() };
-    try loaders.rawSet(runtime.allocator, .{ .number = 2 }, try runtime.newNative(loader_state, mainModuleLoader));
+    try loaders.rawSet(runtime.allocator, .{ .number = 2 }, try runtime.newNativeBuffered(loader_state, mainModuleLoader));
     runtime.package_loaded = loaded;
     try runtime.setGlobal(global_abi.id("package"), .{ .table = package });
     try loaded.rawSet(runtime.allocator, .{ .string = "package" }, .{ .table = package });
@@ -1136,23 +1126,23 @@ fn installPackage(runtime: *rt.Context) !void {
 }
 
 pub fn install(runtime: *rt.Context) !void {
-    try setGlobalNative(runtime, "type", baseType);
-    try setGlobalNative(runtime, "assert", baseAssert);
+    try setGlobalNativeBuffered(runtime, "type", baseType);
+    try setGlobalNativeBuffered(runtime, "assert", baseAssert);
     try setGlobalNative(runtime, "error", baseError);
-    try setGlobalNative(runtime, "rawequal", baseRawEqual);
-    try setGlobalNative(runtime, "rawget", baseRawGet);
-    try setGlobalNative(runtime, "rawset", baseRawSet);
-    try setGlobalNative(runtime, "getmetatable", baseGetMetatable);
-    try setGlobalNative(runtime, "setmetatable", baseSetMetatable);
-    try setGlobalNative(runtime, "tostring", baseToString);
-    try setGlobalNative(runtime, "tonumber", baseToNumber);
-    try setGlobalNative(runtime, "select", baseSelect);
-    try setGlobalNative(runtime, "unpack", baseUnpack);
+    try setGlobalNativeBuffered(runtime, "rawequal", baseRawEqual);
+    try setGlobalNativeBuffered(runtime, "rawget", baseRawGet);
+    try setGlobalNativeBuffered(runtime, "rawset", baseRawSet);
+    try setGlobalNativeBuffered(runtime, "getmetatable", baseGetMetatable);
+    try setGlobalNativeBuffered(runtime, "setmetatable", baseSetMetatable);
+    try setGlobalNativeBuffered(runtime, "tostring", baseToString);
+    try setGlobalNativeBuffered(runtime, "tonumber", baseToNumber);
+    try setGlobalNativeBuffered(runtime, "select", baseSelect);
+    try setGlobalNativeBuffered(runtime, "unpack", baseUnpack);
     runtime.builtin_next = try runtime.newNativeBuffered(null, baseNext);
     try runtime.setGlobal(global_abi.id("next"), runtime.builtin_next);
-    try setGlobalNative(runtime, "pairs", basePairs);
-    try setGlobalNative(runtime, "ipairs", baseIpairs);
-    try setGlobalNative(runtime, "pcall", basePcall);
+    try setGlobalNativeBuffered(runtime, "pairs", basePairs);
+    try setGlobalNativeBuffered(runtime, "ipairs", baseIpairs);
+    try setGlobalNativeBuffered(runtime, "pcall", basePcall);
     try installDynamicBase(runtime);
 
     try installPackage(runtime);
@@ -1160,50 +1150,49 @@ pub fn install(runtime: *rt.Context) !void {
 
     const table = try runtime.newNativeNamespace(.table);
     try setNative(runtime, table, "insert", tableInsert);
-    try setNative(runtime, table, "remove", tableRemove);
-    try setNative(runtime, table, "concat", tableConcat);
+    try setNativeBuffered(runtime, table, "remove", tableRemove);
+    try setNativeBuffered(runtime, table, "concat", tableConcat);
     try setNative(runtime, table, "sort", tableSort);
-    try setNative(runtime, table, "maxn", tableMaxn);
-    try setNative(runtime, table, "getn", struct {
-        fn f(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
-            const a = ctx.allocator;
+    try setNativeBuffered(runtime, table, "maxn", tableMaxn);
+    try setNativeBuffered(runtime, table, "getn", struct {
+        fn f(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
             if (args.len == 0 or args[0] != .table) return error.TableExpected;
-            return one(a, .{ .number = @floatFromInt(args[0].table.rawLen()) });
+            return bufferedOne(result_buffer, .{ .number = @floatFromInt(args[0].table.rawLen()) });
         }
     }.f);
     try runtime.setGlobal(global_abi.id("table"), .{ .table = table });
     const string = try runtime.newNativeNamespace(.string);
-    try setNative(runtime, string, "len", stringLen);
-    try setNative(runtime, string, "sub", stringSub);
-    try setNative(runtime, string, "lower", stringLower);
-    try setNative(runtime, string, "upper", stringUpper);
-    try setNative(runtime, string, "reverse", stringReverse);
-    try setNative(runtime, string, "rep", stringRep);
-    try setNative(runtime, string, "char", stringChar);
+    try setNativeBuffered(runtime, string, "len", stringLen);
+    try setNativeBuffered(runtime, string, "sub", stringSub);
+    try setNativeBuffered(runtime, string, "lower", stringLower);
+    try setNativeBuffered(runtime, string, "upper", stringUpper);
+    try setNativeBuffered(runtime, string, "reverse", stringReverse);
+    try setNativeBuffered(runtime, string, "rep", stringRep);
+    try setNativeBuffered(runtime, string, "char", stringChar);
     try setNativeBuffered(runtime, string, "byte", stringByte);
     try setNativeBuffered(runtime, string, "find", stringFind);
     try setNativeBuffered(runtime, string, "match", stringMatch);
-    try setNative(runtime, string, "gmatch", stringGmatch);
+    try setNativeBuffered(runtime, string, "gmatch", stringGmatch);
     try setNativeBuffered(runtime, string, "gsub", stringGsub);
-    try setNative(runtime, string, "format", stringFormat);
+    try setNativeBuffered(runtime, string, "format", stringFormat);
     try runtime.setGlobal(global_abi.id("string"), .{ .table = string });
     const smt = try runtime.newTable();
     try smt.rawSet(runtime.allocator, .{ .string = "__index" }, .{ .table = string });
     runtime.string_metatable = smt;
     const math = try runtime.newNativeNamespace(.math);
     inline for (.{ .{ "abs", MathOp.abs }, .{ "ceil", .ceil }, .{ "floor", .floor }, .{ "sqrt", .sqrt }, .{ "exp", .exp }, .{ "log", .log }, .{ "log10", .log10 }, .{ "sin", .sin }, .{ "cos", .cos }, .{ "tan", .tan }, .{ "asin", .asin }, .{ "acos", .acos }, .{ "atan", .atan }, .{ "deg", .deg }, .{ "rad", .rad } }) |x| try addMath(runtime, math, x[0], x[1]);
-    try setNative(runtime, math, "min", mathMin);
-    try setNative(runtime, math, "max", mathMax);
-    try setNative(runtime, math, "pow", mathPow);
-    try setNative(runtime, math, "fmod", mathFmod);
-    try setNative(runtime, math, "mod", mathFmod);
-    try setNative(runtime, math, "modf", mathModf);
+    try setNativeBuffered(runtime, math, "min", mathMin);
+    try setNativeBuffered(runtime, math, "max", mathMax);
+    try setNativeBuffered(runtime, math, "pow", mathPow);
+    try setNativeBuffered(runtime, math, "fmod", mathFmod);
+    try setNativeBuffered(runtime, math, "mod", mathFmod);
+    try setNativeBuffered(runtime, math, "modf", mathModf);
     try math.rawSet(runtime.allocator, .{ .string = "pi" }, .{ .number = std.math.pi });
     try math.rawSet(runtime.allocator, .{ .string = "huge" }, .{ .number = std.math.inf(f64) });
     try installMathRandom(runtime, math);
     try runtime.setGlobal(global_abi.id("math"), .{ .table = math });
     const debug = try runtime.newNativeNamespace(.debug);
-    try setNative(runtime, debug, "traceback", debugTraceback);
+    try setNativeBuffered(runtime, debug, "traceback", debugTraceback);
     try runtime.setGlobal(global_abi.id("debug"), .{ .table = debug });
     try registerStandardPackageLoaded(runtime);
 }
@@ -1678,13 +1667,13 @@ test "AOT pairs and ipairs use hidden real metamethods including false call erro
     try protected_mt.rawSet(ctx.allocator, .{ .string = "__metatable" }, .{ .string = "hidden" });
     try protected_mt.rawSet(ctx.allocator, .{ .string = "__pairs" }, try ctx.newNative(null, protectedPairsProbe));
     protected.metatable = protected_mt;
-    const triple = try basePairs(null, &ctx, &.{.{ .table = protected }});
+    const triple = try basePairs(null, &ctx, &.{.{ .table = protected }}, null);
     defer rt.freeResults(triple);
     const first = try ctx.callValue(triple[0], triple[1..3]);
     defer rt.freeResults(first);
     try std.testing.expectEqualStrings("y", first[0].string);
     try std.testing.expectEqual(@as(f64, 2), first[1].number);
-    const exposed = try baseGetMetatable(null, &ctx, &.{.{ .table = protected }});
+    const exposed = try baseGetMetatable(null, &ctx, &.{.{ .table = protected }}, null);
     defer rt.freeResults(exposed);
     try std.testing.expectEqualStrings("hidden", exposed[0].string);
 
@@ -1692,13 +1681,13 @@ test "AOT pairs and ipairs use hidden real metamethods including false call erro
     const bad_pairs_mt = try ctx.newTable();
     try bad_pairs_mt.rawSet(ctx.allocator, .{ .string = "__pairs" }, .{ .boolean = false });
     bad_pairs.metatable = bad_pairs_mt;
-    try std.testing.expectError(error.NotCallable, basePairs(null, &ctx, &.{.{ .table = bad_pairs }}));
+    try std.testing.expectError(error.NotCallable, basePairs(null, &ctx, &.{.{ .table = bad_pairs }}, null));
 
     const bad_ipairs = try ctx.newTable();
     const bad_ipairs_mt = try ctx.newTable();
     try bad_ipairs_mt.rawSet(ctx.allocator, .{ .string = "__ipairs" }, .{ .boolean = false });
     bad_ipairs.metatable = bad_ipairs_mt;
-    try std.testing.expectError(error.NotCallable, baseIpairs(null, &ctx, &.{.{ .table = bad_ipairs }}));
+    try std.testing.expectError(error.NotCallable, baseIpairs(null, &ctx, &.{.{ .table = bad_ipairs }}, null));
 }
 
 test "AOT pairs keeps builtin next after global next is overwritten" {
@@ -1714,7 +1703,7 @@ test "AOT pairs keeps builtin next after global next is overwritten" {
 
     const values = try ctx.newTable();
     try values.rawSet(ctx.allocator, .{ .string = "x" }, .{ .number = 1 });
-    const triple = try basePairs(null, &ctx, &.{.{ .table = values }});
+    const triple = try basePairs(null, &ctx, &.{.{ .table = values }}, null);
     defer rt.freeResults(triple);
     try std.testing.expect(rt.rawEqual(builtin_next, triple[0]));
 
@@ -1795,6 +1784,61 @@ test "stdlib template keeps page mutation isolated" {
     try std.testing.expect(first.getGlobal(global_abi.count) == .nil);
 }
 
+test "stdlib template callable owners outlive children and random hosts stay isolated" {
+    var template = try Template.init();
+    defer template.deinit();
+    var second_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer second_arena.deinit();
+    var second = try rt.Context.init(second_arena.allocator(), global_abi.count);
+    defer second.deinit();
+    try rt.bindGlobalTable(&second, null, global_abi.id("_G"));
+    try template.instantiate(&second);
+    const second_math = second.getGlobal(global_abi.id("math")).table;
+    const second_random = second_math.rawGet(.{ .string = "random" }).?;
+    var saved_sqrt: Value = .nil;
+    var expected_second_sample: f64 = undefined;
+    const Probe = struct {
+        fn seed(ctx: *rt.Context, math: *rt.Table) !void {
+            const result = try callField(ctx, .{ .table = math }, "randomseed", &.{.{ .number = 123 }});
+            defer rt.freeResults(result);
+            try std.testing.expectEqual(@as(usize, 0), result.len);
+        }
+        fn next(ctx: *rt.Context, math: *rt.Table) !f64 {
+            const result = try callField(ctx, .{ .table = math }, "random", &.{});
+            defer rt.freeResults(result);
+            try std.testing.expectEqual(@as(usize, 1), result.len);
+            return result[0].number;
+        }
+    };
+    {
+        var first_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer first_arena.deinit();
+        var first = try rt.Context.init(first_arena.allocator(), global_abi.count);
+        defer first.deinit();
+        try rt.bindGlobalTable(&first, null, global_abi.id("_G"));
+        try template.instantiate(&first);
+        const first_math = first.getGlobal(global_abi.id("math")).table;
+        const first_random = first_math.rawGet(.{ .string = "random" }).?;
+        try std.testing.expect(first_random.callable.env.raw != second_random.callable.env.raw);
+        const base_math = try template.namespace("math");
+        saved_sqrt = first_math.rawGet(.{ .string = "sqrt" }).?;
+        try std.testing.expect(rt.rawEqual(saved_sqrt, base_math.rawGet(.{ .string = "sqrt" }).?));
+        try std.testing.expect(rt.rawEqual(saved_sqrt, second_math.rawGet(.{ .string = "sqrt" }).?));
+        try first_math.rawSet(first.allocator, .{ .string = "sqrt" }, .{ .number = 9 });
+        try Probe.seed(&first, first_math);
+        try Probe.seed(&second, second_math);
+        const first_sample = try Probe.next(&first, first_math);
+        expected_second_sample = try Probe.next(&first, first_math);
+        try std.testing.expectEqual(first_sample, try Probe.next(&second, second_math));
+    }
+    // The saved standard-library callable belongs to the Template, not the
+    // first child's released namespace or arena. The second host also survives.
+    const result = try second.callValue(saved_sqrt, &.{.{ .number = 81 }});
+    defer rt.freeResults(result);
+    try std.testing.expectEqual(@as(f64, 9), result[0].number);
+    try std.testing.expectEqual(expected_second_sample, try Probe.next(&second, second_math));
+}
+
 test "string.gsub appends string replacements and preserves callback captures" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1832,6 +1876,22 @@ test "string.gsub appends string replacements and preserves callback captures" {
     try std.testing.expectEqualStrings("ab cd", via_callback[0].string);
     try std.testing.expectEqual(@as(f64, 2), via_callback[1].number);
     try std.testing.expectEqual(@as(usize, 2), callback_count);
+
+    const original = "no match here";
+    const missed = try ctx.callValue(gsub, &.{
+        .{ .string = original }, .{ .string = "[%d]+" }, .{ .string = "replacement" },
+    });
+    defer rt.freeResults(missed);
+    try std.testing.expectEqualStrings(original, missed[0].string);
+    try std.testing.expectEqual(@as(f64, 0), missed[1].number);
+    try std.testing.expectEqual(@intFromPtr(original.ptr), @intFromPtr(missed[0].string.ptr));
+
+    const limited = try ctx.callValue(gsub, &.{
+        .{ .string = original }, .{ .string = "%a" }, .{ .string = "replacement" }, .{ .number = 0 },
+    });
+    defer rt.freeResults(limited);
+    try std.testing.expectEqualStrings(original, limited[0].string);
+    try std.testing.expectEqual(@as(f64, 0), limited[1].number);
 }
 
 test "buffered stdlib returns clip fixed calls and preserve full dynamic results" {
@@ -1903,4 +1963,242 @@ test "buffered stdlib returns clip fixed calls and preserve full dynamic results
     try std.testing.expectEqual(@as(usize, 1), cached.values.len);
     try std.testing.expect(slots[0].boolean);
     try std.testing.expectError(error.AotCallFailed, ctx.callValueFixed(require, &.{.{ .number = 1 }}, &slots));
+}
+
+test "buffered base and namespace calls borrow fixed slots and keep dynamic arity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try install(&ctx);
+
+    const rawset = ctx.getGlobal(global_abi.id("rawset"));
+    const rawget = ctx.getGlobal(global_abi.id("rawget"));
+    var tostring_callable = ctx.getGlobal(global_abi.id("tostring"));
+    const table_value = Value{ .table = try ctx.newTable() };
+    var slot = [_]Value{.{ .string = "old" }};
+    const set = try ctx.callValueFixed(rawset, &.{ table_value, .{ .string = "a" }, .{ .number = 7 } }, &slot);
+    defer set.deinit();
+    try std.testing.expect(!set.owned);
+    try std.testing.expect(set.values.ptr == slot[0..].ptr);
+    try std.testing.expect(slot[0].table == table_value.table);
+    const get = try ctx.callValueFixed(rawget, &.{ table_value, .{ .string = "a" } }, &slot);
+    defer get.deinit();
+    try std.testing.expect(!get.owned);
+    try std.testing.expectEqual(@as(f64, 7), slot[0].number);
+
+    const assert_fn = ctx.getGlobal(global_abi.id("assert"));
+    const assert_args = [_]Value{ .{ .boolean = true }, .{ .string = "first" }, .{ .string = "second" } };
+    const assert_fixed = try ctx.callValueFixed(assert_fn, &assert_args, &slot);
+    defer assert_fixed.deinit();
+    try std.testing.expect(!assert_fixed.owned);
+    try std.testing.expect(slot[0].boolean);
+    const assert_dynamic = try ctx.callValue(assert_fn, &assert_args);
+    defer rt.freeResults(assert_dynamic);
+    try std.testing.expectEqual(@as(usize, 3), assert_dynamic.len);
+    try std.testing.expectEqualStrings("second", assert_dynamic[2].string);
+
+    const pairs = ctx.getGlobal(global_abi.id("pairs"));
+    var pair_storage = [_]Value{ table_value, .nil, .nil };
+    const pair_result = try ctx.callValueFixed(pairs, pair_storage[0..1], &pair_storage);
+    defer pair_result.deinit();
+    try std.testing.expect(!pair_result.owned);
+    try std.testing.expectEqual(@as(usize, 3), pair_result.values.len);
+    try std.testing.expect(pair_storage[0] == .callable);
+    try std.testing.expect(pair_storage[1].table == table_value.table);
+    try std.testing.expect(pair_storage[2] == .nil);
+    const ipairs = ctx.getGlobal(global_abi.id("ipairs"));
+    var ipairs_storage = [_]Value{ table_value, .nil, .nil };
+    const ipairs_result = try ctx.callValueFixed(ipairs, ipairs_storage[0..1], &ipairs_storage);
+    defer ipairs_result.deinit();
+    try std.testing.expect(!ipairs_result.owned);
+    try std.testing.expectEqual(@as(usize, 3), ipairs_result.values.len);
+    try std.testing.expect(ipairs_storage[0] == .callable);
+    try std.testing.expect(ipairs_storage[1].table == table_value.table);
+    try std.testing.expectEqual(@as(f64, 0), ipairs_storage[2].number);
+
+    const select = ctx.getGlobal(global_abi.id("select"));
+    const selected_args = [_]Value{ .{ .number = 2 }, .{ .string = "a" }, .{ .string = "b" }, .{ .string = "c" } };
+    const clipped = try ctx.callValueFixed(select, &selected_args, &slot);
+    defer clipped.deinit();
+    try std.testing.expect(!clipped.owned);
+    try std.testing.expectEqual(@as(usize, 1), clipped.values.len);
+    try std.testing.expectEqualStrings("b", slot[0].string);
+    const dynamic = try ctx.callValue(select, &selected_args);
+    defer rt.freeResults(dynamic);
+    try std.testing.expectEqual(@as(usize, 2), dynamic.len);
+    try std.testing.expectEqualStrings("c", dynamic[1].string);
+    var overlapping_args = [_]Value{ .{ .number = 2 }, .{ .string = "a" }, .{ .string = "b" }, .{ .string = "c" } };
+    const overlapping = try baseSelect(null, &ctx, &overlapping_args, overlapping_args[1..3]);
+    try std.testing.expectEqual(@as(usize, 2), overlapping.len);
+    try std.testing.expectEqualStrings("b", overlapping[0].string);
+    try std.testing.expectEqualStrings("c", overlapping[1].string);
+    var reverse_overlap_args = [_]Value{ .{ .number = 1 }, .{ .string = "a" }, .{ .string = "b" }, .{ .string = "c" } };
+    const reverse_overlap = try baseSelect(null, &ctx, &reverse_overlap_args, reverse_overlap_args[2..4]);
+    try std.testing.expectEqual(@as(usize, 2), reverse_overlap.len);
+    try std.testing.expectEqualStrings("a", reverse_overlap[0].string);
+    try std.testing.expectEqualStrings("b", reverse_overlap[1].string);
+
+    const unpack = ctx.getGlobal(global_abi.id("unpack"));
+    try table_value.table.rawSet(ctx.allocator, .{ .number = 1 }, .{ .number = 11 });
+    try table_value.table.rawSet(ctx.allocator, .{ .number = 2 }, .{ .number = 22 });
+    const unpacked = try ctx.callValueFixed(unpack, &.{ table_value, .{ .number = 1 }, .{ .number = 3 } }, &slot);
+    defer unpacked.deinit();
+    try std.testing.expect(!unpacked.owned);
+    try std.testing.expectEqual(@as(f64, 11), slot[0].number);
+    const all = try ctx.callValue(unpack, &.{ table_value, .{ .number = 1 }, .{ .number = 3 } });
+    defer rt.freeResults(all);
+    try std.testing.expectEqual(@as(usize, 3), all.len);
+    try std.testing.expect(all[2] == .nil);
+
+    const math = ctx.getGlobal(global_abi.id("math")).table;
+    const modf = math.rawGet(.{ .string = "modf" }).?;
+    const fraction = try ctx.callValueFixed(modf, &.{.{ .number = 2.5 }}, &slot);
+    defer fraction.deinit();
+    try std.testing.expect(!fraction.owned);
+    try std.testing.expectEqual(@as(f64, 2), slot[0].number);
+    const full_fraction = try ctx.callValue(modf, &.{.{ .number = 2.5 }});
+    defer rt.freeResults(full_fraction);
+    try std.testing.expectEqual(@as(usize, 2), full_fraction.len);
+    try std.testing.expectEqual(@as(f64, 0.5), full_fraction[1].number);
+
+    const pcall = ctx.getGlobal(global_abi.id("pcall"));
+    const protected_args = [_]Value{ rawget, table_value, .{ .string = "a" } };
+    const protected_fixed = try ctx.callValueFixed(pcall, &protected_args, &slot);
+    defer protected_fixed.deinit();
+    try std.testing.expect(!protected_fixed.owned);
+    try std.testing.expect(slot[0].boolean);
+    const protected_dynamic = try ctx.callValue(pcall, &protected_args);
+    defer rt.freeResults(protected_dynamic);
+    try std.testing.expectEqual(@as(usize, 2), protected_dynamic.len);
+    try std.testing.expectEqual(@as(f64, 7), protected_dynamic[1].number);
+
+    const string = ctx.getGlobal(global_abi.id("string")).table;
+    const concat = ctx.getGlobal(global_abi.id("table")).table.rawGet(.{ .string = "concat" }).?;
+    const joined = try ctx.callValueFixed(concat, &.{ table_value, .{ .string = ":" }, .{ .number = 1 }, .{ .number = 2 } }, &slot);
+    defer joined.deinit();
+    try std.testing.expect(!joined.owned);
+    try std.testing.expectEqualStrings("11:22", slot[0].string);
+    const sub = string.rawGet(.{ .string = "sub" }).?;
+    const sliced = try ctx.callValueFixed(sub, &.{ .{ .string = "abcdef" }, .{ .number = 2 }, .{ .number = 4 } }, &slot);
+    defer sliced.deinit();
+    try std.testing.expect(!sliced.owned);
+    try std.testing.expectEqualStrings("bcd", slot[0].string);
+
+    const mt = try ctx.newTable();
+    const nested_tostring = try ctx.newNative(&tostring_callable, struct {
+        fn call(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+            const inner_callable: *const Value = @ptrCast(@alignCast(raw.?));
+            const inner = try runtime.callValue(inner_callable.*, &.{.{ .number = 42 }});
+            defer rt.freeResults(inner);
+            return one(runtime.allocator, inner[0]);
+        }
+    }.call);
+    try mt.rawSet(ctx.allocator, .{ .string = "__tostring" }, nested_tostring);
+    table_value.table.metatable = mt;
+    const outer = try ctx.callValueFixed(tostring_callable, &.{table_value}, &slot);
+    defer outer.deinit();
+    try std.testing.expect(!outer.owned);
+    try std.testing.expectEqualStrings("42", slot[0].string);
+
+    var no_slots: [0]Value = .{};
+    const discarded = try ctx.callValueFixed(rawset, &.{ table_value, .{ .string = "b" }, .{ .number = 9 } }, &no_slots);
+    defer discarded.deinit();
+    try std.testing.expectEqual(@as(usize, 0), discarded.values.len);
+    try std.testing.expect(!discarded.owned);
+    try std.testing.expectEqual(@as(f64, 9), table_value.table.rawGet(.{ .string = "b" }).?.number);
+    const missing = try ctx.callValueFixed(rawget, &.{ table_value, .{ .string = "missing" } }, &slot);
+    defer missing.deinit();
+    try std.testing.expectEqual(@as(usize, 1), missing.values.len);
+    try std.testing.expect(slot[0] == .nil);
+}
+
+fn nilPayloadHandler(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len != 1 or args[0] != .nil) return error.BadNilPayload;
+    return one(ctx.allocator, .nil);
+}
+
+fn nestedNilThenGeneric(_: ?*anyopaque, ctx: *rt.Context, _: []const Value) ![]const Value {
+    const pcall = ctx.getGlobal(global_abi.id("pcall"));
+    const raise = ctx.getGlobal(global_abi.id("error"));
+    const inner = try ctx.callValue(pcall, &.{ raise, .nil });
+    defer rt.freeResults(inner);
+    if (inner.len != 2 or inner[0] != .boolean or inner[0].boolean or inner[1] != .nil)
+        return error.BadNestedPcall;
+    return error.GenericAfterNestedPcall;
+}
+
+fn nilIndexPayload(_: ?*anyopaque, ctx: *rt.Context, _: []const Value) ![]const Value {
+    ctx.setLuaError(.nil);
+    return error.LuaRaised;
+}
+
+fn readMissingField(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len != 1) return error.MissingArgument;
+    return one(ctx.allocator, try ctx.getIndex(args[0], .{ .string = "missing" }));
+}
+
+test "protected calls retain explicit nil errors and clear nested payload state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
+    try install(&ctx);
+    const pcall = ctx.getGlobal(global_abi.id("pcall"));
+    const raise = ctx.getGlobal(global_abi.id("error"));
+    const assertion = ctx.getGlobal(global_abi.id("assert"));
+
+    const explicit_nil = try ctx.callValue(pcall, &.{ raise, .nil });
+    defer rt.freeResults(explicit_nil);
+    try std.testing.expectEqual(@as(usize, 2), explicit_nil.len);
+    try std.testing.expect(explicit_nil[0] == .boolean and !explicit_nil[0].boolean and explicit_nil[1] == .nil);
+    try std.testing.expect(!ctx.last_error_present);
+
+    const absent_arg = try ctx.callValue(pcall, &.{raise});
+    defer rt.freeResults(absent_arg);
+    try std.testing.expectEqual(@as(usize, 2), absent_arg.len);
+    try std.testing.expect(absent_arg[0] == .boolean and !absent_arg[0].boolean and absent_arg[1] == .nil);
+
+    const assertion_nil = try ctx.callValue(pcall, &.{ assertion, .{ .boolean = false }, .nil });
+    defer rt.freeResults(assertion_nil);
+    try std.testing.expectEqual(@as(usize, 2), assertion_nil.len);
+    try std.testing.expect(assertion_nil[0] == .boolean and !assertion_nil[0].boolean and assertion_nil[1] == .nil);
+
+    const nested = try ctx.newNative(null, nestedNilThenGeneric);
+    const generic = try ctx.callValue(pcall, &.{nested});
+    defer rt.freeResults(generic);
+    try std.testing.expectEqual(@as(usize, 2), generic.len);
+    try std.testing.expect(generic[0] == .boolean and !generic[0].boolean);
+    try std.testing.expectEqualStrings("GenericAfterNestedPcall", generic[1].string);
+    try std.testing.expect(!ctx.last_error_present);
+}
+
+test "metamethod nil payload and xpcall nil handler result survive protected calls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
+    try install(&ctx);
+    const pcall = ctx.getGlobal(global_abi.id("pcall"));
+    const xpcall = ctx.global_table.?.rawGet(.{ .string = "xpcall" }).?;
+    const raise = ctx.getGlobal(global_abi.id("error"));
+
+    const object = try ctx.newTable();
+    const metatable = try ctx.newTable();
+    try metatable.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNative(null, nilIndexPayload));
+    object.metatable = metatable;
+    const reader = try ctx.newNative(null, readMissingField);
+    const metamethod = try ctx.callValue(pcall, &.{ reader, .{ .table = object } });
+    defer rt.freeResults(metamethod);
+    try std.testing.expectEqual(@as(usize, 2), metamethod.len);
+    try std.testing.expect(metamethod[0] == .boolean and !metamethod[0].boolean and metamethod[1] == .nil);
+
+    const handler = try ctx.newNative(null, nilPayloadHandler);
+    const handled = try ctx.callValue(xpcall, &.{ raise, handler });
+    defer rt.freeResults(handled);
+    try std.testing.expectEqual(@as(usize, 2), handled.len);
+    try std.testing.expect(handled[0] == .boolean and !handled[0].boolean and handled[1] == .nil);
+    try std.testing.expect(!ctx.last_error_present);
 }

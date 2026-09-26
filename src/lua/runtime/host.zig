@@ -77,6 +77,8 @@ pub const Host = struct {
     interface_message: ?InterfaceMessageFn = null,
     file_metadata: ?FileMetadataFn = null,
     site_interwiki_map: ?SiteInterwikiMapFn = null,
+    // Only a native provider backed by one immutable snapshot may set this.
+    stable_site_interwiki_map: bool = false,
     wikibase_sitelink: ?WikibaseSitelinkFn = null,
     wikibase_entity_text: ?WikibaseEntityTextFn = null,
     language_known_tag: ?LanguageKnownTagFn = null,
@@ -118,6 +120,17 @@ pub fn get(runtime: *const rt.Context) ?*Host {
     return getForInvokeBookkeeping(runtime);
 }
 
+pub fn getForStableInterwikiMap(runtime: *const rt.Context) ?*Host {
+    var probe = invoke_host_probe;
+    while (probe) |active| : (probe = active.previous) active.observed = true;
+    const host: *Host = @ptrCast(@alignCast(runtime.host orelse {
+        rt.markLoadDataEffect();
+        return null;
+    }));
+    if (!host.stable_site_interwiki_map) rt.markLoadDataEffect();
+    return host;
+}
+
 test "invoke host probe excludes bookkeeping and propagates nested observations" {
     var runtime = try rt.Context.init(std.testing.allocator, 0);
     defer runtime.deinit();
@@ -136,4 +149,22 @@ test "invoke host probe excludes bookkeeping and propagates nested observations"
     endInvokeHostProbe(&child);
     try std.testing.expect(child.observed);
     try std.testing.expect(parent.observed);
+}
+
+test "mutable interwiki host remains page-sensitive and stable capability is explicit" {
+    var runtime = try rt.Context.init(std.testing.allocator, 0);
+    defer runtime.deinit();
+    var host = Host{};
+    set(&runtime, &host);
+    var effect = false;
+    const previous = rt.beginLoadDataEffectProbe(&effect);
+    defer rt.endLoadDataEffectProbe(previous);
+    _ = getForStableInterwikiMap(&runtime);
+    try std.testing.expect(effect);
+    effect = false;
+    host.stable_site_interwiki_map = true;
+    _ = getForStableInterwikiMap(&runtime);
+    try std.testing.expect(!effect);
+    _ = get(&runtime);
+    try std.testing.expect(effect);
 }

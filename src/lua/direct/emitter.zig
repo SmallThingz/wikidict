@@ -190,6 +190,8 @@ const Runtime = struct {
     value_is_function_id: V,
     value_function_captures: V,
     value_is_nil: V,
+    value_is_number: V,
+    value_number_unchecked: V,
     require_number: V,
     observe_package: V,
     defer_require_module_id: V,
@@ -210,6 +212,7 @@ const Runtime = struct {
     get_index: V,
     set_index: V,
     get_field: V,
+    get_field_cached: V,
     set_field: V,
     set_shape_slot: V,
     get_known_shape_field: V,
@@ -263,6 +266,8 @@ const Runtime = struct {
             .value_is_function_id = try declare(m, "dict_lua_value_is_function_id", ty.i8, &.{ ty.ptr, ty.i32 }),
             .value_function_captures = try declare(m, "dict_lua_value_function_captures", ty.ptr, &.{ ty.ptr, ty.i32 }),
             .value_is_nil = try declare(m, "dict_lua_value_is_nil", ty.i8, &.{ty.ptr}),
+            .value_is_number = try declare(m, "dict_lua_value_is_number", ty.i8, &.{ty.ptr}),
+            .value_number_unchecked = try declare(m, "dict_lua_value_number_unchecked", ty.double, &.{ty.ptr}),
             .require_number = try declare(m, "dict_lua_require_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
             .observe_package = try declare(m, "dict_lua_observe_package", ty.i32, &.{ty.ptr}),
             .defer_require_module_id = try declare(m, "dict_lua_defer_require_module_id", ty.i8, &.{ ty.ptr, ty.i32, ty.ptr }),
@@ -282,7 +287,8 @@ const Runtime = struct {
             .decode_static_literal = try declare(m, "dict_lua_decode_static_literal", ty.i32, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr }),
             .get_index = try declare(m, "dict_lua_get_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .set_index = try declare(m, "dict_lua_set_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
-            .get_field = try declare(m, "dict_lua_get_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr }),
+            .get_field = try declare(m, "dict_lua_get_field_hashed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.ptr }),
+            .get_field_cached = try declare(m, "dict_lua_get_field_cached", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.i64, ty.ptr }),
             .set_field = try declare(m, "dict_lua_set_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.ptr }),
             .set_shape_slot = try declare(m, "dict_lua_set_shape_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr }),
             .get_known_shape_field = try declare(m, "dict_lua_get_known_shape_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
@@ -468,6 +474,7 @@ const FnEmitter = struct {
     storage: []LocalStorage,
     upvalue_slots: []V,
     binding_next: u32 = 0,
+    field_site_next: u32 = 0,
     breaks: std.ArrayList(BB) = .empty,
 
     fn a(self: *FnEmitter) A {
@@ -890,6 +897,79 @@ const FnEmitter = struct {
         return .{ .boolean = try llvm.fcmp(self.builder, predicate, lhs, rhs) };
     }
 
+    const NumericCandidate = union(enum) { native: V, boxed: V };
+
+    fn numericCandidate(value: ValueRef) ?NumericCandidate {
+        return switch (value) {
+            .number => |number| .{ .native = number },
+            .boxed => |boxed| .{ .boxed = boxed },
+            else => null,
+        };
+    }
+
+    fn numberGuard(self: *FnEmitter, candidate: NumericCandidate) anyerror!V {
+        return switch (candidate) {
+            .native => self.cI1(true),
+            .boxed => |ptr| blk: {
+                const tag = try llvm.call(self.builder, self.rt().value_is_number, &.{ptr});
+                break :blk try llvm.icmp(self.builder, .ne, tag, try self.cI8(0));
+            },
+        };
+    }
+
+    fn candidateNumber(self: *FnEmitter, candidate: NumericCandidate) anyerror!V {
+        return switch (candidate) {
+            .native => |number| number,
+            .boxed => |ptr| try llvm.call(self.builder, self.rt().value_number_unchecked, &.{ptr}),
+        };
+    }
+
+    // The operands have already been evaluated in Lua order. A number/number
+    // guard can bypass the boxed runtime operation; every other pair retains
+    // coercion, metamethod, error, and comparison semantics in the fallback.
+    fn guardedNumericBinary(self: *FnEmitter, op: lua.BinaryOp, lhs: ValueRef, rhs: ValueRef, compare: bool) anyerror!?ValueRef {
+        const left = numericCandidate(lhs) orelse return null;
+        const right = numericCandidate(rhs) orelse return null;
+        if (lhs == .number and rhs == .number) return null;
+        const left_ok = try self.numberGuard(left);
+        const right_ok = try self.numberGuard(right);
+        const both = try llvm.select(self.builder, left_ok, right_ok, try self.cI1(false));
+        const fast = try self.newBlock("number_fast");
+        const fallback = try self.newBlock("number_fallback");
+        const done = try self.newBlock("number_done");
+        // Comparison results remain native i1 across the join. Arithmetic
+        // must retain a boxed join because a metamethod may return any Value.
+        const bool_output = if (compare) try self.nativeBoolSlot() else null;
+        const value_output = if (compare) null else try self.valueSlot();
+        try llvm.condBr(self.builder, both, fast, fallback);
+
+        llvm.position(self.builder, fast);
+        const left_number = try self.candidateNumber(left);
+        const right_number = try self.candidateNumber(right);
+        if (compare) {
+            const result = try self.nativeCompare(op, left_number, right_number);
+            try llvm.store(self.builder, result.boolean, bool_output.?, 1);
+        } else {
+            const result = try self.nativeArith(op, left_number, right_number);
+            _ = try llvm.call(self.builder, self.rt().value_number, &.{ value_output.?, result.number });
+        }
+        try llvm.br(self.builder, done);
+
+        llvm.position(self.builder, fallback);
+        if (compare) {
+            const result = try self.dynamicCompare(op, lhs, rhs);
+            try llvm.store(self.builder, result.boolean, bool_output.?, 1);
+        } else {
+            const result = try self.dynamicBinary(op, lhs, rhs);
+            try self.copyValue(value_output.?, try self.box(result));
+        }
+        try llvm.br(self.builder, done);
+
+        llvm.position(self.builder, done);
+        if (compare) return ValueRef{ .boolean = try llvm.load(self.builder, self.ty().i1, bool_output.?, 1) };
+        return ValueRef{ .boxed = value_output.? };
+    }
+
     fn dynamicBinary(self: *FnEmitter, op: lua.BinaryOp, lhs: ValueRef, rhs: ValueRef) anyerror!ValueRef {
         const lhs_box = try self.box(lhs);
         const rhs_box = try self.box(rhs);
@@ -939,10 +1019,12 @@ const FnEmitter = struct {
         switch (op) {
             .add, .sub, .mul, .div, .mod, .pow => {
                 if (lhs == .number and rhs == .number) return self.nativeArith(op, lhs.number, rhs.number);
+                if (try self.guardedNumericBinary(op, lhs, rhs, false)) |fast| return fast;
                 return self.dynamicBinary(op, lhs, rhs);
             },
             .eq, .ne, .lt, .le, .gt, .ge => {
                 if (lhs == .number and rhs == .number) return self.nativeCompare(op, lhs.number, rhs.number);
+                if (try self.guardedNumericBinary(op, lhs, rhs, true)) |fast| return fast;
                 if (op == .eq or op == .ne) {
                     // Both expressions have already been emitted in Lua order.
                     // Nil can never participate in a table/table __eq dispatch.
@@ -1189,8 +1271,17 @@ const FnEmitter = struct {
             _ = try llvm.call(self.builder, self.rt().results_free, &.{ multi_value.ptr, multi_value.len });
     }
 
+    fn fieldSiteId(function_id: u32, ordinal: u32) ?u64 {
+        if (ordinal == std.math.maxInt(u32)) return null;
+        return (@as(u64, function_id) << 32) | ordinal;
+    }
+
     fn getField(self: *FnEmitter, object: ValueRef, name: []const u8) anyerror!ValueRef {
         const object_box = try self.box(object);
+        const field_ordinal = self.field_site_next;
+        if (field_ordinal != std.math.maxInt(u32)) self.field_site_next += 1;
+        const site_id = fieldSiteId(self.info.id, field_ordinal);
+        const use_cache = site_id != null;
         const key = try self.stringRef(name);
         const out = try self.valueSlot();
         const status = if (object == .table) blk: {
@@ -1203,11 +1294,15 @@ const FnEmitter = struct {
                 break :blk try llvm.call(self.builder, self.rt().get_native_slot, &.{
                     self.ctx(), object_box, try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
                 });
-            break :blk try llvm.call(self.builder, self.rt().get_field, &.{
-                self.ctx(), object_box, key.ptr, try self.cI64(key.len), out,
+            break :blk if (use_cache) try llvm.call(self.builder, self.rt().get_field_cached, &.{
+                self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(static_fields.hashStringKey(name)), try self.cI64(site_id.?), out,
+            }) else try llvm.call(self.builder, self.rt().get_field, &.{
+                self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(static_fields.hashStringKey(name)), out,
             });
-        } else try llvm.call(self.builder, self.rt().get_field, &.{
-            self.ctx(), object_box, key.ptr, try self.cI64(key.len), out,
+        } else if (use_cache) try llvm.call(self.builder, self.rt().get_field_cached, &.{
+            self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(static_fields.hashStringKey(name)), try self.cI64(site_id.?), out,
+        }) else try llvm.call(self.builder, self.rt().get_field, &.{
+            self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(static_fields.hashStringKey(name)), out,
         });
         try self.check(status);
         return .{ .boxed = out };
@@ -1329,6 +1424,27 @@ const FnEmitter = struct {
         };
     }
 
+    fn guardedFieldCallable(self: *FnEmitter, resolved: Resolved, candidate: MethodCandidate) anyerror!StaticFunctionRef {
+        // A local bound to obj.field holds the value observed at initialization.
+        // Copy it before argument evaluation; the ID guard in directStatic* then
+        // decides whether this exact saved callable may enter the known body.
+        const callable = try self.box(try self.loadResolved(resolved));
+        const direct_captures = if (candidate.capture_count == 0)
+            try self.nullPtr()
+        else
+            try llvm.call(self.builder, self.rt().value_function_captures, &.{
+                callable, try self.cI32(candidate.function_id),
+            });
+        return .{
+            .function_id = candidate.function_id,
+            .module_id = candidate.module_id,
+            .captures_ptr = try self.nullPtr(),
+            .captures_len = 0,
+            .direct_captures = direct_captures,
+            .guard_callable = callable,
+        };
+    }
+
     fn staticCallee(self: *FnEmitter, value: *const lua.Expr) anyerror!?StaticFunctionRef {
         return switch (value.*) {
             .name => |name| blk: {
@@ -1337,6 +1453,11 @@ const FnEmitter = struct {
                     .local => |binding| target: {
                         if (self.storage[binding] == .static_function)
                             break :blk self.storage[binding].static_function;
+                        const fact = self.info.bindings[binding];
+                        if (!fact.mutated) if (fact.callable_field_hint) |field| {
+                            if (self.module.facts.methodCandidate(field)) |candidate|
+                                break :blk try self.guardedFieldCallable(resolved, candidate);
+                        };
                         break :target self.localFunctionTarget(self.info, binding);
                     },
                     .upvalue => |ordinal| self.capturedFunctionTarget(ordinal),
@@ -2808,4 +2929,12 @@ test "dead local functions do not enter LLVM" {
     try std.testing.expect(std.mem.indexOf(u8, ir, "define %FunctionResult @lua_f_3") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "define internal %FunctionResult @dict_lua_dead_function_unreachable") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_make_function"));
+}
+
+test "field-site ID is unique across function and ordinal and saturates" {
+    try std.testing.expectEqual(@as(?u64, 0), FnEmitter.fieldSiteId(0, 0));
+    try std.testing.expectEqual(@as(?u64, (@as(u64, 1) << 32)), FnEmitter.fieldSiteId(1, 0));
+    try std.testing.expectEqual(@as(?u64, 1), FnEmitter.fieldSiteId(0, 1));
+    try std.testing.expectEqual(@as(?u64, (@as(u64, std.math.maxInt(u32)) << 32) | (std.math.maxInt(u32) - 1)), FnEmitter.fieldSiteId(std.math.maxInt(u32), std.math.maxInt(u32) - 1));
+    try std.testing.expect(FnEmitter.fieldSiteId(1, std.math.maxInt(u32)) == null);
 }

@@ -5,7 +5,7 @@ const std = @import("std");
 const rt = @import("zig_runtime");
 
 comptime {
-    if (@sizeOf(rt.Value) != 32 or @alignOf(rt.Value) != 8)
+    if (@sizeOf(rt.Value) != 24 or @alignOf(rt.Value) != 8)
         @compileError("LLVM Value ABI layout changed");
 }
 

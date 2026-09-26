@@ -244,6 +244,14 @@ fn invokeValue(runtime: *rt.Context, module: Value, function_name: []const u8, f
     return runtime.callValue(callable, &.{frame});
 }
 
+fn invokeValueFixed(runtime: *rt.Context, module: Value, function_name: []const u8, frame: Value, result_buffer: []Value) anyerror!rt.FixedCallResult {
+    const callable = if (function_name.len == 0)
+        module
+    else
+        try runtime.getIndex(module, .{ .string = function_name });
+    return runtime.callValueFixed(callable, &.{frame}, result_buffer);
+}
+
 fn enterInvoke(runtime: *rt.Context) !?*host_api.Host {
     const host = host_api.getForInvokeBookkeeping(runtime) orelse return null;
     if (host.invoke_depth == 0) try stdlib.resetMathRandom(runtime);
@@ -272,6 +280,36 @@ pub fn invokeModuleId(runtime: *rt.Context, module_id: u32, module_name: []const
     else
         try runtime.getIndex(module, .{ .string = function_name });
     return runtime.callValue(callable, &.{frame});
+}
+
+/// Invoke for callers that consume only the first result. Generated functions
+/// write into result_buffer; legacy functions may return an owned result slice.
+pub fn invokeModuleIdFixed(runtime: *rt.Context, module_id: u32, module_name: []const u8, function_name: []const u8, frame: Value, result_buffer: []Value) anyerror!rt.FixedCallResult {
+    if (frame != .table) return error.FrameExpected;
+    const invoke_host = try enterInvoke(runtime);
+    defer leaveInvoke(invoke_host);
+    const saved = runtime.current_frame;
+    runtime.current_frame = frame.table;
+    defer runtime.current_frame = saved;
+    const module = try runtime.requireModuleId(module_id, module_name);
+    const callable = if (function_name.len == 0)
+        module
+    else if (runtime.moduleExportSlot(module_id, function_name)) |known|
+        try runtime.getProgramShapeField(module, known.shape_id, known.slot, function_name)
+    else
+        try runtime.getIndex(module, .{ .string = function_name });
+    return runtime.callValueFixed(callable, &.{frame}, result_buffer);
+}
+
+pub fn invokeFixed(runtime: *rt.Context, module_name: []const u8, function_name: []const u8, frame: Value, result_buffer: []Value) anyerror!rt.FixedCallResult {
+    if (frame != .table) return error.FrameExpected;
+    const invoke_host = try enterInvoke(runtime);
+    defer leaveInvoke(invoke_host);
+    const saved = runtime.current_frame;
+    runtime.current_frame = frame.table;
+    defer runtime.current_frame = saved;
+    const module = try runtime.requireByName(module_name);
+    return invokeValueFixed(runtime, module, function_name, frame, result_buffer);
 }
 
 pub fn invoke(runtime: *rt.Context, module_name: []const u8, function_name: []const u8, frame: Value) anyerror![]const Value {
@@ -450,6 +488,10 @@ const InvokeProbe = struct {
     fn root(runtime: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         const module = try runtime.newTable();
         try module.rawSet(runtime.allocator, .{ .string = "run" }, try runtime.makeFunctionKnown(1, run, &.{}));
+        try module.rawSet(runtime.allocator, .{ .string = "buffered" }, try runtime.makeFunction(2, rt.stabilizeBuffered(runBuffered), &.{}));
+        try module.rawSet(runtime.allocator, .{ .string = "empty" }, try runtime.makeFunction(3, rt.stabilizeBuffered(runEmpty), &.{}));
+        try module.rawSet(runtime.allocator, .{ .string = "nil_return" }, try runtime.makeFunction(4, rt.stabilizeBuffered(runNil), &.{}));
+        try module.rawSet(runtime.allocator, .{ .string = "error_nil" }, try runtime.makeFunction(5, rt.stabilizeBuffered(runErrorNil), &.{}));
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = module };
         return out;
@@ -459,6 +501,26 @@ const InvokeProbe = struct {
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .boolean = ok };
         return out;
+    }
+    fn runBuffered(runtime: *rt.Context, _: rt.Captures, args: []const Value, buffer: ?[]Value) ![]const Value {
+        const ok = args.len == 1 and args[0] == .table and runtime.current_frame == args[0].table and
+            buffer != null and buffer.?.len == 1;
+        const out = try rt.returnBuffer(buffer, 2);
+        rt.storeReturn(out, 0, .{ .boolean = ok });
+        rt.storeReturn(out, 1, .{ .number = 9 });
+        return out;
+    }
+    fn runEmpty(_: *rt.Context, _: rt.Captures, _: []const Value, buffer: ?[]Value) ![]const Value {
+        return try rt.returnBuffer(buffer, 0);
+    }
+    fn runNil(_: *rt.Context, _: rt.Captures, _: []const Value, buffer: ?[]Value) ![]const Value {
+        const out = try rt.returnBuffer(buffer, 1);
+        rt.storeReturn(out, 0, .nil);
+        return out;
+    }
+    fn runErrorNil(runtime: *rt.Context, _: rt.Captures, _: []const Value, _: ?[]Value) ![]const Value {
+        runtime.setLuaError(.nil);
+        return error.LuaRaised;
     }
 };
 
@@ -476,4 +538,35 @@ test "AOT frame invoke binds current frame around numeric module call" {
     defer rt.freeResults(out);
     try std.testing.expect(out.len == 1 and out[0] == .boolean and out[0].boolean);
     try std.testing.expect(runtime.current_frame == null);
+
+    var slot: [1]Value = undefined;
+    const legacy = try invokeFixed(&runtime, "Module:X", "run", frame, &slot);
+    defer legacy.deinit();
+    try std.testing.expect(legacy.owned and legacy.values.len == 1 and legacy.values[0].boolean);
+    try std.testing.expect(runtime.current_frame == null);
+
+    const buffered = try invokeModuleIdFixed(&runtime, 0, "Module:X", "buffered", frame, &slot);
+    defer buffered.deinit();
+    try std.testing.expect(!buffered.owned and buffered.values.len == 1 and buffered.values.ptr == slot[0..].ptr);
+    try std.testing.expect(buffered.values[0].boolean);
+    try std.testing.expect(runtime.current_frame == null);
+
+    const empty = try invokeFixed(&runtime, "Module:X", "empty", frame, &slot);
+    defer empty.deinit();
+    try std.testing.expect(!empty.owned and empty.values.len == 0);
+    const nil_result = try invokeFixed(&runtime, "Module:X", "nil_return", frame, &slot);
+    defer nil_result.deinit();
+    try std.testing.expect(!nil_result.owned and nil_result.values.len == 1 and nil_result.values[0] == .nil);
+    try std.testing.expect(runtime.current_frame == null);
+
+    try std.testing.expectError(error.AotCallFailed, invokeFixed(&runtime, "Module:X", "error_nil", frame, &slot));
+    try std.testing.expect(runtime.last_error_present and runtime.last_error == .nil);
+    try std.testing.expect(runtime.current_frame == null);
+    runtime.clearLuaError();
+    runtime.clearAotErrorName();
+    const old_limit = runtime.max_depth;
+    runtime.max_depth = 0;
+    try std.testing.expectError(error.CallDepth, invokeFixed(&runtime, "Module:X", "buffered", frame, &slot));
+    runtime.max_depth = old_limit;
+    try std.testing.expect(runtime.depth == 0 and runtime.current_frame == null);
 }

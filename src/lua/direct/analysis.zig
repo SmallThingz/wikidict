@@ -78,6 +78,7 @@ pub const Binding = struct {
     late_function_init: bool = false,
     static_type: StaticType = .unknown,
     static_module: ?[]const u8 = null,
+    callable_field_hint: ?[]const u8 = null,
 
     pub fn directCallOnly(self: Binding) bool {
         return self.function_span != null and self.called and !self.value_used and !self.captured and !self.mutated;
@@ -228,6 +229,14 @@ const Analyzer = struct {
             },
             .local => |id| .{ .upvalue = try self.ensureUpvalue(name, .{ .local = id }) },
             .upvalue => |id| .{ .upvalue = try self.ensureUpvalue(name, .{ .upvalue = id }) },
+        };
+    }
+
+    fn staticFieldName(value: *const lua.Expr) ?[]const u8 {
+        return switch (value.*) {
+            .index => |index| staticString(index.key),
+            .paren => |paren| staticFieldName(paren.expr),
+            else => null,
         };
     }
 
@@ -437,6 +446,8 @@ const Analyzer = struct {
                     const binding = try self.bind(name);
                     self.bindings.items[binding].static_type = static_type;
                     if (index == 0) self.bindings.items[binding].static_module = static_module;
+                    if (s.values.len == s.names.len)
+                        self.bindings.items[binding].callable_field_hint = staticFieldName(s.values[index]);
                     for (sources[index].items) |source| try self.addTypeDependency(source, binding);
                     if (s.values.len == s.names.len and s.values[index].* == .function)
                         self.bindings.items[binding].function_span = s.values[index].function.span;

@@ -4,8 +4,8 @@ const value_leaf = @import("value_leaf.zig");
 const static_decode = @import("lua_static_literal_decode");
 
 comptime {
-    if (@sizeOf(rt.Value) != 32 or @alignOf(rt.Value) != 8)
-        @compileError("LLVM ABI requires the audited 32-byte, 8-byte-aligned runtime Value");
+    if (@sizeOf(rt.Value) != 24 or @alignOf(rt.Value) != 8)
+        @compileError("LLVM ABI requires the audited 24-byte, 8-byte-aligned runtime Value");
     if (@sizeOf(rt.Captures) != 24 or @alignOf(rt.Captures) != 8)
         @compileError("LLVM ABI requires the audited 24-byte, 8-byte-aligned Captures union");
     if (@sizeOf(rt.FunctionResult) != 24 or @alignOf(rt.FunctionResult) != 8)
@@ -242,8 +242,12 @@ export fn dict_lua_set_index(ctx: *rt.Context, object: *const rt.Value, key: *co
     ctx.setIndex(object.*, key.*, input.*) catch |err| return fail(ctx, err);
     return 0;
 }
-export fn dict_lua_get_field(ctx: *rt.Context, object: *const rt.Value, name: [*]const u8, len: usize, out: *rt.Value) callconv(.c) u32 {
-    out.* = ctx.getIndex(object.*, .{ .string = name[0..len] }) catch |err| return fail(ctx, err);
+export fn dict_lua_get_field_cached(ctx: *rt.Context, object: *const rt.Value, name: [*]const u8, len: usize, key_hash: u64, site_id: u64, out: *rt.Value) callconv(.c) u32 {
+    out.* = ctx.getFieldAtSite(object.*, name[0..len], key_hash, site_id) catch |err| return fail(ctx, err);
+    return 0;
+}
+export fn dict_lua_get_field_hashed(ctx: *rt.Context, object: *const rt.Value, name: [*]const u8, len: usize, key_hash: u64, out: *rt.Value) callconv(.c) u32 {
+    out.* = ctx.getHashedField(object.*, name[0..len], key_hash) catch |err| return fail(ctx, err);
     return 0;
 }
 export fn dict_lua_set_field(ctx: *rt.Context, object: *const rt.Value, name: [*]const u8, len: usize, input: *const rt.Value) callconv(.c) u32 {
@@ -725,7 +729,7 @@ test "callable leaf ABI preserves exact ID and live capture pointer" {
     const second = try ctx.makeFunction(7, dict_lua_static_module_root_unreachable, &.{&second_cell});
     const no_capture = try ctx.makeFunction(7, dict_lua_static_module_root_unreachable, &.{});
     const missing: rt.Value = .nil;
-    const native: rt.Value = .{ .callable = .{
+    const native: rt.Value = .{ .callable = &.{
         .env = rt.FunctionEnv.native(&first_cell),
         .entry = dict_lua_static_module_root_unreachable,
         .id = rt.native_function_id,

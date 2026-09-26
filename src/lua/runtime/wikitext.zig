@@ -85,6 +85,7 @@ pub const Provider = struct {
     file_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!FileMetadata = null,
     category_tree: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, CategoryTreeScope) anyerror![]const []const u8 = null,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
+    stable_interwiki_map: bool = false,
     wikibase_sitelink: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror!?[]const u8 = null,
     wikibase_entity_text: ?*const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityText = null,
     language_known_tag: ?*const fn (?*anyopaque, []const u8) anyerror!bool = null,
@@ -141,6 +142,7 @@ pub const Expander = struct {
         self.host.interface_message = if (self.provider.interface_message != null) hostInterfaceMessage else null;
         self.host.file_metadata = hostFileMetadata;
         self.host.site_interwiki_map = hostSiteInterwikiMap;
+        self.host.stable_site_interwiki_map = self.provider.stable_interwiki_map;
         self.host.wikibase_sitelink = hostWikibaseSitelink;
         self.host.wikibase_entity_text = hostWikibaseEntityText;
         self.host.language_known_tag = hostLanguageKnownTag;
@@ -1189,7 +1191,7 @@ pub const Expander = struct {
     };
 
     fn clearInvokeFailure(runtime: *rt.Context) void {
-        runtime.last_error = .nil;
+        runtime.clearLuaError();
         runtime.clearAotErrorName();
     }
 
@@ -1355,18 +1357,19 @@ pub const Expander = struct {
         const frame = try frame_lib.makeFrameFromTable(&child, module_name, copied_invoke_args, parent);
         if (self.invoke_reuse != null) host_api.beginInvokeHostProbe(&host_probe);
         defer if (self.invoke_reuse != null) host_api.endInvokeHostProbe(&host_probe);
+        var result_buffer: [1]Value = undefined;
         const result = if (module_id) |id|
-            frame_lib.invokeModuleId(&child, id, module_name, function_name, frame) catch |err| {
+            frame_lib.invokeModuleIdFixed(&child, id, module_name, function_name, frame, &result_buffer) catch |err| {
                 try outer_runtime.adoptFailure(&child);
                 return err;
             }
         else
-            frame_lib.invoke(&child, module_name, function_name, frame) catch |err| {
+            frame_lib.invokeFixed(&child, module_name, function_name, frame, &result_buffer) catch |err| {
                 try outer_runtime.adoptFailure(&child);
                 return err;
             };
-        defer rt.freeResults(result);
-        const text = if (result.len == 0) "" else try self.valueToWikitext(result[0]);
+        defer result.deinit();
+        const text = if (result.values.len == 0) "" else try self.valueToWikitext(result.values[0]);
         const owned = try page_a.dupe(u8, text);
         completed = true;
         return owned;
@@ -2235,6 +2238,8 @@ const TestProvider = struct {
 };
 
 const TestModule = struct {
+    var multi_tail_evaluations: usize = 0;
+
     fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
         return if (std.mem.eql(u8, raw_name, "Module:Test")) 0 else null;
     }
@@ -2252,6 +2257,10 @@ const TestModule = struct {
         try exports.rawSet(ctx.allocator, .{ .string = "nested" }, try ctx.makeFunctionKnown(5, nested, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "repair" }, try ctx.makeFunctionKnown(6, repair, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "repair_parent" }, try ctx.makeFunctionKnown(7, repairParent, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "multi" }, try ctx.makeFunction(8, rt.stabilizeBuffered(multi), &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "empty" }, try ctx.makeFunction(9, rt.stabilizeBuffered(empty), &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "nil_return" }, try ctx.makeFunction(10, rt.stabilizeBuffered(nilReturn), &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "number" }, try ctx.makeFunction(11, rt.stabilizeBuffered(numericReturn), &.{}));
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
         return out;
@@ -2302,6 +2311,27 @@ const TestModule = struct {
         out[0] = .{ .string = "repaired" };
         return out;
     }
+    fn multi(_: *rt.Context, _: rt.Captures, _: []const Value, buffer: ?[]Value) ![]const Value {
+        if (buffer == null or buffer.?.len != 1) return error.ExpectedBoundedResult;
+        const out = try rt.returnBuffer(buffer, 2);
+        rt.storeReturn(out, 0, .{ .string = "first" });
+        multi_tail_evaluations += 1;
+        rt.storeReturn(out, 1, .{ .string = "second" });
+        return out;
+    }
+    fn empty(_: *rt.Context, _: rt.Captures, _: []const Value, buffer: ?[]Value) ![]const Value {
+        return try rt.returnBuffer(buffer, 0);
+    }
+    fn nilReturn(_: *rt.Context, _: rt.Captures, _: []const Value, buffer: ?[]Value) ![]const Value {
+        const out = try rt.returnBuffer(buffer, 1);
+        rt.storeReturn(out, 0, .nil);
+        return out;
+    }
+    fn numericReturn(_: *rt.Context, _: rt.Captures, _: []const Value, buffer: ?[]Value) ![]const Value {
+        const out = try rt.returnBuffer(buffer, 1);
+        rt.storeReturn(out, 0, .{ .number = 12 });
+        return out;
+    }
     fn repairParent(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
         if (args.len == 0 or args[0] != .table) return error.FrameExpected;
         const get_parent = try ctx.getIndex(args[0], .{ .string = "getParent" });
@@ -2326,7 +2356,7 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     defer arena.deinit();
     var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
     defer runtime.deinit();
-    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail), rt.stabilize(TestModule.random), rt.stabilize(TestModule.stateful), rt.stabilize(TestModule.nested), rt.stabilize(TestModule.repair), rt.stabilize(TestModule.repairParent) };
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail), rt.stabilize(TestModule.random), rt.stabilize(TestModule.stateful), rt.stabilize(TestModule.nested), rt.stabilize(TestModule.repair), rt.stabilize(TestModule.repairParent), rt.stabilizeBuffered(TestModule.multi), rt.stabilizeBuffered(TestModule.empty), rt.stabilizeBuffered(TestModule.nilReturn), rt.stabilizeBuffered(TestModule.numericReturn) };
     runtime.module_root_entries = &functions;
     runtime.configureModules(null, TestModule.lookup, TestModule.name);
     try rt.bindGlobalTable(&runtime, null, 0);
@@ -2468,6 +2498,10 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("99|990|20250607080910|Other editor|", other_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|space-template|space-template|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
+    TestModule.multi_tail_evaluations = 0;
+    const bounded_invoke = try expander.expandFragment("Page", "{{#invoke:Test|multi}}|{{#invoke:Test|empty}}|{{#invoke:Test|nil_return}}|{{#invoke:Test|number}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("first|||12", bounded_invoke);
+    try std.testing.expectEqual(@as(usize, 1), TestModule.multi_tail_evaluations);
     const random_top_level = try expander.expandFragment("Page", "{{#invoke:Test|random}}|{{#invoke:Test|random}}", 1_670_803_200);
     try std.testing.expectEqualStrings("9|9", random_top_level);
     const isolated_module_state = try expander.expandFragment("Page", "{{#invoke:Test|stateful}}|{{#invoke:Test|stateful}}", 1_670_803_200);

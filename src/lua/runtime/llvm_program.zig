@@ -10,6 +10,18 @@ const global_shape_index = @import("global_shape_index.zig");
 pub const Context = rt.Context;
 pub const work_stats = rt.work_stats;
 
+// A generation survives every page/context fork and never aliases a later
+// Program load. Exhaustion disables cross-instance shape caching.
+var next_program_shape_generation = std.atomic.Value(u64).init(1);
+fn takeProgramShapeGeneration() u64 {
+    while (true) {
+        const current = next_program_shape_generation.load(.monotonic);
+        if (current == std.math.maxInt(u64)) return 0;
+        if (next_program_shape_generation.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) == null)
+            return current;
+    }
+}
+
 extern fn dict_lua_program_module_roots() callconv(.c) *const anyopaque;
 extern fn dict_lua_program_synth_export_entries() callconv(.c) ?*const anyopaque;
 extern fn dict_lua_program_eager_init(ctx: *rt.Context) callconv(.c) u32;
@@ -57,6 +69,7 @@ const SynthExport = struct {
 pub const Program = struct {
     allocator: std.mem.Allocator,
     mapped: Mapped,
+    shape_generation: u64,
     module_count: u32,
     module_lookup_count: u32,
     module_names: [][]const u8,
@@ -257,6 +270,7 @@ pub const Program = struct {
                 .sorted_string_slots = sorted_slots,
                 .field_count = field_count_u32,
                 .open = true,
+                .all_string_keys = true,
             };
             shape_offset += field_count;
         }
@@ -269,6 +283,7 @@ pub const Program = struct {
         return .{
             .allocator = allocator,
             .mapped = mapped,
+            .shape_generation = takeProgramShapeGeneration(),
             .module_count = module_count,
             .module_lookup_count = module_lookup_count,
             .module_names = module_names,
@@ -291,6 +306,7 @@ pub const Program = struct {
                 .sorted_string_slots = global_sorted_slots,
                 .field_count = global_count,
                 .open = true,
+                .all_string_keys = true,
             },
             .shapes = program_shapes,
             .shape_keys = shape_keys,
@@ -446,6 +462,7 @@ pub const Program = struct {
         ctx.module_root_entries = roots[0..self.module_count];
         ctx.module_export_shape_ids = self.module_export_shape_ids;
         ctx.program_shapes = self.shapes;
+        ctx.program_shape_generation = self.shape_generation;
         ctx.configureModules(self, lookup, moduleName);
         ctx.configureFunctionModules(self.function_module_ids);
         ctx.configureModuleRequirements(self, moduleRequirements);

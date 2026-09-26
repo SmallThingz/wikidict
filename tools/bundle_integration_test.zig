@@ -92,6 +92,32 @@ const module_source =
     \\assert(tonumber('+0xFF', 16) == 255 and tonumber(10, 16) == 16 and tonumber('0xFF', 34) == 38673)
     \\assert(tonumber('-FFFFFFFFFFFFFFFF', 16) == 1 and tonumber('F.F', 16) == nil)
     \\assert(1 + ' 2 ' == 3 and 1 + '0x10' == 17)
+    \\local function guarded_arith(a, b) return a + b, a - b, a * b, a / b, a % b, a ^ b end
+    \\local ga, gs, gm, gd, gr, gp = guarded_arith(6, 2)
+    \\assert(ga == 8 and gs == 4 and gm == 12 and gd == 3 and gr == 0 and gp == 36)
+    \\assert(select(1, guarded_arith(' 2 ', 1)) == 3 and select(1, guarded_arith('0x10', 1)) == 17)
+    \\local function guarded_compare(a, b) return a == b, a ~= b, a < b, a <= b, a > b, a >= b end
+    \\local eq, ne, lt, le, gt, ge = guarded_compare(2, 3)
+    \\assert(not eq and ne and lt and le and not gt and not ge)
+    \\local nan = 0 / 0
+    \\local nan_eq, nan_ne, nan_lt = guarded_compare(nan, nan)
+    \\assert(not nan_eq and nan_ne and not nan_lt)
+    \\local inf = 1 / 0
+    \\assert(select(1, guarded_arith(inf, 1)) == inf)
+    \\local _, _, neg_zero = guarded_arith(-0, 1)
+    \\assert(neg_zero == 0 and 1 / neg_zero < 0)
+    \\local boxed_events = {}
+    \\local boxed_mt = {__add = function(a, b) boxed_events[#boxed_events + 1] = 'add'; return 19 end}
+    \\local boxed_obj = setmetatable({}, boxed_mt)
+    \\local function guarded_add(a, b) return a + b end
+    \\assert(guarded_add(boxed_obj, 1) == 19 and boxed_events[1] == 'add')
+    \\local boxed_bad = pcall(function() return select(1, guarded_arith(true, 1)) end)
+    \\assert(not boxed_bad)
+    \\local compare_bad = pcall(function() return select(3, guarded_compare(1, '1')) end)
+    \\assert(not compare_bad)
+    \\local order = {}
+    \\local function mark(n) order[#order + 1] = n; return n end
+    \\assert(mark(1) + mark(2) == 3 and order[1] == 1 and order[2] == 2)
     \\assert(tostring(1 / 3) == '0.33333333333333' and tostring(1e14) == '1e+14' and tostring(1e13) == '10000000000000')
     \\assert(tostring(1e-6) == '1e-06' and tostring(-0) == '-0' and (-0) .. '/' .. 1e14 == '-0/1e+14')
     \\assert(string.format('%s', 1 / 3) == '0.33333333333333')

@@ -624,6 +624,47 @@ test "module model promotes incremental exports to guarded shape slots" {
     ) != null);
 }
 
+test "fixed LLVM results use the audited 24-byte Value stride" {
+    const source = "return function(a, b) return a, b end";
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    // Runtime and shared-leaf checks independently audit @sizeOf(Value).
+    // This checks the compiler's actual array element type at a fixed return.
+    try std.testing.expect(std.mem.indexOf(u8, ir, "[2 x [24 x i8]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "[32 x i8]") == null);
+}
+
+test "literal field reads carry exact hashes while dynamic keys retain generic lookup" {
+    const source = "return function(t, key) return t.current_layer, t[key] end";
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    const needle = "call i32 @dict_lua_get_field_cached(";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, needle));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_get_index("));
+    const start = std.mem.indexOf(u8, ir, needle).?;
+    const end = std.mem.indexOfScalarPos(u8, ir, start, '\n') orelse ir.len;
+    const hash = @import("abi/static_fields.zig").hashStringKey("current_layer");
+    const argument = try std.fmt.allocPrint(std.testing.allocator, "i64 {d}, i64", .{@as(i64, @bitCast(hash))});
+    defer std.testing.allocator.free(argument);
+    try std.testing.expect(std.mem.indexOf(u8, ir[start..end], argument) != null);
+}
+
 test "immutable parameters borrow argument slots without Value copies" {
     const source = "return function(a, b) return a end";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);
@@ -1247,4 +1288,80 @@ test "module bootstrap safety admits literal require chains but rejects dynamic 
     defer dynamic.deinit();
     try dynamic.build(dynamic_chunk.body);
     try std.testing.expect(!dynamic.root_bootstrap_safe);
+}
+
+test "saved method local uses exact callable guard at fixed and return arities" {
+    const source =
+        \\local offset = 1
+        \\local object = {}
+        \\function object.consume(x) return x + offset, x + offset + 1 end
+        \\local consume = object.consume
+        \\local one = consume(1)
+        \\consume(2)
+        \\local first, second = consume(3)
+        \\local values = { consume(4) }
+        \\return consume(5)
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    const target = module.functions.items[1];
+    const candidates = [_]llvm_emitter.MethodCandidate{.{
+        .name = "consume",
+        .function_id = target.id,
+        .module_id = 0,
+        .capture_count = @intCast(target.upvalues.len),
+    }};
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{
+        .method_candidates = &candidates,
+        .current_module_id = 0,
+    });
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+
+    const entry = try std.fmt.allocPrint(std.testing.allocator, "call %FunctionResult @lua_f_{d}(", .{target.id});
+    defer std.testing.allocator.free(entry);
+    try std.testing.expect(std.mem.indexOf(u8, ir, entry) != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i8 @dict_lua_value_is_function_id") != null);
+    try std.testing.expect(target.upvalues.len != 0);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call ptr @dict_lua_value_function_captures") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_call_fixed(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_call_discard(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %CallResult @dict_lua_call_multi(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @dict_lua_return_call(") != null);
+}
+
+test "reassigned saved method local retains ordinary dynamic call" {
+    const source =
+        \\local object = {}
+        \\function object.consume(x) return x end
+        \\local consume = object.consume
+        \\consume = object.other
+        \\return consume(1)
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    const candidates = [_]llvm_emitter.MethodCandidate{.{
+        .name = "consume",
+        .function_id = module.functions.items[1].id,
+        .module_id = 0,
+        .capture_count = 0,
+    }};
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{
+        .method_candidates = &candidates,
+        .current_module_id = 0,
+    });
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i8 @dict_lua_value_is_function_id") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @dict_lua_return_call(") != null);
 }

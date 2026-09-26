@@ -622,7 +622,7 @@ fn interwikiMapCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
         .nonlocal
     else
         return error.InvalidInterwikiFilter;
-    const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
+    const host = host_api.getForStableInterwikiMap(runtime) orelse return error.MissingScribuntoHost;
     const rows = try (host.site_interwiki_map orelse return error.NotImplemented)(host.ctx);
     const map = try runtime.newTable();
     for (rows) |row| {
@@ -1190,8 +1190,12 @@ test "AOT mw site interwikiMap uses typed host rows and filters" {
     host_api.set(&runtime, &host);
     const site = mw.rawGet(.{ .string = "site" }).?.table;
 
+    var effect = false;
+    const previous_effect = rt.beginLoadDataEffectProbe(&effect);
+    defer rt.endLoadDataEffectProbe(previous_effect);
     const all = try callField(&runtime, .{ .table = site }, "interwikiMap", &.{});
     defer rt.freeResults(all);
+    try std.testing.expect(effect); // Arbitrary hosts default to page-sensitive.
     const local = all[0].table.rawGet(.{ .string = "local" }).?.table;
     try std.testing.expect(local.rawGet(.{ .string = "isLocal" }).?.boolean);
     try std.testing.expect(local.rawGet(.{ .string = "isCurrentWiki" }).?.boolean);
@@ -1207,6 +1211,11 @@ test "AOT mw site interwikiMap uses typed host rows and filters" {
     try std.testing.expect(external_only[0].table.rawGet(.{ .string = "local" }) == null);
     try std.testing.expect(external_only[0].table.rawGet(.{ .string = "ext" }) != null);
     try std.testing.expect(!external_only[0].table.rawGet(.{ .string = "ext" }).?.table.rawGet(.{ .string = "isTranscludable" }).?.boolean);
+    effect = false;
+    host.stable_site_interwiki_map = true;
+    const from_snapshot = try callField(&runtime, .{ .table = site }, "interwikiMap", &.{});
+    defer rt.freeResults(from_snapshot);
+    try std.testing.expect(!effect);
 }
 
 const WikibaseSitelinkProbe = struct {

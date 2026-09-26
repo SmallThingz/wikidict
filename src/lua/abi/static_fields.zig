@@ -1,5 +1,23 @@
 const std = @import("std");
 
+// This is the runtime Value tag, checked against the actual union in core.zig.
+// Literal field readers and ordinary map writes must use identical hashes so
+// they address the same buckets without changing Lua table iteration order.
+pub const string_value_tag: u8 = 3;
+
+pub fn hashStringKey(text: []const u8) u64 {
+    if (text.len <= 63) {
+        var bytes: [64]u8 = undefined;
+        bytes[0] = string_value_tag;
+        @memcpy(bytes[1..][0..text.len], text);
+        return std.hash.Wyhash.hash(0, bytes[0 .. text.len + 1]);
+    }
+    var h = std.hash.Wyhash.init(0);
+    h.update(&.{string_value_tag});
+    h.update(text);
+    return h.final();
+}
+
 // Native global pointers must remain in this permanently dense slot prefix.
 pub const global_dense_prefix_len: u32 = 64;
 
@@ -69,8 +87,8 @@ const html_names = names[94..95];
 const language_names = [_][]const u8{ "new", "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName" };
 const frame_names = [_][]const u8{ "args", "getParent", "getTitle", "expandTemplate", "preprocess", "extensionTag", "callParserFunction", "newChild" };
 const title_value_names = [_][]const u8{
-    "text",         "prefixedText", "__fragment",  "namespace",    "nsText",  "subpageText", "baseText", "rootText",
-    "isSubpage",    "interwiki",    "isExternal",  "isLocal",      "exists",  "getContent",  "fullUrl",  "localUrl",
+    "text",         "prefixedText", "__fragment",  "namespace",    "nsText",  "subpageText", "baseText",   "rootText",
+    "isSubpage",    "interwiki",    "isExternal",  "isLocal",      "exists",  "getContent",  "fullUrl",    "localUrl",
     "canonicalUrl", "inNamespace",  "isSubpageOf", "subPageTitle", "content", "file",        "fileExists",
 };
 const language_value_names = [_][]const u8{

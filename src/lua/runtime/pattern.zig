@@ -333,6 +333,34 @@ fn requiredFindStartByte(pattern: []const u8, start: usize) ?u8 {
     return literal;
 }
 
+// A mandatory initial byte class can reject source positions before running
+// the recursive matcher. Inspect only a class at byte zero: leading captures,
+// frontier assertions and backreferences may have observable error behavior.
+// Invalid classes fall back to matchAt, which retains the original error order.
+fn requiredFindStartClass(pattern: []const u8) ?usize {
+    if (pattern.len == 0) return null;
+    const ep: usize = switch (pattern[0]) {
+        '[' => blk: {
+            const matcher = Matcher{ .source = "", .pattern = pattern };
+            break :blk matcher.classEnd(0) catch return null;
+        },
+        '%' => blk: {
+            if (pattern.len < 2) return null;
+            switch (std.ascii.toLower(pattern[1])) {
+                'a', 'c', 'd', 'g', 'l', 'p', 's', 'u', 'w', 'x', 'z' => {},
+                else => return null,
+            }
+            break :blk 2;
+        },
+        else => return null,
+    };
+    if (ep < pattern.len) switch (pattern[ep]) {
+        '?', '*', '-' => return null,
+        else => {},
+    };
+    return ep;
+}
+
 fn findInto(source: []const u8, pattern: []const u8, initial: usize, honor_anchor: bool, out: *Match) Error!bool {
     var start = initial;
     if (start > source.len) return false;
@@ -350,9 +378,18 @@ fn findInto(source: []const u8, pattern: []const u8, initial: usize, honor_ancho
     var matcher: Matcher = undefined;
     matcher.source = source;
     matcher.pattern = pattern;
+    const required_class_end = if (!anchored and required_start == null and source.len - start >= 16)
+        requiredFindStartClass(pattern[pattern_start..])
+    else
+        null;
     while (start <= source.len) : (start += 1) {
-        if (required_start) |literal|
+        if (required_start) |literal| {
             start = std.mem.indexOfScalarPos(u8, source, start, literal) orelse return false;
+        } else if (required_class_end) |ep| {
+            while (start < source.len and !matcher.singleMatch(source[start], pattern_start, pattern_start + ep))
+                start += 1;
+            if (start == source.len) return false;
+        }
         matcher.level = 0;
         const end = try matcher.matchAt(start, pattern_start) orelse {
             if (anchored) return false;
@@ -472,6 +509,21 @@ test "lazy dot skips impossible suffix starts without changing captures or error
     try std.testing.expectEqualStrings("fragment", try captureText("title#fragment", captured.captures[1]));
     try std.testing.expect((try find("aaaa", "a.-b[", 1)) == null);
     try std.testing.expectError(error.MalformedPattern, find("ab", "a.-b[", 1));
+}
+
+test "required initial byte class skips nonmatching starts and preserves suffix errors" {
+    const source = "!" ** 80 ++ "az123";
+    const bracket = (try find(source, "[a-z]+%d+", 1)).?;
+    try std.testing.expectEqual(@as(usize, 80), bracket.start);
+    try std.testing.expectEqual(@as(usize, 85), bracket.end);
+    const escaped = (try find(source, "%a+%d+", 1)).?;
+    try std.testing.expectEqual(@as(usize, 80), escaped.start);
+    try std.testing.expect((try find("!" ** 80, "[a-z]+%d+", 1)) == null);
+    try std.testing.expectError(error.MalformedPattern, find(source, "[a-z]+[", 1));
+    // A zero-width first item must still be tried at the initial position.
+    const optional = (try find("!" ** 80 ++ "b", "[a]?b", 1)).?;
+    try std.testing.expectEqual(@as(usize, 80), optional.start);
+    try std.testing.expectError(error.MalformedPattern, find(source, "[", 1));
 }
 
 test "balanced frontier backref and nongreedy" {

@@ -187,6 +187,7 @@ pub const Provider = struct {
             .category_tree = if (self.category_tree_available) categoryTree else null,
             .file_metadata = if (self.file_metadata_available) fileMetadata else null,
             .interwiki_map = if (self.interwiki_available) interwikiMap else null,
+            .stable_interwiki_map = self.interwiki_available,
             .wikibase_sitelink = if (self.wikibase_sitelinks_available) wikibaseSitelink else null,
             .wikibase_entity_text = if (self.wikibase_entity_text_available) wikibaseEntityText else null,
             .language_known_tag = if (self.language_registry_available) languageKnownTag else null,

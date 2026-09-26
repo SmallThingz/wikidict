@@ -886,11 +886,31 @@ fn emitBatches(
         return error.IncompleteLlvmEmission;
 }
 
-/// Pilot source-derived class method targets. A call site still tests the
-/// exact live callable ID, so an override or unrelated receiver is safe.
-fn languageMethodCandidates(io: std.Io, a: A, source_root: []const u8, records: []const ModuleRecord) ![]const emitter.MethodCandidate {
+/// Keep the candidate set bounded to reviewed class methods.
+fn knownMethodName(is_languages: bool, is_parser: bool, owner: []const u8, method: []const u8) ?[]const u8 {
+    if (is_languages and std.mem.eql(u8, owner, "Language")) {
+        if (std.mem.eql(u8, method, "getCode")) return "getCode";
+        if (std.mem.eql(u8, method, "getCanonicalName")) return "getCanonicalName";
+    }
+    if (is_parser and std.mem.eql(u8, owner, "StringParser")) {
+        if (std.mem.eql(u8, method, "consume")) return "consume";
+        if (std.mem.eql(u8, method, "advance")) return "advance";
+    }
+    if (is_parser and std.mem.eql(u8, owner, "Parser") and std.mem.eql(u8, method, "traverse"))
+        return "traverse";
+    return null;
+}
+
+/// Collect known Lua method bodies. A call may enter one of these only after
+/// checking the exact live callable ID; another class or a replaced method
+/// retains the ordinary dynamic call path.
+fn knownMethodCandidates(io: std.Io, a: A, source_root: []const u8, records: []const ModuleRecord) ![]const emitter.MethodCandidate {
+    var candidates: std.ArrayList(emitter.MethodCandidate) = .empty;
+    errdefer candidates.deinit(a);
     for (records, 0..) |record, module_id| {
-        if (!std.mem.eql(u8, record.title, "Module:languages")) continue;
+        const is_languages = std.mem.eql(u8, record.title, "Module:languages");
+        const is_parser = std.mem.eql(u8, record.title, "Module:parser");
+        if (!is_languages and !is_parser) continue;
         const path = try sourcePath(a, source_root, record.path);
         defer a.free(path);
         const source = try readAll(io, a, path);
@@ -901,22 +921,15 @@ fn languageMethodCandidates(io: std.Io, a: A, source_root: []const u8, records: 
         defer globals.deinit();
         var module = try analysis.analyze(a, &globals, &chunk, record.function_base);
         defer module.deinit();
-        var candidates: std.ArrayList(emitter.MethodCandidate) = .empty;
-        errdefer candidates.deinit(a);
         for (chunk.body) |statement| {
             if (statement.* != .function_assign) continue;
             const assignment = statement.function_assign;
             if (assignment.target != .index or assignment.function.* != .function) continue;
             const target = assignment.target.index;
             if (target.object.* != .name or target.key.* != .string) continue;
-            if (!std.mem.eql(u8, target.object.name.value, "Language")) continue;
-            const method_name = target.key.string.value;
-            const name: []const u8 = if (std.mem.eql(u8, method_name, "getCode"))
-                "getCode"
-            else if (std.mem.eql(u8, method_name, "getCanonicalName"))
-                "getCanonicalName"
-            else
-                continue;
+            const owner = target.object.name.value;
+            const method = target.key.string.value;
+            const name = knownMethodName(is_languages, is_parser, owner, method) orelse continue;
             const span = assignment.function.function.span;
             for (module.functions.items[1..]) |info| {
                 if (info.span.start != span.start or info.span.end != span.end) continue;
@@ -929,9 +942,9 @@ fn languageMethodCandidates(io: std.Io, a: A, source_root: []const u8, records: 
                 break;
             }
         }
-        return candidates.toOwnedSlice(a);
     }
-    return &.{};
+    if (candidates.items.len == 0) return &.{};
+    return candidates.toOwnedSlice(a);
 }
 
 fn run(io: std.Io, a: A, args: []const []const u8) !void {
@@ -1143,7 +1156,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         };
     }
 
-    const method_candidates = try languageMethodCandidates(io, a, source_root, selected_records.items);
+    const method_candidates = try knownMethodCandidates(io, a, source_root, selected_records.items);
     defer if (method_candidates.len != 0) a.free(method_candidates);
     std.debug.print("LLVM_METHOD_CANDIDATES count={d}\n", .{method_candidates.len});
     for (method_candidates) |candidate| std.debug.print(

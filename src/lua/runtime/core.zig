@@ -2,6 +2,11 @@ const std = @import("std");
 pub const work_stats = @import("work_stats.zig");
 const static_fields = @import("lua_static_fields");
 
+comptime {
+    if (@intFromEnum(std.meta.Tag(Value).string) != static_fields.string_value_tag)
+        @compileError("prehashed field ABI requires the runtime string Value tag");
+}
+
 extern fn snprintf(buffer: [*]u8, size: usize, format: [*:0]const u8, ...) c_int;
 
 pub const Cell = struct { value: Value };
@@ -48,13 +53,13 @@ pub const FunctionValue = struct {
     id: u32,
     identity: u32,
 
-    pub fn captures(self: FunctionValue) Captures {
+    pub fn captures(self: *const FunctionValue) Captures {
         if (self.id == native_function_id) return .{ .native = self.env.nativePtr() };
         if (self.env.closurePtr()) |env| return env.capture_view;
         return .{ .direct = &.{} };
     }
 
-    pub fn capturesPtr(self: FunctionValue) ?*const Captures {
+    pub fn capturesPtr(self: *const FunctionValue) ?*const Captures {
         if (self.id == native_function_id) return null;
         if (self.env.closurePtr()) |env| return &env.capture_view;
         return null;
@@ -84,7 +89,9 @@ pub const Value = union(enum) {
     number: f64,
     string: []const u8,
     table: *Table,
-    callable: FunctionValue,
+    // Descriptors are immutable and remain valid for their owning Context.
+    // Copies keep closure identity and the live capture cells by pointer.
+    callable: *const FunctionValue,
 
     pub fn truthy(value: Value) bool {
         return switch (value) {
@@ -208,6 +215,8 @@ pub const Shape = struct {
     field_count: u32 = 0,
     choice_count: u32 = 0,
     open: bool = false,
+    // Set only by producers that construct a complete all-string key index.
+    all_string_keys: bool = false,
 };
 
 fn shapeStringSlot(shape: *const Shape, name: []const u8) ?u32 {
@@ -259,18 +268,19 @@ fn numberValueHash(number: f64) u64 {
 }
 
 fn stringValueHash(text: []const u8) u64 {
-    const tag: u8 = @intFromEnum(std.meta.Tag(Value).string);
-    if (text.len <= 63) {
-        var bytes: [64]u8 = undefined;
-        bytes[0] = tag;
-        @memcpy(bytes[1..][0..text.len], text);
-        return std.hash.Wyhash.hash(0, bytes[0 .. text.len + 1]);
-    }
-    var h = std.hash.Wyhash.init(0);
-    h.update(&.{tag});
-    h.update(text);
-    return h.final();
+    return static_fields.hashStringKey(text);
 }
+
+const StringLookupContext = struct {
+    key_hash: u64,
+
+    pub fn hash(self: StringLookupContext, _: []const u8) u64 {
+        return self.key_hash;
+    }
+    pub fn eql(_: StringLookupContext, text: []const u8, value: Value) bool {
+        return value == .string and std.mem.eql(u8, text, value.string);
+    }
+};
 
 const NumberLookupContext = struct {
     pub fn hash(_: NumberLookupContext, number: f64) u64 {
@@ -381,8 +391,24 @@ pub const Table = struct {
     root_tail_cache_valid: ?*bool = null,
     // Monotonic: only tables that have ever hashed a numeric key need numeric map probes.
     has_hashed_number: bool = false,
+    field_cache_owner_nonce: u64 = 0,
+    field_cache_nonce: u64 = 0,
+    field_cache_epoch: u64 = 1,
+    // A small numeric read mirror for string-shaped tables. The map remains
+    // authoritative for insertion, deletion, and iteration order.
+    numeric_mirror: []Value = &.{},
+    numeric_mirror_disabled: bool = false,
+    dense_prefix_len: usize = 0,
+    dense_prefix_valid: bool = true,
     // Identity-key iteration may depend on arena addresses or function allocation order.
     has_identity_key: bool = false,
+
+    fn markMapStructuralMutation(self: *Table) void {
+        if (self.field_cache_epoch == std.math.maxInt(u64))
+            self.field_cache_nonce = 0
+        else
+            self.field_cache_epoch += 1;
+    }
 
     fn markMutated(self: *Table) void {
         if (self.mutation_sentinel) |sentinel| sentinel.* = false;
@@ -401,6 +427,7 @@ pub const Table = struct {
 
     pub fn deinit(self: *Table, allocator: std.mem.Allocator) void {
         self.map.deinit(allocator);
+        if (self.numeric_mirror.len != 0) allocator.free(self.numeric_mirror);
         if (self.owns_slots and self.slots.len != 0) allocator.free(self.slots);
         if (self.choices.len != 0) allocator.free(self.choices);
     }
@@ -418,11 +445,73 @@ pub const Table = struct {
         return if (slot < self.slots.len) slot else null;
     }
 
+    const numeric_mirror_len: usize = 16;
+
+    fn allStringShape(self: *const Table) bool {
+        const shape = self.shape orelse return false;
+        return shape.all_string_keys and self.native_namespace == null and self.choices.len == 0 and
+            shape.sorted_string_slots.len == shape.field_keys.len;
+    }
+
+    fn positiveInteger(number: f64) ?usize {
+        if (!std.math.isFinite(number) or number < 1 or
+            number >= @as(f64, @floatFromInt(std.math.maxInt(usize))) or
+            @floor(number) != number) return null;
+        return @intFromFloat(number);
+    }
+
+    // Build only after the authoritative map write has succeeded. The mirror
+    // is an optional cache: its allocation must never cause a Lua write to fail.
+    fn maybeBuildNumericMirror(self: *Table, allocator: std.mem.Allocator, key: Value, value: Value) void {
+        if (!self.allStringShape() or key != .number or value == .nil or
+            self.numeric_mirror.len != 0 or self.numeric_mirror_disabled) return;
+        const index = positiveInteger(key.number) orelse return;
+        if (index > numeric_mirror_len) return;
+        if (self.map.count() > 128) {
+            self.numeric_mirror_disabled = true;
+            return;
+        }
+        const mirror = allocator.alloc(Value, numeric_mirror_len) catch {
+            self.numeric_mirror_disabled = true;
+            return;
+        };
+        @memset(mirror, .nil);
+        var entries = self.map.iterator();
+        while (entries.next()) |entry| {
+            if (entry.key_ptr.* != .number) continue;
+            const number_index = positiveInteger(entry.key_ptr.number) orelse continue;
+            if (number_index <= mirror.len) mirror[number_index - 1] = entry.value_ptr.*;
+        }
+        self.numeric_mirror = mirror;
+    }
+
+    // Called only after a successful map mutation. A known dense prefix has no
+    // missing positive integer and no positive key beyond its border.
+    fn noteNumericMapWrite(self: *Table, key: Value, value: Value) void {
+        if (!self.allStringShape() or key != .number) return;
+        const index = positiveInteger(key.number) orelse {
+            if (std.math.isFinite(key.number) and key.number >= 1 and
+                @floor(key.number) == key.number and value != .nil)
+                self.dense_prefix_valid = false;
+            return;
+        };
+        if (index <= self.numeric_mirror.len) self.numeric_mirror[index - 1] = value;
+        if (!self.dense_prefix_valid) return;
+        if (value == .nil) {
+            if (index <= self.dense_prefix_len) self.dense_prefix_valid = false;
+        } else if (self.dense_prefix_len < std.math.maxInt(usize) and index == self.dense_prefix_len + 1) {
+            self.dense_prefix_len = index;
+        } else if (index > self.dense_prefix_len) {
+            self.dense_prefix_valid = false;
+        }
+    }
+
     fn slotForKey(self: *const Table, key: Value) ?u32 {
         if (key == .string) if (self.native_namespace) |namespace|
             return static_fields.slotForName(namespace, key.string);
         const shape = self.shape orelse return null;
         if (shape.field_keys.len != shape.field_count) return null;
+        if (key != .string and shape.all_string_keys) return null;
         if (key == .string and shape.sorted_string_slots.len == shape.field_keys.len)
             return shapeStringSlot(shape, key.string);
         for (shape.field_keys, 0..) |field_key, slot| {
@@ -533,8 +622,44 @@ pub const Table = struct {
         return self.map.getContext(key, .{});
     }
 
+    pub fn rawGetHashedString(self: *const Table, name: []const u8, key_hash: u64) ?Value {
+        const key = Value{ .string = name };
+        if (self.slotForKey(key)) |slot| if (self.rawGetSlot(slot)) |value| return value;
+        for (self.choices) |cell| {
+            if (cell.value != .nil and rawEqual(cell.key, key)) return cell.value;
+        }
+        return self.map.getAdapted(name, StringLookupContext{ .key_hash = key_hash });
+    }
+
+    // A positive own field can be cached, but the live Value is always read.
+    // A traced miss records only the nil locations already visited by this
+    // lookup, so an inherited-cache fill never repeats the receiver search.
+    const OwnMissWitness = struct {
+        slot: ?*Value = null,
+        map_value: ?*Value = null,
+    };
+    fn ownHashedStringValuePtr(self: *Table, name: []const u8, key_hash: u64, witness: ?*OwnMissWitness) ?*Value {
+        if (self.native_namespace != null or !self.owns_slots or
+            self.global_tail != null or self.choices.len != 0) return null;
+        if (self.shape != null) {
+            if (self.slotForKey(.{ .string = name })) |slot| {
+                const value = self.slotPtr(slot) orelse return null;
+                if (witness) |miss| miss.slot = value;
+                if (value.* != .nil) return value;
+            }
+        }
+        const value = self.map.getPtrAdapted(name, StringLookupContext{ .key_hash = key_hash });
+        if (witness) |miss| miss.map_value = value;
+        if (value) |ptr| if (ptr.* != .nil) return ptr;
+        return null;
+    }
+
     pub fn rawGetNumber(self: *const Table, number: f64) ?Value {
         if (self.arraySlotForNumber(number)) |slot| if (self.rawGetArraySlot(slot)) |value| return value;
+        if (!self.numeric_mirror_disabled and self.numeric_mirror.len != 0) if (positiveInteger(number)) |index| if (index <= self.numeric_mirror.len) {
+            const value = self.numeric_mirror[index - 1];
+            return if (value == .nil) null else value;
+        };
         if (self.shape == null and self.choices.len == 0)
             return if (self.has_hashed_number) self.map.getAdapted(number, NumberLookupContext{}) else null;
         const key = Value{ .number = number };
@@ -552,12 +677,12 @@ pub const Table = struct {
         self.markMutated();
         if (key == .number) if (self.genericArrayIndex(key.number)) |index| {
             if (self.arraySlotForNumber(key.number)) |slot| {
-                _ = self.map.removeContext(key, .{});
+                if (self.map.removeContext(key, .{})) self.markMapStructuralMutation();
                 self.rawSetArraySlot(slot, value);
                 return;
             }
             if (value != .nil) if (try self.ensureGenericArraySlot(allocator, index)) |slot| {
-                _ = self.map.removeContext(key, .{});
+                if (self.map.removeContext(key, .{})) self.markMapStructuralMutation();
                 self.rawSetArraySlot(slot, value);
                 return;
             };
@@ -568,10 +693,17 @@ pub const Table = struct {
                 return self.rawSetChoice(@intCast(choice), key, value);
         }
         if (value == .nil) {
-            _ = self.map.removeContext(key, .{});
+            if (self.map.removeContext(key, .{})) self.markMapStructuralMutation();
+            self.noteNumericMapWrite(key, value);
             return;
         }
+        const old_count = self.map.count();
+        const old_capacity = self.map.capacity();
         try self.map.putContext(allocator, key, value, .{});
+        if (self.map.count() != old_count or self.map.capacity() != old_capacity)
+            self.markMapStructuralMutation();
+        self.maybeBuildNumericMirror(allocator, key, value);
+        self.noteNumericMapWrite(key, value);
         if (key == .number) self.has_hashed_number = true;
     }
 
@@ -626,6 +758,12 @@ pub const Table = struct {
     };
 
     pub fn iterator(self: *Table) Iterator {
+        // Iterator.Entry exposes mutable value pointers. Existing callers only
+        // read them, but invalidate the auxiliary mirror before exposing one.
+        if (self.allStringShape() and self.has_hashed_number) {
+            self.numeric_mirror_disabled = true;
+            self.dense_prefix_valid = false;
+        }
         if (self.has_identity_key) markLoadDataEffect();
         return .{ .table = self, .hash = self.map.iterator() };
     }
@@ -635,6 +773,7 @@ pub const Table = struct {
     }
 
     pub fn rawLen(self: *const Table) usize {
+        if (self.allStringShape() and self.dense_prefix_valid) return self.dense_prefix_len;
         var low: usize = if (self.append_index == 0) 0 else self.append_index - 1;
         if (low != 0 and !self.hasArrayIndex(low)) {
             var high = low;
@@ -747,6 +886,7 @@ pub const NextIterationHint = struct {
 };
 
 threadlocal var load_data_effect_probe: ?*bool = null;
+threadlocal var load_data_pending_probe: ?*bool = null;
 
 pub fn beginLoadDataEffectProbe(flag: *bool) ?*bool {
     const previous = load_data_effect_probe;
@@ -760,6 +900,22 @@ pub fn endLoadDataEffectProbe(previous: ?*bool) void {
 
 pub fn markLoadDataEffect() void {
     if (load_data_effect_probe) |flag| flag.* = true;
+}
+
+// A nested read-only dependency has not reached the worker cache yet. Do not
+// promote this execution, but allow a later page to retry once it has.
+pub fn beginLoadDataPendingProbe(flag: *bool) ?*bool {
+    const previous = load_data_pending_probe;
+    load_data_pending_probe = flag;
+    return previous;
+}
+
+pub fn endLoadDataPendingProbe(previous: ?*bool) void {
+    load_data_pending_probe = previous;
+}
+
+pub fn markLoadDataPending() void {
+    if (load_data_pending_probe) |flag| flag.* = true;
 }
 
 const module_state_page_shift = 8;
@@ -801,9 +957,91 @@ const GlobalScope = struct {
     global_tail: ?*GlobalTail,
 };
 
+// Nonces prevent a stale site pointer from surviving page-arena address reuse.
+var next_field_cache_context_nonce: std.atomic.Value(u64) = .init(1);
+fn takeFieldCacheContextNonce() u64 {
+    while (true) {
+        const current = next_field_cache_context_nonce.load(.monotonic);
+        if (current == std.math.maxInt(u64)) return 0;
+        if (next_field_cache_context_nonce.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) == null)
+            return current;
+    }
+}
+
+const FieldCache = struct {
+    site_id: u64 = 0,
+    context_nonce: u64 = 0,
+    owner_context_nonce: u64 = 0,
+    table_nonce: u64 = 0,
+    table_epoch: u64 = 0,
+    table: ?*Table = null,
+    value: ?*Value = null,
+};
+const field_cache_entries = 4096;
+// Spread nearby function IDs and field ordinals across the direct-mapped cache.
+fn fieldCacheIndex(site_id: u64) usize {
+    comptime std.debug.assert(field_cache_entries == 4096);
+    return @intCast((site_id *% 0x9e3779b97f4a7c15) >> 52);
+}
+threadlocal var field_cache: [field_cache_entries]FieldCache = [_]FieldCache{.{}} ** field_cache_entries;
+// A positive named slot is stable across fresh instances of one program shape.
+// This cache holds only metadata, never a Value pointer from another table.
+const ShapeSiteCache = struct {
+    site_id: u64 = 0,
+    program_generation: u64 = 0,
+    shape_id: u32 = 0,
+    slot: u32 = 0,
+};
+threadlocal var shape_site_cache: [field_cache_entries]ShapeSiteCache =
+    [_]ShapeSiteCache{.{}} ** field_cache_entries;
+
+// A bounded path of table-valued __index links. The path holds live locations,
+// never a copied Value, and is useful across reads of one mutable receiver.
+const inherited_link_limit = 3;
+const inherited_site_entries = 1024;
+const InheritedHop = struct {
+    table: *Table,
+    owner_nonce: u64,
+    nonce: u64,
+    epoch: u64,
+    shape: ?*const Shape,
+    own_slot: ?*Value,
+    own_map_value: ?*Value,
+    metatable: *Table,
+    mt_owner_nonce: u64,
+    mt_nonce: u64,
+    mt_epoch: u64,
+    mt_shape: ?*const Shape,
+    index_value: *Value,
+    parent: *Table,
+};
+const InheritedTerminal = struct {
+    table: ?*Table = null,
+    owner_nonce: u64 = 0,
+    nonce: u64 = 0,
+    epoch: u64 = 0,
+    shape: ?*const Shape = null,
+    value: ?*Value = null,
+};
+const InheritedSiteCache = struct {
+    site_id: u64 = 0,
+    context_nonce: u64 = 0,
+    count: u8 = 0,
+    hops: [inherited_link_limit]InheritedHop = undefined,
+    terminal: InheritedTerminal = .{},
+};
+fn inheritedSiteIndex(site_id: u64) usize {
+    return @intCast((site_id *% 0x9e3779b97f4a7c15) >> 54);
+}
+threadlocal var inherited_site_cache: [inherited_site_entries]InheritedSiteCache =
+    [_]InheritedSiteCache{.{}} ** inherited_site_entries;
+
 pub const Context = struct {
     allocator: std.mem.Allocator,
+    field_cache_nonce: u64 = 0,
+    next_field_cache_table_nonce: u64 = 1,
     // Lua strings compare/hash by bytes; runtime concat results need ownership, not hash dedup.
+    // Context-lifetime strings and immutable callable descriptors.
     string_arena: std.heap.ArenaAllocator,
     globals: []Value,
     root_globals: []Value,
@@ -813,11 +1051,13 @@ pub const Context = struct {
     root_tail_dense: bool = false,
     global_tail: ?*GlobalTail = null,
     program_shapes: []const Shape = &.{},
+    program_shape_generation: u64 = 0,
     module_export_shape_ids: []const u32 = &.{},
     module_root_entries: []const FunctionFn = &.{},
     function_module_ids: []const u32 = &.{},
     string_metatable: ?*Table = null,
     last_error: Value = .nil,
+    last_error_present: bool = false,
     aot_error_name: StableErrorName = .{},
     depth: usize = 0,
     max_depth: usize = 1000,
@@ -864,6 +1104,7 @@ pub const Context = struct {
         root_tail_cache_valid.* = false;
         return .{
             .allocator = allocator,
+            .field_cache_nonce = takeFieldCacheContextNonce(),
             .string_arena = .init(allocator),
             .globals = globals,
             .root_globals = globals,
@@ -876,6 +1117,7 @@ pub const Context = struct {
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
         var child = try initProgram(allocator, self.root_globals.len, self.module_count);
         child.program_shapes = self.program_shapes;
+        child.program_shape_generation = self.program_shape_generation;
         child.module_export_shape_ids = self.module_export_shape_ids;
         child.module_root_entries = self.module_root_entries;
         child.function_module_ids = self.function_module_ids;
@@ -929,6 +1171,16 @@ pub const Context = struct {
         self.host = host;
     }
 
+    pub fn setLuaError(self: *Context, value: Value) void {
+        self.last_error = value;
+        self.last_error_present = true;
+    }
+
+    pub fn clearLuaError(self: *Context) void {
+        self.last_error = .nil;
+        self.last_error_present = false;
+    }
+
     pub fn setAotErrorName(self: *Context, name: []const u8) void {
         self.aot_error_name.set(name);
     }
@@ -944,8 +1196,12 @@ pub const Context = struct {
     pub fn adoptFailure(self: *Context, child: *const Context) !void {
         if (child.last_error == .string) {
             self.last_error = .{ .string = try self.allocator.dupe(u8, child.last_error.string) };
+            self.last_error_present = child.last_error_present;
         } else {
+            // A nil payload has no ownership boundary. Other non-string
+            // values may refer to the child's arena and remain unadopted.
             self.last_error = .nil;
+            self.last_error_present = child.last_error_present and child.last_error == .nil;
         }
         if (child.aotErrorName()) |name| {
             self.setAotErrorName(name);
@@ -976,18 +1232,37 @@ pub const Context = struct {
         self.next_identity +%= 1;
         return identity;
     }
+    fn storeFunction(self: *Context, function: FunctionValue) !Value {
+        const descriptor = try self.string_arena.allocator().create(FunctionValue);
+        descriptor.* = function;
+        return .{ .callable = descriptor };
+    }
+
     pub fn makeFunction(self: *Context, id: u32, entry: FunctionFn, captures: []const *Cell) !Value {
         const identity = try self.takeFunctionIdentity();
-        const env: FunctionEnv = if (captures.len == 0) .{} else blk: {
-            const owned = try self.allocator.dupe(*Cell, captures);
-            const value = try self.allocator.create(Env);
-            value.* = .{
-                .captures = owned,
-                .capture_view = .{ .direct = owned },
-            };
-            break :blk FunctionEnv.closure(value);
+        if (captures.len == 0)
+            return self.storeFunction(.{ .id = id, .identity = identity, .entry = entry });
+        // Keep the descriptor, environment, and copied capture pointers in
+        // one stable allocation. The cells themselves stay shared and mutable.
+        const CapturedFunction = struct { function: FunctionValue, env: Env };
+        const capture_bytes = std.math.mul(usize, captures.len, @sizeOf(*Cell)) catch return error.OutOfMemory;
+        const total_bytes = std.math.add(usize, @sizeOf(CapturedFunction), capture_bytes) catch return error.OutOfMemory;
+        const bytes = try self.string_arena.allocator().alignedAlloc(u8, .of(CapturedFunction), total_bytes);
+        const record: *CapturedFunction = @ptrCast(bytes.ptr);
+        const capture_ptr: [*]*Cell = @ptrCast(@alignCast(bytes.ptr + @sizeOf(CapturedFunction)));
+        const owned = capture_ptr[0..captures.len];
+        @memcpy(owned, captures);
+        record.env = .{
+            .captures = owned,
+            .capture_view = .{ .direct = owned },
         };
-        return .{ .callable = .{ .id = id, .env = env, .identity = identity, .entry = entry } };
+        record.function = .{
+            .id = id,
+            .env = FunctionEnv.closure(&record.env),
+            .identity = identity,
+            .entry = entry,
+        };
+        return .{ .callable = &record.function };
     }
 
     pub fn makeFunctionKnown(self: *Context, id: u32, comptime entry: DirectFunctionFn, captures: []const *Cell) !Value {
@@ -1021,7 +1296,7 @@ pub const Context = struct {
         return self.callEntryBuffered(entry, captures, args, null);
     }
 
-    pub fn callFunctionBuffered(self: *Context, value: FunctionValue, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+    pub fn callFunctionBuffered(self: *Context, value: *const FunctionValue, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
         if (value.id == native_function_id) return self.callEntryBuffered(value.entry, value.captures(), args, result_buffer);
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
@@ -1031,7 +1306,7 @@ pub const Context = struct {
         return self.callEntryBuffered(value.entry, value.captures(), args, result_buffer);
     }
 
-    pub fn callFunction(self: *Context, value: FunctionValue, args: []const Value) anyerror![]const Value {
+    pub fn callFunction(self: *Context, value: *const FunctionValue, args: []const Value) anyerror![]const Value {
         return self.callFunctionBuffered(value, args, null);
     }
 
@@ -1545,27 +1820,39 @@ pub const Context = struct {
     }
     pub fn newNative(self: *Context, host: ?*anyopaque, comptime call: anytype) !Value {
         const identity = try self.takeFunctionIdentity();
-        return .{ .callable = .{
+        return self.storeFunction(.{
             .id = native_function_id,
             .env = FunctionEnv.native(host),
             .identity = identity,
             .entry = stabilizeNative(call),
-        } };
+        });
     }
 
     pub fn newNativeBuffered(self: *Context, host: ?*anyopaque, comptime call: anytype) !Value {
         const identity = try self.takeFunctionIdentity();
-        return .{ .callable = .{
+        return self.storeFunction(.{
             .id = native_function_id,
             .env = FunctionEnv.native(host),
             .identity = identity,
             .entry = stabilizeNativeBuffered(call),
-        } };
+        });
+    }
+
+    fn assignFieldCacheIdentity(self: *Context, table: *Table) void {
+        if (self.field_cache_nonce != 0 and self.next_field_cache_table_nonce != 0) {
+            table.field_cache_owner_nonce = self.field_cache_nonce;
+            table.field_cache_nonce = self.next_field_cache_table_nonce;
+            self.next_field_cache_table_nonce = if (self.next_field_cache_table_nonce == std.math.maxInt(u64))
+                0
+            else
+                self.next_field_cache_table_nonce + 1;
+        }
     }
 
     pub fn newTable(self: *Context) !*Table {
         const table = try self.allocator.create(Table);
         table.* = .{};
+        self.assignFieldCacheIdentity(table);
         return table;
     }
 
@@ -1586,6 +1873,7 @@ pub const Context = struct {
         const table = try self.allocator.create(Table);
         errdefer self.allocator.destroy(table);
         table.* = .{ .shape = shape };
+        self.assignFieldCacheIdentity(table);
         if (shape.field_count != 0) {
             table.slots = try self.allocator.alloc(Value, shape.field_count);
             @memset(table.slots, .nil);
@@ -1667,6 +1955,204 @@ pub const Context = struct {
             else => return error.IndexType,
         }
     }
+    // The key hash is compiled from the exact immutable field-name bytes. Only
+    // lookup work is reused: Values and each __index handler remain live reads.
+    fn getHashedFieldAfterOwnMiss(self: *Context, object: Value, table: *Table, name: []const u8, key_hash: u64) anyerror!Value {
+        const index_hash = comptime static_fields.hashStringKey("__index");
+        if (table.metatable) |mt| if (mt.rawGetHashedString("__index", index_hash)) |indexer| {
+            return switch (indexer) {
+                .table => |other| self.getHashedField(.{ .table = other }, name, key_hash),
+                else => blk: {
+                    const out = try self.callValue(indexer, &.{ object, .{ .string = name } });
+                    defer freeResults(out);
+                    break :blk if (out.len == 0) .nil else out[0];
+                },
+            };
+        };
+        return .nil;
+    }
+
+    fn programShapeId(self: *const Context, shape: *const Shape) ?u32 {
+        if (self.program_shape_generation == 0 or self.program_shapes.len == 0) return null;
+        const first = @intFromPtr(self.program_shapes.ptr);
+        const address = @intFromPtr(shape);
+        if (address < first) return null;
+        const delta = address - first;
+        if (delta % @sizeOf(Shape) != 0) return null;
+        const index = delta / @sizeOf(Shape);
+        if (index >= self.program_shapes.len or index > std.math.maxInt(u32)) return null;
+        return @intCast(index);
+    }
+
+    fn inheritedCacheable(table: *const Table) bool {
+        return table.field_cache_nonce != 0 and table.native_namespace == null and
+            table.owns_slots and table.global_tail == null and table.choices.len == 0;
+    }
+
+    fn inheritedCacheHit(self: *Context, receiver: *Table, site_id: u64) ?Value {
+        const cached = &inherited_site_cache[inheritedSiteIndex(site_id)];
+        if (cached.site_id != site_id or cached.context_nonce != self.field_cache_nonce or
+            cached.count == 0 or cached.count > inherited_link_limit) return null;
+        var current = receiver;
+        for (cached.hops[0..cached.count]) |hop| {
+            if (hop.table != current or current.field_cache_owner_nonce != hop.owner_nonce or
+                current.field_cache_nonce != hop.nonce or current.field_cache_epoch != hop.epoch or
+                current.shape != hop.shape or !inheritedCacheable(current) or
+                (hop.own_slot != null and hop.own_slot.?.* != .nil) or
+                (hop.own_map_value != null and hop.own_map_value.?.* != .nil)) return null;
+            const mt = current.metatable orelse return null;
+            if (mt != hop.metatable or mt.field_cache_owner_nonce != hop.mt_owner_nonce or
+                mt.field_cache_nonce != hop.mt_nonce or mt.field_cache_epoch != hop.mt_epoch or
+                mt.shape != hop.mt_shape or !inheritedCacheable(mt)) return null;
+            const indexer = hop.index_value.*;
+            if (indexer != .table or indexer.table != hop.parent) return null;
+            current = hop.parent;
+        }
+        const terminal = cached.terminal;
+        if (terminal.table != current or current.field_cache_owner_nonce != terminal.owner_nonce or
+            current.field_cache_nonce != terminal.nonce or current.field_cache_epoch != terminal.epoch or
+            current.shape != terminal.shape or !inheritedCacheable(current)) return null;
+        const value = terminal.value orelse return null;
+        return if (value.* == .nil) null else value.*;
+    }
+
+    // Called after the receiver's own search. Every subsequent own lookup is
+    // performed once, and its nil locations become guards for a future hit.
+    fn inheritedCacheFill(self: *Context, receiver: *Table, first_miss: Table.OwnMissWitness, name: []const u8, key_hash: u64, site_id: u64) anyerror!Value {
+        var candidate = InheritedSiteCache{ .site_id = site_id, .context_nonce = self.field_cache_nonce };
+        var current = receiver;
+        var witness = first_miss;
+        const index_hash = comptime static_fields.hashStringKey("__index");
+        while (true) {
+            if (candidate.count == inherited_link_limit or !inheritedCacheable(current))
+                return self.getHashedFieldAfterOwnMiss(.{ .table = current }, current, name, key_hash);
+            const mt = current.metatable orelse return .nil;
+            if (!inheritedCacheable(mt))
+                return self.getHashedFieldAfterOwnMiss(.{ .table = current }, current, name, key_hash);
+            var index_miss: Table.OwnMissWitness = .{};
+            const index_value = mt.ownHashedStringValuePtr("__index", index_hash, &index_miss) orelse {
+                // A map cell set to nil through an iterator is still returned
+                // by rawGetHashedString; leave that unusual case to the
+                // original dispatcher rather than changing its behavior.
+                if (index_miss.map_value != null)
+                    return self.getHashedFieldAfterOwnMiss(.{ .table = current }, current, name, key_hash);
+                return .nil;
+            };
+            if (index_value.* != .table)
+                return self.getHashedFieldAfterOwnMiss(.{ .table = current }, current, name, key_hash);
+            const parent = index_value.table;
+            if (!inheritedCacheable(parent))
+                return self.getHashedField(.{ .table = parent }, name, key_hash);
+            candidate.hops[candidate.count] = .{
+                .table = current,
+                .owner_nonce = current.field_cache_owner_nonce,
+                .nonce = current.field_cache_nonce,
+                .epoch = current.field_cache_epoch,
+                .shape = current.shape,
+                .own_slot = witness.slot,
+                .own_map_value = witness.map_value,
+                .metatable = mt,
+                .mt_owner_nonce = mt.field_cache_owner_nonce,
+                .mt_nonce = mt.field_cache_nonce,
+                .mt_epoch = mt.field_cache_epoch,
+                .mt_shape = mt.shape,
+                .index_value = index_value,
+                .parent = parent,
+            };
+            candidate.count += 1;
+            var parent_miss: Table.OwnMissWitness = .{};
+            if (parent.ownHashedStringValuePtr(name, key_hash, &parent_miss)) |value| {
+                candidate.terminal = .{
+                    .table = parent,
+                    .owner_nonce = parent.field_cache_owner_nonce,
+                    .nonce = parent.field_cache_nonce,
+                    .epoch = parent.field_cache_epoch,
+                    .shape = parent.shape,
+                    .value = value,
+                };
+                inherited_site_cache[inheritedSiteIndex(site_id)] = candidate;
+                return value.*;
+            }
+            // Recursive getHashedField returns an iterator-written nil map
+            // cell as the own result, without following the parent metatable.
+            if (parent_miss.map_value != null) return .nil;
+            current = parent;
+            witness = parent_miss;
+        }
+    }
+
+    pub fn getFieldAtSite(self: *Context, object: Value, name: []const u8, key_hash: u64, site_id: u64) anyerror!Value {
+        if (object != .table or self.field_cache_nonce == 0 or object.table.field_cache_nonce == 0 or
+            object.table.native_namespace != null or !object.table.owns_slots or object.table.global_tail != null or object.table.choices.len != 0)
+            return self.getHashedField(object, name, key_hash);
+        const table = object.table;
+        const cache_index: usize = fieldCacheIndex(site_id);
+        const shape_entry = &shape_site_cache[cache_index];
+        if (table.shape != null and self.program_shape_generation != 0 and
+            shape_entry.site_id == site_id and
+            shape_entry.program_generation == self.program_shape_generation and
+            shape_entry.shape_id < self.program_shapes.len and
+            table.shape == &self.program_shapes[shape_entry.shape_id])
+        {
+            if (table.rawGetSlot(shape_entry.slot)) |value| return value;
+        }
+        const entry = &field_cache[cache_index];
+        if (entry.site_id == site_id and entry.context_nonce == self.field_cache_nonce and
+            entry.owner_context_nonce == table.field_cache_owner_nonce and
+            entry.table_nonce == table.field_cache_nonce and entry.table_epoch == table.field_cache_epoch and
+            entry.table == table)
+        {
+            if (entry.value) |value| if (value.* != .nil) return value.*;
+        }
+        if (table.metatable != null) if (self.inheritedCacheHit(table, site_id)) |value| return value;
+        var own_witness: Table.OwnMissWitness = .{};
+        if (table.ownHashedStringValuePtr(name, key_hash, &own_witness)) |value| {
+            // The own lookup already found this key. A Value pointer inside the
+            // slot allocation identifies its stable shape slot without another
+            // binary search or string hash.
+            if (table.shape) |shape| if (self.programShapeId(shape)) |shape_id| {
+                if (table.slots.len != 0) {
+                    const first = @intFromPtr(table.slots.ptr);
+                    const address = @intFromPtr(value);
+                    if (address >= first) {
+                        const delta = address - first;
+                        if (delta % @sizeOf(Value) == 0 and delta / @sizeOf(Value) < table.slots.len) {
+                            shape_entry.* = .{
+                                .site_id = site_id,
+                                .program_generation = self.program_shape_generation,
+                                .shape_id = shape_id,
+                                .slot = @intCast(delta / @sizeOf(Value)),
+                            };
+                        }
+                    }
+                }
+            };
+            entry.* = .{ .site_id = site_id, .context_nonce = self.field_cache_nonce, .owner_context_nonce = table.field_cache_owner_nonce, .table_nonce = table.field_cache_nonce, .table_epoch = table.field_cache_epoch, .table = table, .value = value };
+            return value.*;
+        }
+        return self.inheritedCacheFill(table, own_witness, name, key_hash, site_id);
+    }
+
+    pub fn getHashedField(self: *Context, object: Value, name: []const u8, key_hash: u64) anyerror!Value {
+        const index_hash = comptime static_fields.hashStringKey("__index");
+        switch (object) {
+            .table => |table| {
+                if (table.rawGetHashedString(name, key_hash)) |value| return value;
+                return self.getHashedFieldAfterOwnMiss(object, table, name, key_hash);
+            },
+            .string => {
+                if (self.string_metatable) |mt| if (mt.rawGetHashedString("__index", index_hash)) |indexer| {
+                    if (indexer == .table) return indexer.table.rawGetHashedString(name, key_hash) orelse .nil;
+                    const out = try self.callValue(indexer, &.{ object, .{ .string = name } });
+                    defer freeResults(out);
+                    return if (out.len == 0) .nil else out[0];
+                };
+                return error.IndexType;
+            },
+            else => return error.IndexType,
+        }
+    }
+
     pub fn setIndex(self: *Context, object: Value, key: Value, value: Value) anyerror!void {
         if (object != .table) return error.IndexType;
         const table = object.table;
@@ -1902,6 +2388,110 @@ test "string value hashing preserves prior iteration order" {
         try std.testing.expectEqual(previous.final(), context.hash(value));
     }
 }
+test "prehashed string lookup preserves mutable map shape choice and native slots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    var bytes: [80]u8 = undefined;
+    for (&bytes, 0..) |*byte, index| byte.* = @intCast((index * 37 + 11) % 251);
+    const lengths = [_]usize{ 0, 1, 3, 4, 7, 8, 15, 16, 17, 31, 32, 47, 48, 49, 63, 64, 79 };
+    for (lengths) |len| try table.rawSet(ctx.allocator, .{ .string = bytes[0..len] }, .{ .number = @floatFromInt(len) });
+    for (lengths) |len| {
+        const name = bytes[0..len];
+        try std.testing.expect(rawEqual(table.rawGet(.{ .string = name }).?, table.rawGetHashedString(name, static_fields.hashStringKey(name)).?));
+    }
+    const hash = comptime static_fields.hashStringKey("field");
+    try table.rawSet(ctx.allocator, .{ .string = "field" }, .{ .number = 1 });
+    for (0..256) |index| {
+        const name = try std.fmt.allocPrint(ctx.allocator, "grow_{d}", .{index});
+        try table.rawSet(ctx.allocator, .{ .string = name }, .{ .number = @floatFromInt(index) });
+    }
+    try std.testing.expectEqual(@as(f64, 1), table.rawGetHashedString("field", hash).?.number);
+    var it = table.iterator();
+    while (it.next()) |entry| if (rawEqual(entry.key_ptr.*, .{ .string = "field" })) {
+        entry.value_ptr.* = .{ .number = 2 };
+    };
+    try std.testing.expectEqual(@as(f64, 2), table.rawGetHashedString("field", hash).?.number);
+    try std.testing.expect(table.rawGetHashedString("not-field", hash) == null);
+    try table.rawSet(ctx.allocator, .{ .string = "field" }, .nil);
+    try std.testing.expect(table.rawGetHashedString("field", hash) == null);
+    try table.rawSet(ctx.allocator, .{ .string = "field" }, .{ .number = 3 });
+    try std.testing.expectEqual(@as(f64, 3), table.rawGetHashedString("field", hash).?.number);
+
+    const keys = [_]Value{.{ .string = "slot" }};
+    const shape = Shape{ .field_keys = &keys, .field_count = 1, .choice_count = 1 };
+    const shaped = try ctx.newShapedTable(&shape);
+    try shaped.rawSetSlot(0, .{ .number = 4 });
+    try shaped.rawSetChoice(0, .{ .string = "choice" }, .{ .number = 5 });
+    try shaped.rawSet(ctx.allocator, .{ .string = "overflow" }, .{ .number = 6 });
+    for ([_][]const u8{ "slot", "choice", "overflow" }) |name|
+        try std.testing.expect(rawEqual(shaped.rawGet(.{ .string = name }).?, shaped.rawGetHashedString(name, static_fields.hashStringKey(name)).?));
+    const native = try ctx.newNativeNamespace(.string);
+    try native.rawSetNativeField(.string, "find", .{ .number = 7 });
+    try std.testing.expectEqual(@as(f64, 7), native.rawGetHashedString("find", comptime static_fields.hashStringKey("find")).?.number);
+}
+
+test "prehashed field lookup keeps metatable callbacks and string semantics live" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const object = try ctx.newTable();
+    const mt = try ctx.newTable();
+    object.metatable = mt;
+    const parent = try ctx.newTable();
+    const parent_mt = try ctx.newTable();
+    const grandparent = try ctx.newTable();
+    parent.metatable = parent_mt;
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = parent });
+    try parent_mt.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = grandparent });
+    try grandparent.rawSet(ctx.allocator, .{ .string = "field" }, .{ .number = 11 });
+    const hash = comptime static_fields.hashStringKey("field");
+    try std.testing.expectEqual(@as(f64, 11), (try ctx.getHashedField(.{ .table = object }, "field", hash)).number);
+    try grandparent.rawSet(ctx.allocator, .{ .string = "field" }, .{ .number = 12 });
+    try std.testing.expectEqual(@as(f64, 12), (try ctx.getHashedField(.{ .table = object }, "field", hash)).number);
+    try object.rawSet(ctx.allocator, .{ .string = "field" }, .{ .boolean = false });
+    try std.testing.expectEqual(false, (try ctx.getHashedField(.{ .table = object }, "field", hash)).boolean);
+    try object.rawSet(ctx.allocator, .{ .string = "field" }, .nil);
+    var count: usize = 0;
+    const Probe = struct {
+        fn call(raw: ?*anyopaque, runtime: *Context, args: []const Value) ![]const Value {
+            const calls: *usize = @ptrCast(@alignCast(raw.?));
+            calls.* += 1;
+            try std.testing.expectEqualStrings("field", args[1].string);
+            try args[0].table.rawSet(runtime.allocator, args[1], .{ .number = 14 });
+            return &.{};
+        }
+        fn fail(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return error.IndexProbeFailure;
+        }
+    };
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNative(&count, Probe.call));
+    try std.testing.expect((try ctx.getHashedField(.{ .table = object }, "field", hash)) == .nil);
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqual(@as(f64, 14), (try ctx.getHashedField(.{ .table = object }, "field", hash)).number);
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try object.rawSet(ctx.allocator, .{ .string = "field" }, .nil);
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNative(null, Probe.fail));
+    ctx.clearAotErrorName();
+    try std.testing.expectError(error.AotCallFailed, ctx.getHashedField(.{ .table = object }, "field", hash));
+    try std.testing.expectEqualStrings("IndexProbeFailure", ctx.aotErrorName().?);
+    ctx.clearAotErrorName();
+
+    const string_mt = try ctx.newTable();
+    ctx.string_metatable = string_mt;
+    try string_mt.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = parent });
+    try parent.rawSet(ctx.allocator, .{ .string = "field" }, .{ .number = 15 });
+    try std.testing.expectEqual(@as(f64, 15), (try ctx.getHashedField(.{ .string = "abc" }, "field", hash)).number);
+    try parent.rawSet(ctx.allocator, .{ .string = "field" }, .nil);
+    // The existing string-table branch performs a raw read, unlike the table
+    // __index chain. The specialized reader must preserve that distinction.
+    try std.testing.expect((try ctx.getHashedField(.{ .string = "abc" }, "field", hash)) == .nil);
+    try std.testing.expectError(error.IndexType, ctx.getHashedField(.nil, "field", hash));
+}
+
 test "AOT module resolver caches numeric identities and exposes package.loaded aliases" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -2485,7 +3075,7 @@ test "fixed dynamic calls borrow and truncate caller result storage" {
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
 
-    const buffered = Value{ .callable = .{ .id = 0, .identity = 1, .entry = stabilizeBuffered(bufferedTripleProbe) } };
+    const buffered = Value{ .callable = &.{ .id = 0, .identity = 1, .entry = stabilizeBuffered(bufferedTripleProbe) } };
     var storage: [2]Value = undefined;
     const borrowed = try ctx.callValueFixed(buffered, &.{}, &storage);
     defer borrowed.deinit();
@@ -2494,13 +3084,13 @@ test "fixed dynamic calls borrow and truncate caller result storage" {
     try std.testing.expectEqual(@as(f64, 1), borrowed.values[0].number);
     try std.testing.expectEqual(@as(f64, 2), borrowed.values[1].number);
 
-    const empty_callable = Value{ .callable = .{ .id = 2, .identity = 3, .entry = stabilizeBuffered(bufferedEmptyProbe) } };
+    const empty_callable = Value{ .callable = &.{ .id = 2, .identity = 3, .entry = stabilizeBuffered(bufferedEmptyProbe) } };
     const empty = try ctx.callValueFixed(empty_callable, &.{}, &storage);
     defer empty.deinit();
     try std.testing.expect(!empty.owned);
     try std.testing.expectEqual(@as(usize, 0), empty.values.len);
 
-    const unbuffered = Value{ .callable = .{ .id = 1, .identity = 2, .entry = stabilize(guardTestExpected) } };
+    const unbuffered = Value{ .callable = &.{ .id = 1, .identity = 2, .entry = stabilize(guardTestExpected) } };
     const copied = try ctx.callValueFixed(unbuffered, &.{.{ .number = 7 }}, &storage);
     defer copied.deinit();
     try std.testing.expect(copied.owned);
@@ -2540,7 +3130,7 @@ test "fixed dynamic calls borrow and truncate caller result storage" {
     const lua_table = try ctx.newTable();
     const lua_mt = try ctx.newTable();
     lua_table.metatable = lua_mt;
-    const lua_method = Value{ .callable = .{ .id = 3, .identity = 4, .entry = stabilizeBuffered(bufferedCallableTableProbe) } };
+    const lua_method = Value{ .callable = &.{ .id = 3, .identity = 4, .entry = stabilizeBuffered(bufferedCallableTableProbe) } };
     try lua_mt.rawSet(ctx.allocator, .{ .string = "__call" }, lua_method);
     const table_borrowed = try ctx.callValueFixed(.{ .table = lua_table }, &.{.{ .number = 12 }}, &storage);
     defer table_borrowed.deinit();
@@ -3075,8 +3665,111 @@ test "program string shapes use sorted slots with open fallback" {
     try std.testing.expectEqual(@as(usize, 1), table.map.count());
 }
 
+test "compact callable descriptors preserve copies identities and live captures" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    var first_cell = Cell{ .value = .{ .number = 11 } };
+    var second_cell = Cell{ .value = .{ .number = 22 } };
+    const first = try ctx.makeFunction(7, stabilizeBuffered(bufferedResultProbe), &.{&first_cell});
+    const second = try ctx.makeFunction(7, stabilizeBuffered(bufferedResultProbe), &.{&second_cell});
+    const copy = first;
+    const first_captures = first.callable.capturesPtr().?;
+    try std.testing.expect(first.callable != second.callable);
+    try std.testing.expect(copy.callable == first.callable);
+    try std.testing.expect(rawEqual(copy, first));
+    try std.testing.expect(!rawEqual(first, second));
+
+    const keys = try ctx.newTable();
+    try keys.rawSet(ctx.allocator, first, .{ .number = 101 });
+    try keys.rawSet(ctx.allocator, second, .{ .number = 202 });
+    try std.testing.expectEqual(@as(f64, 101), keys.rawGet(copy).?.number);
+    try std.testing.expectEqual(@as(f64, 202), keys.rawGet(second).?.number);
+
+    const plain = try ctx.makeFunction(7, stabilizeBuffered(bufferedResultProbe), &.{});
+    const another_plain = try ctx.makeFunction(7, stabilizeBuffered(bufferedResultProbe), &.{});
+    try std.testing.expect(plain.callable.capturesPtr() == null);
+    try std.testing.expect(!rawEqual(plain, another_plain));
+    // Growing the arena must not move either an earlier descriptor or its
+    // adjacent environment. No closure is interned merely by its source ID.
+    for (0..256) |_| _ = try ctx.makeFunction(7, stabilizeBuffered(bufferedResultProbe), &.{});
+    try std.testing.expect(first.callable.capturesPtr().? == first_captures);
+    first_cell.value = .{ .number = 40 };
+    var storage: [1]Value = undefined;
+    const first_result = try ctx.callValueFixed(copy, &.{.{ .number = 2 }}, &storage);
+    defer first_result.deinit();
+    try std.testing.expect(!first_result.owned);
+    try std.testing.expectEqual(@as(f64, 42), first_result.values[0].number);
+    const second_result = try ctx.callValueFixed(second, &.{.{ .number = 3 }}, &storage);
+    defer second_result.deinit();
+    try std.testing.expectEqual(@as(f64, 25), second_result.values[0].number);
+}
+
+test "captured function stores copied pointer tails in its owning context" {
+    var first = try Context.init(std.testing.allocator, 0);
+    defer first.deinit();
+    var second = try Context.init(std.testing.allocator, 0);
+    defer second.deinit();
+    var cells: [17]Cell = undefined;
+    var pointers: [17]*Cell = undefined;
+    for (&cells, &pointers, 0..) |*cell, *ptr, index| {
+        cell.* = .{ .value = .{ .number = @floatFromInt(index) } };
+        ptr.* = cell;
+    }
+    const entry = stabilizeBuffered(bufferedResultProbe);
+    const one = try first.makeFunction(7, entry, &.{pointers[0]});
+    const many = try first.makeFunction(7, entry, &pointers);
+    const other = try second.makeFunction(7, entry, &pointers);
+    const captured = many.callable.capturesPtr().?.direct;
+    try std.testing.expectEqual(@as(usize, pointers.len), captured.len);
+    try std.testing.expectEqual(@as(usize, 0), @intFromPtr(captured.ptr) % @alignOf(*Cell));
+    try std.testing.expect(@intFromPtr(captured.ptr) >= @intFromPtr(many.callable));
+    try std.testing.expect(@intFromPtr(captured.ptr) - @intFromPtr(many.callable) < @sizeOf(FunctionValue) + @sizeOf(Env) + @alignOf(*Cell));
+    pointers[0] = &cells[1];
+    try std.testing.expect(one.callable.capturesPtr().?.direct[0] == &cells[0]);
+    try std.testing.expect(captured[0] == &cells[0]);
+    try std.testing.expect(other.callable.capturesPtr().?.direct[0] == &cells[0]);
+    try std.testing.expect(other.callable.capturesPtr().?.direct.ptr != captured.ptr);
+    for (captured, 0..) |cell, index| try std.testing.expect(cell == &cells[index]);
+    for (0..512) |_| _ = try first.makeFunction(7, entry, &pointers);
+    try std.testing.expect(many.callable.capturesPtr().?.direct.ptr == captured.ptr);
+    cells[0].value = .{ .number = 40 };
+    var storage: [1]Value = undefined;
+    const result = try first.callValueFixed(many, &.{.{ .number = 2 }}, &storage);
+    defer result.deinit();
+    try std.testing.expectEqual(@as(f64, 42), result.values[0].number);
+}
+
+test "compact native descriptors preserve host pointers through arena growth" {
+    var ctx = try Context.init(std.testing.allocator, 0);
+    defer ctx.deinit();
+    var host = Cell{ .value = .{ .number = 5 } };
+    const HostProbe = struct {
+        fn call(raw: ?*anyopaque, _: *Context, _: []const Value, buffer: ?[]Value) ![]const Value {
+            const cell: *Cell = @ptrCast(@alignCast(raw orelse return error.MissingHost));
+            const out = try returnBuffer(buffer, 1);
+            storeReturn(out, 0, cell.value);
+            return out;
+        }
+    };
+    const native = try ctx.newNativeBuffered(&host, HostProbe.call);
+    const copy = native;
+    for (0..256) |_| _ = try ctx.newNativeBuffered(null, HostProbe.call);
+    try std.testing.expect(native.callable.capturesPtr() == null);
+    try std.testing.expect(native.callable.captures().native == @as(?*anyopaque, @ptrCast(&host)));
+    try std.testing.expect(rawEqual(native, copy));
+    host.value = .{ .number = 19 };
+    var storage: [1]Value = undefined;
+    const result = try ctx.callValueFixed(copy, &.{}, &storage);
+    defer result.deinit();
+    try std.testing.expect(!result.owned);
+    try std.testing.expectEqual(@as(f64, 19), result.values[0].number);
+}
+
 test "runtime Value stays compact and function identities never wrap" {
-    try std.testing.expectEqual(@as(usize, 32), @sizeOf(Value));
+    try std.testing.expectEqual(@as(usize, 24), @sizeOf(Value));
+    try std.testing.expectEqual(@as(usize, 8), @alignOf(Value));
     try std.testing.expectEqual(@as(usize, 24), @sizeOf(FunctionValue));
     var ctx = try Context.init(std.testing.allocator, 0);
     defer ctx.deinit();
@@ -3104,4 +3797,458 @@ test "concat strings use owned arena without interning" {
     try std.testing.expect(rawEqual(first, second));
     try std.testing.expectEqual((ValueContext{}).hash(first), (ValueContext{}).hash(second));
     try std.testing.expect(first.string.ptr != second.string.ptr);
+}
+
+test "all-string shaped tables mirror numeric reads without changing iteration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{.{ .string = "_parse_data" }};
+    const sorted = [_]u32{0};
+    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const table = try ctx.newShapedTable(&shape);
+    try table.rawSet(ctx.allocator, keys[0], .{ .string = "metadata" });
+    try std.testing.expectEqual(@as(usize, 0), table.rawLen());
+    for (1..17) |i| {
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(i) }, .{ .number = @floatFromInt(i * 10) });
+        try std.testing.expectEqual(i, table.rawLen());
+        try std.testing.expectEqual(@as(f64, @floatFromInt(i * 10)), table.rawGetNumber(@floatFromInt(i)).?.number);
+    }
+    try std.testing.expectEqual(@as(usize, 16), table.numeric_mirror.len);
+    try std.testing.expectEqual(@as(usize, 16), table.map.count()); // metadata lives in its shape slot.
+    try table.rawSet(ctx.allocator, .{ .number = 8 }, .nil);
+    try std.testing.expect(table.rawGetNumber(8) == null);
+    try std.testing.expect(!table.dense_prefix_valid);
+    try std.testing.expectEqual(table.map.getContext(.{ .number = 16 }, .{}).?.number, table.rawGetNumber(16).?.number);
+    var seen: usize = 0;
+    var it = table.iterator();
+    while (it.next()) |entry| {
+        if (entry.key_ptr.* == .number) {
+            seen += 1;
+            try std.testing.expectEqual(table.map.getContext(entry.key_ptr.*, .{}).?.number, entry.value_ptr.number);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 15), seen);
+}
+
+test "numeric mirror does not hide metatable fallback or out-of-range keys" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{.{ .string = "name" }};
+    const sorted = [_]u32{0};
+    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const table = try ctx.newShapedTable(&shape);
+    const mt = try ctx.newTable();
+    const fallback = try ctx.newTable();
+    try fallback.rawSet(ctx.allocator, .{ .number = 2 }, .{ .string = "fallback" });
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = fallback });
+    table.metatable = mt;
+    try table.rawSet(ctx.allocator, .{ .number = 1 }, .{ .string = "first" });
+    try std.testing.expectEqualStrings("fallback", (try ctx.getIndex(.{ .table = table }, .{ .number = 2 })).string);
+    try table.rawSet(ctx.allocator, .{ .number = 40 }, .{ .number = 40 });
+    try std.testing.expectEqual(@as(f64, 40), table.rawGetNumber(40).?.number);
+    try table.rawSet(ctx.allocator, .{ .number = 1.5 }, .{ .string = "fraction" });
+    try std.testing.expectEqualStrings("fraction", table.rawGetNumber(1.5).?.string);
+    try table.rawSet(ctx.allocator, .{ .number = -1 }, .{ .string = "negative" });
+    try std.testing.expectEqualStrings("negative", table.rawGetNumber(-1).?.string);
+}
+
+test "numeric mirror and dense prefix match baseline after sparse mutations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{.{ .string = "label" }};
+    const sorted = [_]u32{0};
+    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const unoptimized_shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true };
+    const fast = try ctx.newShapedTable(&shape);
+    const old = try ctx.newShapedTable(&unoptimized_shape);
+    const writes = [_]struct { key: f64, value: Value }{
+        .{ .key = 1, .value = .{ .number = 10 } },
+        .{ .key = 2, .value = .{ .number = 20 } },
+        .{ .key = 3, .value = .{ .number = 30 } },
+        .{ .key = 2, .value = .{ .number = 21 } },
+        .{ .key = 40, .value = .{ .number = 40 } },
+        .{ .key = 1, .value = .nil },
+        .{ .key = 1, .value = .{ .number = 11 } },
+        .{ .key = 0, .value = .{ .number = 0 } },
+        .{ .key = 1.5, .value = .{ .number = 15 } },
+        .{ .key = 40, .value = .nil },
+    };
+    for (writes) |write| {
+        try fast.rawSet(ctx.allocator, .{ .number = write.key }, write.value);
+        try old.rawSet(ctx.allocator, .{ .number = write.key }, write.value);
+        try std.testing.expectEqual(old.rawLen(), fast.rawLen());
+        for ([_]f64{ 0, 1, 1.5, 2, 3, 4, 16, 40 }) |n| {
+            const before = old.rawGetNumber(n) orelse .nil;
+            const after = fast.rawGetNumber(n) orelse .nil;
+            try std.testing.expect(rawEqual(before, after));
+        }
+    }
+    var oi = old.iterator();
+    var fi = fast.iterator();
+    while (oi.next()) |entry| {
+        const counterpart = fi.next() orelse return error.IterationOrderChanged;
+        try std.testing.expect(rawEqual(entry.key_ptr.*, counterpart.key_ptr.*));
+        try std.testing.expect(rawEqual(entry.value_ptr.*, counterpart.value_ptr.*));
+    }
+    try std.testing.expect(fi.next() == null);
+}
+
+test "numeric mirror allocation is optional and map failures leave it coherent" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{.{ .string = "field" }};
+    const sorted = [_]u32{0};
+    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const first = try ctx.newShapedTable(&shape);
+    try first.map.ensureTotalCapacity(ctx.allocator, 8);
+    var fail_mirror = std.testing.FailingAllocator.init(ctx.allocator, .{ .fail_index = 0 });
+    try first.rawSet(fail_mirror.allocator(), .{ .number = 1 }, .{ .number = 11 });
+    try std.testing.expect(fail_mirror.has_induced_failure);
+    try std.testing.expect(first.numeric_mirror_disabled);
+    try std.testing.expectEqual(@as(f64, 11), first.rawGetNumber(1).?.number);
+
+    const second = try ctx.newShapedTable(&shape);
+    try second.rawSet(ctx.allocator, .{ .number = 1 }, .{ .number = 21 });
+    try std.testing.expect(second.numeric_mirror.len != 0);
+    var failed_at: ?usize = null;
+    for (2..100) |i| {
+        var fail_map = std.testing.FailingAllocator.init(ctx.allocator, .{ .fail_index = 0 });
+        second.rawSet(fail_map.allocator(), .{ .number = @floatFromInt(i) }, .{ .number = @floatFromInt(i * 10) }) catch |err| {
+            try std.testing.expect(err == error.OutOfMemory);
+            failed_at = i;
+            break;
+        };
+    }
+    const missing = failed_at orelse return error.ExpectedMapGrowthFailure;
+    try std.testing.expectEqual(@as(f64, 21), second.rawGetNumber(1).?.number);
+    try std.testing.expect(second.rawGetNumber(@floatFromInt(missing)) == null);
+    try second.rawSet(ctx.allocator, .{ .number = @floatFromInt(missing) }, .{ .number = 99 });
+    try std.testing.expectEqual(@as(f64, 99), second.rawGetNumber(@floatFromInt(missing)).?.number);
+}
+
+test "numeric mirror rejects out-of-range integer conversion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{.{ .string = "field" }};
+    const sorted = [_]u32{0};
+    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const table = try ctx.newShapedTable(&shape);
+    const huge: f64 = 0x1p64;
+    try table.rawSet(ctx.allocator, .{ .number = huge }, .{ .string = "huge" });
+    try std.testing.expectEqualStrings("huge", table.rawGetNumber(huge).?.string);
+    try std.testing.expect(!table.dense_prefix_valid);
+    try std.testing.expect(table.numeric_mirror.len == 0);
+}
+
+test "iterator mutable value pointer invalidates shaped numeric mirror" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{.{ .string = "field" }};
+    const sorted = [_]u32{0};
+    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const table = try ctx.newShapedTable(&shape);
+    try table.rawSet(ctx.allocator, .{ .number = 1 }, .{ .number = 1 });
+    try std.testing.expectEqual(@as(usize, 1), table.rawLen());
+    var it = table.iterator();
+    while (it.next()) |entry| {
+        if (entry.key_ptr.* == .number and entry.key_ptr.number == 1) entry.value_ptr.* = .{ .number = 42 };
+    }
+    try std.testing.expect(table.numeric_mirror_disabled);
+    try std.testing.expectEqual(@as(f64, 42), table.rawGetNumber(1).?.number);
+}
+
+test "adoptFailure distinguishes explicit nil and owns string payload" {
+    var parent_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer parent_arena.deinit();
+    var child_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer child_arena.deinit();
+    var parent = try Context.init(parent_arena.allocator(), 0);
+    defer parent.deinit();
+    var child = try Context.init(child_arena.allocator(), 0);
+    defer child.deinit();
+
+    child.setLuaError(.nil);
+    try parent.adoptFailure(&child);
+    try std.testing.expect(parent.last_error_present and parent.last_error == .nil);
+
+    const child_text = try child.allocator.dupe(u8, "child error");
+    child.setLuaError(.{ .string = child_text });
+    try parent.adoptFailure(&child);
+    try std.testing.expect(parent.last_error_present);
+    try std.testing.expectEqualStrings("child error", parent.last_error.string);
+    try std.testing.expect(parent.last_error.string.ptr != child_text.ptr);
+
+    const child_table = try child.newTable();
+    child.setLuaError(.{ .table = child_table });
+    try parent.adoptFailure(&child);
+    try std.testing.expect(!parent.last_error_present and parent.last_error == .nil);
+}
+
+test "prehashed field-site cache follows alias writes and callback mutation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const hash = comptime static_fields.hashStringKey("key");
+    const site: u64 = (@as(u64, 12345) << 32) | 17;
+    const table = try ctx.newTable();
+    const alias = table;
+    const mt = try ctx.newTable();
+    table.metatable = mt;
+    try table.rawSet(ctx.allocator, .{ .string = "key" }, .{ .number = 1 });
+    const object = Value{ .table = table };
+    try std.testing.expectEqual(@as(f64, 1), (try ctx.getFieldAtSite(object, "key", hash, site)).number);
+    try alias.rawSet(ctx.allocator, .{ .string = "key" }, .{ .number = 2 });
+    try std.testing.expectEqual(@as(f64, 2), (try ctx.getFieldAtSite(object, "key", hash, site)).number);
+    var iterator = alias.iterator();
+    const item = iterator.next() orelse return error.MissingIteratorValue;
+    item.value_ptr.* = .{ .number = 3 };
+    try std.testing.expectEqual(@as(f64, 3), (try ctx.getFieldAtSite(object, "key", hash, site)).number);
+    try alias.rawSet(ctx.allocator, .{ .string = "key" }, .nil);
+    var calls: usize = 0;
+    const Probe = struct {
+        fn call(raw: ?*anyopaque, runtime: *Context, args: []const Value) ![]const Value {
+            const count: *usize = @ptrCast(@alignCast(raw.?));
+            count.* += 1;
+            try args[0].table.rawSet(runtime.allocator, args[1], .{ .number = 4 });
+            return &.{};
+        }
+    };
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNative(&calls, Probe.call));
+    try std.testing.expect((try ctx.getFieldAtSite(object, "key", hash, site)) == .nil);
+    try std.testing.expectEqual(@as(usize, 1), calls);
+    try std.testing.expectEqual(@as(f64, 4), (try ctx.getFieldAtSite(object, "key", hash, site)).number);
+    try std.testing.expectEqual(@as(usize, 1), calls);
+    const other = try ctx.newTable();
+    try other.rawSet(ctx.allocator, .{ .string = "key" }, .{ .number = 5 });
+    try std.testing.expectEqual(@as(f64, 5), (try ctx.getFieldAtSite(.{ .table = other }, "key", hash, site)).number);
+    try std.testing.expectEqual(@as(f64, 4), (try ctx.getFieldAtSite(object, "key", hash, site)).number);
+}
+
+test "prehashed field-site cache preserves shaped slot and overflow field" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{.{ .string = "slot" }};
+    const shape = Shape{ .field_keys = &keys, .field_count = 1 };
+    const table = try ctx.newShapedTable(&shape);
+    const hash = comptime static_fields.hashStringKey("slot");
+    const object = Value{ .table = table };
+    try table.rawSetSlot(0, .{ .number = 1 });
+    try std.testing.expectEqual(@as(f64, 1), (try ctx.getFieldAtSite(object, "slot", hash, 41)).number);
+    try table.rawSetSlot(0, .{ .number = 2 });
+    try std.testing.expectEqual(@as(f64, 2), (try ctx.getFieldAtSite(object, "slot", hash, 41)).number);
+    try table.rawSetSlot(0, .nil);
+    try std.testing.expect((try ctx.getFieldAtSite(object, "slot", hash, 41)) == .nil);
+    const overflow_hash = comptime static_fields.hashStringKey("overflow");
+    try table.rawSet(ctx.allocator, .{ .string = "overflow" }, .{ .number = 3 });
+    try std.testing.expectEqual(@as(f64, 3), (try ctx.getFieldAtSite(object, "overflow", overflow_hash, 42)).number);
+    const old_epoch = table.field_cache_epoch;
+    try table.rawSet(ctx.allocator, .{ .string = "overflow" }, .nil);
+    try std.testing.expect(table.field_cache_epoch != old_epoch);
+    try std.testing.expect((try ctx.getFieldAtSite(object, "overflow", overflow_hash, 42)) == .nil);
+}
+
+test "field site shares a positive program shape slot across fresh tables" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+
+    const x_keys = [_]Value{.{ .string = "x" }};
+    const y_keys = [_]Value{.{ .string = "y" }};
+    const sorted = [_]u32{0};
+    var shapes = [_]Shape{
+        .{ .field_keys = &x_keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true },
+        .{ .field_keys = &y_keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true },
+    };
+    ctx.program_shapes = &shapes;
+    ctx.program_shape_generation = 83;
+    const site_id: u64 = (@as(u64, 110111) << 32) | 71;
+    const key_hash = static_fields.hashStringKey("x");
+    const first = try ctx.newProgramShape(0);
+    const second = try ctx.newProgramShape(0);
+    try first.rawSetSlot(0, .{ .number = 1 });
+    try second.rawSetSlot(0, .{ .number = 2 });
+    try std.testing.expectEqual(@as(f64, 1), (try ctx.getFieldAtSite(.{ .table = first }, "x", key_hash, site_id)).number);
+    const cache_index: usize = fieldCacheIndex(site_id);
+    try std.testing.expectEqual(site_id, shape_site_cache[cache_index].site_id);
+    try std.testing.expectEqual(@as(u32, 0), shape_site_cache[cache_index].shape_id);
+    try std.testing.expectEqual(@as(f64, 2), (try ctx.getFieldAtSite(.{ .table = second }, "x", key_hash, site_id)).number);
+    try second.rawSetSlot(0, .{ .number = 3 });
+    try std.testing.expectEqual(@as(f64, 3), (try ctx.getFieldAtSite(.{ .table = second }, "x", key_hash, site_id)).number);
+
+    const metatable = try ctx.newTable();
+    const inherited = try ctx.newTable();
+    try inherited.rawSet(ctx.allocator, .{ .string = "x" }, .{ .number = 9 });
+    try metatable.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = inherited });
+    second.metatable = metatable;
+    try second.rawSetSlot(0, .nil);
+    try std.testing.expectEqual(@as(f64, 9), (try ctx.getFieldAtSite(.{ .table = second }, "x", key_hash, site_id)).number);
+    try second.rawSetSlot(0, .{ .number = 5 });
+    try std.testing.expectEqual(@as(f64, 5), (try ctx.getFieldAtSite(.{ .table = second }, "x", key_hash, site_id)).number);
+
+    var iterator = first.iterator();
+    const one = iterator.next() orelse return error.MissingShapeField;
+    try std.testing.expectEqualStrings("x", one.key_ptr.string);
+    try std.testing.expect(iterator.next() == null);
+
+    const other = try ctx.newProgramShape(1);
+    try other.rawSetSlot(0, .{ .number = 10 });
+    try std.testing.expect((try ctx.getFieldAtSite(.{ .table = other }, "x", key_hash, site_id)) == .nil);
+    try std.testing.expectError(error.IndexType, ctx.getFieldAtSite(.{ .number = 1 }, "x", key_hash, site_id));
+
+    // Simulate a new metadata load reusing the same shape allocation.
+    ctx.program_shape_generation = 84;
+    shapes[0] = shapes[1];
+    const later = try ctx.newProgramShape(0);
+    try later.rawSetSlot(0, .{ .number = 11 });
+    try std.testing.expect((try ctx.getFieldAtSite(.{ .table = later }, "x", key_hash, site_id)) == .nil);
+}
+
+test "bounded inherited site cache reads live three-link field and invalidates mutations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const hash = comptime static_fields.hashStringKey("method");
+    const site: u64 = (@as(u64, 110068) << 32) | 0;
+    const keys = [_]Value{.{ .string = "method" }};
+    const shape = Shape{ .field_keys = &keys, .field_count = 1 };
+    const receiver = try ctx.newShapedTable(&shape);
+    const mt0 = try ctx.newTable();
+    const mt1 = try ctx.newTable();
+    const mt2 = try ctx.newTable();
+    const class1 = try ctx.newTable();
+    const class2 = try ctx.newShapedTable(&shape);
+    const class3 = try ctx.newTable();
+    receiver.metatable = mt0;
+    class1.metatable = mt1;
+    class2.metatable = mt2;
+    try mt0.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = class1 });
+    try mt1.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = class2 });
+    try mt2.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = class3 });
+    try class3.rawSet(ctx.allocator, .{ .string = "method" }, .{ .number = 1 });
+    const object = Value{ .table = receiver };
+    try std.testing.expectEqual(@as(f64, 1), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    const cached = &inherited_site_cache[inheritedSiteIndex(site)];
+    try std.testing.expectEqual(site, cached.site_id);
+    try std.testing.expectEqual(@as(u8, 3), cached.count);
+    try std.testing.expectEqual(@as(f64, 1), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    // Existing-key replacement does not bump the map epoch; cached Values stay live.
+    try class3.rawSet(ctx.allocator, .{ .string = "method" }, .{ .number = 2 });
+    try std.testing.expectEqual(@as(f64, 2), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    try receiver.rawSetSlot(0, .{ .number = 3 });
+    try std.testing.expectEqual(@as(f64, 3), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    try receiver.rawSetSlot(0, .nil);
+    try std.testing.expectEqual(@as(f64, 2), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    try class2.rawSetSlot(0, .{ .number = 8 });
+    try std.testing.expectEqual(@as(f64, 8), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    try class2.rawSetSlot(0, .nil);
+    try std.testing.expectEqual(@as(f64, 2), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    var deep_calls: usize = 0;
+    const DeepProbe = struct {
+        fn call(raw: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            const count: *usize = @ptrCast(@alignCast(raw.?));
+            count.* += 1;
+            return &.{};
+        }
+    };
+    try mt2.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNative(&deep_calls, DeepProbe.call));
+    try std.testing.expect((try ctx.getFieldAtSite(object, "method", hash, site)) == .nil);
+    try std.testing.expect((try ctx.getFieldAtSite(object, "method", hash, site)) == .nil);
+    try std.testing.expectEqual(@as(usize, 2), deep_calls);
+    try mt2.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = class3 });
+    // A nil map cell can be revived by an iterator without a structural epoch bump.
+    try class1.rawSet(ctx.allocator, .{ .string = "method" }, .{ .number = 4 });
+    var erase = class1.iterator();
+    while (erase.next()) |entry| {
+        if (rawEqual(entry.key_ptr.*, .{ .string = "method" })) entry.value_ptr.* = .nil;
+    }
+    try std.testing.expect((try ctx.getFieldAtSite(object, "method", hash, site)) == .nil);
+    var revive = class1.iterator();
+    while (revive.next()) |entry| {
+        if (rawEqual(entry.key_ptr.*, .{ .string = "method" })) entry.value_ptr.* = .{ .number = 5 };
+    }
+    try std.testing.expectEqual(@as(f64, 5), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    // Restoring absence allows the same path to fill again.
+    try class1.rawSet(ctx.allocator, .{ .string = "method" }, .nil);
+    try std.testing.expectEqual(@as(f64, 2), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    const replacement = try ctx.newTable();
+    try replacement.rawSet(ctx.allocator, .{ .string = "method" }, .{ .number = 6 });
+    try mt1.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = replacement });
+    try std.testing.expectEqual(@as(f64, 6), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    class1.metatable = mt2;
+    try std.testing.expectEqual(@as(f64, 2), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    const other_mt = try ctx.newTable();
+    try other_mt.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = replacement });
+    receiver.metatable = other_mt;
+    try std.testing.expectEqual(@as(f64, 6), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    try class3.rawSet(ctx.allocator, .{ .string = "method" }, .nil);
+    const fourth = try ctx.newTable();
+    try fourth.rawSet(ctx.allocator, .{ .string = "method" }, .{ .number = 7 });
+    const mt3 = try ctx.newTable();
+    try mt3.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = fourth });
+    class3.metatable = mt3;
+    // A cycle exists beyond the terminal field; bounded tracing must use the
+    // ordinary lookup after three links and stop at the positive field.
+    const cycle_mt = try ctx.newTable();
+    fourth.metatable = cycle_mt;
+    try cycle_mt.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = class1 });
+    receiver.metatable = mt0;
+    class1.metatable = mt1;
+    try mt1.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = class2 });
+    try std.testing.expectEqual(@as(f64, 7), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+}
+
+test "bounded inherited site cache keeps callable indexers live and context-local" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var first = try Context.init(arena.allocator(), 0);
+    defer first.deinit();
+    const site: u64 = (@as(u64, 21434) << 32) | 0;
+    const hash = comptime static_fields.hashStringKey("method");
+    const receiver = try first.newTable();
+    const mt = try first.newTable();
+    const parent = try first.newTable();
+    receiver.metatable = mt;
+    try mt.rawSet(first.allocator, .{ .string = "__index" }, .{ .table = parent });
+    try parent.rawSet(first.allocator, .{ .string = "method" }, .{ .number = 10 });
+    try std.testing.expectEqual(@as(f64, 10), (try first.getFieldAtSite(.{ .table = receiver }, "method", hash, site)).number);
+    try std.testing.expectEqual(@as(u8, 1), inherited_site_cache[inheritedSiteIndex(site)].count);
+    var calls: usize = 0;
+    const Probe = struct {
+        fn call(raw: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            const count: *usize = @ptrCast(@alignCast(raw.?));
+            count.* += 1;
+            return &.{};
+        }
+    };
+    try mt.rawSet(first.allocator, .{ .string = "__index" }, try first.newNative(&calls, Probe.call));
+    try std.testing.expect((try first.getFieldAtSite(.{ .table = receiver }, "method", hash, site)) == .nil);
+    try std.testing.expect((try first.getFieldAtSite(.{ .table = receiver }, "method", hash, site)) == .nil);
+    try std.testing.expectEqual(@as(usize, 2), calls);
+    var second = try Context.init(arena.allocator(), 0);
+    defer second.deinit();
+    const other = try second.newTable();
+    const other_mt = try second.newTable();
+    const other_parent = try second.newTable();
+    other.metatable = other_mt;
+    try other_mt.rawSet(second.allocator, .{ .string = "__index" }, .{ .table = other_parent });
+    try other_parent.rawSet(second.allocator, .{ .string = "method" }, .{ .number = 11 });
+    try std.testing.expect(first.field_cache_nonce != second.field_cache_nonce);
+    try std.testing.expectEqual(@as(f64, 11), (try second.getFieldAtSite(.{ .table = other }, "method", hash, site)).number);
 }
