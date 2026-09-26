@@ -27,7 +27,9 @@ FILES = (
 TREE = "modules"
 MISS = 3
 MAX_MARKER_BYTES = 64 * 1024 * 1024
-OBJECT_VERSION = 3
+OBJECT_VERSION = 4
+MAX_OBJECT_BYTES = 1024 * 1024 * 1024
+MAX_BATCHES = 100_000
 LEAF_PRODUCER_FLAGS = ("build-obj", "-OReleaseFast", "-mcpu=baseline", "-fllvm", "-fstrip", "-lc")
 LEAF_PRODUCER_SOURCES = ("src/lua/value_leaf_build.zig", "src/lua/runtime/value_leaf.zig")
 ABI_FILES = (
@@ -294,7 +296,7 @@ def read_object_plan(llvm_dir):
         if count <= 0 or first < 0 or last < first or source_bytes < 0:
             raise ValueError("Invalid LLVM batch plan bounds")
         plans.append(fields)
-        if len(plans) > 100_000:
+        if len(plans) > MAX_BATCHES:
             raise ValueError("Oversized LLVM batch plan")
     if not plans:
         raise ValueError("Empty LLVM batch plan")
@@ -302,6 +304,9 @@ def read_object_plan(llvm_dir):
 
 
 def object_identity(llvm_dir, clang, project_root, flags, zig="zig"):
+    """Snapshot all build inputs; only object_entries() defines reuse keys."""
+    if not flags or flags[-1] not in ("-O0", "-O1", "-O2"):
+        raise ValueError("Missing LLVM program optimization mode")
     plans = read_object_plan(llvm_dir)
     bitcode = []
     for mode, name, *_ in plans:
@@ -348,35 +353,91 @@ def valid_abi_provenance(value):
 
 def object_names(expected):
     bitcode = expected.get("bitcode")
-    if not isinstance(bitcode, list) or not bitcode or len(bitcode) > 100_000:
+    if not isinstance(bitcode, list) or not bitcode or len(bitcode) > MAX_BATCHES:
         raise ValueError("Invalid cached object identity")
     return [f"module_batch_{index:06d}.o" for index in range(len(bitcode))] + ["program.o"]
 
 
-def record_named_assets(root, names):
-    records = []
-    for name in names:
-        path = root / name
-        regular(path)
-        records.append([name, path.stat().st_size, sha256(path)])
-    return records
+def valid_digest_record(value):
+    return (isinstance(value, list) and len(value) == 2 and
+            type(value[0]) is int and 0 < value[0] <= MAX_OBJECT_BYTES and
+            isinstance(value[1], str) and re.fullmatch(r"[0-9a-f]{64}", value[1]))
 
 
-def validate_objects(root, expected):
-    marker = root / ".complete.json"
-    record = read_marker(marker)
-    if not isinstance(record, dict):
-        return False
-    if record.get("identity") != expected:
-        return False
-    if expected.get("version") == OBJECT_VERSION and not valid_abi_provenance(
+def object_entries(expected):
+    """Map current link order to content keys independent of batch names/IDs.
+
+    Function IDs remain embedded in the exact bitcode bytes. Neither metadata
+    nor unrelated batches are Clang inputs. Only O1/O2 batches import the leaf
+    producer; the program and O0 objects do not depend on that producer.
+    """
+    names = object_names(expected)
+    flags = expected.get("flags")
+    if (expected.get("version") != OBJECT_VERSION or
+            not isinstance(expected.get("clang"), dict) or
+            not isinstance(flags, list) or not flags or
+            any(not isinstance(flag, str) for flag in flags) or
+            flags[-1] not in ("-O0", "-O1", "-O2") or
+            not valid_digest_record(expected.get("program_bc")) or
+            not isinstance(expected.get("value_leaf"), dict) or
+            not valid_digest_record(expected["value_leaf"].get("bitcode"))):
+        raise ValueError("Invalid cached object identity")
+    seen = set()
+    for index, row in enumerate(expected["bitcode"] + [
+            [flags[-1], "program.bc", *expected.get("program_bc", [])]]):
+        if (not isinstance(row, list) or len(row) != 4 or
+                row[0] not in ("-O0", "-O1", "-O2") or
+                not isinstance(row[1], str) or row[1] in seen or
+                (index < len(names) - 1 and not re.fullmatch(
+                    r"module_batch_o[012]_[0-9]{6}\.bc", row[1])) or
+                not valid_digest_record(row[2:])):
+            raise ValueError("Invalid cached bitcode record")
+        seen.add(row[1])
+        identity = {"version": OBJECT_VERSION, "bitcode": row[2:],
+                    "mode": row[0], "flags": flags[:-1], "clang": expected["clang"]}
+        if index < len(names) - 1 and row[0] != "-O0":
+            identity["value_leaf"] = expected["value_leaf"]
+        yield names[index], identity
+
+
+def record_object(path):
+    regular(path)
+    size = path.stat().st_size
+    if not 0 < size <= MAX_OBJECT_BYTES:
+        raise ValueError(f"Invalid native object size: {path}")
+    return [size, sha256(path)]
+
+
+def validated_object(root, expected):
+    """Return the verified object digest, or None for an unusable entry."""
+    if root.is_symlink() or not root.is_dir():
+        return None
+    record = read_marker(root / ".complete.json")
+    if not isinstance(record, dict) or record.get("identity") != expected:
+        return None
+    if not valid_abi_provenance(
             record.get("provenance", {}).get("abi") if isinstance(
                 record.get("provenance"), dict) else None):
-        return False
-    names = object_names(expected)
-    if set(path.name for path in root.iterdir()) != set(names + [".complete.json"]):
-        return False
-    return record.get("assets") == record_named_assets(root, names)
+        return None
+    names = set()
+    for path in root.iterdir():
+        names.add(path.name)
+        if len(names) > 2:
+            return None
+    if names != {"object.o", ".complete.json"}:
+        return None
+    expected_object = record.get("object")
+    if not valid_digest_record(expected_object):
+        return None
+    actual = record_object(root / "object.o")
+    return actual if actual == expected_object else None
+
+
+def cached_object(root, expected):
+    try:
+        return validated_object(root, expected)
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        return None
 
 
 def object_cache_path(root, expected):
@@ -410,98 +471,138 @@ def prune_old_generations(parent, current):
             shutil.rmtree(older)
 
 
+def write_private_marker(path, value):
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+    if len(raw.encode()) > MAX_MARKER_BYTES:
+        raise ValueError("Oversized object cache identity marker")
+    fd, temporary = tempfile.mkstemp(prefix=".object-state-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(raw)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 def probe_objects(root, clang, project_root, llvm_dir, flags, zig="zig"):
     expected = object_identity(llvm_dir, clang, project_root, flags, zig)
-    provenance = {"abi": abi_provenance(project_root)}
-    identity_path = llvm_dir / ".object-identity.json"
-    temporary = identity_path.with_suffix(".part")
-    temporary.write_text(json.dumps({"identity": expected, "provenance": provenance}, sort_keys=True,
-                                    separators=(",", ":")) + "\n")
-    os.replace(temporary, identity_path)
-    source = object_cache_path(root, expected)
-    valid_current = False
-    if source.exists() and not source.is_symlink():
-        try:
-            valid_current = validate_objects(source, expected)
-        except (OSError, ValueError, json.JSONDecodeError, TypeError):
-            pass
-    if not valid_current:
-        return MISS
-    for name in object_names(expected):
+    entries = list(object_entries(expected))
+    # Preflight the whole output set before installing any cache link. A file
+    # merely existing in the private build directory is never a verified hit.
+    for name, _ in entries:
         destination = llvm_dir / name
         if destination.exists() or destination.is_symlink():
             raise ValueError(f"Refusing to replace LLVM object: {destination}")
-        link_or_copy(source / name, destination)
-    print(f"Reusing verified native Lua objects: {source}", flush=True)
-    return 0
+    restored = []
+    sources = []
+    hits = []
+    for name, identity in entries:
+        source = object_cache_path(root, identity)
+        asset = cached_object(source, identity)
+        hits.append("1" if asset is not None else "0")
+        if asset is not None:
+            restored.append([name, *asset])
+            sources.append((source / "object.o", llvm_dir / name))
+    # Clang deletes compiled bitcode, so retain all input digests before any
+    # child starts. Keep restored hashes too: publication cannot certify an
+    # accidentally modified hardlink as newly compiled output.
+    write_private_marker(llvm_dir / ".object-identity.json", {
+        "identity": expected, "provenance": {"abi": abi_provenance(project_root)},
+        "restored": restored,
+    })
+    for source, destination in sources:
+        link_or_copy(source, destination)
+    # This bounded bitmap is the sole authority for the build driver's skips.
+    # The final bit belongs to program.o; preceding bits follow the fresh plan.
+    (llvm_dir / ".object-hits").write_text("".join(hits) + "\n")
+    print(f"Reusing verified native Lua objects: {len(restored)}/{len(entries)}", flush=True)
+    return 0 if len(restored) == len(entries) else MISS
 
 
-def publish_objects(root, llvm_dir, clang, flags):
-    # The LLVM directory is private to one locked build. Clang deletes input
-    # bitcode after compilation, so probe records its digests before any Clang
-    # child starts; no producer may mutate inputs until publication finishes.
-    identity_path = llvm_dir / ".object-identity.json"
-    snapshot = read_marker(identity_path)
-    if not isinstance(snapshot, dict):
-        raise ValueError("Invalid object cache identity marker")
-    expected = snapshot.get("identity")
-    provenance = snapshot.get("provenance")
-    if not isinstance(expected, dict) or expected.get("version") != OBJECT_VERSION:
-        raise ValueError("Invalid object cache identity marker")
-    if not isinstance(provenance, dict) or not valid_abi_provenance(provenance.get("abi")):
-        raise ValueError("Invalid object cache ABI provenance")
-    if expected.get("clang") != clang_identity(clang, flags) or expected.get("flags") != flags:
-        raise ValueError("Clang native target or compile flags changed during compilation")
-    if sha256(llvm_dir / "batch-plan.tsv") != expected.get("batch_plan_sha256"):
-        raise ValueError("LLVM batch plan changed during compilation")
-    if sha256(llvm_dir / "program.meta") != expected.get("program_meta_sha256"):
-        raise ValueError("LLVM program metadata changed during compilation")
-    leaf = llvm_dir / "value_leaf.bc"
-    regular(leaf)
-    if [leaf.stat().st_size, sha256(leaf)] != expected.get("value_leaf", {}).get("bitcode"):
-        raise ValueError("Build-only value helper bitcode changed during compilation")
-    names = object_names(expected)
-    parent = root / "objects"
-    destination = object_cache_path(root, expected)
-    parent.mkdir(parents=True, exist_ok=True)
-    prune_abandoned_partials(parent)
-    if destination.exists() or destination.is_symlink():
-        try:
-            if not destination.is_symlink() and validate_objects(destination, expected):
-                prune_old_generations(parent, destination)
-                return 0
-        except (OSError, ValueError, json.JSONDecodeError, TypeError):
-            pass
-        stale = parent / (".stale-" + destination.name)
-        if stale.exists() or stale.is_symlink():
-            if stale.is_dir() and not stale.is_symlink():
-                shutil.rmtree(stale)
-            else:
-                stale.unlink()
-        destination.rename(stale)
+def remove_cache_entry(path):
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
     else:
-        stale = None
-    temporary = Path(tempfile.mkdtemp(prefix=".part-", dir=parent))
+        path.unlink(missing_ok=True)
+
+
+def publish_object(root, source, identity, provenance, asset):
+    destination = object_cache_path(root, identity)
+    if cached_object(destination, identity) is not None:
+        return destination
+    temporary = Path(tempfile.mkdtemp(prefix=".part-", dir=destination.parent))
+    stale = None
     try:
-        for name in names:
-            source = llvm_dir / name
-            regular(source)
-            link_or_copy(source, temporary / name)
-        marker = {"identity": expected, "provenance": provenance,
-                  "assets": record_named_assets(temporary, names)}
+        link_or_copy(source, temporary / "object.o")
+        if record_object(temporary / "object.o") != asset:
+            raise ValueError("Native object changed during cache publication")
+        marker = {"identity": identity, "provenance": provenance, "object": asset}
         (temporary / ".complete.json").write_text(
             json.dumps(marker, sort_keys=True, separators=(",", ":")) + "\n")
+        if destination.exists() or destination.is_symlink():
+            stale = destination.parent / (".stale-" + destination.name)
+            remove_cache_entry(stale)
+            destination.rename(stale)
         temporary.rename(destination)
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
     if stale is not None:
-        if stale.is_dir() and not stale.is_symlink():
-            shutil.rmtree(stale)
-        else:
-            stale.unlink()
-    prune_old_generations(parent, destination)
-    print(f"Published verified native Lua objects: {destination}", flush=True)
+        remove_cache_entry(stale)
+    return destination
+
+
+def publish_objects(root, llvm_dir, clang, flags):
+    # The LLVM directory and immutable cache are protected by the corpus lock.
+    # No producer may mutate inputs while Clang is running or publishing.
+    snapshot = read_marker(llvm_dir / ".object-identity.json")
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("identity"), dict):
+        raise ValueError("Invalid object cache identity marker")
+    expected = snapshot["identity"]
+    entries = list(object_entries(expected))
+    provenance = snapshot.get("provenance")
+    if not isinstance(provenance, dict) or not valid_abi_provenance(provenance.get("abi")):
+        raise ValueError("Invalid object cache ABI provenance")
+    if expected.get("clang") != clang_identity(clang, flags) or expected.get("flags") != flags:
+        raise ValueError("Clang native target or compile flags changed during compilation")
+    for filename, key in (("batch-plan.tsv", "batch_plan_sha256"),
+                          ("program.meta", "program_meta_sha256")):
+        path = llvm_dir / filename
+        regular(path)
+        if sha256(path) != expected.get(key):
+            raise ValueError(f"LLVM {filename} changed during compilation")
+    leaf = llvm_dir / "value_leaf.bc"
+    regular(leaf)
+    if [leaf.stat().st_size, sha256(leaf)] != expected["value_leaf"]["bitcode"]:
+        raise ValueError("Build-only value helper bitcode changed during compilation")
+    restored = snapshot.get("restored")
+    if not isinstance(restored, list) or len(restored) > len(entries):
+        raise ValueError("Invalid restored native object inventory")
+    assets = {name: record_object(llvm_dir / name) for name, _ in entries}
+    seen = set()
+    for row in restored:
+        if (not isinstance(row, list) or len(row) != 3 or
+                not isinstance(row[0], str) or row[0] not in assets or
+                row[0] in seen or not valid_digest_record(row[1:])):
+            raise ValueError("Invalid restored native object inventory")
+        seen.add(row[0])
+        if assets[row[0]] != row[1:]:
+            raise ValueError("Restored native object changed during compilation")
+    # Validate all producer outputs before changing any cache entry. Each
+    # immutable object is independently atomic. Only a complete publication
+    # prunes older keys, retaining exactly the latest build's object set.
+    parent = object_cache_path(root, entries[0][1]).parent
+    parent.mkdir(parents=True, exist_ok=True)
+    prune_abandoned_partials(parent)
+    current = set()
+    for name, identity in entries:
+        current.add(publish_object(root, llvm_dir / name, identity,
+                                   provenance, assets[name]))
+    for older in parent.iterdir():
+        if older not in current and re.fullmatch(r"[0-9a-f]{64}", older.name):
+            remove_cache_entry(older)
+    print(f"Published verified native Lua objects: {len(entries)} outputs, "
+          f"{len(current)} content keys", flush=True)
     return 0
 
 

@@ -230,6 +230,19 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "dict", "Run the dictionary frontend CLI", blob_query_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
+    // Compile and execute bundle_build.zig's scheduler/cache tests using the
+    // same generated pipeline_paths module as the production pipeline binary.
+    const bundle_pipeline_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/bundle_build.zig"),
+            .target = b.graph.host,
+            .optimize = test_optimize,
+            .imports = &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }},
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const run_bundle_pipeline_tests = b.addRunArtifact(bundle_pipeline_tests);
+    const run_bundle_pipeline_tests_only = b.addRunArtifact(bundle_pipeline_tests);
 
     const encoder_tests = b.addTest(.{
         .root_module = encoder_mod_test,
@@ -473,7 +486,9 @@ pub fn build(b: *std.Build) void {
     b.step("test-global-index", "Run Lua global-name index tests serially").dependOn(&run_global_index_tests_only.step);
     b.step("test-lua-abi", "Run Lua LLVM ABI tests serially").dependOn(&run_lua_abi_tests_only.step);
     blob_wasm_smoke.step.dependOn(&run_bundle_protocol_tests.step);
-    test_step.dependOn(&blob_wasm_smoke.step);
+    run_bundle_pipeline_tests.step.dependOn(&blob_wasm_smoke.step);
+    test_step.dependOn(&run_bundle_pipeline_tests.step);
+    b.step("test-bundle-pipeline", "Run bundle build scheduler and cache bitmap unit tests only").dependOn(&run_bundle_pipeline_tests_only.step);
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });
     addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}, b.args), &.{});
     const bundle_test_exe = addCliExecutable(b, "dict-bundle-integration-test", b.path("tools/bundle_integration_test.zig"), b.graph.host, test_optimize, &.{.{ .name = "bundle_protocol", .module = bundle_protocol_mod_test }});

@@ -394,39 +394,151 @@ fn readBatchPlan(
     return plans.toOwnedSlice(a);
 }
 
-const CompileJob = struct {
-    child: std.process.Child,
+const BatchCompileItem = struct {
     source: []const u8,
-    started_ns: i128,
-    mode: CompileMode,
-    first_index: usize,
-    last_index: usize,
-    count: usize,
+    object: []const u8,
+    batch_index: usize,
+    plan: BatchPlan,
 };
 
-fn waitCompile(io: std.Io, job: *?CompileJob) !void {
-    if (job.*) |*active| {
-        const term = try active.child.wait(io);
-        const elapsed_ms = @divTrunc(std.Io.Clock.awake.now(io).toNanoseconds() - active.started_ns, std.time.ns_per_ms);
-        const mode = active.mode;
-        const first_index = active.first_index;
-        const last_index = active.last_index;
-        const count = active.count;
-        const source = active.source;
-        job.* = null;
-        if (term != .exited or term.exited != 0) {
-            std.debug.print(
-                "dictionary build failed compiling {s} LLVM batch count={d} first={d} last={d} elapsed_ms={d}; incomplete marker retained\n",
-                .{ mode.flag(), count, first_index, last_index, elapsed_ms },
-            );
-            return error.PipelineStageFailed;
-        }
-        std.debug.print("dictionary build completed: {s} LLVM batch count={d} first={d} last={d} elapsed_ms={d}\n", .{ mode.flag(), count, first_index, last_index, elapsed_ms });
-        std.Io.Dir.cwd().deleteFile(io, source) catch |err| switch (err) {
-            error.FileNotFound => {},
-            else => return err,
-        };
+fn compileBatch(io: std.Io, item: *const BatchCompileItem) !void {
+    const plan = item.plan;
+    std.debug.print(
+        "dictionary build: compile {s} LLVM batch count={d} first={d} last={d} source_bytes={d}\n",
+        .{ plan.mode.flag(), plan.count, plan.first_index, plan.last_index, plan.source_bytes },
+    );
+    var child = try std.process.spawn(io, .{
+        .argv = &.{
+            paths.clang,
+            plan.mode.flag(),
+            clang_common_flags[0],
+            clang_common_flags[1],
+            clang_common_flags[2],
+            "-c",
+            item.source,
+            "-o",
+            item.object,
+        },
+        .stdin = .ignore,
+    });
+    // Zig 0.16 Child.kill is idempotent and blocks until this child is reaped.
+    // This handles a wait error without leaving a compiler process behind.
+    errdefer child.kill(io);
+    const started_ns = std.Io.Clock.awake.now(io).toNanoseconds();
+    const term = try child.wait(io);
+    const elapsed_ms = @divTrunc(std.Io.Clock.awake.now(io).toNanoseconds() - started_ns, std.time.ns_per_ms);
+    if (term != .exited or term.exited != 0) {
+        std.debug.print(
+            "dictionary build failed compiling {s} LLVM batch count={d} first={d} last={d} elapsed_ms={d}; incomplete marker retained\n",
+            .{ plan.mode.flag(), plan.count, plan.first_index, plan.last_index, elapsed_ms },
+        );
+        return error.PipelineStageFailed;
     }
+    std.debug.print(
+        "dictionary build completed: {s} LLVM batch count={d} first={d} last={d} elapsed_ms={d}\n",
+        .{ plan.mode.flag(), plan.count, plan.first_index, plan.last_index, elapsed_ms },
+    );
+    std.Io.Dir.cwd().deleteFile(io, item.source) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+const BatchCompilePool = struct {
+    io: std.Io,
+    items: []const BatchCompileItem,
+    next: std.atomic.Value(usize) = .init(0),
+    stop: std.atomic.Value(bool) = .init(false),
+};
+
+const BatchCompileWorker = struct {
+    pool: *BatchCompilePool,
+    failure: ?anyerror = null,
+
+    fn run(self: *BatchCompileWorker) void {
+        while (true) {
+            if (self.pool.stop.load(.acquire)) return;
+            const index = self.pool.next.fetchAdd(1, .monotonic);
+            if (index >= self.pool.items.len or self.pool.stop.load(.acquire)) return;
+            compileBatch(self.pool.io, &self.pool.items[index]) catch |err| {
+                self.failure = err;
+                self.pool.stop.store(true, .release);
+                return;
+            };
+        }
+    }
+};
+
+fn compileMissingBatches(
+    io: std.Io,
+    a: std.mem.Allocator,
+    items: []const BatchCompileItem,
+    llvm_workers: usize,
+) !void {
+    if (llvm_workers == 0 or llvm_workers > max_parallel_workers) return error.InvalidWorkerCount;
+    const worker_count = @min(llvm_workers, items.len);
+    std.debug.print("dictionary build: LLVM compile workers={d} missing_batches={d}\n", .{ worker_count, items.len });
+    // A full cache hit performs no worker allocation, thread spawn, or Clang
+    // invocation. The caller still handles the independent program.o bit.
+    if (items.len == 0) return;
+    var pool: BatchCompilePool = .{ .io = io, .items = items };
+    const workers = try a.alloc(BatchCompileWorker, worker_count);
+    defer a.free(workers);
+    for (workers) |*worker| worker.* = .{ .pool = &pool };
+    // The caller is one of the bounded compiler workers. Thread-spawn failure
+    // stops claims and joins all already-started workers before returning.
+    const threads = try a.alloc(std.Thread, worker_count - 1);
+    defer a.free(threads);
+    var started: usize = 0;
+    errdefer {
+        pool.stop.store(true, .release);
+        for (threads[0..started]) |thread| thread.join();
+    }
+    for (threads) |*thread| {
+        thread.* = try std.Thread.spawn(.{}, BatchCompileWorker.run, .{&workers[started + 1]});
+        started += 1;
+    }
+    workers[0].run();
+    for (threads[0..started]) |thread| thread.join();
+    started = 0;
+    for (workers) |worker| if (worker.failure) |err| return err;
+}
+
+test "empty native compile queue launches no workers" {
+    // A failing allocator proves the all-hit branch returns before creating
+    // worker/thread storage. No compiler tool is needed by this test.
+    try compileMissingBatches(std.testing.io, std.testing.failing_allocator, &.{}, 4);
+    try std.testing.expectError(error.InvalidWorkerCount, compileMissingBatches(std.testing.io, std.testing.failing_allocator, &.{}, 0));
+    try std.testing.expectError(error.InvalidWorkerCount, compileMissingBatches(std.testing.io, std.testing.failing_allocator, &.{}, 5));
+}
+
+test "two failed Clang batches leave no object and join every owned child" {
+    const io = std.testing.io;
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(base);
+    const first_source = try std.fs.path.join(a, &.{ base, "invalid-a.bc" });
+    defer a.free(first_source);
+    const second_source = try std.fs.path.join(a, &.{ base, "invalid-b.bc" });
+    defer a.free(second_source);
+    const first_object = try std.fs.path.join(a, &.{ base, "invalid-a.o" });
+    defer a.free(first_object);
+    const second_object = try std.fs.path.join(a, &.{ base, "invalid-b.o" });
+    defer a.free(second_object);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = first_source, .data = "invalid LLVM bitcode\n" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = second_source, .data = "invalid LLVM bitcode\n" });
+    const plan: BatchPlan = .{ .mode = .o0, .file = "invalid.bc", .count = 1, .first_index = 0, .last_index = 0, .source_bytes = 21 };
+    const items = [_]BatchCompileItem{
+        .{ .source = first_source, .object = first_object, .batch_index = 0, .plan = plan },
+        .{ .source = second_source, .object = second_object, .batch_index = 1, .plan = plan },
+    };
+    // Each worker owns its own Clang process. The pool returns only after all
+    // started workers have waited or killed/reaped their exact child.
+    try std.testing.expectError(error.PipelineStageFailed, compileMissingBatches(io, a, &items, 2));
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().openFile(io, first_object, .{}));
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().openFile(io, second_object, .{}));
 }
 
 fn compileBitcodeModules(
@@ -435,84 +547,64 @@ fn compileBitcodeModules(
     marker: []const u8,
     llvm_dir: []const u8,
     llvm_workers: usize,
+    use_object_cache: bool,
 ) !std.ArrayList([]const u8) {
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = marker,
         .data = "compile Lua LLVM bitcode batches",
     });
 
-    if (llvm_workers == 0) return error.InvalidWorkerCount;
+    if (llvm_workers == 0 or llvm_workers > max_parallel_workers) return error.InvalidWorkerCount;
     const plans = try readBatchPlan(io, a, llvm_dir);
     defer a.free(plans);
-    const worker_count = @min(llvm_workers, plans.len);
-    std.debug.print("dictionary build: LLVM compile workers={d}\n", .{worker_count});
-
+    if (plans.len == 0) return error.InvalidBatchPlan;
+    const cache_hits = if (use_object_cache) blk: {
+        const hits_path = try std.fs.path.join(a, &.{ llvm_dir, ".object-hits" });
+        defer a.free(hits_path);
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, hits_path, a, .limited(100_002));
+        errdefer a.free(bytes);
+        try validateObjectHits(bytes, plans.len + 1);
+        break :blk bytes;
+    } else null;
+    defer if (cache_hits) |hits| a.free(hits);
     var objects: std.ArrayList([]const u8) = .empty;
-    const jobs = try a.alloc(?CompileJob, worker_count);
-    defer a.free(jobs);
-    @memset(jobs, null);
-    errdefer for (jobs) |*job| if (job.*) |*active| active.child.kill(io);
-
+    errdefer objects.deinit(a);
+    // All paths and plan metadata are prepared before workers start. Keep
+    // every object in current plan order, but enqueue only verified misses.
+    const items = try a.alloc(BatchCompileItem, plans.len);
+    defer a.free(items);
+    var missing_count: usize = 0;
     for (plans, 0..) |plan, batch_index| {
         const source = try std.fs.path.join(a, &.{ llvm_dir, plan.file });
-        const object = try std.fmt.allocPrint(
-            a,
-            "{s}/module_batch_{d:0>6}.o",
-            .{ llvm_dir, batch_index },
-        );
+        const object = try std.fmt.allocPrint(a, "{s}/module_batch_{d:0>6}.o", .{ llvm_dir, batch_index });
         try objects.append(a, object);
-
-        const slot = batch_index % jobs.len;
-        try waitCompile(io, &jobs[slot]);
-        std.debug.print(
-            "dictionary build: compile {s} LLVM batch count={d} first={d} last={d} source_bytes={d}\n",
-            .{
-                plan.mode.flag(),
-                plan.count,
-                plan.first_index,
-                plan.last_index,
-                plan.source_bytes,
-            },
-        );
-        const child = try std.process.spawn(io, .{
-            .argv = &.{
-                paths.clang,
-                plan.mode.flag(),
-                clang_common_flags[0],
-                clang_common_flags[1],
-                clang_common_flags[2],
-                "-c",
-                source,
-                "-o",
-                object,
-            },
-            .stdin = .ignore,
-        });
-        jobs[slot] = .{
-            .child = child,
-            .source = source,
-            .started_ns = std.Io.Clock.awake.now(io).toNanoseconds(),
-            .mode = plan.mode,
-            .first_index = plan.first_index,
-            .last_index = plan.last_index,
-            .count = plan.count,
-        };
+        // Only the verified probe bitmap authorizes a skip. A cached
+        // hardlink must never be passed to Clang as a writable output.
+        if (cache_hits) |hits| {
+            if (hits[batch_index] == '1') {
+                try std.Io.Dir.cwd().deleteFile(io, source);
+                continue;
+            }
+        }
+        items[missing_count] = .{ .source = source, .object = object, .batch_index = batch_index, .plan = plan };
+        missing_count += 1;
     }
-    for (jobs) |*job| try waitCompile(io, job);
+    try compileMissingBatches(io, a, items[0..missing_count], llvm_workers);
 
     const program_source = try std.fs.path.join(a, &.{ llvm_dir, "program.bc" });
     const program_object = try std.fs.path.join(a, &.{ llvm_dir, "program.o" });
-    try stage(io, marker, "compile LLVM program metadata (-O1)", &.{
-        paths.clang,
-        clang_program_mode,
-        clang_common_flags[0],
-        clang_common_flags[1],
-        clang_common_flags[2],
-        "-c",
-        program_source,
-        "-o",
-        program_object,
-    });
+    if (cache_hits == null or cache_hits.?[plans.len] == '0')
+        try stage(io, marker, "compile LLVM program metadata (-O1)", &.{
+            paths.clang,
+            clang_program_mode,
+            clang_common_flags[0],
+            clang_common_flags[1],
+            clang_common_flags[2],
+            "-c",
+            program_source,
+            "-o",
+            program_object,
+        });
     try objects.append(a, program_object);
     std.Io.Dir.cwd().deleteFile(io, program_source) catch |err| switch (err) {
         error.FileNotFound => {},
@@ -521,16 +613,26 @@ fn compileBitcodeModules(
     return objects;
 }
 
-fn cachedObjectPaths(io: std.Io, a: std.mem.Allocator, llvm_dir: []const u8) !std.ArrayList([]const u8) {
-    const plans = try readBatchPlan(io, a, llvm_dir);
-    defer a.free(plans);
-    if (plans.len == 0) return error.InvalidBatchPlan;
-    var objects: std.ArrayList([]const u8) = .empty;
-    for (plans, 0..) |_, index| {
-        try objects.append(a, try std.fmt.allocPrint(a, "{s}/module_batch_{d:0>6}.o", .{ llvm_dir, index }));
+fn validateObjectHits(bytes: []const u8, object_count: usize) !void {
+    // One bit per batch plus the final program.o bit. The helper writes this
+    // only after hashing and restoring each listed immutable cache object.
+    if (object_count < 2 or object_count > 100_001 or
+        bytes.len != object_count + 1 or bytes[object_count] != '\n')
+        return error.InvalidObjectCacheHits;
+    for (bytes[0..object_count]) |byte| {
+        if (byte != '0' and byte != '1') return error.InvalidObjectCacheHits;
     }
-    try objects.append(a, try std.fs.path.join(a, &.{ llvm_dir, "program.o" }));
-    return objects;
+}
+
+test "object cache hit bitmap is exact and includes the program object" {
+    try validateObjectHits("101\n", 3);
+    try validateObjectHits("000\n", 3);
+    try validateObjectHits("111\n", 3);
+    const invalid = [_][]const u8{ "11\n", "1111\n", "10x\n", "101", "101\r", "101\n0" };
+    for (invalid) |bytes|
+        try std.testing.expectError(error.InvalidObjectCacheHits, validateObjectHits(bytes, 3));
+    try std.testing.expectError(error.InvalidObjectCacheHits, validateObjectHits("1\n", 1));
+    try std.testing.expectError(error.InvalidObjectCacheHits, validateObjectHits("", 100_002));
 }
 
 fn compileLeafBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) ![]const u8 {
@@ -737,18 +839,18 @@ fn compileNativeWorker(
     object_cache_root: ?[]const u8,
     worker: []const u8,
 ) !void {
-    const cache_hit = if (object_cache_root) |cache|
-        try objectCacheCommand(io, a, "probe-objects", cache, llvm_dir)
-    else
-        false;
-    const lua_objects = if (cache_hit)
-        try cachedObjectPaths(io, a, llvm_dir)
-    else blk: {
-        const compiled = try compileBitcodeModules(io, a, marker, llvm_dir, llvm_workers);
-        if (object_cache_root) |cache|
-            _ = try objectCacheCommand(io, a, "publish-objects", cache, llvm_dir);
-        break :blk compiled;
-    };
+    if (object_cache_root) |cache|
+        _ = try objectCacheCommand(io, a, "probe-objects", cache, llvm_dir);
+    const lua_objects = try compileBitcodeModules(
+        io,
+        a,
+        marker,
+        llvm_dir,
+        llvm_workers,
+        object_cache_root != null,
+    );
+    if (object_cache_root) |cache|
+        _ = try objectCacheCommand(io, a, "publish-objects", cache, llvm_dir);
     const main_c = try sourcePath(a, "src/lua/bundle_worker_main.c");
     const output = try std.fs.path.join(a, &.{ publish_root, "dict-bundle-expander" });
     try linkNativeWorker(io, a, marker, llvm_dir, main_c, worker, lua_objects.items, output);

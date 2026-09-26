@@ -191,12 +191,21 @@ write canonical blobs. The spool is transient and is removed after finalization.
 An interrupted corpus build retains verified extraction assets and native Lua
 objects in its staging workspace. Extraction reuse requires the same compressed
 input and index hashes, extractor and extraction arguments. Native object reuse
-requires identical emitted bitcode, compiler identity, target and flags, including
-the build-only value helper bitcode and its Zig producer. Runtime changes that
-leave those inputs unchanged can reuse native Lua objects while compiling and
-linking a fresh worker. Every cached asset is
-hashed before reuse, incomplete generations are rejected, and successful corpus
-publication removes the staging workspace and these transient caches.
+is checked separately for each emitted batch and the program object. Each key
+includes that object's exact bitcode, optimization mode, compiler, target and
+flags. Optimized batches also include the build-only value helper bitcode and
+its Zig producer; O0 batches and the program object do not import those helpers.
+Changing one batch can therefore reuse the other objects while compiling and
+linking a fresh worker. Every cached object is hashed before reuse. Missing or
+corrupt entries are rebuilt independently, and successful corpus publication
+removes the staging workspace and these transient caches.
+
+Up to four compiler workers take missing batches from one shared queue. A worker
+starts its next batch as soon as its current compiler exits, while the final
+link retains the original object order. A full cache hit launches no batch
+compilers. On failure, the queue stops admitting work and joins all started
+workers before returning. The first population of a new object-cache format
+still requires a cold native compile.
 
 Generated Lua batches use Clang's `-march=native` for the build host. The
 transient expansion worker is therefore host-specific; the native-object cache
