@@ -1,4 +1,5 @@
 const std = @import("std");
+const LocalBumpArena = rt.LocalBumpArena;
 const work_stats = rt.work_stats;
 const rt = @import("zig_runtime");
 const host_api = @import("host.zig");
@@ -1333,10 +1334,11 @@ pub const Expander = struct {
         const page_a = self.page_allocator orelse self.runtime.allocator;
         const outer_runtime = self.runtime;
 
-        var invoke_arena = std.heap.ArenaAllocator.init(page_a);
+        var invoke_arena = LocalBumpArena.init(page_a);
         defer invoke_arena.deinit();
         var child = try outer_runtime.forkProgram(invoke_arena.allocator());
         defer child.deinit();
+        child.useContextAllocatorForStrings();
         const global_shape = if (outer_runtime.global_table) |global| global.shape else null;
         try rt.bindGlobalTable(&child, global_shape, self.env_slot);
         if (!try child.bootstrapProgram()) try stdlib.install(&child);
@@ -2261,6 +2263,7 @@ const TestModule = struct {
         try exports.rawSet(ctx.allocator, .{ .string = "empty" }, try ctx.makeFunction(9, rt.stabilizeBuffered(empty), &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "nil_return" }, try ctx.makeFunction(10, rt.stabilizeBuffered(nilReturn), &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "number" }, try ctx.makeFunction(11, rt.stabilizeBuffered(numericReturn), &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "nested_owned" }, try ctx.makeFunctionKnown(12, nestedOwned, &.{}));
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
         return out;
@@ -2296,6 +2299,20 @@ const TestModule = struct {
     fn nested(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .string = "<ref>{{Hello|R|1}}</ref>" };
+        return out;
+    }
+    fn nestedOwned(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+        const live = try ctx.allocator.alloc(u8, 80_000);
+        @memset(live, 0x39);
+        const before = try ctx.concatValues(&.{ .{ .string = "outer-" }, .{ .string = "before" } });
+        const preprocess_fn = try ctx.getIndex(args[0], .{ .string = "preprocess" });
+        const nested_result = try ctx.callValue(preprocess_fn, &.{ args[0], .{ .string = "{{#invoke:Test|run|x=inner}}" } });
+        defer rt.freeResults(nested_result);
+        if (nested_result.len != 1) return error.ExpectedNestedResult;
+        for (live) |byte| if (byte != 0x39) return error.OuterInvokeMemoryChanged;
+        const joined = try ctx.concatValues(&.{ before, .{ .string = ":" }, nested_result[0], .{ .string = ":outer-after" } });
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = joined;
         return out;
     }
     fn repair(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
@@ -2508,6 +2525,9 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("1|1", isolated_module_state);
     const nested_invoke_wikitext = try expander.expandFragment("Page", "{{#invoke:Test|nested}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<ref>Hi R Y</ref>", nested_invoke_wikitext);
+
+    const nested_owned = try expander.expandFragment("Page", "{{#invoke:Test|nested_owned}}|{{#invoke:Test|nested_owned}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("outer-before:inner:outer-after|outer-before:inner:outer-after", nested_owned);
 
     const display_body = try expander.expandFragment("Page", "{{DISPLAYTITLE:''Page''}}body", 1_670_803_200);
     try std.testing.expectEqualStrings("body", display_body);

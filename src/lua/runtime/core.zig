@@ -1,4 +1,6 @@
 const std = @import("std");
+pub const RequestAllocator = @import("request_allocator.zig").RequestAllocator;
+pub const LocalBumpArena = @import("local_bump_arena.zig").LocalBumpArena;
 pub const work_stats = @import("work_stats.zig");
 const static_fields = @import("lua_static_fields");
 
@@ -1043,6 +1045,7 @@ pub const Context = struct {
     // Lua strings compare/hash by bytes; runtime concat results need ownership, not hash dedup.
     // Context-lifetime strings and immutable callable descriptors.
     string_arena: std.heap.ArenaAllocator,
+    strings_use_context_allocator: bool = false,
     globals: []Value,
     root_globals: []Value,
     // Stable heap address because Context is returned and forked by value.
@@ -1133,6 +1136,16 @@ pub const Context = struct {
         child.max_depth = self.max_depth;
         child.host = self.host;
         return child;
+    }
+
+    // Opt in only when the caller bulk-reclaims allocator after this Context.
+    // Strings and callable descriptors remain live until that owner exits.
+    pub fn useContextAllocatorForStrings(self: *Context) void {
+        self.strings_use_context_allocator = true;
+    }
+
+    fn stringAllocator(self: *Context) std.mem.Allocator {
+        return if (self.strings_use_context_allocator) self.allocator else self.string_arena.allocator();
     }
 
     pub fn deinit(self: *Context) void {
@@ -1233,7 +1246,7 @@ pub const Context = struct {
         return identity;
     }
     fn storeFunction(self: *Context, function: FunctionValue) !Value {
-        const descriptor = try self.string_arena.allocator().create(FunctionValue);
+        const descriptor = try self.stringAllocator().create(FunctionValue);
         descriptor.* = function;
         return .{ .callable = descriptor };
     }
@@ -1247,7 +1260,7 @@ pub const Context = struct {
         const CapturedFunction = struct { function: FunctionValue, env: Env };
         const capture_bytes = std.math.mul(usize, captures.len, @sizeOf(*Cell)) catch return error.OutOfMemory;
         const total_bytes = std.math.add(usize, @sizeOf(CapturedFunction), capture_bytes) catch return error.OutOfMemory;
-        const bytes = try self.string_arena.allocator().alignedAlloc(u8, .of(CapturedFunction), total_bytes);
+        const bytes = try self.stringAllocator().alignedAlloc(u8, .of(CapturedFunction), total_bytes);
         const record: *CapturedFunction = @ptrCast(bytes.ptr);
         const capture_ptr: [*]*Cell = @ptrCast(@alignCast(bytes.ptr + @sizeOf(CapturedFunction)));
         const owned = capture_ptr[0..captures.len];
@@ -2233,7 +2246,7 @@ pub const Context = struct {
         return error.CompareType;
     }
     fn ownString(self: *Context, text: []const u8) ![]const u8 {
-        return self.string_arena.allocator().dupe(u8, text);
+        return self.stringAllocator().dupe(u8, text);
     }
 
     pub fn concatValues(self: *Context, values: []const Value) anyerror!Value {
@@ -4251,4 +4264,56 @@ test "bounded inherited site cache keeps callable indexers live and context-loca
     try other_parent.rawSet(second.allocator, .{ .string = "method" }, .{ .number = 11 });
     try std.testing.expect(first.field_cache_nonce != second.field_cache_nonce);
     try std.testing.expectEqual(@as(f64, 11), (try second.getFieldAtSite(.{ .table = other }, "method", hash, site)).number);
+}
+
+test "invoke-local strings and captured callables release with the invoke arena" {
+    var request = RequestAllocator.init(std.testing.allocator);
+    defer request.deinit();
+    {
+        var invoke_arena = LocalBumpArena.init(request.allocator());
+        defer invoke_arena.deinit();
+        var child = try Context.init(invoke_arena.allocator(), 0);
+        defer child.deinit();
+        child.useContextAllocatorForStrings();
+
+        var cell = Cell{ .value = .{ .number = 3 } };
+        const captured = try child.makeFunction(7, stabilizeBuffered(bufferedResultProbe), &.{&cell});
+        try std.testing.expect(captured.callable.capturesPtr().?.direct[0] == &cell);
+        const plain = try child.makeFunction(8, stabilizeBuffered(bufferedResultProbe), &.{});
+        try std.testing.expect(plain.callable.capturesPtr() == null);
+        const joined = try child.concatValues(&.{ .{ .string = "left" }, .{ .string = "right" } });
+        try std.testing.expectEqualStrings("leftright", joined.string);
+        try std.testing.expect(request.live_count > 0);
+    }
+    try std.testing.expectEqual(@as(usize, 0), request.live_count);
+}
+
+test "invoke-local owned strings and errors survive explicit parent copies" {
+    var request = RequestAllocator.init(std.testing.allocator);
+    defer request.deinit();
+    var parent = try Context.init(request.allocator(), 0);
+    defer parent.deinit();
+    const before = request.live_count;
+    var output: []const u8 = undefined;
+    {
+        var invoke_arena = LocalBumpArena.init(request.allocator());
+        defer invoke_arena.deinit();
+        var child = try parent.forkProgram(invoke_arena.allocator());
+        defer child.deinit();
+        child.useContextAllocatorForStrings();
+        const result = try child.concatValues(&.{ .{ .string = "owned-" }, .{ .string = "output" } });
+        output = try request.allocator().dupe(u8, result.string);
+        child.last_error = try child.concatValues(&.{ .{ .string = "owned-" }, .{ .string = "failure" } });
+        child.last_error_present = true;
+        child.setAotErrorName("LuaRaised");
+        try parent.adoptFailure(&child);
+    }
+    // Only the two explicit parent copies remain after child bulk reclamation.
+    try std.testing.expectEqual(before + 2, request.live_count);
+    const churn = try request.allocator().alloc(u8, 64 * 1024);
+    @memset(churn, 0xaa);
+    try std.testing.expectEqualStrings("owned-output", output);
+    try std.testing.expectEqualStrings("owned-failure", parent.last_error.string);
+    try std.testing.expect(parent.last_error_present);
+    try std.testing.expectEqualStrings("LuaRaised", parent.aotErrorName().?);
 }

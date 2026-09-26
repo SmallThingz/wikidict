@@ -7,7 +7,7 @@ comptime {
 }
 const pages = @import("bundle_pages.zig");
 const protocol = @import("bundle_protocol.zig");
-const RequestAllocator = @import("runtime/request_allocator.zig").RequestAllocator;
+const RequestAllocator = lua_program.RequestAllocator;
 const InvokeReuseStats = lua_program.InvokeReuseStats;
 const work_stats = lua_program.work_stats;
 const A = std.mem.Allocator;

@@ -131,3 +131,20 @@ A four-CPU observational ABBA comparison then passed exact output checks in all 
 Both pairs improved worker CPU in each window, but the difficult-window gain is small. Machine-wide pressure and busy observations are recorded; this is loaded-host evidence, not clean-host or isolated-gain qualification. The complete comparison took 237.72 s with peak sampled PSS 2,776,522,752 bytes. A larger 100,000-page semantic count is the next gate; no new counted throughput is claimed here.
 
 Receipt: `.tmp/c25-continuation-review-20260927/allocator-observational-r1/qualification.json`, SHA-256 `0a41ef1e1a734814f36689ee45b5320c14718a88bf0417ed23c1a83694d82142`.
+
+## Allocator counted follow-up
+
+Allocator follow-up measurements support retaining the change provisionally on the measured page windows. The observational C25-control ABBA comparisons had lower worker CPU in both matched pairs of both windows. Ordinary mean worker CPU was 44.55575 -> 41.48450 seconds (ratio 0.931069, -6.89%; paired ratios 0.902444/0.961746). Hard mean worker CPU was 66.38195 -> 65.22121 seconds (ratio 0.982514, -1.75%; paired ratios 0.997032/0.968066). The near-neutral first hard pair limits confidence in the small gain. Machine-wide load was observed, so these are measured-window prioritization evidence, without an isolated performance claim.
+
+The separate eight-worker counted follow-up passed exact parity for 100,000 selected pages: 73,386 main pages, 74,848 language records, 1,620 fallback pages, all 524 nonfallback files, the fallback multiset, and blob verification. Native wall time was 192.161 seconds (520.397 selected pages/s), worker CPU 1,340.50864 seconds and joined process CPU 1,362.802 seconds. Complete bounded run time was 215.38 seconds, peak joined PSS 3,808,806,912 bytes and 23 tasks. Historical C24 measured 189.05 seconds / 528.96 pages/s on this workload; that unpaired run was faster in wall time. Different host pressure and the older C24 control prevent attributing either difference to the allocator. No counted throughput improvement over C25 has been demonstrated.
+
+The counted native stage recorded machine-wide major-fault/swap deltas {'pgmajfault': 118615, 'pswpin': 23811, 'pswpout': 32111}; PSI total stall deltas remain in the raw receipt. These machine-wide counters include other host work. The result does not meet 2,000 pages/s or qualify whole-English completion.
+
+Receipts:
+
+- `allocator-observational-r1/qualification.json` SHA-256 `0a41ef1e1a734814f36689ee45b5320c14718a88bf0417ed23c1a83694d82142`.
+- `allocator-counted-r2/qualification.json` SHA-256 `03dc9156ffdb00d9a588bbf90ab648fba183259790faa81ac24b2a99e6aee99e`.
+- `allocator-counted-r2/watchdog.json` SHA-256 `16144ae9efcf61231ecc63c5b94f9f18de8ff698ef93024a90fa9cdf8f87ccc4`.
+- `allocator-counted-r2/result.json` SHA-256 `075a780a9525461e26ded81c1ecf5615bb516c0f14a7c8e46f0bb5274f73a0a6`.
+
+The allocator-only patch also passed the full test graph on a plain snapshot of clean `bc3dc03` plus only its five owned files (224.20 s). This establishes independent test coverage for the allocator commit; the native parity and timing measurements above used C25 plus the allocator. The staged allocator core was verified against this snapshot, and the remaining live core changes were verified to be the original C25 work. Receipt: `.tmp/allocator-isolated-head-20260927/gate-r1/allocator-isolated-qualified.json`, SHA-256 `135b473f7f6599287f3abd0dd5b3cd9e2ad17ffae6525a097c4afc137c145e93`.

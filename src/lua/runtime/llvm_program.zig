@@ -8,6 +8,7 @@ const static_decode = @import("lua_static_literal_decode");
 const global_shape_index = @import("global_shape_index.zig");
 
 pub const Context = rt.Context;
+pub const RequestAllocator = rt.RequestAllocator;
 pub const work_stats = rt.work_stats;
 
 // A generation survives every page/context fork and never aliases a later
