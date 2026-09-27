@@ -240,3 +240,56 @@ The retained worker was profiled on the same 100,000 selected pages used for cou
 The most expensive individual self costs remain pattern matching (6.35%), cached field reads (3.86%), shape slot lookup (3.65%), copying (3.25%), UTF-8 decoding (2.81%), and table writes (2.45%). `mw.loadData` promotion accounts for about 3.16% including descendants; those inclusive samples overlap other costs and must not be added to them. Two of four workers finished within 5 KiB of the 64 MiB shared load-data cache budget. Source review found that a failed capacity admission discards its copied graph and can retry the same full copy later. Avoiding repeated rejected admission attempts is a candidate for testing, not a measured gain.
 
 Capture and output evidence live in `.tmp/representative-profile-100k-20260927/profile-r1`. Its caller report timed out; report recovery reused the saved capture without another expansion. Recovery retained the complete flat report and limited caller output to significant chains, with offline inline expansion disabled. The final qualification is `.tmp/representative-profile-100k-20260927/reports-r3/lbr-qualified.json`, SHA-256 `e672f7be04c1d9d7a88015acbfea7ffc991a2c95074bdbaa07685fd83b03510e`. Earlier recovery attempts failed on an overly strict empty-file check and the report output cap; both are preserved. Final report recovery took 5.456 seconds and peaked at 326,488,064 bytes PSS.
+
+## Rejected load-data capacity optimization
+
+Remembering failed shared-cache admission avoided redundant graph copies, but failed the representative timing check. The candidate passed the full Zig graph, linked cyclic/aliased/read-only fixture parity, and exact ordinary/difficult 1,000-page parity; its native build reused all 118 Lua objects. Those short windows did not exercise capacity rejection, so the decision used four 100,000-page runs in control/candidate/candidate/control order.
+
+All four runs matched all 524 non-fallback files and the 1,620 fallback records as a multiset, with 73,386 main pages and 74,848 language records; final blob verification passed. Candidate runs recorded 37 and 18 capacity rejections, avoiding 67 and 32 later admission copies. Despite that mechanism working, average worker CPU increased from 1,364.028 to 1,381.981 seconds (ratio 1.013161); both matched pairs were worse (1.021516 and 1.004914). Mean native wall increased from 201.901 to 209.296 seconds. The change remains unmerged.
+
+This was an observational comparison on the loaded shared host, under eight CPUs and the independent 8 GiB watchdog. The complete wrapper took 1,031.965 seconds and peaked at 3,633,643,520 bytes aggregate PSS and 21 tasks. Evidence: `.tmp/load-data-capacity-long-20260927/abba-r1/qualification.json`, SHA-256 `8285724ecf6d10948775aa47b0e1378136fe6e014747219a918a4f560cac315b`. The retained throughput remains 554.631 selected pages/s.
+
+## Additional runtime trials
+
+Using the private bump arena for temporary load-data evaluation passed the full Zig graph, linked lifetime/error fixture, and both exact 1,000-page English windows. All 118 native Lua objects were reused. Paired worker CPU averages were effectively unchanged: ordinary ratio 0.999794 and difficult ratio 0.999482; both windows had mixed pairs. The candidate remains unmerged. Receipt: `.tmp/load-data-bump-observational-20260927/abba-r1/qualification.json`, SHA-256 `829e88acf65c08e7e477a73a7ba7ed7ba167d4412188796f0c578ce9d77e9cdb`.
+
+Tracking the active module identity to skip repeated scope lookups also passed the full Zig graph, linked nested-module/error fixture, and exact ordinary/difficult parity, with 118/118 object reuse. Its observational ABBA CPU ratios were 1.082536 ordinary and 1.007186 difficult. Both windows had mixed pairs amid host memory reclaim and I/O pressure; this does not establish an isolated regression or gain. The candidate remains unmerged. Receipt: `.tmp/active-module-scope-observational-20260927/abba-r1/qualification.json`, SHA-256 `b06b731c44ad0cfad7af4f3cbd2ee59ac0e4e9ef4ee88a8f5a04d55d3ccd5c69`. The wrapper took 269.694 seconds and peaked at 2,951,970,816 bytes aggregate PSS and 13 tasks.
+
+## Alternative backend prefilter
+
+The user requested evaluation of Cranelift and MIR, with adoption conditional on real speed gains. Production remains LLVM. A scratch Cranelift 0.136.1 AOT pilot passed bidirectional C/Zig aggregate ABI checks, the hidden SysV result pointer/RAX check, high-bit argument counts, exact guarded callback counts, and floating-point edge cases. The full pilot took 17.386 seconds, peaking at 338,546,688 bytes PSS and 17 tasks. Receipt: `.tmp/cranelift-exploration-20260927/pilot-r5/qualification.json`, SHA-256 `c51248f9b0402b19c2c0bc6936618549fdea075cea863c9cec1695cf6721f839`.
+
+Five rotating repeats of three hand-lowered kernels produced these median process CPU seconds:
+
+| Kernel | Cranelift speed | LLVM C -O2 |
+| --- | ---: | ---: |
+| Scalar accumulation | 0.069875 | 0.047647 |
+| External table-helper loop | 0.121822 | 0.230280 |
+| Guarded direct/indirect callback | 0.228716 | 0.227609 |
+
+An independent assembly review found no omitted helper calls or changed summation order in the table kernel; LLVM emitted an extra dependent accumulator spill/reload. That localized gain does not qualify Lua expansion or a backend replacement. The nine-function code-generation timings are dominated by process/frontend differences and are not a production compilation speedup. The actual-source probes below extend this prefilter. Ordinary/difficult full-worker parity and total compilation plus representative expansion gains would still be required for adoption.
+
+MIR's pinned source (`a8ab7c31cd5f9b23b77d84c60b3d83e62d9d304c`) exposes eager native generation into process memory, but no supported drop-in relocatable-object emitter was found. This is an AOT integration limitation, not evidence of slow execution. The actual-source tests below evaluated a build-time-only native JIT, with no interpreter fallback or shipped executable corpus representation. Neither backend has established a production speed gain or been accepted. The retained English result remains 554.631 selected pages/s; the 2,000 pages/s and full-English targets remain open.
+
+### Actual-source backend probes
+
+The tested Cranelift and MIR integrations are rejected for adoption: actual Lua probes have not demonstrated a speed gain. This decision applies to these generic lowerings, not every possible implementation of either backend. The retained observed English result remains **554.631 selected input pages/sec**, below the 2000 target; it is not full-corpus or isolated-speedup qualification.
+
+Cranelift passed sixteen real runtime cases for ArrayParser.jump/StringParser.advance and ten for Parser.traverse. MIR passed eight real advance cases and all ten traverse cases. Traversal uses genuine LLVM consume/advance bodies with their real IDs and find/sub captures. It tests both identity-guard hits, actual cached/uncached pattern behavior, misses, field rebinding, zero-return padding, false/marker returns, nil errors and depth restoration. Production object guards compare IDs 110111 and 110108, matching the qualified receipts.
+
+CPU ratios are candidate/production LLVM means across five paired rounds; above 1 is slower.
+
+| Actual Lua workload | Cranelift host | MIR |
+| --- | ---: | ---: |
+| Advance: mutable / inherited / metamethod | 3.071 / 2.052 / 1.851 | 3.225 / 2.064 / 1.928 |
+| Traverse: genuine cached / uncached consume | 1.189 / 1.187 | 1.168 / 1.180 |
+| Traverse: consume miss / both misses / field rebinding | 1.148 / 1.065 / 1.203 | 1.134 / 1.053 / 1.169 |
+
+All 25 Cranelift traverse pairs were slower (1.03778-1.25908). MIR's genuine-hit and field-rebinding pairs were also all slower; its callback-miss pairs varied and establish no gain. These are bounded native observations on a shared host, using the same real Zig runtime and exact receipts; helper visibility differs, so they do not isolate backend code generation. The earlier hand-kernel table win and tiny codegen timings do not establish total dictionary build plus expansion gains. Total cold build remains unqualified. No alternative backend was adopted or shipped; whole-worker parity and representative total-build/expansion improvement remain required.
+
+Qualification artifacts (SHA-256):
+
+- `.tmp/cranelift-exploration-20260927/shared-r3/runtime-qualified.json`: `1d52990ba2f6b2d41c9c638d7f38e649bd83fc0b95bbedfd5a1116d6bd4c456c`.
+- `.tmp/mir-exploration-20260927/runtime-r1/mir-runtime-qualified.json`: `68e391fd9f5babdf5d73089262eaf02c460d073dae6aeda7c8e9091ea25b70a1`.
+- `.tmp/cranelift-exploration-20260927/traverse-shared-r1/traverse-qualified.json`: `42e605facc68502025e61b42542c0120117772690f8a8691f55ebe06f17efffa`.
+- `.tmp/mir-exploration-20260927/traverse-runtime-r1/mir-runtime-qualified.json`: `5b480e4de13734279c443b45bcf8d0e706fc3b09102640219ac8c3223a86e4ab`.
