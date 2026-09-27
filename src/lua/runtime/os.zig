@@ -91,7 +91,7 @@ fn setDateFields(runtime: *rt.Context, table: *rt.Table, timestamp: i64) !void {
 }
 
 fn pinnedNow(runtime: *rt.Context) !i64 {
-    const host = host_api.get(runtime) orelse return error.MissingCurrentTime;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.MissingCurrentTime;
     return host.now_unix orelse error.MissingCurrentTime;
 }
 

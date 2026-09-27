@@ -180,6 +180,7 @@ pub const Provider = struct {
             .get_transclusion_body = getTransclusionBody,
             .redirect_target = redirectTarget,
             .page_metadata = pageMetadata,
+            .stable_page_reads = true,
             .exists = exists,
             .external_data = if (self.external_data_available) externalData else null,
             .category_stats = if (self.category_stats_available) categoryStats else null,

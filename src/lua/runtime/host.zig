@@ -67,6 +67,10 @@ pub const Host = struct {
     page_redirect: ?PageRedirectFn = null,
     page_id: ?PageIdFn = null,
     page_content_model: ?PageContentModelFn = null,
+    // The build provider pins these lookups for the lifetime of a page
+    // expansion. They remain loadData effects across pages, but do not make an
+    // exact same-page invocation result unstable.
+    stable_page_reads: bool = false,
     frame_preprocess: ?FramePreprocessFn = null,
     frame_expand_template: ?FrameExpandTemplateFn = null,
     frame_extension_tag: ?FrameExtensionTagFn = null,
@@ -120,6 +124,19 @@ pub fn get(runtime: *const rt.Context) ?*Host {
     return getForInvokeBookkeeping(runtime);
 }
 
+pub fn getForStablePageRead(runtime: *const rt.Context) ?*Host {
+    const host: *Host = @ptrCast(@alignCast(runtime.host orelse {
+        rt.markLoadDataEffect();
+        return null;
+    }));
+    if (!host.stable_page_reads) {
+        var probe = invoke_host_probe;
+        while (probe) |active| : (probe = active.previous) active.observed = true;
+    }
+    rt.markLoadDataEffect();
+    return host;
+}
+
 pub fn getForStableInterwikiMap(runtime: *const rt.Context) ?*Host {
     var probe = invoke_host_probe;
     while (probe) |active| : (probe = active.previous) active.observed = true;
@@ -167,4 +184,29 @@ test "mutable interwiki host remains page-sensitive and stable capability is exp
     try std.testing.expect(!effect);
     _ = get(&runtime);
     try std.testing.expect(effect);
+}
+
+test "stable page reads stay loadData effects without invalidating same-page invoke reuse" {
+    var runtime = try rt.Context.init(std.testing.allocator, 0);
+    defer runtime.deinit();
+    var host = Host{};
+    set(&runtime, &host);
+
+    var effect = false;
+    const previous_effect = rt.beginLoadDataEffectProbe(&effect);
+    defer rt.endLoadDataEffectProbe(previous_effect);
+    var invoke: InvokeHostProbe = .{};
+    beginInvokeHostProbe(&invoke);
+    defer endInvokeHostProbe(&invoke);
+
+    try std.testing.expect(getForStablePageRead(&runtime) == &host);
+    try std.testing.expect(effect);
+    try std.testing.expect(invoke.observed);
+
+    effect = false;
+    invoke.observed = false;
+    host.stable_page_reads = true;
+    try std.testing.expect(getForStablePageRead(&runtime) == &host);
+    try std.testing.expect(effect);
+    try std.testing.expect(!invoke.observed);
 }

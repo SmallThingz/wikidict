@@ -319,7 +319,7 @@ fn parseLeadingClockDateTime(raw: []const u8) ?Civil {
 }
 
 fn currentUnix(runtime: *const rt.Context) !i64 {
-    const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.MissingScribuntoHost;
     return host.now_unix orelse error.MissingCurrentTime;
 }
 
@@ -812,7 +812,7 @@ fn isKnownLanguageTag(_: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     const a = runtime.allocator;
     if (args.len == 0 or args[0] != .string) return one(a, .{ .boolean = false });
     if (std.mem.eql(u8, args[0].string, "en")) return one(a, .{ .boolean = true });
-    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
     const get = host.language_known_tag orelse return error.NotImplemented;
     return one(a, .{ .boolean = try get(host.ctx, args[0].string) });
 }

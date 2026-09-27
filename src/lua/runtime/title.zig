@@ -200,7 +200,7 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
             try std.fmt.allocPrint(runtime.allocator, "File:{s}", .{ns.text})
         else
             return one(.nil);
-        const host = host_api.get(runtime) orelse return error.NotImplemented;
+        const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
         const get = host.file_metadata orelse return error.NotImplemented;
         const metadata = try get(host.ctx, canonical_file_title);
         const file = try runtime.newTable();
@@ -217,7 +217,7 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         // Scribunto maps Media: title existence to file.exists, not page existence.
         if (ns.id == -2) {
             const canonical_file_title = try std.fmt.allocPrint(runtime.allocator, "File:{s}", .{ns.text});
-            const host = host_api.get(runtime) orelse return error.NotImplemented;
+            const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
             const get = host.file_metadata orelse return error.NotImplemented;
             const metadata = try get(host.ctx, canonical_file_title);
             try table.rawSetNativeField(.title_value, "exists", .{ .boolean = metadata.exists });
@@ -253,7 +253,7 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         return one(try makeTitleValue(runtime, state, title));
     }
     if (std.mem.eql(u8, key, "contentModel")) {
-        const host = host_api.get(runtime);
+        const host = host_api.getForStablePageRead(runtime);
         const model = if (host) |value|
             if (value.page_content_model) |get| try get(value.ctx, prefixed.string) else null
         else
@@ -261,12 +261,12 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         return one(.{ .string = model orelse defaultContentModel(prefixed.string) });
     }
     if (std.mem.eql(u8, key, "id")) {
-        const host = host_api.get(runtime) orelse return one(.{ .number = 0 });
+        const host = host_api.getForStablePageRead(runtime) orelse return one(.{ .number = 0 });
         const id = if (host.page_id) |get| try get(host.ctx, prefixed.string) else null;
         return one(.{ .number = @floatFromInt(id orelse 0) });
     }
     if (std.mem.eql(u8, key, "isRedirect") or std.mem.eql(u8, key, "redirectTarget")) {
-        const host = host_api.get(runtime) orelse return one(if (std.mem.eql(u8, key, "isRedirect")) .{ .boolean = false } else .nil);
+        const host = host_api.getForStablePageRead(runtime) orelse return one(if (std.mem.eql(u8, key, "isRedirect")) .{ .boolean = false } else .nil);
         const redirect = if (host.page_redirect) |get| try get(host.ctx, prefixed.string) else null;
         if (std.mem.eql(u8, key, "isRedirect")) return one(.{ .boolean = redirect != null });
         const target = redirect orelse {
@@ -306,7 +306,7 @@ fn ensureMetatable(runtime: *rt.Context, state: *State) !*rt.Table {
     return mt;
 }
 fn pageExists(runtime: *rt.Context, title: []const u8) !bool {
-    if (host_api.get(runtime)) |host| if (host.page_exists) |exists|
+    if (host_api.getForStablePageRead(runtime)) |host| if (host.page_exists) |exists|
         return exists(host.ctx, title);
     if (namespaceOf(title).id == 828) {
         _ = runtime.resolveModule(title) catch return false;
@@ -410,7 +410,7 @@ fn canonicalUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
 }
 
 fn titleContentValue(runtime: *rt.Context, title: []const u8) !?[]const u8 {
-    const host = host_api.get(runtime) orelse return null;
+    const host = host_api.getForStablePageRead(runtime) orelse return null;
     const provider = host.page_content orelse return null;
     return provider(host.ctx, runtime.allocator, title);
 }
@@ -584,7 +584,7 @@ fn titleForNamespace(runtime: *rt.Context, state: *State, spec: namespace_lib.Sp
 const InterwikiDisposition = enum { none, current_wiki, external };
 
 fn interwikiDisposition(runtime: *rt.Context, prefix: []const u8) !InterwikiDisposition {
-    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
     const get = host.site_interwiki_map orelse return error.NotImplemented;
     for (try get(host.ctx)) |row| {
         if (!std.ascii.eqlIgnoreCase(row.prefix, prefix)) continue;
@@ -744,7 +744,7 @@ fn makeCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]cons
 }
 fn currentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
-    const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.MissingScribuntoHost;
     if (host.current_title.len == 0) return error.MissingCurrentTitle;
     return one(try makeTitleValue(runtime, state, host.current_title));
 }

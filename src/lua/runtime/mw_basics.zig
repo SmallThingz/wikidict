@@ -63,7 +63,7 @@ fn pagesInCategoryCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value
         args[1].string;
 
     rt.work_stats.noteCategory(args[0].string, which);
-    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
     const get = host.category_stats orelse return error.NotImplemented;
     const key = try categoryDbKey(runtime, args[0].string);
     const stats = (try get(host.ctx, key)) orelse host_api.CategoryStats{ .all = 0, .subcats = 0, .files = 0 };
@@ -334,7 +334,7 @@ fn messageSource(runtime: *rt.Context, ctx: *const MessageCtx) !?[]const u8 {
         return source;
     }
     const key = ctx.key orelse return error.MissingMessageKey;
-    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
     if (ctx.language) |language|
         return snapshotMessageSource(runtime, host, language, key);
 
@@ -601,7 +601,7 @@ fn externalDataGetCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value
         return error.NotImplemented;
 
     if (!std.mem.endsWith(u8, args[0].string, ".tab")) return error.NotImplemented;
-    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
     const get = host.external_data orelse return error.NotImplemented;
     const entry = (try get(host.ctx, args[0].string)) orelse return one(.{ .boolean = false });
     if (!std.mem.eql(u8, entry.content_model, "Tabular.JsonConfig")) return error.NotImplemented;
@@ -706,7 +706,7 @@ fn wikibaseGetSitelinkCall(_: ?*anyopaque, runtime: *rt.Context, args: []const V
     else
         return error.StringExpected;
     rt.work_stats.noteSitelink(args[0].string, global_site_id);
-    const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.MissingScribuntoHost;
     const get = host.wikibase_sitelink orelse return error.NotImplemented;
     const title = get(host.ctx, args[0].string, global_site_id) catch |err| {
         if (err == error.WikibaseSitelinkSnapshotMissing) {
@@ -725,7 +725,7 @@ fn wikibaseGetSitelinkCall(_: ?*anyopaque, runtime: *rt.Context, args: []const V
 fn wikibaseEntityText(runtime: *rt.Context, args: []const Value) !?host_api.WikibaseEntityText {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     const entity_id = (try canonicalWikibaseEntityId(runtime, args[0].string)) orelse return null;
-    const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.MissingScribuntoHost;
     const get = host.wikibase_entity_text orelse return error.NotImplemented;
     return get(host.ctx, entity_id) catch |err| {
         if (err == error.WikibaseEntityTextSnapshotMissing) {

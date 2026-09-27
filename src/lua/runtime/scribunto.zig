@@ -41,6 +41,7 @@ pub const SharedLoadDataCache = struct {
     backing: std.mem.Allocator,
     cacheable: []const bool,
     entries: std.AutoHashMapUnmanaged(u32, Entry) = .empty,
+    headword_static: ?Entry = null,
     seen: std.AutoHashMapUnmanaged(u32, void) = .empty,
     impure: std.AutoHashMapUnmanaged(u32, void) = .empty,
     pending_attempts: std.AutoHashMapUnmanaged(u32, u8) = .empty,
@@ -74,6 +75,10 @@ pub const SharedLoadDataCache = struct {
             self.backing.destroy(entry.arena);
         }
         self.entries.deinit(self.backing);
+        if (self.headword_static) |*entry| {
+            entry.arena.deinit();
+            self.backing.destroy(entry.arena);
+        }
         self.seen.deinit(self.backing);
         self.impure.deinit(self.backing);
         self.pending_attempts.deinit(self.backing);
@@ -102,9 +107,9 @@ pub const SharedLoadDataCache = struct {
     /// Build-worker diagnostics only; emitted once when its persistent engine exits.
     pub fn logDiagnostics(self: *const SharedLoadDataCache, module_names: []const []const u8) void {
         rt.work_stats.logLine("loadData cache: hits={d} promotions={d} effect_exclusions={d} pending_observations={d} pending_exclusions={d} pending_keys={d} pending_disabled={} entries={d} bytes={d}\n", .{
-            self.hits, self.promotions, self.effect_exclusions, self.pending_observations,
-            self.pending_exclusions, self.pending_attempts.count(), self.pending_disabled,
-            self.entries.count(), self.bytes,
+            self.hits,               self.promotions,               self.effect_exclusions, self.pending_observations,
+            self.pending_exclusions, self.pending_attempts.count(), self.pending_disabled,  self.entries.count(),
+            self.bytes,
         });
         for (self.first_promoted[0..self.promoted_count]) |id| {
             const name = if (id < module_names.len) module_names[id] else "?";
@@ -115,8 +120,8 @@ pub const SharedLoadDataCache = struct {
             rt.work_stats.logLine("loadData effect excluded: {d} {s}\n", .{ id, name[0..@min(name.len, 512)] });
         }
         inline for (.{
-            "Module:scripts/data", "Module:languages/chars",
-            "Module:glossary/data", "Module:headword/data",
+            "Module:scripts/data",    "Module:languages/chars",
+            "Module:glossary/data",   "Module:headword/data",
             "Module:data/interwikis", "Module:template parser/data",
         }) |target| {
             for (module_names, 0..) |name, index| {
@@ -124,9 +129,9 @@ pub const SharedLoadDataCache = struct {
                 const id: u32 = @intCast(index);
                 const entry = self.entries.get(id);
                 rt.work_stats.logLine("loadData target: {s} id={d} hits={d} admitted={} excluded={} pending_attempts={d} pending_blocked={}\n", .{
-                    target, id, if (entry) |value| value.hits else @as(u64, 0),
-                    entry != null, self.impure.contains(id),
-                    self.pending_attempts.get(id) orelse 0, self.pendingBlocked(id),
+                    target,                  id,                       if (entry) |value| value.hits else @as(u64, 0),
+                    entry != null,           self.impure.contains(id), self.pending_attempts.get(id) orelse 0,
+                    self.pendingBlocked(id),
                 });
                 break;
             }
@@ -186,6 +191,44 @@ pub const SharedLoadDataCache = struct {
         table.read_only = true;
         self.metatable = table;
         return table;
+    }
+
+    fn seedHeadwordStatic(self: *SharedLoadDataCache, source: Value) !void {
+        if (self.headword_static != null or source != .table) return;
+        const arena = try self.backing.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(self.backing);
+        errdefer {
+            arena.deinit();
+            self.backing.destroy(arena);
+        }
+        const a = arena.allocator();
+        const metatable = try self.loadDataMetatable();
+        const root = try a.create(rt.Table);
+        root.* = .{};
+        var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
+        defer seen.deinit(a);
+        try seen.put(a, source.table, root);
+        var it = source.table.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* == .string and
+                (std.mem.eql(u8, entry.key_ptr.string, "page") or
+                    std.mem.eql(u8, entry.key_ptr.string, "pagename") or
+                    std.mem.eql(u8, entry.key_ptr.string, "encoded_pagename")))
+                continue;
+            const key = try promoteLoadData(a, entry.key_ptr.*, &seen, metatable);
+            const value = try promoteLoadData(a, entry.value_ptr.*, &seen, metatable);
+            try root.rawSet(a, key, value);
+        }
+        root.metatable = metatable;
+        root.read_only = true;
+        const bytes = arena.queryCapacity();
+        if (bytes > shared_load_data_max_entry_bytes or bytes > shared_load_data_max_bytes - self.bytes) {
+            arena.deinit();
+            self.backing.destroy(arena);
+            return;
+        }
+        self.bytes += bytes;
+        self.headword_static = .{ .arena = arena, .value = .{ .table = root }, .bytes = bytes };
     }
 
     fn tryPromote(self: *SharedLoadDataCache, module_id: u32, source: Value, dynamic_proven: bool) !?Value {
@@ -311,6 +354,118 @@ fn promoteLoadDataForState(state: *State, module_id: u32, source: Value, dynamic
     return promoteLoadData(state.allocator, source, &seen, try pageLoadDataMetatable(state));
 }
 
+fn frozenInvariantLoadDataName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "Module:glossary/data") or
+        std.mem.startsWith(u8, name, "Module:labels/data");
+}
+
+test "frozen invariant loadData names stay limited to audited corpus data modules" {
+    try std.testing.expect(frozenInvariantLoadDataName("Module:glossary/data"));
+    try std.testing.expect(frozenInvariantLoadDataName("Module:labels/data"));
+    try std.testing.expect(frozenInvariantLoadDataName("Module:labels/data/lang/en"));
+    try std.testing.expect(!frozenInvariantLoadDataName("Module:glossary"));
+    try std.testing.expect(!frozenInvariantLoadDataName("Module:labels"));
+    try std.testing.expect(!frozenInvariantLoadDataName("Module:headword/data"));
+}
+
+test "headword static split never shares page-specific fields" {
+    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer source_arena.deinit();
+    const source_a = source_arena.allocator();
+    const source = try source_a.create(rt.Table);
+    source.* = .{};
+    const source_page = try source_a.create(rt.Table);
+    source_page.* = .{};
+    try source_page.rawSet(source_a, .{ .string = "pagename" }, .{ .string = "Source" });
+    const nested = try source_a.create(rt.Table);
+    nested.* = .{};
+    try nested.rawSet(source_a, .{ .string = "value" }, .{ .number = 7 });
+    try source.rawSet(source_a, .{ .string = "static" }, .{ .table = nested });
+    try source.rawSet(source_a, .{ .string = "page" }, .{ .table = source_page });
+    try source.rawSet(source_a, .{ .string = "pagename" }, .{ .string = "Source" });
+    try source.rawSet(source_a, .{ .string = "encoded_pagename" }, .{ .string = "Source" });
+
+    var shared = SharedLoadDataCache.init(std.testing.allocator, &.{false});
+    defer shared.deinit();
+    try shared.seedHeadwordStatic(.{ .table = source });
+    const static = shared.headword_static.?.value;
+    try std.testing.expect(static.table.rawGet(.{ .string = "page" }) == null);
+    try std.testing.expect(static.table.rawGet(.{ .string = "pagename" }) == null);
+    try std.testing.expect(static.table.rawGet(.{ .string = "encoded_pagename" }) == null);
+    try std.testing.expectEqual(@as(f64, 7), static.table.rawGet(.{ .string = "static" }).?.table.rawGet(.{ .string = "value" }).?.number);
+
+    var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer page_arena.deinit();
+    const page_a = page_arena.allocator();
+    var state = State{ .allocator = page_a, .env_slot = 0, .string_slot = 0, .mw_slot = 0, .shared_load_data = &shared };
+    const alpha = try page_a.create(rt.Table);
+    alpha.* = .{};
+    try alpha.rawSet(page_a, .{ .string = "pagename" }, .{ .string = "Alpha" });
+    try alpha.rawSet(page_a, .{ .string = "encoded_pagename" }, .{ .string = "Alpha%20encoded" });
+    const alpha_data = try mergeHeadwordData(&state, static, .{ .table = alpha });
+    try std.testing.expectEqualStrings("Alpha", alpha_data.table.rawGet(.{ .string = "pagename" }).?.string);
+    try std.testing.expectEqualStrings("Alpha%20encoded", alpha_data.table.rawGet(.{ .string = "encoded_pagename" }).?.string);
+    try std.testing.expect(alpha_data.table.rawGet(.{ .string = "page" }).?.table == alpha);
+    try std.testing.expect(alpha_data.table.rawGet(.{ .string = "static" }).?.table == static.table.rawGet(.{ .string = "static" }).?.table);
+
+    const beta = try page_a.create(rt.Table);
+    beta.* = .{};
+    try beta.rawSet(page_a, .{ .string = "pagename" }, .{ .string = "Beta" });
+    try beta.rawSet(page_a, .{ .string = "encoded_pagename" }, .{ .string = "Beta%20encoded" });
+    const beta_data = try mergeHeadwordData(&state, static, .{ .table = beta });
+    try std.testing.expect(beta_data.table != alpha_data.table);
+    try std.testing.expectEqualStrings("Beta", beta_data.table.rawGet(.{ .string = "pagename" }).?.string);
+    try std.testing.expectEqualStrings("Alpha", alpha_data.table.rawGet(.{ .string = "pagename" }).?.string);
+}
+
+fn installLoadDataChild(runtime: *rt.Context, state: *State, child: *rt.Context) !void {
+    const global_shape = if (runtime.global_table) |global| global.shape else null;
+    try rt.bindGlobalTable(child, global_shape, state.env_slot);
+    if (!try child.bootstrapProgram()) try stdlib.install(child);
+    try installInto(child, state);
+    const empty_args = try child.newTable();
+    const empty_frame = try frame_lib.makeFrameFromTable(child, "empty", empty_args, null);
+    child.current_frame = empty_frame.table;
+}
+
+fn headwordPageData(runtime: *rt.Context, state: *State) !Value {
+    var eval_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer eval_arena.deinit();
+    var child = try runtime.forkProgram(eval_arena.allocator());
+    defer child.deinit();
+    try installLoadDataChild(runtime, state, &child);
+    const module_name = "Module:headword/page";
+    const module_id = try child.resolveModule(module_name);
+    const module = try child.requireModuleId(module_id, module_name);
+    const callable = if (child.moduleExportSlot(module_id, "process_page")) |known|
+        try child.getProgramShapeField(module, known.shape_id, known.slot, "process_page")
+    else
+        try child.getIndex(module, .{ .string = "process_page" });
+    const values = try child.callValue(callable, &.{});
+    defer rt.freeResults(values);
+    if (values.len == 0 or values[0] != .table) return error.LoadDataTableExpected;
+    var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
+    defer seen.deinit(state.allocator);
+    return promoteLoadData(state.allocator, values[0], &seen, try pageLoadDataMetatable(state));
+}
+
+fn mergeHeadwordData(state: *State, static: Value, page: Value) !Value {
+    if (static != .table or page != .table) return error.LoadDataTableExpected;
+    const root = try state.allocator.create(rt.Table);
+    root.* = .{};
+    var it = static.table.iterator();
+    while (it.next()) |entry|
+        try root.rawSet(state.allocator, entry.key_ptr.*, entry.value_ptr.*);
+    try root.rawSet(state.allocator, .{ .string = "page" }, page);
+    const pagename = page.table.rawGet(.{ .string = "pagename" }) orelse return error.LoadDataTableExpected;
+    const encoded = page.table.rawGet(.{ .string = "encoded_pagename" }) orelse return error.LoadDataTableExpected;
+    try root.rawSet(state.allocator, .{ .string = "pagename" }, pagename);
+    try root.rawSet(state.allocator, .{ .string = "encoded_pagename" }, encoded);
+    root.metatable = try pageLoadDataMetatable(state);
+    root.read_only = true;
+    return .{ .table = root };
+}
+
 fn cloneCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0) return one(.nil);
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
@@ -362,6 +517,15 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     if (args.len == 0 or args[0] != .string) return error.ModuleNameExpected;
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingScribuntoState));
     const module_id = try runtime.resolveModule(args[0].string);
+    const is_headword_data = std.mem.eql(u8, args[0].string, "Module:headword/data");
+    if (is_headword_data) if (state.shared_load_data) |shared| if (shared.headword_static) |entry| {
+        rt.markLoadDataEffect();
+        if (state.load_data_cache.get(module_id)) |value| return one(value);
+        const value = try mergeHeadwordData(state, entry.value, try headwordPageData(runtime, state));
+        try state.load_data_cache.put(state.allocator, module_id, value);
+        return one(value);
+    };
+    const frozen_corpus_invariant = state.shared_load_data != null and frozenInvariantLoadDataName(args[0].string);
     // A verified worker-owned read-only graph is an invariant dependency.
     if (state.shared_load_data) |shared| if (shared.get(module_id)) |value| return one(value);
     // A page-local dependency can become shareable only after its own proof.
@@ -388,7 +552,6 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     defer eval_arena.deinit();
     var child = try runtime.forkProgram(eval_arena.allocator());
     defer child.deinit();
-    const global_shape = if (runtime.global_table) |global| global.shape else null;
     var observed_effect = false;
     var observed_pending = false;
     const source = blk: {
@@ -396,27 +559,23 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
         defer rt.endLoadDataEffectProbe(previous_probe);
         const previous_pending = rt.beginLoadDataPendingProbe(&observed_pending);
         defer rt.endLoadDataPendingProbe(previous_pending);
-        try rt.bindGlobalTable(&child, global_shape, state.env_slot);
-        if (!try child.bootstrapProgram()) try stdlib.install(&child);
-        try installInto(&child, state);
-        const empty_args = try child.newTable();
-        const empty_frame = try frame_lib.makeFrameFromTable(&child, "empty", empty_args, null);
-        child.current_frame = empty_frame.table;
+        try installLoadDataChild(runtime, state, &child);
         break :blk child.requireByName(args[0].string) catch |err| {
             try runtime.adoptFailure(&child);
             return err;
         };
     };
     if (source != .table) return error.LoadDataTableExpected;
-    if (observed_effect) {
+    if (is_headword_data) if (state.shared_load_data) |shared| try shared.seedHeadwordStatic(source);
+    if (observed_effect and !frozen_corpus_invariant) {
         if (state.shared_load_data) |shared| shared.noteImpure(module_id);
         rt.markLoadDataEffect();
     } else if (observed_pending) {
         if (state.shared_load_data) |shared| shared.notePending(module_id);
     }
 
-    const promoted = try promoteLoadDataForState(state, module_id, source,
-        !observed_effect and !observed_pending, !observed_effect and !observed_pending);
+    const dynamically_proven = (!observed_effect or frozen_corpus_invariant) and !observed_pending;
+    const promoted = try promoteLoadDataForState(state, module_id, source, dynamically_proven, dynamically_proven);
     try state.load_data_cache.put(state.allocator, module_id, promoted);
     return one(promoted);
 }
@@ -934,9 +1093,12 @@ test "immutable interwiki provider admits loadData while ordinary mutable host d
     const Probe = struct {
         var root_calls: usize = 0;
         const rows = [_]host_api.InterwikiRow{.{
-            .prefix = "fixed", .url = "https://fixed.example/$1",
-            .is_local = false, .is_current_wiki = false,
-            .is_protocol_relative = false, .is_transcludable = false,
+            .prefix = "fixed",
+            .url = "https://fixed.example/$1",
+            .is_local = false,
+            .is_current_wiki = false,
+            .is_protocol_relative = false,
+            .is_transcludable = false,
         }};
         fn lookup(_: ?*const anyopaque, module_name: []const u8) ?u32 {
             return if (std.mem.eql(u8, module_name, "Module:InterwikiData")) 0 else null;
@@ -1066,7 +1228,11 @@ test "nested page-sensitive loadData keeps the outer result page-local" {
             return null;
         }
         fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
-            return switch (id) { 0 => "Module:Outer", 1 => "Module:Inner", else => null };
+            return switch (id) {
+                0 => "Module:Outer",
+                1 => "Module:Inner",
+                else => null,
+            };
         }
         fn inner(runtime: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
             const host = host_api.get(runtime) orelse return error.MissingScribuntoHost;

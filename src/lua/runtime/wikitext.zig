@@ -79,6 +79,7 @@ pub const Provider = struct {
     get_transclusion_body: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?TransclusionBody = null,
     redirect_target: ?*const fn (?*anyopaque, []const u8) anyerror!?[]const u8 = null,
     page_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!?PageMetadata = null,
+    stable_page_reads: bool = false,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
     external_data: ?*const fn (?*anyopaque, []const u8) anyerror!?ExternalData = null,
     category_stats: ?*const fn (?*anyopaque, []const u8) anyerror!?CategoryStats = null,
@@ -133,6 +134,7 @@ pub const Expander = struct {
         self.host.page_redirect = hostPageRedirect;
         self.host.page_id = hostPageId;
         self.host.page_content_model = hostPageContentModel;
+        self.host.stable_page_reads = self.provider.stable_page_reads;
         self.host.frame_preprocess = hostFramePreprocess;
         self.host.frame_expand_template = hostFrameExpandTemplate;
         self.host.frame_extension_tag = hostFrameExtensionTag;
