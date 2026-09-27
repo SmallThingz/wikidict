@@ -212,3 +212,31 @@ The final three candidates each passed a fresh full Zig test graph, baseline/can
 | Immutable saved-callable guards | 180.758 s / 233.282 s | 117/118 | `46db8b2a25ec06bc1295cc7efecfdbcdd285067beb4489decbc1fd6bf4921830` |
 
 These native receipts are `native-r1/build-qualified.json` under `.tmp/scalar-index-native-20260927/`, `.tmp/ascii-ustring-native-20260927/`, and `.tmp/immutable-callable-native-20260927/`, respectively. Builds and comparisons used the serialized four-CPU watchdog with an independent 8 GiB sampled aggregate memory budget; these are not kernel-hard-cap or full-corpus results.
+
+## Further runtime candidates
+
+Three more candidates passed the full Zig graph, linked semantic fixtures, and exact ordinary/difficult 1,000-page English comparisons. All reused all 118 native Lua objects. None was retained: paired timings on the loaded shared host did not show consistent improvement on both workloads. No 100,000-page follow-up was run for these candidates.
+
+| Candidate | Ordinary worker CPU ratio | Difficult worker CPU ratio | Decision |
+| --- | ---: | ---: | --- |
+| Borrow Lua capture metadata at generic call boundaries | 1.014626 | 0.989411 | Ordinary pairs disagreed: 1.043050 / 0.987002 |
+| Buffer scalar Unicode and installed language-case results | 0.992555 | 0.994262 | Ordinary pairs disagreed: 1.003913 / 0.981320 |
+| Skip general UTF-8 decoding for ASCII; count ASCII words at once | 1.012330 | 0.993509 | Both windows had mixed pairs; ordinary average regressed |
+
+Ratios compare candidate with control; below one means less worker CPU. These are observations under host load, not isolated speedup claims. All warmup and timed outputs matched their references. The retained count remains 554.631 selected pages/s, and neither the 2,000 pages/s target nor the full-English end-to-end target is qualified.
+
+Capture-pointer evidence: `.tmp/capture-pointer-call-20260927/gate-r1`, `.tmp/capture-pointer-native-20260927/native-r1`, and `.tmp/capture-pointer-observational-20260927/abba-r1`. The timing qualification SHA-256 is `f42f3a0475242691e5a128b680551e400ef22aa857344dacff2f227cb1a46b8c`.
+
+Buffered Unicode evidence: `.tmp/ustring-buffered-r2-20260927/gate-r1`, `.tmp/ustring-buffered-native-20260927/native-r1`, and `.tmp/ustring-buffered-observational-20260927/abba-r1`. The timing qualification SHA-256 is `ecc9dca8c480ad177fdb2829ddd8dc5b12f5114c104a9012ac2c5da0b1966166`. The native build took 168.797 seconds and 223.421 child CPU seconds; the full native/parity wrapper peaked at 2,744,237,056 bytes aggregate PSS and 25 tasks.
+
+The linked Unicode fixture initially made an incorrect assumption that `mw.ustring.lower` accepts numbers. The installed content-language implementation replaces the base Unicode helper and rejects numeric input. The corrected fixture preserves that rejection, invalid-UTF-8 case fallback, discarded-call errors, and fixed/dynamic return behavior. No product semantics were weakened to pass it.
+
+ASCII-decoding evidence: `.tmp/unicode-ascii-decode-20260927/gate-r2`, `.tmp/unicode-ascii-decode-native-20260927/native-r1`, and `.tmp/unicode-ascii-decode-observational-20260927/abba-r1`. The timing qualification SHA-256 is `7de389977cbf3f709034b03b9c19e767f1f87e929ee917754b5b90f0e1ac77db`. Ordinary pair ratios were 1.030368 / 0.994775; difficult pair ratios were 1.000194 / 0.986922. The full test and linked gate passed with a peak aggregate PSS of 1,689,573,376 bytes. The native/parity wrapper peaked at 2,953,713,664 bytes and 25 tasks. The first gate launch was rejected before testing because its command had a mistyped expected HEAD; the corrected launch used the same source and manifest.
+
+## Representative 100,000-page profile
+
+The retained worker was profiled on the same 100,000 selected pages used for counting, under four CPUs and the independent 8 GiB watchdog. All 524 non-fallback files matched exactly, as did the 1,620 fallback records as a multiset. Counts were 73,386 main pages and 74,848 language records; blob verification passed. The capture contains approximately 49,000 user-cycle samples with none lost. Native execution under profiling took 275.565 seconds and workers used 987.283 CPU seconds. This four-worker instrumented run is diagnostic, not throughput acceptance. Peak sampled aggregate PSS was 2,871,242,752 bytes with 13 tasks.
+
+The most expensive individual self costs remain pattern matching (6.35%), cached field reads (3.86%), shape slot lookup (3.65%), copying (3.25%), UTF-8 decoding (2.81%), and table writes (2.45%). `mw.loadData` promotion accounts for about 3.16% including descendants; those inclusive samples overlap other costs and must not be added to them. Two of four workers finished within 5 KiB of the 64 MiB shared load-data cache budget. Source review found that a failed capacity admission discards its copied graph and can retry the same full copy later. Avoiding repeated rejected admission attempts is a candidate for testing, not a measured gain.
+
+Capture and output evidence live in `.tmp/representative-profile-100k-20260927/profile-r1`. Its caller report timed out; report recovery reused the saved capture without another expansion. Recovery retained the complete flat report and limited caller output to significant chains, with offline inline expansion disabled. The final qualification is `.tmp/representative-profile-100k-20260927/reports-r3/lbr-qualified.json`, SHA-256 `e672f7be04c1d9d7a88015acbfea7ffc991a2c95074bdbaa07685fd83b03510e`. Earlier recovery attempts failed on an overly strict empty-file check and the report output cap; both are preserved. Final report recovery took 5.456 seconds and peaked at 326,488,064 bytes PSS.
