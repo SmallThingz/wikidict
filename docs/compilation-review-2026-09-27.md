@@ -180,3 +180,35 @@ Comparison receipts are respectively `allocator-abba-r1/qualification.json` (SHA
 The eight-worker 100,000-page run passed all 524 nonfallback file comparisons, the 1,620-record fallback multiset, and final blob verification. It produced 73,386 main pages and 74,848 language records. Native wall time was **180.300 seconds / 554.631 selected pages/s**, worker CPU 1,292.18424 seconds, and joined process CPU 1,313.924 seconds. The full wrapper took 188.285 seconds, including 0.754 seconds for blob verification; peak aggregate PSS was 3,529,057,280 bytes with 20 tasks. Memory limits used sampled watchdog enforcement, not a kernel hard cap.
 
 This observed rate exceeds the earlier unpaired 520.397 pages/s allocator count, but differing host pressure prevents attributing the difference entirely to source changes. The 2,000 pages/s target and full-English end-to-end goal remain unmet. Receipt: `.tmp/combined-stack-native-20260927/counted-r1/qualification.json`, SHA-256 `37c9236d0fb735700bbd855ec71b4c16d98bc44c4a3ce3b741f04070ee389e92`.
+
+## Additional unretained candidates
+
+Five independent source candidates passed their recorded correctness gates but did not show consistent improvement. These paired timings used the retained combined worker on a loaded shared host; they do not establish isolated gains. Ratios compare candidate/control worker CPU, with values below one favoring the candidate. Every warmup and timed sample passed exact output verification.
+
+| Candidate | Ordinary mean (matched pairs) | Hard mean (matched pairs) |
+| --- | --- | --- |
+| Shape lookup index | 0.996903 (1.009488 / 0.984634) | 1.001242 (0.999858 / 1.002626) |
+| Unicode service reuse | 0.971923 (0.943646 / 1.000595) | 0.995763 (1.005381 / 0.986346) |
+| Scalar numeric index | 0.989693 (0.990677 / 0.988673) | 1.001752 (1.006211 / 0.997345) |
+| ASCII Unicode patterns | 1.019206 (0.993065 / 1.045793) | 0.995358 (0.989479 / 1.001266) |
+| Immutable saved-callable guards | 0.984709 (0.966630 / 1.003571) | 1.003095 (1.011021 / 0.995260) |
+
+All five remain unmerged, and none advanced to a 100,000-page count. In particular, moving saved-callable identity and capture-pointer checks outside the actual Parser traversal loop was verified in both O0 and O1 IR, with the retained Parser IR failing the same placement check. That mechanism proof did not translate into a consistent representative timing win. The latest retained count remains 554.631 selected pages/s; both throughput and full-English goals remain unmet.
+
+Comparison receipts and SHA-256 hashes:
+
+- Shape lookup index: `.tmp/shape-hash-observational-20260927/abba-r1/qualification.json`, `471ac9eb1c3fa0aa1a73d4cf040400e2ae7c82fdafeed57851092c97b851b1ec`.
+- Unicode service reuse: `.tmp/normalizer-observational-20260927/abba-r1/qualification.json`, `f5ee7fd7846223943bd6db07d2be904c3cfe7b4768f7ca5f4dd711607b7cee6b`.
+- Scalar numeric index: `.tmp/scalar-index-observational-20260927/abba-r1/qualification.json`, `9803af0ff39cd61d337b25b70d3bf9904710e40b3e12aec81232f6ae82c073f7`.
+- ASCII Unicode patterns: `.tmp/ascii-ustring-observational-20260927/abba-r1/qualification.json`, `8955d58ccb04ad748bfad2c762221dc5f7c686e426aa554d8d5b2939ad60fba9`.
+- Immutable saved-callable guards: `.tmp/immutable-callable-observational-20260927/abba-r1/qualification.json`, `3fbbf58174fd08f00fa35e03783f954eefedd9b84ffb1d96c43bd0c562b3c78c`.
+
+The final three candidates each passed a fresh full Zig test graph, baseline/candidate linked fixture parity, and real ordinary/hard 1,000-page parity. Scalar indexing also passed special-number/dynamic-key tests and actual Parser IR checks. The ASCII path passed differential matcher tests; the saved-callable fixture exercised loop-local initialization, replaced methods, live captures, changing callable-table metamethods, argument mutation and nil errors. Their native builds verified all original semantic assets, including metadata, exactly:
+
+| Candidate | Native build wall / child CPU | Object reuse | Native qualification SHA-256 |
+| --- | --- | --- | --- |
+| Scalar numeric index | 688.460 s / 2099.931 s | 1/118 | `4a2299af6085fcb84fc2c882e0709b4236011f55b746c7074136928368725613` |
+| ASCII Unicode patterns | 166.358 s / 223.543 s | 118/118 | `76951cb0678046947eb8bbddb54233b5171b4e4b5726638372e6952575e6cf77` |
+| Immutable saved-callable guards | 180.758 s / 233.282 s | 117/118 | `46db8b2a25ec06bc1295cc7efecfdbcdd285067beb4489decbc1fd6bf4921830` |
+
+These native receipts are `native-r1/build-qualified.json` under `.tmp/scalar-index-native-20260927/`, `.tmp/ascii-ustring-native-20260927/`, and `.tmp/immutable-callable-native-20260927/`, respectively. Builds and comparisons used the serialized four-CPU watchdog with an independent 8 GiB sampled aggregate memory budget; these are not kernel-hard-cap or full-corpus results.
