@@ -337,33 +337,20 @@ fn requiredFindStartByte(pattern: []const u8, start: usize) ?u8 {
 // the recursive matcher. Inspect only a class at byte zero: leading captures,
 // frontier assertions and backreferences may have observable error behavior.
 // Invalid classes fall back to matchAt, which retains the original error order.
-const RequiredStartClass = struct { start: usize, end: usize };
-
-fn requiredFindStartClass(pattern: []const u8) ?RequiredStartClass {
+fn requiredFindStartClass(pattern: []const u8) ?usize {
     if (pattern.len == 0) return null;
-    var p: usize = 0;
-    var captures: usize = 0;
-    // Opening and position captures consume no source bytes. They can be
-    // skipped for candidate selection exactly like requiredFindStartByte does,
-    // while the full matcher still creates and closes the captures.
-    while (p < pattern.len and pattern[p] == '(') {
-        captures += 1;
-        if (captures > max_captures) return null;
-        p += if (p + 1 < pattern.len and pattern[p + 1] == ')') @as(usize, 2) else 1;
-    }
-    if (p >= pattern.len) return null;
-    const ep: usize = switch (pattern[p]) {
+    const ep: usize = switch (pattern[0]) {
         '[' => blk: {
             const matcher = Matcher{ .source = "", .pattern = pattern };
-            break :blk matcher.classEnd(p) catch return null;
+            break :blk matcher.classEnd(0) catch return null;
         },
         '%' => blk: {
-            if (p + 1 >= pattern.len) return null;
-            switch (std.ascii.toLower(pattern[p + 1])) {
+            if (pattern.len < 2) return null;
+            switch (std.ascii.toLower(pattern[1])) {
                 'a', 'c', 'd', 'g', 'l', 'p', 's', 'u', 'w', 'x', 'z' => {},
                 else => return null,
             }
-            break :blk p + 2;
+            break :blk 2;
         },
         else => return null,
     };
@@ -371,7 +358,7 @@ fn requiredFindStartClass(pattern: []const u8) ?RequiredStartClass {
         '?', '*', '-' => return null,
         else => {},
     };
-    return .{ .start = p, .end = ep };
+    return ep;
 }
 
 fn findInto(source: []const u8, pattern: []const u8, initial: usize, honor_anchor: bool, out: *Match) Error!bool {
@@ -398,8 +385,8 @@ fn findInto(source: []const u8, pattern: []const u8, initial: usize, honor_ancho
     while (start <= source.len) : (start += 1) {
         if (required_start) |literal| {
             start = std.mem.indexOfScalarPos(u8, source, start, literal) orelse return false;
-        } else if (required_class_end) |class| {
-            while (start < source.len and !matcher.singleMatch(source[start], pattern_start + class.start, pattern_start + class.end))
+        } else if (required_class_end) |ep| {
+            while (start < source.len and !matcher.singleMatch(source[start], pattern_start, pattern_start + ep))
                 start += 1;
             if (start == source.len) return false;
         }
@@ -537,24 +524,6 @@ test "required initial byte class skips nonmatching starts and preserves suffix 
     const optional = (try find("!" ** 80 ++ "b", "[a]?b", 1)).?;
     try std.testing.expectEqual(@as(usize, 80), optional.start);
     try std.testing.expectError(error.MalformedPattern, find(source, "[", 1));
-}
-
-test "required initial byte class skips through leading captures" {
-    const source = "!" ** 80 ++ "<rest";
-    const captured = (try find(source, "([\n<=[{|}])", 1)).?;
-    try std.testing.expectEqual(@as(usize, 80), captured.start);
-    try std.testing.expectEqual(@as(usize, 81), captured.end);
-    try std.testing.expectEqual(@as(u8, 1), captured.capture_count);
-    try std.testing.expectEqualStrings("<", try captureText(source, captured.captures[0]));
-
-    const positioned = (try find(source, "()([\n<=[{|}])", 1)).?;
-    try std.testing.expectEqual(@as(usize, 80), positioned.start);
-    try std.testing.expect(positioned.captures[0] == .position);
-    try std.testing.expectEqual(@as(usize, 80), positioned.captures[0].position);
-    try std.testing.expectEqualStrings("<", try captureText(source, positioned.captures[1]));
-
-    try std.testing.expect((try find("!" ** 80, "([a-z]+[)", 1)) == null);
-    try std.testing.expectError(error.MalformedPattern, find("!" ** 80 ++ "a", "([a-z]+[)", 1));
 }
 
 test "balanced frontier backref and nongreedy" {
