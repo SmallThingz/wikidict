@@ -1374,7 +1374,7 @@ pub const Context = struct {
         return self.makeFunction(id, stabilize(entry), captures);
     }
 
-    pub fn callEntryBuffered(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+    pub inline fn callEntryBuffered(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
         const result = entry(
             self,
             &captures,
@@ -1401,7 +1401,7 @@ pub const Context = struct {
         return self.callEntryBuffered(entry, captures, args, null);
     }
 
-    pub fn callFunctionBuffered(self: *Context, value: *const FunctionValue, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+    pub inline fn callFunctionBuffered(self: *Context, value: *const FunctionValue, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
         if (value.id == native_function_id) return self.callEntryBuffered(value.entry, value.captures(), args, result_buffer);
         if (self.depth >= self.max_depth) return error.CallDepth;
         self.depth += 1;
@@ -1887,7 +1887,7 @@ pub const Context = struct {
         return self.requireModuleId(try self.resolveModule(raw_name), raw_name);
     }
 
-    pub fn callValueFixed(self: *Context, callable: Value, args: []const Value, result_buffer: []Value) anyerror!FixedCallResult {
+    pub inline fn callValueFixed(self: *Context, callable: Value, args: []const Value, result_buffer: []Value) anyerror!FixedCallResult {
         return switch (callable) {
             .callable => |function| if (function.id == native_function_id) blk: {
                 const values = try self.callEntryBuffered(function.entry, function.captures(), args, result_buffer);
@@ -1896,15 +1896,18 @@ pub const Context = struct {
                 const values = try self.callFunctionBuffered(function, args, result_buffer);
                 break :blk .{ .values = values, .owned = values.len != 0 and values.ptr != result_buffer.ptr };
             },
-            .table => blk: {
-                const method = self.metamethod(callable, "__call") orelse return error.NotCallable;
-                var storage: [8]Value = undefined;
-                const all = try mergeSmallValues(&storage, &.{callable}, args);
-                defer freeSmallValues(all, &storage);
-                break :blk try self.callValueFixed(method, all, result_buffer);
-            },
+            .table => self.callTableFixed(callable, args, result_buffer),
             else => error.NotCallable,
         };
+    }
+
+    // Keep recursive __call dispatch out of the hot inlined callable path.
+    noinline fn callTableFixed(self: *Context, callable: Value, args: []const Value, result_buffer: []Value) anyerror!FixedCallResult {
+        const method = self.metamethod(callable, "__call") orelse return error.NotCallable;
+        var storage: [8]Value = undefined;
+        const all = try mergeSmallValues(&storage, &.{callable}, args);
+        defer freeSmallValues(all, &storage);
+        return self.callValueFixed(method, all, result_buffer);
     }
 
     pub fn callValue(self: *Context, callable: Value, args: []const Value) anyerror![]const Value {
@@ -3183,6 +3186,21 @@ test "callable table metamethod tables retain recursive call semantics" {
     defer freeResults(out);
     try std.testing.expectEqual(@as(f64, 3), out[0].number);
     try std.testing.expectEqual(@as(f64, 9), out[1].number);
+
+    var storage: [2]Value = undefined;
+    const fixed = try ctx.callValueFixed(.{ .table = outer }, &.{.{ .number = 9 }}, &storage);
+    defer fixed.deinit();
+    try std.testing.expectEqual(@as(f64, 3), fixed.values[0].number);
+    try std.testing.expectEqual(@as(f64, 9), fixed.values[1].number);
+
+    const many = try ctx.callValueFixed(.{ .table = outer }, &.{
+        .{ .number = 1 }, .{ .number = 2 }, .{ .number = 3 },
+        .{ .number = 4 }, .{ .number = 5 }, .{ .number = 6 },
+        .{ .number = 7 }, .{ .number = 8 }, .{ .number = 9 },
+    }, &storage);
+    defer many.deinit();
+    try std.testing.expectEqual(@as(f64, 11), many.values[0].number);
+    try std.testing.expectEqual(@as(f64, 9), many.values[1].number);
 }
 
 fn bufferedCallableTableProbe(_: *Context, _: Captures, args: []const Value, result_buffer: ?[]Value) ![]const Value {
