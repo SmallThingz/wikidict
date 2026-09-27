@@ -347,12 +347,8 @@ const GlobalTail = struct {
             };
             if (!occupied) continue;
             const owned = try allocator.create(GlobalPage);
-            if (source.len == global_page_len) {
-                @memcpy(owned[0..], source);
-            } else {
-                owned.* = [_]Value{.nil} ** global_page_len;
-                @memcpy(owned[0..source.len], source);
-            }
+            owned.* = [_]Value{.nil} ** global_page_len;
+            @memcpy(owned[0..source.len], source);
             page.* = owned;
         }
         return self;
