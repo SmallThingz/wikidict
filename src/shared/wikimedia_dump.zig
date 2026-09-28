@@ -359,7 +359,10 @@ fn decompressMemberLimitedAlloc(io: std.Io, allocator: std.mem.Allocator, file: 
     const init_rc = BZ2_bzDecompressInit(&stream, 0, 0);
     if (init_rc == BZ_MEM_ERROR) return error.OutOfMemory;
     if (init_rc != BZ_OK) return error.Bzip2DecompressFailed;
-    defer _ = BZ2_bzDecompressEnd(&stream);
+    var stream_live = true;
+    defer {
+        if (stream_live) _ = BZ2_bzDecompressEnd(&stream);
+    }
 
     var out = try allocator.alloc(u8, @min(@as(usize, 64 * 1024), limit));
     errdefer allocator.free(out);
@@ -391,8 +394,35 @@ fn decompressMemberLimitedAlloc(io: std.Io, allocator: std.mem.Allocator, file: 
         if (probing and produced != 0) return error.Bzip2MemberTooLarge;
         written += produced;
         if (rc == BZ_STREAM_END) {
-            if (stream.avail_in != 0 or read_len != span.len) return error.InvalidBzip2Member;
-            return allocator.realloc(out, written);
+            const remaining_avail = stream.avail_in;
+            const remaining_ptr = stream.next_in;
+            const consumed = read_len - remaining_avail;
+            if (consumed == span.len)
+                return allocator.realloc(out, written);
+
+            // Wikimedia multistream dumps may leave the final XML footer in a
+            // second valid bzip2 stream after the last indexed stream. Treat a
+            // concatenation of complete bzip2 streams as one indexed span, as
+            // bzip2 itself does, but continue rejecting arbitrary trailing
+            // bytes or truncated headers.
+            if (span.len - consumed < 4) return error.InvalidBzip2Member;
+            var header: [4]u8 = undefined;
+            if (try file.readPositionalAll(io, &header, span.offset + consumed) != header.len)
+                return error.TruncatedDump;
+            if (!std.mem.startsWith(u8, &header, "BZh") or
+                header[3] < '1' or header[3] > '9')
+                return error.InvalidBzip2Member;
+
+            _ = BZ2_bzDecompressEnd(&stream);
+            stream_live = false;
+            stream = .{};
+            const next_init_rc = BZ2_bzDecompressInit(&stream, 0, 0);
+            if (next_init_rc == BZ_MEM_ERROR) return error.OutOfMemory;
+            if (next_init_rc != BZ_OK) return error.Bzip2DecompressFailed;
+            stream_live = true;
+            stream.next_in = remaining_ptr;
+            stream.avail_in = remaining_avail;
+            continue;
         }
         if (rc == BZ_MEM_ERROR) return error.OutOfMemory;
         if (rc != BZ_OK) return error.Bzip2DecompressFailed;
@@ -1152,10 +1182,15 @@ test "bzip2 member rejects truncated corrupt and trailing input" {
     const span: StreamSpan = .{ .offset = 0, .len = compressed.len };
     try std.testing.expectError(error.TruncatedDump, testDecompressBytes(a, compressed[0 .. compressed.len - 1], span, 1024));
     try std.testing.expectError(error.TruncatedDump, testDecompressBytes(a, compressed, .{ .offset = 0, .len = compressed.len - 1 }, 1024));
-    const trailing = try std.mem.concat(a, u8, &.{ compressed, compressed });
-    defer a.free(trailing);
-    try std.testing.expectError(error.InvalidBzip2Member, testDecompressBytes(a, trailing, .{ .offset = 0, .len = trailing.len }, 1024));
-    try std.testing.expectError(error.InvalidBzip2Member, testDecompressBytes(a, trailing, .{ .offset = 0, .len = compressed.len + 1 }, 1024));
+    const concatenated = try std.mem.concat(a, u8, &.{ compressed, compressed });
+    defer a.free(concatenated);
+    const decoded = try testDecompressBytes(a, concatenated, .{ .offset = 0, .len = concatenated.len }, 1024);
+    defer a.free(decoded);
+    try std.testing.expectEqualStrings("member payloadmember payload", decoded);
+    try std.testing.expectError(error.InvalidBzip2Member, testDecompressBytes(a, concatenated, .{ .offset = 0, .len = compressed.len + 1 }, 1024));
+    const garbage = try std.mem.concat(a, u8, &.{ compressed, "junk" });
+    defer a.free(garbage);
+    try std.testing.expectError(error.InvalidBzip2Member, testDecompressBytes(a, garbage, .{ .offset = 0, .len = garbage.len }, 1024));
     // The block CRC follows the four-byte header and six-byte block marker.
     compressed[10] ^= 1;
     try std.testing.expectError(error.Bzip2DecompressFailed, testDecompressBytes(a, compressed, span, 1024));
