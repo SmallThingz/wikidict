@@ -510,8 +510,13 @@ pub const Table = struct {
     }
 
     fn slotForKey(self: *const Table, key: Value) ?u32 {
-        if (key == .string) if (self.native_namespace) |namespace|
+        if (key == .string) if (self.native_namespace) |namespace| {
+            // Namespace-map names are virtual aliases backed by numeric entries;
+            // they must never become physical slots because that would change
+            // iteration and string-key override semantics.
+            if (namespace == .namespace_map) return null;
             return static_fields.slotForName(namespace, key.string);
+        };
         const shape = self.shape orelse return null;
         if (shape.field_keys.len != shape.field_count) return null;
         if (key != .string and shape.all_string_keys) return null;
@@ -2241,9 +2246,13 @@ pub const Context = struct {
         name: []const u8,
     ) !Value {
         if (object == .table and object.table.native_namespace == namespace) {
+            if (namespace == .namespace_map) {
+                if (object.table.rawGet(.{ .string = name })) |override| return override;
+                if (static_fields.namespaceMapId(name)) |id|
+                    return object.table.rawGetNumber(@floatFromInt(id)) orelse .nil;
+            }
             if (object.table.fieldKey(slot)) |expected|
-                if (rawEqual(expected, .{ .string = name }))
-                {
+                if (rawEqual(expected, .{ .string = name })) {
                     if (object.table.rawGetSlot(slot)) |value| return value;
                     if (object.table.metatable == null) return .nil;
                 };
@@ -2261,8 +2270,7 @@ pub const Context = struct {
     ) !void {
         if (object == .table and object.table.native_namespace == namespace) {
             if (object.table.fieldKey(slot)) |expected|
-                if (rawEqual(expected, .{ .string = name }))
-                {
+                if (rawEqual(expected, .{ .string = name })) {
                     if (object.table.rawGetSlot(slot) != null or object.table.metatable == null) {
                         try object.table.rawSetSlot(slot, value);
                         return;

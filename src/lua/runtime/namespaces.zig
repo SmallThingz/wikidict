@@ -194,7 +194,7 @@ pub fn makeTable(runtime: *rt.Context) !*rt.Table {
     // IDs 1..15 are the dense prefix produced by this namespace catalog.
     // The namespace objects and their fixed slots have page lifetime, so allocate
     // them in contiguous arena-backed batches instead of ~2 allocations per object.
-    const namespaces = try runtime.newArrayTable(16);
+    const namespaces = try runtime.newNativeNamespace(.namespace_map);
     try namespaces.map.ensureTotalCapacity(runtime.allocator, @intCast(all.len));
     const entries = try runtime.allocator.alloc(rt.Table, all.len);
     const entry_slots = try runtime.allocator.alloc(rt.Value, all.len * entry_keys.len);
@@ -204,7 +204,7 @@ pub fn makeTable(runtime: *rt.Context) !*rt.Table {
     for (all, 0..) |spec, index| {
         const value = &entries[index];
         const slots = entry_slots[index * entry_keys.len ..][0..entry_keys.len];
-        value.* = .{ .shape = &entry_shape, .slots = slots, .owns_slots = false };
+        value.* = .{ .native_namespace = .namespace_value, .slots = slots, .owns_slots = false };
 
         const aliases = &alias_tables[index];
         const initial_aliases = alias_slots[alias_offset..][0..spec.aliases.len];

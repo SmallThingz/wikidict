@@ -48,6 +48,8 @@ pub const Namespace = enum(u8) {
     uri_value,
     title_batch,
     os,
+    namespace_map,
+    namespace_value,
 };
 const names = [_][]const u8{
     "insert",               "remove",             "concat",            "sort",            "maxn",                 "getn",
@@ -130,6 +132,87 @@ const uri_value_names = [_][]const u8{
 };
 const title_batch_names = [_][]const u8{ "lookupExistence", "getTitles" };
 const os_names = [_][]const u8{ "date", "time", "difftime", "clock" };
+const namespace_map_names = [_][]const u8{};
+const namespace_value_names = [_][]const u8{
+    "id",                   "name",      "canonicalName", "hasSubpages", "isCapitalized", "aliases", "displayName",
+    "hasGenderDistinction", "isContent", "isIncludable",  "isMovable",   "isSubject",     "isTalk",  "defaultContentModel",
+    "subject",              "talk",      "associated",
+};
+
+const NamespaceMapEntry = struct { name: []const u8, id: i32 };
+const namespace_map_entries = [_]NamespaceMapEntry{
+    .{ .name = "Media", .id = -2 },
+    .{ .name = "Special", .id = -1 },
+    .{ .name = "", .id = 0 },
+    .{ .name = "Talk", .id = 1 },
+    .{ .name = "User", .id = 2 },
+    .{ .name = "User talk", .id = 3 },
+    .{ .name = "Wiktionary", .id = 4 },
+    .{ .name = "Project", .id = 4 },
+    .{ .name = "WT", .id = 4 },
+    .{ .name = "Wiktionary talk", .id = 5 },
+    .{ .name = "Project talk", .id = 5 },
+    .{ .name = "File", .id = 6 },
+    .{ .name = "Image", .id = 6 },
+    .{ .name = "File talk", .id = 7 },
+    .{ .name = "Image talk", .id = 7 },
+    .{ .name = "MediaWiki", .id = 8 },
+    .{ .name = "MediaWiki talk", .id = 9 },
+    .{ .name = "Template", .id = 10 },
+    .{ .name = "T", .id = 10 },
+    .{ .name = "Template talk", .id = 11 },
+    .{ .name = "Help", .id = 12 },
+    .{ .name = "Help talk", .id = 13 },
+    .{ .name = "Category", .id = 14 },
+    .{ .name = "CAT", .id = 14 },
+    .{ .name = "Category talk", .id = 15 },
+    .{ .name = "Thread", .id = 90 },
+    .{ .name = "Thread talk", .id = 91 },
+    .{ .name = "Summary", .id = 92 },
+    .{ .name = "Summary talk", .id = 93 },
+    .{ .name = "Appendix", .id = 100 },
+    .{ .name = "AP", .id = 100 },
+    .{ .name = "Appendix talk", .id = 101 },
+    .{ .name = "Rhymes", .id = 106 },
+    .{ .name = "Rhymes talk", .id = 107 },
+    .{ .name = "Transwiki", .id = 108 },
+    .{ .name = "Transwiki talk", .id = 109 },
+    .{ .name = "Thesaurus", .id = 110 },
+    .{ .name = "WS", .id = 110 },
+    .{ .name = "Wikisaurus", .id = 110 },
+    .{ .name = "Thesaurus talk", .id = 111 },
+    .{ .name = "Wikisaurus talk", .id = 111 },
+    .{ .name = "Citations", .id = 114 },
+    .{ .name = "Citations talk", .id = 115 },
+    .{ .name = "Sign gloss", .id = 116 },
+    .{ .name = "Sign gloss talk", .id = 117 },
+    .{ .name = "Reconstruction", .id = 118 },
+    .{ .name = "RC", .id = 118 },
+    .{ .name = "Reconstruction talk", .id = 119 },
+    .{ .name = "TimedText", .id = 710 },
+    .{ .name = "TimedText talk", .id = 711 },
+    .{ .name = "Module", .id = 828 },
+    .{ .name = "MOD", .id = 828 },
+    .{ .name = "Module talk", .id = 829 },
+    .{ .name = "Event", .id = 1728 },
+    .{ .name = "Event talk", .id = 1729 },
+    .{ .name = "Topic", .id = 2600 },
+};
+
+fn namespaceNameEqual(raw: []const u8, expected: []const u8) bool {
+    if (raw.len != expected.len) return false;
+    for (raw, expected) |lhs_raw, rhs_raw| {
+        const lhs = if (lhs_raw == '_') ' ' else lhs_raw;
+        if (std.ascii.toLower(lhs) != std.ascii.toLower(rhs_raw)) return false;
+    }
+    return true;
+}
+
+pub fn namespaceMapId(name: []const u8) ?i32 {
+    for (namespace_map_entries) |entry|
+        if (namespaceNameEqual(name, entry.name)) return entry.id;
+    return null;
+}
 
 fn namespaceNames(namespace: Namespace) []const []const u8 {
     return switch (namespace) {
@@ -159,6 +242,8 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
         .uri_value => &uri_value_names,
         .title_batch => &title_batch_names,
         .os => &os_names,
+        .namespace_map => &namespace_map_names,
+        .namespace_value => &namespace_value_names,
     };
 }
 pub fn fieldCount(namespace: Namespace) u32 {
@@ -204,6 +289,8 @@ pub fn slotForName(namespace: Namespace, field_name: []const u8) ?u32 {
         .uri_value => staticSlot(&uri_value_names, field_name),
         .title_batch => staticSlot(&title_batch_names, field_name),
         .os => staticSlot(&os_names, field_name),
+        .namespace_map => if (namespaceMapId(field_name) != null) 0 else null,
+        .namespace_value => staticSlot(&namespace_value_names, field_name),
     };
 }
 
@@ -242,7 +329,12 @@ pub fn fieldNamespace(namespace: Namespace, field_name: []const u8) ?Namespace {
             .message
         else
             null,
-        .site => if (std.mem.eql(u8, field_name, "stats")) .site_stats else null,
+        .site => if (std.mem.eql(u8, field_name, "stats"))
+            .site_stats
+        else if (std.mem.eql(u8, field_name, "namespaces"))
+            .namespace_map
+        else
+            null,
         .ext => if (std.mem.eql(u8, field_name, "data")) .ext_data else null,
         .title_value => if (std.mem.eql(u8, field_name, "redirectTarget") or
             std.mem.eql(u8, field_name, "subjectPageTitle") or
@@ -250,6 +342,13 @@ pub fn fieldNamespace(namespace: Namespace, field_name: []const u8) ?Namespace {
             std.mem.eql(u8, field_name, "basePageTitle") or
             std.mem.eql(u8, field_name, "rootPageTitle"))
             .title_value
+        else
+            null,
+        .namespace_map => if (namespaceMapId(field_name) != null) .namespace_value else null,
+        .namespace_value => if (std.mem.eql(u8, field_name, "subject") or
+            std.mem.eql(u8, field_name, "talk") or
+            std.mem.eql(u8, field_name, "associated"))
+            .namespace_value
         else
             null,
         else => null,
@@ -325,4 +424,7 @@ test "namespace slot layouts round trip" {
     try std.testing.expectEqual(Namespace.title, fieldNamespace(.mw, "title").?);
     try std.testing.expectEqual(Namespace.title_value, callReturnNamespace(.title, "new").?);
     try std.testing.expectEqual(Namespace.frame, callReturnNamespace(.frame, "newChild").?);
+    try std.testing.expectEqual(@as(?i32, 10), namespaceMapId("template"));
+    try std.testing.expectEqual(@as(?i32, 3), namespaceMapId("user_talk"));
+    try std.testing.expectEqual(Namespace.namespace_value, fieldNamespace(.namespace_map, "Template").?);
 }
