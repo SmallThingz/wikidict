@@ -38,6 +38,13 @@ pub const Namespace = enum(u8) {
     language_value,
     html_node,
     hash,
+    site,
+    site_stats,
+    ext,
+    ext_data,
+    wikibase,
+    message,
+    message_value,
 };
 const names = [_][]const u8{
     "insert",               "remove",             "concat",            "sort",            "maxn",                 "getn",
@@ -97,6 +104,22 @@ const language_value_names = [_][]const u8{
 };
 const html_node_names = [_][]const u8{ "tag", "done", "allDone", "wikitext", "node", "css", "cssText", "addClass", "attr", "getAttr", "newline" };
 const hash_names = [_][]const u8{"hashValue"};
+const site_names = [_][]const u8{ "namespaces", "stats", "interwikiMap" };
+const site_stats_names = [_][]const u8{ "pagesInCategory", "pagesInNamespace", "usersInGroup" };
+const ext_names = [_][]const u8{"data"};
+const ext_data_names = [_][]const u8{"get"};
+const wikibase_names = [_][]const u8{
+    "getEntity",        "getEntityIdForTitle", "getEntityIdForCurrentPage", "getBestStatements",
+    "getLabelWithLang", "getLabelByLang",      "getAllStatements",          "formatValue",
+    "entityExists",     "getDescription",      "getLabel",                  "getSitelink",
+    "sitelink",         "getEntityUrl",        "getGlobalSiteId",           "isValidEntityId",
+};
+const message_names = [_][]const u8{
+    "new", "newRawMessage", "newFallbackSequence", "rawParam", "numParam", "getDefaultLanguage",
+};
+const message_value_names = [_][]const u8{
+    "plain", "exists", "isBlank", "isDisabled", "inLanguage", "params", "rawParams", "numParams", "useDatabase",
+};
 
 fn namespaceNames(namespace: Namespace) []const []const u8 {
     return switch (namespace) {
@@ -116,6 +139,13 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
         .language_value => &language_value_names,
         .html_node => &html_node_names,
         .hash => &hash_names,
+        .site => &site_names,
+        .site_stats => &site_stats_names,
+        .ext => &ext_names,
+        .ext_data => &ext_data_names,
+        .wikibase => &wikibase_names,
+        .message => &message_names,
+        .message_value => &message_value_names,
     };
 }
 pub fn fieldCount(namespace: Namespace) u32 {
@@ -151,6 +181,13 @@ pub fn slotForName(namespace: Namespace, field_name: []const u8) ?u32 {
         .language_value => staticSlot(&language_value_names, field_name),
         .html_node => staticSlot(&html_node_names, field_name),
         .hash => staticSlot(&hash_names, field_name),
+        .site => staticSlot(&site_names, field_name),
+        .site_stats => staticSlot(&site_stats_names, field_name),
+        .ext => staticSlot(&ext_names, field_name),
+        .ext_data => staticSlot(&ext_data_names, field_name),
+        .wikibase => staticSlot(&wikibase_names, field_name),
+        .message => staticSlot(&message_names, field_name),
+        .message_value => staticSlot(&message_value_names, field_name),
     };
 }
 
@@ -179,8 +216,18 @@ pub fn fieldNamespace(namespace: Namespace, field_name: []const u8) ?Namespace {
             .html
         else if (std.mem.eql(u8, field_name, "language"))
             .language
+        else if (std.mem.eql(u8, field_name, "site"))
+            .site
+        else if (std.mem.eql(u8, field_name, "ext"))
+            .ext
+        else if (std.mem.eql(u8, field_name, "wikibase"))
+            .wikibase
+        else if (std.mem.eql(u8, field_name, "message"))
+            .message
         else
             null,
+        .site => if (std.mem.eql(u8, field_name, "stats")) .site_stats else null,
+        .ext => if (std.mem.eql(u8, field_name, "data")) .ext_data else null,
         else => null,
     };
 }
@@ -222,6 +269,12 @@ pub fn callReturnNamespace(namespace: Namespace, field_name: []const u8) ?Namesp
             .html_node
         else
             null,
+        .message => if (std.mem.eql(u8, field_name, "new") or
+            std.mem.eql(u8, field_name, "newRawMessage"))
+            .message_value
+        else
+            null,
+        .message_value => if (std.mem.eql(u8, field_name, "inLanguage")) .message_value else null,
         else => null,
     };
 }

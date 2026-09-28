@@ -433,7 +433,7 @@ fn messageInLanguageCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const V
 }
 
 fn makeMessageObject(runtime: *rt.Context, ctx: *MessageCtx) ![]const Value {
-    const object = try runtime.newTable();
+    const object = try runtime.newNativeNamespace(.message_value);
     const plain = try runtime.newNative(ctx, messagePlainCall);
     try object.rawSet(runtime.allocator, .{ .string = "plain" }, plain);
     try object.rawSet(runtime.allocator, .{ .string = "exists" }, try runtime.newNative(ctx, messageExistsCall));
@@ -758,10 +758,10 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setMwNative(runtime, mw, "incrementExpensiveFunctionCount", noOpCall);
     try setMwNative(runtime, mw, "isSubsting", falseCall);
 
-    const site = try runtime.newTable();
+    const site = try runtime.newNativeNamespace(.site);
     const namespaces = try namespace_lib.makeTable(runtime);
     try site.rawSet(runtime.allocator, .{ .string = "namespaces" }, .{ .table = namespaces });
-    const stats = try runtime.newTable();
+    const stats = try runtime.newNativeNamespace(.site_stats);
     try setNative(runtime, stats, "pagesInCategory", pagesInCategoryCall);
     inline for (.{ "pagesInNamespace", "usersInGroup" }) |name|
         try setNative(runtime, stats, name, notImplementedCall);
@@ -772,13 +772,13 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, site, "interwikiMap", interwikiMapCall);
     try mw.rawSetNativeField(.mw, "site", .{ .table = site });
 
-    const ext = try runtime.newTable();
-    const ext_data = try runtime.newTable();
+    const ext = try runtime.newNativeNamespace(.ext);
+    const ext_data = try runtime.newNativeNamespace(.ext_data);
     try setNative(runtime, ext_data, "get", externalDataGetCall);
     try ext.rawSet(runtime.allocator, .{ .string = "data" }, .{ .table = ext_data });
     try mw.rawSetNativeField(.mw, "ext", .{ .table = ext });
 
-    const wikibase = try runtime.newTable();
+    const wikibase = try runtime.newNativeNamespace(.wikibase);
     inline for (.{
         "getEntity",
         "getEntityIdForTitle",
@@ -799,7 +799,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setNative(runtime, wikibase, "isValidEntityId", wikibaseIsValidEntityIdCall);
     try mw.rawSetNativeField(.mw, "wikibase", .{ .table = wikibase });
 
-    const message = try runtime.newTable();
+    const message = try runtime.newNativeNamespace(.message);
     try setNative(runtime, message, "new", messageNewCall);
     try setNative(runtime, message, "newRawMessage", messageNewRawCall);
     inline for (.{
