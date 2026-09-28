@@ -10,14 +10,17 @@ pub const Key = union(enum) {
 pub const Fact = struct {
     id: u32,
     keys: []const Key,
+    value_shape_spans: []const ?u32,
 };
 
 pub const ModuleFacts = std.AutoHashMapUnmanaged(u32, Fact);
 
 const Record = struct {
+    module_index: u32,
     span_start: u32,
     next_for_module: u32 = no_record,
     keys: []const Key,
+    value_shape_spans: []?u32,
 };
 
 const no_record = std.math.maxInt(u32);
@@ -34,6 +37,7 @@ pub const Registry = struct {
     pub fn deinit(self: *Registry) void {
         for (self.records.items) |entry| {
             self.freeKeys(entry.keys);
+            self.allocator.free(entry.value_shape_spans);
         }
         self.records.deinit(self.allocator);
         self.module_chains.deinit(self.allocator);
@@ -63,7 +67,25 @@ pub const Registry = struct {
 
     pub fn record(self: *const Registry, id: u32) Fact {
         const value = self.records.items[id];
-        return .{ .id = id, .keys = value.keys };
+        return .{
+            .id = id,
+            .keys = value.keys,
+            .value_shape_spans = value.value_shape_spans,
+        };
+    }
+
+    pub fn childShape(self: *const Registry, fact: Fact, slot: u32) ?Fact {
+        if (fact.id >= self.records.items.len or slot >= fact.value_shape_spans.len) return null;
+        const child_span = fact.value_shape_spans[slot] orelse return null;
+        const record_value = self.records.items[fact.id];
+        const chain = self.module_chains.get(record_value.module_index) orelse return null;
+        var id = chain.first;
+        while (id != no_record) {
+            const candidate = self.records.items[id];
+            if (candidate.span_start == child_span) return self.record(id);
+            id = candidate.next_for_module;
+        }
+        return null;
     }
 
     pub fn moduleFacts(self: *const Registry, allocator: std.mem.Allocator, module_index: u32) !ModuleFacts {
@@ -73,17 +95,30 @@ pub const Registry = struct {
         var id = chain.first;
         while (id != no_record) {
             const record_value = self.records.items[id];
-            try out.put(allocator, record_value.span_start, .{ .id = id, .keys = record_value.keys });
+            try out.put(allocator, record_value.span_start, .{
+                .id = id,
+                .keys = record_value.keys,
+                .value_shape_spans = record_value.value_shape_spans,
+            });
             id = record_value.next_for_module;
         }
         return out;
     }
-    fn appendRecord(self: *Registry, module_index: u32, span_start: u32, keys: []const Key) !u32 {
+    fn appendRecord(
+        self: *Registry,
+        module_index: u32,
+        span_start: u32,
+        keys: []const Key,
+        value_shape_spans: []?u32,
+    ) !u32 {
         if (self.records.items.len >= no_record) return error.TooManyShapes;
+        if (keys.len != value_shape_spans.len) return error.InvalidShapeValueFacts;
         const id: u32 = @intCast(self.records.items.len);
         try self.records.append(self.allocator, .{
+            .module_index = module_index,
             .span_start = span_start,
             .keys = keys,
+            .value_shape_spans = value_shape_spans,
         });
         errdefer _ = self.records.pop();
         const entry = try self.module_chains.getOrPut(self.allocator, module_index);
@@ -116,6 +151,12 @@ pub const Registry = struct {
         self.allocator.free(keys);
     }
 
+    fn emptyValueShapes(self: *Registry, len: usize) ![]?u32 {
+        const values = try self.allocator.alloc(?u32, len);
+        @memset(values, null);
+        return values;
+    }
+
     pub fn promote(self: *Registry, module_index: u32, span_start: u32, field_names: []const []const u8) !?u32 {
         if (field_names.len == 0) return null;
         const raw = try self.allocator.alloc(Key, field_names.len);
@@ -128,19 +169,23 @@ pub const Registry = struct {
         if (keys.len == 0) return null;
         const replacement = try self.copyKeys(keys);
         errdefer self.freeKeys(replacement);
+        const replacement_values = try self.emptyValueShapes(keys.len);
+        errdefer self.allocator.free(replacement_values);
         if (self.module_chains.get(module_index)) |chain| {
             var id = chain.first;
             while (id != no_record) {
                 const record_value = &self.records.items[id];
                 if (record_value.span_start == span_start) {
                     self.freeKeys(record_value.keys);
+                    self.allocator.free(record_value.value_shape_spans);
                     record_value.keys = replacement;
+                    record_value.value_shape_spans = replacement_values;
                     return id;
                 }
                 id = record_value.next_for_module;
             }
         }
-        return try self.appendRecord(module_index, span_start, replacement);
+        return try self.appendRecord(module_index, span_start, replacement, replacement_values);
     }
 
     pub fn extendKeys(self: *Registry, module_index: u32, span_start: u32, extra: []const Key) !?u32 {
@@ -152,19 +197,29 @@ pub const Registry = struct {
                 if (record_value.span_start == span_start) {
                     var merged: std.ArrayList(Key) = .empty;
                     defer merged.deinit(self.allocator);
+                    var merged_values: std.ArrayList(?u32) = .empty;
+                    defer merged_values.deinit(self.allocator);
                     try merged.appendSlice(self.allocator, record_value.keys);
+                    try merged_values.appendSlice(self.allocator, record_value.value_shape_spans);
                     for (extra) |key| {
                         var duplicate = false;
                         for (merged.items) |existing| if (keyEqual(existing, key)) {
                             duplicate = true;
                             break;
                         };
-                        if (!duplicate) try merged.append(self.allocator, key);
+                        if (!duplicate) {
+                            try merged.append(self.allocator, key);
+                            try merged_values.append(self.allocator, null);
+                        }
                     }
                     if (merged.items.len == record_value.keys.len) return id;
                     const replacement = try self.copyKeys(merged.items);
+                    errdefer self.freeKeys(replacement);
+                    const replacement_values = try self.allocator.dupe(?u32, merged_values.items);
                     self.freeKeys(record_value.keys);
+                    self.allocator.free(record_value.value_shape_spans);
                     record_value.keys = replacement;
+                    record_value.value_shape_spans = replacement_values;
                     return id;
                 }
                 id = record_value.next_for_module;
@@ -172,11 +227,36 @@ pub const Registry = struct {
         }
         const replacement = try self.copyKeys(extra);
         errdefer self.freeKeys(replacement);
-        return try self.appendRecord(module_index, span_start, replacement);
+        const replacement_values = try self.emptyValueShapes(extra.len);
+        errdefer self.allocator.free(replacement_values);
+        return try self.appendRecord(module_index, span_start, replacement, replacement_values);
     }
 
     pub fn extendKey(self: *Registry, module_index: u32, span_start: u32, key: Key) !?u32 {
         return self.extendKeys(module_index, span_start, &.{key});
+    }
+
+    pub fn setValueShapeSpan(
+        self: *Registry,
+        module_index: u32,
+        span_start: u32,
+        key: Key,
+        value_span: ?u32,
+    ) void {
+        const chain = self.module_chains.get(module_index) orelse return;
+        var id = chain.first;
+        while (id != no_record) {
+            const record_value = &self.records.items[id];
+            if (record_value.span_start == span_start) {
+                for (record_value.keys, 0..) |candidate, slot| {
+                    if (!keyEqual(candidate, key)) continue;
+                    record_value.value_shape_spans[slot] = value_span;
+                    return;
+                }
+                return;
+            }
+            id = record_value.next_for_module;
+        }
     }
 
     pub fn collect(self: *Registry, module_index: u32, body: lua.Block) !void {
@@ -260,31 +340,49 @@ pub const Registry = struct {
         if (fields.len == 0) return;
         var keys: std.ArrayList(Key) = .empty;
         defer keys.deinit(self.allocator);
+        var value_shapes: std.ArrayList(?u32) = .empty;
+        defer value_shapes.deinit(self.allocator);
         var list_index: u32 = 0;
         for (fields) |field| {
-            const key: Key = switch (field) {
-                .named => |item| .{ .string = item.name },
-                .keyed => |item| staticKey(item.key) orelse continue,
+            const key: Key, const value_expr: *const lua.Expr = switch (field) {
+                .named => |item| .{ .{ .string = item.name }, item.value },
+                .keyed => |item| .{ staticKey(item.key) orelse continue, item.value },
                 .list => blk: {
                     list_index += 1;
-                    break :blk .{ .number = @floatFromInt(list_index) };
+                    break :blk .{ .{ .number = @floatFromInt(list_index) }, field.list };
                 },
             };
-            var duplicate = false;
-            for (keys.items) |existing| if (keyEqual(existing, key)) {
-                duplicate = true;
+            const value_span = staticTableSpan(value_expr);
+            var duplicate_slot: ?usize = null;
+            for (keys.items, 0..) |existing, slot| if (keyEqual(existing, key)) {
+                duplicate_slot = slot;
                 break;
             };
-            if (!duplicate) try keys.append(self.allocator, key);
+            if (duplicate_slot) |slot| {
+                value_shapes.items[slot] = value_span;
+            } else {
+                try keys.append(self.allocator, key);
+                try value_shapes.append(self.allocator, value_span);
+            }
         }
         if (keys.items.len == 0) return;
         if (keys.items.len > std.math.maxInt(u32)) return error.TooManyShapeFields;
 
         const owned = try self.copyKeys(keys.items);
         errdefer self.freeKeys(owned);
-        _ = try self.appendRecord(module_index, span.start, owned);
+        const owned_values = try self.allocator.dupe(?u32, value_shapes.items);
+        errdefer self.allocator.free(owned_values);
+        _ = try self.appendRecord(module_index, span.start, owned, owned_values);
     }
 };
+
+pub fn staticTableSpan(value: *const lua.Expr) ?u32 {
+    return switch (value.*) {
+        .table => |table| table.span.start,
+        .paren => |paren| staticTableSpan(paren.expr),
+        else => null,
+    };
+}
 
 pub fn keyEqual(lhs: Key, rhs: Key) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;

@@ -90,6 +90,11 @@ pub const ProgramFacts = struct {
         return registry.record(id);
     }
 
+    pub fn childShape(self: ProgramFacts, fact: shapes.Fact, slot: u32) ?shapes.Fact {
+        const registry = self.shape_registry orelse return null;
+        return registry.childShape(fact, slot);
+    }
+
     pub fn methodCandidate(self: ProgramFacts, name: []const u8) ?MethodCandidate {
         for (self.method_candidates) |candidate|
             if (std.mem.eql(u8, candidate.name, name)) return candidate;
@@ -1347,7 +1352,10 @@ const FnEmitter = struct {
                         self.ctx(), object_box, try self.cI32(shape.id), try self.cI32(slot), key_box, out,
                     });
                     try self.check(status);
-                    return .{ .boxed = out };
+                    return if (self.module.facts.childShape(shape, slot)) |child|
+                        .{ .shaped_boxed = .{ .ptr = out, .shape = child } }
+                    else
+                        .{ .boxed = out };
                 }
             } else {
                 const object_box = try self.box(object);
@@ -1539,7 +1547,10 @@ const FnEmitter = struct {
                 self.ctx(), object_box, try self.cI32(shape.id), try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
             });
             try self.check(status);
-            return .{ .boxed = out };
+            return if (self.module.facts.childShape(shape, slot)) |child|
+                .{ .shaped_boxed = .{ .ptr = out, .shape = child } }
+            else
+                .{ .boxed = out };
         };
         if (object == .table) {
             if (object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, name)) |slot| {

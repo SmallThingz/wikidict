@@ -110,6 +110,7 @@ const CallShapeObservation = struct {
 pub const TableShapeWrite = struct {
     table_span: lua.Span,
     key: *const lua.Expr,
+    value_span: ?lua.Span = null,
 };
 
 pub const Module = struct {
@@ -476,11 +477,6 @@ const Analyzer = struct {
                 .global => try self.globals.markMutated(name),
             },
             .index => |idx| {
-                if (self.exprStaticTable(idx.object)) |table_span|
-                    try self.module.table_shape_writes.append(self.allocator, .{
-                        .table_span = table_span,
-                        .key = idx.key,
-                    });
                 try self.expr(idx.object);
                 try self.expr(idx.key);
             },
@@ -575,6 +571,16 @@ const Analyzer = struct {
                 const types = try self.rhsTypes(s.values, s.targets.len);
                 defer self.allocator.free(types);
                 for (s.targets, types, 0..) |target, static_type, index| {
+                    if (target == .index and index < s.values.len and
+                        !(index + 1 == s.values.len and isMultiExpr(s.values[index])))
+                    {
+                        if (self.exprStaticTable(target.index.object)) |table_span|
+                            try self.module.table_shape_writes.append(self.allocator, .{
+                                .table_span = table_span,
+                                .key = target.index.key,
+                                .value_span = self.exprStaticTable(s.values[index]),
+                            });
+                    }
                     self.mergeWriteType(target, static_type);
                     if (target == .name and index < s.values.len and !(index + 1 == s.values.len and isMultiExpr(s.values[index]))) {
                         const binding = self.locals.get(target.name) orelse continue;
