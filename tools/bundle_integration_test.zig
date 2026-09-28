@@ -446,7 +446,7 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     try h.require(std.mem.indexOf(u8, text, "Script error") == null and std.mem.indexOf(u8, text, "source that must not become synthetic") == null, "operational fallback publishes no invented or original body text");
 }
 
-fn compilerPipelineProbe(h: *Harness, compiler: []const u8, dir: []const u8) !void {
+fn compilerPipelineProbe(h: *Harness, compiler: []const u8, leaf_bc: []const u8, dir: []const u8) !void {
     const root = try std.fs.path.join(h.a, &.{ dir, "compiler-probe" });
     try std.Io.Dir.cwd().createDirPath(h.io, root);
     const manifest = try std.fs.path.join(h.a, &.{ root, "manifest.jsonl" });
@@ -466,8 +466,8 @@ fn compilerPipelineProbe(h: *Harness, compiler: []const u8, dir: []const u8) !vo
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = unused, .data = "this is deliberately invalid Lua !!!" });
     const serial = try std.fs.path.join(h.a, &.{ root, "serial" });
     const parallel = try std.fs.path.join(h.a, &.{ root, "parallel" });
-    _ = try h.run(&.{ compiler, manifest, root, serial, "--parse-workers", "1" }, 0);
-    _ = try h.run(&.{ compiler, manifest, root, parallel, "--parse-workers", "4" }, 0);
+    _ = try h.run(&.{ compiler, manifest, root, serial, "--parse-workers", "1", "--value-leaf-bc", leaf_bc }, 0);
+    _ = try h.run(&.{ compiler, manifest, root, parallel, "--parse-workers", "4", "--value-leaf-bc", leaf_bc }, 0);
     const plan = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ serial, "compile-plan.tsv" }), h.a, .unlimited);
     const parallel_plan = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ parallel, "compile-plan.tsv" }), h.a, .unlimited);
     try h.require(std.mem.eql(u8, plan, parallel_plan), "parallel parsing preserves deterministic plans through redirects and cycles");
@@ -489,7 +489,7 @@ fn compilerPipelineProbe(h: *Harness, compiler: []const u8, dir: []const u8) !vo
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
-    if (argv.len != 7) return error.Usage;
+    if (argv.len != 8) return error.Usage;
     const bin = argv[1];
     const pipeline = argv[2];
     const verifier = argv[3];
@@ -499,7 +499,7 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDirPath(init.io, dir);
     var h: Harness = .{ .a = a, .io = init.io };
 
-    try compilerPipelineProbe(&h, argv[5], dir);
+    try compilerPipelineProbe(&h, argv[5], argv[7], dir);
     try deadlineProbe(init.io, a, dir);
     try failureMetadataProbe(&h, dir);
     try expansionFallbackProbe(&h, argv[6], verifier, bin, dir);

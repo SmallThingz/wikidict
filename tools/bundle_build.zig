@@ -557,7 +557,6 @@ fn compileBitcodeModules(
     if (llvm_workers == 0 or llvm_workers > max_parallel_workers) return error.InvalidWorkerCount;
     const plans = try readBatchPlan(io, a, llvm_dir);
     defer a.free(plans);
-    if (plans.len == 0) return error.InvalidBatchPlan;
     const cache_hits = if (use_object_cache) blk: {
         const hits_path = try std.fs.path.join(a, &.{ llvm_dir, ".object-hits" });
         defer a.free(hits_path);
@@ -616,7 +615,7 @@ fn compileBitcodeModules(
 fn validateObjectHits(bytes: []const u8, object_count: usize) !void {
     // One bit per batch plus the final program.o bit. The helper writes this
     // only after hashing and restoring each listed immutable cache object.
-    if (object_count < 2 or object_count > 100_001 or
+    if (object_count < 1 or object_count > 100_001 or
         bytes.len != object_count + 1 or bytes[object_count] != '\n')
         return error.InvalidObjectCacheHits;
     for (bytes[0..object_count]) |byte| {
@@ -628,10 +627,11 @@ test "object cache hit bitmap is exact and includes the program object" {
     try validateObjectHits("101\n", 3);
     try validateObjectHits("000\n", 3);
     try validateObjectHits("111\n", 3);
+    try validateObjectHits("1\n", 1);
     const invalid = [_][]const u8{ "11\n", "1111\n", "10x\n", "101", "101\r", "101\n0" };
     for (invalid) |bytes|
         try std.testing.expectError(error.InvalidObjectCacheHits, validateObjectHits(bytes, 3));
-    try std.testing.expectError(error.InvalidObjectCacheHits, validateObjectHits("1\n", 1));
+    try std.testing.expectError(error.InvalidObjectCacheHits, validateObjectHits("10\n", 1));
     try std.testing.expectError(error.InvalidObjectCacheHits, validateObjectHits("", 100_002));
 }
 

@@ -323,6 +323,19 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     zig_runtime_test_mod.addImport("lua_static_fields", lua_static_fields_test_mod);
+    const value_leaf_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/value_leaf_build.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+        .imports = &.{.{ .name = "zig_runtime", .module = zig_runtime_test_mod }},
+    });
+    const value_leaf_test_obj = b.addObject(.{
+        .name = "dict-lua-value-leaf-test",
+        .root_module = value_leaf_test_mod,
+    });
+    value_leaf_test_obj.use_llvm = true;
+    const value_leaf_test_bc = value_leaf_test_obj.getEmittedLlvmBc();
     const lua_core_tests = b.addTest(.{
         .root_module = zig_runtime_test_mod,
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -499,6 +512,7 @@ pub fn build(b: *std.Build) void {
     bundle_test_run.addArg(b.pathFromRoot(".zig-cache"));
     bundle_test_run.addFileArg(llvm_exe.getEmittedBin());
     bundle_test_run.addFileArg(blob_build_exe.getEmittedBin());
+    bundle_test_run.addFileArg(value_leaf_test_bc);
     b.step("test-bundle", "Exercise build-time Lua/template expansion into data-only blobs").dependOn(&bundle_test_run.step);
     const reader_test_exe = addCliExecutable(b, "dict-reader-integration-test", b.path("tools/reader_integration_test.zig"), b.graph.host, test_optimize, &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }});
     const reader_test_run = b.addRunArtifact(reader_test_exe);
