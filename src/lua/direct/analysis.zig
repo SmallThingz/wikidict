@@ -107,11 +107,17 @@ const CallShapeObservation = struct {
     shape_span: ?lua.Span,
 };
 
+pub const TableShapeWrite = struct {
+    table_span: lua.Span,
+    key: *const lua.Expr,
+};
+
 pub const Module = struct {
     allocator: std.mem.Allocator,
     base_id: u32,
     functions: std.ArrayList(*FunctionInfo) = .empty,
     call_shape_observations: std.ArrayList(CallShapeObservation) = .empty,
+    table_shape_writes: std.ArrayList(TableShapeWrite) = .empty,
     root: *FunctionInfo,
 
     pub fn deinit(self: *Module) void {
@@ -123,6 +129,7 @@ pub const Module = struct {
         }
         self.functions.deinit(self.allocator);
         self.call_shape_observations.deinit(self.allocator);
+        self.table_shape_writes.deinit(self.allocator);
     }
 };
 
@@ -320,10 +327,15 @@ const Analyzer = struct {
             .name => |name| if (self.locals.get(name.value)) |binding|
                 self.bindings.items[binding].static_table_span
             else
-                null,
+                if (self.parent) |parent| parent.exprStaticTableName(name.value) else null,
             .paren => |paren| self.exprStaticTable(paren.expr),
             else => null,
         };
+    }
+
+    fn exprStaticTableName(self: *const Analyzer, name: []const u8) ?lua.Span {
+        if (self.locals.get(name)) |binding| return self.bindings.items[binding].static_table_span;
+        return if (self.parent) |parent| parent.exprStaticTableName(name) else null;
     }
 
     fn directLocalFunctionSpan(self: *const Analyzer, value: *const lua.Expr) ?lua.Span {
@@ -464,6 +476,11 @@ const Analyzer = struct {
                 .global => try self.globals.markMutated(name),
             },
             .index => |idx| {
+                if (self.exprStaticTable(idx.object)) |table_span|
+                    try self.module.table_shape_writes.append(self.allocator, .{
+                        .table_span = table_span,
+                        .key = idx.key,
+                    });
                 try self.expr(idx.object);
                 try self.expr(idx.key);
             },

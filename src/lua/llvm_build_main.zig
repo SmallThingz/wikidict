@@ -602,6 +602,10 @@ fn analyzeManifest(
             else => {},
         };
         var module = try analysis.analyze(sa, globals, chunk, function_base);
+        for (module.table_shape_writes.items) |write| {
+            if (shapes.staticKey(write.key)) |key|
+                _ = try shape_registry.extendKey(module_index, write.table_span.start, key);
+        }
         const count: u32 = @intCast(module.functions.items.len);
         function_stats.functions += module.functions.items.len;
         var module_dead_functions: u32 = 0;
