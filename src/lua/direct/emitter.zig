@@ -169,6 +169,7 @@ const ValueRef = union(enum) {
     string: StringRef,
     table: TableRef,
     shaped_boxed: TableRef,
+    native_boxed: TableRef,
     boxed: V,
 };
 
@@ -264,6 +265,8 @@ const Runtime = struct {
     set_shape_dynamic: V,
     get_native_slot: V,
     set_native_slot: V,
+    get_known_native_slot: V,
+    set_known_native_slot: V,
     len_number: V,
     neg: V,
     binary: V,
@@ -347,6 +350,8 @@ const Runtime = struct {
             .set_shape_dynamic = try declare(m, "dict_lua_set_shape_dynamic", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.ptr }),
             .get_native_slot = try declare(m, "dict_lua_get_native_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.i64, ty.ptr }),
             .set_native_slot = try declare(m, "dict_lua_set_native_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.i64, ty.ptr }),
+            .get_known_native_slot = try declare(m, "dict_lua_get_known_native_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
+            .set_known_native_slot = try declare(m, "dict_lua_set_known_native_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
             .len_number = try declare(m, "dict_lua_len_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
             .neg = try declare(m, "dict_lua_neg", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
             .binary = try declare(m, "dict_lua_binary", ty.i32, &.{ ty.ptr, ty.i8, ty.ptr, ty.ptr, ty.ptr }),
@@ -759,6 +764,7 @@ const FnEmitter = struct {
             .boxed => |ptr| return ptr,
             .table => |table_value| return table_value.ptr,
             .shaped_boxed => |table_value| return table_value.ptr,
+            .native_boxed => |table_value| return table_value.ptr,
             .deferred_number => |number| {
                 const out = try self.valueSlot();
                 const numeric = try self.newBlock("deferred_box_number");
@@ -785,7 +791,7 @@ const FnEmitter = struct {
                 _ = try llvm.call(self.builder, self.rt().value_bool, &.{ out, wide });
             },
             .string => |s| _ = try llvm.call(self.builder, self.rt().value_string, &.{ out, s.ptr, try self.cI64(s.len) }),
-            .table, .shaped_boxed, .boxed, .deferred_number => unreachable,
+            .table, .shaped_boxed, .native_boxed, .boxed, .deferred_number => unreachable,
         }
         return out;
     }
@@ -802,7 +808,7 @@ const FnEmitter = struct {
             .nil => try self.cI1(false),
             .boolean => |v| v,
             .number, .string, .table => try self.cI1(true),
-            .shaped_boxed, .boxed, .deferred_number => blk: {
+            .shaped_boxed, .native_boxed, .boxed, .deferred_number => blk: {
                 const ptr = try self.box(value);
                 const raw = try llvm.call(self.builder, self.rt().value_truthy, &.{ptr});
                 break :blk try llvm.icmp(self.builder, .ne, raw, try self.cI8(0));
@@ -1039,6 +1045,7 @@ const FnEmitter = struct {
         return switch (value) {
             .number => |number| .{ .native = number },
             .shaped_boxed => |table_value| .{ .boxed = table_value.ptr },
+            .native_boxed => |table_value| .{ .boxed = table_value.ptr },
             .boxed => |boxed| .{ .boxed = boxed },
             .deferred_number => |number| .{ .deferred = number },
             else => null,
@@ -1219,7 +1226,7 @@ const FnEmitter = struct {
                         const other = if (lhs == .nil) rhs else lhs;
                         const is_nil = switch (other) {
                             .nil => try self.cI1(true),
-                            .shaped_boxed, .boxed, .deferred_number => blk: {
+                            .shaped_boxed, .native_boxed, .boxed, .deferred_number => blk: {
                                 const ptr = try self.box(other);
                                 const raw = try llvm.call(self.builder, self.rt().value_is_nil, &.{ptr});
                                 break :blk try llvm.icmp(self.builder, .ne, raw, try self.cI8(0));
@@ -1503,6 +1510,72 @@ const FnEmitter = struct {
         };
     }
 
+    fn nativeNamespaceHint(value: ValueRef) ?static_fields.Namespace {
+        return switch (value) {
+            .table => |table_value| table_value.native_namespace,
+            .native_boxed => |table_value| table_value.native_namespace,
+            else => null,
+        };
+    }
+
+    fn nativeNamespaceExpr(self: *FnEmitter, value: *const lua.Expr) anyerror!?static_fields.Namespace {
+        return switch (value.*) {
+            .name => |name| blk: {
+                const resolved = try self.resolve(name.value);
+                break :blk switch (resolved) {
+                    .local => |binding| switch (self.storage[binding]) {
+                        .direct => |direct| nativeNamespaceHint(direct),
+                        else => null,
+                    },
+                    .upvalue => null,
+                    .global => |slot| if (self.module.globals.stableSlot(slot) and slot < global_abi.count)
+                        nativeGlobalNamespace(self.module.globals.names.items[slot])
+                    else
+                        null,
+                };
+            },
+            .paren => |paren| self.nativeNamespaceExpr(paren.expr),
+            .index => |index| blk: {
+                const owner = (try self.nativeNamespaceExpr(index.object)) orelse break :blk null;
+                const field = staticString(index.key) orelse break :blk null;
+                break :blk static_fields.fieldNamespace(owner, field);
+            },
+            .call => |call| self.nativeCallReturnNamespace(call.callee),
+            .method_call => |call| blk: {
+                const owner = (try self.nativeNamespaceExpr(call.object)) orelse break :blk null;
+                break :blk static_fields.callReturnNamespace(owner, call.method);
+            },
+            else => null,
+        };
+    }
+
+    fn nativeCallReturnNamespace(self: *FnEmitter, callee: *const lua.Expr) anyerror!?static_fields.Namespace {
+        return switch (callee.*) {
+            .index => |index| blk: {
+                const owner = (try self.nativeNamespaceExpr(index.object)) orelse break :blk null;
+                const field = staticString(index.key) orelse break :blk null;
+                break :blk static_fields.callReturnNamespace(owner, field);
+            },
+            .paren => |paren| self.nativeCallReturnNamespace(paren.expr),
+            else => null,
+        };
+    }
+
+    fn callResultRef(self: *FnEmitter, callee: *const lua.Expr, out: V) anyerror!ValueRef {
+        if (try self.callReturnShapeHint(callee)) |shape|
+            return .{ .shaped_boxed = .{ .ptr = out, .shape = shape } };
+        if (try self.nativeCallReturnNamespace(callee)) |namespace|
+            return .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } };
+        return .{ .boxed = out };
+    }
+
+    fn methodResultRef(self: *FnEmitter, object: *const lua.Expr, method: []const u8, out: V) anyerror!ValueRef {
+        if (try self.nativeNamespaceExpr(object)) |owner|
+            if (static_fields.callReturnNamespace(owner, method)) |namespace|
+                return .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } };
+        return .{ .boxed = out };
+    }
+
     fn freeMulti(self: *FnEmitter, multi_value: MultiRef) anyerror!void {
         if (multi_value.owned)
             _ = try llvm.call(self.builder, self.rt().results_free, &.{ multi_value.ptr, multi_value.len });
@@ -1560,14 +1633,23 @@ const FnEmitter = struct {
             else
                 .{ .boxed = out };
         };
-        if (object == .table) {
-            if (object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, name)) |slot| {
-                const status = try llvm.call(self.builder, self.rt().get_native_slot, &.{
-                    self.ctx(), object_box, try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
-                });
+        if (nativeNamespaceHint(object)) |namespace| {
+            if (static_fields.slotForName(namespace, name)) |slot| {
+                const status = if (object == .native_boxed)
+                    try llvm.call(self.builder, self.rt().get_known_native_slot, &.{
+                        self.ctx(), object_box, try self.cI32(@intFromEnum(namespace)), try self.cI32(slot),
+                        key.ptr,    try self.cI64(key.len), out,
+                    })
+                else
+                    try llvm.call(self.builder, self.rt().get_native_slot, &.{
+                        self.ctx(), object_box, try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
+                    });
                 try self.check(status);
-                return .{ .boxed = out };
-            };
+                return if (static_fields.fieldNamespace(namespace, name)) |child|
+                    .{ .native_boxed = .{ .ptr = out, .native_namespace = child } }
+                else
+                    .{ .boxed = out };
+            }
         }
         if (site_id) |id| {
             try self.emitCachedField(object_box, key, out, id, key_hash);
@@ -2537,17 +2619,12 @@ const FnEmitter = struct {
             },
             .index => |v| try self.getIndex(try self.expr(v.object), v.key),
             .call => |v| blk: {
-                const shape = try self.callReturnShapeHint(v.callee);
                 const result = (try self.callFixed(v.callee, null, v.args, 1)) orelse unreachable;
-                const out = try self.arrayElem(result, 0);
-                break :blk if (shape) |known|
-                    .{ .shaped_boxed = .{ .ptr = out, .shape = known } }
-                else
-                    .{ .boxed = out };
+                break :blk try self.callResultRef(v.callee, try self.arrayElem(result, 0));
             },
             .method_call => |v| blk: {
                 const result = (try self.callFixed(v.object, v.method, v.args, 1)) orelse unreachable;
-                break :blk .{ .boxed = try self.arrayElem(result, 0) };
+                break :blk try self.methodResultRef(v.object, v.method, try self.arrayElem(result, 0));
             },
             .function => |f| try self.closure(try self.module.functionForSpan(f.span)),
             .table => |v| try self.table(v),
@@ -2745,11 +2822,23 @@ const FnEmitter = struct {
                             continue;
                         };
                         const results = (try self.callFixed(v.callee, null, v.args, remain)) orelse unreachable;
-                        for (0..remain) |j| out[oi + j] = .{ .boxed = try self.arrayElem(results, j) };
+                        for (0..remain) |j| {
+                            const value_out = try self.arrayElem(results, j);
+                            out[oi + j] = if (j == 0)
+                                try self.callResultRef(v.callee, value_out)
+                            else
+                                .{ .boxed = value_out };
+                        }
                     },
                     .method_call => |v| {
                         const results = (try self.callFixed(v.object, v.method, v.args, remain)) orelse unreachable;
-                        for (0..remain) |j| out[oi + j] = .{ .boxed = try self.arrayElem(results, j) };
+                        for (0..remain) |j| {
+                            const value_out = try self.arrayElem(results, j);
+                            out[oi + j] = if (j == 0)
+                                try self.methodResultRef(v.object, v.method, value_out)
+                            else
+                                .{ .boxed = value_out };
+                        }
                     },
                     .vararg => for (0..remain) |j| {
                         const dst = try self.valueSlot();
@@ -2815,13 +2904,19 @@ const FnEmitter = struct {
                     break :blk try llvm.call(self.builder, self.rt().set_field, &.{
                         self.ctx(), object, field.key.ptr, try self.cI64(field.key.len), try self.cI64(static_fields.hashStringKey(key_name)), boxed,
                     });
-                } else if (field.object == .table) blk: {
+                } else if (nativeNamespaceHint(field.object)) |namespace| blk: {
                     const key_name = field.key.bytes;
-                    if (field.object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, key_name)) |slot|
-                        break :blk try llvm.call(self.builder, self.rt().set_native_slot, &.{
-                            self.ctx(),                   object, try self.cI32(slot), field.key.ptr,
-                            try self.cI64(field.key.len), boxed,
-                        });
+                    if (static_fields.slotForName(namespace, key_name)) |slot|
+                        break :blk if (field.object == .native_boxed)
+                            try llvm.call(self.builder, self.rt().set_known_native_slot, &.{
+                                self.ctx(), object, try self.cI32(@intFromEnum(namespace)), try self.cI32(slot),
+                                field.key.ptr, try self.cI64(field.key.len), boxed,
+                            })
+                        else
+                            try llvm.call(self.builder, self.rt().set_native_slot, &.{
+                                self.ctx(),                   object, try self.cI32(slot), field.key.ptr,
+                                try self.cI64(field.key.len), boxed,
+                            });
                     break :blk try llvm.call(self.builder, self.rt().set_field, &.{
                         self.ctx(), object, field.key.ptr, try self.cI64(field.key.len), try self.cI64(static_fields.hashStringKey(key_name)), boxed,
                     });

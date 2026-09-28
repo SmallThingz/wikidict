@@ -3,6 +3,7 @@ pub const RequestAllocator = @import("request_allocator.zig").RequestAllocator;
 pub const LocalBumpArena = @import("local_bump_arena.zig").LocalBumpArena;
 pub const work_stats = @import("work_stats.zig");
 const static_fields = @import("lua_static_fields");
+pub const NativeNamespace = static_fields.Namespace;
 
 comptime {
     if (@intFromEnum(std.meta.Tag(Value).string) != static_fields.string_value_tag)
@@ -2230,6 +2231,45 @@ pub const Context = struct {
             }
         }
         return self.getIndex(object, key);
+    }
+
+    pub fn getKnownNativeField(
+        self: *Context,
+        object: Value,
+        namespace: static_fields.Namespace,
+        slot: u32,
+        name: []const u8,
+    ) !Value {
+        if (object == .table and object.table.native_namespace == namespace) {
+            if (object.table.fieldKey(slot)) |expected|
+                if (rawEqual(expected, .{ .string = name }))
+                {
+                    if (object.table.rawGetSlot(slot)) |value| return value;
+                    if (object.table.metatable == null) return .nil;
+                };
+        }
+        return self.getIndex(object, .{ .string = name });
+    }
+
+    pub fn setKnownNativeField(
+        self: *Context,
+        object: Value,
+        namespace: static_fields.Namespace,
+        slot: u32,
+        name: []const u8,
+        value: Value,
+    ) !void {
+        if (object == .table and object.table.native_namespace == namespace) {
+            if (object.table.fieldKey(slot)) |expected|
+                if (rawEqual(expected, .{ .string = name }))
+                {
+                    if (object.table.rawGetSlot(slot) != null or object.table.metatable == null) {
+                        try object.table.rawSetSlot(slot, value);
+                        return;
+                    }
+                };
+        }
+        try self.setIndex(object, .{ .string = name }, value);
     }
 
     pub fn setProgramShapeIndex(self: *Context, object: Value, shape_id: u32, slot: u32, key: Value, value: Value) !void {

@@ -159,6 +159,72 @@ pub fn nameAt(namespace: Namespace, slot: u32) ?[]const u8 {
     if (slot >= namespace_names.len) return null;
     return namespace_names[slot];
 }
+
+/// Structural namespace of a table-valued field on a compiler-known native
+/// namespace. These are immutable API layout facts, not assumptions about the
+/// live field value: callers must still guard the runtime namespace.
+pub fn fieldNamespace(namespace: Namespace, field_name: []const u8) ?Namespace {
+    return switch (namespace) {
+        .mw => if (std.mem.eql(u8, field_name, "ustring"))
+            .ustring
+        else if (std.mem.eql(u8, field_name, "title"))
+            .title
+        else if (std.mem.eql(u8, field_name, "text"))
+            .text
+        else if (std.mem.eql(u8, field_name, "uri"))
+            .uri
+        else if (std.mem.eql(u8, field_name, "hash"))
+            .hash
+        else if (std.mem.eql(u8, field_name, "html"))
+            .html
+        else if (std.mem.eql(u8, field_name, "language"))
+            .language
+        else
+            null,
+        else => null,
+    };
+}
+
+/// Structural namespace of a single-result native API call. The emitter carries
+/// this only as a guarded hint so overwritten functions retain ordinary Lua
+/// behavior.
+pub fn callReturnNamespace(namespace: Namespace, field_name: []const u8) ?Namespace {
+    return switch (namespace) {
+        .mw => if (std.mem.eql(u8, field_name, "getCurrentFrame"))
+            .frame
+        else if (std.mem.eql(u8, field_name, "getContentLanguage") or
+            std.mem.eql(u8, field_name, "getLanguage"))
+            .language_value
+        else
+            null,
+        .title => if (std.mem.eql(u8, field_name, "new") or
+            std.mem.eql(u8, field_name, "makeTitle") or
+            std.mem.eql(u8, field_name, "getCurrentTitle"))
+            .title_value
+        else
+            null,
+        .language => if (std.mem.eql(u8, field_name, "new") or
+            std.mem.eql(u8, field_name, "getContentLanguage"))
+            .language_value
+        else
+            null,
+        .html => if (std.mem.eql(u8, field_name, "create")) .html_node else null,
+        .frame => if (std.mem.eql(u8, field_name, "getParent") or
+            std.mem.eql(u8, field_name, "newChild"))
+            .frame
+        else
+            null,
+        .title_value => if (std.mem.eql(u8, field_name, "subPageTitle")) .title_value else null,
+        .html_node => if (std.mem.eql(u8, field_name, "tag") or
+            std.mem.eql(u8, field_name, "done") or
+            std.mem.eql(u8, field_name, "allDone") or
+            std.mem.eql(u8, field_name, "node"))
+            .html_node
+        else
+            null,
+        else => null,
+    };
+}
 test "namespace slot layouts round trip" {
     inline for (std.meta.fields(Namespace)) |field| {
         const namespace: Namespace = @enumFromInt(field.value);
@@ -169,4 +235,7 @@ test "namespace slot layouts round trip" {
         }
     }
     try std.testing.expectEqual(@as(?u32, null), slotForName(.table, "definitely-not-a-field"));
+    try std.testing.expectEqual(Namespace.title, fieldNamespace(.mw, "title").?);
+    try std.testing.expectEqual(Namespace.title_value, callReturnNamespace(.title, "new").?);
+    try std.testing.expectEqual(Namespace.frame, callReturnNamespace(.frame, "newChild").?);
 }

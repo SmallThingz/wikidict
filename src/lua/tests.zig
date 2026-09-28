@@ -1039,6 +1039,29 @@ test "stable native namespaces use compile-time field slots" {
     try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_set_native_slot") != null);
 }
 
+test "native namespace fields and returns retain structural types" {
+    const source =
+        \\local title = mw.title.new("rat")
+        \\local language = mw.getLanguage("en")
+        \\local node = mw.html.create("div"):tag("span")
+        \\return title.prefixedText, language:getCode(), node:allDone()
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_native_slot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_known_native_slot") != null);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_field_cached("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_field_hashed("));
+}
+
 test "global table escape disables native namespace slot assumptions" {
     const source = "local env = _G; return math.floor(1.5)";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);

@@ -333,6 +333,18 @@ export fn dict_lua_get_native_slot(ctx: *rt.Context, object: *const rt.Value, sl
     return 0;
 }
 
+export fn dict_lua_get_known_native_slot(ctx: *rt.Context, object: *const rt.Value, namespace: u32, slot: u32, name: [*]const u8, len: usize, out: *rt.Value) callconv(.c) u32 {
+    const ns = std.enums.fromInt(rt.NativeNamespace, namespace) orelse return fail(ctx, error.BadNativeNamespace);
+    out.* = ctx.getKnownNativeField(object.*, ns, slot, name[0..len]) catch |err| return fail(ctx, err);
+    return 0;
+}
+
+export fn dict_lua_set_known_native_slot(ctx: *rt.Context, object: *const rt.Value, namespace: u32, slot: u32, name: [*]const u8, len: usize, input: *const rt.Value) callconv(.c) u32 {
+    const ns = std.enums.fromInt(rt.NativeNamespace, namespace) orelse return fail(ctx, error.BadNativeNamespace);
+    ctx.setKnownNativeField(object.*, ns, slot, name[0..len], input.*) catch |err| return fail(ctx, err);
+    return 0;
+}
+
 export fn dict_lua_set_native_slot(ctx: *rt.Context, object: *const rt.Value, slot: u32, name: [*]const u8, len: usize, input: *const rt.Value) callconv(.c) u32 {
     const key: rt.Value = .{ .string = name[0..len] };
     if (object.* == .table) if (object.table.fieldKey(slot)) |field_key| {
