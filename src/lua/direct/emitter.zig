@@ -38,11 +38,13 @@ pub const ModuleFact = struct {
     root_pure: bool = false,
     eager_prepared: bool = false,
     canonical_name: []const u8 = "",
+    export_shape_id: ?u32 = null,
     exports: []const DirectExport = &.{},
 };
 pub const ProgramFacts = struct {
     module_ids: ?*const ModuleIdMap = null,
     module_facts: ?[]const ModuleFact = null,
+    shape_registry: ?*const shapes.Registry = null,
     method_candidates: []const MethodCandidate = &.{},
     table_shapes: ?*const shapes.ModuleFacts = null,
     synth_root: bool = false,
@@ -77,6 +79,15 @@ pub const ProgramFacts = struct {
         for (facts[module_id].exports) |entry|
             if (std.mem.eql(u8, entry.name, name)) return entry;
         return null;
+    }
+
+    pub fn moduleExportShape(self: ProgramFacts, module_id: u32) ?shapes.Fact {
+        const facts = self.module_facts orelse return null;
+        const registry = self.shape_registry orelse return null;
+        if (module_id >= facts.len) return null;
+        const id = facts[module_id].export_shape_id orelse return null;
+        if (id >= registry.count()) return null;
+        return registry.record(id);
     }
 
     pub fn methodCandidate(self: ProgramFacts, name: []const u8) ?MethodCandidate {
@@ -129,6 +140,7 @@ const StaticModuleRef = struct {
     module_id: u32,
     value: V,
     pristine_ptr: ?V = null,
+    shape: ?shapes.Fact = null,
 };
 
 // A computed arithmetic result remains scalar whenever its actual result is a
@@ -143,6 +155,7 @@ const ValueRef = union(enum) {
     deferred_number: DeferredNumber,
     string: StringRef,
     table: TableRef,
+    shaped_boxed: TableRef,
     boxed: V,
 };
 
@@ -727,6 +740,7 @@ const FnEmitter = struct {
         switch (value) {
             .boxed => |ptr| return ptr,
             .table => |table_value| return table_value.ptr,
+            .shaped_boxed => |table_value| return table_value.ptr,
             .deferred_number => |number| {
                 const out = try self.valueSlot();
                 const numeric = try self.newBlock("deferred_box_number");
@@ -753,7 +767,7 @@ const FnEmitter = struct {
                 _ = try llvm.call(self.builder, self.rt().value_bool, &.{ out, wide });
             },
             .string => |s| _ = try llvm.call(self.builder, self.rt().value_string, &.{ out, s.ptr, try self.cI64(s.len) }),
-            .table, .boxed, .deferred_number => unreachable,
+            .table, .shaped_boxed, .boxed, .deferred_number => unreachable,
         }
         return out;
     }
@@ -770,7 +784,7 @@ const FnEmitter = struct {
             .nil => try self.cI1(false),
             .boolean => |v| v,
             .number, .string, .table => try self.cI1(true),
-            .boxed, .deferred_number => blk: {
+            .shaped_boxed, .boxed, .deferred_number => blk: {
                 const ptr = try self.box(value);
                 const raw = try llvm.call(self.builder, self.rt().value_truthy, &.{ptr});
                 break :blk try llvm.icmp(self.builder, .ne, raw, try self.cI8(0));
@@ -850,7 +864,10 @@ const FnEmitter = struct {
                 else
                     value,
                 .static_function => error.DirectFunctionUsedAsValue,
-                .static_module => |module| .{ .boxed = module.value },
+                .static_module => |module| if (module.shape) |shape|
+                    .{ .shaped_boxed = .{ .ptr = module.value, .shape = shape } }
+                else
+                    .{ .boxed = module.value },
                 .number => |slot| .{ .number = try llvm.load(self.builder, self.ty().double, slot, 8) },
                 .boolean => |slot| .{ .boolean = try llvm.load(self.builder, self.ty().i1, slot, 1) },
                 .value => |slot| blk: {
@@ -1003,6 +1020,7 @@ const FnEmitter = struct {
     fn numericCandidate(value: ValueRef) ?NumericCandidate {
         return switch (value) {
             .number => |number| .{ .native = number },
+            .shaped_boxed => |table_value| .{ .boxed = table_value.ptr },
             .boxed => |boxed| .{ .boxed = boxed },
             .deferred_number => |number| .{ .deferred = number },
             else => null,
@@ -1183,7 +1201,7 @@ const FnEmitter = struct {
                         const other = if (lhs == .nil) rhs else lhs;
                         const is_nil = switch (other) {
                             .nil => try self.cI1(true),
-                            .boxed, .deferred_number => blk: {
+                            .shaped_boxed, .boxed, .deferred_number => blk: {
                                 const ptr = try self.box(other);
                                 const raw = try llvm.call(self.builder, self.rt().value_is_nil, &.{ptr});
                                 break :blk try llvm.icmp(self.builder, .ne, raw, try self.cI8(0));
@@ -1314,7 +1332,7 @@ const FnEmitter = struct {
 
     fn getIndex(self: *FnEmitter, object: ValueRef, key_expr: *const lua.Expr) anyerror!ValueRef {
         if (staticString(key_expr)) |name| return self.getField(object, name);
-        if (object == .table) if (object.table.shape) |shape| {
+        if (shapeHint(object)) |shape| {
             if (shapes.staticKey(key_expr)) |key| if (shapeKeySlot(shape, key)) |slot| {
                 const object_box = try self.box(object);
                 const key_box = try self.box(try self.shapeKeyRef(key));
@@ -1325,7 +1343,7 @@ const FnEmitter = struct {
                 try self.check(status);
                 return .{ .boxed = out };
             };
-        };
+        }
         const object_box = try self.box(object);
         const out = try self.valueSlot();
         const key_box = try self.box(try self.expr(key_expr));
@@ -1445,6 +1463,14 @@ const FnEmitter = struct {
         };
     }
 
+    fn shapeHint(value: ValueRef) ?shapes.Fact {
+        return switch (value) {
+            .table => |table_value| table_value.shape,
+            .shaped_boxed => |table_value| table_value.shape,
+            else => null,
+        };
+    }
+
     fn freeMulti(self: *FnEmitter, multi_value: MultiRef) anyerror!void {
         if (multi_value.owned)
             _ = try llvm.call(self.builder, self.rt().results_free, &.{ multi_value.ptr, multi_value.len });
@@ -1492,14 +1518,14 @@ const FnEmitter = struct {
         const key = try self.stringRef(name);
         const key_hash = static_fields.hashStringKey(name);
         const out = try self.valueSlot();
+        if (shapeHint(object)) |shape| if (shapeSlot(shape, name)) |slot| {
+            const status = try llvm.call(self.builder, self.rt().get_known_shape_field, &.{
+                self.ctx(), object_box, try self.cI32(shape.id), try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
+            });
+            try self.check(status);
+            return .{ .boxed = out };
+        };
         if (object == .table) {
-            if (object.table.shape) |shape| if (shapeSlot(shape, name)) |slot| {
-                const status = try llvm.call(self.builder, self.rt().get_known_shape_field, &.{
-                    self.ctx(), object_box, try self.cI32(shape.id), try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
-                });
-                try self.check(status);
-                return .{ .boxed = out };
-            };
             if (object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, name)) |slot| {
                 const status = try llvm.call(self.builder, self.rt().get_native_slot, &.{
                     self.ctx(), object_box, try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
@@ -1795,7 +1821,11 @@ const FnEmitter = struct {
 
     fn directStaticModuleRequire(self: *FnEmitter, request: StaticRequire) anyerror!StaticModuleRef {
         if (!self.module.facts.canDeferRequire(request.module_id, request.requested.bytes))
-            return .{ .module_id = request.module_id, .value = try self.directRequireValue(request) };
+            return .{
+                .module_id = request.module_id,
+                .value = try self.directRequireValue(request),
+                .shape = self.module.facts.moduleExportShape(request.module_id),
+            };
 
         const loaded = try self.valueSlot();
         const sentinel = try llvm.call(self.builder, self.rt().defer_require_module_ref, &.{
@@ -1818,7 +1848,12 @@ const FnEmitter = struct {
         try self.check(status);
         try llvm.br(self.builder, join);
         llvm.position(self.builder, join);
-        return .{ .module_id = request.module_id, .value = loaded, .pristine_ptr = sentinel };
+        return .{
+            .module_id = request.module_id,
+            .value = loaded,
+            .pristine_ptr = sentinel,
+            .shape = self.module.facts.moduleExportShape(request.module_id),
+        };
     }
 
     fn directRequireValue(self: *FnEmitter, request: StaticRequire) anyerror!V {
@@ -2653,7 +2688,7 @@ const FnEmitter = struct {
                 const object = try self.expr(idx.object);
                 if (staticString(idx.key)) |name|
                     break :blk .{ .field = .{ .object = object, .key = try self.stringRef(name) } };
-                if (object == .table) if (object.table.shape) |shape| {
+                if (shapeHint(object)) |shape| {
                     if (shapes.staticKey(idx.key)) |key| if (shapeKeySlot(shape, key)) |slot|
                         break :blk .{ .shape_index = .{
                             .object = object,
@@ -2661,7 +2696,7 @@ const FnEmitter = struct {
                             .shape_id = shape.id,
                             .slot = slot,
                         } };
-                };
+                }
                 break :blk .{ .index = .{ .object = object, .key = try self.expr(idx.key) } };
             },
         };
@@ -2673,13 +2708,18 @@ const FnEmitter = struct {
             .field => |field| {
                 const object = try self.box(field.object);
                 const boxed = try self.box(value);
-                const status = if (field.object == .table) blk: {
+                const status = if (shapeHint(field.object)) |shape| blk: {
                     const key_name = field.key.bytes;
-                    if (field.object.table.shape) |shape| if (shapeSlot(shape, key_name)) |slot|
+                    if (shapeSlot(shape, key_name)) |slot|
                         break :blk try llvm.call(self.builder, self.rt().set_known_shape_field, &.{
                             self.ctx(),    object,                       try self.cI32(shape.id), try self.cI32(slot),
                             field.key.ptr, try self.cI64(field.key.len), boxed,
                         });
+                    break :blk try llvm.call(self.builder, self.rt().set_field, &.{
+                        self.ctx(), object, field.key.ptr, try self.cI64(field.key.len), try self.cI64(static_fields.hashStringKey(key_name)), boxed,
+                    });
+                } else if (field.object == .table) blk: {
+                    const key_name = field.key.bytes;
                     if (field.object.table.native_namespace) |namespace| if (static_fields.slotForName(namespace, key_name)) |slot|
                         break :blk try llvm.call(self.builder, self.rt().set_native_slot, &.{
                             self.ctx(),                   object, try self.cI32(slot), field.key.ptr,

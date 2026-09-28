@@ -840,6 +840,7 @@ fn appendModuleToBatch(
     const facts = emitter.ProgramFacts{
         .module_ids = module_ids,
         .module_facts = module_facts,
+        .shape_registry = shape_registry,
         .method_candidates = method_candidates,
         .table_shapes = &table_shapes,
         .synth_root = record.synth_root,
@@ -1260,6 +1261,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
             .root_pure = record.root_pure,
             .eager_prepared = record.eager_order != std.math.maxInt(u32),
             .canonical_name = record.title,
+            .export_shape_id = record.export_shape_id,
             .exports = record.direct_exports,
         };
     }

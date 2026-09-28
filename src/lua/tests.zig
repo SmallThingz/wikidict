@@ -438,6 +438,37 @@ test "constant require lowers to module id only when global is stable" {
     try std.testing.expect(std.mem.indexOf(u8, escaped, "call i32 @dict_lua_require_module_id") == null);
 }
 
+test "known module export shapes survive boxed require semantics" {
+    const source = "local m = require('Module:Shaped'); return m.foo";
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+
+    var ids: llvm_emitter.ModuleIdMap = .empty;
+    defer ids.deinit(std.testing.allocator);
+    try ids.put(std.testing.allocator, "Module:Shaped", 0);
+    var registry = llvm_shapes.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    const shape_id = (try registry.promote(0, 0, &.{"foo"})).?;
+    const module_facts = [_]llvm_emitter.ModuleFact{.{
+        .canonical_name = "Module:Shaped",
+        .export_shape_id = shape_id,
+    }};
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{
+        .module_ids = &ids,
+        .module_facts = &module_facts,
+        .shape_registry = &registry,
+    });
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_require_module_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_known_shape_field") != null);
+}
+
 test "eager canonical require uses prepared module fast path with semantic fallback" {
     var ids: llvm_emitter.ModuleIdMap = .empty;
     defer ids.deinit(std.testing.allocator);
