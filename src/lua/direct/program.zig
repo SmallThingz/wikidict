@@ -27,6 +27,7 @@ pub const ModuleRecord = struct {
     root_requires: []const []const u8 = &.{},
     eager_order: u32 = std.math.maxInt(u32),
     eager_requirements: []const EagerRequirement = &.{},
+    template_eligible: bool = false,
     load_data_snapshot: bool = false,
     direct_exports: []const emitter.DirectExport = &.{},
     static_root: bool = false,
@@ -329,7 +330,10 @@ pub fn writeMetadata(
     }
 
     for (records) |record| {
-        try metadata.writeU32(w, @intFromBool(record.load_data_snapshot));
+        const flags: u32 =
+            @as(u32, @intFromBool(record.load_data_snapshot)) |
+            (@as(u32, @intFromBool(record.template_eligible)) << 1);
+        try metadata.writeU32(w, flags);
         try metadata.writeString(w, record.static_root_blob);
     }
 

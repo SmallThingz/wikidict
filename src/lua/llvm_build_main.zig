@@ -295,6 +295,84 @@ fn planEagerInit(
     return eager_count;
 }
 
+fn planModuleTemplates(
+    a: A,
+    records: []ModuleRecord,
+    module_ids: *const emitter.ModuleIdMap,
+    stable_require: bool,
+) !usize {
+    const candidate = try a.alloc(bool, records.len);
+    defer a.free(candidate);
+    const blocked = try a.alloc(bool, records.len);
+    defer a.free(blocked);
+    @memset(blocked, false);
+    for (candidate, records) |*out, record|
+        out.* = record.root_bootstrap_safe and
+            (record.root_requires.len == 0 or stable_require);
+
+    var edges: std.ArrayList(EagerEdge) = .empty;
+    defer edges.deinit(a);
+    const indegree = try a.alloc(u32, records.len);
+    defer a.free(indegree);
+    @memset(indegree, 0);
+    const offsets = try a.alloc(u32, records.len + 1);
+    defer a.free(offsets);
+    @memset(offsets, 0);
+
+    for (records, candidate, 0..) |record, can, module_index| {
+        if (!can) continue;
+        for (record.root_requires) |raw| {
+            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse {
+                blocked[module_index] = true;
+                continue;
+            };
+            if (dependency >= records.len or !candidate[dependency]) {
+                blocked[module_index] = true;
+                continue;
+            }
+            try edges.append(a, .{ .from = dependency, .to = @intCast(module_index) });
+        }
+    }
+    std.mem.sort(EagerEdge, edges.items, {}, eagerEdgeLess);
+    if (edges.items.len > 1) {
+        var write: usize = 1;
+        var previous = edges.items[0];
+        for (edges.items[1..]) |edge| {
+            if (edge.from == previous.from and edge.to == previous.to) continue;
+            edges.items[write] = edge;
+            write += 1;
+            previous = edge;
+        }
+        edges.items.len = write;
+    }
+    for (edges.items) |edge| {
+        indegree[edge.to] += 1;
+        offsets[edge.from + 1] += 1;
+    }
+    for (1..offsets.len) |index| offsets[index] += offsets[index - 1];
+
+    var queue: std.ArrayList(u32) = .empty;
+    defer queue.deinit(a);
+    for (candidate, blocked, indegree, 0..) |can, is_blocked, degree, index|
+        if (can and !is_blocked and degree == 0)
+            try queue.append(a, @intCast(index));
+
+    var count: usize = 0;
+    var read: usize = 0;
+    while (read < queue.items.len) : (read += 1) {
+        const module_id = queue.items[read];
+        if (records[module_id].template_eligible) continue;
+        records[module_id].template_eligible = true;
+        count += 1;
+        for (edges.items[offsets[module_id]..offsets[module_id + 1]]) |edge| {
+            indegree[edge.to] -= 1;
+            if (indegree[edge.to] == 0 and candidate[edge.to] and !blocked[edge.to])
+                try queue.append(a, edge.to);
+        }
+    }
+    return count;
+}
+
 fn compilePlanLabel(keep: bool, static_root: bool, mode: usage_profile.CompileMode) []const u8 {
     if (!keep) return "drop";
     if (static_root) return "data";
@@ -1091,6 +1169,16 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     );
     std.debug.print("LLVM_EAGER_INIT modules={d}/{d}\n", .{
         eager_count,
+        selected_records.items.len,
+    });
+    const template_count = try planModuleTemplates(
+        a,
+        selected_records.items,
+        &selected_module_ids,
+        globals.stable("require"),
+    );
+    std.debug.print("LLVM_MODULE_TEMPLATES modules={d}/{d}\n", .{
+        template_count,
         selected_records.items.len,
     });
 

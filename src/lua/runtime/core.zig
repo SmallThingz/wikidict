@@ -1166,6 +1166,8 @@ pub const Context = struct {
     module_requirements: ?ModuleRequirementsFn = null,
     static_module_ctx: ?*const anyopaque = null,
     static_module: ?StaticModuleFn = null,
+    module_template_context: ?*Context = null,
+    module_template_eligible: []const bool = &.{},
     eager_bootstrap: bool = false,
     package_observable: bool = false,
     program_bootstrap_ctx: ?*const anyopaque = null,
@@ -1223,6 +1225,8 @@ pub const Context = struct {
         child.module_requirements = self.module_requirements;
         child.static_module_ctx = self.static_module_ctx;
         child.static_module = self.static_module;
+        child.module_template_context = self.module_template_context;
+        child.module_template_eligible = self.module_template_eligible;
         child.program_bootstrap_ctx = self.program_bootstrap_ctx;
         child.program_bootstrap = self.program_bootstrap;
         child.max_depth = self.max_depth;
@@ -1725,6 +1729,189 @@ pub const Context = struct {
         return .{ .table = copy };
     }
 
+    const ModuleTemplateClone = struct {
+        source: *Context,
+        target: *Context,
+        tables: std.AutoHashMapUnmanaged(*Table, *Table) = .empty,
+        cells: std.AutoHashMapUnmanaged(*Cell, *Cell) = .empty,
+        callables: std.AutoHashMapUnmanaged(*const FunctionValue, *const FunctionValue) = .empty,
+
+        fn deinit(self: *ModuleTemplateClone) void {
+            self.tables.deinit(self.target.allocator);
+            self.cells.deinit(self.target.allocator);
+            self.callables.deinit(self.target.allocator);
+        }
+
+        fn bindExisting(self: *ModuleTemplateClone, from: Value, to: Value) !void {
+            if (from == .table and to == .table) {
+                try self.tables.put(self.target.allocator, from.table, to.table);
+            } else if (from == .callable and to == .callable) {
+                try self.callables.put(self.target.allocator, from.callable, to.callable);
+            }
+        }
+
+        fn cloneCell(self: *ModuleTemplateClone, source_cell: *Cell) anyerror!*Cell {
+            if (self.cells.get(source_cell)) |existing| return existing;
+            const cell = try self.target.allocator.create(Cell);
+            cell.* = .{ .value = .nil };
+            try self.cells.put(self.target.allocator, source_cell, cell);
+            cell.value = try self.cloneValue(source_cell.value);
+            return cell;
+        }
+
+        fn cloneCallable(self: *ModuleTemplateClone, source_function: *const FunctionValue) anyerror!Value {
+            if (self.callables.get(source_function)) |existing|
+                return .{ .callable = existing };
+            // Bootstrap-safe roots cannot construct host-bound native closures.
+            // If a dependency exposes one, the descriptor itself is immutable and
+            // takes the live Context at call time, so sharing it is correct.
+            if (source_function.id == native_function_id) return .{ .callable = source_function };
+
+            const captures = source_function.captures();
+            const source_cells = switch (captures) {
+                .direct => |cells| cells,
+                .native => unreachable,
+            };
+            if (source_cells.len == 0) {
+                const value = try self.target.makeFunction(source_function.id, source_function.entry, &.{});
+                try self.callables.put(self.target.allocator, source_function, value.callable);
+                return value;
+            }
+
+            const target_cells = try self.target.allocator.alloc(*Cell, source_cells.len);
+            defer self.target.allocator.free(target_cells);
+            for (source_cells, 0..) |source_cell, index| {
+                if (self.cells.get(source_cell)) |existing| {
+                    target_cells[index] = existing;
+                } else {
+                    const cell = try self.target.allocator.create(Cell);
+                    cell.* = .{ .value = .nil };
+                    try self.cells.put(self.target.allocator, source_cell, cell);
+                    target_cells[index] = cell;
+                }
+            }
+            const value = try self.target.makeFunction(
+                source_function.id,
+                source_function.entry,
+                target_cells,
+            );
+            try self.callables.put(self.target.allocator, source_function, value.callable);
+            for (source_cells, target_cells) |source_cell, target_cell| {
+                if (target_cell.value == .nil and source_cell.value != .nil)
+                    target_cell.value = try self.cloneValue(source_cell.value);
+            }
+            return value;
+        }
+
+        fn cloneTable(self: *ModuleTemplateClone, source_table: *Table) anyerror!Value {
+            if (self.tables.get(source_table)) |existing|
+                return .{ .table = existing };
+            if (!source_table.owns_slots or source_table.global_tail != null or
+                source_table.has_identity_key)
+                return error.UnsupportedModuleTemplate;
+
+            const table = try self.target.allocator.create(Table);
+            table.* = .{
+                .shape = source_table.shape,
+                .native_namespace = source_table.native_namespace,
+                .append_index = source_table.append_index,
+                .read_only = source_table.read_only,
+                .has_hashed_number = source_table.has_hashed_number,
+                .numeric_mirror_disabled = source_table.numeric_mirror_disabled,
+                .dense_prefix_len = source_table.dense_prefix_len,
+                .dense_prefix_valid = source_table.dense_prefix_valid,
+            };
+            self.target.assignFieldCacheIdentity(table);
+            try self.tables.put(self.target.allocator, source_table, table);
+
+            if (source_table.slots.len != 0) {
+                table.slots = try self.target.allocator.alloc(Value, source_table.slots.len);
+                for (source_table.slots, 0..) |item, index|
+                    table.slots[index] = try self.cloneValue(item);
+            }
+            if (source_table.choices.len != 0) {
+                table.choices = try self.target.allocator.alloc(ChoiceCell, source_table.choices.len);
+                for (source_table.choices, 0..) |choice, index| {
+                    if (Table.identityKey(choice.key)) return error.UnsupportedModuleTemplate;
+                    table.choices[index] = .{
+                        .key = choice.key,
+                        .value = try self.cloneValue(choice.value),
+                    };
+                }
+            }
+            var entries = source_table.map.iterator();
+            while (entries.next()) |entry| {
+                if (Table.identityKey(entry.key_ptr.*)) return error.UnsupportedModuleTemplate;
+                try table.map.putContext(
+                    self.target.allocator,
+                    entry.key_ptr.*,
+                    try self.cloneValue(entry.value_ptr.*),
+                    .{},
+                );
+            }
+            if (source_table.metatable) |metatable|
+                table.metatable = (try self.cloneTable(metatable)).table;
+            return .{ .table = table };
+        }
+
+        fn cloneValue(self: *ModuleTemplateClone, value: Value) anyerror!Value {
+            return switch (value) {
+                .table => |table| self.cloneTable(table),
+                .callable => |callable| self.cloneCallable(callable),
+                else => value,
+            };
+        }
+
+        fn cloneModule(
+            self: *ModuleTemplateClone,
+            module_id: u32,
+            requested: ?[]const u8,
+        ) anyerror!Value {
+            if (module_id >= self.target.module_template_eligible.len or
+                !self.target.module_template_eligible[module_id])
+                return error.UnsupportedModuleTemplate;
+
+            const source_value = try self.source.loadModule(module_id, requested);
+            if (self.target.moduleState(module_id)) |existing| {
+                if (existing.value) |value| {
+                    try self.bindExisting(source_value, value);
+                    return value;
+                }
+                if (existing.loading) return error.ModuleLoadLoop;
+            }
+
+            const state = try self.target.ensureModuleState(module_id);
+            state.loading = true;
+            errdefer state.loading = false;
+            for (self.target.requirementsFor(module_id)) |requirement|
+                _ = try self.cloneModule(requirement.module_id, requirement.requested);
+
+            const value = try self.cloneValue(source_value);
+            state.value = value;
+            state.preinitialized = null;
+            state.export_pristine = value == .table;
+            if (value == .table) value.table.mutation_sentinel = &state.export_pristine;
+            state.loading = false;
+            const canonical = self.target.canonicalModuleName(module_id, requested);
+            if (canonical) |text| if (self.target.package_loaded) |loaded|
+                try loaded.rawSet(self.target.allocator, .{ .string = text }, value);
+            return value;
+        }
+    };
+
+    fn instantiateModuleTemplate(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!?Value {
+        const source = self.module_template_context orelse return null;
+        if (module_id >= self.module_template_eligible.len or
+            !self.module_template_eligible[module_id])
+            return null;
+        var clone = ModuleTemplateClone{ .source = source, .target = self };
+        defer clone.deinit();
+        return clone.cloneModule(module_id, requested) catch |err| switch (err) {
+            error.UnsupportedModuleTemplate => null,
+            else => return err,
+        };
+    }
+
     pub fn preinitializeModule(self: *Context, module_id: u32, value: Value, snapshot_load_data: bool) !void {
         const state = try self.ensureModuleState(module_id);
         if (state.value == null and state.preinitialized == null) {
@@ -1807,6 +1994,8 @@ pub const Context = struct {
                     return adopted;
             if (existing.loading) return error.ModuleLoadLoop;
         }
+        if (try self.instantiateModuleTemplate(module_id, requested)) |templated|
+            return templated;
         const state = try self.ensureModuleState(module_id);
         state.export_pristine = false;
         state.loading = true;
@@ -2664,6 +2853,91 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     try std.testing.expect(!loop_state.loading);
     try std.testing.expect(loop_state.value == null);
     try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("Module:Missing"));
+}
+
+const ModuleTemplateProbe = struct {
+    var root_calls = std.atomic.Value(u32).init(0);
+
+    fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+        return if (std.mem.eql(u8, raw_name, "Module:TemplateProbe")) 0 else null;
+    }
+
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id == 0) "Module:TemplateProbe" else null;
+    }
+
+    fn run(ctx: *Context, captures: Captures, _: []const Value) ![]const Value {
+        const cell = try captures.cell(0);
+        const current = if (cell.value == .number) cell.value.number else 0;
+        cell.value = .{ .number = current + 1 };
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = cell.value;
+        _ = ctx;
+        return out;
+    }
+
+    fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        _ = root_calls.fetchAdd(1, .monotonic);
+        const cell = try ctx.allocator.create(Cell);
+        cell.* = .{ .value = .{ .number = 0 } };
+        const table = try ctx.newTable();
+        try table.rawSet(
+            ctx.allocator,
+            .{ .string = "run" },
+            try ctx.makeFunctionKnown(1, run, &.{cell}),
+        );
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .table = table };
+        return out;
+    }
+};
+
+test "module templates run roots once while fresh contexts clone mutable closure state" {
+    ModuleTemplateProbe.root_calls.store(0, .monotonic);
+    const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
+    const eligible = [_]bool{true};
+
+    var template_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer template_arena.deinit();
+    var template = try Context.initProgram(template_arena.allocator(), 0, 1);
+    defer template.deinit();
+    template.module_root_entries = &roots;
+    template.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+
+    var first_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer first_arena.deinit();
+    var first = try template.forkProgram(first_arena.allocator());
+    defer first.deinit();
+    first.module_template_context = &template;
+    first.module_template_eligible = &eligible;
+
+    var second_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer second_arena.deinit();
+    var second = try template.forkProgram(second_arena.allocator());
+    defer second.deinit();
+    second.module_template_context = &template;
+    second.module_template_eligible = &eligible;
+
+    const first_module = try first.requireByName("Module:TemplateProbe");
+    const second_module = try second.requireByName("Module:TemplateProbe");
+    try std.testing.expectEqual(@as(u32, 1), ModuleTemplateProbe.root_calls.load(.monotonic));
+    try std.testing.expect(first_module == .table and second_module == .table);
+    try std.testing.expect(first_module.table != second_module.table);
+
+    const first_run = first_module.table.rawGet(.{ .string = "run" }) orelse return error.MissingTemplateCallable;
+    const second_run = second_module.table.rawGet(.{ .string = "run" }) orelse return error.MissingTemplateCallable;
+    try std.testing.expect(first_run == .callable and second_run == .callable);
+    try std.testing.expect(first_run.callable != second_run.callable);
+
+    const first_once = try first.callValue(first_run, &.{});
+    defer freeResults(first_once);
+    try std.testing.expectEqual(@as(f64, 1), first_once[0].number);
+    const first_twice = try first.callValue(first_run, &.{});
+    defer freeResults(first_twice);
+    try std.testing.expectEqual(@as(f64, 2), first_twice[0].number);
+    const second_once = try second.callValue(second_run, &.{});
+    defer freeResults(second_once);
+    try std.testing.expectEqual(@as(f64, 1), second_once[0].number);
 }
 
 const DeferredRequireProbe = struct {

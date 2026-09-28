@@ -82,6 +82,7 @@ pub const Program = struct {
     module_requirements: []rt.ModuleRequirement,
     module_static_root_blobs: [][]const u8,
     module_static_root_load_data: []bool,
+    module_template_eligible: []bool,
     module_synth_roots: []bool,
     module_synth_offsets: []u32,
     synth_exports: []SynthExport,
@@ -93,6 +94,8 @@ pub const Program = struct {
     shape_keys: []rt.Value,
     shape_sorted_slots: []u32,
     stdlib_template: stdlib.Template,
+    template_arena: ?*std.heap.ArenaAllocator = null,
+    template_context: ?*rt.Context = null,
 
     pub fn init(
         io: std.Io,
@@ -198,10 +201,13 @@ pub const Program = struct {
         errdefer allocator.free(module_static_root_blobs);
         const module_static_root_load_data = try allocator.alloc(bool, module_count);
         errdefer allocator.free(module_static_root_load_data);
-        for (module_static_root_blobs, module_static_root_load_data) |*blob, *snapshot| {
+        const module_template_eligible = try allocator.alloc(bool, module_count);
+        errdefer allocator.free(module_template_eligible);
+        for (module_static_root_blobs, module_static_root_load_data, module_template_eligible) |*blob, *snapshot, *template| {
             const flags = try reader.readU32();
-            if (flags > 1) return error.InvalidProgramMetadata;
-            snapshot.* = flags != 0;
+            if (flags > 3) return error.InvalidProgramMetadata;
+            snapshot.* = flags & 1 != 0;
+            template.* = flags & 2 != 0;
             blob.* = try reader.readString();
         }
 
@@ -296,6 +302,7 @@ pub const Program = struct {
             .module_requirements = module_requirements,
             .module_static_root_blobs = module_static_root_blobs,
             .module_static_root_load_data = module_static_root_load_data,
+            .module_template_eligible = module_template_eligible,
             .module_synth_roots = module_synth_roots,
             .module_synth_offsets = module_synth_offsets,
             .synth_exports = synth_exports,
@@ -317,6 +324,12 @@ pub const Program = struct {
     }
 
     pub fn deinit(self: *Program) void {
+        if (self.template_context) |ctx| {
+            ctx.deinit();
+            self.template_arena.?.deinit();
+            self.allocator.destroy(self.template_context.?);
+            self.allocator.destroy(self.template_arena.?);
+        }
         self.stdlib_template.deinit();
         self.allocator.free(self.shape_sorted_slots);
         self.allocator.free(self.shape_keys);
@@ -328,6 +341,7 @@ pub const Program = struct {
         self.allocator.free(self.module_synth_roots);
         self.allocator.free(self.module_static_root_load_data);
         self.allocator.free(self.module_static_root_blobs);
+        self.allocator.free(self.module_template_eligible);
         self.allocator.free(self.module_requirements);
         self.allocator.free(self.module_requirement_offsets);
         self.allocator.free(self.function_module_ids);
@@ -477,8 +491,29 @@ pub const Program = struct {
         return ctx;
     }
 
+    fn ensureTemplateContext(self: *Program) !*rt.Context {
+        if (self.template_context) |ctx| return ctx;
+        const arena = try self.allocator.create(std.heap.ArenaAllocator);
+        errdefer self.allocator.destroy(arena);
+        arena.* = std.heap.ArenaAllocator.init(self.allocator);
+        errdefer arena.deinit();
+        const ctx = try self.allocator.create(rt.Context);
+        errdefer self.allocator.destroy(ctx);
+        ctx.* = try self.initContextBase(arena.allocator());
+        self.template_arena = arena;
+        self.template_context = ctx;
+        return ctx;
+    }
+
     pub fn initPageContext(self: *Program, allocator: std.mem.Allocator) !rt.Context {
-        return self.initContextBase(allocator);
+        const template = try self.ensureTemplateContext();
+        var ctx = try template.forkProgram(allocator);
+        errdefer ctx.deinit();
+        try rt.bindGlobalTable(&ctx, &self.global_shape, globals_abi.id("_G"));
+        _ = try ctx.bootstrapProgram();
+        ctx.module_template_context = template;
+        ctx.module_template_eligible = self.module_template_eligible;
+        return ctx;
     }
 
     pub fn initContext(self: *Program, allocator: std.mem.Allocator) !rt.Context {
