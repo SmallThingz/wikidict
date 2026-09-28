@@ -836,6 +836,7 @@ const FnEmitter = struct {
     }
 
     fn loadResolved(self: *FnEmitter, resolved: Resolved) anyerror!ValueRef {
+        const known_shape = self.resolvedTableShape(resolved);
         return switch (resolved) {
             .local => |binding| switch (self.storage[binding]) {
                 .uninitialized => error.UninitializedBinding,
@@ -847,20 +848,29 @@ const FnEmitter = struct {
                 .value => |slot| blk: {
                     const out = try self.valueSlot();
                     try self.copyValue(out, slot);
-                    break :blk .{ .boxed = out };
+                    break :blk if (known_shape) |shape|
+                        .{ .table = .{ .ptr = out, .shape = shape } }
+                    else
+                        .{ .boxed = out };
                 },
                 .cell => |slot| blk: {
                     const out = try self.valueSlot();
                     const cell = try llvm.load(self.builder, self.ty().ptr, slot, 8);
                     _ = try llvm.call(self.builder, self.rt().cell_get, &.{ cell, out });
-                    break :blk .{ .boxed = out };
+                    break :blk if (known_shape) |shape|
+                        .{ .table = .{ .ptr = out, .shape = shape } }
+                    else
+                        .{ .boxed = out };
                 },
             },
             .upvalue => |ordinal| blk: {
                 const out = try self.valueSlot();
                 const cell = try llvm.load(self.builder, self.ty().ptr, self.upvalue_slots[ordinal], 8);
                 _ = try llvm.call(self.builder, self.rt().cell_get, &.{ cell, out });
-                break :blk .{ .boxed = out };
+                break :blk if (known_shape) |shape|
+                    .{ .table = .{ .ptr = out, .shape = shape } }
+                else
+                    .{ .boxed = out };
             },
             .global => |slot| blk: {
                 if (slot == global_abi.id("package") or slot == global_abi.id("_G")) {
@@ -880,6 +890,37 @@ const FnEmitter = struct {
                 break :blk .{ .boxed = out };
             },
         };
+    }
+
+    fn tableSpanForUpvalue(self: *const FnEmitter, owner: *const analysis.FunctionInfo, ordinal: u32) ?lua.Span {
+        var current = owner;
+        var current_ordinal = ordinal;
+        while (true) {
+            if (current_ordinal >= current.upvalues.len) return null;
+            const parent = self.analyzedFunction(current.parent_id orelse return null) orelse return null;
+            switch (current.upvalues[current_ordinal].source) {
+                .local => |binding| {
+                    if (binding >= parent.bindings.len) return null;
+                    return parent.bindings[binding].static_table_span;
+                },
+                .upvalue => |parent_ordinal| {
+                    current = parent;
+                    current_ordinal = parent_ordinal;
+                },
+            }
+        }
+    }
+
+    fn resolvedTableShape(self: *const FnEmitter, resolved: Resolved) ?shapes.Fact {
+        const span = switch (resolved) {
+            .local => |binding| if (binding < self.info.bindings.len)
+                self.info.bindings[binding].static_table_span
+            else
+                null,
+            .upvalue => |ordinal| self.tableSpanForUpvalue(self.info, ordinal),
+            .global => null,
+        } orelse return null;
+        return self.module.facts.tableShape(span.start);
     }
 
     fn storeResolved(self: *FnEmitter, resolved: Resolved, value: ValueRef) anyerror!void {

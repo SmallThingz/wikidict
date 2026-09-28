@@ -522,6 +522,63 @@ test "pure string keyed tables lower to process shapes" {
     try std.testing.expect(std.mem.indexOf(u8, generated_source, " = call i32 @dict_lua_set_field") == null);
 }
 
+test "static table shapes survive captured and shape-stable mutable locals" {
+    const compile = struct {
+        fn run(source: []const u8) ![]u8 {
+            var chunk = try llvm_parser.parse(std.testing.allocator, source);
+            defer chunk.deinit();
+            var registry = llvm_shapes.Registry.init(std.testing.allocator);
+            defer registry.deinit();
+            try registry.collect(0, chunk.body);
+            var shape_facts = try registry.moduleFacts(std.testing.allocator, 0);
+            defer shape_facts.deinit(std.testing.allocator);
+            var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+            defer globals.deinit();
+            var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+            defer module.deinit();
+            var generated = try llvm_emitter.generate(
+                std.testing.allocator,
+                &globals,
+                &module,
+                .{ .table_shapes = &shape_facts },
+            );
+            defer generated.deinit();
+            return generated.toText(std.testing.allocator);
+        }
+    }.run;
+
+    const captured = try compile(
+        "local t={foo=1}; local function read() return t.foo end; return read()",
+    );
+    defer std.testing.allocator.free(captured);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        captured,
+        "call i32 @dict_lua_get_known_shape_field",
+    ) != null);
+
+    const mutable = try compile("local t={foo=1}; t=t; return t.foo");
+    defer std.testing.allocator.free(mutable);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        mutable,
+        "call i32 @dict_lua_get_known_shape_field",
+    ) != null);
+
+    const changed = try compile("local t={foo=1}; t={bar=2}; return t.foo");
+    defer std.testing.allocator.free(changed);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        changed,
+        "call i32 @dict_lua_get_known_shape_field",
+    ) == null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        changed,
+        "call i32 @dict_lua_get_field_cached",
+    ) != null);
+}
+
 test "mixed list tables keep generic dense array semantics" {
     const source = "return { 1, foo = 2 }";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);

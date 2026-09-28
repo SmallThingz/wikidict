@@ -77,6 +77,7 @@ pub const Binding = struct {
     function_span: ?lua.Span = null,
     late_function_init: bool = false,
     static_type: StaticType = .unknown,
+    static_table_span: ?lua.Span = null,
     static_module: ?[]const u8 = null,
     callable_field_hint: ?[]const u8 = null,
 
@@ -117,6 +118,7 @@ pub const Module = struct {
 const Capture = union(enum) { global, local: u32, upvalue: u32 };
 const Save = struct { name: []const u8, previous: ?u32 };
 const TypeDependency = struct { source: u32, target: u32 };
+const ShapeDependency = struct { source: u32, target: u32 };
 const Analyzer = struct {
     allocator: std.mem.Allocator,
     globals: *Globals,
@@ -129,6 +131,7 @@ const Analyzer = struct {
     upvalues: std.ArrayList(Upvalue) = .empty,
     upvalue_by_name: std.StringHashMapUnmanaged(u32) = .empty,
     type_dependencies: std.ArrayList(TypeDependency) = .empty,
+    shape_dependencies: std.ArrayList(ShapeDependency) = .empty,
 
     fn deinit(self: *Analyzer) void {
         self.locals.deinit(self.allocator);
@@ -137,6 +140,7 @@ const Analyzer = struct {
         self.upvalues.deinit(self.allocator);
         self.upvalue_by_name.deinit(self.allocator);
         self.type_dependencies.deinit(self.allocator);
+        self.shape_dependencies.deinit(self.allocator);
     }
 
     fn bind(self: *Analyzer, name: []const u8) !u32 {
@@ -167,6 +171,7 @@ const Analyzer = struct {
     fn markLocalMutated(self: *Analyzer, binding: u32) void {
         self.bindings.items[binding].mutated = true;
         self.bindings.items[binding].static_module = null;
+        self.invalidateStaticTable(binding);
         self.invalidateStaticType(binding);
     }
 
@@ -299,6 +304,18 @@ const Analyzer = struct {
         };
     }
 
+    fn exprStaticTable(self: *const Analyzer, value: *const lua.Expr) ?lua.Span {
+        return switch (value.*) {
+            .table => |table| table.span,
+            .name => |name| if (self.locals.get(name.value)) |binding|
+                self.bindings.items[binding].static_table_span
+            else
+                null,
+            .paren => |paren| self.exprStaticTable(paren.expr),
+            else => null,
+        };
+    }
+
     fn rhsTypes(self: *const Analyzer, values: []const *lua.Expr, needed: usize) ![]StaticType {
         const out = try self.allocator.alloc(StaticType, needed);
         if (needed == 0) return out;
@@ -320,6 +337,28 @@ const Analyzer = struct {
         self.bindings.items[binding].static_type = .unknown;
         for (self.type_dependencies.items) |dependency|
             if (dependency.source == binding) self.invalidateStaticType(dependency.target);
+    }
+
+    fn invalidateStaticTable(self: *Analyzer, binding: u32) void {
+        if (self.bindings.items[binding].static_table_span == null) return;
+        self.bindings.items[binding].static_table_span = null;
+        for (self.shape_dependencies.items) |dependency|
+            if (dependency.source == binding) self.invalidateStaticTable(dependency.target);
+    }
+
+    fn addShapeDependency(self: *Analyzer, source: u32, target: u32) !void {
+        if (source == target) return;
+        for (self.shape_dependencies.items) |dependency|
+            if (dependency.source == source and dependency.target == target) return;
+        try self.shape_dependencies.append(self.allocator, .{ .source = source, .target = target });
+    }
+
+    fn collectShapeSource(self: *const Analyzer, value: *const lua.Expr) ?u32 {
+        return switch (value.*) {
+            .name => |name| self.locals.get(name.value),
+            .paren => |paren| self.collectShapeSource(paren.expr),
+            else => null,
+        };
     }
 
     fn addTypeDependency(self: *Analyzer, source: u32, target: u32) !void {
@@ -359,6 +398,15 @@ const Analyzer = struct {
         if (target != .name) return;
         const binding = self.locals.get(target.name) orelse return;
         if (self.bindings.items[binding].static_type != incoming) self.invalidateStaticType(binding);
+    }
+
+    fn mergeWriteShape(self: *Analyzer, target: lua.LValue, incoming: ?lua.Span) void {
+        if (target != .name) return;
+        const binding = self.locals.get(target.name) orelse return;
+        const current = self.bindings.items[binding].static_table_span;
+        if (current == null or incoming == null or
+            current.?.start != incoming.?.start or current.?.end != incoming.?.end)
+            self.invalidateStaticTable(binding);
     }
 
     fn analyzeWriteTarget(self: *Analyzer, target: lua.LValue) anyerror!void {
@@ -445,6 +493,11 @@ const Analyzer = struct {
                 for (s.names, types, 0..) |name, static_type, index| {
                     const binding = try self.bind(name);
                     self.bindings.items[binding].static_type = static_type;
+                    if (index < s.values.len and !(index + 1 == s.values.len and isMultiExpr(s.values[index]))) {
+                        self.bindings.items[binding].static_table_span = self.exprStaticTable(s.values[index]);
+                        if (self.collectShapeSource(s.values[index])) |source|
+                            try self.addShapeDependency(source, binding);
+                    }
                     if (index == 0) self.bindings.items[binding].static_module = static_module;
                     if (s.values.len == s.names.len)
                         self.bindings.items[binding].callable_field_hint = staticFieldName(s.values[index]);
@@ -462,6 +515,10 @@ const Analyzer = struct {
                     self.mergeWriteType(target, static_type);
                     if (target == .name and index < s.values.len and !(index + 1 == s.values.len and isMultiExpr(s.values[index]))) {
                         const binding = self.locals.get(target.name) orelse continue;
+                        const incoming_shape = self.exprStaticTable(s.values[index]);
+                        self.mergeWriteShape(target, incoming_shape);
+                        if (incoming_shape != null) if (self.collectShapeSource(s.values[index])) |source|
+                            try self.addShapeDependency(source, binding);
                         if (self.bindings.items[binding].static_type != .unknown)
                             try self.addTypeDependencies(binding, s.values[index]);
                     }
