@@ -107,7 +107,7 @@ fn setCheckedFrameArg(runtime: *rt.Context, out: *rt.Table, key: Value, value: V
 }
 
 fn checkedFrameArgs(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
-    const out = try runtime.newTable();
+    const out = try runtime.newFrameArgsTable();
     const object = Value{ .table = source };
     if (source.metatable) |mt| if (mt.rawGet(.{ .string = "__pairs" })) |method| {
         const triple = try runtime.callValue(method, &.{object});
@@ -130,7 +130,7 @@ fn checkedFrameArgs(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
 }
 
 fn positionalParserArgs(runtime: *rt.Context, values: []const Value) !*rt.Table {
-    const table = try runtime.newTable();
+    const table = try runtime.newFrameArgsTable();
     for (values, 1..) |value, index| {
         if (value == .nil) continue;
         try setCheckedFrameArg(runtime, table, .{ .number = @floatFromInt(index) }, value);
@@ -193,7 +193,7 @@ fn newChildCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     const title: []const u8 = if (title_value == .nil) ctx.title else try valueToString(runtime, title_value);
     const raw_args = try runtime.getIndex(spec, .{ .string = "args" });
     const child_args = switch (raw_args) {
-        .nil => try runtime.newTable(),
+        .nil => try runtime.newFrameArgsTable(),
         .table => |table| try checkedFrameArgs(runtime, table),
         else => return error.FrameChildArgsExpected,
     };
@@ -228,7 +228,7 @@ pub fn makeFrameFromTable(runtime: *rt.Context, title: []const u8, args: *rt.Tab
 }
 
 pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg, parent: ?Value) !Value {
-    const table = try runtime.newTable();
+    const table = try runtime.newFrameArgsTable();
     for (args) |arg| try table.rawSet(runtime.allocator, arg.key, arg.value);
     return makeFrameWithArgs(runtime, title, table, parent);
 }

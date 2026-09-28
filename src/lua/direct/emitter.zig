@@ -57,6 +57,7 @@ pub const ProgramFacts = struct {
     native_find_three: bool = false,
     fixed_callable_entries: bool = false,
     frame_entry_functions: []const u32 = &.{},
+    frame_args_shape_id: ?u32 = null,
 
     pub fn moduleId(self: ProgramFacts, a: A, raw: []const u8) anyerror!?u32 {
         const ids = self.module_ids orelse return null;
@@ -87,6 +88,10 @@ pub const ProgramFacts = struct {
         for (self.frame_entry_functions) |entry|
             if (entry == function_id) return true;
         return false;
+    }
+
+    pub fn frameArgsShape(self: ProgramFacts) ?shapes.Fact {
+        return self.shapeById(self.frame_args_shape_id);
     }
 
     pub fn moduleExportShape(self: ProgramFacts, module_id: u32) ?shapes.Fact {
@@ -854,6 +859,7 @@ const FnEmitter = struct {
         if (std.mem.eql(u8, name, "string")) return .string;
         if (std.mem.eql(u8, name, "math")) return .math;
         if (std.mem.eql(u8, name, "debug")) return .debug;
+        if (std.mem.eql(u8, name, "package")) return .package;
         if (std.mem.eql(u8, name, "mw")) return .mw;
         if (std.mem.eql(u8, name, "os")) return .os;
         return null;
@@ -1596,7 +1602,7 @@ const FnEmitter = struct {
                 const field = staticString(index.key) orelse break :blk null;
                 break :blk static_fields.fieldNamespace(owner, field);
             },
-            .call => |call| self.nativeCallReturnNamespace(call.callee),
+            .call => |call| self.nativeCallReturnNamespace(call.callee, call.args),
             .method_call => |call| blk: {
                 const owner = (try self.nativeNamespaceExpr(call.object)) orelse break :blk null;
                 break :blk static_fields.callReturnNamespace(owner, call.method);
@@ -1605,22 +1611,52 @@ const FnEmitter = struct {
         };
     }
 
-    fn nativeCallReturnNamespace(self: *FnEmitter, callee: *const lua.Expr) anyerror!?static_fields.Namespace {
+    fn builtinRequireNamespace(
+        self: *FnEmitter,
+        callee: *const lua.Expr,
+        args_in: []const *lua.Expr,
+    ) anyerror!?static_fields.Namespace {
+        if (args_in.len != 1 or callee.* != .name or
+            !std.mem.eql(u8, callee.name.value, "require") or
+            !self.module.globals.stable("require"))
+            return null;
+        const require_slot = self.module.globals.get("require") orelse return null;
+        switch (try self.resolve("require")) {
+            .global => |slot| if (slot != require_slot) return null,
+            else => return null,
+        }
+        const requested = staticString(args_in[0]) orelse return null;
+        if (std.mem.eql(u8, requested, "bit32")) return .bit32;
+        if (std.mem.eql(u8, requested, "libraryUtil")) return .library_util;
+        return null;
+    }
+
+    fn nativeCallReturnNamespace(
+        self: *FnEmitter,
+        callee: *const lua.Expr,
+        args_in: []const *lua.Expr,
+    ) anyerror!?static_fields.Namespace {
+        if (try self.builtinRequireNamespace(callee, args_in)) |namespace| return namespace;
         return switch (callee.*) {
             .index => |index| blk: {
                 const owner = (try self.nativeNamespaceExpr(index.object)) orelse break :blk null;
                 const field = staticString(index.key) orelse break :blk null;
                 break :blk static_fields.callReturnNamespace(owner, field);
             },
-            .paren => |paren| self.nativeCallReturnNamespace(paren.expr),
+            .paren => |paren| self.nativeCallReturnNamespace(paren.expr, args_in),
             else => null,
         };
     }
 
-    fn callResultRef(self: *FnEmitter, callee: *const lua.Expr, out: V) anyerror!ValueRef {
+    fn callResultRef(
+        self: *FnEmitter,
+        callee: *const lua.Expr,
+        args_in: []const *lua.Expr,
+        out: V,
+    ) anyerror!ValueRef {
         if (try self.callReturnShapeHint(callee)) |shape|
             return .{ .shaped_boxed = .{ .ptr = out, .shape = shape } };
-        if (try self.nativeCallReturnNamespace(callee)) |namespace|
+        if (try self.nativeCallReturnNamespace(callee, args_in)) |namespace|
             return .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } };
         return .{ .boxed = out };
     }
@@ -1701,6 +1737,9 @@ const FnEmitter = struct {
                         self.ctx(), object_box, try self.cI32(slot), key.ptr, try self.cI64(key.len), out,
                     });
                 try self.check(status);
+                if (namespace == .frame and std.mem.eql(u8, name, "args"))
+                    if (self.module.facts.frameArgsShape()) |frame_args_shape|
+                        return .{ .shaped_boxed = .{ .ptr = out, .shape = frame_args_shape } };
                 return if (static_fields.fieldNamespace(namespace, name)) |child|
                     .{ .native_boxed = .{ .ptr = out, .native_namespace = child } }
                 else
@@ -2676,7 +2715,7 @@ const FnEmitter = struct {
             .index => |v| try self.getIndex(try self.expr(v.object), v.key),
             .call => |v| blk: {
                 const result = (try self.callFixed(v.callee, null, v.args, 1)) orelse unreachable;
-                break :blk try self.callResultRef(v.callee, try self.arrayElem(result, 0));
+                break :blk try self.callResultRef(v.callee, v.args, try self.arrayElem(result, 0));
             },
             .method_call => |v| blk: {
                 const result = (try self.callFixed(v.object, v.method, v.args, 1)) orelse unreachable;
@@ -2881,7 +2920,7 @@ const FnEmitter = struct {
                         for (0..remain) |j| {
                             const value_out = try self.arrayElem(results, j);
                             out[oi + j] = if (j == 0)
-                                try self.callResultRef(v.callee, value_out)
+                                try self.callResultRef(v.callee, v.args, value_out)
                             else
                                 .{ .boxed = value_out };
                         }

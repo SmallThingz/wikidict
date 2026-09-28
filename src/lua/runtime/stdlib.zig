@@ -1077,7 +1077,7 @@ fn bit32Bor(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: 
 }
 
 fn makeBit32(runtime: *rt.Context) !*rt.Table {
-    const bit32 = try runtime.newTable();
+    const bit32 = try runtime.newNativeNamespace(.bit32);
     try setNativeBuffered(runtime, bit32, "band", bit32Band);
     try setNativeBuffered(runtime, bit32, "bor", bit32Bor);
     return bit32;
@@ -1139,7 +1139,7 @@ fn libraryUtilCheckTypeMulti(_: ?*anyopaque, ctx: *rt.Context, args: []const Val
 }
 
 fn makeLibraryUtil(runtime: *rt.Context) !*rt.Table {
-    const library_util = try runtime.newTable();
+    const library_util = try runtime.newNativeNamespace(.library_util);
     try setNative(runtime, library_util, "checkType", libraryUtilCheckType);
     try setNative(runtime, library_util, "checkTypeMulti", libraryUtilCheckTypeMulti);
     return library_util;
@@ -1157,8 +1157,8 @@ fn registerStandardPackageLoaded(runtime: *rt.Context) !void {
 }
 
 fn installPackage(runtime: *rt.Context) !void {
-    const package = try runtime.newTable();
-    const loaded = try runtime.newTable();
+    const package = try runtime.newNativeNamespace(.package);
+    const loaded = try runtime.newNativeNamespace(.package_loaded);
     const loaders = try runtime.newTable();
     try package.rawSet(runtime.allocator, .{ .string = "loaded" }, .{ .table = loaded });
     try package.rawSet(runtime.allocator, .{ .string = "loaders" }, .{ .table = loaders });

@@ -1153,6 +1153,7 @@ pub const Context = struct {
     global_tail: ?*GlobalTail = null,
     program_shapes: []const Shape = &.{},
     program_shape_generation: u64 = 0,
+    frame_args_shape_id: ?u32 = null,
     module_export_shape_ids: []const u32 = &.{},
     module_root_entries: []const FunctionFn = &.{},
     function_module_ids: []const u32 = &.{},
@@ -1221,6 +1222,7 @@ pub const Context = struct {
         var child = try initProgram(allocator, self.root_globals.len, self.module_count);
         child.program_shapes = self.program_shapes;
         child.program_shape_generation = self.program_shape_generation;
+        child.frame_args_shape_id = self.frame_args_shape_id;
         child.module_export_shape_ids = self.module_export_shape_ids;
         child.module_root_entries = self.module_root_entries;
         child.function_module_ids = self.function_module_ids;
@@ -2198,6 +2200,13 @@ pub const Context = struct {
     pub fn newProgramShape(self: *Context, shape_id: u32) !*Table {
         if (shape_id >= self.program_shapes.len) return error.BadShape;
         return self.newShapedTable(&self.program_shapes[shape_id]);
+    }
+
+    pub fn newFrameArgsTable(self: *Context) !*Table {
+        return if (self.frame_args_shape_id) |shape_id|
+            self.newProgramShape(shape_id)
+        else
+            self.newTable();
     }
 
     pub const ProgramFieldSlot = struct { shape_id: u32, slot: u32 };

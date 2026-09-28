@@ -50,6 +50,10 @@ pub const Namespace = enum(u8) {
     os,
     namespace_map,
     namespace_value,
+    package,
+    package_loaded,
+    bit32,
+    library_util,
 };
 const names = [_][]const u8{
     "insert",               "remove",             "concat",            "sort",            "maxn",                 "getn",
@@ -81,7 +85,7 @@ const names = [_][]const u8{
 const table_names = names[0..6];
 const string_names = names[6..19];
 const math_names = [_][]const u8{ "abs", "ceil", "floor", "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "atan", "deg", "rad", "min", "max", "pow", "fmod", "mod", "modf", "pi", "huge", "random", "randomseed" };
-const debug_names = names[43..44];
+const debug_names = [_][]const u8{ "traceback", "getmetatable", "getinfo" };
 const mw_names = [_][]const u8{
     "loadData",   "loadJsonData", "clone", "getCurrentFrame", "ustring",            "dumpObject",  "log",                             "logObject",
     "addWarning", "isSubsting",   "title", "text",            "site",               "uri",         "wikibase",                        "message",
@@ -138,6 +142,12 @@ const namespace_value_names = [_][]const u8{
     "hasGenderDistinction", "isContent", "isIncludable",  "isMovable",   "isSubject",     "isTalk",  "defaultContentModel",
     "subject",              "talk",      "associated",
 };
+const package_names = [_][]const u8{ "loaded", "loaders" };
+const package_loaded_names = [_][]const u8{
+    "_G", "table", "string", "math", "debug", "bit32", "libraryUtil", "package", "strict",
+};
+const bit32_names = [_][]const u8{ "band", "bor" };
+const library_util_names = [_][]const u8{ "checkType", "checkTypeMulti" };
 
 const NamespaceMapEntry = struct { name: []const u8, id: i32 };
 const namespace_map_entries = [_]NamespaceMapEntry{
@@ -219,7 +229,7 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
         .table => table_names,
         .string => string_names,
         .math => &math_names,
-        .debug => debug_names,
+        .debug => &debug_names,
         .mw => &mw_names,
         .ustring => &ustring_names,
         .title => title_names,
@@ -244,6 +254,10 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
         .os => &os_names,
         .namespace_map => &namespace_map_names,
         .namespace_value => &namespace_value_names,
+        .package => &package_names,
+        .package_loaded => &package_loaded_names,
+        .bit32 => &bit32_names,
+        .library_util => &library_util_names,
     };
 }
 pub fn fieldCount(namespace: Namespace) u32 {
@@ -266,7 +280,7 @@ pub fn slotForName(namespace: Namespace, field_name: []const u8) ?u32 {
         .table => staticSlot(table_names, field_name),
         .string => staticSlot(string_names, field_name),
         .math => staticSlot(&math_names, field_name),
-        .debug => staticSlot(debug_names, field_name),
+        .debug => staticSlot(&debug_names, field_name),
         .mw => staticSlot(&mw_names, field_name),
         .ustring => staticSlot(&ustring_names, field_name),
         .title => staticSlot(title_names, field_name),
@@ -291,6 +305,10 @@ pub fn slotForName(namespace: Namespace, field_name: []const u8) ?u32 {
         .os => staticSlot(&os_names, field_name),
         .namespace_map => if (namespaceMapId(field_name) != null) 0 else null,
         .namespace_value => staticSlot(&namespace_value_names, field_name),
+        .package => staticSlot(&package_names, field_name),
+        .package_loaded => staticSlot(&package_loaded_names, field_name),
+        .bit32 => staticSlot(&bit32_names, field_name),
+        .library_util => staticSlot(&library_util_names, field_name),
     };
 }
 
@@ -351,6 +369,7 @@ pub fn fieldNamespace(namespace: Namespace, field_name: []const u8) ?Namespace {
             .namespace_value
         else
             null,
+        .package => if (std.mem.eql(u8, field_name, "loaded")) .package_loaded else null,
         else => null,
     };
 }

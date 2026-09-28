@@ -93,6 +93,7 @@ pub const Program = struct {
     shapes: []rt.Shape,
     shape_keys: []rt.Value,
     shape_sorted_slots: []u32,
+    frame_args_shape_id: ?u32,
     stdlib_template: stdlib.Template,
     template_arena: ?*std.heap.ArenaAllocator = null,
     template_context: ?*rt.Context = null,
@@ -114,6 +115,7 @@ pub const Program = struct {
         const shape_field_total = try reader.readU32();
         const module_requirement_total = try reader.readU32();
         const synth_export_total = try reader.readU32();
+        const frame_args_shape_raw = try reader.readU32();
         const item_bound: u64 = mapped.bytes.len / 4 + 1;
         if (@as(u64, module_count) > item_bound or
             @as(u64, module_lookup_count) > item_bound or
@@ -124,6 +126,12 @@ pub const Program = struct {
             @as(u64, synth_export_total) > item_bound)
             return error.InvalidProgramMetadata;
         if (global_count < globals_abi.count) return error.BadGlobalLayout;
+        const frame_args_shape_id = if (frame_args_shape_raw == std.math.maxInt(u32))
+            null
+        else if (frame_args_shape_raw < shape_count)
+            frame_args_shape_raw
+        else
+            return error.InvalidProgramMetadata;
 
         const module_names = try allocator.alloc([]const u8, module_count);
         errdefer allocator.free(module_names);
@@ -334,6 +342,7 @@ pub const Program = struct {
             .shapes = program_shapes,
             .shape_keys = shape_keys,
             .shape_sorted_slots = shape_sorted_slots,
+            .frame_args_shape_id = frame_args_shape_id,
             .stdlib_template = stdlib_template,
         };
     }
@@ -493,6 +502,7 @@ pub const Program = struct {
         ctx.module_export_shape_ids = self.module_export_shape_ids;
         ctx.program_shapes = self.shapes;
         ctx.program_shape_generation = self.shape_generation;
+        ctx.frame_args_shape_id = self.frame_args_shape_id;
         ctx.configureModules(self, lookup, moduleName);
         ctx.configureFunctionModules(self.function_module_ids);
         ctx.configureModuleRequirements(self, moduleRequirements);

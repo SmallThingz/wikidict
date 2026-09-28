@@ -1047,7 +1047,9 @@ test "native namespace fields and returns retain structural types" {
         \\local uri = mw.uri.new("https://example.test/path")
         \\local batch = mw.title.newBatch({"rat"}):lookupExistence()
         \\local template_ns = mw.site.namespaces.Template
-        \\return title.prefixedText, title.contentModel, language:getCode(), node:allDone(), uri.protocol, batch:getTitles(), os.date("!%Y", 0), template_ns.isCapitalized
+        \\local bits = require("bit32")
+        \\local libraryUtil = require("libraryUtil")
+        \\return title.prefixedText, title.contentModel, language:getCode(), node:allDone(), uri.protocol, batch:getTitles(), os.date("!%Y", 0), template_ns.isCapitalized, package.loaded, bits.band, libraryUtil.checkType, debug.getinfo
     ;
     var chunk = try llvm_parser.parse(std.testing.allocator, source);
     defer chunk.deinit();

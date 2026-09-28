@@ -609,6 +609,14 @@ fn analyzeManifest(
             else => {},
         };
         var module = try analysis.analyze(sa, globals, chunk, function_base);
+        // The runtime shape guard makes this safe even for modules with dynamic
+        // top-level effects or non-synthesizable roots. If analysis can trace the
+        // returned value back to a concrete table, keep that structural export
+        // type instead of discarding it merely because root execution is dynamic.
+        if (export_shape_id == null) {
+            if (module.root.return_table_span) |span|
+                export_shape_id = shape_registry.idForSpan(module_index, span.start);
+        }
         for (module.table_shape_writes.items) |write| {
             if (shapes.staticKey(write.key)) |key| {
                 _ = try shape_registry.extendKey(module_index, write.table_span.start, key);
@@ -863,6 +871,7 @@ fn appendModuleToBatch(
     deferred_numeric_ssa: bool,
     demanded_entries: bool,
     native_find_three: bool,
+    frame_args_shape_id: ?u32,
 ) !void {
     const path = try sourcePath(scratch, source_root, record.path);
     const source = try readAll(io, scratch, path);
@@ -894,6 +903,7 @@ fn appendModuleToBatch(
         .native_find_three = native_find_three,
         .fixed_callable_entries = demanded_entries,
         .frame_entry_functions = record.frame_entry_functions,
+        .frame_args_shape_id = frame_args_shape_id,
     };
     const result = try batch.append(scratch, globals, &module, facts);
     if (result.root_function != record.root_function or
@@ -914,6 +924,7 @@ fn emitBatches(
     module_facts: []const emitter.ModuleFact,
     method_candidates: []const emitter.MethodCandidate,
     value_leaf_bc: []const u8,
+    frame_args_shape_id: ?u32,
 ) !void {
     if (records.len != modes.len) return error.InvalidCompilePlan;
 
@@ -981,6 +992,7 @@ fn emitBatches(
                     mode != .o0,
                     mode != .o0,
                     mode != .o0,
+                    frame_args_shape_id,
                 );
                 _ = scratch_arena.reset(.retain_capacity);
 
@@ -1087,6 +1099,147 @@ fn knownMethodCandidates(io: std.Io, a: A, source_root: []const u8, records: []c
     }
     if (candidates.items.len == 0) return &.{};
     return candidates.toOwnedSlice(a);
+}
+
+const FrameArgKeySet = struct {
+    allocator: A,
+    items: std.ArrayList(shapes.Key) = .empty,
+
+    fn deinit(self: *FrameArgKeySet) void {
+        for (self.items.items) |key| if (key == .string) self.allocator.free(key.string);
+        self.items.deinit(self.allocator);
+    }
+
+    fn add(self: *FrameArgKeySet, key: shapes.Key) !void {
+        for (self.items.items) |existing| if (shapes.keyEqual(existing, key)) return;
+        const owned: shapes.Key = switch (key) {
+            .string => |value| .{ .string = try self.allocator.dupe(u8, value) },
+            .number => |value| .{ .number = value },
+            .boolean => |value| .{ .boolean = value },
+        };
+        try self.items.append(self.allocator, owned);
+    }
+};
+
+fn bareFrameArgExpr(expr: *const lua.Expr) *const lua.Expr {
+    return if (expr.* == .paren) bareFrameArgExpr(expr.paren.expr) else expr;
+}
+
+fn isFrameArgsExpr(expr: *const lua.Expr) bool {
+    const value = bareFrameArgExpr(expr);
+    if (value.* != .index) return false;
+    const key = shapes.staticKey(value.index.key) orelse return false;
+    return key == .string and std.mem.eql(u8, key.string, "args");
+}
+
+fn collectFrameArgExpr(keys: *FrameArgKeySet, expr: *const lua.Expr) anyerror!void {
+    switch (expr.*) {
+        .function => |value| try collectFrameArgBlock(keys, value.body),
+        .index => |value| {
+            if (isFrameArgsExpr(value.object))
+                if (shapes.staticKey(value.key)) |key| try keys.add(key);
+            try collectFrameArgExpr(keys, value.object);
+            try collectFrameArgExpr(keys, value.key);
+        },
+        .call => |value| {
+            try collectFrameArgExpr(keys, value.callee);
+            for (value.args) |arg| try collectFrameArgExpr(keys, arg);
+        },
+        .method_call => |value| {
+            try collectFrameArgExpr(keys, value.object);
+            for (value.args) |arg| try collectFrameArgExpr(keys, arg);
+        },
+        .table => |value| for (value.fields) |field| switch (field) {
+            .list => |item| try collectFrameArgExpr(keys, item),
+            .named => |item| try collectFrameArgExpr(keys, item.value),
+            .keyed => |item| {
+                try collectFrameArgExpr(keys, item.key);
+                try collectFrameArgExpr(keys, item.value);
+            },
+        },
+        .unary => |value| try collectFrameArgExpr(keys, value.expr),
+        .binary => |value| {
+            try collectFrameArgExpr(keys, value.lhs);
+            try collectFrameArgExpr(keys, value.rhs);
+        },
+        else => {},
+    }
+}
+
+fn collectFrameArgBlock(keys: *FrameArgKeySet, block: lua.Block) anyerror!void {
+    for (block) |stmt| switch (stmt.*) {
+        .local_function => |value| try collectFrameArgExpr(keys, value.function),
+        .function_assign => |value| {
+            if (value.target == .index) {
+                try collectFrameArgExpr(keys, value.target.index.object);
+                try collectFrameArgExpr(keys, value.target.index.key);
+            }
+            try collectFrameArgExpr(keys, value.function);
+        },
+        .local_assign => |value| for (value.values) |expr| try collectFrameArgExpr(keys, expr),
+        .assign => |value| {
+            for (value.targets) |target| if (target == .index) {
+                try collectFrameArgExpr(keys, target.index.object);
+                try collectFrameArgExpr(keys, target.index.key);
+            };
+            for (value.values) |expr| try collectFrameArgExpr(keys, expr);
+        },
+        .call => |value| try collectFrameArgExpr(keys, value.expr),
+        .do_block => |value| try collectFrameArgBlock(keys, value.body),
+        .while_loop => |value| {
+            try collectFrameArgExpr(keys, value.cond);
+            try collectFrameArgBlock(keys, value.body);
+        },
+        .repeat_loop => |value| {
+            try collectFrameArgBlock(keys, value.body);
+            try collectFrameArgExpr(keys, value.cond);
+        },
+        .if_stmt => |value| {
+            for (value.branches) |branch| {
+                try collectFrameArgExpr(keys, branch.cond);
+                try collectFrameArgBlock(keys, branch.body);
+            }
+            if (value.else_body) |body| try collectFrameArgBlock(keys, body);
+        },
+        .numeric_for => |value| {
+            try collectFrameArgExpr(keys, value.start);
+            try collectFrameArgExpr(keys, value.limit);
+            if (value.step) |step| try collectFrameArgExpr(keys, step);
+            try collectFrameArgBlock(keys, value.body);
+        },
+        .generic_for => |value| {
+            for (value.values) |expr| try collectFrameArgExpr(keys, expr);
+            try collectFrameArgBlock(keys, value.body);
+        },
+        .return_stmt => |value| for (value.values) |expr| try collectFrameArgExpr(keys, expr),
+        .empty, .break_stmt => {},
+    };
+}
+
+fn buildFrameArgShape(
+    io: std.Io,
+    a: A,
+    source_root: []const u8,
+    records: []const ModuleRecord,
+    shape_registry: *shapes.Registry,
+) !?u32 {
+    var keys = FrameArgKeySet{ .allocator = a };
+    defer keys.deinit();
+    for (records) |record| {
+        const path = try sourcePath(a, source_root, record.path);
+        defer a.free(path);
+        const source = try readAll(io, a, path);
+        defer a.free(source);
+        var chunk = try lua.parse(a, source);
+        defer chunk.deinit();
+        try collectFrameArgBlock(&keys, chunk.body);
+    }
+    if (keys.items.items.len == 0) return null;
+    return shape_registry.promoteKeys(
+        std.math.maxInt(u32),
+        std.math.maxInt(u32) - 1,
+        keys.items.items,
+    );
 }
 
 fn run(io: std.Io, a: A, args: []const []const u8) !void {
@@ -1316,6 +1469,14 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         "LLVM_METHOD_CANDIDATE name={s} id={d} module={d} captures={d}\n",
         .{ candidate.name, candidate.function_id, candidate.module_id, candidate.capture_count },
     );
+    const frame_args_shape_id = try buildFrameArgShape(
+        io,
+        a,
+        source_root,
+        selected_records.items,
+        &shape_registry,
+    );
+    std.debug.print("LLVM_FRAME_ARGS_SHAPE id={?d}\n", .{frame_args_shape_id});
 
     try emitBatches(
         io,
@@ -1330,6 +1491,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         selected_module_facts,
         method_candidates,
         leaf_bc,
+        frame_args_shape_id,
     );
 
     var program_module = try program.generate(a, selected_records.items);
@@ -1346,6 +1508,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &globals,
         &shape_registry,
         &selected_module_ids,
+        frame_args_shape_id,
     );
     std.debug.print("LLVM_DONE modules={d} globals={d}\n", .{ selected_records.items.len, globals.names.items.len });
 }

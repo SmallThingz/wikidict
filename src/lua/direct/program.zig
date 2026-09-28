@@ -61,7 +61,7 @@ fn validateRecords(a: A, records: []const ModuleRecord) !void {
         }
     }.lessThan);
     if (sorted.len == 0) return;
-    for (sorted[1..], sorted[0..sorted.len - 1]) |id, previous| {
+    for (sorted[1..], sorted[0 .. sorted.len - 1]) |id, previous| {
         if (std.mem.eql(u8, records[id].title, records[previous].title))
             return error.DuplicateModuleName;
     }
@@ -260,6 +260,7 @@ pub fn writeMetadata(
     globals: *const analysis.Globals,
     shape_registry: *const shapes.Registry,
     module_ids: *const emitter.ModuleIdMap,
+    frame_args_shape_id: ?u32,
 ) !void {
     try validateRecords(a, records);
     const lookup_entries = try sortedLookupEntries(a, module_ids);
@@ -303,6 +304,7 @@ pub fn writeMetadata(
     try metadata.writeU32(w, shape_field_total);
     try metadata.writeU32(w, module_requirement_total);
     try metadata.writeU32(w, synth_export_total);
+    try metadata.writeU32(w, frame_args_shape_id orelse std.math.maxInt(u32));
 
     for (records) |record| try metadata.writeString(w, record.title);
 
