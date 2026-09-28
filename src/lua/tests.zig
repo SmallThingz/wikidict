@@ -1062,6 +1062,24 @@ test "native namespace fields and returns retain structural types" {
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_field_hashed("));
 }
 
+test "exported Scribunto entry first argument is a guarded frame struct" {
+    const source = "local function run(frame) return frame:preprocess('x') end; return {run=run}";
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    const run_id = module.functions.items[1].id;
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{
+        .frame_entry_functions = &.{run_id},
+    });
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_known_native_slot") != null);
+}
+
 test "global table escape disables native namespace slot assumptions" {
     const source = "local env = _G; return math.floor(1.5)";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);

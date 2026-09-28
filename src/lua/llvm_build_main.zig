@@ -621,6 +621,25 @@ fn analyzeManifest(
         try dead_functions_by_module.append(a, module_dead_functions);
 
         var direct_exports: std.ArrayList(emitter.DirectExport) = .empty;
+        var frame_entry_functions: std.ArrayList(u32) = .empty;
+        // Scratch-arena storage is reclaimed by the per-module reset below.
+        // Do not deinit this list after that reset.
+        switch (model.return_binding) {
+            .table => |table| {
+                var fields = table.fields.iterator();
+                while (fields.next()) |entry| switch (entry.value_ptr.*) {
+                    .function => |span_start| {
+                        for (module.functions.items[1..]) |info| {
+                            if (info.span.start != span_start) continue;
+                            try frame_entry_functions.append(sa, info.id);
+                            break;
+                        }
+                    },
+                    else => {},
+                };
+            },
+            else => {},
+        }
         if (!model.dynamic_top_level) switch (model.return_binding) {
             .table => |table| {
                 var fields = table.fields.iterator();
@@ -796,6 +815,7 @@ fn analyzeManifest(
             .root_bootstrap_safe = model.root_bootstrap_safe,
             .root_requires = root_requires,
             .direct_exports = try direct_exports.toOwnedSlice(a),
+            .frame_entry_functions = try a.dupe(u32, frame_entry_functions.items),
             .static_root_blob = synth_seed_blob,
             .synth_root = synth_root,
             .synth_callable_root = synth_callable_root,
@@ -866,6 +886,7 @@ fn appendModuleToBatch(
         .demanded_entries = demanded_entries,
         .native_find_three = native_find_three,
         .fixed_callable_entries = demanded_entries,
+        .frame_entry_functions = record.frame_entry_functions,
     };
     const result = try batch.append(scratch, globals, &module, facts);
     if (result.root_function != record.root_function or

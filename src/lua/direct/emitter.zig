@@ -56,6 +56,7 @@ pub const ProgramFacts = struct {
     demanded_entries: bool = false,
     native_find_three: bool = false,
     fixed_callable_entries: bool = false,
+    frame_entry_functions: []const u32 = &.{},
 
     pub fn moduleId(self: ProgramFacts, a: A, raw: []const u8) anyerror!?u32 {
         const ids = self.module_ids orelse return null;
@@ -80,6 +81,12 @@ pub const ProgramFacts = struct {
         for (facts[module_id].exports) |entry|
             if (std.mem.eql(u8, entry.name, name)) return entry;
         return null;
+    }
+
+    pub fn functionFrameHint(self: ProgramFacts, function_id: u32) bool {
+        for (self.frame_entry_functions) |entry|
+            if (entry == function_id) return true;
+        return false;
     }
 
     pub fn moduleExportShape(self: ProgramFacts, module_id: u32) ?shapes.Fact {
@@ -878,13 +885,55 @@ const FnEmitter = struct {
         }
     }
 
+    fn bindingNativeNamespace(
+        self: *const FnEmitter,
+        owner: *const analysis.FunctionInfo,
+        binding: u32,
+    ) ?static_fields.Namespace {
+        if (binding < owner.params.len and binding == 0 and
+            self.module.facts.functionFrameHint(owner.id))
+            return .frame;
+        return null;
+    }
+
+    fn upvalueNativeNamespace(
+        self: *const FnEmitter,
+        owner: *const analysis.FunctionInfo,
+        ordinal: u32,
+    ) ?static_fields.Namespace {
+        var current = owner;
+        var current_ordinal = ordinal;
+        while (true) {
+            if (current_ordinal >= current.upvalues.len) return null;
+            const parent = self.analyzedFunction(current.parent_id orelse return null) orelse return null;
+            switch (current.upvalues[current_ordinal].source) {
+                .local => |binding| return self.bindingNativeNamespace(parent, binding),
+                .upvalue => |parent_ordinal| {
+                    current = parent;
+                    current_ordinal = parent_ordinal;
+                },
+            }
+        }
+    }
+
+    fn resolvedNativeNamespace(self: *const FnEmitter, resolved: Resolved) ?static_fields.Namespace {
+        return switch (resolved) {
+            .local => |binding| self.bindingNativeNamespace(self.info, binding),
+            .upvalue => |ordinal| self.upvalueNativeNamespace(self.info, ordinal),
+            .global => null,
+        };
+    }
+
     fn loadResolved(self: *FnEmitter, resolved: Resolved) anyerror!ValueRef {
         const known_shape = self.resolvedTableShape(resolved);
+        const known_native = self.resolvedNativeNamespace(resolved);
         return switch (resolved) {
             .local => |binding| switch (self.storage[binding]) {
                 .uninitialized => error.UninitializedBinding,
                 .direct => |value| if (known_shape) |shape|
                     .{ .table = .{ .ptr = try self.box(value), .shape = shape } }
+                else if (known_native) |namespace|
+                    .{ .native_boxed = .{ .ptr = try self.box(value), .native_namespace = namespace } }
                 else
                     value,
                 .static_function => error.DirectFunctionUsedAsValue,
@@ -899,6 +948,8 @@ const FnEmitter = struct {
                     try self.copyValue(out, slot);
                     break :blk if (known_shape) |shape|
                         .{ .table = .{ .ptr = out, .shape = shape } }
+                    else if (known_native) |namespace|
+                        .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } }
                     else
                         .{ .boxed = out };
                 },
@@ -908,6 +959,8 @@ const FnEmitter = struct {
                     _ = try llvm.call(self.builder, self.rt().cell_get, &.{ cell, out });
                     break :blk if (known_shape) |shape|
                         .{ .table = .{ .ptr = out, .shape = shape } }
+                    else if (known_native) |namespace|
+                        .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } }
                     else
                         .{ .boxed = out };
                 },
@@ -918,6 +971,8 @@ const FnEmitter = struct {
                 _ = try llvm.call(self.builder, self.rt().cell_get, &.{ cell, out });
                 break :blk if (known_shape) |shape|
                     .{ .table = .{ .ptr = out, .shape = shape } }
+                else if (known_native) |namespace|
+                    .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } }
                 else
                     .{ .boxed = out };
             },
@@ -4056,7 +4111,11 @@ const FnEmitter = struct {
             else try llvm.call(self.builder, self.rt().arg_ptr, &.{
                 self.args(), self.argsLen(), try self.cI64(index),
             });
-            try self.initBinding(binding, .{ .boxed = value });
+            const initial: ValueRef = if (index == 0 and self.module.facts.functionFrameHint(self.info.id))
+                .{ .native_boxed = .{ .ptr = value, .native_namespace = .frame } }
+            else
+                .{ .boxed = value };
+            try self.initBinding(binding, initial);
         }
     }
 };

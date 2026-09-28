@@ -30,6 +30,7 @@ pub const ModuleRecord = struct {
     template_eligible: bool = false,
     load_data_snapshot: bool = false,
     direct_exports: []const emitter.DirectExport = &.{},
+    frame_entry_functions: []const u32 = &.{},
     static_root: bool = false,
     static_root_blob: []const u8 = &.{},
     synth_root: bool = false,
