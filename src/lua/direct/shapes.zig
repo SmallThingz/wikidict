@@ -88,6 +88,17 @@ pub const Registry = struct {
         return null;
     }
 
+    pub fn idForSpan(self: *const Registry, module_index: u32, span_start: u32) ?u32 {
+        const chain = self.module_chains.get(module_index) orelse return null;
+        var id = chain.first;
+        while (id != no_record) {
+            const candidate = self.records.items[id];
+            if (candidate.span_start == span_start) return id;
+            id = candidate.next_for_module;
+        }
+        return null;
+    }
+
     pub fn moduleFacts(self: *const Registry, allocator: std.mem.Allocator, module_index: u32) !ModuleFacts {
         var out: ModuleFacts = .empty;
         errdefer out.deinit(allocator);

@@ -638,6 +638,10 @@ fn analyzeManifest(
                             .name = try a.dupe(u8, entry.key_ptr.*),
                             .function_id = info.id,
                             .capture_count = @intCast(info.upvalues.len),
+                            .return_shape_id = if (info.return_table_span) |span|
+                                shape_registry.idForSpan(module_index, span.start)
+                            else
+                                null,
                         });
                     },
                     else => {},
@@ -730,6 +734,10 @@ fn analyzeManifest(
                             .name = "",
                             .function_id = info.id,
                             .capture_count = @intCast(info.upvalues.len),
+                            .return_shape_id = if (info.return_table_span) |span|
+                                shape_registry.idForSpan(module_index, span.start)
+                            else
+                                null,
                         });
                         synth_callable_root = true;
                         function_stats.synth_callable_roots += 1;

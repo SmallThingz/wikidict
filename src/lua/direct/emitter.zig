@@ -27,6 +27,7 @@ pub const DirectExport = struct {
     name: []const u8,
     function_id: u32,
     capture_count: u32 = 0,
+    return_shape_id: ?u32 = null,
 };
 pub const MethodCandidate = struct {
     name: []const u8,
@@ -93,6 +94,13 @@ pub const ProgramFacts = struct {
     pub fn childShape(self: ProgramFacts, fact: shapes.Fact, slot: u32) ?shapes.Fact {
         const registry = self.shape_registry orelse return null;
         return registry.childShape(fact, slot);
+    }
+
+    pub fn shapeById(self: ProgramFacts, id: ?u32) ?shapes.Fact {
+        const shape_id = id orelse return null;
+        const registry = self.shape_registry orelse return null;
+        if (shape_id >= registry.count()) return null;
+        return registry.record(shape_id);
     }
 
     pub fn methodCandidate(self: ProgramFacts, name: []const u8) ?MethodCandidate {
@@ -1684,6 +1692,39 @@ const FnEmitter = struct {
         return self.module.facts.tableShape(span.start);
     }
 
+    fn staticModuleIdHint(self: *FnEmitter, value: *const lua.Expr) anyerror!?u32 {
+        return switch (value.*) {
+            .name => |name| blk: {
+                const resolved = try self.resolve(name.value);
+                if (resolved == .local) switch (self.storage[resolved.local]) {
+                    .static_module => |module| break :blk module.module_id,
+                    else => {},
+                };
+                break :blk self.module.staticModuleId(name.value);
+            },
+            .paren => |paren| self.staticModuleIdHint(paren.expr),
+            .call => |call| if (try self.staticRequire(call.callee, null, call.args)) |request|
+                request.module_id
+            else
+                null,
+            else => null,
+        };
+    }
+
+    fn callReturnShapeHint(self: *FnEmitter, value: *const lua.Expr) anyerror!?shapes.Fact {
+        if (try self.localCallReturnShape(value)) |shape| return shape;
+        return switch (value.*) {
+            .index => |index| blk: {
+                const field = staticString(index.key) orelse break :blk null;
+                const module_id = (try self.staticModuleIdHint(index.object)) orelse break :blk null;
+                const export_fact = self.module.facts.exportFunction(module_id, field) orelse break :blk null;
+                break :blk self.module.facts.shapeById(export_fact.return_shape_id);
+            },
+            .paren => |paren| self.callReturnShapeHint(paren.expr),
+            else => null,
+        };
+    }
+
     fn guardedLocalFunction(self: *FnEmitter, resolved: Resolved, target: *const analysis.FunctionInfo) anyerror!StaticFunctionRef {
         // Capture the callable before evaluating arguments. A later argument may
         // rebind its cell, but this call must still use the earlier value.
@@ -2496,7 +2537,7 @@ const FnEmitter = struct {
             },
             .index => |v| try self.getIndex(try self.expr(v.object), v.key),
             .call => |v| blk: {
-                const shape = try self.localCallReturnShape(v.callee);
+                const shape = try self.callReturnShapeHint(v.callee);
                 const result = (try self.callFixed(v.callee, null, v.args, 1)) orelse unreachable;
                 const out = try self.arrayElem(result, 0);
                 break :blk if (shape) |known|

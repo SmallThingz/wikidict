@@ -1333,6 +1333,42 @@ test "known module export emits guarded direct LLVM call" {
     try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @dict_lua_return_call(") != null);
 }
 
+test "known module function returns retain table struct shapes" {
+    var ids: llvm_emitter.ModuleIdMap = .empty;
+    defer ids.deinit(std.testing.allocator);
+    try ids.put(std.testing.allocator, "Module:Target", 0);
+    var registry = llvm_shapes.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    const return_shape = (try registry.promote(0, 200, &.{"foo"})).?;
+    const exports = [_]llvm_emitter.DirectExport{
+        .{ .name = "make", .function_id = 99, .return_shape_id = return_shape },
+    };
+    const modules = [_]llvm_emitter.ModuleFact{
+        .{ .root_pure = false, .exports = &exports },
+    };
+    const facts = llvm_emitter.ProgramFacts{
+        .module_ids = &ids,
+        .module_facts = &modules,
+        .shape_registry = &registry,
+        .current_module_id = 1,
+    };
+    var chunk = try llvm_parser.parse(
+        std.testing.allocator,
+        "local target=require('Module:Target'); return target.make().foo",
+    );
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, facts);
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_known_shape_field") != null);
+}
+
 test "eager pristine module export bypasses field lookup on direct branch" {
     var ids: llvm_emitter.ModuleIdMap = .empty;
     defer ids.deinit(std.testing.allocator);
