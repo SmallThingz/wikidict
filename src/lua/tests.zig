@@ -691,6 +691,32 @@ test "dynamic keys on known table shapes stay structural" {
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_index("));
 }
 
+test "dense numeric accesses and len-plus-one appends bypass generic table indexing" {
+    const source =
+        \\local values = {}
+        \\local function add(value)
+        \\  values[#values + 1] = value
+        \\end
+        \\add(4)
+        \\add(5)
+        \\return values[1], values[2]
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_set_len_plus_one") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_typed_array_index") != null);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_struct_index("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_struct_index("));
+}
+
 test "nested table fields retain child struct shapes" {
     const source = "local t = { foo = { bar = { baz = 7 } } }; return t.foo.bar.baz";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);

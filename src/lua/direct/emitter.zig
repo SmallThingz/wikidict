@@ -295,6 +295,8 @@ const Runtime = struct {
     get_typed_array_index: V,
     set_index: V,
     set_struct_index: V,
+    set_typed_array_index: V,
+    set_len_plus_one: V,
     get_field: V,
     get_field_cached: V,
     get_struct_field: V,
@@ -384,6 +386,8 @@ const Runtime = struct {
             .get_typed_array_index = try declare(m, "dict_lua_get_typed_array_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .set_index = try declare(m, "dict_lua_set_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .set_struct_index = try declare(m, "dict_lua_set_struct_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
+            .set_typed_array_index = try declare(m, "dict_lua_set_typed_array_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
+            .set_len_plus_one = try declare(m, "dict_lua_set_len_plus_one", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
             .get_field = try declare(m, "dict_lua_get_field_hashed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .get_field_cached = try declare(m, "dict_lua_get_field_cached", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.i64, ty.ptr }),
             .get_struct_field = try declare(m, "dict_lua_get_struct_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.i64, ty.ptr }),
@@ -565,6 +569,8 @@ const Resolved = union(enum) { local: u32, upvalue: u32, global: u32 };
 const PreparedTarget = union(enum) {
     name: Resolved,
     index: struct { object: ValueRef, key: ValueRef },
+    typed_array_index: struct { object: ValueRef, key: ValueRef },
+    len_plus_one: ValueRef,
     field: struct { object: ValueRef, key: StringRef },
     shape_index: struct { object: ValueRef, key: ValueRef, shape_id: u32, slot: u32 },
     shape_dynamic: struct { object: ValueRef, key: ValueRef, shape_id: u32 },
@@ -1571,6 +1577,16 @@ const FnEmitter = struct {
                 return .{ .boxed = out };
             }
         }
+        if (shapes.staticKey(key_expr)) |key| if (key == .number) {
+            const object_box = try self.box(object);
+            const key_box = try self.box(try self.shapeKeyRef(key));
+            const out = try self.valueSlot();
+            const status = try llvm.call(self.builder, self.rt().get_typed_array_index, &.{
+                self.ctx(), object_box, key_box, out,
+            });
+            try self.check(status);
+            return .{ .boxed = out };
+        };
         const object_box = try self.box(object);
         const out = try self.valueSlot();
         const key_box = try self.box(try self.expr(key_expr));
@@ -1579,6 +1595,43 @@ const FnEmitter = struct {
         });
         try self.check(status);
         return .{ .boxed = out };
+    }
+
+    fn simpleName(value_expr: *const lua.Expr) ?[]const u8 {
+        return switch (value_expr.*) {
+            .name => |name| name.value,
+            .paren => |paren| simpleName(paren.expr),
+            else => null,
+        };
+    }
+
+    fn isOne(value_expr: *const lua.Expr) bool {
+        return switch (value_expr.*) {
+            .number => |number| (numbers.parse(number.raw) catch return false) == 1,
+            .paren => |paren| isOne(paren.expr),
+            else => false,
+        };
+    }
+
+    fn isLengthOf(value_expr: *const lua.Expr, name: []const u8) bool {
+        return switch (value_expr.*) {
+            .unary => |unary_value| unary_value.op == .len and
+                if (simpleName(unary_value.expr)) |candidate| std.mem.eql(u8, candidate, name) else false,
+            .paren => |paren| isLengthOf(paren.expr, name),
+            else => false,
+        };
+    }
+
+    fn isLenPlusOneTarget(object_expr: *const lua.Expr, key_expr: *const lua.Expr) bool {
+        const name = simpleName(object_expr) orelse return false;
+        const binary_expr = switch (key_expr.*) {
+            .binary => |binary_value| binary_value,
+            .paren => |paren| return isLenPlusOneTarget(object_expr, paren.expr),
+            else => return false,
+        };
+        if (binary_expr.op != .add) return false;
+        return (isLengthOf(binary_expr.lhs, name) and isOne(binary_expr.rhs)) or
+            (isOne(binary_expr.lhs) and isLengthOf(binary_expr.rhs, name));
     }
 
     fn table(self: *FnEmitter, table_expr: anytype) anyerror!ValueRef {
@@ -3160,6 +3213,8 @@ const FnEmitter = struct {
                 const object = try self.expr(idx.object);
                 if (staticString(idx.key)) |name|
                     break :blk .{ .field = .{ .object = object, .key = try self.stringRef(name) } };
+                if (isLenPlusOneTarget(idx.object, idx.key))
+                    break :blk .{ .len_plus_one = object };
                 if (shapeHint(object)) |shape| {
                     if (shapes.staticKey(idx.key)) |key| {
                         if (shapeKeySlot(shape, key)) |slot|
@@ -3177,6 +3232,11 @@ const FnEmitter = struct {
                         } };
                     }
                 }
+                if (shapes.staticKey(idx.key)) |key| if (key == .number)
+                    break :blk .{ .typed_array_index = .{
+                        .object = object,
+                        .key = try self.shapeKeyRef(key),
+                    } };
                 break :blk .{ .index = .{ .object = object, .key = try self.expr(idx.key) } };
             },
         };
@@ -3222,6 +3282,18 @@ const FnEmitter = struct {
             .index => |index| {
                 const status = try llvm.call(self.builder, self.rt().set_struct_index, &.{
                     self.ctx(), try self.box(index.object), try self.box(index.key), try self.box(value),
+                });
+                try self.check(status);
+            },
+            .typed_array_index => |index| {
+                const status = try llvm.call(self.builder, self.rt().set_typed_array_index, &.{
+                    self.ctx(), try self.box(index.object), try self.box(index.key), try self.box(value),
+                });
+                try self.check(status);
+            },
+            .len_plus_one => |object| {
+                const status = try llvm.call(self.builder, self.rt().set_len_plus_one, &.{
+                    self.ctx(), try self.box(object), try self.box(value),
                 });
                 try self.check(status);
             },

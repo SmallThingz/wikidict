@@ -264,6 +264,31 @@ export fn dict_lua_get_typed_array_index(ctx: *rt.Context, object: *const rt.Val
     out.* = ctx.getTypedArrayIndex(object.*, key.*) catch |err| return fail(ctx, err);
     return 0;
 }
+
+export fn dict_lua_set_typed_array_index(ctx: *rt.Context, object: *const rt.Value, key: *const rt.Value, input: *const rt.Value) callconv(.c) u32 {
+    if (object.* == .table and key.* == .number) {
+        const table = object.table;
+        if (table.rawGet(key.*) != null or table.metatable == null) {
+            table.rawSet(ctx.allocator, key.*, input.*) catch |err| return fail(ctx, err);
+            return 0;
+        }
+    }
+    ctx.setIndex(object.*, key.*, input.*) catch |err| return fail(ctx, err);
+    return 0;
+}
+
+export fn dict_lua_set_len_plus_one(ctx: *rt.Context, object: *const rt.Value, input: *const rt.Value) callconv(.c) u32 {
+    if (object.* != .table) return fail(ctx, error.IndexType);
+    const table = object.table;
+    const next_index = table.rawLen() + 1;
+    const key = rt.Value{ .number = @floatFromInt(next_index) };
+    if (table.metatable == null) {
+        table.rawSet(ctx.allocator, key, input.*) catch |err| return fail(ctx, err);
+        return 0;
+    }
+    ctx.setIndex(object.*, key, input.*) catch |err| return fail(ctx, err);
+    return 0;
+}
 export fn dict_lua_set_index(ctx: *rt.Context, object: *const rt.Value, key: *const rt.Value, input: *const rt.Value) callconv(.c) u32 {
     ctx.setIndex(object.*, key.*, input.*) catch |err| return fail(ctx, err);
     return 0;
