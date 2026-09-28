@@ -26,15 +26,55 @@ const Record = struct {
 const no_record = std.math.maxInt(u32);
 const ModuleChain = struct { first: u32, last: u32 };
 
+const KeySliceContext = struct {
+    pub fn hash(_: @This(), keys: []const Key) u64 {
+        var h = std.hash.Wyhash.init(0);
+        const len: usize = keys.len;
+        h.update(std.mem.asBytes(&len));
+        for (keys) |key| {
+            const tag: u8 = @intFromEnum(std.meta.activeTag(key));
+            h.update(&.{tag});
+            switch (key) {
+                .string => |value| {
+                    const value_len: usize = value.len;
+                    h.update(std.mem.asBytes(&value_len));
+                    h.update(value);
+                },
+                .number => |value| {
+                    const bits: u64 = @bitCast(value);
+                    h.update(std.mem.asBytes(&bits));
+                },
+                .boolean => |value| h.update(&.{@intFromBool(value)}),
+            }
+        }
+        return h.final();
+    }
+
+    pub fn eql(_: @This(), lhs: []const Key, rhs: []const Key) bool {
+        if (lhs.len != rhs.len) return false;
+        for (lhs, rhs) |a, b| if (!keyEqual(a, b)) return false;
+        return true;
+    }
+};
+
+const LayoutIndex = std.HashMapUnmanaged(
+    []const Key,
+    u32,
+    KeySliceContext,
+    80,
+);
+
 pub const Registry = struct {
     allocator: std.mem.Allocator,
     records: std.ArrayList(Record) = .empty,
     module_chains: std.AutoHashMapUnmanaged(u32, ModuleChain) = .empty,
+    static_layouts: LayoutIndex = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Registry {
         return .{ .allocator = allocator };
     }
     pub fn deinit(self: *Registry) void {
+        self.static_layouts.deinit(self.allocator);
         for (self.records.items) |entry| {
             self.freeKeys(entry.keys);
             self.allocator.free(entry.value_shape_spans);
@@ -140,6 +180,54 @@ pub const Registry = struct {
             entry.value_ptr.* = .{ .first = id, .last = id };
         }
         return id;
+    }
+
+    /// Intern a runtime table layout without creating a compiler source-site
+    /// fact. This is used by static/pure-data tables: millions of table
+    /// instances may share the same immutable slot layout.
+    pub fn internKeys(self: *Registry, keys: []const Key) !?u32 {
+        if (keys.len == 0) return null;
+        if (self.static_layouts.get(keys)) |id| return id;
+        if (self.records.items.len >= no_record) return error.TooManyShapes;
+
+        const owned = try self.copyKeys(keys);
+        errdefer self.freeKeys(owned);
+        const value_shapes = try self.emptyValueShapes(keys.len);
+        errdefer self.allocator.free(value_shapes);
+        const id: u32 = @intCast(self.records.items.len);
+        try self.records.append(self.allocator, .{
+            .module_index = no_record,
+            .span_start = no_record,
+            .keys = owned,
+            .value_shape_spans = value_shapes,
+        });
+        errdefer _ = self.records.pop();
+        try self.static_layouts.put(self.allocator, self.records.items[id].keys, id);
+        return id;
+    }
+
+    pub fn internTableFields(self: *Registry, fields: []const lua.TableField) !?u32 {
+        if (fields.len == 0) return null;
+        var keys: std.ArrayList(Key) = .empty;
+        defer keys.deinit(self.allocator);
+        var list_index: u32 = 0;
+        for (fields) |field| {
+            const key: Key = switch (field) {
+                .named => |item| .{ .string = item.name },
+                .keyed => |item| staticKey(item.key) orelse continue,
+                .list => blk: {
+                    list_index += 1;
+                    break :blk .{ .number = @floatFromInt(list_index) };
+                },
+            };
+            var duplicate = false;
+            for (keys.items) |existing| if (keyEqual(existing, key)) {
+                duplicate = true;
+                break;
+            };
+            if (!duplicate) try keys.append(self.allocator, key);
+        }
+        return self.internKeys(keys.items);
     }
     fn copyKeys(self: *Registry, keys: []const Key) ![]const Key {
         const owned = try self.allocator.alloc(Key, keys.len);
@@ -463,6 +551,33 @@ test "module shape index preserves ids and replacements across out-of-order modu
     var absent = try registry.moduleFacts(a, 7);
     defer absent.deinit(a);
     try std.testing.expectEqual(@as(usize, 0), absent.count());
+}
+
+test "static runtime layouts are hash-consed by exact slot order" {
+    const a = std.testing.allocator;
+    var registry = Registry.init(a);
+    defer registry.deinit();
+
+    const first = (try registry.internKeys(&.{
+        .{ .string = "alpha" },
+        .{ .number = 1 },
+        .{ .boolean = true },
+    })).?;
+    const duplicate = (try registry.internKeys(&.{
+        .{ .string = "alpha" },
+        .{ .number = 1 },
+        .{ .boolean = true },
+    })).?;
+    const reordered = (try registry.internKeys(&.{
+        .{ .number = 1 },
+        .{ .string = "alpha" },
+        .{ .boolean = true },
+    })).?;
+
+    try std.testing.expectEqual(first, duplicate);
+    try std.testing.expect(first != reordered);
+    try std.testing.expectEqual(@as(usize, 2), registry.count());
+    try std.testing.expectEqual(@as(usize, 6), registry.fieldCount());
 }
 
 fn appendAllocationCase(allocator: std.mem.Allocator) !void {

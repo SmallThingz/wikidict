@@ -43,6 +43,7 @@ pub fn rootLiteral(body: lua.Block) ?*const lua.Expr {
 const Encoder = struct {
     allocator: A,
     table_shapes: ?*const shapes.ModuleFacts,
+    shape_registry: ?*shapes.Registry = null,
     static_shapes: ?*const StaticShapeMap = null,
     out: std.ArrayList(u8) = .empty,
 
@@ -96,6 +97,8 @@ const Encoder = struct {
                 try self.out.append(self.allocator, @intFromEnum(format.ValueTag.table));
                 const shape_id: ?u32 = if (self.table_shapes) |facts|
                     if (facts.get(table_expr.span.start)) |shape| shape.id else null
+                else if (self.shape_registry) |registry|
+                    try registry.internTableFields(table_expr.fields)
                 else
                     null;
                 try self.out.append(self.allocator, if (shape_id != null) format.table_has_shape else 0);
@@ -134,6 +137,34 @@ pub fn encode(a: A, value: *const lua.Expr, table_shapes: ?*const shapes.ModuleF
     try encoder.beginCompact();
     try encoder.expr(value, 0);
     return encoder.out.toOwnedSlice(a);
+}
+
+pub fn encodeLiteralRoot(
+    a: A,
+    value: *const lua.Expr,
+    shape_registry: *shapes.Registry,
+) !EvaluatedRoot {
+    if (!isLiteral(value)) return error.NonStaticLiteral;
+    const export_shape_id = switch (value.*) {
+        .table => |table_expr| try shape_registry.internTableFields(table_expr.fields),
+        .paren => |paren| switch (paren.expr.*) {
+            .table => |table_expr| try shape_registry.internTableFields(table_expr.fields),
+            else => null,
+        },
+        else => null,
+    };
+    var encoder = Encoder{
+        .allocator = a,
+        .table_shapes = null,
+        .shape_registry = shape_registry,
+    };
+    errdefer encoder.out.deinit(a);
+    try encoder.beginCompact();
+    try encoder.expr(value, 0);
+    return .{
+        .blob = try encoder.out.toOwnedSlice(a),
+        .export_shape_id = export_shape_id,
+    };
 }
 
 pub fn encodeScalarLiteralList(a: A, values: []const *const lua.Expr) ![]u8 {
@@ -192,7 +223,6 @@ const StaticTable = struct {
     fields: std.ArrayList(StaticField) = .empty,
 };
 const StaticShapeMap = std.AutoHashMapUnmanaged(*StaticTable, u32);
-const StaticSpanMap = std.AutoHashMapUnmanaged(*StaticTable, u32);
 
 const PreparedTarget = union(enum) {
     local: []const u8,
@@ -500,16 +530,8 @@ fn registerStaticTableShapes(
     a: A,
     evaluator: *const Evaluator,
     shape_registry: *shapes.Registry,
-    module_index: u32,
     out: *StaticShapeMap,
 ) !void {
-    var spans: StaticSpanMap = .empty;
-    defer spans.deinit(a);
-    for (evaluator.tables.items, 0..) |table_value, table_index| {
-        const synthetic_span = std.math.cast(u32, table_index + 1) orelse return error.TooManyShapes;
-        try spans.put(a, table_value, synthetic_span);
-    }
-
     for (evaluator.tables.items) |table_value| {
         var keys: std.ArrayList(shapes.Key) = .empty;
         defer keys.deinit(a);
@@ -527,27 +549,8 @@ fn registerStaticTableShapes(
             if (!duplicate) try keys.append(a, key);
         }
         if (keys.items.len == 0) continue;
-        const synthetic_span = spans.get(table_value) orelse unreachable;
-        const id = (try shape_registry.promoteKeys(module_index, synthetic_span, keys.items)) orelse continue;
+        const id = (try shape_registry.internKeys(keys.items)) orelse continue;
         try out.put(a, table_value, id);
-    }
-
-    for (evaluator.tables.items) |table_value| {
-        const parent_span = spans.get(table_value) orelse unreachable;
-        for (table_value.fields.items) |field| {
-            const key: shapes.Key, const child_value: StaticValue = switch (field) {
-                .list => |item| .{ .{ .number = @floatFromInt(item.index) }, item.value },
-                .named => |item| .{ .{ .string = item.name }, item.value },
-                .keyed => |item| .{ staticShapeKey(item.key) orelse continue, item.value },
-            };
-            if (child_value != .table) continue;
-            shape_registry.setValueShapeSpan(
-                module_index,
-                parent_span,
-                key,
-                spans.get(child_value.table),
-            );
-        }
     }
 }
 
@@ -627,7 +630,8 @@ pub fn encodePureDataRoot(
 
     var static_shapes: StaticShapeMap = .empty;
     defer static_shapes.deinit(a);
-    try registerStaticTableShapes(a, &evaluator, shape_registry, module_index, &static_shapes);
+    _ = module_index;
+    try registerStaticTableShapes(a, &evaluator, shape_registry, &static_shapes);
     const export_shape_id: ?u32 = if (root == .table) static_shapes.get(root.table) else null;
     var encoder = Encoder{ .allocator = a, .table_shapes = null, .static_shapes = &static_shapes };
     errdefer encoder.out.deinit(a);
@@ -672,6 +676,23 @@ test "pure incremental data builder lowers to static literal" {
     // Root, alpha, beta, and coords all keep fixed structural layouts.
     try std.testing.expectEqual(@as(usize, 4), registry.count());
     try std.testing.expect(result.blob.len != 0);
+}
+
+test "literal data reuses repeated nested runtime layouts" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(
+        a,
+        "return { first = {x=1,y=2}, second = {x=3,y=4}, third = {x=5,y=6} }",
+    );
+    defer chunk.deinit();
+    const literal = rootLiteral(chunk.body) orelse return error.ExpectedStaticLiteral;
+    var registry = shapes.Registry.init(a);
+    defer registry.deinit();
+    const result = try encodeLiteralRoot(a, literal, &registry);
+    defer a.free(result.blob);
+    try std.testing.expect(result.export_shape_id != null);
+    // One root layout plus one shared {x,y} row layout.
+    try std.testing.expectEqual(@as(usize, 2), registry.count());
 }
 
 test "pure data evaluator rejects calls loops and shared table identity" {

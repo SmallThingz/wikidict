@@ -559,18 +559,11 @@ fn analyzeManifest(
         const module_index: u32 = @intCast(records.items.len);
 
         if (static_encode.rootLiteral(chunk.body)) |literal| {
-            // Literal data modules benefit from the same structural layout as
-            // executable Lua. Collect the entire literal tree so nested rows
-            // and lists decode directly into program-shape slots too.
-            try shape_registry.collect(module_index, chunk.body);
-            const export_shape_id = if (literal.* == .table)
-                shape_registry.idForSpan(module_index, literal.table.span.start)
-            else
-                null;
-            var table_shapes = try shape_registry.moduleFacts(sa, module_index);
-            // scratch.reset below frees the arena-backed map in one step.
-            // Deinitializing it after that reset would access freed storage.
-            const blob = try static_encode.encode(sa, literal, &table_shapes);
+            const encoded = try static_encode.encodeLiteralRoot(
+                sa,
+                literal,
+                shape_registry,
+            );
             try records.append(a, .{
                 .title = try a.dupe(u8, row.title),
                 .path = try a.dupe(u8, row.path),
@@ -579,11 +572,11 @@ fn analyzeManifest(
                 .function_base = function_base,
                 .function_count = 1,
                 .root_function = function_base,
-                .export_shape_id = export_shape_id,
+                .export_shape_id = encoded.export_shape_id,
                 .root_pure = true,
                 .root_bootstrap_safe = true,
                 .static_root = true,
-                .static_root_blob = try a.dupe(u8, blob),
+                .static_root_blob = try a.dupe(u8, encoded.blob),
             });
             try dead_functions_by_module.append(a, 0);
             function_base = std.math.add(u32, function_base, 1) catch return error.TooManyFunctions;
