@@ -2222,6 +2222,16 @@ pub const Context = struct {
         return self.getIndex(object, key);
     }
 
+    pub fn getProgramShapeDynamic(self: *Context, object: Value, shape_id: u32, key: Value) !Value {
+        if (object == .table and shape_id < self.program_shapes.len and object.table.shape == &self.program_shapes[shape_id]) {
+            if (object.table.slotForKey(key)) |slot| {
+                if (object.table.rawGetSlot(slot)) |value| return value;
+                if (object.table.metatable == null) return .nil;
+            }
+        }
+        return self.getIndex(object, key);
+    }
+
     pub fn setProgramShapeIndex(self: *Context, object: Value, shape_id: u32, slot: u32, key: Value, value: Value) !void {
         if (object == .table and shape_id < self.program_shapes.len and object.table.shape == &self.program_shapes[shape_id]) {
             if (object.table.fieldKey(slot)) |expected| if (rawEqual(expected, key)) {
@@ -2230,6 +2240,18 @@ pub const Context = struct {
                     return;
                 }
             };
+        }
+        try self.setIndex(object, key, value);
+    }
+
+    pub fn setProgramShapeDynamic(self: *Context, object: Value, shape_id: u32, key: Value, value: Value) !void {
+        if (object == .table and shape_id < self.program_shapes.len and object.table.shape == &self.program_shapes[shape_id]) {
+            if (object.table.slotForKey(key)) |slot| {
+                if (object.table.rawGetSlot(slot) != null or object.table.metatable == null) {
+                    try object.table.rawSetSlot(slot, value);
+                    return;
+                }
+            }
         }
         try self.setIndex(object, key, value);
     }

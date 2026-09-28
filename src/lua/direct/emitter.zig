@@ -247,6 +247,8 @@ const Runtime = struct {
     set_known_shape_field: V,
     get_known_shape_index: V,
     set_known_shape_index: V,
+    get_shape_dynamic: V,
+    set_shape_dynamic: V,
     get_native_slot: V,
     set_native_slot: V,
     len_number: V,
@@ -328,6 +330,8 @@ const Runtime = struct {
             .set_known_shape_field = try declare(m, "dict_lua_set_known_shape_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
             .get_known_shape_index = try declare(m, "dict_lua_get_known_shape_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.ptr }),
             .set_known_shape_index = try declare(m, "dict_lua_set_known_shape_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.ptr }),
+            .get_shape_dynamic = try declare(m, "dict_lua_get_shape_dynamic", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.ptr }),
+            .set_shape_dynamic = try declare(m, "dict_lua_set_shape_dynamic", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.ptr }),
             .get_native_slot = try declare(m, "dict_lua_get_native_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.i64, ty.ptr }),
             .set_native_slot = try declare(m, "dict_lua_set_native_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.i64, ty.ptr }),
             .len_number = try declare(m, "dict_lua_len_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
@@ -498,6 +502,7 @@ const PreparedTarget = union(enum) {
     index: struct { object: ValueRef, key: ValueRef },
     field: struct { object: ValueRef, key: StringRef },
     shape_index: struct { object: ValueRef, key: ValueRef, shape_id: u32, slot: u32 },
+    shape_dynamic: struct { object: ValueRef, key: ValueRef, shape_id: u32 },
 };
 
 const FnEmitter = struct {
@@ -1333,16 +1338,27 @@ const FnEmitter = struct {
     fn getIndex(self: *FnEmitter, object: ValueRef, key_expr: *const lua.Expr) anyerror!ValueRef {
         if (staticString(key_expr)) |name| return self.getField(object, name);
         if (shapeHint(object)) |shape| {
-            if (shapes.staticKey(key_expr)) |key| if (shapeKeySlot(shape, key)) |slot| {
+            if (shapes.staticKey(key_expr)) |key| {
+                if (shapeKeySlot(shape, key)) |slot| {
+                    const object_box = try self.box(object);
+                    const key_box = try self.box(try self.shapeKeyRef(key));
+                    const out = try self.valueSlot();
+                    const status = try llvm.call(self.builder, self.rt().get_known_shape_index, &.{
+                        self.ctx(), object_box, try self.cI32(shape.id), try self.cI32(slot), key_box, out,
+                    });
+                    try self.check(status);
+                    return .{ .boxed = out };
+                }
+            } else {
                 const object_box = try self.box(object);
-                const key_box = try self.box(try self.shapeKeyRef(key));
+                const key_box = try self.box(try self.expr(key_expr));
                 const out = try self.valueSlot();
-                const status = try llvm.call(self.builder, self.rt().get_known_shape_index, &.{
-                    self.ctx(), object_box, try self.cI32(shape.id), try self.cI32(slot), key_box, out,
+                const status = try llvm.call(self.builder, self.rt().get_shape_dynamic, &.{
+                    self.ctx(), object_box, try self.cI32(shape.id), key_box, out,
                 });
                 try self.check(status);
                 return .{ .boxed = out };
-            };
+            }
         }
         const object_box = try self.box(object);
         const out = try self.valueSlot();
@@ -2689,13 +2705,21 @@ const FnEmitter = struct {
                 if (staticString(idx.key)) |name|
                     break :blk .{ .field = .{ .object = object, .key = try self.stringRef(name) } };
                 if (shapeHint(object)) |shape| {
-                    if (shapes.staticKey(idx.key)) |key| if (shapeKeySlot(shape, key)) |slot|
-                        break :blk .{ .shape_index = .{
+                    if (shapes.staticKey(idx.key)) |key| {
+                        if (shapeKeySlot(shape, key)) |slot|
+                            break :blk .{ .shape_index = .{
+                                .object = object,
+                                .key = try self.shapeKeyRef(key),
+                                .shape_id = shape.id,
+                                .slot = slot,
+                            } };
+                    } else {
+                        break :blk .{ .shape_dynamic = .{
                             .object = object,
-                            .key = try self.shapeKeyRef(key),
+                            .key = try self.expr(idx.key),
                             .shape_id = shape.id,
-                            .slot = slot,
                         } };
+                    }
                 }
                 break :blk .{ .index = .{ .object = object, .key = try self.expr(idx.key) } };
             },
@@ -2745,6 +2769,16 @@ const FnEmitter = struct {
                     try self.box(index.object),
                     try self.cI32(index.shape_id),
                     try self.cI32(index.slot),
+                    try self.box(index.key),
+                    try self.box(value),
+                });
+                try self.check(status);
+            },
+            .shape_dynamic => |index| {
+                const status = try llvm.call(self.builder, self.rt().set_shape_dynamic, &.{
+                    self.ctx(),
+                    try self.box(index.object),
+                    try self.cI32(index.shape_id),
                     try self.box(index.key),
                     try self.box(value),
                 });

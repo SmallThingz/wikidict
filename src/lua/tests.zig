@@ -656,6 +656,41 @@ test "list and numeric table keys lower to fixed shape slots" {
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_index("));
 }
 
+test "dynamic keys on known table shapes stay structural" {
+    const source =
+        \\local t = { foo = 1, bar = 2 }
+        \\local k = "foo"
+        \\local w = "bar"
+        \\local value = t[k]
+        \\t[w] = 7
+        \\return value, t.bar
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var registry = llvm_shapes.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try registry.collect(0, chunk.body);
+    var shape_facts = try registry.moduleFacts(std.testing.allocator, 0);
+    defer shape_facts.deinit(std.testing.allocator);
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(
+        std.testing.allocator,
+        &globals,
+        &module,
+        .{ .table_shapes = &shape_facts },
+    );
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_shape_dynamic") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_set_shape_dynamic") != null);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_index("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_index("));
+}
+
 test "incrementally populated local tables promote to fixed shapes" {
     const source =
         \\local t = {}
