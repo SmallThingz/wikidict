@@ -1005,6 +1005,7 @@ fn randomBound(value: Value) !i32 {
     return @intCast(n);
 }
 fn mathRandomCall(raw: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    rt.markLoadDataEffect();
     const state: *MathRandomState = @ptrCast(@alignCast(raw orelse return error.MissingRandomState));
     const rand_max: u32 = 2147483647;
     const sample = state.next() % rand_max;
@@ -1028,6 +1029,7 @@ fn mathRandomCall(raw: ?*anyopaque, _: *rt.Context, args: []const Value, result_
     return bufferedOne(result_buffer, .{ .number = result });
 }
 fn mathRandomSeedCall(raw: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    rt.markLoadDataEffect();
     if (args.len == 0) return error.MissingArgument;
     const state: *MathRandomState = @ptrCast(@alignCast(raw orelse return error.MissingRandomState));
     state.seed(try randomSeedValue(args[0]));
@@ -1579,6 +1581,13 @@ test "Lua 5.1 math random matches glibc sequence and reseeding" {
     const range = try ctx.callValue(random, &.{ .{ .number = -300 }, .{ .number = 300 } });
     defer rt.freeResults(range);
     try std.testing.expectEqual(@as(f64, 204), range[0].number);
+
+    var observed = false;
+    const previous = rt.beginLoadDataEffectProbe(&observed);
+    defer rt.endLoadDataEffectProbe(previous);
+    const observed_random = try ctx.callValue(random, &.{});
+    defer rt.freeResults(observed_random);
+    try std.testing.expect(observed);
 }
 
 test "AOT pcall preserves Lua error values" {

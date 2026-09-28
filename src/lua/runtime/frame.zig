@@ -201,6 +201,7 @@ fn newChildCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
 }
 
 fn currentFrameCall(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+    rt.markLoadDataEffect();
     return one(if (runtime.current_frame) |frame| .{ .table = frame } else .nil);
 }
 fn makeFrameWithArgs(runtime: *rt.Context, title: []const u8, arg_table: *rt.Table, parent: ?Value) !Value {
@@ -569,4 +570,20 @@ test "AOT frame invoke binds current frame around numeric module call" {
     try std.testing.expectError(error.CallDepth, invokeFixed(&runtime, "Module:X", "buffered", frame, &slot));
     runtime.max_depth = old_limit;
     try std.testing.expect(runtime.depth == 0 and runtime.current_frame == null);
+}
+
+test "current frame access is page-sensitive for reusable module roots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const frame = try makeFrame(&runtime, "Module:X", &.{}, null);
+    runtime.current_frame = frame.table;
+
+    var observed = false;
+    const previous = rt.beginLoadDataEffectProbe(&observed);
+    defer rt.endLoadDataEffectProbe(previous);
+    const out = try currentFrameCall(null, &runtime, &.{});
+    defer rt.freeResults(out);
+    try std.testing.expect(observed);
 }
