@@ -430,6 +430,20 @@ pub fn callReturnNamespace(namespace: Namespace, field_name: []const u8) ?Namesp
         else => null,
     };
 }
+
+pub fn callReturnElementNamespace(namespace: Namespace, field_name: []const u8) ?Namespace {
+    return switch (namespace) {
+        .title_batch => if (std.mem.eql(u8, field_name, "getTitles")) .title_value else null,
+        else => null,
+    };
+}
+
+pub fn indexElementNamespace(namespace: Namespace) ?Namespace {
+    return switch (namespace) {
+        .namespace_map => .namespace_value,
+        else => null,
+    };
+}
 test "namespace slot layouts round trip" {
     inline for (std.meta.fields(Namespace)) |field| {
         const namespace: Namespace = @enumFromInt(field.value);

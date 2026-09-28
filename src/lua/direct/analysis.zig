@@ -1,6 +1,7 @@
 const std = @import("std");
 const lua = @import("../parser/root.zig");
 const global_abi = @import("../abi/globals.zig");
+const static_fields = @import("../abi/static_fields.zig");
 
 pub const Globals = struct {
     allocator: std.mem.Allocator,
@@ -68,6 +69,7 @@ pub const Upvalue = struct {
     mutated: bool = false,
 };
 pub const StaticType = enum { unknown, nil, boolean, number, string };
+pub const ProgramTableKind = enum { json_object, uri_query };
 pub const ShapeDependency = struct { source: u32, target: u32 };
 pub const Binding = struct {
     name: []const u8,
@@ -79,6 +81,9 @@ pub const Binding = struct {
     late_function_init: bool = false,
     static_type: StaticType = .unknown,
     static_table_span: ?lua.Span = null,
+    static_program_table: ?ProgramTableKind = null,
+    static_native_namespace: ?static_fields.Namespace = null,
+    static_array_element_native_namespace: ?static_fields.Namespace = null,
     static_module: ?[]const u8 = null,
     callable_field_hint: ?[]const u8 = null,
 
@@ -294,6 +299,125 @@ const Analyzer = struct {
         };
     }
 
+    fn nativeGlobalNamespace(name: []const u8) ?static_fields.Namespace {
+        if (std.mem.eql(u8, name, "table")) return .table;
+        if (std.mem.eql(u8, name, "string")) return .string;
+        if (std.mem.eql(u8, name, "math")) return .math;
+        if (std.mem.eql(u8, name, "debug")) return .debug;
+        if (std.mem.eql(u8, name, "package")) return .package;
+        if (std.mem.eql(u8, name, "mw")) return .mw;
+        if (std.mem.eql(u8, name, "os")) return .os;
+        return null;
+    }
+
+    fn exprStaticNativeName(self: *const Analyzer, name: []const u8) ?static_fields.Namespace {
+        if (self.locals.get(name)) |binding|
+            return self.bindings.items[binding].static_native_namespace;
+        if (self.parent) |parent| if (parent.exprStaticNativeName(name)) |namespace|
+            return namespace;
+        return nativeGlobalNamespace(name);
+    }
+
+    fn nativeCallReturnNamespace(
+        self: *const Analyzer,
+        callee_expr: *const lua.Expr,
+        args: []const *lua.Expr,
+    ) ?static_fields.Namespace {
+        if (callee_expr.* == .name and std.mem.eql(u8, callee_expr.name.value, "require") and args.len == 1)
+            if (staticString(args[0])) |requested| {
+                if (std.mem.eql(u8, requested, "bit32")) return .bit32;
+                if (std.mem.eql(u8, requested, "libraryUtil")) return .library_util;
+            };
+        return switch (callee_expr.*) {
+            .index => |index| blk: {
+                const owner = self.exprStaticNative(index.object) orelse break :blk null;
+                const field = staticString(index.key) orelse break :blk null;
+                break :blk static_fields.callReturnNamespace(owner, field);
+            },
+            .paren => |paren| self.nativeCallReturnNamespace(paren.expr, args),
+            else => null,
+        };
+    }
+
+    fn exprStaticNative(self: *const Analyzer, value: *const lua.Expr) ?static_fields.Namespace {
+        return switch (value.*) {
+            .name => |name| self.exprStaticNativeName(name.value),
+            .paren => |paren| self.exprStaticNative(paren.expr),
+            .index => |index| blk: {
+                const owner = self.exprStaticNative(index.object) orelse break :blk null;
+                const field = staticString(index.key) orelse break :blk null;
+                break :blk static_fields.fieldNamespace(owner, field);
+            },
+            .call => |call| self.nativeCallReturnNamespace(call.callee, call.args),
+            .method_call => |call| blk: {
+                const owner = self.exprStaticNative(call.object) orelse break :blk null;
+                break :blk static_fields.callReturnNamespace(owner, call.method);
+            },
+            else => null,
+        };
+    }
+
+    fn exprStaticArrayElementNativeName(self: *const Analyzer, name: []const u8) ?static_fields.Namespace {
+        if (self.locals.get(name)) |binding|
+            return self.bindings.items[binding].static_array_element_native_namespace;
+        return if (self.parent) |parent| parent.exprStaticArrayElementNativeName(name) else null;
+    }
+
+    fn exprStaticArrayElementNative(self: *const Analyzer, value: *const lua.Expr) ?static_fields.Namespace {
+        return switch (value.*) {
+            .name => |name| self.exprStaticArrayElementNativeName(name.value),
+            .paren => |paren| self.exprStaticArrayElementNative(paren.expr),
+            .call => |call| switch (call.callee.*) {
+                .index => |index| blk: {
+                    const owner = self.exprStaticNative(index.object) orelse break :blk null;
+                    const field = staticString(index.key) orelse break :blk null;
+                    break :blk static_fields.callReturnElementNamespace(owner, field);
+                },
+                .paren => |paren| self.exprStaticArrayElementNative(paren.expr),
+                else => null,
+            },
+            .method_call => |call| blk: {
+                const owner = self.exprStaticNative(call.object) orelse break :blk null;
+                break :blk static_fields.callReturnElementNamespace(owner, call.method);
+            },
+            else => null,
+        };
+    }
+
+    fn exprStaticProgramTableName(self: *const Analyzer, name: []const u8) ?ProgramTableKind {
+        if (self.locals.get(name)) |binding|
+            return self.bindings.items[binding].static_program_table;
+        return if (self.parent) |parent| parent.exprStaticProgramTableName(name) else null;
+    }
+
+    fn exprStaticProgramTable(self: *const Analyzer, value: *const lua.Expr) ?ProgramTableKind {
+        return switch (value.*) {
+            .name => |name| self.exprStaticProgramTableName(name.value),
+            .paren => |paren| self.exprStaticProgramTable(paren.expr),
+            .call => |call| blk: {
+                if (call.callee.* != .index) break :blk null;
+                const owner = self.exprStaticNative(call.callee.index.object) orelse break :blk null;
+                const field = staticString(call.callee.index.key) orelse break :blk null;
+                if ((owner == .mw and std.mem.eql(u8, field, "loadJsonData")) or
+                    (owner == .text and std.mem.eql(u8, field, "jsonDecode")))
+                    break :blk .json_object;
+                break :blk null;
+            },
+            .index => |index| blk: {
+                if (self.exprStaticProgramTable(index.object)) |kind| switch (kind) {
+                    .json_object => break :blk .json_object,
+                    .uri_query => break :blk null,
+                };
+                const owner = self.exprStaticNative(index.object) orelse break :blk null;
+                const field = staticString(index.key) orelse break :blk null;
+                if (owner == .uri_value and std.mem.eql(u8, field, "query"))
+                    break :blk .uri_query;
+                break :blk null;
+            },
+            else => null,
+        };
+    }
+
     fn exprStaticType(self: *const Analyzer, value: *const lua.Expr) StaticType {
         return switch (value.*) {
             .nil_lit => .nil,
@@ -329,8 +453,7 @@ const Analyzer = struct {
             .table => |table| table.span,
             .name => |name| if (self.locals.get(name.value)) |binding|
                 self.bindings.items[binding].static_table_span
-            else
-                if (self.parent) |parent| parent.exprStaticTableName(name.value) else null,
+            else if (self.parent) |parent| parent.exprStaticTableName(name.value) else null,
             .paren => |paren| self.exprStaticTable(paren.expr),
             .call => |call| blk: {
                 const target_span = self.directLocalFunctionSpan(call.callee) orelse break :blk null;
@@ -561,8 +684,12 @@ const Analyzer = struct {
                 for (s.names, types, 0..) |name, static_type, index| {
                     const binding = try self.bind(name);
                     self.bindings.items[binding].static_type = static_type;
-                    if (index < s.values.len and !(index + 1 == s.values.len and isMultiExpr(s.values[index]))) {
+                    if (index < s.values.len) {
                         self.bindings.items[binding].static_table_span = self.exprStaticTable(s.values[index]);
+                        self.bindings.items[binding].static_program_table = self.exprStaticProgramTable(s.values[index]);
+                        self.bindings.items[binding].static_native_namespace = self.exprStaticNative(s.values[index]);
+                        self.bindings.items[binding].static_array_element_native_namespace =
+                            self.exprStaticArrayElementNative(s.values[index]);
                         if (self.collectShapeSource(s.values[index])) |source|
                             try self.addShapeDependency(source, binding);
                     }
@@ -591,8 +718,14 @@ const Analyzer = struct {
                             });
                     }
                     self.mergeWriteType(target, static_type);
-                    if (target == .name and index < s.values.len and !(index + 1 == s.values.len and isMultiExpr(s.values[index]))) {
+                    if (target == .name and index < s.values.len) {
                         const binding = self.locals.get(target.name) orelse continue;
+                        self.bindings.items[binding].static_program_table =
+                            self.exprStaticProgramTable(s.values[index]);
+                        if (self.exprStaticNative(s.values[index])) |namespace|
+                            self.bindings.items[binding].static_native_namespace = namespace;
+                        if (self.exprStaticArrayElementNative(s.values[index])) |namespace|
+                            self.bindings.items[binding].static_array_element_native_namespace = namespace;
                         const incoming_shape = self.exprStaticTable(s.values[index]);
                         self.mergeWriteShape(target, incoming_shape);
                         if (incoming_shape != null) if (self.collectShapeSource(s.values[index])) |source|
@@ -643,6 +776,14 @@ const Analyzer = struct {
                 try self.block(s.body);
             },
             .function_assign => |s| {
+                if (s.target == .index) {
+                    if (self.exprStaticTable(s.target.index.object)) |table_span|
+                        try self.module.table_shape_writes.append(self.allocator, .{
+                            .table_span = table_span,
+                            .key = s.target.index.key,
+                            .value_span = null,
+                        });
+                }
                 try self.analyzeWriteTarget(s.target);
                 self.mergeWriteType(s.target, .unknown);
                 try self.expr(s.function);

@@ -574,7 +574,7 @@ fn jsonToLua(runtime: *rt.Context, value: std.json.Value, preserve_keys: bool) !
             break :blk .{ .table = table };
         },
         .object => |object| blk: {
-            const table = try runtime.newTable();
+            const table = try runtime.newJsonObjectTable();
             var it = object.iterator();
             while (it.next()) |entry| {
                 const key = try jsonObjectKey(runtime, entry.key_ptr.*);

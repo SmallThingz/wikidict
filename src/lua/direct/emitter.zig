@@ -59,6 +59,8 @@ pub const ProgramFacts = struct {
     frame_entry_functions: []const u32 = &.{},
     frame_args_shape_id: ?u32 = null,
     package_loaded_shape_id: ?u32 = null,
+    json_object_shape_id: ?u32 = null,
+    uri_query_shape_id: ?u32 = null,
 
     pub fn moduleId(self: ProgramFacts, a: A, raw: []const u8) anyerror!?u32 {
         const ids = self.module_ids orelse return null;
@@ -70,6 +72,11 @@ pub const ProgramFacts = struct {
         defer a.free(normalized);
         std.mem.replaceScalar(u8, normalized, '_', ' ');
         return ids.get(normalized);
+    }
+
+    pub fn moduleIdExact(self: ProgramFacts, raw: []const u8) ?u32 {
+        const ids = self.module_ids orelse return null;
+        return ids.get(raw);
     }
 
     pub fn tableShape(self: ProgramFacts, span_start: u32) ?shapes.Fact {
@@ -99,6 +106,14 @@ pub const ProgramFacts = struct {
         return self.shapeById(self.package_loaded_shape_id);
     }
 
+    pub fn jsonObjectShape(self: ProgramFacts) ?shapes.Fact {
+        return self.shapeById(self.json_object_shape_id);
+    }
+
+    pub fn uriQueryShape(self: ProgramFacts) ?shapes.Fact {
+        return self.shapeById(self.uri_query_shape_id);
+    }
+
     pub fn moduleExportShape(self: ProgramFacts, module_id: u32) ?shapes.Fact {
         const facts = self.module_facts orelse return null;
         const registry = self.shape_registry orelse return null;
@@ -109,6 +124,8 @@ pub const ProgramFacts = struct {
     }
 
     pub fn childShape(self: ProgramFacts, fact: shapes.Fact, slot: u32) ?shapes.Fact {
+        if (self.json_object_shape_id != null and fact.id == self.json_object_shape_id.?)
+            return self.jsonObjectShape();
         const registry = self.shape_registry orelse return null;
         return registry.childShape(fact, slot);
     }
@@ -177,6 +194,10 @@ const StaticModuleRef = struct {
 // number. The boxed alternative is live only when is_number is false. Every
 // path initializes number, including arbitrary metamethod results.
 const DeferredNumber = struct { is_number: V, number: V, fallback: V };
+const TypedArrayRef = struct {
+    ptr: V,
+    element_native_namespace: static_fields.Namespace,
+};
 
 const ValueRef = union(enum) {
     nil,
@@ -187,6 +208,7 @@ const ValueRef = union(enum) {
     table: TableRef,
     shaped_boxed: TableRef,
     native_boxed: TableRef,
+    typed_array: TypedArrayRef,
     boxed: V,
 };
 
@@ -269,9 +291,13 @@ const Runtime = struct {
     table_append_many: V,
     decode_static_literal: V,
     get_index: V,
+    get_struct_index: V,
+    get_typed_array_index: V,
     set_index: V,
+    set_struct_index: V,
     get_field: V,
     get_field_cached: V,
+    get_struct_field: V,
     set_field: V,
     set_shape_slot: V,
     get_known_shape_field: V,
@@ -354,9 +380,13 @@ const Runtime = struct {
             .table_append_many = try declare(m, "dict_lua_table_append_many", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64 }),
             .decode_static_literal = try declare(m, "dict_lua_decode_static_literal", ty.i32, &.{ ty.ptr, ty.ptr, ty.i64, ty.ptr }),
             .get_index = try declare(m, "dict_lua_get_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
+            .get_struct_index = try declare(m, "dict_lua_get_struct_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
+            .get_typed_array_index = try declare(m, "dict_lua_get_typed_array_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .set_index = try declare(m, "dict_lua_set_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
+            .set_struct_index = try declare(m, "dict_lua_set_struct_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .get_field = try declare(m, "dict_lua_get_field_hashed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .get_field_cached = try declare(m, "dict_lua_get_field_cached", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.i64, ty.ptr }),
+            .get_struct_field = try declare(m, "dict_lua_get_struct_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.i64, ty.ptr }),
             .set_field = try declare(m, "dict_lua_store_field_hashed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .set_shape_slot = try declare(m, "dict_lua_set_shape_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr }),
             .get_known_shape_field = try declare(m, "dict_lua_get_known_shape_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
@@ -782,6 +812,7 @@ const FnEmitter = struct {
             .table => |table_value| return table_value.ptr,
             .shaped_boxed => |table_value| return table_value.ptr,
             .native_boxed => |table_value| return table_value.ptr,
+            .typed_array => |array| return array.ptr,
             .deferred_number => |number| {
                 const out = try self.valueSlot();
                 const numeric = try self.newBlock("deferred_box_number");
@@ -808,7 +839,7 @@ const FnEmitter = struct {
                 _ = try llvm.call(self.builder, self.rt().value_bool, &.{ out, wide });
             },
             .string => |s| _ = try llvm.call(self.builder, self.rt().value_string, &.{ out, s.ptr, try self.cI64(s.len) }),
-            .table, .shaped_boxed, .native_boxed, .boxed, .deferred_number => unreachable,
+            .table, .shaped_boxed, .native_boxed, .typed_array, .boxed, .deferred_number => unreachable,
         }
         return out;
     }
@@ -825,7 +856,7 @@ const FnEmitter = struct {
             .nil => try self.cI1(false),
             .boolean => |v| v,
             .number, .string, .table => try self.cI1(true),
-            .shaped_boxed, .native_boxed, .boxed, .deferred_number => blk: {
+            .shaped_boxed, .native_boxed, .typed_array, .boxed, .deferred_number => blk: {
                 const ptr = try self.box(value);
                 const raw = try llvm.call(self.builder, self.rt().value_truthy, &.{ptr});
                 break :blk try llvm.icmp(self.builder, .ne, raw, try self.cI8(0));
@@ -902,6 +933,9 @@ const FnEmitter = struct {
         owner: *const analysis.FunctionInfo,
         binding: u32,
     ) ?static_fields.Namespace {
+        if (binding < owner.bindings.len)
+            if (owner.bindings[binding].static_native_namespace) |namespace|
+                return namespace;
         if (binding < owner.params.len and binding == 0 and
             self.module.facts.functionFrameHint(owner.id))
             return .frame;
@@ -936,9 +970,50 @@ const FnEmitter = struct {
         };
     }
 
+    fn bindingArrayElementNativeNamespace(
+        _: *const FnEmitter,
+        owner: *const analysis.FunctionInfo,
+        binding: u32,
+    ) ?static_fields.Namespace {
+        if (binding >= owner.bindings.len) return null;
+        return owner.bindings[binding].static_array_element_native_namespace;
+    }
+
+    fn upvalueArrayElementNativeNamespace(
+        self: *const FnEmitter,
+        owner: *const analysis.FunctionInfo,
+        ordinal: u32,
+    ) ?static_fields.Namespace {
+        var current = owner;
+        var current_ordinal = ordinal;
+        while (true) {
+            if (current_ordinal >= current.upvalues.len) return null;
+            const parent = self.analyzedFunction(current.parent_id orelse return null) orelse return null;
+            switch (current.upvalues[current_ordinal].source) {
+                .local => |binding| return self.bindingArrayElementNativeNamespace(parent, binding),
+                .upvalue => |parent_ordinal| {
+                    current = parent;
+                    current_ordinal = parent_ordinal;
+                },
+            }
+        }
+    }
+
+    fn resolvedArrayElementNativeNamespace(
+        self: *const FnEmitter,
+        resolved: Resolved,
+    ) ?static_fields.Namespace {
+        return switch (resolved) {
+            .local => |binding| self.bindingArrayElementNativeNamespace(self.info, binding),
+            .upvalue => |ordinal| self.upvalueArrayElementNativeNamespace(self.info, ordinal),
+            .global => null,
+        };
+    }
+
     fn loadResolved(self: *FnEmitter, resolved: Resolved) anyerror!ValueRef {
         const known_shape = self.resolvedTableShape(resolved);
         const known_native = self.resolvedNativeNamespace(resolved);
+        const known_array_element = self.resolvedArrayElementNativeNamespace(resolved);
         return switch (resolved) {
             .local => |binding| switch (self.storage[binding]) {
                 .uninitialized => error.UninitializedBinding,
@@ -946,6 +1021,8 @@ const FnEmitter = struct {
                     .{ .table = .{ .ptr = try self.box(value), .shape = shape } }
                 else if (known_native) |namespace|
                     .{ .native_boxed = .{ .ptr = try self.box(value), .native_namespace = namespace } }
+                else if (known_array_element) |namespace|
+                    .{ .typed_array = .{ .ptr = try self.box(value), .element_native_namespace = namespace } }
                 else
                     value,
                 .static_function => error.DirectFunctionUsedAsValue,
@@ -962,6 +1039,8 @@ const FnEmitter = struct {
                         .{ .table = .{ .ptr = out, .shape = shape } }
                     else if (known_native) |namespace|
                         .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } }
+                    else if (known_array_element) |namespace|
+                        .{ .typed_array = .{ .ptr = out, .element_native_namespace = namespace } }
                     else
                         .{ .boxed = out };
                 },
@@ -973,6 +1052,8 @@ const FnEmitter = struct {
                         .{ .table = .{ .ptr = out, .shape = shape } }
                     else if (known_native) |namespace|
                         .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } }
+                    else if (known_array_element) |namespace|
+                        .{ .typed_array = .{ .ptr = out, .element_native_namespace = namespace } }
                     else
                         .{ .boxed = out };
                 },
@@ -985,6 +1066,8 @@ const FnEmitter = struct {
                     .{ .table = .{ .ptr = out, .shape = shape } }
                 else if (known_native) |namespace|
                     .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } }
+                else if (known_array_element) |namespace|
+                    .{ .typed_array = .{ .ptr = out, .element_native_namespace = namespace } }
                 else
                     .{ .boxed = out };
             },
@@ -1008,17 +1091,33 @@ const FnEmitter = struct {
         };
     }
 
-    fn tableSpanForUpvalue(self: *const FnEmitter, owner: *const analysis.FunctionInfo, ordinal: u32) ?lua.Span {
+    fn bindingTableShape(
+        self: *const FnEmitter,
+        owner: *const analysis.FunctionInfo,
+        binding: u32,
+    ) ?shapes.Fact {
+        if (binding >= owner.bindings.len) return null;
+        const fact = owner.bindings[binding];
+        if (fact.static_table_span) |span|
+            if (self.module.facts.tableShape(span.start)) |shape| return shape;
+        if (fact.static_module) |raw|
+            if (self.module.facts.moduleIdExact(raw)) |module_id|
+                return self.module.facts.moduleExportShape(module_id);
+        if (fact.static_program_table) |kind| return switch (kind) {
+            .json_object => self.module.facts.jsonObjectShape(),
+            .uri_query => self.module.facts.uriQueryShape(),
+        };
+        return null;
+    }
+
+    fn tableShapeForUpvalue(self: *const FnEmitter, owner: *const analysis.FunctionInfo, ordinal: u32) ?shapes.Fact {
         var current = owner;
         var current_ordinal = ordinal;
         while (true) {
             if (current_ordinal >= current.upvalues.len) return null;
             const parent = self.analyzedFunction(current.parent_id orelse return null) orelse return null;
             switch (current.upvalues[current_ordinal].source) {
-                .local => |binding| {
-                    if (binding >= parent.bindings.len) return null;
-                    return parent.bindings[binding].static_table_span;
-                },
+                .local => |binding| return self.bindingTableShape(parent, binding),
                 .upvalue => |parent_ordinal| {
                     current = parent;
                     current_ordinal = parent_ordinal;
@@ -1028,15 +1127,11 @@ const FnEmitter = struct {
     }
 
     fn resolvedTableShape(self: *const FnEmitter, resolved: Resolved) ?shapes.Fact {
-        const span = switch (resolved) {
-            .local => |binding| if (binding < self.info.bindings.len)
-                self.info.bindings[binding].static_table_span
-            else
-                null,
-            .upvalue => |ordinal| self.tableSpanForUpvalue(self.info, ordinal),
+        return switch (resolved) {
+            .local => |binding| self.bindingTableShape(self.info, binding),
+            .upvalue => |ordinal| self.tableShapeForUpvalue(self.info, ordinal),
             .global => null,
-        } orelse return null;
-        return self.module.facts.tableShape(span.start);
+        };
     }
 
     fn storeResolved(self: *FnEmitter, resolved: Resolved, value: ValueRef) anyerror!void {
@@ -1113,6 +1208,7 @@ const FnEmitter = struct {
             .number => |number| .{ .native = number },
             .shaped_boxed => |table_value| .{ .boxed = table_value.ptr },
             .native_boxed => |table_value| .{ .boxed = table_value.ptr },
+            .typed_array => |array| .{ .boxed = array.ptr },
             .boxed => |boxed| .{ .boxed = boxed },
             .deferred_number => |number| .{ .deferred = number },
             else => null,
@@ -1293,7 +1389,7 @@ const FnEmitter = struct {
                         const other = if (lhs == .nil) rhs else lhs;
                         const is_nil = switch (other) {
                             .nil => try self.cI1(true),
-                            .shaped_boxed, .native_boxed, .boxed, .deferred_number => blk: {
+                            .shaped_boxed, .native_boxed, .typed_array, .boxed, .deferred_number => blk: {
                                 const ptr = try self.box(other);
                                 const raw = try llvm.call(self.builder, self.rt().value_is_nil, &.{ptr});
                                 break :blk try llvm.icmp(self.builder, .ne, raw, try self.cI8(0));
@@ -1424,6 +1520,31 @@ const FnEmitter = struct {
 
     fn getIndex(self: *FnEmitter, object: ValueRef, key_expr: *const lua.Expr) anyerror!ValueRef {
         if (staticString(key_expr)) |name| return self.getField(object, name);
+        if (nativeNamespaceHint(object)) |namespace| if (static_fields.indexElementNamespace(namespace)) |element_namespace| {
+            const out = try self.valueSlot();
+            const status = try llvm.call(self.builder, self.rt().get_typed_array_index, &.{
+                self.ctx(),
+                try self.box(object),
+                try self.box(try self.expr(key_expr)),
+                out,
+            });
+            try self.check(status);
+            return .{ .native_boxed = .{ .ptr = out, .native_namespace = element_namespace } };
+        };
+        if (object == .typed_array) {
+            const out = try self.valueSlot();
+            const status = try llvm.call(self.builder, self.rt().get_typed_array_index, &.{
+                self.ctx(),
+                object.typed_array.ptr,
+                try self.box(try self.expr(key_expr)),
+                out,
+            });
+            try self.check(status);
+            return .{ .native_boxed = .{
+                .ptr = out,
+                .native_namespace = object.typed_array.element_native_namespace,
+            } };
+        }
         if (shapeHint(object)) |shape| {
             if (shapes.staticKey(key_expr)) |key| {
                 if (shapeKeySlot(shape, key)) |slot| {
@@ -1453,7 +1574,7 @@ const FnEmitter = struct {
         const object_box = try self.box(object);
         const out = try self.valueSlot();
         const key_box = try self.box(try self.expr(key_expr));
-        const status = try llvm.call(self.builder, self.rt().get_index, &.{
+        const status = try llvm.call(self.builder, self.rt().get_struct_index, &.{
             self.ctx(), object_box, key_box, out,
         });
         try self.check(status);
@@ -1525,7 +1646,7 @@ const FnEmitter = struct {
                 } else blk: {
                     const key_box = try self.box(try self.expr(item.key));
                     const value_box = try self.box(try self.expr(item.value));
-                    break :blk try llvm.call(self.builder, self.rt().set_index, &.{
+                    break :blk try llvm.call(self.builder, self.rt().set_struct_index, &.{
                         self.ctx(), table_value, key_box, value_box,
                     });
                 };
@@ -1589,6 +1710,8 @@ const FnEmitter = struct {
         return switch (value.*) {
             .name => |name| blk: {
                 const resolved = try self.resolve(name.value);
+                if (self.resolvedNativeNamespace(resolved)) |namespace|
+                    break :blk namespace;
                 break :blk switch (resolved) {
                     .local => |binding| switch (self.storage[binding]) {
                         .direct => |direct| nativeNamespaceHint(direct),
@@ -1630,7 +1753,7 @@ const FnEmitter = struct {
             .global => |slot| if (slot != require_slot) return null,
             else => return null,
         }
-        const requested = staticString(args_in[0]) orelse return null;
+        const requested = (try self.staticStringExpr(args_in[0])) orelse return null;
         if (std.mem.eql(u8, requested, "bit32")) return .bit32;
         if (std.mem.eql(u8, requested, "libraryUtil")) return .library_util;
         return null;
@@ -1653,23 +1776,56 @@ const FnEmitter = struct {
         };
     }
 
+    fn nativeCallReturnElementNamespace(
+        self: *FnEmitter,
+        callee: *const lua.Expr,
+    ) anyerror!?static_fields.Namespace {
+        return switch (callee.*) {
+            .index => |index| blk: {
+                const owner = (try self.nativeNamespaceExpr(index.object)) orelse break :blk null;
+                const field = staticString(index.key) orelse break :blk null;
+                break :blk static_fields.callReturnElementNamespace(owner, field);
+            },
+            .paren => |paren| self.nativeCallReturnElementNamespace(paren.expr),
+            else => null,
+        };
+    }
+
     fn callResultRef(
         self: *FnEmitter,
         callee: *const lua.Expr,
         args_in: []const *lua.Expr,
         out: V,
     ) anyerror!ValueRef {
+        if (callee.* == .index) {
+            if (try self.nativeNamespaceExpr(callee.index.object)) |owner| {
+                if (staticString(callee.index.key)) |name| {
+                    if ((owner == .mw and std.mem.eql(u8, name, "loadJsonData")) or
+                        (owner == .text and std.mem.eql(u8, name, "jsonDecode")))
+                        if (self.module.facts.jsonObjectShape()) |shape|
+                            return .{ .shaped_boxed = .{ .ptr = out, .shape = shape } };
+                }
+            }
+        }
+        if (try self.staticRequire(callee, null, args_in)) |request|
+            if (self.module.facts.moduleExportShape(request.module_id)) |shape|
+                return .{ .shaped_boxed = .{ .ptr = out, .shape = shape } };
         if (try self.callReturnShapeHint(callee)) |shape|
             return .{ .shaped_boxed = .{ .ptr = out, .shape = shape } };
+        if (try self.nativeCallReturnElementNamespace(callee)) |element_namespace|
+            return .{ .typed_array = .{ .ptr = out, .element_native_namespace = element_namespace } };
         if (try self.nativeCallReturnNamespace(callee, args_in)) |namespace|
             return .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } };
         return .{ .boxed = out };
     }
 
     fn methodResultRef(self: *FnEmitter, object: *const lua.Expr, method: []const u8, out: V) anyerror!ValueRef {
-        if (try self.nativeNamespaceExpr(object)) |owner|
+        if (try self.nativeNamespaceExpr(object)) |owner| {
+            if (static_fields.callReturnElementNamespace(owner, method)) |element_namespace|
+                return .{ .typed_array = .{ .ptr = out, .element_native_namespace = element_namespace } };
             if (static_fields.callReturnNamespace(owner, method)) |namespace|
                 return .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } };
+        }
         return .{ .boxed = out };
     }
 
@@ -1748,20 +1904,28 @@ const FnEmitter = struct {
                 if (namespace == .package and std.mem.eql(u8, name, "loaded"))
                     if (self.module.facts.packageLoadedShape()) |package_loaded_shape|
                         return .{ .shaped_boxed = .{ .ptr = out, .shape = package_loaded_shape } };
+                if (namespace == .uri_value and std.mem.eql(u8, name, "query"))
+                    if (self.module.facts.uriQueryShape()) |uri_query_shape|
+                        return .{ .shaped_boxed = .{ .ptr = out, .shape = uri_query_shape } };
                 return if (static_fields.fieldNamespace(namespace, name)) |child|
                     .{ .native_boxed = .{ .ptr = out, .native_namespace = child } }
                 else
                     .{ .boxed = out };
             }
+            if (object == .native_boxed) {
+                const status = try llvm.call(self.builder, self.rt().get_known_native_slot, &.{
+                    self.ctx(), object_box, try self.cI32(@intFromEnum(namespace)),
+                    try self.cI32(std.math.maxInt(u32)), key.ptr, try self.cI64(key.len), out,
+                });
+                try self.check(status);
+                return .{ .boxed = out };
+            }
         }
-        if (site_id) |id| {
-            try self.emitCachedField(object_box, key, out, id, key_hash);
-        } else {
-            const status = try llvm.call(self.builder, self.rt().get_field, &.{
-                self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(key_hash), out,
-            });
-            try self.check(status);
-        }
+        const status = try llvm.call(self.builder, self.rt().get_struct_field, &.{
+            self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(key_hash),
+            try self.cI64(site_id orelse std.math.maxInt(u64)), out,
+        });
+        try self.check(status);
         return .{ .boxed = out };
     }
 
@@ -1996,7 +2160,13 @@ const FnEmitter = struct {
                     try llvm.br(self.builder, join);
 
                     llvm.position(self.builder, fallback_block);
-                    const live = try self.getField(.{ .boxed = module.value }, field);
+                    const live = try self.getField(
+                        if (module.shape) |shape|
+                            .{ .shaped_boxed = .{ .ptr = module.value, .shape = shape } }
+                        else
+                            .{ .boxed = module.value },
+                        field,
+                    );
                     const callable = try self.box(live);
                     try llvm.br(self.builder, join);
 
@@ -2012,7 +2182,13 @@ const FnEmitter = struct {
                     };
                 };
 
-                const live = try self.getField(.{ .boxed = module.value }, field);
+                const live = try self.getField(
+                    if (module.shape) |shape|
+                        .{ .shaped_boxed = .{ .ptr = module.value, .shape = shape } }
+                    else
+                        .{ .boxed = module.value },
+                    field,
+                );
                 const callable = try self.box(live);
                 const direct_captures = if (export_fact.capture_count == 0)
                     try self.nullPtr()
@@ -2074,6 +2250,21 @@ const FnEmitter = struct {
         };
     }
 
+    fn staticStringExpr(self: *FnEmitter, value: *const lua.Expr) anyerror!?[]const u8 {
+        if (staticString(value)) |text| return text;
+        return switch (value.*) {
+            .name => |name| switch (try self.resolve(name.value)) {
+                .local => |binding| switch (self.storage[binding]) {
+                    .direct => |direct| if (direct == .string) direct.string.bytes else null,
+                    else => null,
+                },
+                else => null,
+            },
+            .paren => |paren| self.staticStringExpr(paren.expr),
+            else => null,
+        };
+    }
+
     fn staticRequire(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr) anyerror!?StaticRequire {
         if (method != null or args_in.len != 1 or callee_expr.* != .name) return null;
         if (!std.mem.eql(u8, callee_expr.name.value, "require")) return null;
@@ -2083,7 +2274,7 @@ const FnEmitter = struct {
             .global => |slot| if (slot != require_slot) return null,
             else => return null,
         }
-        const requested = staticString(args_in[0]) orelse return null;
+        const requested = (try self.staticStringExpr(args_in[0])) orelse return null;
         const module_id = (try self.module.facts.moduleId(self.a(), requested)) orelse return null;
         return .{ .module_id = module_id, .requested = try self.stringRef(requested) };
     }
@@ -3029,7 +3220,7 @@ const FnEmitter = struct {
                 try self.check(status);
             },
             .index => |index| {
-                const status = try llvm.call(self.builder, self.rt().set_index, &.{
+                const status = try llvm.call(self.builder, self.rt().set_struct_index, &.{
                     self.ctx(), try self.box(index.object), try self.box(index.key), try self.box(value),
                 });
                 try self.check(status);

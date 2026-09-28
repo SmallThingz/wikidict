@@ -95,6 +95,8 @@ pub const Program = struct {
     shape_sorted_slots: []u32,
     frame_args_shape_id: ?u32,
     package_loaded_shape_id: ?u32,
+    json_object_shape_id: ?u32,
+    uri_query_shape_id: ?u32,
     stdlib_template: stdlib.Template,
     template_arena: ?*std.heap.ArenaAllocator = null,
     template_context: ?*rt.Context = null,
@@ -118,6 +120,8 @@ pub const Program = struct {
         const synth_export_total = try reader.readU32();
         const frame_args_shape_raw = try reader.readU32();
         const package_loaded_shape_raw = try reader.readU32();
+        const json_object_shape_raw = try reader.readU32();
+        const uri_query_shape_raw = try reader.readU32();
         const item_bound: u64 = mapped.bytes.len / 4 + 1;
         if (@as(u64, module_count) > item_bound or
             @as(u64, module_lookup_count) > item_bound or
@@ -138,6 +142,18 @@ pub const Program = struct {
             null
         else if (package_loaded_shape_raw < shape_count)
             package_loaded_shape_raw
+        else
+            return error.InvalidProgramMetadata;
+        const json_object_shape_id = if (json_object_shape_raw == std.math.maxInt(u32))
+            null
+        else if (json_object_shape_raw < shape_count)
+            json_object_shape_raw
+        else
+            return error.InvalidProgramMetadata;
+        const uri_query_shape_id = if (uri_query_shape_raw == std.math.maxInt(u32))
+            null
+        else if (uri_query_shape_raw < shape_count)
+            uri_query_shape_raw
         else
             return error.InvalidProgramMetadata;
 
@@ -352,6 +368,8 @@ pub const Program = struct {
             .shape_sorted_slots = shape_sorted_slots,
             .frame_args_shape_id = frame_args_shape_id,
             .package_loaded_shape_id = package_loaded_shape_id,
+            .json_object_shape_id = json_object_shape_id,
+            .uri_query_shape_id = uri_query_shape_id,
             .stdlib_template = stdlib_template,
         };
     }
@@ -513,6 +531,8 @@ pub const Program = struct {
         ctx.program_shape_generation = self.shape_generation;
         ctx.frame_args_shape_id = self.frame_args_shape_id;
         ctx.package_loaded_shape_id = self.package_loaded_shape_id;
+        ctx.json_object_shape_id = self.json_object_shape_id;
+        ctx.uri_query_shape_id = self.uri_query_shape_id;
         ctx.configureModules(self, lookup, moduleName);
         ctx.configureFunctionModules(self.function_module_ids);
         ctx.configureModuleRequirements(self, moduleRequirements);

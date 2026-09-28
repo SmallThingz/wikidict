@@ -1155,6 +1155,8 @@ pub const Context = struct {
     program_shape_generation: u64 = 0,
     frame_args_shape_id: ?u32 = null,
     package_loaded_shape_id: ?u32 = null,
+    json_object_shape_id: ?u32 = null,
+    uri_query_shape_id: ?u32 = null,
     module_export_shape_ids: []const u32 = &.{},
     module_root_entries: []const FunctionFn = &.{},
     function_module_ids: []const u32 = &.{},
@@ -1225,6 +1227,8 @@ pub const Context = struct {
         child.program_shape_generation = self.program_shape_generation;
         child.frame_args_shape_id = self.frame_args_shape_id;
         child.package_loaded_shape_id = self.package_loaded_shape_id;
+        child.json_object_shape_id = self.json_object_shape_id;
+        child.uri_query_shape_id = self.uri_query_shape_id;
         child.module_export_shape_ids = self.module_export_shape_ids;
         child.module_root_entries = self.module_root_entries;
         child.function_module_ids = self.function_module_ids;
@@ -2218,6 +2222,20 @@ pub const Context = struct {
             self.newTable();
     }
 
+    pub fn newJsonObjectTable(self: *Context) !*Table {
+        return if (self.json_object_shape_id) |shape_id|
+            self.newProgramShape(shape_id)
+        else
+            self.newTable();
+    }
+
+    pub fn newUriQueryTable(self: *Context) !*Table {
+        return if (self.uri_query_shape_id) |shape_id|
+            self.newProgramShape(shape_id)
+        else
+            self.newTable();
+    }
+
     pub const ProgramFieldSlot = struct { shape_id: u32, slot: u32 };
 
     pub fn moduleExportSlot(self: *const Context, module_id: u32, name: []const u8) ?ProgramFieldSlot {
@@ -2252,6 +2270,30 @@ pub const Context = struct {
                 if (object.table.rawGetSlot(slot)) |value| return value;
                 if (object.table.metatable == null) return .nil;
             }
+        }
+        return self.getIndex(object, key);
+    }
+
+    /// Dynamic-key access with structural priority. Any shaped/native table uses
+    /// its slot layout first; truly open/shapeless tables and misses retain
+    /// ordinary Lua indexing and metamethod behavior.
+    pub fn getStructuralIndex(self: *Context, object: Value, key: Value) !Value {
+        if (object == .table) {
+            const table = object.table;
+            if (table.shape != null or table.native_namespace != null) {
+                if (table.slotForKey(key)) |slot| {
+                    if (table.rawGetSlot(slot)) |value| return value;
+                    if (table.metatable == null) return .nil;
+                }
+            }
+        }
+        return self.getIndex(object, key);
+    }
+
+    pub fn getTypedArrayIndex(self: *Context, object: Value, key: Value) !Value {
+        if (object == .table and key == .number) {
+            if (object.table.rawGetNumber(key.number)) |value| return value;
+            if (object.table.metatable == null) return .nil;
         }
         return self.getIndex(object, key);
     }
@@ -2316,6 +2358,23 @@ pub const Context = struct {
                 if (object.table.rawGetSlot(slot) != null or object.table.metatable == null) {
                     try object.table.rawSetSlot(slot, value);
                     return;
+                }
+            }
+        }
+        try self.setIndex(object, key, value);
+    }
+
+    /// Dynamic-key write with structural priority. Open structural tables still
+    /// fall through for keys outside their declared slot set.
+    pub fn setStructuralIndex(self: *Context, object: Value, key: Value, value: Value) !void {
+        if (object == .table) {
+            const table = object.table;
+            if (table.shape != null or table.native_namespace != null) {
+                if (table.slotForKey(key)) |slot| {
+                    if (table.rawGetSlot(slot) != null or table.metatable == null) {
+                        try table.rawSetSlot(slot, value);
+                        return;
+                    }
                 }
             }
         }
@@ -2530,6 +2589,32 @@ pub const Context = struct {
             return value.*;
         }
         return self.inheritedCacheFill(table, own_witness, name, key_hash, site_id);
+    }
+
+    /// Static field access on a value whose exact table shape is not known by
+    /// the compiler. Prefer the live table's structural slot immediately, then
+    /// retain the ordinary site-cache / hash / metamethod path as the semantic
+    /// fallback for truly dynamic or overflow fields.
+    pub fn getStructuralFieldAtSite(
+        self: *Context,
+        object: Value,
+        name: []const u8,
+        key_hash: u64,
+        site_id: ?u64,
+    ) anyerror!Value {
+        if (object == .table) {
+            const table = object.table;
+            if (table.shape != null or table.native_namespace != null) {
+                if (table.slotForKey(.{ .string = name })) |slot| {
+                    if (table.rawGetSlot(slot)) |value| return value;
+                    if (table.metatable == null) return .nil;
+                }
+            }
+        }
+        return if (site_id) |site|
+            self.getFieldAtSite(object, name, key_hash, site)
+        else
+            self.getHashedField(object, name, key_hash);
     }
 
     pub fn getHashedField(self: *Context, object: Value, name: []const u8, key_hash: u64) anyerror!Value {

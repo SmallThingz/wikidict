@@ -254,12 +254,33 @@ export fn dict_lua_get_index(ctx: *rt.Context, object: *const rt.Value, key: *co
     out.* = ctx.getIndex(object.*, key.*) catch |err| return fail(ctx, err);
     return 0;
 }
+
+export fn dict_lua_get_struct_index(ctx: *rt.Context, object: *const rt.Value, key: *const rt.Value, out: *rt.Value) callconv(.c) u32 {
+    out.* = ctx.getStructuralIndex(object.*, key.*) catch |err| return fail(ctx, err);
+    return 0;
+}
+
+export fn dict_lua_get_typed_array_index(ctx: *rt.Context, object: *const rt.Value, key: *const rt.Value, out: *rt.Value) callconv(.c) u32 {
+    out.* = ctx.getTypedArrayIndex(object.*, key.*) catch |err| return fail(ctx, err);
+    return 0;
+}
 export fn dict_lua_set_index(ctx: *rt.Context, object: *const rt.Value, key: *const rt.Value, input: *const rt.Value) callconv(.c) u32 {
     ctx.setIndex(object.*, key.*, input.*) catch |err| return fail(ctx, err);
     return 0;
 }
+
+export fn dict_lua_set_struct_index(ctx: *rt.Context, object: *const rt.Value, key: *const rt.Value, input: *const rt.Value) callconv(.c) u32 {
+    ctx.setStructuralIndex(object.*, key.*, input.*) catch |err| return fail(ctx, err);
+    return 0;
+}
 export fn dict_lua_get_field_cached(ctx: *rt.Context, object: *const rt.Value, name: [*]const u8, len: usize, key_hash: u64, site_id: u64, out: *rt.Value) callconv(.c) u32 {
     out.* = ctx.getFieldAtSite(object.*, name[0..len], key_hash, site_id) catch |err| return fail(ctx, err);
+    return 0;
+}
+
+export fn dict_lua_get_struct_field(ctx: *rt.Context, object: *const rt.Value, name: [*]const u8, len: usize, key_hash: u64, site_id: u64, out: *rt.Value) callconv(.c) u32 {
+    const site: ?u64 = if (site_id == std.math.maxInt(u64)) null else site_id;
+    out.* = ctx.getStructuralFieldAtSite(object.*, name[0..len], key_hash, site) catch |err| return fail(ctx, err);
     return 0;
 }
 export fn dict_lua_get_field_hashed(ctx: *rt.Context, object: *const rt.Value, name: [*]const u8, len: usize, key_hash: u64, out: *rt.Value) callconv(.c) u32 {

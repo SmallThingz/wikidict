@@ -604,7 +604,9 @@ fn analyzeManifest(
                         return std.mem.order(u8, lhs, rhs) == .lt;
                     }
                 }.lessThan);
-                export_shape_id = try shape_registry.promote(module_index, table.span_start, fields.items);
+                const field_keys = try sa.alloc(shapes.Key, fields.items.len);
+                for (field_keys, fields.items) |*out, field| out.* = .{ .string = field };
+                export_shape_id = try shape_registry.extendKeys(module_index, table.span_start, field_keys);
             },
             else => {},
         };
@@ -689,6 +691,15 @@ fn analyzeManifest(
                 return std.mem.order(u8, lhs.name, rhs.name) == .lt;
             }
         }.lessThan);
+        if (direct_exports.items.len != 0) switch (model.return_binding) {
+            .table => |table| {
+                const export_keys = try sa.alloc(shapes.Key, direct_exports.items.len);
+                for (export_keys, direct_exports.items) |*key, entry|
+                    key.* = .{ .string = entry.name };
+                export_shape_id = try shape_registry.extendKeys(module_index, table.span_start, export_keys);
+            },
+            else => {},
+        };
 
         var synth_literals: std.ArrayList(static_encode.NamedLiteralField) = .empty;
         if (!model.dynamic_top_level) switch (model.return_binding) {
@@ -873,6 +884,8 @@ fn appendModuleToBatch(
     native_find_three: bool,
     frame_args_shape_id: ?u32,
     package_loaded_shape_id: ?u32,
+    json_object_shape_id: ?u32,
+    uri_query_shape_id: ?u32,
 ) !void {
     const path = try sourcePath(scratch, source_root, record.path);
     const source = try readAll(io, scratch, path);
@@ -906,6 +919,8 @@ fn appendModuleToBatch(
         .frame_entry_functions = record.frame_entry_functions,
         .frame_args_shape_id = frame_args_shape_id,
         .package_loaded_shape_id = package_loaded_shape_id,
+        .json_object_shape_id = json_object_shape_id,
+        .uri_query_shape_id = uri_query_shape_id,
     };
     const result = try batch.append(scratch, globals, &module, facts);
     if (result.root_function != record.root_function or
@@ -928,6 +943,8 @@ fn emitBatches(
     value_leaf_bc: []const u8,
     frame_args_shape_id: ?u32,
     package_loaded_shape_id: ?u32,
+    json_object_shape_id: ?u32,
+    uri_query_shape_id: ?u32,
 ) !void {
     if (records.len != modes.len) return error.InvalidCompilePlan;
 
@@ -997,6 +1014,8 @@ fn emitBatches(
                     mode != .o0,
                     frame_args_shape_id,
                     package_loaded_shape_id,
+                    json_object_shape_id,
+                    uri_query_shape_id,
                 );
                 _ = scratch_arena.reset(.retain_capacity);
 
@@ -1265,6 +1284,255 @@ fn buildPackageLoadedShape(
     );
 }
 
+const DynamicObjectKind = enum {
+    none,
+    mw,
+    text,
+    uri,
+    json_object,
+    uri_value,
+    uri_query,
+};
+
+const DynamicObjectShapeScanner = struct {
+    allocator: A,
+    json_keys: *FrameArgKeySet,
+    uri_query_keys: *FrameArgKeySet,
+    env: std.StringHashMapUnmanaged(DynamicObjectKind) = .empty,
+
+    fn deinit(self: *DynamicObjectShapeScanner) void {
+        self.env.deinit(self.allocator);
+    }
+
+    fn staticStringExpr(expr: *const lua.Expr) ?[]const u8 {
+        return switch (expr.*) {
+            .string => |value| value.value,
+            .paren => |value| staticStringExpr(value.expr),
+            else => null,
+        };
+    }
+
+    fn nameKind(self: *const DynamicObjectShapeScanner, name: []const u8) DynamicObjectKind {
+        if (self.env.get(name)) |kind| return kind;
+        return if (std.mem.eql(u8, name, "mw")) .mw else .none;
+    }
+
+    fn exprKind(self: *const DynamicObjectShapeScanner, expr: *const lua.Expr) DynamicObjectKind {
+        return switch (expr.*) {
+            .name => |value| self.nameKind(value.value),
+            .paren => |value| self.exprKind(value.expr),
+            .index => |value| blk: {
+                const owner = self.exprKind(value.object);
+                const field = staticStringExpr(value.key) orelse break :blk .none;
+                break :blk switch (owner) {
+                    .mw => if (std.mem.eql(u8, field, "text"))
+                        .text
+                    else if (std.mem.eql(u8, field, "uri"))
+                        .uri
+                    else
+                        .none,
+                    .json_object => .json_object,
+                    .uri_value => if (std.mem.eql(u8, field, "query")) .uri_query else .none,
+                    else => .none,
+                };
+            },
+            .call => |value| blk: {
+                if (value.callee.* != .index) break :blk .none;
+                const owner = self.exprKind(value.callee.index.object);
+                const field = staticStringExpr(value.callee.index.key) orelse break :blk .none;
+                break :blk switch (owner) {
+                    .mw => if (std.mem.eql(u8, field, "loadJsonData")) .json_object else .none,
+                    .text => if (std.mem.eql(u8, field, "jsonDecode")) .json_object else .none,
+                    .uri => if (std.mem.eql(u8, field, "new")) .uri_value else .none,
+                    else => .none,
+                };
+            },
+            else => .none,
+        };
+    }
+
+    fn collectExpr(self: *DynamicObjectShapeScanner, expr: *const lua.Expr) anyerror!void {
+        switch (expr.*) {
+            .function => |value| try self.collectFunction(value.params, value.body),
+            .index => |value| {
+                switch (self.exprKind(value.object)) {
+                    .json_object => if (shapes.staticKey(value.key)) |key|
+                        if (key == .string) try self.json_keys.add(key),
+                    .uri_query => if (shapes.staticKey(value.key)) |key|
+                        if (key == .string) try self.uri_query_keys.add(key),
+                    else => {},
+                }
+                try self.collectExpr(value.object);
+                try self.collectExpr(value.key);
+            },
+            .call => |value| {
+                try self.collectExpr(value.callee);
+                for (value.args) |arg| try self.collectExpr(arg);
+            },
+            .method_call => |value| {
+                try self.collectExpr(value.object);
+                for (value.args) |arg| try self.collectExpr(arg);
+            },
+            .table => |value| for (value.fields) |field| switch (field) {
+                .list => |item| try self.collectExpr(item),
+                .named => |item| try self.collectExpr(item.value),
+                .keyed => |item| {
+                    try self.collectExpr(item.key);
+                    try self.collectExpr(item.value);
+                },
+            },
+            .unary => |value| try self.collectExpr(value.expr),
+            .binary => |value| {
+                try self.collectExpr(value.lhs);
+                try self.collectExpr(value.rhs);
+            },
+            .paren => |value| try self.collectExpr(value.expr),
+            else => {},
+        }
+    }
+
+    fn collectFunction(
+        self: *DynamicObjectShapeScanner,
+        params: []const []const u8,
+        body: lua.Block,
+    ) anyerror!void {
+        const saved = try self.env.clone(self.allocator);
+        defer {
+            self.env.deinit(self.allocator);
+            self.env = saved;
+        }
+        for (params) |name| try self.env.put(self.allocator, name, .none);
+        try self.collectBlock(body);
+    }
+
+    fn collectScopedBlock(self: *DynamicObjectShapeScanner, body: lua.Block) anyerror!void {
+        const saved = try self.env.clone(self.allocator);
+        defer {
+            self.env.deinit(self.allocator);
+            self.env = saved;
+        }
+        try self.collectBlock(body);
+    }
+
+    fn collectBlock(self: *DynamicObjectShapeScanner, block: lua.Block) anyerror!void {
+        for (block) |stmt| switch (stmt.*) {
+            .local_assign => |value| {
+                const kinds = try self.allocator.alloc(DynamicObjectKind, value.names.len);
+                defer self.allocator.free(kinds);
+                for (kinds, 0..) |*kind, index|
+                    kind.* = if (index < value.values.len) self.exprKind(value.values[index]) else .none;
+                for (value.values) |expr| try self.collectExpr(expr);
+                for (value.names, kinds) |name, kind|
+                    try self.env.put(self.allocator, name, kind);
+            },
+            .assign => |value| {
+                for (value.targets) |target| if (target == .index) {
+                    try self.collectExpr(target.index.object);
+                    try self.collectExpr(target.index.key);
+                };
+                for (value.values) |expr| try self.collectExpr(expr);
+                for (value.targets, 0..) |target, index| if (target == .name) {
+                    const kind = if (index < value.values.len) self.exprKind(value.values[index]) else .none;
+                    try self.env.put(self.allocator, target.name, kind);
+                };
+            },
+            .local_function => |value| {
+                try self.env.put(self.allocator, value.name, .none);
+                try self.collectExpr(value.function);
+            },
+            .function_assign => |value| {
+                if (value.target == .index) {
+                    try self.collectExpr(value.target.index.object);
+                    try self.collectExpr(value.target.index.key);
+                }
+                try self.collectExpr(value.function);
+            },
+            .call => |value| try self.collectExpr(value.expr),
+            .do_block => |value| try self.collectScopedBlock(value.body),
+            .while_loop => |value| {
+                try self.collectExpr(value.cond);
+                try self.collectScopedBlock(value.body);
+            },
+            .repeat_loop => |value| {
+                try self.collectScopedBlock(value.body);
+                try self.collectExpr(value.cond);
+            },
+            .if_stmt => |value| {
+                for (value.branches) |branch| {
+                    try self.collectExpr(branch.cond);
+                    try self.collectScopedBlock(branch.body);
+                }
+                if (value.else_body) |body| try self.collectScopedBlock(body);
+            },
+            .numeric_for => |value| {
+                try self.collectExpr(value.start);
+                try self.collectExpr(value.limit);
+                if (value.step) |step| try self.collectExpr(step);
+                try self.collectScopedBlock(value.body);
+            },
+            .generic_for => |value| {
+                for (value.values) |expr| try self.collectExpr(expr);
+                try self.collectScopedBlock(value.body);
+            },
+            .return_stmt => |value| for (value.values) |expr| try self.collectExpr(expr),
+            .empty, .break_stmt => {},
+        };
+    }
+};
+
+const DynamicObjectShapes = struct {
+    json_object: ?u32,
+    uri_query: ?u32,
+};
+
+fn buildDynamicObjectShapes(
+    io: std.Io,
+    a: A,
+    source_root: []const u8,
+    records: []const ModuleRecord,
+    shape_registry: *shapes.Registry,
+) !DynamicObjectShapes {
+    var json_keys = FrameArgKeySet{ .allocator = a };
+    defer json_keys.deinit();
+    var uri_query_keys = FrameArgKeySet{ .allocator = a };
+    defer uri_query_keys.deinit();
+
+    for (records) |record| {
+        const path = try sourcePath(a, source_root, record.path);
+        defer a.free(path);
+        const source = try readAll(io, a, path);
+        defer a.free(source);
+        var chunk = try lua.parse(a, source);
+        defer chunk.deinit();
+        var scanner = DynamicObjectShapeScanner{
+            .allocator = a,
+            .json_keys = &json_keys,
+            .uri_query_keys = &uri_query_keys,
+        };
+        defer scanner.deinit();
+        try scanner.collectBlock(chunk.body);
+    }
+
+    return .{
+        .json_object = if (json_keys.items.items.len == 0)
+            null
+        else
+            try shape_registry.promoteKeys(
+                std.math.maxInt(u32) - 2,
+                std.math.maxInt(u32) - 3,
+                json_keys.items.items,
+            ),
+        .uri_query = if (uri_query_keys.items.items.len == 0)
+            null
+        else
+            try shape_registry.promoteKeys(
+                std.math.maxInt(u32) - 3,
+                std.math.maxInt(u32) - 4,
+                uri_query_keys.items.items,
+            ),
+    };
+}
+
 fn run(io: std.Io, a: A, args: []const []const u8) !void {
     if (args.len < 4) return error.Usage;
     var analysis_only = false;
@@ -1504,8 +1772,17 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &selected_module_ids,
         &shape_registry,
     );
+    const dynamic_object_shapes = try buildDynamicObjectShapes(
+        io,
+        a,
+        source_root,
+        selected_records.items,
+        &shape_registry,
+    );
     std.debug.print("LLVM_FRAME_ARGS_SHAPE id={?d}\n", .{frame_args_shape_id});
     std.debug.print("LLVM_PACKAGE_LOADED_SHAPE id={?d}\n", .{package_loaded_shape_id});
+    std.debug.print("LLVM_JSON_OBJECT_SHAPE id={?d}\n", .{dynamic_object_shapes.json_object});
+    std.debug.print("LLVM_URI_QUERY_SHAPE id={?d}\n", .{dynamic_object_shapes.uri_query});
 
     try emitBatches(
         io,
@@ -1522,6 +1799,8 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         leaf_bc,
         frame_args_shape_id,
         package_loaded_shape_id,
+        dynamic_object_shapes.json_object,
+        dynamic_object_shapes.uri_query,
     );
 
     var program_module = try program.generate(a, selected_records.items);
@@ -1540,6 +1819,8 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &selected_module_ids,
         frame_args_shape_id,
         package_loaded_shape_id,
+        dynamic_object_shapes.json_object,
+        dynamic_object_shapes.uri_query,
     );
     std.debug.print("LLVM_DONE modules={d} globals={d}\n", .{ selected_records.items.len, globals.names.items.len });
 }

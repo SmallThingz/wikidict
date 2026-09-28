@@ -606,7 +606,7 @@ test "static table shapes survive captured and shape-stable mutable locals" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         changed,
-        "call i32 @dict_lua_get_field_cached",
+        "call i32 @dict_lua_get_struct_field",
     ) != null);
 
     const through_param = try compile(
@@ -917,9 +917,9 @@ test "literal field reads carry exact hashes while dynamic keys retain generic l
     defer generated.deinit();
     const ir = try generated.toText(std.testing.allocator);
     defer std.testing.allocator.free(ir);
-    const needle = "call i32 @dict_lua_get_field_cached(";
+    const needle = "call i32 @dict_lua_get_struct_field(";
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, needle));
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_get_index("));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_get_struct_index("));
     const start = std.mem.indexOf(u8, ir, needle).?;
     const end = std.mem.indexOfScalarPos(u8, ir, start, '\n') orelse ir.len;
     const hash = @import("abi/static_fields.zig").hashStringKey("current_layer");
@@ -1046,10 +1046,11 @@ test "native namespace fields and returns retain structural types" {
         \\local node = mw.html.create("div"):tag("span")
         \\local uri = mw.uri.new("https://example.test/path")
         \\local batch = mw.title.newBatch({"rat"}):lookupExistence()
+        \\local titles = batch:getTitles()
         \\local template_ns = mw.site.namespaces.Template
         \\local bits = require("bit32")
         \\local libraryUtil = require("libraryUtil")
-        \\return title.prefixedText, title.contentModel, language:getCode(), node:allDone(), uri.protocol, batch:getTitles(), os.date("!%Y", 0), template_ns.isCapitalized, package.loaded, bits.band, libraryUtil.checkType, debug.getinfo
+        \\return title.prefixedText, title.contentModel, language:getCode(), node:allDone(), uri.protocol, titles[1].prefixedText, os.date("!%Y", 0), template_ns.isCapitalized, package.loaded, bits.band, libraryUtil.checkType, debug.getinfo
     ;
     var chunk = try llvm_parser.parse(std.testing.allocator, source);
     defer chunk.deinit();
@@ -1063,8 +1064,24 @@ test "native namespace fields and returns retain structural types" {
     defer std.testing.allocator.free(ir);
     try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_native_slot") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_known_native_slot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_typed_array_index") != null);
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_field_cached("));
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_field_hashed("));
+}
+
+test "captured native results retain structural types" {
+    const source = "local media=mw.title.new('Media:Remote.svg'); return function() return media.exists end";
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_known_native_slot") != null);
 }
 
 test "exported Scribunto entry first argument is a guarded frame struct" {
@@ -1098,7 +1115,7 @@ test "global table escape disables native namespace slot assumptions" {
     const generated_source = try generated.toText(std.testing.allocator);
     defer std.testing.allocator.free(generated_source);
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, generated_source, "call i32 @dict_lua_get_native_slot"));
-    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_get_field") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_source, "call i32 @dict_lua_get_struct_field") != null);
 }
 
 test "length and dynamic comparison stay native scalar values" {
@@ -1456,7 +1473,7 @@ test "eager pristine module export bypasses field lookup on direct branch" {
     try std.testing.expect(std.mem.indexOf(u8, block, "@dict_lua_value_is_function_id") == null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "call %FunctionResult @lua_f_99") != null);
     const fallback_start = std.mem.indexOf(u8, ir, "export_callee_fallback:") orelse return error.MissingExportFallbackBlock;
-    try std.testing.expect(std.mem.indexOf(u8, ir[fallback_start..], "@dict_lua_get_field") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir[fallback_start..], "@dict_lua_get_struct_field") != null);
 }
 
 test "captured eager module value keeps mutation-guarded direct export call" {
@@ -1866,15 +1883,8 @@ test "optimized field reads snapshot imported positive hits before later effects
         defer generated.deinit();
         const ir = try generated.toText(std.testing.allocator);
         defer std.testing.allocator.free(ir);
-        try std.testing.expectEqual(enabled, std.mem.indexOf(u8, ir, "call ptr @dict_lua_value_field_hit(") != null);
-        try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_field_cached(") != null);
-        if (enabled) {
-            const hit_start = std.mem.indexOf(u8, ir, "\nfield_cache_inline_hit:") orelse return error.MissingHitBlock;
-            const hit_end = std.mem.indexOfPos(u8, ir, hit_start + 1, "\nfield_cache_inline_miss:") orelse return error.MissingMissBlock;
-            const body = ir[hit_start..hit_end];
-            try std.testing.expect(std.mem.indexOf(u8, body, "call void @dict_lua_value_copy(") != null);
-            try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_get_field_cached(") == null);
-        }
+        try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_struct_field(") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ir, "call ptr @dict_lua_value_field_hit(") == null);
     }
 }
 
@@ -2092,7 +2102,7 @@ test "structural callable table entries use bounded fixed pointer ABI" {
     try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_arg_ptr") == null);
     try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_return_call") == null);
     try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_call_fixed") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_get_index") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "@dict_lua_get_struct_index") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "call i8 @dict_lua_guard_table_call") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_enter_local_static_call") != null);
     try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_leave_local_static_call") != null);

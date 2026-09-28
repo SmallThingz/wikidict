@@ -313,7 +313,7 @@ fn queryPut(runtime: *rt.Context, query: *rt.Table, key: []const u8, value: Valu
 }
 
 fn parseQueryAlloc(runtime: *rt.Context, source: []const u8) !*rt.Table {
-    const query = try runtime.newTable();
+    const query = try runtime.newUriQueryTable();
     var pos: usize = 0;
     while (pos < source.len) {
         const amp = std.mem.indexOfScalarPos(u8, source, pos, '&') orelse source.len;

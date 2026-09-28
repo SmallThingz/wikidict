@@ -262,6 +262,8 @@ pub fn writeMetadata(
     module_ids: *const emitter.ModuleIdMap,
     frame_args_shape_id: ?u32,
     package_loaded_shape_id: ?u32,
+    json_object_shape_id: ?u32,
+    uri_query_shape_id: ?u32,
 ) !void {
     try validateRecords(a, records);
     const lookup_entries = try sortedLookupEntries(a, module_ids);
@@ -307,6 +309,8 @@ pub fn writeMetadata(
     try metadata.writeU32(w, synth_export_total);
     try metadata.writeU32(w, frame_args_shape_id orelse std.math.maxInt(u32));
     try metadata.writeU32(w, package_loaded_shape_id orelse std.math.maxInt(u32));
+    try metadata.writeU32(w, json_object_shape_id orelse std.math.maxInt(u32));
+    try metadata.writeU32(w, uri_query_shape_id orelse std.math.maxInt(u32));
 
     for (records) |record| try metadata.writeString(w, record.title);
 
