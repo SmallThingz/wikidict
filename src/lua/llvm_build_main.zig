@@ -520,7 +520,14 @@ fn analyzeManifest(
         const module_index: u32 = @intCast(records.items.len);
 
         if (static_encode.rootLiteral(chunk.body)) |literal| {
-            const export_shape_id = try shape_registry.collectRootExpr(module_index, literal);
+            // Literal data modules benefit from the same structural layout as
+            // executable Lua. Collect the entire literal tree so nested rows
+            // and lists decode directly into program-shape slots too.
+            try shape_registry.collect(module_index, chunk.body);
+            const export_shape_id = if (literal.* == .table)
+                shape_registry.idForSpan(module_index, literal.table.span.start)
+            else
+                null;
             var table_shapes = try shape_registry.moduleFacts(sa, module_index);
             // scratch.reset below frees the arena-backed map in one step.
             // Deinitializing it after that reset would access freed storage.

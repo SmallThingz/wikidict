@@ -43,6 +43,7 @@ pub fn rootLiteral(body: lua.Block) ?*const lua.Expr {
 const Encoder = struct {
     allocator: A,
     table_shapes: ?*const shapes.ModuleFacts,
+    static_shapes: ?*const StaticShapeMap = null,
     out: std.ArrayList(u8) = .empty,
 
     fn beginCompact(self: *Encoder) !void {
@@ -190,6 +191,8 @@ const StaticField = union(enum) {
 const StaticTable = struct {
     fields: std.ArrayList(StaticField) = .empty,
 };
+const StaticShapeMap = std.AutoHashMapUnmanaged(*StaticTable, u32);
+const StaticSpanMap = std.AutoHashMapUnmanaged(*StaticTable, u32);
 
 const PreparedTarget = union(enum) {
     local: []const u8,
@@ -484,6 +487,70 @@ fn rootStringFields(a: A, value: StaticValue) !?[]const []const u8 {
     return try names.toOwnedSlice(a);
 }
 
+fn staticShapeKey(value: StaticValue) ?shapes.Key {
+    return switch (value) {
+        .string => |item| .{ .string = item },
+        .number => |item| .{ .number = item },
+        .boolean => |item| .{ .boolean = item },
+        .nil, .table => null,
+    };
+}
+
+fn registerStaticTableShapes(
+    a: A,
+    evaluator: *const Evaluator,
+    shape_registry: *shapes.Registry,
+    module_index: u32,
+    out: *StaticShapeMap,
+) !void {
+    var spans: StaticSpanMap = .empty;
+    defer spans.deinit(a);
+    for (evaluator.tables.items, 0..) |table_value, table_index| {
+        const synthetic_span = std.math.cast(u32, table_index + 1) orelse return error.TooManyShapes;
+        try spans.put(a, table_value, synthetic_span);
+    }
+
+    for (evaluator.tables.items) |table_value| {
+        var keys: std.ArrayList(shapes.Key) = .empty;
+        defer keys.deinit(a);
+        for (table_value.fields.items) |field| {
+            const key: shapes.Key = switch (field) {
+                .list => |item| .{ .number = @floatFromInt(item.index) },
+                .named => |item| .{ .string = item.name },
+                .keyed => |item| staticShapeKey(item.key) orelse continue,
+            };
+            var duplicate = false;
+            for (keys.items) |existing| if (shapes.keyEqual(existing, key)) {
+                duplicate = true;
+                break;
+            };
+            if (!duplicate) try keys.append(a, key);
+        }
+        if (keys.items.len == 0) continue;
+        const synthetic_span = spans.get(table_value) orelse unreachable;
+        const id = (try shape_registry.promoteKeys(module_index, synthetic_span, keys.items)) orelse continue;
+        try out.put(a, table_value, id);
+    }
+
+    for (evaluator.tables.items) |table_value| {
+        const parent_span = spans.get(table_value) orelse unreachable;
+        for (table_value.fields.items) |field| {
+            const key: shapes.Key, const child_value: StaticValue = switch (field) {
+                .list => |item| .{ .{ .number = @floatFromInt(item.index) }, item.value },
+                .named => |item| .{ .{ .string = item.name }, item.value },
+                .keyed => |item| .{ staticShapeKey(item.key) orelse continue, item.value },
+            };
+            if (child_value != .table) continue;
+            shape_registry.setValueShapeSpan(
+                module_index,
+                parent_span,
+                key,
+                spans.get(child_value.table),
+            );
+        }
+    }
+}
+
 fn staticValue(self: *Encoder, value: StaticValue, depth: usize, shape_id: ?u32) anyerror!void {
     if (depth >= format.max_depth) return error.StaticLiteralTooDeep;
     switch (value) {
@@ -501,9 +568,13 @@ fn staticValue(self: *Encoder, value: StaticValue, depth: usize, shape_id: ?u32)
             try self.writeString(item);
         },
         .table => |table_value| {
+            const actual_shape_id = shape_id orelse if (self.static_shapes) |facts|
+                facts.get(table_value)
+            else
+                null;
             try self.out.append(self.allocator, @intFromEnum(format.ValueTag.table));
-            try self.out.append(self.allocator, if (shape_id != null) format.table_has_shape else 0);
-            if (shape_id) |id| try self.writeVarU32(id);
+            try self.out.append(self.allocator, if (actual_shape_id != null) format.table_has_shape else 0);
+            if (actual_shape_id) |id| try self.writeVarU32(id);
             try self.writeVarSize(table_value.fields.items.len);
             var list_capacity: usize = 0;
             for (table_value.fields.items) |field| {
@@ -554,12 +625,11 @@ pub fn encodePureDataRoot(
         else => return err,
     };
 
-    var export_shape_id: ?u32 = null;
-    if (try rootStringFields(a, root)) |fields| {
-        defer a.free(fields);
-        export_shape_id = try shape_registry.promote(module_index, 0, fields);
-    }
-    var encoder = Encoder{ .allocator = a, .table_shapes = null };
+    var static_shapes: StaticShapeMap = .empty;
+    defer static_shapes.deinit(a);
+    try registerStaticTableShapes(a, &evaluator, shape_registry, module_index, &static_shapes);
+    const export_shape_id: ?u32 = if (root == .table) static_shapes.get(root.table) else null;
+    var encoder = Encoder{ .allocator = a, .table_shapes = null, .static_shapes = &static_shapes };
     errdefer encoder.out.deinit(a);
     try encoder.beginCompact();
     try staticValue(&encoder, root, 0, export_shape_id);
@@ -599,7 +669,8 @@ test "pure incremental data builder lowers to static literal" {
         return error.ExpectedStaticData;
     defer a.free(result.blob);
     try std.testing.expect(result.export_shape_id != null);
-    try std.testing.expectEqual(@as(usize, 1), registry.count());
+    // Root, alpha, beta, and coords all keep fixed structural layouts.
+    try std.testing.expectEqual(@as(usize, 4), registry.count());
     try std.testing.expect(result.blob.len != 0);
 }
 
