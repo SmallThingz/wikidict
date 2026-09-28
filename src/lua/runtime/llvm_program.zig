@@ -83,6 +83,7 @@ pub const Program = struct {
     module_static_root_blobs: [][]const u8,
     module_static_root_load_data: []bool,
     module_template_eligible: []bool,
+    module_template_rejected: []bool,
     module_synth_roots: []bool,
     module_synth_offsets: []u32,
     synth_exports: []SynthExport,
@@ -235,6 +236,9 @@ pub const Program = struct {
         errdefer allocator.free(module_static_root_load_data);
         const module_template_eligible = try allocator.alloc(bool, module_count);
         errdefer allocator.free(module_template_eligible);
+        const module_template_rejected = try allocator.alloc(bool, module_count);
+        errdefer allocator.free(module_template_rejected);
+        @memset(module_template_rejected, false);
         for (module_static_root_blobs, module_static_root_load_data, module_template_eligible) |*blob, *snapshot, *template| {
             const flags = try reader.readU32();
             if (flags > 3) return error.InvalidProgramMetadata;
@@ -350,6 +354,7 @@ pub const Program = struct {
             .module_static_root_blobs = module_static_root_blobs,
             .module_static_root_load_data = module_static_root_load_data,
             .module_template_eligible = module_template_eligible,
+            .module_template_rejected = module_template_rejected,
             .module_synth_roots = module_synth_roots,
             .module_synth_offsets = module_synth_offsets,
             .synth_exports = synth_exports,
@@ -392,6 +397,7 @@ pub const Program = struct {
         self.allocator.free(self.module_synth_roots);
         self.allocator.free(self.module_static_root_load_data);
         self.allocator.free(self.module_static_root_blobs);
+        self.allocator.free(self.module_template_rejected);
         self.allocator.free(self.module_template_eligible);
         self.allocator.free(self.module_requirements);
         self.allocator.free(self.module_requirement_offsets);
@@ -527,6 +533,8 @@ pub const Program = struct {
         );
         ctx.module_root_entries = roots[0..self.module_count];
         ctx.module_export_shape_ids = self.module_export_shape_ids;
+        ctx.module_template_eligible = self.module_template_eligible;
+        ctx.module_template_rejected = self.module_template_rejected;
         ctx.program_shapes = self.shapes;
         ctx.program_shape_generation = self.shape_generation;
         ctx.frame_args_shape_id = self.frame_args_shape_id;
@@ -568,6 +576,7 @@ pub const Program = struct {
         _ = try ctx.bootstrapProgram();
         ctx.module_template_context = template;
         ctx.module_template_eligible = self.module_template_eligible;
+        ctx.module_template_rejected = self.module_template_rejected;
         return ctx;
     }
 
