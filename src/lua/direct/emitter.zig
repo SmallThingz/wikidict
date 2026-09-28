@@ -293,10 +293,12 @@ const Runtime = struct {
     get_index: V,
     get_struct_index: V,
     get_typed_array_index: V,
+    get_linear_index: V,
     set_index: V,
     set_struct_index: V,
     set_typed_array_index: V,
     set_len_plus_one: V,
+    set_linear_index: V,
     get_field: V,
     get_field_cached: V,
     get_struct_field: V,
@@ -384,10 +386,12 @@ const Runtime = struct {
             .get_index = try declare(m, "dict_lua_get_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .get_struct_index = try declare(m, "dict_lua_get_struct_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .get_typed_array_index = try declare(m, "dict_lua_get_typed_array_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
+            .get_linear_index = try declare(m, "dict_lua_get_linear_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .set_index = try declare(m, "dict_lua_set_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .set_struct_index = try declare(m, "dict_lua_set_struct_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .set_typed_array_index = try declare(m, "dict_lua_set_typed_array_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .set_len_plus_one = try declare(m, "dict_lua_set_len_plus_one", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
+            .set_linear_index = try declare(m, "dict_lua_set_linear_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr }),
             .get_field = try declare(m, "dict_lua_get_field_hashed", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.ptr }),
             .get_field_cached = try declare(m, "dict_lua_get_field_cached", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.i64, ty.ptr }),
             .get_struct_field = try declare(m, "dict_lua_get_struct_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.i64, ty.i64, ty.i64, ty.ptr }),
@@ -569,6 +573,7 @@ const Resolved = union(enum) { local: u32, upvalue: u32, global: u32 };
 const PreparedTarget = union(enum) {
     name: Resolved,
     index: struct { object: ValueRef, key: ValueRef },
+    linear_index: struct { object: ValueRef, key: ValueRef },
     typed_array_index: struct { object: ValueRef, key: ValueRef },
     len_plus_one: ValueRef,
     field: struct { object: ValueRef, key: StringRef },
@@ -1524,7 +1529,25 @@ const FnEmitter = struct {
         return .{ .boxed = out };
     }
 
-    fn getIndex(self: *FnEmitter, object: ValueRef, key_expr: *const lua.Expr) anyerror!ValueRef {
+    fn linearIndexExpr(self: *FnEmitter, value_expr: *const lua.Expr) anyerror!bool {
+        return switch (value_expr.*) {
+            .name => |name| switch (try self.resolve(name.value)) {
+                .local => |binding| binding < self.info.bindings.len and
+                    self.info.bindings[binding].linear_index_table,
+                .upvalue, .global => false,
+            },
+            .paren => |paren| self.linearIndexExpr(paren.expr),
+            else => false,
+        };
+    }
+
+    fn getIndex(
+        self: *FnEmitter,
+        object: ValueRef,
+        object_expr: *const lua.Expr,
+        key_expr: *const lua.Expr,
+    ) anyerror!ValueRef {
+        const linear_index = try self.linearIndexExpr(object_expr);
         if (staticString(key_expr)) |name| return self.getField(object, name);
         if (nativeNamespaceHint(object)) |namespace| if (static_fields.indexElementNamespace(namespace)) |element_namespace| {
             const out = try self.valueSlot();
@@ -1566,7 +1589,7 @@ const FnEmitter = struct {
                     else
                         .{ .boxed = out };
                 }
-            } else {
+            } else if (!linear_index) {
                 const object_box = try self.box(object);
                 const key_box = try self.box(try self.expr(key_expr));
                 const out = try self.valueSlot();
@@ -1587,6 +1610,16 @@ const FnEmitter = struct {
             try self.check(status);
             return .{ .boxed = out };
         };
+        if (linear_index) {
+            const object_box = try self.box(object);
+            const key_box = try self.box(try self.expr(key_expr));
+            const out = try self.valueSlot();
+            const status = try llvm.call(self.builder, self.rt().get_linear_index, &.{
+                self.ctx(), object_box, key_box, out,
+            });
+            try self.check(status);
+            return .{ .boxed = out };
+        }
         const object_box = try self.box(object);
         const out = try self.valueSlot();
         const key_box = try self.box(try self.expr(key_expr));
@@ -2964,7 +2997,7 @@ const FnEmitter = struct {
                 });
                 break :blk .{ .boxed = out };
             },
-            .index => |v| try self.getIndex(try self.expr(v.object), v.key),
+            .index => |v| try self.getIndex(try self.expr(v.object), v.object, v.key),
             .call => |v| blk: {
                 const result = (try self.callFixed(v.callee, null, v.args, 1)) orelse unreachable;
                 break :blk try self.callResultRef(v.callee, v.args, try self.arrayElem(result, 0));
@@ -3211,6 +3244,7 @@ const FnEmitter = struct {
             .name => |name| .{ .name = try self.resolve(name) },
             .index => |idx| blk: {
                 const object = try self.expr(idx.object);
+                const linear_index = try self.linearIndexExpr(idx.object);
                 if (staticString(idx.key)) |name|
                     break :blk .{ .field = .{ .object = object, .key = try self.stringRef(name) } };
                 if (isLenPlusOneTarget(idx.object, idx.key))
@@ -3224,7 +3258,7 @@ const FnEmitter = struct {
                                 .shape_id = shape.id,
                                 .slot = slot,
                             } };
-                    } else {
+                    } else if (!linear_index) {
                         break :blk .{ .shape_dynamic = .{
                             .object = object,
                             .key = try self.expr(idx.key),
@@ -3236,6 +3270,11 @@ const FnEmitter = struct {
                     break :blk .{ .typed_array_index = .{
                         .object = object,
                         .key = try self.shapeKeyRef(key),
+                    } };
+                if (linear_index)
+                    break :blk .{ .linear_index = .{
+                        .object = object,
+                        .key = try self.expr(idx.key),
                     } };
                 break :blk .{ .index = .{ .object = object, .key = try self.expr(idx.key) } };
             },
@@ -3281,6 +3320,12 @@ const FnEmitter = struct {
             },
             .index => |index| {
                 const status = try llvm.call(self.builder, self.rt().set_struct_index, &.{
+                    self.ctx(), try self.box(index.object), try self.box(index.key), try self.box(value),
+                });
+                try self.check(status);
+            },
+            .linear_index => |index| {
+                const status = try llvm.call(self.builder, self.rt().set_linear_index, &.{
                     self.ctx(), try self.box(index.object), try self.box(index.key), try self.box(value),
                 });
                 try self.check(status);

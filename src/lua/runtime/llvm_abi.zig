@@ -265,6 +265,78 @@ export fn dict_lua_get_typed_array_index(ctx: *rt.Context, object: *const rt.Val
     return 0;
 }
 
+export fn dict_lua_get_linear_index(ctx: *rt.Context, object: *const rt.Value, key: *const rt.Value, out: *rt.Value) callconv(.c) u32 {
+    if (object.* != .table) return fail(ctx, error.IndexType);
+    const table = object.table;
+    if (table.metatable != null) {
+        out.* = ctx.getIndex(object.*, key.*) catch |err| return fail(ctx, err);
+        return 0;
+    }
+    if (key.* == .number) if (table.rawGetNumber(key.number)) |value| {
+        out.* = value;
+        return 0;
+    };
+    if (table.shape != null) {
+        for (table.slots, 0..) |_, slot| {
+            const field_key = table.fieldKey(@intCast(slot)) orelse continue;
+            if (!rt.rawEqual(field_key, key.*)) continue;
+            out.* = table.rawGetSlot(@intCast(slot)) orelse .nil;
+            return 0;
+        }
+    }
+    for (table.choices, 0..) |_, choice| if (table.rawGetChoice(@intCast(choice), key.*)) |value| {
+        out.* = value;
+        return 0;
+    };
+    out.* = .nil;
+    return 0;
+}
+
+export fn dict_lua_set_linear_index(ctx: *rt.Context, object: *const rt.Value, key: *const rt.Value, input: *const rt.Value) callconv(.c) u32 {
+    if (object.* != .table) return fail(ctx, error.IndexType);
+    const table = object.table;
+    if (table.metatable != null) {
+        ctx.setIndex(object.*, key.*, input.*) catch |err| return fail(ctx, err);
+        return 0;
+    }
+    if (key.* == .number and table.rawGetNumber(key.number) != null) {
+        table.rawSet(ctx.allocator, key.*, input.*) catch |err| return fail(ctx, err);
+        return 0;
+    }
+    if (table.shape != null) {
+        for (table.slots, 0..) |_, slot| {
+            const field_key = table.fieldKey(@intCast(slot)) orelse continue;
+            if (!rt.rawEqual(field_key, key.*)) continue;
+            table.rawSetSlot(@intCast(slot), input.*) catch |err| return fail(ctx, err);
+            return 0;
+        }
+    }
+    var empty_choice: ?u32 = null;
+    for (table.choices, 0..) |cell, choice| {
+        if (cell.value == .nil) {
+            if (empty_choice == null) empty_choice = @intCast(choice);
+            continue;
+        }
+        if (!rt.rawEqual(cell.key, key.*)) continue;
+        table.rawSetChoice(@intCast(choice), key.*, input.*) catch |err| return fail(ctx, err);
+        return 0;
+    }
+    if (input.* == .nil) return 0;
+    if (empty_choice == null) {
+        const old_len = table.choices.len;
+        const new_len: usize = if (old_len == 0) 8 else old_len * 2;
+        const grown = if (old_len == 0)
+            ctx.allocator.alloc(rt.ChoiceCell, new_len)
+        else
+            ctx.allocator.realloc(table.choices, new_len);
+        table.choices = grown catch |err| return fail(ctx, err);
+        @memset(table.choices[old_len..], .{});
+        empty_choice = @intCast(old_len);
+    }
+    table.rawSetChoice(empty_choice.?, key.*, input.*) catch |err| return fail(ctx, err);
+    return 0;
+}
+
 export fn dict_lua_set_typed_array_index(ctx: *rt.Context, object: *const rt.Value, key: *const rt.Value, input: *const rt.Value) callconv(.c) u32 {
     if (object.* == .table and key.* == .number) {
         const table = object.table;

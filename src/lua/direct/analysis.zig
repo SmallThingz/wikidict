@@ -86,6 +86,7 @@ pub const Binding = struct {
     static_array_element_native_namespace: ?static_fields.Namespace = null,
     static_module: ?[]const u8 = null,
     callable_field_hint: ?[]const u8 = null,
+    linear_index_table: bool = false,
 
     pub fn directCallOnly(self: Binding) bool {
         return self.function_span != null and self.called and !self.value_used and !self.captured and !self.mutated;
@@ -196,6 +197,7 @@ const Analyzer = struct {
     fn markLocalMutated(self: *Analyzer, binding: u32) void {
         self.bindings.items[binding].mutated = true;
         self.bindings.items[binding].static_module = null;
+        self.bindings.items[binding].linear_index_table = false;
         self.invalidateStaticTable(binding);
         self.invalidateStaticType(binding);
     }
@@ -214,6 +216,7 @@ const Analyzer = struct {
     fn captureForChild(self: *Analyzer, name: []const u8) !Capture {
         if (self.locals.get(name)) |binding| {
             self.bindings.items[binding].captured = true;
+            self.bindings.items[binding].linear_index_table = false;
             // Captured locals live in boxed cells. Any scalar type inferred by
             // aliases before this closure was seen must be invalidated too.
             self.invalidateStaticType(binding);
@@ -229,15 +232,49 @@ const Analyzer = struct {
     }
     fn markValueUse(self: *Analyzer, name: []const u8) !void {
         switch (try self.resolve(name)) {
-            .local => |binding| self.bindings.items[binding].value_used = true,
+            .local => |binding| {
+                self.bindings.items[binding].value_used = true;
+                self.bindings.items[binding].linear_index_table = false;
+            },
             .upvalue, .global => {},
         }
+    }
+
+    fn indexedObjectUse(self: *Analyzer, value: *const lua.Expr) anyerror!void {
+        switch (value.*) {
+            .name => |name| if (self.locals.get(name.value)) |binding| {
+                self.bindings.items[binding].value_used = true;
+            } else try self.expr(value),
+            .paren => |paren| try self.indexedObjectUse(paren.expr),
+            else => try self.expr(value),
+        }
+    }
+
+    fn lengthOperandUse(self: *Analyzer, value: *const lua.Expr) anyerror!void {
+        switch (value.*) {
+            .name => |name| if (self.locals.get(name.value)) |binding| {
+                self.bindings.items[binding].value_used = true;
+            } else try self.expr(value),
+            .paren => |paren| try self.lengthOperandUse(paren.expr),
+            else => try self.expr(value),
+        }
+    }
+
+    fn emptyTableLiteral(value: *const lua.Expr) bool {
+        return switch (value.*) {
+            .table => |table| table.fields.len == 0,
+            .paren => |paren| emptyTableLiteral(paren.expr),
+            else => false,
+        };
     }
 
     fn callee(self: *Analyzer, value: *const lua.Expr) anyerror!void {
         switch (value.*) {
             .name => |name| switch (try self.resolve(name.value)) {
-                .local => |binding| self.bindings.items[binding].called = true,
+                .local => |binding| {
+                    self.bindings.items[binding].called = true;
+                    self.bindings.items[binding].linear_index_table = false;
+                },
                 .upvalue, .global => {},
             },
             .paren => |v| try self.callee(v.expr),
@@ -609,7 +646,7 @@ const Analyzer = struct {
                 .global => try self.globals.markMutated(name),
             },
             .index => |idx| {
-                try self.expr(idx.object);
+                try self.indexedObjectUse(idx.object);
                 try self.expr(idx.key);
             },
         }
@@ -623,7 +660,7 @@ const Analyzer = struct {
             },
             .paren => |v| try self.expr(v.expr),
             .index => |v| {
-                try self.expr(v.object);
+                try self.indexedObjectUse(v.object);
                 try self.expr(v.key);
             },
             .call => |v| {
@@ -645,7 +682,10 @@ const Analyzer = struct {
                     try self.expr(item.value);
                 },
             },
-            .unary => |v| try self.expr(v.expr),
+            .unary => |v| if (v.op == .len)
+                try self.lengthOperandUse(v.expr)
+            else
+                try self.expr(v.expr),
             .binary => |v| {
                 try self.expr(v.lhs);
                 try self.expr(v.rhs);
@@ -685,6 +725,8 @@ const Analyzer = struct {
                     const binding = try self.bind(name);
                     self.bindings.items[binding].static_type = static_type;
                     if (index < s.values.len) {
+                        self.bindings.items[binding].linear_index_table =
+                            emptyTableLiteral(s.values[index]);
                         self.bindings.items[binding].static_table_span = self.exprStaticTable(s.values[index]);
                         self.bindings.items[binding].static_program_table = self.exprStaticProgramTable(s.values[index]);
                         self.bindings.items[binding].static_native_namespace = self.exprStaticNative(s.values[index]);

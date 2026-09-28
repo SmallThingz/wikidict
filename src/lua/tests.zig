@@ -717,6 +717,35 @@ test "dense numeric accesses and len-plus-one appends bypass generic table index
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_struct_index("));
 }
 
+test "non-escaping index-only tables lower dynamic keys to linear struct cells" {
+    const source =
+        \\local seen = {}
+        \\local first = {}
+        \\local second = {}
+        \\local key = first
+        \\local before = seen[key]
+        \\seen[key] = true
+        \\key = second
+        \\local after = seen[key]
+        \\seen[key] = true
+        \\return before, after
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_linear_index") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_set_linear_index") != null);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_struct_index("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_struct_index("));
+}
+
 test "nested table fields retain child struct shapes" {
     const source = "local t = { foo = { bar = { baz = 7 } } }; return t.foo.bar.baz";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);
