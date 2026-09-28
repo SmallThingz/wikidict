@@ -1158,7 +1158,7 @@ fn registerStandardPackageLoaded(runtime: *rt.Context) !void {
 
 fn installPackage(runtime: *rt.Context) !void {
     const package = try runtime.newNativeNamespace(.package);
-    const loaded = try runtime.newNativeNamespace(.package_loaded);
+    const loaded = try runtime.newPackageLoadedTable();
     const loaders = try runtime.newTable();
     try package.rawSet(runtime.allocator, .{ .string = "loaded" }, .{ .table = loaded });
     try package.rawSet(runtime.allocator, .{ .string = "loaders" }, .{ .table = loaders });

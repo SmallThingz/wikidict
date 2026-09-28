@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const magic = "DLPMETA7";
+pub const magic = "DLPMETA8";
 
 pub const ShapeKeyTag = enum(u32) {
     string = 1,

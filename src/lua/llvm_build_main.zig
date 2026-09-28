@@ -872,6 +872,7 @@ fn appendModuleToBatch(
     demanded_entries: bool,
     native_find_three: bool,
     frame_args_shape_id: ?u32,
+    package_loaded_shape_id: ?u32,
 ) !void {
     const path = try sourcePath(scratch, source_root, record.path);
     const source = try readAll(io, scratch, path);
@@ -904,6 +905,7 @@ fn appendModuleToBatch(
         .fixed_callable_entries = demanded_entries,
         .frame_entry_functions = record.frame_entry_functions,
         .frame_args_shape_id = frame_args_shape_id,
+        .package_loaded_shape_id = package_loaded_shape_id,
     };
     const result = try batch.append(scratch, globals, &module, facts);
     if (result.root_function != record.root_function or
@@ -925,6 +927,7 @@ fn emitBatches(
     method_candidates: []const emitter.MethodCandidate,
     value_leaf_bc: []const u8,
     frame_args_shape_id: ?u32,
+    package_loaded_shape_id: ?u32,
 ) !void {
     if (records.len != modes.len) return error.InvalidCompilePlan;
 
@@ -993,6 +996,7 @@ fn emitBatches(
                     mode != .o0,
                     mode != .o0,
                     frame_args_shape_id,
+                    package_loaded_shape_id,
                 );
                 _ = scratch_arena.reset(.retain_capacity);
 
@@ -1242,6 +1246,25 @@ fn buildFrameArgShape(
     );
 }
 
+fn buildPackageLoadedShape(
+    a: A,
+    module_ids: *const emitter.ModuleIdMap,
+    shape_registry: *shapes.Registry,
+) !?u32 {
+    var keys = FrameArgKeySet{ .allocator = a };
+    defer keys.deinit();
+    inline for (.{ "_G", "table", "string", "math", "debug", "bit32", "libraryUtil", "package", "strict" }) |name|
+        try keys.add(.{ .string = name });
+    var it = module_ids.keyIterator();
+    while (it.next()) |name| try keys.add(.{ .string = name.* });
+    if (keys.items.items.len == 0) return null;
+    return shape_registry.promoteKeys(
+        std.math.maxInt(u32) - 1,
+        std.math.maxInt(u32) - 2,
+        keys.items.items,
+    );
+}
+
 fn run(io: std.Io, a: A, args: []const []const u8) !void {
     if (args.len < 4) return error.Usage;
     var analysis_only = false;
@@ -1476,7 +1499,13 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         selected_records.items,
         &shape_registry,
     );
+    const package_loaded_shape_id = try buildPackageLoadedShape(
+        a,
+        &selected_module_ids,
+        &shape_registry,
+    );
     std.debug.print("LLVM_FRAME_ARGS_SHAPE id={?d}\n", .{frame_args_shape_id});
+    std.debug.print("LLVM_PACKAGE_LOADED_SHAPE id={?d}\n", .{package_loaded_shape_id});
 
     try emitBatches(
         io,
@@ -1492,6 +1521,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         method_candidates,
         leaf_bc,
         frame_args_shape_id,
+        package_loaded_shape_id,
     );
 
     var program_module = try program.generate(a, selected_records.items);
@@ -1509,6 +1539,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         &shape_registry,
         &selected_module_ids,
         frame_args_shape_id,
+        package_loaded_shape_id,
     );
     std.debug.print("LLVM_DONE modules={d} globals={d}\n", .{ selected_records.items.len, globals.names.items.len });
 }

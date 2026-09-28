@@ -94,6 +94,7 @@ pub const Program = struct {
     shape_keys: []rt.Value,
     shape_sorted_slots: []u32,
     frame_args_shape_id: ?u32,
+    package_loaded_shape_id: ?u32,
     stdlib_template: stdlib.Template,
     template_arena: ?*std.heap.ArenaAllocator = null,
     template_context: ?*rt.Context = null,
@@ -116,6 +117,7 @@ pub const Program = struct {
         const module_requirement_total = try reader.readU32();
         const synth_export_total = try reader.readU32();
         const frame_args_shape_raw = try reader.readU32();
+        const package_loaded_shape_raw = try reader.readU32();
         const item_bound: u64 = mapped.bytes.len / 4 + 1;
         if (@as(u64, module_count) > item_bound or
             @as(u64, module_lookup_count) > item_bound or
@@ -130,6 +132,12 @@ pub const Program = struct {
             null
         else if (frame_args_shape_raw < shape_count)
             frame_args_shape_raw
+        else
+            return error.InvalidProgramMetadata;
+        const package_loaded_shape_id = if (package_loaded_shape_raw == std.math.maxInt(u32))
+            null
+        else if (package_loaded_shape_raw < shape_count)
+            package_loaded_shape_raw
         else
             return error.InvalidProgramMetadata;
 
@@ -343,6 +351,7 @@ pub const Program = struct {
             .shape_keys = shape_keys,
             .shape_sorted_slots = shape_sorted_slots,
             .frame_args_shape_id = frame_args_shape_id,
+            .package_loaded_shape_id = package_loaded_shape_id,
             .stdlib_template = stdlib_template,
         };
     }
@@ -503,6 +512,7 @@ pub const Program = struct {
         ctx.program_shapes = self.shapes;
         ctx.program_shape_generation = self.shape_generation;
         ctx.frame_args_shape_id = self.frame_args_shape_id;
+        ctx.package_loaded_shape_id = self.package_loaded_shape_id;
         ctx.configureModules(self, lookup, moduleName);
         ctx.configureFunctionModules(self.function_module_ids);
         ctx.configureModuleRequirements(self, moduleRequirements);

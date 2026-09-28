@@ -58,6 +58,7 @@ pub const ProgramFacts = struct {
     fixed_callable_entries: bool = false,
     frame_entry_functions: []const u32 = &.{},
     frame_args_shape_id: ?u32 = null,
+    package_loaded_shape_id: ?u32 = null,
 
     pub fn moduleId(self: ProgramFacts, a: A, raw: []const u8) anyerror!?u32 {
         const ids = self.module_ids orelse return null;
@@ -92,6 +93,10 @@ pub const ProgramFacts = struct {
 
     pub fn frameArgsShape(self: ProgramFacts) ?shapes.Fact {
         return self.shapeById(self.frame_args_shape_id);
+    }
+
+    pub fn packageLoadedShape(self: ProgramFacts) ?shapes.Fact {
+        return self.shapeById(self.package_loaded_shape_id);
     }
 
     pub fn moduleExportShape(self: ProgramFacts, module_id: u32) ?shapes.Fact {
@@ -1740,6 +1745,9 @@ const FnEmitter = struct {
                 if (namespace == .frame and std.mem.eql(u8, name, "args"))
                     if (self.module.facts.frameArgsShape()) |frame_args_shape|
                         return .{ .shaped_boxed = .{ .ptr = out, .shape = frame_args_shape } };
+                if (namespace == .package and std.mem.eql(u8, name, "loaded"))
+                    if (self.module.facts.packageLoadedShape()) |package_loaded_shape|
+                        return .{ .shaped_boxed = .{ .ptr = out, .shape = package_loaded_shape } };
                 return if (static_fields.fieldNamespace(namespace, name)) |child|
                     .{ .native_boxed = .{ .ptr = out, .native_namespace = child } }
                 else
