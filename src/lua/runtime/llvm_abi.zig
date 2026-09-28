@@ -284,6 +284,11 @@ export fn dict_lua_get_known_shape_field(ctx: *rt.Context, object: *const rt.Val
     return 0;
 }
 
+export fn dict_lua_get_known_shape_index(ctx: *rt.Context, object: *const rt.Value, shape_id: u32, slot: u32, key: *const rt.Value, out: *rt.Value) callconv(.c) u32 {
+    out.* = ctx.getProgramShapeIndex(object.*, shape_id, slot, key.*) catch |err| return fail(ctx, err);
+    return 0;
+}
+
 export fn dict_lua_set_known_shape_field(ctx: *rt.Context, object: *const rt.Value, shape_id: u32, slot: u32, name: [*]const u8, len: usize, input: *const rt.Value) callconv(.c) u32 {
     const key: rt.Value = .{ .string = name[0..len] };
     if (object.* == .table and shape_id < ctx.program_shapes.len and object.table.shape == &ctx.program_shapes[shape_id]) {
@@ -293,6 +298,11 @@ export fn dict_lua_set_known_shape_field(ctx: *rt.Context, object: *const rt.Val
         }
     }
     ctx.setIndex(object.*, key, input.*) catch |err| return fail(ctx, err);
+    return 0;
+}
+
+export fn dict_lua_set_known_shape_index(ctx: *rt.Context, object: *const rt.Value, shape_id: u32, slot: u32, key: *const rt.Value, input: *const rt.Value) callconv(.c) u32 {
+    ctx.setProgramShapeIndex(object.*, shape_id, slot, key.*, input.*) catch |err| return fail(ctx, err);
     return 0;
 }
 export fn dict_lua_get_native_slot(ctx: *rt.Context, object: *const rt.Value, slot: u32, name: [*]const u8, len: usize, out: *rt.Value) callconv(.c) u32 {

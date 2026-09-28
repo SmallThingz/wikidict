@@ -222,7 +222,7 @@ pub const Shape = struct {
 };
 
 fn shapeStringSlot(shape: *const Shape, name: []const u8) ?u32 {
-    if (shape.field_keys.len != shape.field_count or shape.sorted_string_slots.len != shape.field_keys.len) return null;
+    if (shape.field_keys.len != shape.field_count) return null;
     var low: usize = 0;
     var high = shape.sorted_string_slots.len;
     while (low < high) {
@@ -2162,8 +2162,18 @@ pub const Context = struct {
 
     pub fn newShapedTable(self: *Context, shape: *const Shape) !*Table {
         if (shape.field_keys.len != shape.field_count or
-            (shape.sorted_string_slots.len != 0 and shape.sorted_string_slots.len != shape.field_keys.len))
+            shape.sorted_string_slots.len > shape.field_keys.len)
             return error.BadShape;
+        var previous_string: ?[]const u8 = null;
+        for (shape.sorted_string_slots) |slot| {
+            if (slot >= shape.field_keys.len or shape.field_keys[slot] != .string)
+                return error.BadShape;
+            const current = shape.field_keys[slot].string;
+            if (previous_string) |previous|
+                if (std.mem.order(u8, previous, current) != .lt)
+                    return error.BadShape;
+            previous_string = current;
+        }
         const table = try self.allocator.create(Table);
         errdefer self.allocator.destroy(table);
         table.* = .{ .shape = shape };
@@ -2200,6 +2210,28 @@ pub const Context = struct {
             if (object.table.metatable == null) return .nil;
         }
         return self.getIndex(object, .{ .string = name });
+    }
+
+    pub fn getProgramShapeIndex(self: *Context, object: Value, shape_id: u32, slot: u32, key: Value) !Value {
+        if (object == .table and shape_id < self.program_shapes.len and object.table.shape == &self.program_shapes[shape_id]) {
+            if (object.table.fieldKey(slot)) |expected| if (rawEqual(expected, key)) {
+                if (object.table.rawGetSlot(slot)) |value| return value;
+                if (object.table.metatable == null) return .nil;
+            };
+        }
+        return self.getIndex(object, key);
+    }
+
+    pub fn setProgramShapeIndex(self: *Context, object: Value, shape_id: u32, slot: u32, key: Value, value: Value) !void {
+        if (object == .table and shape_id < self.program_shapes.len and object.table.shape == &self.program_shapes[shape_id]) {
+            if (object.table.fieldKey(slot)) |expected| if (rawEqual(expected, key)) {
+                if (object.table.rawGetSlot(slot) != null or object.table.metatable == null) {
+                    try object.table.rawSetSlot(slot, value);
+                    return;
+                }
+            };
+        }
+        try self.setIndex(object, key, value);
     }
 
     pub fn newNativeNamespace(self: *Context, namespace: static_fields.Namespace) !*Table {

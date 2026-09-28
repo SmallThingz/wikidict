@@ -232,6 +232,8 @@ const Runtime = struct {
     set_shape_slot: V,
     get_known_shape_field: V,
     set_known_shape_field: V,
+    get_known_shape_index: V,
+    set_known_shape_index: V,
     get_native_slot: V,
     set_native_slot: V,
     len_number: V,
@@ -311,6 +313,8 @@ const Runtime = struct {
             .set_shape_slot = try declare(m, "dict_lua_set_shape_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr }),
             .get_known_shape_field = try declare(m, "dict_lua_get_known_shape_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
             .set_known_shape_field = try declare(m, "dict_lua_set_known_shape_field", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.i64, ty.ptr }),
+            .get_known_shape_index = try declare(m, "dict_lua_get_known_shape_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.ptr }),
+            .set_known_shape_index = try declare(m, "dict_lua_set_known_shape_index", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.i32, ty.ptr, ty.ptr }),
             .get_native_slot = try declare(m, "dict_lua_get_native_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.i64, ty.ptr }),
             .set_native_slot = try declare(m, "dict_lua_set_native_slot", ty.i32, &.{ ty.ptr, ty.ptr, ty.i32, ty.ptr, ty.i64, ty.ptr }),
             .len_number = try declare(m, "dict_lua_len_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
@@ -480,6 +484,7 @@ const PreparedTarget = union(enum) {
     name: Resolved,
     index: struct { object: ValueRef, key: ValueRef },
     field: struct { object: ValueRef, key: StringRef },
+    shape_index: struct { object: ValueRef, key: ValueRef, shape_id: u32, slot: u32 },
 };
 
 const FnEmitter = struct {
@@ -1309,6 +1314,18 @@ const FnEmitter = struct {
 
     fn getIndex(self: *FnEmitter, object: ValueRef, key_expr: *const lua.Expr) anyerror!ValueRef {
         if (staticString(key_expr)) |name| return self.getField(object, name);
+        if (object == .table) if (object.table.shape) |shape| {
+            if (shapes.staticKey(key_expr)) |key| if (shapeKeySlot(shape, key)) |slot| {
+                const object_box = try self.box(object);
+                const key_box = try self.box(try self.shapeKeyRef(key));
+                const out = try self.valueSlot();
+                const status = try llvm.call(self.builder, self.rt().get_known_shape_index, &.{
+                    self.ctx(), object_box, try self.cI32(shape.id), try self.cI32(slot), key_box, out,
+                });
+                try self.check(status);
+                return .{ .boxed = out };
+            };
+        };
         const object_box = try self.box(object);
         const out = try self.valueSlot();
         const key_box = try self.box(try self.expr(key_expr));
@@ -1371,10 +1388,13 @@ const FnEmitter = struct {
                 try self.check(status);
             },
             .keyed => |item| {
-                const status = if (shape) |shape_value| blk: {
-                    const key_name = staticString(item.key) orelse return error.ShapeAnalysisMismatch;
+                const static_key = shapes.staticKey(item.key);
+                const static_slot = if (shape) |shape_value|
+                    if (static_key) |key| shapeKeySlot(shape_value, key) else null
+                else
+                    null;
+                const status = if (static_slot) |slot| blk: {
                     const value_box = try self.box(try self.expr(item.value));
-                    const slot = shapeSlot(shape_value, key_name) orelse return error.ShapeAnalysisMismatch;
                     break :blk try llvm.call(self.builder, self.rt().set_shape_slot, &.{
                         self.ctx(), table_value, try self.cI32(slot), value_box,
                     });
@@ -1408,9 +1428,21 @@ const FnEmitter = struct {
     }
 
     fn shapeSlot(shape: shapes.Fact, name: []const u8) ?u32 {
-        for (shape.fields, 0..) |field, slot|
-            if (std.mem.eql(u8, field, name)) return @intCast(slot);
+        return shapeKeySlot(shape, .{ .string = name });
+    }
+
+    fn shapeKeySlot(shape: shapes.Fact, key: shapes.Key) ?u32 {
+        for (shape.keys, 0..) |candidate, slot|
+            if (shapes.keyEqual(candidate, key)) return @intCast(slot);
         return null;
+    }
+
+    fn shapeKeyRef(self: *FnEmitter, key: shapes.Key) anyerror!ValueRef {
+        return switch (key) {
+            .string => |value| .{ .string = try self.stringRef(value) },
+            .number => |value| .{ .number = try self.cDouble(value) },
+            .boolean => |value| .{ .boolean = try self.cI1(value) },
+        };
     }
 
     fn freeMulti(self: *FnEmitter, multi_value: MultiRef) anyerror!void {
@@ -2621,6 +2653,15 @@ const FnEmitter = struct {
                 const object = try self.expr(idx.object);
                 if (staticString(idx.key)) |name|
                     break :blk .{ .field = .{ .object = object, .key = try self.stringRef(name) } };
+                if (object == .table) if (object.table.shape) |shape| {
+                    if (shapes.staticKey(idx.key)) |key| if (shapeKeySlot(shape, key)) |slot|
+                        break :blk .{ .shape_index = .{
+                            .object = object,
+                            .key = try self.shapeKeyRef(key),
+                            .shape_id = shape.id,
+                            .slot = slot,
+                        } };
+                };
                 break :blk .{ .index = .{ .object = object, .key = try self.expr(idx.key) } };
             },
         };
@@ -2655,6 +2696,17 @@ const FnEmitter = struct {
             .index => |index| {
                 const status = try llvm.call(self.builder, self.rt().set_index, &.{
                     self.ctx(), try self.box(index.object), try self.box(index.key), try self.box(value),
+                });
+                try self.check(status);
+            },
+            .shape_index => |index| {
+                const status = try llvm.call(self.builder, self.rt().set_known_shape_index, &.{
+                    self.ctx(),
+                    try self.box(index.object),
+                    try self.cI32(index.shape_id),
+                    try self.cI32(index.slot),
+                    try self.box(index.key),
+                    try self.box(value),
                 });
                 try self.check(status);
             },

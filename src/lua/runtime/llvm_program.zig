@@ -258,6 +258,7 @@ pub const Program = struct {
         errdefer allocator.free(shape_sorted_slots);
 
         var shape_offset: usize = 0;
+        var sorted_shape_offset: usize = 0;
         for (program_shapes) |*shape| {
             const field_count_u32 = try reader.readU32();
             const field_count: usize = @intCast(field_count_u32);
@@ -265,21 +266,35 @@ pub const Program = struct {
                 return error.InvalidProgramMetadata;
 
             const keys = shape_keys[shape_offset .. shape_offset + field_count];
-            const sorted_slots = shape_sorted_slots[shape_offset .. shape_offset + field_count];
-            for (keys) |*key|
-                key.* = .{ .string = try reader.readString() };
+            for (keys) |*key| {
+                const tag = std.enums.fromInt(metadata.ShapeKeyTag, try reader.readU32()) orelse
+                    return error.InvalidProgramMetadata;
+                key.* = switch (tag) {
+                    .string => .{ .string = try reader.readString() },
+                    .number => .{ .number = @bitCast(try reader.readU64()) },
+                    .false_ => .{ .boolean = false },
+                    .true_ => .{ .boolean = true },
+                };
+            }
+            const string_count: usize = @intCast(try reader.readU32());
+            if (string_count > field_count or
+                string_count > shape_sorted_slots.len -| sorted_shape_offset)
+                return error.InvalidProgramMetadata;
+            const sorted_slots = shape_sorted_slots[sorted_shape_offset .. sorted_shape_offset + string_count];
             for (sorted_slots) |*slot| {
                 slot.* = try reader.readU32();
-                if (slot.* >= field_count_u32) return error.InvalidProgramMetadata;
+                if (slot.* >= field_count_u32 or keys[slot.*] != .string)
+                    return error.InvalidProgramMetadata;
             }
             shape.* = .{
                 .field_keys = keys,
                 .sorted_string_slots = sorted_slots,
                 .field_count = field_count_u32,
                 .open = true,
-                .all_string_keys = true,
+                .all_string_keys = string_count == field_count,
             };
             shape_offset += field_count;
+            sorted_shape_offset += string_count;
         }
         if (shape_offset != shape_field_total) return error.InvalidProgramMetadata;
         try reader.finish();

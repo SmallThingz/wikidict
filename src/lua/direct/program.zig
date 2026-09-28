@@ -90,7 +90,7 @@ fn shapeFieldTotal(shape_registry: *const shapes.Registry) !u32 {
         total = std.math.add(
             usize,
             total,
-            shape_registry.record(@intCast(shape_index)).fields.len,
+            shape_registry.record(@intCast(shape_index)).keys.len,
         ) catch return error.ProgramMetadataTooLarge;
     }
     return requireU32(total);
@@ -355,18 +355,33 @@ pub fn writeMetadata(
 
     for (0..shape_registry.count()) |shape_index| {
         const shape = shape_registry.record(@intCast(shape_index));
-        try metadata.writeU32(w, try requireU32(shape.fields.len));
-        for (shape.fields) |field| try metadata.writeString(w, field);
-
-        const slots = try a.alloc(u32, shape.fields.len);
-        defer a.free(slots);
-        for (slots, 0..) |*slot, index| slot.* = @intCast(index);
-        std.mem.sort(u32, slots, shape.fields, struct {
-            fn lessThan(fields: []const []const u8, lhs: u32, rhs: u32) bool {
-                return std.mem.order(u8, fields[lhs], fields[rhs]) == .lt;
+        try metadata.writeU32(w, try requireU32(shape.keys.len));
+        var string_slots: std.ArrayList(u32) = .empty;
+        defer string_slots.deinit(a);
+        for (shape.keys, 0..) |key, slot| {
+            switch (key) {
+                .string => |value| {
+                    try metadata.writeU32(w, @intFromEnum(metadata.ShapeKeyTag.string));
+                    try metadata.writeString(w, value);
+                    try string_slots.append(a, @intCast(slot));
+                },
+                .number => |value| {
+                    try metadata.writeU32(w, @intFromEnum(metadata.ShapeKeyTag.number));
+                    try metadata.writeU64(w, @bitCast(value));
+                },
+                .boolean => |value| try metadata.writeU32(
+                    w,
+                    @intFromEnum(if (value) metadata.ShapeKeyTag.true_ else metadata.ShapeKeyTag.false_),
+                ),
+            }
+        }
+        try metadata.writeU32(w, try requireU32(string_slots.items.len));
+        std.mem.sort(u32, string_slots.items, shape.keys, struct {
+            fn lessThan(keys: []const shapes.Key, lhs: u32, rhs: u32) bool {
+                return std.mem.order(u8, keys[lhs].string, keys[rhs].string) == .lt;
             }
         }.lessThan);
-        for (slots) |slot| try metadata.writeU32(w, slot);
+        for (string_slots.items) |slot| try metadata.writeU32(w, slot);
     }
     try w.flush();
 }

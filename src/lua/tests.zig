@@ -589,14 +589,85 @@ test "static table shapes survive captured and shape-stable mutable locals" {
     ) != null);
 }
 
-test "mixed list tables keep generic dense array semantics" {
-    const source = "return { 1, foo = 2 }";
+test "list and numeric table keys lower to fixed shape slots" {
+    const source = "local t = { 1, 2, foo = 3, [true] = 4 }; t[2] = 5; return t[2], t[true]";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);
     defer chunk.deinit();
     var registry = llvm_shapes.Registry.init(std.testing.allocator);
     defer registry.deinit();
     try registry.collect(0, chunk.body);
-    try std.testing.expectEqual(@as(usize, 0), registry.count());
+    try std.testing.expectEqual(@as(usize, 1), registry.count());
+    var shape_facts = try registry.moduleFacts(std.testing.allocator, 0);
+    defer shape_facts.deinit(std.testing.allocator);
+    const shape = shape_facts.get(chunk.body[0].local_assign.values[0].table.span.start).?;
+    try std.testing.expectEqual(@as(usize, 4), shape.keys.len);
+    try std.testing.expect(shape.keys[0] == .number and shape.keys[0].number == 1);
+    try std.testing.expect(shape.keys[1] == .number and shape.keys[1].number == 2);
+    try std.testing.expect(shape.keys[2] == .string and std.mem.eql(u8, shape.keys[2].string, "foo"));
+    try std.testing.expect(shape.keys[3] == .boolean and shape.keys[3].boolean);
+
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(
+        std.testing.allocator,
+        &globals,
+        &module,
+        .{ .table_shapes = &shape_facts },
+    );
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_new_shaped_table") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_known_shape_index") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_set_known_shape_index") != null);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_index("));
+}
+
+test "incrementally populated local tables promote to fixed shapes" {
+    const source =
+        \\local t = {}
+        \\t.foo = 1
+        \\t[2] = 2
+        \\local alias = t
+        \\alias.bar = 3
+        \\local function captured() t.baz = 4; return t.baz end
+        \\return t.foo, t[2], alias.bar, captured()
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var registry = llvm_shapes.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try registry.collect(0, chunk.body);
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    for (module.table_shape_writes.items) |write| {
+        if (llvm_shapes.staticKey(write.key)) |key|
+            _ = try registry.extendKey(0, write.table_span.start, key);
+    }
+    var shape_facts = try registry.moduleFacts(std.testing.allocator, 0);
+    defer shape_facts.deinit(std.testing.allocator);
+    const table_span = chunk.body[0].local_assign.values[0].table.span;
+    const shape = shape_facts.get(table_span.start).?;
+    try std.testing.expectEqual(@as(usize, 4), shape.keys.len);
+
+    var generated = try llvm_emitter.generate(
+        std.testing.allocator,
+        &globals,
+        &module,
+        .{ .table_shapes = &shape_facts },
+    );
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_new_shaped_table") != null);
+    try std.testing.expect(std.mem.count(u8, ir, "call i32 @dict_lua_set_known_shape_field") >= 3);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_set_known_shape_index") != null);
+    try std.testing.expect(std.mem.count(u8, ir, "call i32 @dict_lua_get_known_shape_field") >= 3);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_known_shape_index") != null);
 }
 
 test "computed-key module exports stay generic" {

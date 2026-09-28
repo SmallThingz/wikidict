@@ -1,9 +1,15 @@
 const std = @import("std");
 const lua = @import("../parser/root.zig");
+const numbers = @import("numbers.zig");
 
+pub const Key = union(enum) {
+    string: []const u8,
+    number: f64,
+    boolean: bool,
+};
 pub const Fact = struct {
     id: u32,
-    fields: []const []const u8,
+    keys: []const Key,
 };
 
 pub const ModuleFacts = std.AutoHashMapUnmanaged(u32, Fact);
@@ -11,7 +17,7 @@ pub const ModuleFacts = std.AutoHashMapUnmanaged(u32, Fact);
 const Record = struct {
     span_start: u32,
     next_for_module: u32 = no_record,
-    fields: []const []const u8,
+    keys: []const Key,
 };
 
 const no_record = std.math.maxInt(u32);
@@ -27,8 +33,7 @@ pub const Registry = struct {
     }
     pub fn deinit(self: *Registry) void {
         for (self.records.items) |entry| {
-            for (entry.fields) |field| self.allocator.free(field);
-            self.allocator.free(entry.fields);
+            self.freeKeys(entry.keys);
         }
         self.records.deinit(self.allocator);
         self.module_chains.deinit(self.allocator);
@@ -40,7 +45,7 @@ pub const Registry = struct {
 
     pub fn fieldCount(self: *const Registry) usize {
         var total: usize = 0;
-        for (self.records.items) |entry| total += entry.fields.len;
+        for (self.records.items) |entry| total += entry.keys.len;
         return total;
     }
 
@@ -58,7 +63,7 @@ pub const Registry = struct {
 
     pub fn record(self: *const Registry, id: u32) Fact {
         const value = self.records.items[id];
-        return .{ .id = id, .fields = value.fields };
+        return .{ .id = id, .keys = value.keys };
     }
 
     pub fn moduleFacts(self: *const Registry, allocator: std.mem.Allocator, module_index: u32) !ModuleFacts {
@@ -68,17 +73,17 @@ pub const Registry = struct {
         var id = chain.first;
         while (id != no_record) {
             const record_value = self.records.items[id];
-            try out.put(allocator, record_value.span_start, .{ .id = id, .fields = record_value.fields });
+            try out.put(allocator, record_value.span_start, .{ .id = id, .keys = record_value.keys });
             id = record_value.next_for_module;
         }
         return out;
     }
-    fn appendRecord(self: *Registry, module_index: u32, span_start: u32, fields: []const []const u8) !u32 {
+    fn appendRecord(self: *Registry, module_index: u32, span_start: u32, keys: []const Key) !u32 {
         if (self.records.items.len >= no_record) return error.TooManyShapes;
         const id: u32 = @intCast(self.records.items.len);
         try self.records.append(self.allocator, .{
             .span_start = span_start,
-            .fields = fields,
+            .keys = keys,
         });
         errdefer _ = self.records.pop();
         const entry = try self.module_chains.getOrPut(self.allocator, module_index);
@@ -90,40 +95,88 @@ pub const Registry = struct {
         }
         return id;
     }
-    fn copyFields(self: *Registry, field_names: []const []const u8) ![]const []const u8 {
-        const owned = try self.allocator.alloc([]const u8, field_names.len);
+    fn copyKeys(self: *Registry, keys: []const Key) ![]const Key {
+        const owned = try self.allocator.alloc(Key, keys.len);
         errdefer self.allocator.free(owned);
         var copied: usize = 0;
-        errdefer for (owned[0..copied]) |name| self.allocator.free(name);
-        for (field_names, 0..) |name, index| {
-            owned[index] = try self.allocator.dupe(u8, name);
+        errdefer for (owned[0..copied]) |key| if (key == .string) self.allocator.free(key.string);
+        for (keys, 0..) |key, index| {
+            owned[index] = switch (key) {
+                .string => |name| .{ .string = try self.allocator.dupe(u8, name) },
+                .number => |number| .{ .number = number },
+                .boolean => |boolean| .{ .boolean = boolean },
+            };
             copied += 1;
         }
         return owned;
     }
 
-    fn freeFields(self: *Registry, fields: []const []const u8) void {
-        for (fields) |field| self.allocator.free(field);
-        self.allocator.free(fields);
+    fn freeKeys(self: *Registry, keys: []const Key) void {
+        for (keys) |key| if (key == .string) self.allocator.free(key.string);
+        self.allocator.free(keys);
     }
 
     pub fn promote(self: *Registry, module_index: u32, span_start: u32, field_names: []const []const u8) !?u32 {
         if (field_names.len == 0) return null;
-        const replacement = try self.copyFields(field_names);
-        errdefer self.freeFields(replacement);
+        const raw = try self.allocator.alloc(Key, field_names.len);
+        defer self.allocator.free(raw);
+        for (field_names, 0..) |name, index| raw[index] = .{ .string = name };
+        return self.promoteKeys(module_index, span_start, raw);
+    }
+
+    pub fn promoteKeys(self: *Registry, module_index: u32, span_start: u32, keys: []const Key) !?u32 {
+        if (keys.len == 0) return null;
+        const replacement = try self.copyKeys(keys);
+        errdefer self.freeKeys(replacement);
         if (self.module_chains.get(module_index)) |chain| {
             var id = chain.first;
             while (id != no_record) {
                 const record_value = &self.records.items[id];
                 if (record_value.span_start == span_start) {
-                    self.freeFields(record_value.fields);
-                    record_value.fields = replacement;
+                    self.freeKeys(record_value.keys);
+                    record_value.keys = replacement;
                     return id;
                 }
                 id = record_value.next_for_module;
             }
         }
         return try self.appendRecord(module_index, span_start, replacement);
+    }
+
+    pub fn extendKeys(self: *Registry, module_index: u32, span_start: u32, extra: []const Key) !?u32 {
+        if (extra.len == 0) return null;
+        if (self.module_chains.get(module_index)) |chain| {
+            var id = chain.first;
+            while (id != no_record) {
+                const record_value = &self.records.items[id];
+                if (record_value.span_start == span_start) {
+                    var merged: std.ArrayList(Key) = .empty;
+                    defer merged.deinit(self.allocator);
+                    try merged.appendSlice(self.allocator, record_value.keys);
+                    for (extra) |key| {
+                        var duplicate = false;
+                        for (merged.items) |existing| if (keyEqual(existing, key)) {
+                            duplicate = true;
+                            break;
+                        };
+                        if (!duplicate) try merged.append(self.allocator, key);
+                    }
+                    if (merged.items.len == record_value.keys.len) return id;
+                    const replacement = try self.copyKeys(merged.items);
+                    self.freeKeys(record_value.keys);
+                    record_value.keys = replacement;
+                    return id;
+                }
+                id = record_value.next_for_module;
+            }
+        }
+        const replacement = try self.copyKeys(extra);
+        errdefer self.freeKeys(replacement);
+        return try self.appendRecord(module_index, span_start, replacement);
+    }
+
+    pub fn extendKey(self: *Registry, module_index: u32, span_start: u32, key: Key) !?u32 {
+        return self.extendKeys(module_index, span_start, &.{key});
     }
 
     pub fn collect(self: *Registry, module_index: u32, body: lua.Block) !void {
@@ -205,34 +258,54 @@ pub const Registry = struct {
     }
     fn maybeTable(self: *Registry, module_index: u32, span: lua.Span, fields: []const lua.TableField) !void {
         if (fields.len == 0) return;
-        var names: std.ArrayList([]const u8) = .empty;
-        defer names.deinit(self.allocator);
+        var keys: std.ArrayList(Key) = .empty;
+        defer keys.deinit(self.allocator);
+        var list_index: u32 = 0;
         for (fields) |field| {
-            const name = switch (field) {
-                .named => |item| item.name,
-                .keyed => |item| staticString(item.key) orelse return,
-                .list => return,
+            const key: Key = switch (field) {
+                .named => |item| .{ .string = item.name },
+                .keyed => |item| staticKey(item.key) orelse continue,
+                .list => blk: {
+                    list_index += 1;
+                    break :blk .{ .number = @floatFromInt(list_index) };
+                },
             };
             var duplicate = false;
-            for (names.items) |existing| if (std.mem.eql(u8, existing, name)) {
+            for (keys.items) |existing| if (keyEqual(existing, key)) {
                 duplicate = true;
                 break;
             };
-            if (!duplicate) try names.append(self.allocator, name);
+            if (!duplicate) try keys.append(self.allocator, key);
         }
-        if (names.items.len == 0) return;
-        if (names.items.len > std.math.maxInt(u32)) return error.TooManyShapeFields;
+        if (keys.items.len == 0) return;
+        if (keys.items.len > std.math.maxInt(u32)) return error.TooManyShapeFields;
 
-        const owned = try self.copyFields(names.items);
-        errdefer self.freeFields(owned);
+        const owned = try self.copyKeys(keys.items);
+        errdefer self.freeKeys(owned);
         _ = try self.appendRecord(module_index, span.start, owned);
     }
 };
 
-fn staticString(value: *const lua.Expr) ?[]const u8 {
+pub fn keyEqual(lhs: Key, rhs: Key) bool {
+    if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
+    return switch (lhs) {
+        .string => |value| std.mem.eql(u8, value, rhs.string),
+        .number => |value| value == rhs.number,
+        .boolean => |value| value == rhs.boolean,
+    };
+}
+
+pub fn staticKey(value: *const lua.Expr) ?Key {
     return switch (value.*) {
-        .string => |v| v.value,
-        .paren => |v| staticString(v.expr),
+        .string => |v| .{ .string = v.value },
+        .number => |v| .{ .number = numbers.parse(v.raw) catch return null },
+        .bool_lit => |v| .{ .boolean = v.value },
+        .paren => |v| staticKey(v.expr),
+        .unary => |v| if (v.op == .neg) blk: {
+            const inner = staticKey(v.expr) orelse break :blk null;
+            if (inner != .number) break :blk null;
+            break :blk .{ .number = -inner.number };
+        } else null,
         else => null,
     };
 }
@@ -270,7 +343,7 @@ test "module shape index preserves ids and replacements across out-of-order modu
     defer nine.deinit(a);
     try std.testing.expectEqual(@as(usize, 2), nine.count());
     try std.testing.expectEqual(@as(u32, 0), nine.get(10).?.id);
-    try std.testing.expectEqualStrings("replaced", nine.get(10).?.fields[0]);
+    try std.testing.expectEqualStrings("replaced", nine.get(10).?.keys[0].string);
     try std.testing.expectEqual(@as(u32, 2), nine.get(20).?.id);
 
     var two = try registry.moduleFacts(a, 2);

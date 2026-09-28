@@ -1,6 +1,13 @@
 const std = @import("std");
 
-pub const magic = "DLPMETA5";
+pub const magic = "DLPMETA6";
+
+pub const ShapeKeyTag = enum(u32) {
+    string = 1,
+    number = 2,
+    false_ = 3,
+    true_ = 4,
+};
 
 pub fn writeU32(w: *std.Io.Writer, value: u32) !void {
     const bytes = [_]u8{
@@ -9,6 +16,12 @@ pub fn writeU32(w: *std.Io.Writer, value: u32) !void {
         @truncate(value >> 16),
         @truncate(value >> 24),
     };
+    try w.writeAll(&bytes);
+}
+
+pub fn writeU64(w: *std.Io.Writer, value: u64) !void {
+    var bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &bytes, value, .little);
     try w.writeAll(&bytes);
 }
 
@@ -30,6 +43,13 @@ pub const Reader = struct {
             (@as(u32, b[1]) << 8) |
             (@as(u32, b[2]) << 16) |
             (@as(u32, b[3]) << 24);
+    }
+
+    pub fn readU64(self: *Reader) !u64 {
+        if (self.bytes.len -| self.pos < 8) return error.InvalidProgramMetadata;
+        const b = self.bytes[self.pos .. self.pos + 8];
+        self.pos += 8;
+        return std.mem.readInt(u64, b[0..8], .little);
     }
 
     pub fn readString(self: *Reader) ![]const u8 {
