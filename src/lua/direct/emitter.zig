@@ -840,7 +840,10 @@ const FnEmitter = struct {
         return switch (resolved) {
             .local => |binding| switch (self.storage[binding]) {
                 .uninitialized => error.UninitializedBinding,
-                .direct => |value| value,
+                .direct => |value| if (known_shape) |shape|
+                    .{ .table = .{ .ptr = try self.box(value), .shape = shape } }
+                else
+                    value,
                 .static_function => error.DirectFunctionUsedAsValue,
                 .static_module => |module| .{ .boxed = module.value },
                 .number => |slot| .{ .number = try llvm.load(self.builder, self.ty().double, slot, 8) },

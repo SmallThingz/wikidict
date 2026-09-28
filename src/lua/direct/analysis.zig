@@ -68,6 +68,7 @@ pub const Upvalue = struct {
     mutated: bool = false,
 };
 pub const StaticType = enum { unknown, nil, boolean, number, string };
+pub const ShapeDependency = struct { source: u32, target: u32 };
 pub const Binding = struct {
     name: []const u8,
     captured: bool = false,
@@ -95,30 +96,39 @@ pub const FunctionInfo = struct {
     span: lua.Span,
     bindings: []Binding,
     upvalues: []Upvalue,
+    shape_dependencies: []ShapeDependency = &.{},
     direct_only: bool = false,
     dead: bool = false,
+};
+
+const CallShapeObservation = struct {
+    target_span: lua.Span,
+    param_index: u32,
+    shape_span: ?lua.Span,
 };
 
 pub const Module = struct {
     allocator: std.mem.Allocator,
     base_id: u32,
     functions: std.ArrayList(*FunctionInfo) = .empty,
+    call_shape_observations: std.ArrayList(CallShapeObservation) = .empty,
     root: *FunctionInfo,
 
     pub fn deinit(self: *Module) void {
         for (self.functions.items) |info| {
             self.allocator.free(info.bindings);
             self.allocator.free(info.upvalues);
+            self.allocator.free(info.shape_dependencies);
             self.allocator.destroy(info);
         }
         self.functions.deinit(self.allocator);
+        self.call_shape_observations.deinit(self.allocator);
     }
 };
 
 const Capture = union(enum) { global, local: u32, upvalue: u32 };
 const Save = struct { name: []const u8, previous: ?u32 };
 const TypeDependency = struct { source: u32, target: u32 };
-const ShapeDependency = struct { source: u32, target: u32 };
 const Analyzer = struct {
     allocator: std.mem.Allocator,
     globals: *Globals,
@@ -316,6 +326,40 @@ const Analyzer = struct {
         };
     }
 
+    fn directLocalFunctionSpan(self: *const Analyzer, value: *const lua.Expr) ?lua.Span {
+        return switch (value.*) {
+            .name => |name| if (self.locals.get(name.value)) |binding|
+                self.bindings.items[binding].function_span
+            else
+                null,
+            .paren => |paren| self.directLocalFunctionSpan(paren.expr),
+            else => null,
+        };
+    }
+
+    fn observeDirectCallShapes(self: *Analyzer, target_span: lua.Span, args: []const *lua.Expr) !void {
+        var target: ?*const FunctionInfo = null;
+        for (self.module.functions.items) |candidate| {
+            if (candidate.span.start == target_span.start and candidate.span.end == target_span.end) {
+                target = candidate;
+                break;
+            }
+        }
+        const info = target orelse return;
+        for (info.params, 0..) |_, param_index| {
+            const shape = if (param_index < args.len and
+                !(param_index + 1 == args.len and isMultiExpr(args[param_index])))
+                self.exprStaticTable(args[param_index])
+            else
+                null;
+            try self.module.call_shape_observations.append(self.allocator, .{
+                .target_span = target_span,
+                .param_index = @intCast(param_index),
+                .shape_span = shape,
+            });
+        }
+    }
+
     fn rhsTypes(self: *const Analyzer, values: []const *lua.Expr, needed: usize) ![]StaticType {
         const out = try self.allocator.alloc(StaticType, needed);
         if (needed == 0) return out;
@@ -439,6 +483,8 @@ const Analyzer = struct {
             },
             .call => |v| {
                 try self.callee(v.callee);
+                if (self.directLocalFunctionSpan(v.callee)) |target_span|
+                    try self.observeDirectCallShapes(target_span, v.args);
                 for (v.args) |arg| try self.expr(arg);
             },
             .method_call => |v| {
@@ -602,6 +648,7 @@ fn analyzeFunction(
         .span = span,
         .bindings = &.{},
         .upvalues = &.{},
+        .shape_dependencies = &.{},
     };
     try module.functions.append(allocator, info);
     var analyzer = Analyzer{
@@ -623,7 +670,57 @@ fn analyzeFunction(
     };
     info.bindings = try analyzer.bindings.toOwnedSlice(allocator);
     info.upvalues = try analyzer.upvalues.toOwnedSlice(allocator);
+    info.shape_dependencies = try analyzer.shape_dependencies.toOwnedSlice(allocator);
     return info;
+}
+
+fn spansEqual(lhs: lua.Span, rhs: lua.Span) bool {
+    return lhs.start == rhs.start and lhs.end == rhs.end;
+}
+
+fn applyDirectParameterShapes(module: *Module) void {
+    for (module.functions.items) |info| {
+        if (!info.direct_only or info.dead) continue;
+        for (info.params, 0..) |_, param_index| {
+            var observed = false;
+            var valid = true;
+            var chosen: ?lua.Span = null;
+            for (module.call_shape_observations.items) |observation| {
+                if (!spansEqual(observation.target_span, info.span) or
+                    observation.param_index != param_index)
+                    continue;
+                observed = true;
+                const shape = observation.shape_span orelse {
+                    valid = false;
+                    break;
+                };
+                if (chosen) |existing| {
+                    if (!spansEqual(existing, shape)) {
+                        valid = false;
+                        break;
+                    }
+                } else {
+                    chosen = shape;
+                }
+            }
+            if (observed and valid and chosen != null and param_index < info.bindings.len)
+                info.bindings[param_index].static_table_span = chosen;
+        }
+
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (info.shape_dependencies) |dependency| {
+                if (dependency.source >= info.bindings.len or dependency.target >= info.bindings.len)
+                    continue;
+                const source = info.bindings[dependency.source].static_table_span orelse continue;
+                const target = &info.bindings[dependency.target];
+                if (target.mutated or target.static_table_span != null) continue;
+                target.static_table_span = source;
+                changed = true;
+            }
+        }
+    }
 }
 
 const FunctionOrigin = struct {
@@ -741,6 +838,7 @@ pub fn analyze(
     const synthetic_span = lua.Span{ .start = 0, .end = @intCast(chunk.source.len) };
     module.root = try analyzeFunction(allocator, globals, &module, null, &.{}, true, chunk.body, synthetic_span);
     try computeFunctionLiveness(allocator, &module);
+    applyDirectParameterShapes(&module);
     return module;
 }
 

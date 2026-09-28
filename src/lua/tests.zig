@@ -577,6 +577,16 @@ test "static table shapes survive captured and shape-stable mutable locals" {
         changed,
         "call i32 @dict_lua_get_field_cached",
     ) != null);
+
+    const through_param = try compile(
+        "local function read(t) return t.foo end; local s={foo=1}; return read(s)",
+    );
+    defer std.testing.allocator.free(through_param);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        through_param,
+        "call i32 @dict_lua_get_known_shape_field",
+    ) != null);
 }
 
 test "mixed list tables keep generic dense array semantics" {
