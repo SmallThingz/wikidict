@@ -405,6 +405,10 @@ pub const Table = struct {
     dense_prefix_valid: bool = true,
     // Identity-key iteration may depend on arena addresses or function allocation order.
     has_identity_key: bool = false,
+    // Non-zero only for tables created while a dynamic module-root promotion
+    // probe is active. Mutating a table owned by another probe (or no probe)
+    // is an externally visible effect and makes the root non-reusable.
+    module_template_probe_id: u64 = 0,
 
     fn markMapStructuralMutation(self: *Table) void {
         if (self.field_cache_epoch == std.math.maxInt(u64))
@@ -414,6 +418,9 @@ pub const Table = struct {
     }
 
     fn markMutated(self: *Table) void {
+        if (module_template_effect_probe != null and
+            self.module_template_probe_id != module_template_probe_id)
+            markModuleTemplateEffect();
         if (self.mutation_sentinel) |sentinel| {
             sentinel.* = false;
             markModuleTemplateEffect();
@@ -930,6 +937,13 @@ pub const NextIterationHint = struct {
 threadlocal var load_data_effect_probe: ?*bool = null;
 threadlocal var load_data_pending_probe: ?*bool = null;
 threadlocal var module_template_effect_probe: ?*bool = null;
+threadlocal var module_template_probe_id: u64 = 0;
+threadlocal var module_template_probe_next_id: u64 = 1;
+
+const ModuleTemplateProbeState = struct {
+    previous: ?*bool,
+    previous_id: u64,
+};
 
 pub fn beginLoadDataEffectProbe(flag: *bool) ?*bool {
     const previous = load_data_effect_probe;
@@ -946,17 +960,43 @@ pub fn markLoadDataEffect() void {
     if (module_template_effect_probe) |flag| flag.* = true;
 }
 
-fn beginModuleTemplateEffectProbe(flag: *bool) ?*bool {
+fn beginModuleTemplateEffectProbe(flag: *bool) ModuleTemplateProbeState {
     const previous = module_template_effect_probe;
+    const previous_id = module_template_probe_id;
+    const id = module_template_probe_next_id;
+    module_template_probe_next_id +%= 1;
+    if (module_template_probe_next_id == 0) module_template_probe_next_id = 1;
     module_template_effect_probe = flag;
-    return previous;
+    module_template_probe_id = id;
+    return .{ .previous = previous, .previous_id = previous_id };
 }
 
-fn endModuleTemplateEffectProbe(previous: ?*bool, observed: bool) void {
-    module_template_effect_probe = previous;
+fn endModuleTemplateEffectProbe(state: ModuleTemplateProbeState, observed: bool) void {
+    module_template_effect_probe = state.previous;
+    module_template_probe_id = state.previous_id;
     if (observed) {
-        if (previous) |flag| flag.* = true;
+        if (state.previous) |flag| flag.* = true;
     }
+}
+
+const ModuleTemplateProbeSuspend = struct {
+    current: ?*bool,
+    current_id: u64,
+};
+
+fn suspendModuleTemplateEffectProbe() ModuleTemplateProbeSuspend {
+    const state = ModuleTemplateProbeSuspend{
+        .current = module_template_effect_probe,
+        .current_id = module_template_probe_id,
+    };
+    module_template_effect_probe = null;
+    module_template_probe_id = 0;
+    return state;
+}
+
+fn resumeModuleTemplateEffectProbe(state: ModuleTemplateProbeSuspend) void {
+    module_template_effect_probe = state.current;
+    module_template_probe_id = state.current_id;
 }
 
 fn markModuleTemplateEffect() void {
@@ -1562,6 +1602,20 @@ pub const Context = struct {
         self.package_observable = true;
     }
 
+    /// Runtime-only cache writes must not make an otherwise reusable module
+    /// root look effectful. User-visible writes still flow through ordinary
+    /// table mutation paths and are observed by the active promotion probe.
+    pub fn rawSetRuntimeBookkeeping(
+        self: *Context,
+        table: *Table,
+        key: Value,
+        value: Value,
+    ) !void {
+        const suspended = suspendModuleTemplateEffectProbe();
+        defer resumeModuleTemplateEffectProbe(suspended);
+        try table.rawSet(self.allocator, key, value);
+    }
+
     pub fn deferStaticRequireRef(self: *Context, module_id: u32, out: *Value) ?*const bool {
         if (self.package_observable) return null;
         const state = self.moduleState(module_id) orelse return null;
@@ -1672,6 +1726,7 @@ pub const Context = struct {
                     .slots = globals,
                     .global_tail = tail,
                     .owns_slots = false,
+                    .module_template_probe_id = module_template_probe_id,
                 };
                 if (self.global_env_slot) |slot| {
                     if (slot < globals.len) {
@@ -1753,7 +1808,7 @@ pub const Context = struct {
         if (value != .table) return value;
         if (seen.get(value.table)) |existing| return .{ .table = existing };
         const copy = try self.allocator.create(Table);
-        copy.* = .{};
+        copy.* = .{ .module_template_probe_id = module_template_probe_id };
         try seen.put(self.allocator, value.table, copy);
         var it = value.table.iterator();
         while (it.next()) |entry| {
@@ -1979,7 +2034,7 @@ pub const Context = struct {
             state.loading = false;
             const canonical = self.target.canonicalModuleName(module_id, requested);
             if (canonical) |text| if (self.target.package_loaded) |loaded|
-                try loaded.rawSet(self.target.allocator, .{ .string = text }, value);
+                try self.target.rawSetRuntimeBookkeeping(loaded, .{ .string = text }, value);
             return value;
         }
     };
@@ -2106,7 +2161,7 @@ pub const Context = struct {
 
         const canonical = self.canonicalModuleName(module_id, requested);
         if (canonical) |text| if (self.package_loaded) |loaded|
-            try loaded.rawSet(self.allocator, .{ .string = text }, value);
+            try self.rawSetRuntimeBookkeeping(loaded, .{ .string = text }, value);
         state.value = value;
         state.loading = false;
         return value;
@@ -2130,7 +2185,7 @@ pub const Context = struct {
         else
             null;
         defer if (dynamic_template_probe)
-            endModuleTemplateEffectProbe(previous_template_probe, observed_template_effect);
+            endModuleTemplateEffectProbe(previous_template_probe.?, observed_template_effect);
         errdefer if (dynamic_template_probe) {
             observed_template_effect = true;
             self.module_template_rejected[module_id] = true;
@@ -2177,7 +2232,7 @@ pub const Context = struct {
             if (value == .nil) value = .{ .boolean = true };
         }
         if (canonical) |text| if (self.package_loaded) |loaded|
-            try loaded.rawSet(self.allocator, .{ .string = text }, value);
+            try self.rawSetRuntimeBookkeeping(loaded, .{ .string = text }, value);
         state.value = value;
         state.export_pristine = value == .table;
         if (value == .table) value.table.mutation_sentinel = &state.export_pristine;
@@ -2213,7 +2268,8 @@ pub const Context = struct {
             return self.preparedModuleValue(module_id) orelse error.EagerDependencyNotInitialized;
         if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
         const value = try self.loadModule(module_id, raw_name);
-        if (self.package_loaded) |loaded| try loaded.rawSet(self.allocator, .{ .string = raw_name }, value);
+        if (self.package_loaded) |loaded|
+            try self.rawSetRuntimeBookkeeping(loaded, .{ .string = raw_name }, value);
         if (self.moduleState(module_id)) |state| state.deferred_require_visibility = false;
         return value;
     }
@@ -2293,7 +2349,7 @@ pub const Context = struct {
 
     pub fn newTable(self: *Context) !*Table {
         const table = try self.allocator.create(Table);
-        table.* = .{};
+        table.* = .{ .module_template_probe_id = module_template_probe_id };
         self.assignFieldCacheIdentity(table);
         return table;
     }
@@ -2324,7 +2380,10 @@ pub const Context = struct {
         }
         const table = try self.allocator.create(Table);
         errdefer self.allocator.destroy(table);
-        table.* = .{ .shape = shape };
+        table.* = .{
+            .shape = shape,
+            .module_template_probe_id = module_template_probe_id,
+        };
         self.assignFieldCacheIdentity(table);
         if (shape.field_count != 0) {
             table.slots = try self.allocator.alloc(Value, shape.field_count);
@@ -2518,7 +2577,10 @@ pub const Context = struct {
     pub fn newNativeNamespace(self: *Context, namespace: static_fields.Namespace) !*Table {
         const table = try self.allocator.create(Table);
         errdefer self.allocator.destroy(table);
-        table.* = .{ .native_namespace = namespace };
+        table.* = .{
+            .native_namespace = namespace,
+            .module_template_probe_id = module_template_probe_id,
+        };
         const count = static_fields.fieldCount(namespace);
         if (count != 0) {
             table.slots = try self.allocator.alloc(Value, count);
@@ -3197,6 +3259,7 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
 const ModuleTemplateProbe = struct {
     var root_calls = std.atomic.Value(u32).init(0);
     var effect_root_calls = std.atomic.Value(u32).init(0);
+    var existing_mutation_calls = std.atomic.Value(u32).init(0);
 
     fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
         return if (std.mem.eql(u8, raw_name, "Module:TemplateProbe")) 0 else null;
@@ -3236,6 +3299,20 @@ const ModuleTemplateProbe = struct {
         try ctx.observePackage();
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = try ctx.newTable() };
+        return out;
+    }
+
+    fn mutateExistingRoot(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        _ = existing_mutation_calls.fetchAdd(1, .monotonic);
+        const existing = ctx.getGlobal(0);
+        if (existing != .table) return error.TableExpected;
+        try existing.table.rawSet(
+            ctx.allocator,
+            .{ .string = "root_mutation" },
+            .{ .boolean = true },
+        );
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .boolean = true };
         return out;
     }
 };
@@ -3308,6 +3385,7 @@ test "effect-free roots promote after first execution and never rerun on fresh c
     var first = try template.forkProgram(first_arena.allocator());
     defer first.deinit();
     first.module_template_context = &template;
+    first.package_loaded = try first.newTable();
     const first_module = try first.requireByName("Module:TemplateProbe");
     try std.testing.expect(eligible[0]);
     try std.testing.expect(!rejected[0]);
@@ -3324,6 +3402,7 @@ test "effect-free roots promote after first execution and never rerun on fresh c
     var second = try template.forkProgram(second_arena.allocator());
     defer second.deinit();
     second.module_template_context = &template;
+    second.package_loaded = try second.newTable();
     const second_module = try second.requireByName("Module:TemplateProbe");
     try std.testing.expectEqual(@as(u32, 1), ModuleTemplateProbe.root_calls.load(.monotonic));
     try std.testing.expect(second_module.table != first_module.table);
@@ -3367,6 +3446,46 @@ test "effectful roots are rejected from dynamic module templates" {
     try std.testing.expectEqual(
         @as(u32, 2),
         ModuleTemplateProbe.effect_root_calls.load(.monotonic),
+    );
+}
+
+test "mutating a pre-existing table rejects dynamic module templates" {
+    ModuleTemplateProbe.existing_mutation_calls.store(0, .monotonic);
+    const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.mutateExistingRoot)};
+    var eligible = [_]bool{false};
+    var rejected = [_]bool{false};
+
+    var template_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer template_arena.deinit();
+    var template = try Context.initProgram(template_arena.allocator(), 1, 1);
+    defer template.deinit();
+    template.module_root_entries = &roots;
+    template.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+    template.module_template_eligible = &eligible;
+    template.module_template_rejected = &rejected;
+
+    var first_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer first_arena.deinit();
+    var first = try template.forkProgram(first_arena.allocator());
+    defer first.deinit();
+    first.module_template_context = &template;
+    const first_existing = try first.newTable();
+    try first.setGlobal(0, .{ .table = first_existing });
+    _ = try first.requireByName("Module:TemplateProbe");
+    try std.testing.expect(!eligible[0]);
+    try std.testing.expect(rejected[0]);
+
+    var second_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer second_arena.deinit();
+    var second = try template.forkProgram(second_arena.allocator());
+    defer second.deinit();
+    second.module_template_context = &template;
+    const second_existing = try second.newTable();
+    try second.setGlobal(0, .{ .table = second_existing });
+    _ = try second.requireByName("Module:TemplateProbe");
+    try std.testing.expectEqual(
+        @as(u32, 2),
+        ModuleTemplateProbe.existing_mutation_calls.load(.monotonic),
     );
 }
 

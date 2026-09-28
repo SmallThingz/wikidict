@@ -133,7 +133,7 @@ fn mainModuleLoader(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value, res
     const loader_ctx = try ctx.allocator.create(ModuleLoaderCtx);
     loader_ctx.* = .{ .module_id = module_id };
     const loader = try ctx.newNativeBuffered(loader_ctx, moduleLoader);
-    try state.cache.rawSet(ctx.allocator, key, loader);
+    try ctx.rawSetRuntimeBookkeeping(state.cache, key, loader);
     return bufferedOne(result_buffer, loader);
 }
 
