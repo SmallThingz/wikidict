@@ -855,6 +855,7 @@ const FnEmitter = struct {
         if (std.mem.eql(u8, name, "math")) return .math;
         if (std.mem.eql(u8, name, "debug")) return .debug;
         if (std.mem.eql(u8, name, "mw")) return .mw;
+        if (std.mem.eql(u8, name, "os")) return .os;
         return null;
     }
 
@@ -1692,7 +1693,7 @@ const FnEmitter = struct {
             if (static_fields.slotForName(namespace, name)) |slot| {
                 const status = if (object == .native_boxed)
                     try llvm.call(self.builder, self.rt().get_known_native_slot, &.{
-                        self.ctx(), object_box, try self.cI32(@intFromEnum(namespace)), try self.cI32(slot),
+                        self.ctx(), object_box,             try self.cI32(@intFromEnum(namespace)), try self.cI32(slot),
                         key.ptr,    try self.cI64(key.len), out,
                     })
                 else
@@ -2964,7 +2965,7 @@ const FnEmitter = struct {
                     if (static_fields.slotForName(namespace, key_name)) |slot|
                         break :blk if (field.object == .native_boxed)
                             try llvm.call(self.builder, self.rt().set_known_native_slot, &.{
-                                self.ctx(), object, try self.cI32(@intFromEnum(namespace)), try self.cI32(slot),
+                                self.ctx(),    object,                       try self.cI32(@intFromEnum(namespace)), try self.cI32(slot),
                                 field.key.ptr, try self.cI64(field.key.len), boxed,
                             })
                         else
@@ -4108,9 +4109,10 @@ const FnEmitter = struct {
             const binding = try self.bindName(name);
             const value = if (self.fixed_pointer_entry)
                 try llvm.param(self.function, @intCast(index + 1))
-            else try llvm.call(self.builder, self.rt().arg_ptr, &.{
-                self.args(), self.argsLen(), try self.cI64(index),
-            });
+            else
+                try llvm.call(self.builder, self.rt().arg_ptr, &.{
+                    self.args(), self.argsLen(), try self.cI64(index),
+                });
             const initial: ValueRef = if (index == 0 and self.module.facts.functionFrameHint(self.info.id))
                 .{ .native_boxed = .{ .ptr = value, .native_namespace = .frame } }
             else

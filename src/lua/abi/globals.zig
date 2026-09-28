@@ -6,7 +6,7 @@ pub const names = [_][]const u8{
     "_G",           "type",         "assert",   "error",    "rawequal", "rawget", "rawset",
     "getmetatable", "setmetatable", "tostring", "tonumber", "select",   "unpack", "next",
     "pairs",        "ipairs",       "pcall",    "table",    "string",   "math",   "debug",
-    "package",      "require",      "mw",
+    "package",      "require",      "mw",       "os",
 };
 pub const count: u32 = names.len;
 pub const native_shape: u32 = std.math.maxInt(u32) - 1;

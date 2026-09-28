@@ -497,7 +497,7 @@ fn uriObjectToStringCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const 
 }
 
 fn makeUriObject(runtime: *rt.Context, url: []const u8) !Value {
-    const object = try runtime.newTable();
+    const object = try runtime.newNativeNamespace(.uri_value);
     const mt = try runtime.newTable();
     const ctx = try runtime.allocator.create(UriStringCtx);
     ctx.* = .{ .url = url };

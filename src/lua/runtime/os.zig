@@ -252,7 +252,7 @@ fn setNative(runtime: *rt.Context, table: *rt.Table, name: []const u8, comptime 
 
 pub fn install(runtime: *rt.Context) !void {
     const global = runtime.global_table orelse return;
-    const table = try runtime.newTable();
+    const table = try runtime.newNativeNamespace(.os);
     try setNative(runtime, table, "date", dateCall);
     try setNative(runtime, table, "time", timeCall);
     try setNative(runtime, table, "difftime", difftimeCall);

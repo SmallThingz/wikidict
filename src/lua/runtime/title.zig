@@ -699,7 +699,7 @@ fn newBatchCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     }
     const batch_state = try runtime.allocator.create(BatchState);
     batch_state.* = .{ .title_state = state, .source = args[0].table, .namespace = namespace };
-    const batch = try runtime.newTable();
+    const batch = try runtime.newNativeNamespace(.title_batch);
     try batch.rawSet(runtime.allocator, .{ .string = "lookupExistence" }, try runtime.newNative(batch_state, batchLookupExistenceCall));
     try batch.rawSet(runtime.allocator, .{ .string = "getTitles" }, try runtime.newNative(batch_state, batchGetTitlesCall));
     return one(.{ .table = batch });

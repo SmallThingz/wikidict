@@ -45,6 +45,9 @@ pub const Namespace = enum(u8) {
     wikibase,
     message,
     message_value,
+    uri_value,
+    title_batch,
+    os,
 };
 const names = [_][]const u8{
     "insert",               "remove",             "concat",            "sort",            "maxn",                 "getn",
@@ -94,9 +97,11 @@ const html_names = names[94..95];
 const language_names = [_][]const u8{ "new", "getContentLanguage", "getFallbacksFor", "isKnownLanguageTag", "fetchLanguageName" };
 const frame_names = [_][]const u8{ "args", "getParent", "getTitle", "expandTemplate", "preprocess", "extensionTag", "callParserFunction", "newChild" };
 const title_value_names = [_][]const u8{
-    "text",         "prefixedText", "__fragment",  "namespace",    "nsText",  "subpageText", "baseText",   "rootText",
-    "isSubpage",    "interwiki",    "isExternal",  "isLocal",      "exists",  "getContent",  "fullUrl",    "localUrl",
-    "canonicalUrl", "inNamespace",  "isSubpageOf", "subPageTitle", "content", "file",        "fileExists",
+    "text",          "prefixedText",  "__fragment",   "namespace",      "nsText",     "subpageText",   "baseText",         "rootText",
+    "isSubpage",     "interwiki",     "isExternal",   "isLocal",        "exists",     "getContent",    "fullUrl",          "localUrl",
+    "canonicalUrl",  "inNamespace",   "isSubpageOf",  "subPageTitle",   "content",    "file",          "fileExists",       "fragment",
+    "fullText",      "id",            "isRedirect",   "redirectTarget", "isTalkPage", "isContentPage", "subjectPageTitle", "talkPageTitle",
+    "basePageTitle", "rootPageTitle", "contentModel", "subjectNsText",  "talkNsText", "canTalk",
 };
 const language_value_names = [_][]const u8{
     "code",  "getCode",              "formatDate", "uc",     "lc",        "ucfirst",              "lcfirst", "getDir",
@@ -120,6 +125,11 @@ const message_names = [_][]const u8{
 const message_value_names = [_][]const u8{
     "plain", "exists", "isBlank", "isDisabled", "inLanguage", "params", "rawParams", "numParams", "useDatabase",
 };
+const uri_value_names = [_][]const u8{
+    "protocol", "user", "password", "host", "port", "path", "query", "fragment",
+};
+const title_batch_names = [_][]const u8{ "lookupExistence", "getTitles" };
+const os_names = [_][]const u8{ "date", "time", "difftime", "clock" };
 
 fn namespaceNames(namespace: Namespace) []const []const u8 {
     return switch (namespace) {
@@ -146,6 +156,9 @@ fn namespaceNames(namespace: Namespace) []const []const u8 {
         .wikibase => &wikibase_names,
         .message => &message_names,
         .message_value => &message_value_names,
+        .uri_value => &uri_value_names,
+        .title_batch => &title_batch_names,
+        .os => &os_names,
     };
 }
 pub fn fieldCount(namespace: Namespace) u32 {
@@ -188,6 +201,9 @@ pub fn slotForName(namespace: Namespace, field_name: []const u8) ?u32 {
         .wikibase => staticSlot(&wikibase_names, field_name),
         .message => staticSlot(&message_names, field_name),
         .message_value => staticSlot(&message_value_names, field_name),
+        .uri_value => staticSlot(&uri_value_names, field_name),
+        .title_batch => staticSlot(&title_batch_names, field_name),
+        .os => staticSlot(&os_names, field_name),
     };
 }
 
@@ -228,6 +244,14 @@ pub fn fieldNamespace(namespace: Namespace, field_name: []const u8) ?Namespace {
             null,
         .site => if (std.mem.eql(u8, field_name, "stats")) .site_stats else null,
         .ext => if (std.mem.eql(u8, field_name, "data")) .ext_data else null,
+        .title_value => if (std.mem.eql(u8, field_name, "redirectTarget") or
+            std.mem.eql(u8, field_name, "subjectPageTitle") or
+            std.mem.eql(u8, field_name, "talkPageTitle") or
+            std.mem.eql(u8, field_name, "basePageTitle") or
+            std.mem.eql(u8, field_name, "rootPageTitle"))
+            .title_value
+        else
+            null,
         else => null,
     };
 }
@@ -248,6 +272,15 @@ pub fn callReturnNamespace(namespace: Namespace, field_name: []const u8) ?Namesp
             std.mem.eql(u8, field_name, "makeTitle") or
             std.mem.eql(u8, field_name, "getCurrentTitle"))
             .title_value
+        else if (std.mem.eql(u8, field_name, "newBatch"))
+            .title_batch
+        else
+            null,
+        .uri => if (std.mem.eql(u8, field_name, "new") or
+            std.mem.eql(u8, field_name, "fullUrl") or
+            std.mem.eql(u8, field_name, "localUrl") or
+            std.mem.eql(u8, field_name, "canonicalUrl"))
+            .uri_value
         else
             null,
         .language => if (std.mem.eql(u8, field_name, "new") or
@@ -275,6 +308,7 @@ pub fn callReturnNamespace(namespace: Namespace, field_name: []const u8) ?Namesp
         else
             null,
         .message_value => if (std.mem.eql(u8, field_name, "inLanguage")) .message_value else null,
+        .title_batch => if (std.mem.eql(u8, field_name, "lookupExistence")) .title_batch else null,
         else => null,
     };
 }
