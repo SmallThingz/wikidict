@@ -2000,12 +2000,24 @@ pub const Context = struct {
             if (self.callables.get(source_function)) |existing|
                 return .{ .callable = existing };
             if (source_function.id == native_function_id) {
-                // Null-environment natives are immutable process code and can be
-                // shared. A non-null native environment usually points into the
-                // source page/context and cannot enter the persistent template.
-                if (self.promotion and source_function.env.nativePtr() != null)
+                // The entrypoint is process code, but the descriptor itself is
+                // allocated in the owning Context arena. Never retain that
+                // pointer across page/template lifetimes. Context-bound native
+                // environments remain uncloneable until they have an explicit
+                // remapping contract.
+                if (source_function.env.nativePtr() != null)
                     return error.UnsupportedModuleTemplate;
-                return .{ .callable = source_function };
+                const value = try self.target.storeFunction(.{
+                    .id = native_function_id,
+                    .identity = try self.target.takeFunctionIdentity(),
+                    .entry = source_function.entry,
+                });
+                try self.callables.put(
+                    self.target.allocator,
+                    source_function,
+                    value.callable,
+                );
+                return value;
             }
 
             const captures = source_function.captures();
@@ -2239,12 +2251,40 @@ pub const Context = struct {
         };
         defer clone.deinit();
         const value = clone.cloneModule(module_id, requested) catch |err| switch (err) {
-            error.UnsupportedModuleTemplate => null,
+            error.UnsupportedModuleTemplate => blk: {
+                try self.clearTemplateInstalledModule(module_id, requested);
+                self.module_template_eligible[module_id] = false;
+                if (module_id < self.module_template_rejected.len)
+                    self.module_template_rejected[module_id] = true;
+                break :blk null;
+            },
             else => return err,
         };
         if (value == null) return null;
-        try clone.applyTemplateOverrides(source_state.template_overrides);
+        clone.applyTemplateOverrides(source_state.template_overrides) catch |err| switch (err) {
+            error.UnsupportedModuleTemplate => {
+                try self.clearTemplateInstalledModule(module_id, requested);
+                for (source_state.template_overrides) |override|
+                    try self.clearTemplateInstalledModule(override.module_id, null);
+                self.module_template_eligible[module_id] = false;
+                if (module_id < self.module_template_rejected.len)
+                    self.module_template_rejected[module_id] = true;
+                return null;
+            },
+            else => return err,
+        };
         return value;
+    }
+
+    fn clearTemplateInstalledModule(
+        self: *Context,
+        module_id: u32,
+        requested: ?[]const u8,
+    ) !void {
+        if (self.moduleState(module_id)) |state| state.* = .{};
+        const canonical = self.canonicalModuleName(module_id, requested);
+        if (canonical) |text| if (self.package_loaded) |loaded|
+            try self.rawSetRuntimeBookkeeping(loaded, .{ .string = text }, .nil);
     }
 
     fn dynamicModuleTemplateCandidate(self: *const Context, module_id: u32) bool {
@@ -3636,6 +3676,43 @@ test "module templates run roots once while fresh contexts clone mutable closure
     const second_once = try second.callValue(second_run, &.{});
     defer freeResults(second_once);
     try std.testing.expectEqual(@as(f64, 1), second_once[0].number);
+}
+
+test "module template cloning recreates null-environment native descriptors" {
+    const NativeProbe = struct {
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .boolean = true };
+            return out;
+        }
+    };
+
+    var target_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer target_arena.deinit();
+    var target = try Context.init(target_arena.allocator(), 0);
+    defer target.deinit();
+
+    const copied = blk: {
+        var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer source_arena.deinit();
+        var source = try Context.init(source_arena.allocator(), 0);
+        defer source.deinit();
+        const original = try source.newNative(null, NativeProbe.call);
+        var clone = Context.ModuleTemplateClone{
+            .source = &source,
+            .target = &target,
+        };
+        defer clone.deinit();
+        const value = try clone.cloneValue(original);
+        try std.testing.expect(value == .callable);
+        try std.testing.expect(value.callable != original.callable);
+        try std.testing.expectEqual(original.callable.entry, value.callable.entry);
+        break :blk value;
+    };
+
+    const out = try target.callValue(copied, &.{});
+    defer freeResults(out);
+    try std.testing.expectEqual(true, out[0].boolean);
 }
 
 test "effect-free roots promote after first execution and never rerun on fresh contexts" {
