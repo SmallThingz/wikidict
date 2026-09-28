@@ -746,6 +746,37 @@ test "non-escaping index-only tables lower dynamic keys to linear struct cells" 
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_struct_index("));
 }
 
+test "metamethod parameters retain guarded receiver struct shapes" {
+    const source =
+        \\local mt = { __lt = function(a, b) return a.n < b.n end }
+        \\local a = setmetatable({ n = 1 }, mt)
+        \\local b = setmetatable({ n = 2 }, mt)
+        \\return a < b
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var registry = llvm_shapes.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try registry.collect(0, chunk.body);
+    var shape_facts = try registry.moduleFacts(std.testing.allocator, 0);
+    defer shape_facts.deinit(std.testing.allocator);
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(
+        std.testing.allocator,
+        &globals,
+        &module,
+        .{ .table_shapes = &shape_facts },
+    );
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.count(u8, ir, "call i32 @dict_lua_get_known_shape_field") >= 2);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_struct_field("));
+}
+
 test "nested table fields retain child struct shapes" {
     const source = "local t = { foo = { bar = { baz = 7 } } }; return t.foo.bar.baz";
     var chunk = try llvm_parser.parse(std.testing.allocator, source);

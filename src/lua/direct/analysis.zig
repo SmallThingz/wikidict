@@ -114,6 +114,17 @@ const CallShapeObservation = struct {
     shape_span: ?lua.Span,
 };
 
+const TableFunctionField = struct {
+    table_span: lua.Span,
+    field_name: []const u8,
+    function_span: lua.Span,
+};
+
+const MetatableShapeObservation = struct {
+    metatable_span: lua.Span,
+    object_span: lua.Span,
+};
+
 pub const TableShapeWrite = struct {
     table_span: lua.Span,
     key: *const lua.Expr,
@@ -125,6 +136,8 @@ pub const Module = struct {
     base_id: u32,
     functions: std.ArrayList(*FunctionInfo) = .empty,
     call_shape_observations: std.ArrayList(CallShapeObservation) = .empty,
+    table_function_fields: std.ArrayList(TableFunctionField) = .empty,
+    metatable_shape_observations: std.ArrayList(MetatableShapeObservation) = .empty,
     table_shape_writes: std.ArrayList(TableShapeWrite) = .empty,
     root: *FunctionInfo,
 
@@ -137,6 +150,8 @@ pub const Module = struct {
         }
         self.functions.deinit(self.allocator);
         self.call_shape_observations.deinit(self.allocator);
+        self.table_function_fields.deinit(self.allocator);
+        self.metatable_shape_observations.deinit(self.allocator);
         self.table_shape_writes.deinit(self.allocator);
     }
 };
@@ -542,6 +557,49 @@ const Analyzer = struct {
         }
     }
 
+    fn staticFunctionSpan(value: *const lua.Expr) ?lua.Span {
+        return switch (value.*) {
+            .function => |function| function.span,
+            .paren => |paren| staticFunctionSpan(paren.expr),
+            else => null,
+        };
+    }
+
+    fn observeTableFunctionFields(self: *Analyzer, table: anytype) !void {
+        for (table.fields) |field| {
+            const name: []const u8, const value: *const lua.Expr = switch (field) {
+                .named => |item| .{ item.name, item.value },
+                .keyed => |item| .{
+                    staticString(item.key) orelse continue,
+                    item.value,
+                },
+                .list => continue,
+            };
+            const function_span = staticFunctionSpan(value) orelse continue;
+            try self.module.table_function_fields.append(self.allocator, .{
+                .table_span = table.span,
+                .field_name = name,
+                .function_span = function_span,
+            });
+        }
+    }
+
+    fn observeMetatableShape(self: *Analyzer, callee_expr: *const lua.Expr, args: []const *lua.Expr) !void {
+        if (args.len < 2) return;
+        const name = switch (callee_expr.*) {
+            .name => |value| value.value,
+            .paren => |paren| return self.observeMetatableShape(paren.expr, args),
+            else => return,
+        };
+        if (!std.mem.eql(u8, name, "setmetatable")) return;
+        const object_span = self.exprStaticTable(args[0]) orelse return;
+        const metatable_span = self.exprStaticTable(args[1]) orelse return;
+        try self.module.metatable_shape_observations.append(self.allocator, .{
+            .metatable_span = metatable_span,
+            .object_span = object_span,
+        });
+    }
+
     fn rhsTypes(self: *const Analyzer, values: []const *lua.Expr, needed: usize) ![]StaticType {
         const out = try self.allocator.alloc(StaticType, needed);
         if (needed == 0) return out;
@@ -664,6 +722,7 @@ const Analyzer = struct {
                 try self.expr(v.key);
             },
             .call => |v| {
+                try self.observeMetatableShape(v.callee, v.args);
                 try self.callee(v.callee);
                 if (self.directLocalFunctionSpan(v.callee)) |target_span|
                     try self.observeDirectCallShapes(target_span, v.args);
@@ -674,13 +733,16 @@ const Analyzer = struct {
                 for (v.args) |arg| try self.expr(arg);
             },
             .function => |f| _ = try analyzeFunction(self.allocator, self.globals, self.module, self, f.params, f.is_vararg, f.body, f.span),
-            .table => |v| for (v.fields) |field| switch (field) {
-                .list => |item| try self.expr(item),
-                .named => |item| try self.expr(item.value),
-                .keyed => |item| {
-                    try self.expr(item.key);
-                    try self.expr(item.value);
-                },
+            .table => |v| {
+                try self.observeTableFunctionFields(v);
+                for (v.fields) |field| switch (field) {
+                    .list => |item| try self.expr(item),
+                    .named => |item| try self.expr(item.value),
+                    .keyed => |item| {
+                        try self.expr(item.key);
+                        try self.expr(item.value);
+                    },
+                };
             },
             .unary => |v| if (v.op == .len)
                 try self.lengthOperandUse(v.expr)
@@ -943,6 +1005,37 @@ fn applyDirectParameterShapes(module: *Module) void {
     }
 }
 
+fn binaryMetamethod(name: []const u8) bool {
+    inline for (.{
+        "__add", "__sub", "__mul", "__div", "__mod", "__pow",
+        "__concat", "__eq", "__lt", "__le",
+    }) |candidate|
+        if (std.mem.eql(u8, name, candidate)) return true;
+    return false;
+}
+
+fn applyMetatableParameterShapes(module: *Module) void {
+    for (module.metatable_shape_observations.items) |observation| {
+        for (module.table_function_fields.items) |field| {
+            if (!spansEqual(field.table_span, observation.metatable_span)) continue;
+            var target: ?*FunctionInfo = null;
+            for (module.functions.items) |info| {
+                if (spansEqual(info.span, field.function_span)) {
+                    target = info;
+                    break;
+                }
+            }
+            const info = target orelse continue;
+            if (info.bindings.len != 0 and info.bindings[0].static_table_span == null)
+                info.bindings[0].static_table_span = observation.object_span;
+            if (binaryMetamethod(field.field_name) and
+                info.bindings.len > 1 and
+                info.bindings[1].static_table_span == null)
+                info.bindings[1].static_table_span = observation.object_span;
+        }
+    }
+}
+
 const FunctionOrigin = struct {
     owner_index: usize,
     binding: u32,
@@ -1058,6 +1151,7 @@ pub fn analyze(
     const synthetic_span = lua.Span{ .start = 0, .end = @intCast(chunk.source.len) };
     module.root = try analyzeFunction(allocator, globals, &module, null, &.{}, true, chunk.body, synthetic_span);
     try computeFunctionLiveness(allocator, &module);
+    applyMetatableParameterShapes(&module);
     applyDirectParameterShapes(&module);
     return module;
 }
