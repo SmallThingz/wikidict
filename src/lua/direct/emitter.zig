@@ -1668,6 +1668,22 @@ const FnEmitter = struct {
         }
     }
 
+    fn localCallReturnShape(self: *FnEmitter, value: *const lua.Expr) anyerror!?shapes.Fact {
+        const target = switch (value.*) {
+            .name => |name| blk: {
+                break :blk switch (try self.resolve(name.value)) {
+                    .local => |binding| self.localFunctionTarget(self.info, binding),
+                    .upvalue => |ordinal| self.capturedFunctionTarget(ordinal),
+                    .global => null,
+                };
+            },
+            .paren => |paren| return self.localCallReturnShape(paren.expr),
+            else => null,
+        } orelse return null;
+        const span = target.return_table_span orelse return null;
+        return self.module.facts.tableShape(span.start);
+    }
+
     fn guardedLocalFunction(self: *FnEmitter, resolved: Resolved, target: *const analysis.FunctionInfo) anyerror!StaticFunctionRef {
         // Capture the callable before evaluating arguments. A later argument may
         // rebind its cell, but this call must still use the earlier value.
@@ -2480,8 +2496,13 @@ const FnEmitter = struct {
             },
             .index => |v| try self.getIndex(try self.expr(v.object), v.key),
             .call => |v| blk: {
+                const shape = try self.localCallReturnShape(v.callee);
                 const result = (try self.callFixed(v.callee, null, v.args, 1)) orelse unreachable;
-                break :blk .{ .boxed = try self.arrayElem(result, 0) };
+                const out = try self.arrayElem(result, 0);
+                break :blk if (shape) |known|
+                    .{ .shaped_boxed = .{ .ptr = out, .shape = known } }
+                else
+                    .{ .boxed = out };
             },
             .method_call => |v| blk: {
                 const result = (try self.callFixed(v.object, v.method, v.args, 1)) orelse unreachable;

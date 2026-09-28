@@ -718,6 +718,38 @@ test "nested table fields retain child struct shapes" {
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_field_cached("));
 }
 
+test "local function returns retain table struct shapes" {
+    const source =
+        \\local function make()
+        \\  return { foo = { bar = 9 } }
+        \\end
+        \\return make().foo.bar
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var registry = llvm_shapes.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try registry.collect(0, chunk.body);
+    var shape_facts = try registry.moduleFacts(std.testing.allocator, 0);
+    defer shape_facts.deinit(std.testing.allocator);
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(
+        std.testing.allocator,
+        &globals,
+        &module,
+        .{ .table_shapes = &shape_facts, .shape_registry = &registry },
+    );
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.count(u8, ir, "call i32 @dict_lua_get_known_shape_field") >= 2);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_field_hashed("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_field_cached("));
+}
+
 test "incrementally populated local tables promote to fixed shapes" {
     const source =
         \\local t = {}

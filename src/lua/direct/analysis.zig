@@ -97,6 +97,7 @@ pub const FunctionInfo = struct {
     bindings: []Binding,
     upvalues: []Upvalue,
     shape_dependencies: []ShapeDependency = &.{},
+    return_table_span: ?lua.Span = null,
     direct_only: bool = false,
     dead: bool = false,
 };
@@ -150,6 +151,7 @@ const Analyzer = struct {
     upvalue_by_name: std.StringHashMapUnmanaged(u32) = .empty,
     type_dependencies: std.ArrayList(TypeDependency) = .empty,
     shape_dependencies: std.ArrayList(ShapeDependency) = .empty,
+    return_table_span: ?lua.Span = null,
 
     fn deinit(self: *Analyzer) void {
         self.locals.deinit(self.allocator);
@@ -330,6 +332,13 @@ const Analyzer = struct {
             else
                 if (self.parent) |parent| parent.exprStaticTableName(name.value) else null,
             .paren => |paren| self.exprStaticTable(paren.expr),
+            .call => |call| blk: {
+                const target_span = self.directLocalFunctionSpan(call.callee) orelse break :blk null;
+                for (self.module.functions.items) |info|
+                    if (info.span.start == target_span.start and info.span.end == target_span.end)
+                        break :blk info.return_table_span;
+                break :blk null;
+            },
             else => null,
         };
     }
@@ -644,7 +653,11 @@ const Analyzer = struct {
                 self.bindings.items[binding].late_function_init = true;
                 try self.expr(s.function);
             },
-            .return_stmt => |s| for (s.values) |value| try self.expr(value),
+            .return_stmt => |s| {
+                if (self.return_table_span == null and s.values.len != 0 and !isMultiExpr(s.values[0]))
+                    self.return_table_span = self.exprStaticTable(s.values[0]);
+                for (s.values) |value| try self.expr(value);
+            },
         }
     }
 };
@@ -694,6 +707,7 @@ fn analyzeFunction(
     info.bindings = try analyzer.bindings.toOwnedSlice(allocator);
     info.upvalues = try analyzer.upvalues.toOwnedSlice(allocator);
     info.shape_dependencies = try analyzer.shape_dependencies.toOwnedSlice(allocator);
+    info.return_table_span = analyzer.return_table_span;
     return info;
 }
 
