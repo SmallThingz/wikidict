@@ -401,8 +401,9 @@ fn protectedErrorValue(ctx: *rt.Context, err: anyerror) !Value {
 
 fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     // A later evaluation could catch allocation failure even if this one did
-    // not. Protected calls therefore exclude dynamic cross-page admission.
-    rt.markLoadDataEffect();
+    // not. Keep loadData conservative, while module-root promotion relies on
+    // the called code to report actual page/state observations.
+    rt.markLoadDataOnlyEffect();
     if (args.len == 0) return error.MissingArgument;
     const saved_error = ctx.last_error;
     const saved_error_present = ctx.last_error_present;
@@ -417,7 +418,7 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffe
     const result = ctx.callValue(args[0], args[1..]) catch |err| {
         // A protected error can expose allocator pressure (including OOM) as
         // Lua data. Such a result cannot be shared between page evaluations.
-        rt.markLoadDataEffect();
+        rt.markLoadDataOnlyEffect();
         const out = try rt.returnBuffer(result_buffer, 2);
         const error_value = try protectedErrorValue(ctx, err);
         rt.storeReturn(out, 0, .{ .boolean = false });
@@ -432,7 +433,7 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffe
 }
 
 fn baseXpcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
-    rt.markLoadDataEffect();
+    rt.markLoadDataOnlyEffect();
     if (args.len < 2) return error.MissingArgument;
     const saved_error = ctx.last_error;
     const saved_error_present = ctx.last_error_present;
@@ -445,12 +446,12 @@ fn baseXpcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buff
     ctx.clearLuaError();
     ctx.clearAotErrorName();
     const result = ctx.callValue(args[0], &.{}) catch |err| {
-        rt.markLoadDataEffect();
+        rt.markLoadDataOnlyEffect();
         const original_error = try protectedErrorValue(ctx, err);
         ctx.clearLuaError();
         ctx.clearAotErrorName();
         const handled = ctx.callValue(args[1], &.{original_error}) catch {
-            rt.markLoadDataEffect();
+            rt.markLoadDataOnlyEffect();
             const out = try bufferedTwo(result_buffer, .{ .boolean = false }, .{ .string = "error in error handling" });
             return out;
         };

@@ -132,8 +132,13 @@ pub fn getForStablePageRead(runtime: *const rt.Context) ?*Host {
     if (!host.stable_page_reads) {
         var probe = invoke_host_probe;
         while (probe) |active| : (probe = active.previous) active.observed = true;
+        rt.markLoadDataEffect();
+    } else {
+        // The dump-backed provider is immutable for the lifetime of a bundle
+        // worker, so it is safe for one-time module-root construction even
+        // though shared loadData remains deliberately more conservative.
+        rt.markLoadDataOnlyEffect();
     }
-    rt.markLoadDataEffect();
     return host;
 }
 

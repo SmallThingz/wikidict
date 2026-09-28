@@ -580,13 +580,13 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     return one(promoted);
 }
 fn loadJsonDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    rt.markLoadDataEffect();
+    rt.markLoadDataOnlyEffect();
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingScribuntoState));
     const title = args[0].string;
     if (state.load_json_cache.get(title)) |value| return one(value);
 
-    const host = host_api.get(runtime) orelse return error.NotImplemented;
+    const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
     const get_model = host.page_content_model orelse return error.NotImplemented;
     const model = (try get_model(host.ctx, title)) orelse return error.InvalidJsonPage;
     if (!std.mem.eql(u8, model, "json")) return error.InvalidJsonPage;
