@@ -2231,10 +2231,23 @@ pub const Context = struct {
         if (module_id >= self.module_template_eligible.len or
             !self.module_template_eligible[module_id])
             return null;
-        if (source.moduleStateConst(module_id) == null)
-            _ = try source.loadModule(module_id, requested);
-        const source_state = source.moduleStateConst(module_id) orelse
-            return error.UnsupportedModuleTemplate;
+        if (source.moduleStateConst(module_id) == null) {
+            _ = source.loadModule(module_id, requested) catch |err| switch (err) {
+                error.UnsupportedModuleTemplate => {
+                    self.module_template_eligible[module_id] = false;
+                    if (module_id < self.module_template_rejected.len)
+                        self.module_template_rejected[module_id] = true;
+                    return null;
+                },
+                else => return err,
+            };
+        }
+        const source_state = source.moduleStateConst(module_id) orelse {
+            self.module_template_eligible[module_id] = false;
+            if (module_id < self.module_template_rejected.len)
+                self.module_template_rejected[module_id] = true;
+            return null;
+        };
         for (source_state.template_overrides) |override| {
             if (self.moduleStateConst(override.module_id)) |existing|
                 if (existing.value != null or existing.preinitialized != null)
@@ -2543,7 +2556,18 @@ pub const Context = struct {
             if (observed_template_effect) {
                 self.module_template_rejected[module_id] = true;
             } else {
-                _ = try self.promoteModuleTemplate(module_id, requested);
+                _ = self.promoteModuleTemplate(module_id, requested) catch |err| switch (err) {
+                    error.UnsupportedModuleTemplate => blk: {
+                        self.module_template_eligible[module_id] = false;
+                        self.module_template_rejected[module_id] = true;
+                        if (self.module_template_context) |target| {
+                            if (target.moduleState(module_id)) |template_state|
+                                template_state.* = .{};
+                        }
+                        break :blk false;
+                    },
+                    else => return err,
+                };
             }
         }
         return value;

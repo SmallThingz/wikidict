@@ -308,6 +308,8 @@ fn planModuleTemplates(
     @memset(blocked, false);
     for (candidate, records) |*out, record|
         out.* = record.root_bootstrap_safe and
+            !record.static_root and
+            !record.synth_root and
             (record.root_requires.len == 0 or stable_require);
 
     var edges: std.ArrayList(EagerEdge) = .empty;
@@ -371,6 +373,43 @@ fn planModuleTemplates(
         }
     }
     return count;
+}
+
+test "module templates are reserved for executable roots" {
+    const base = ModuleRecord{
+        .title = "Module:X",
+        .path = "modules/1.lua",
+        .source_bytes = 1,
+        .source_index = 0,
+        .function_base = 0,
+        .function_count = 1,
+        .root_function = 0,
+        .export_shape_id = null,
+        .root_bootstrap_safe = true,
+    };
+    var ids: emitter.ModuleIdMap = .empty;
+    defer ids.deinit(std.testing.allocator);
+    try ids.put(std.testing.allocator, base.title, 0);
+
+    var executable = [_]ModuleRecord{base};
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        try planModuleTemplates(std.testing.allocator, &executable, &ids, true),
+    );
+
+    var static_root = [_]ModuleRecord{base};
+    static_root[0].static_root = true;
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        try planModuleTemplates(std.testing.allocator, &static_root, &ids, true),
+    );
+
+    var synth_root = [_]ModuleRecord{base};
+    synth_root[0].synth_root = true;
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        try planModuleTemplates(std.testing.allocator, &synth_root, &ids, true),
+    );
 }
 
 fn compilePlanLabel(keep: bool, static_root: bool, mode: usage_profile.CompileMode) []const u8 {
