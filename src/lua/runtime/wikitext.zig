@@ -112,6 +112,7 @@ pub const Expander = struct {
     install_scribunto: ?InstallScribuntoFn = null,
     scribunto_state: ?*anyopaque = null,
     scribunto_shared: ?*anyopaque = null,
+    hot_translation_runtime: ?*rt.Context = null,
     page_template_eligible: []bool = &.{},
     page_template_rejected: []bool = &.{},
     base_template_eligible: []bool = &.{},
@@ -163,6 +164,7 @@ pub const Expander = struct {
         self.current_source = source;
         self.page_allocator = self.runtime.allocator;
         self.scribunto_state = null;
+        self.hot_translation_runtime = null;
         self.page_heading_count = 0;
         self.fake_heading_count = 0;
         self.display_title = null;
@@ -1395,44 +1397,78 @@ pub const Expander = struct {
         const outer_runtime = self.runtime;
         try self.ensurePageModuleTemplates();
 
+        const reuse_translation = std.mem.eql(u8, module_name, "Module:translations") and
+            std.mem.eql(u8, function_name, "show") and
+            self.hot_translation_runtime != self.runtime;
         var invoke_arena = LocalBumpArena.init(page_a);
-        defer invoke_arena.deinit();
-        var child = try outer_runtime.forkProgram(invoke_arena.allocator());
-        defer child.deinit();
-        child.useContextAllocatorForStrings();
-        const global_shape = if (outer_runtime.global_table) |global| global.shape else null;
-        try rt.bindGlobalTable(&child, global_shape, self.env_slot);
-        if (!try child.bootstrapProgram()) try stdlib.install(&child);
-        try install(&self.scribunto_state, self.scribunto_shared, page_a, &child, self.env_slot, self.string_slot, self.mw_slot);
-        child.module_template_context = outer_runtime;
-        child.module_template_eligible = self.page_template_eligible;
-        child.module_template_rejected = self.page_template_rejected;
-        child.module_template_page_scope = true;
+        defer if (!reuse_translation) invoke_arena.deinit();
+        var stack_child: rt.Context = undefined;
+        var child: *rt.Context = undefined;
+        var owns_stack_child = false;
+        if (reuse_translation) {
+            if (self.hot_translation_runtime) |cached| {
+                child = cached;
+                // A fresh #invoke context never inherits a pending Lua/AOT
+                // failure or frame. Preserve that boundary while retaining the
+                // expensive, page-local translations module graph.
+                child.clearLuaError();
+                child.clearAotErrorName();
+                child.current_frame = null;
+            } else {
+                const cached = try page_a.create(rt.Context);
+                cached.* = try outer_runtime.forkProgram(page_a);
+                cached.useContextAllocatorForStrings();
+                const global_shape = if (outer_runtime.global_table) |global| global.shape else null;
+                try rt.bindGlobalTable(cached, global_shape, self.env_slot);
+                if (!try cached.bootstrapProgram()) try stdlib.install(cached);
+                try install(&self.scribunto_state, self.scribunto_shared, page_a, cached, self.env_slot, self.string_slot, self.mw_slot);
+                cached.module_template_context = outer_runtime;
+                cached.module_template_eligible = self.page_template_eligible;
+                cached.module_template_rejected = self.page_template_rejected;
+                cached.module_template_page_scope = true;
+                self.hot_translation_runtime = cached;
+                child = cached;
+            }
+        } else {
+            stack_child = try outer_runtime.forkProgram(invoke_arena.allocator());
+            owns_stack_child = true;
+            stack_child.useContextAllocatorForStrings();
+            const global_shape = if (outer_runtime.global_table) |global| global.shape else null;
+            try rt.bindGlobalTable(&stack_child, global_shape, self.env_slot);
+            if (!try stack_child.bootstrapProgram()) try stdlib.install(&stack_child);
+            try install(&self.scribunto_state, self.scribunto_shared, page_a, &stack_child, self.env_slot, self.string_slot, self.mw_slot);
+            stack_child.module_template_context = outer_runtime;
+            stack_child.module_template_eligible = self.page_template_eligible;
+            stack_child.module_template_rejected = self.page_template_rejected;
+            stack_child.module_template_page_scope = true;
+            child = &stack_child;
+        }
+        defer if (owns_stack_child) child.deinit();
 
         const saved_runtime = self.runtime;
-        self.runtime = &child;
+        self.runtime = child;
         defer self.runtime = saved_runtime;
 
-        const copied_invoke_args = try copyArgsTable(&child, invoke_args);
+        const copied_invoke_args = try copyArgsTable(child, invoke_args);
         const parent: ?Value = if (existing_parent) |frame|
             frame
         else if (parent_title) |title| blk: {
             const source_args = parent_args orelse return error.MissingInvokeParentArgs;
-            const copied_parent_args = try copyArgsTable(&child, source_args);
-            break :blk try frame_lib.makeFrameFromTable(&child, title, copied_parent_args, null);
+            const copied_parent_args = try copyArgsTable(child, source_args);
+            break :blk try frame_lib.makeFrameFromTable(child, title, copied_parent_args, null);
         } else null;
-        const frame = try frame_lib.makeFrameFromTable(&child, module_name, copied_invoke_args, parent);
+        const frame = try frame_lib.makeFrameFromTable(child, module_name, copied_invoke_args, parent);
         if (self.invoke_reuse != null) host_api.beginInvokeHostProbe(&host_probe);
         defer if (self.invoke_reuse != null) host_api.endInvokeHostProbe(&host_probe);
         var result_buffer: [1]Value = undefined;
         const result = if (module_id) |id|
-            frame_lib.invokeModuleIdFixed(&child, id, module_name, function_name, frame, &result_buffer) catch |err| {
-                try outer_runtime.adoptFailure(&child);
+            frame_lib.invokeModuleIdFixed(child, id, module_name, function_name, frame, &result_buffer) catch |err| {
+                try outer_runtime.adoptFailure(child);
                 return err;
             }
         else
-            frame_lib.invokeFixed(&child, module_name, function_name, frame, &result_buffer) catch |err| {
-                try outer_runtime.adoptFailure(&child);
+            frame_lib.invokeFixed(child, module_name, function_name, frame, &result_buffer) catch |err| {
+                try outer_runtime.adoptFailure(child);
                 return err;
             };
         defer result.deinit();
@@ -2434,6 +2470,97 @@ const TestModule = struct {
         return out;
     }
 };
+
+const TranslationReuseProbe = struct {
+    var active_context: ?*rt.Context = null;
+
+    fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+        return if (std.mem.eql(u8, raw_name, "Module:translations")) 0 else null;
+    }
+
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id == 0) "Module:translations" else null;
+    }
+
+    fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const exports = try ctx.newTable();
+        try exports.rawSet(ctx.allocator, .{ .string = "show" }, try ctx.makeFunctionKnown(1, show, &.{}));
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .table = exports };
+        return out;
+    }
+
+    fn show(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+        if (args.len == 0 or args[0] != .table) return error.FrameExpected;
+        const frame_args = try ctx.getIndex(args[0], .{ .string = "args" });
+        const mode = try ctx.getIndex(frame_args, .{ .string = "mode" });
+        if (mode != .string) return error.StringExpected;
+        if (std.mem.eql(u8, mode.string, "named-failure")) {
+            ctx.last_error = .{ .string = try ctx.allocator.dupe(u8, "first failure") };
+            return error.LuaRaised;
+        }
+        if (std.mem.eql(u8, mode.string, "generic-failure")) return error.NotImplemented;
+        if (std.mem.eql(u8, mode.string, "inner")) {
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .string = if (active_context == ctx) "reused" else "fresh" };
+            return out;
+        }
+        if (std.mem.eql(u8, mode.string, "outer")) {
+            active_context = ctx;
+            defer active_context = null;
+            const preprocess_fn = try ctx.getIndex(args[0], .{ .string = "preprocess" });
+            const nested = try ctx.callValue(preprocess_fn, &.{ args[0], .{ .string = "{{#invoke:translations|show|mode=inner}}" } });
+            defer rt.freeResults(nested);
+            if (nested.len != 1 or nested[0] != .string) return error.ExpectedNestedResult;
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .string = try ctx.allocator.dupe(u8, nested[0].string) };
+            return out;
+        }
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "ok" };
+        return out;
+    }
+};
+
+test "translations show page cache resets failures and avoids reentrant reuse" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(TranslationReuseProbe.root)};
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TranslationReuseProbe.lookup, TranslationReuseProbe.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+        .install_scribunto = installTestInvoke,
+    };
+    const failures = try expander.expandFragment(
+        "Page",
+        "{{#invoke:translations|show|mode=named-failure}}|{{#invoke:translations|show|mode=generic-failure}}",
+        1_670_803_200,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, failures, "first failure") != null);
+    try std.testing.expect(std.mem.indexOf(u8, failures, "NotImplemented") != null);
+    try std.testing.expect(expander.hot_translation_runtime != null);
+
+    const nested = try expander.expandFragment(
+        "Page",
+        "{{#invoke:translations|show|mode=outer}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("fresh", nested);
+    try std.testing.expect(expander.hot_translation_runtime != null);
+    expander.beginPage("Other page", "", 1_670_803_200);
+    try std.testing.expect(expander.hot_translation_runtime == null);
+}
 
 test "native AOT wikitext expands templates parser functions and invoke" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
