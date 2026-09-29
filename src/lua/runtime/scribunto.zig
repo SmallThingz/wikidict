@@ -434,6 +434,7 @@ fn headwordPageData(runtime: *rt.Context, state: *State) !Value {
     var child = try runtime.forkProgram(eval_arena.allocator());
     defer child.deinit();
     try installLoadDataChild(runtime, state, &child);
+    child.page_stable_host_effects = true;
     const module_name = "Module:headword/page";
     const module_id = try child.resolveModule(module_name);
     const module = try child.requireModuleId(module_id, module_name);
@@ -519,7 +520,7 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     const module_id = try runtime.resolveModule(args[0].string);
     const is_headword_data = std.mem.eql(u8, args[0].string, "Module:headword/data");
     if (is_headword_data) if (state.shared_load_data) |shared| if (shared.headword_static) |entry| {
-        rt.markLoadDataEffect();
+        rt.markPageTemplateEffect();
         if (state.load_data_cache.get(module_id)) |value| return one(value);
         const value = try mergeHeadwordData(state, entry.value, try headwordPageData(runtime, state));
         try state.load_data_cache.put(state.allocator, module_id, value);
@@ -531,14 +532,19 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     // A page-local dependency can become shareable only after its own proof.
     // Bounded pending attempts avoid endless speculative outer promotions.
     if (state.shared_load_data) |shared| {
-        if (shared.unsafeDependency(module_id))
-            rt.markLoadDataEffect()
-        else
-            rt.markLoadDataPending();
+        if (shared.unsafeDependency(module_id)) {
+            if (frozen_corpus_invariant)
+                rt.markLoadDataOnlyEffect()
+            else
+                rt.markLoadDataEffect();
+        } else rt.markLoadDataPending();
     } else rt.markLoadDataEffect();
     if (state.load_data_cache.get(module_id)) |value| return one(value);
     if (runtime.loadDataSnapshot(module_id)) |source| {
-        rt.markLoadDataEffect();
+        if (frozen_corpus_invariant)
+            rt.markLoadDataOnlyEffect()
+        else
+            rt.markLoadDataEffect();
         if (source != .table) return error.LoadDataTableExpected;
         const promoted = try promoteLoadDataForState(state, module_id, source, false, false);
         try state.load_data_cache.put(state.allocator, module_id, promoted);

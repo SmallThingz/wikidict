@@ -112,6 +112,10 @@ pub const Expander = struct {
     install_scribunto: ?InstallScribuntoFn = null,
     scribunto_state: ?*anyopaque = null,
     scribunto_shared: ?*anyopaque = null,
+    page_template_eligible: []bool = &.{},
+    page_template_rejected: []bool = &.{},
+    base_template_eligible: []bool = &.{},
+    base_template_rejected: []bool = &.{},
     invoke_reuse: ?*InvokeReuseStats = null,
     host: host_api.Host = .{},
     current_source: ?[]const u8 = null,
@@ -153,6 +157,7 @@ pub const Expander = struct {
     }
 
     pub fn beginPage(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64) void {
+        self.releasePageModuleTemplates();
         self.host.current_title = title;
         self.host.now_unix = now_unix;
         self.current_source = source;
@@ -167,6 +172,58 @@ pub const Expander = struct {
         self.template_depth = 0;
         self.lazy_template_args = .empty;
         self.attach();
+    }
+
+    fn releasePageModuleTemplates(self: *Expander) void {
+        if (self.page_template_eligible.len == 0 and
+            self.page_template_rejected.len == 0)
+            return;
+        const a = self.page_allocator orelse self.runtime.allocator;
+        self.runtime.module_template_eligible = self.base_template_eligible;
+        self.runtime.module_template_rejected = self.base_template_rejected;
+        if (self.page_template_eligible.len != 0)
+            a.free(self.page_template_eligible);
+        if (self.page_template_rejected.len != 0)
+            a.free(self.page_template_rejected);
+        self.page_template_eligible = &.{};
+        self.page_template_rejected = &.{};
+        self.base_template_eligible = &.{};
+        self.base_template_rejected = &.{};
+    }
+
+    fn ensurePageModuleTemplates(self: *Expander) !void {
+        if (self.page_template_eligible.len != 0) return;
+        try self.ensureScribunto();
+        const a = self.page_allocator orelse self.runtime.allocator;
+        self.base_template_eligible = self.runtime.module_template_eligible;
+        self.base_template_rejected = self.runtime.module_template_rejected;
+        if (self.runtime.module_count == 0) return;
+        self.page_template_eligible = if (self.base_template_eligible.len ==
+            self.runtime.module_count)
+            try a.dupe(bool, self.base_template_eligible)
+        else blk: {
+            if (self.base_template_eligible.len != 0)
+                return error.BadModuleTemplateLayout;
+            const values = try a.alloc(bool, self.runtime.module_count);
+            @memset(values, false);
+            break :blk values;
+        };
+        errdefer {
+            a.free(self.page_template_eligible);
+            self.page_template_eligible = &.{};
+        }
+        self.page_template_rejected = if (self.base_template_rejected.len ==
+            self.runtime.module_count)
+            try a.dupe(bool, self.base_template_rejected)
+        else blk: {
+            if (self.base_template_rejected.len != 0)
+                return error.BadModuleTemplateLayout;
+            const values = try a.alloc(bool, self.runtime.module_count);
+            @memset(values, false);
+            break :blk values;
+        };
+        self.runtime.module_template_eligible = self.page_template_eligible;
+        self.runtime.module_template_rejected = self.page_template_rejected;
     }
 
     fn ensureScribunto(self: *Expander) !void {
@@ -284,6 +341,7 @@ pub const Expander = struct {
 
     pub fn expandFragment(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64) anyerror![]const u8 {
         self.beginPage(title, source, now_unix);
+        defer self.releasePageModuleTemplates();
         if (work_stats.current()) |work| work.comment_bytes +|= source.len;
         const comments_start = work_stats.cpuNow();
         const stripped = try preprocess.stripDecodedComments(self.runtime.allocator, source);
@@ -1335,6 +1393,7 @@ pub const Expander = struct {
         const install = self.install_scribunto orelse return error.MissingScribuntoInstaller;
         const page_a = self.page_allocator orelse self.runtime.allocator;
         const outer_runtime = self.runtime;
+        try self.ensurePageModuleTemplates();
 
         var invoke_arena = LocalBumpArena.init(page_a);
         defer invoke_arena.deinit();
@@ -1345,6 +1404,10 @@ pub const Expander = struct {
         try rt.bindGlobalTable(&child, global_shape, self.env_slot);
         if (!try child.bootstrapProgram()) try stdlib.install(&child);
         try install(&self.scribunto_state, self.scribunto_shared, page_a, &child, self.env_slot, self.string_slot, self.mw_slot);
+        child.module_template_context = outer_runtime;
+        child.module_template_eligible = self.page_template_eligible;
+        child.module_template_rejected = self.page_template_rejected;
+        child.module_template_page_scope = true;
 
         const saved_runtime = self.runtime;
         self.runtime = &child;
@@ -2243,6 +2306,7 @@ const TestProvider = struct {
 
 const TestModule = struct {
     var multi_tail_evaluations: usize = 0;
+    var root_calls: usize = 0;
 
     fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
         return if (std.mem.eql(u8, raw_name, "Module:Test")) 0 else null;
@@ -2251,6 +2315,7 @@ const TestModule = struct {
         return if (id == 0) "Module:Test" else null;
     }
     fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        root_calls += 1;
         const exports = try ctx.newTable();
         try exports.rawSet(ctx.allocator, .{ .string = "run" }, try ctx.makeFunctionKnown(1, run, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "fail" }, try ctx.makeFunctionKnown(2, fail, &.{}));
@@ -2523,8 +2588,24 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqual(@as(usize, 1), TestModule.multi_tail_evaluations);
     const random_top_level = try expander.expandFragment("Page", "{{#invoke:Test|random}}|{{#invoke:Test|random}}", 1_670_803_200);
     try std.testing.expectEqualStrings("9|9", random_top_level);
+    const roots_before_isolated = TestModule.root_calls;
     const isolated_module_state = try expander.expandFragment("Page", "{{#invoke:Test|stateful}}|{{#invoke:Test|stateful}}", 1_670_803_200);
     try std.testing.expectEqualStrings("1|1", isolated_module_state);
+    try std.testing.expectEqual(
+        roots_before_isolated + 1,
+        TestModule.root_calls,
+    );
+    const roots_before_next_page = TestModule.root_calls;
+    const isolated_next_page = try expander.expandFragment(
+        "Other page",
+        "{{#invoke:Test|stateful}}|{{#invoke:Test|stateful}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("1|1", isolated_next_page);
+    try std.testing.expectEqual(
+        roots_before_next_page + 1,
+        TestModule.root_calls,
+    );
     const nested_invoke_wikitext = try expander.expandFragment("Page", "{{#invoke:Test|nested}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<ref>Hi R Y</ref>", nested_invoke_wikitext);
 

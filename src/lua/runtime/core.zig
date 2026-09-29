@@ -5,6 +5,45 @@ pub const work_stats = @import("work_stats.zig");
 const static_fields = @import("lua_static_fields");
 pub const NativeNamespace = static_fields.Namespace;
 
+fn templateSingletonNamespace(namespace: static_fields.Namespace) bool {
+    return switch (namespace) {
+        .table,
+        .string,
+        .math,
+        .debug,
+        .mw,
+        .ustring,
+        .title,
+        .text,
+        .uri,
+        .html,
+        .language,
+        .hash,
+        .site,
+        .site_stats,
+        .ext,
+        .ext_data,
+        .wikibase,
+        .message,
+        .os,
+        .namespace_map,
+        .package,
+        .package_loaded,
+        .bit32,
+        .library_util,
+        => true,
+        .frame,
+        .title_value,
+        .language_value,
+        .html_node,
+        .message_value,
+        .uri_value,
+        .title_batch,
+        .namespace_value,
+        => false,
+    };
+}
+
 comptime {
     if (@intFromEnum(std.meta.Tag(Value).string) != static_fields.string_value_tag)
         @compileError("prehashed field ABI requires the runtime string Value tag");
@@ -958,12 +997,14 @@ threadlocal var module_template_probe_id: u64 = 0;
 threadlocal var module_template_probe_owner_id: u64 = 0;
 threadlocal var module_template_probe_next_id: u64 = 1;
 threadlocal var module_template_effect_reasons: u32 = 0;
+threadlocal var module_template_probe_page_scope: bool = false;
 
 const ModuleTemplateProbeState = struct {
     previous: ?*bool,
     previous_id: u64,
     previous_owner_id: u64,
     previous_reasons: u32,
+    previous_page_scope: bool,
 };
 
 pub fn beginLoadDataEffectProbe(flag: *bool) ?*bool {
@@ -988,11 +1029,23 @@ pub fn markLoadDataEffect() void {
     }
 }
 
-fn beginModuleTemplateEffectProbe(flag: *bool) ModuleTemplateProbeState {
+/// Marks state that is stable for one page but intentionally cannot cross the
+/// page boundary. Page-scoped module templates may retain it; worker-global
+/// templates must reject it.
+pub fn markPageTemplateEffect() void {
+    markLoadDataOnlyEffect();
+    if (module_template_effect_probe) |flag| {
+        module_template_effect_reasons |= 1 << 5;
+        if (!module_template_probe_page_scope) flag.* = true;
+    }
+}
+
+fn beginModuleTemplateEffectProbe(flag: *bool, page_scope: bool) ModuleTemplateProbeState {
     const previous = module_template_effect_probe;
     const previous_id = module_template_probe_id;
     const previous_owner_id = module_template_probe_owner_id;
     const previous_reasons = module_template_effect_reasons;
+    const previous_page_scope = module_template_probe_page_scope;
     const id = module_template_probe_next_id;
     module_template_probe_next_id +%= 1;
     if (module_template_probe_next_id == 0) module_template_probe_next_id = 1;
@@ -1000,11 +1053,13 @@ fn beginModuleTemplateEffectProbe(flag: *bool) ModuleTemplateProbeState {
     module_template_probe_id = id;
     module_template_probe_owner_id = if (previous != null) previous_owner_id else id;
     module_template_effect_reasons = 0;
+    module_template_probe_page_scope = page_scope;
     return .{
         .previous = previous,
         .previous_id = previous_id,
         .previous_owner_id = previous_owner_id,
         .previous_reasons = previous_reasons,
+        .previous_page_scope = previous_page_scope,
     };
 }
 
@@ -1014,6 +1069,7 @@ fn endModuleTemplateEffectProbe(state: ModuleTemplateProbeState, observed: bool)
     module_template_probe_id = state.previous_id;
     module_template_probe_owner_id = state.previous_owner_id;
     module_template_effect_reasons = state.previous_reasons | observed_reasons;
+    module_template_probe_page_scope = state.previous_page_scope;
     if (observed) {
         if (state.previous) |flag| flag.* = true;
     }
@@ -1027,6 +1083,7 @@ const ModuleTemplateProbeSuspend = struct {
     current: ?*bool,
     current_id: u64,
     current_owner_id: u64,
+    current_page_scope: bool,
 };
 
 fn suspendModuleTemplateEffectProbe() ModuleTemplateProbeSuspend {
@@ -1034,10 +1091,12 @@ fn suspendModuleTemplateEffectProbe() ModuleTemplateProbeSuspend {
         .current = module_template_effect_probe,
         .current_id = module_template_probe_id,
         .current_owner_id = module_template_probe_owner_id,
+        .current_page_scope = module_template_probe_page_scope,
     };
     module_template_effect_probe = null;
     module_template_probe_id = 0;
     module_template_probe_owner_id = 0;
+    module_template_probe_page_scope = false;
     return state;
 }
 
@@ -1045,6 +1104,7 @@ fn resumeModuleTemplateEffectProbe(state: ModuleTemplateProbeSuspend) void {
     module_template_effect_probe = state.current;
     module_template_probe_id = state.current_id;
     module_template_probe_owner_id = state.current_owner_id;
+    module_template_probe_page_scope = state.current_page_scope;
 }
 
 fn markModuleTemplateEffect() void {
@@ -1297,6 +1357,8 @@ pub const Context = struct {
     module_template_context: ?*Context = null,
     module_template_eligible: []bool = &.{},
     module_template_rejected: []bool = &.{},
+    module_template_page_scope: bool = false,
+    page_stable_host_effects: bool = false,
     eager_bootstrap: bool = false,
     package_observable: bool = false,
     program_bootstrap_ctx: ?*const anyopaque = null,
@@ -1361,6 +1423,8 @@ pub const Context = struct {
         child.module_template_context = self.module_template_context;
         child.module_template_eligible = self.module_template_eligible;
         child.module_template_rejected = self.module_template_rejected;
+        child.module_template_page_scope = self.module_template_page_scope;
+        child.page_stable_host_effects = self.page_stable_host_effects;
         child.program_bootstrap_ctx = self.program_bootstrap_ctx;
         child.program_bootstrap = self.program_bootstrap;
         child.max_depth = self.max_depth;
@@ -1376,6 +1440,50 @@ pub const Context = struct {
 
     fn stringAllocator(self: *Context) std.mem.Allocator {
         return if (self.strings_use_context_allocator) self.allocator else self.string_arena.allocator();
+    }
+
+    fn findTemplateNativeNamespace(
+        self: *const Context,
+        namespace: static_fields.Namespace,
+    ) ?*Table {
+        if (!templateSingletonNamespace(namespace)) return null;
+        var pending: [96]*Table = undefined;
+        var pending_len: usize = 0;
+        var seen: [96]*Table = undefined;
+        var seen_len: usize = 0;
+
+        for (self.root_globals) |value| {
+            if (value != .table or value.table.native_namespace == null) continue;
+            if (pending_len == pending.len) return null;
+            pending[pending_len] = value.table;
+            pending_len += 1;
+        }
+
+        while (pending_len != 0) {
+            pending_len -= 1;
+            const table = pending[pending_len];
+            var duplicate = false;
+            for (seen[0..seen_len]) |existing| {
+                if (existing == table) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            if (seen_len == seen.len) return null;
+            seen[seen_len] = table;
+            seen_len += 1;
+
+            if (table.native_namespace == namespace) return table;
+            if (table.native_namespace == null) continue;
+            for (table.slots) |value| {
+                if (value != .table or value.table.native_namespace == null) continue;
+                if (pending_len == pending.len) return null;
+                pending[pending_len] = value.table;
+                pending_len += 1;
+            }
+        }
+        return null;
     }
 
     pub fn deinit(self: *Context) void {
@@ -1996,6 +2104,38 @@ pub const Context = struct {
             return cell;
         }
 
+        fn remapNativeCallable(
+            self: *ModuleTemplateClone,
+            source_function: *const FunctionValue,
+        ) ?Value {
+            for (self.source.root_globals, self.target.root_globals) |source_value, target_value| {
+                if (source_value != .callable or source_value.callable != source_function)
+                    continue;
+                if (target_value != .callable or target_value.callable.id != native_function_id)
+                    return null;
+                return target_value;
+            }
+
+            inline for (std.enums.values(static_fields.Namespace)) |namespace| {
+                if (comptime templateSingletonNamespace(namespace)) {
+                    if (self.source.findTemplateNativeNamespace(namespace)) |source_table| {
+                        if (self.target.findTemplateNativeNamespace(namespace)) |target_table| {
+                            if (source_table.slots.len != target_table.slots.len)
+                                return null;
+                            for (source_table.slots, target_table.slots) |source_value, target_value| {
+                                if (source_value != .callable or source_value.callable != source_function)
+                                    continue;
+                                if (target_value != .callable or target_value.callable.id != native_function_id)
+                                    return null;
+                                return target_value;
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
         fn cloneCallable(self: *ModuleTemplateClone, source_function: *const FunctionValue) anyerror!Value {
             if (self.callables.get(source_function)) |existing|
                 return .{ .callable = existing };
@@ -2005,8 +2145,16 @@ pub const Context = struct {
                 // pointer across page/template lifetimes. Context-bound native
                 // environments remain uncloneable until they have an explicit
                 // remapping contract.
-                if (source_function.env.nativePtr() != null)
-                    return error.UnsupportedModuleTemplate;
+                if (source_function.env.nativePtr() != null) {
+                    const value = self.remapNativeCallable(source_function) orelse
+                        return error.UnsupportedModuleTemplate;
+                    try self.callables.put(
+                        self.target.allocator,
+                        source_function,
+                        value.callable,
+                    );
+                    return value;
+                }
                 const value = try self.target.storeFunction(.{
                     .id = native_function_id,
                     .identity = try self.target.takeFunctionIdentity(),
@@ -2059,6 +2207,14 @@ pub const Context = struct {
         fn cloneTable(self: *ModuleTemplateClone, source_table: *Table) anyerror!Value {
             if (self.tables.get(source_table)) |existing|
                 return .{ .table = existing };
+            if (source_table.native_namespace) |namespace| {
+                if (templateSingletonNamespace(namespace)) {
+                    const table = self.target.findTemplateNativeNamespace(namespace) orelse
+                        return error.UnsupportedModuleTemplate;
+                    try self.tables.put(self.target.allocator, source_table, table);
+                    return .{ .table = table };
+                }
+            }
             if (!source_table.owns_slots or source_table.global_tail != null or
                 source_table.has_identity_key)
                 return error.UnsupportedModuleTemplate;
@@ -2488,7 +2644,10 @@ pub const Context = struct {
         const dynamic_template_probe = self.dynamicModuleTemplateCandidate(module_id);
         var observed_template_effect = false;
         const previous_template_probe = if (dynamic_template_probe)
-            beginModuleTemplateEffectProbe(&observed_template_effect)
+            beginModuleTemplateEffectProbe(
+                &observed_template_effect,
+                self.module_template_page_scope,
+            )
         else
             null;
         defer if (dynamic_template_probe)
@@ -3587,6 +3746,7 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
 const ModuleTemplateProbe = struct {
     var root_calls = std.atomic.Value(u32).init(0);
     var effect_root_calls = std.atomic.Value(u32).init(0);
+    var page_effect_root_calls = std.atomic.Value(u32).init(0);
     var existing_mutation_calls = std.atomic.Value(u32).init(0);
     var load_data_only_calls = std.atomic.Value(u32).init(0);
 
@@ -3626,6 +3786,14 @@ const ModuleTemplateProbe = struct {
     fn effectRoot(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
         _ = effect_root_calls.fetchAdd(1, .monotonic);
         markLoadDataEffect();
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .table = try ctx.newTable() };
+        return out;
+    }
+
+    fn pageEffectRoot(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        _ = page_effect_root_calls.fetchAdd(1, .monotonic);
+        markPageTemplateEffect();
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = try ctx.newTable() };
         return out;
@@ -3739,6 +3907,60 @@ test "module template cloning recreates null-environment native descriptors" {
     try std.testing.expectEqual(true, out[0].boolean);
 }
 
+test "module template cloning remaps context-bound native namespace callables" {
+    const NativeProbe = struct {
+        fn call(raw: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            const host: *const u32 = @ptrCast(@alignCast(raw orelse
+                return error.MissingHost));
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .number = @floatFromInt(host.*) };
+            return out;
+        }
+    };
+
+    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer source_arena.deinit();
+    var source = try Context.init(source_arena.allocator(), 1);
+    defer source.deinit();
+    var source_host: u32 = 11;
+    const source_title = try source.newNativeNamespace(.title);
+    const source_callable = try source.newNative(&source_host, NativeProbe.call);
+    try source_title.rawSetNativeField(.title, "new", source_callable);
+    try source.setGlobal(0, .{ .table = source_title });
+    const source_export = try source.newTable();
+    try source_export.rawSet(
+        source.allocator,
+        .{ .string = "call" },
+        source_callable,
+    );
+
+    var target_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer target_arena.deinit();
+    var target = try Context.init(target_arena.allocator(), 1);
+    defer target.deinit();
+    var target_host: u32 = 29;
+    const target_title = try target.newNativeNamespace(.title);
+    const target_callable = try target.newNative(&target_host, NativeProbe.call);
+    try target_title.rawSetNativeField(.title, "new", target_callable);
+    try target.setGlobal(0, .{ .table = target_title });
+
+    var clone = Context.ModuleTemplateClone{
+        .source = &source,
+        .target = &target,
+    };
+    defer clone.deinit();
+    const copied = try clone.cloneValue(.{ .table = source_export });
+    const callable = copied.table.rawGet(.{ .string = "call" }) orelse
+        return error.MissingTemplateCallable;
+    try std.testing.expect(callable == .callable);
+    try std.testing.expect(callable.callable == target_callable.callable);
+    try std.testing.expect(callable.callable != source_callable.callable);
+
+    const out = try target.callValue(callable, &.{});
+    defer freeResults(out);
+    try std.testing.expectEqual(@as(f64, 29), out[0].number);
+}
+
 test "effect-free roots promote after first execution and never rerun on fresh contexts" {
     ModuleTemplateProbe.root_calls.store(0, .monotonic);
     const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
@@ -3820,6 +4042,76 @@ test "effectful roots are rejected from dynamic module templates" {
     try std.testing.expectEqual(
         @as(u32, 2),
         ModuleTemplateProbe.effect_root_calls.load(.monotonic),
+    );
+}
+
+test "page-stable effects promote only into page-scoped module templates" {
+    ModuleTemplateProbe.page_effect_root_calls.store(0, .monotonic);
+    const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.pageEffectRoot)};
+
+    {
+        var eligible = [_]bool{false};
+        var rejected = [_]bool{false};
+        var template_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer template_arena.deinit();
+        var template = try Context.initProgram(template_arena.allocator(), 0, 1);
+        defer template.deinit();
+        template.module_root_entries = &roots;
+        template.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+        template.module_template_eligible = &eligible;
+        template.module_template_rejected = &rejected;
+
+        var child_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer child_arena.deinit();
+        var child = try template.forkProgram(child_arena.allocator());
+        defer child.deinit();
+        child.module_template_context = &template;
+        _ = try child.requireByName("Module:TemplateProbe");
+        try std.testing.expect(!eligible[0]);
+        try std.testing.expect(rejected[0]);
+    }
+
+    ModuleTemplateProbe.page_effect_root_calls.store(0, .monotonic);
+    var eligible = [_]bool{false};
+    var rejected = [_]bool{false};
+    var base_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer base_arena.deinit();
+    var base = try Context.initProgram(base_arena.allocator(), 0, 1);
+    defer base.deinit();
+    base.module_root_entries = &roots;
+    base.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+
+    var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer page_arena.deinit();
+    var page = try base.forkProgram(page_arena.allocator());
+    defer page.deinit();
+    page.module_template_eligible = &eligible;
+    page.module_template_rejected = &rejected;
+
+    var first_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer first_arena.deinit();
+    var first = try page.forkProgram(first_arena.allocator());
+    defer first.deinit();
+    first.module_template_context = &page;
+    first.module_template_eligible = &eligible;
+    first.module_template_rejected = &rejected;
+    first.module_template_page_scope = true;
+    _ = try first.requireByName("Module:TemplateProbe");
+    try std.testing.expect(eligible[0]);
+    try std.testing.expect(!rejected[0]);
+
+    var second_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer second_arena.deinit();
+    var second = try page.forkProgram(second_arena.allocator());
+    defer second.deinit();
+    second.module_template_context = &page;
+    second.module_template_eligible = &eligible;
+    second.module_template_rejected = &rejected;
+    second.module_template_page_scope = true;
+    _ = try second.requireByName("Module:TemplateProbe");
+    try std.testing.expectEqual(
+        @as(u32, 1),
+        ModuleTemplateProbe.page_effect_root_calls.load(.monotonic),
     );
 }
 

@@ -121,6 +121,10 @@ pub fn get(runtime: *const rt.Context) ?*Host {
     // not observe the page host (including title, time, and provider data).
     var probe = invoke_host_probe;
     while (probe) |active| : (probe = active.previous) active.observed = true;
+    if (runtime.page_stable_host_effects) {
+        rt.markPageTemplateEffect();
+        return @ptrCast(@alignCast(runtime.host orelse return null));
+    }
     return getForInvokeBookkeeping(runtime);
 }
 
