@@ -1116,20 +1116,18 @@ fn knownMethodName(is_languages: bool, is_parser: bool, owner: []const u8, metho
 fn knownMethodCandidates(io: std.Io, a: A, source_root: []const u8, records: []const ModuleRecord) ![]const emitter.MethodCandidate {
     var candidates: std.ArrayList(emitter.MethodCandidate) = .empty;
     errdefer candidates.deinit(a);
+    var scratch_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer scratch_arena.deinit();
     for (records, 0..) |record, module_id| {
         const is_languages = std.mem.eql(u8, record.title, "Module:languages");
         const is_parser = std.mem.eql(u8, record.title, "Module:parser");
         if (!is_languages and !is_parser) continue;
-        const path = try sourcePath(a, source_root, record.path);
-        defer a.free(path);
-        const source = try readAll(io, a, path);
-        defer a.free(source);
-        var chunk = try lua.parse(a, source);
-        defer chunk.deinit();
-        var globals = try analysis.Globals.init(a);
-        defer globals.deinit();
-        var module = try analysis.analyze(a, &globals, &chunk, record.function_base);
-        defer module.deinit();
+        const scratch = scratch_arena.allocator();
+        const path = try sourcePath(scratch, source_root, record.path);
+        const source = try readAll(io, scratch, path);
+        var chunk = try lua.parse(scratch, source);
+        var globals = try analysis.Globals.init(scratch);
+        var module = try analysis.analyze(scratch, &globals, &chunk, record.function_base);
         for (chunk.body) |statement| {
             if (statement.* != .function_assign) continue;
             const assignment = statement.function_assign;
@@ -1151,6 +1149,10 @@ fn knownMethodCandidates(io: std.Io, a: A, source_root: []const u8, records: []c
                 break;
             }
         }
+        module.deinit();
+        globals.deinit();
+        chunk.deinit();
+        _ = scratch_arena.reset(.retain_capacity);
     }
     if (candidates.items.len == 0) return &.{};
     return candidates.toOwnedSlice(a);
@@ -1280,14 +1282,16 @@ fn buildFrameArgShape(
 ) !?u32 {
     var keys = FrameArgKeySet{ .allocator = a };
     defer keys.deinit();
+    var scratch_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer scratch_arena.deinit();
     for (records) |record| {
-        const path = try sourcePath(a, source_root, record.path);
-        defer a.free(path);
-        const source = try readAll(io, a, path);
-        defer a.free(source);
-        var chunk = try lua.parse(a, source);
-        defer chunk.deinit();
+        const scratch = scratch_arena.allocator();
+        const path = try sourcePath(scratch, source_root, record.path);
+        const source = try readAll(io, scratch, path);
+        var chunk = try lua.parse(scratch, source);
         try collectFrameArgBlock(&keys, chunk.body);
+        chunk.deinit();
+        _ = scratch_arena.reset(.retain_capacity);
     }
     if (keys.items.items.len == 0) return null;
     return shape_registry.promoteKeys(
@@ -1528,21 +1532,23 @@ fn buildDynamicObjectShapes(
     defer json_keys.deinit();
     var uri_query_keys = FrameArgKeySet{ .allocator = a };
     defer uri_query_keys.deinit();
+    var scratch_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer scratch_arena.deinit();
 
     for (records) |record| {
-        const path = try sourcePath(a, source_root, record.path);
-        defer a.free(path);
-        const source = try readAll(io, a, path);
-        defer a.free(source);
-        var chunk = try lua.parse(a, source);
-        defer chunk.deinit();
+        const scratch = scratch_arena.allocator();
+        const path = try sourcePath(scratch, source_root, record.path);
+        const source = try readAll(io, scratch, path);
+        var chunk = try lua.parse(scratch, source);
         var scanner = DynamicObjectShapeScanner{
-            .allocator = a,
+            .allocator = scratch,
             .json_keys = &json_keys,
             .uri_query_keys = &uri_query_keys,
         };
-        defer scanner.deinit();
         try scanner.collectBlock(chunk.body);
+        scanner.deinit();
+        chunk.deinit();
+        _ = scratch_arena.reset(.retain_capacity);
     }
 
     return .{
