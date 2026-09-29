@@ -1029,14 +1029,14 @@ pub fn markLoadDataEffect() void {
     }
 }
 
-/// Marks state that is stable for one page but intentionally cannot cross the
-/// page boundary. Page-scoped module templates may retain it; worker-global
-/// templates must reject it.
+/// Marks state that is stable for one page but not necessarily across
+/// independent invokes on that page. Page-local data caches may retain it, but
+/// module-root templates must reject it unless an invoke-stability proof exists.
 pub fn markPageTemplateEffect() void {
     markLoadDataOnlyEffect();
     if (module_template_effect_probe) |flag| {
         module_template_effect_reasons |= 1 << 5;
-        if (!module_template_probe_page_scope) flag.* = true;
+        flag.* = true;
     }
 }
 
@@ -1357,6 +1357,14 @@ pub const Context = struct {
     module_template_context: ?*Context = null,
     module_template_eligible: []bool = &.{},
     module_template_rejected: []bool = &.{},
+    // Reuse one source→child graph mapping for the lifetime of a fresh Context.
+    // A #invoke can load many modules from the same template graph; rebuilding
+    // these maps for every require both reallocates and reclones shared
+    // dependency objects.
+    module_template_clone_source: ?*Context = null,
+    module_template_clone_tables: std.AutoHashMapUnmanaged(*Table, *Table) = .empty,
+    module_template_clone_cells: std.AutoHashMapUnmanaged(*Cell, *Cell) = .empty,
+    module_template_clone_callables: std.AutoHashMapUnmanaged(*const FunctionValue, *const FunctionValue) = .empty,
     module_template_page_scope: bool = false,
     page_stable_host_effects: bool = false,
     eager_bootstrap: bool = false,
@@ -1486,7 +1494,59 @@ pub const Context = struct {
         return null;
     }
 
+    fn seedModuleTemplateNativeAliases(
+        self: *Context,
+        source: *Context,
+    ) !void {
+        if (source.root_globals.len == self.root_globals.len) {
+            for (source.root_globals, self.root_globals) |source_value, target_value| {
+                if (source_value == .callable and target_value == .callable and
+                    source_value.callable.id == native_function_id and
+                    target_value.callable.id == native_function_id and
+                    source_value.callable.entry == target_value.callable.entry)
+                {
+                    try self.module_template_clone_callables.put(
+                        self.allocator,
+                        source_value.callable,
+                        target_value.callable,
+                    );
+                }
+            }
+        }
+
+        inline for (std.enums.values(static_fields.Namespace)) |namespace| {
+            if (comptime templateSingletonNamespace(namespace)) {
+                if (source.findTemplateNativeNamespace(namespace)) |source_table| {
+                    if (self.findTemplateNativeNamespace(namespace)) |target_table| {
+                        if (source_table.slots.len == target_table.slots.len) {
+                            try self.module_template_clone_tables.put(
+                                self.allocator,
+                                source_table,
+                                target_table,
+                            );
+                            for (source_table.slots, target_table.slots) |source_value, target_value| {
+                                if (source_value != .callable or target_value != .callable or
+                                    source_value.callable.id != native_function_id or
+                                    target_value.callable.id != native_function_id or
+                                    source_value.callable.entry != target_value.callable.entry)
+                                    continue;
+                                try self.module_template_clone_callables.put(
+                                    self.allocator,
+                                    source_value.callable,
+                                    target_value.callable,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn deinit(self: *Context) void {
+        self.module_template_clone_tables.deinit(self.allocator);
+        self.module_template_clone_cells.deinit(self.allocator);
+        self.module_template_clone_callables.deinit(self.allocator);
         self.string_arena.deinit();
         self.static_global_scopes.deinit(self.allocator);
         for (self.module_state_pages) |page| if (page) |owned| {
@@ -2413,15 +2473,42 @@ pub const Context = struct {
         defer self.allocator.free(override_ids);
         for (source_state.template_overrides, override_ids) |override, *id|
             id.* = override.module_id;
+        if (self.module_template_clone_source != source) {
+            self.module_template_clone_tables.deinit(self.allocator);
+            self.module_template_clone_cells.deinit(self.allocator);
+            self.module_template_clone_callables.deinit(self.allocator);
+            self.module_template_clone_tables = .empty;
+            self.module_template_clone_cells = .empty;
+            self.module_template_clone_callables = .empty;
+            self.module_template_clone_source = source;
+            try self.seedModuleTemplateNativeAliases(source);
+        }
         var clone = ModuleTemplateClone{
             .source = source,
             .target = self,
             .skip_modules = override_ids,
+            .tables = self.module_template_clone_tables,
+            .cells = self.module_template_clone_cells,
+            .callables = self.module_template_clone_callables,
         };
-        defer clone.deinit();
+        self.module_template_clone_tables = .empty;
+        self.module_template_clone_cells = .empty;
+        self.module_template_clone_callables = .empty;
+        defer {
+            self.module_template_clone_tables = clone.tables;
+            self.module_template_clone_cells = clone.cells;
+            self.module_template_clone_callables = clone.callables;
+            clone.tables = .empty;
+            clone.cells = .empty;
+            clone.callables = .empty;
+            clone.deinit();
+        }
         const value = clone.cloneModule(module_id, requested) catch |err| switch (err) {
             error.UnsupportedModuleTemplate => blk: {
                 try self.clearTemplateInstalledModule(module_id, requested);
+                clone.tables.clearRetainingCapacity();
+                clone.cells.clearRetainingCapacity();
+                clone.callables.clearRetainingCapacity();
                 self.module_template_eligible[module_id] = false;
                 if (module_id < self.module_template_rejected.len)
                     self.module_template_rejected[module_id] = true;
@@ -2435,6 +2522,9 @@ pub const Context = struct {
                 try self.clearTemplateInstalledModule(module_id, requested);
                 for (source_state.template_overrides) |override|
                     try self.clearTemplateInstalledModule(override.module_id, null);
+                clone.tables.clearRetainingCapacity();
+                clone.cells.clearRetainingCapacity();
+                clone.callables.clearRetainingCapacity();
                 self.module_template_eligible[module_id] = false;
                 if (module_id < self.module_template_rejected.len)
                     self.module_template_rejected[module_id] = true;
@@ -4045,7 +4135,7 @@ test "effectful roots are rejected from dynamic module templates" {
     );
 }
 
-test "page-stable effects promote only into page-scoped module templates" {
+test "page-stable effects reject module-root reuse across invokes" {
     ModuleTemplateProbe.page_effect_root_calls.store(0, .monotonic);
     const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.pageEffectRoot)};
 
@@ -4097,8 +4187,8 @@ test "page-stable effects promote only into page-scoped module templates" {
     first.module_template_rejected = &rejected;
     first.module_template_page_scope = true;
     _ = try first.requireByName("Module:TemplateProbe");
-    try std.testing.expect(eligible[0]);
-    try std.testing.expect(!rejected[0]);
+    try std.testing.expect(!eligible[0]);
+    try std.testing.expect(rejected[0]);
 
     var second_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer second_arena.deinit();
@@ -4110,7 +4200,7 @@ test "page-stable effects promote only into page-scoped module templates" {
     second.module_template_page_scope = true;
     _ = try second.requireByName("Module:TemplateProbe");
     try std.testing.expectEqual(
-        @as(u32, 1),
+        @as(u32, 2),
         ModuleTemplateProbe.page_effect_root_calls.load(.monotonic),
     );
 }
