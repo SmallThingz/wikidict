@@ -1330,6 +1330,7 @@ pub const Context = struct {
     root_tail_dense: bool = false,
     global_tail: ?*GlobalTail = null,
     program_shapes: []const Shape = &.{},
+    program_shapes_validated: bool = false,
     program_shape_generation: u64 = 0,
     frame_args_shape_id: ?u32 = null,
     package_loaded_shape_id: ?u32 = null,
@@ -1413,6 +1414,7 @@ pub const Context = struct {
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
         var child = try initProgram(allocator, self.root_globals.len, self.module_count);
         child.program_shapes = self.program_shapes;
+        child.program_shapes_validated = self.program_shapes_validated;
         child.program_shape_generation = self.program_shape_generation;
         child.frame_args_shape_id = self.frame_args_shape_id;
         child.package_loaded_shape_id = self.package_loaded_shape_id;
@@ -2939,20 +2941,7 @@ pub const Context = struct {
         return table;
     }
 
-    pub fn newShapedTable(self: *Context, shape: *const Shape) !*Table {
-        if (shape.field_keys.len != shape.field_count or
-            shape.sorted_string_slots.len > shape.field_keys.len)
-            return error.BadShape;
-        var previous_string: ?[]const u8 = null;
-        for (shape.sorted_string_slots) |slot| {
-            if (slot >= shape.field_keys.len or shape.field_keys[slot] != .string)
-                return error.BadShape;
-            const current = shape.field_keys[slot].string;
-            if (previous_string) |previous|
-                if (std.mem.order(u8, previous, current) != .lt)
-                    return error.BadShape;
-            previous_string = current;
-        }
+    fn allocShapedTable(self: *Context, shape: *const Shape) !*Table {
         const table = try self.allocator.create(Table);
         errdefer self.allocator.destroy(table);
         table.* = .{
@@ -2971,9 +2960,30 @@ pub const Context = struct {
         return table;
     }
 
+    pub fn newShapedTable(self: *Context, shape: *const Shape) !*Table {
+        if (shape.field_keys.len != shape.field_count or
+            shape.sorted_string_slots.len > shape.field_keys.len)
+            return error.BadShape;
+        var previous_string: ?[]const u8 = null;
+        for (shape.sorted_string_slots) |slot| {
+            if (slot >= shape.field_keys.len or shape.field_keys[slot] != .string)
+                return error.BadShape;
+            const current = shape.field_keys[slot].string;
+            if (previous_string) |previous|
+                if (std.mem.order(u8, previous, current) != .lt)
+                    return error.BadShape;
+            previous_string = current;
+        }
+        return self.allocShapedTable(shape);
+    }
+
     pub fn newProgramShape(self: *Context, shape_id: u32) !*Table {
         if (shape_id >= self.program_shapes.len) return error.BadShape;
-        return self.newShapedTable(&self.program_shapes[shape_id]);
+        const shape = &self.program_shapes[shape_id];
+        return if (self.program_shapes_validated)
+            self.allocShapedTable(shape)
+        else
+            self.newShapedTable(shape);
     }
 
     pub fn newFrameArgsTable(self: *Context) !*Table {

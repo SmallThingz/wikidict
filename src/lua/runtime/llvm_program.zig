@@ -317,10 +317,16 @@ pub const Program = struct {
                 string_count > shape_sorted_slots.len -| sorted_shape_offset)
                 return error.InvalidProgramMetadata;
             const sorted_slots = shape_sorted_slots[sorted_shape_offset .. sorted_shape_offset + string_count];
+            var previous_string: ?[]const u8 = null;
             for (sorted_slots) |*slot| {
                 slot.* = try reader.readU32();
                 if (slot.* >= field_count_u32 or keys[slot.*] != .string)
                     return error.InvalidProgramMetadata;
+                const current = keys[slot.*].string;
+                if (previous_string) |previous|
+                    if (std.mem.order(u8, previous, current) != .lt)
+                        return error.InvalidProgramMetadata;
+                previous_string = current;
             }
             shape.* = .{
                 .field_keys = keys,
@@ -536,6 +542,7 @@ pub const Program = struct {
         ctx.module_template_eligible = self.module_template_eligible;
         ctx.module_template_rejected = self.module_template_rejected;
         ctx.program_shapes = self.shapes;
+        ctx.program_shapes_validated = true;
         ctx.program_shape_generation = self.shape_generation;
         ctx.frame_args_shape_id = self.frame_args_shape_id;
         ctx.package_loaded_shape_id = self.package_loaded_shape_id;
