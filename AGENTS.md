@@ -58,5 +58,6 @@
 - Encoder/decoder changes require round-trip tests plus representative build/read benchmarks.
 - Run full `zig build test` when unrelated shared edits do not block it.
 - Run `git diff --check` before every commit.
+- The representative English 100k benchmark is the first 100,000 rows of the official 2026-09-01 multistream index (row-window SHA-256 `abf923c141deef52263527cc8e00f81acc83eb6017a7f9d58c152f6638cc866e`). Build the expander from the full dump first, then run the blob stage with `--limit-pages 100000`; the standalone 100k XML shard has no Module namespace and is not a valid Lua-performance oracle.
 - Reader UX changes should exercise the actual CLI and PTY, including narrow terminals, resize, Unicode input, terminal restoration, and concurrent state saves when relevant. `test-reader` generates marked synthetic fixtures for `tools/verify_reader_ux.py`; never run destructive state checks against user dictionaries.
 - Terminal media work owns and joins its background tasks before releasing arguments or state. Preserve I/O cancellation errors through the media helpers.
