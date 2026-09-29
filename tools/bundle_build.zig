@@ -958,6 +958,10 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDir(init.io, expander_root, .default_dir);
     const expander_marker = try std.fs.path.join(a, &.{ expander_root, ".incomplete" });
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = expander_marker, .data = "building" });
+    // Fail missing/unreadable input before starting the expensive optimized
+    // worker and value-helper compilation jobs. Keep the incomplete marker so
+    // the caller still has durable failed-build state.
+    try std.Io.Dir.cwd().access(init.io, dump, .{});
     if (options.commons_data_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "commons-data.tsv");
     if (options.category_stats_snapshot) |snapshot|
