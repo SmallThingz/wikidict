@@ -1724,9 +1724,27 @@ test "module bootstrap safety admits literal require chains but rejects dynamic 
     try std.testing.expectEqual(@as(usize, 1), safe.root_requires.items.len);
     try std.testing.expectEqualStrings("Module:Dependency", safe.root_requires.items[0]);
 
+    const aliased_source =
+        \\local require = require
+        \\local dependency_module = 'Module:Dependency'
+        \\local dep = require(dependency_module)
+        \\return dep
+    ;
+    var aliased_chunk = try llvm_parser.parse(std.testing.allocator, aliased_source);
+    defer aliased_chunk.deinit();
+    var aliased = llvm_module_model.Builder{
+        .allocator = std.testing.allocator,
+        .source = aliased_chunk.source,
+    };
+    defer aliased.deinit();
+    try aliased.build(aliased_chunk.body);
+    try std.testing.expect(aliased.root_bootstrap_safe);
+    try std.testing.expectEqual(@as(usize, 1), aliased.root_requires.items.len);
+    try std.testing.expectEqualStrings("Module:Dependency", aliased.root_requires.items[0]);
+
     var dynamic_chunk = try llvm_parser.parse(
         std.testing.allocator,
-        "local name='Module:Dependency'; local dep=require(name); return dep",
+        "local name=tostring(1); local dep=require(name); return dep",
     );
     defer dynamic_chunk.deinit();
     var dynamic = llvm_module_model.Builder{

@@ -275,24 +275,33 @@ fn planEagerInit(
         }
     }
 
+    return eager_count;
+}
+
+fn planModuleRequirements(
+    a: A,
+    records: []ModuleRecord,
+    module_ids: *const emitter.ModuleIdMap,
+) !usize {
+    var total: usize = 0;
     for (records) |*record| {
-        if (record.eager_order == std.math.maxInt(u32)) {
-            record.eager_requirements = &.{};
-            continue;
-        }
-        const requirements = try a.alloc(program.EagerRequirement, record.root_requires.len);
-        for (requirements, record.root_requires) |*requirement, raw| {
-            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse
-                return error.InvalidEagerPlan;
-            requirement.* = .{
+        var requirements: std.ArrayList(program.ModuleRequirement) = .empty;
+        defer requirements.deinit(a);
+        for (record.root_requires) |raw| {
+            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse continue;
+            try requirements.append(a, .{
                 .module_id = dependency,
                 .requested = raw,
-            };
+            });
         }
-        record.eager_requirements = requirements;
+        if (requirements.items.len == 0) {
+            record.module_requirements = &.{};
+            continue;
+        }
+        total += requirements.items.len;
+        record.module_requirements = try requirements.toOwnedSlice(a);
     }
-
-    return eager_count;
+    return total;
 }
 
 fn planModuleTemplates(
@@ -410,6 +419,44 @@ test "module templates are reserved for executable roots" {
         @as(usize, 0),
         try planModuleTemplates(std.testing.allocator, &synth_root, &ids, true),
     );
+}
+
+test "runtime module requirements retain resolvable root require edges" {
+    const a = std.testing.allocator;
+    var records = [_]ModuleRecord{
+        .{
+            .title = "Module:A",
+            .path = "modules/1.lua",
+            .source_bytes = 1,
+            .source_index = 0,
+            .function_base = 0,
+            .function_count = 1,
+            .root_function = 0,
+            .export_shape_id = null,
+            .root_requires = &.{ "Module:B", "bit32" },
+        },
+        .{
+            .title = "Module:B",
+            .path = "modules/2.lua",
+            .source_bytes = 1,
+            .source_index = 1,
+            .function_base = 1,
+            .function_count = 1,
+            .root_function = 1,
+            .export_shape_id = null,
+        },
+    };
+    var ids: emitter.ModuleIdMap = .empty;
+    defer ids.deinit(a);
+    try ids.put(a, records[0].title, 0);
+    try ids.put(a, records[1].title, 1);
+
+    try std.testing.expectEqual(@as(usize, 1), try planModuleRequirements(a, &records, &ids));
+    defer a.free(records[0].module_requirements);
+    try std.testing.expectEqual(@as(usize, 1), records[0].module_requirements.len);
+    try std.testing.expectEqual(@as(u32, 1), records[0].module_requirements[0].module_id);
+    try std.testing.expectEqualStrings("Module:B", records[0].module_requirements[0].requested);
+    try std.testing.expectEqual(@as(usize, 0), records[1].module_requirements.len);
 }
 
 fn compilePlanLabel(keep: bool, static_root: bool, mode: usage_profile.CompileMode) []const u8 {
@@ -1711,6 +1758,12 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         template_count,
         selected_records.items.len,
     });
+    const module_requirement_count = try planModuleRequirements(
+        a,
+        selected_records.items,
+        &selected_module_ids,
+    );
+    std.debug.print("LLVM_MODULE_REQUIREMENTS edges={d}\n", .{module_requirement_count});
 
     for (named_load_data_targets.items) |target| {
         const id = selected_module_ids.get(target) orelse continue;

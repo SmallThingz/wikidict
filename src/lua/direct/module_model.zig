@@ -4,6 +4,7 @@ const lua = @import("../parser/root.zig");
 pub const ModuleExport = struct { module: []const u8, name: []const u8 };
 pub const Binding = union(enum) {
     unknown,
+    builtin_require,
     literal: *const lua.Expr,
     function: u32,
     module: []const u8,
@@ -131,15 +132,28 @@ pub const Builder = struct {
         self.env = saved;
     }
 
+    fn nameBinding(self: *const Builder, name: []const u8) Binding {
+        if (self.env.get(name)) |binding| return binding;
+        if (std.mem.eql(u8, name, "require")) return .{ .builtin_require = {} };
+        return .{ .unknown = {} };
+    }
+
     fn rootRequire(self: *Builder, expr: *const lua.Expr) ?[]const u8 {
         if (expr.* != .call) return null;
         const call = expr.call;
-        if (call.callee.* != .name or
-            !std.mem.eql(u8, call.callee.name.value, "require") or
-            self.env.contains("require") or
-            call.args.len != 1)
-            return null;
-        return stringConst(call.args[0]);
+        if (call.callee.* != .name or call.args.len != 1) return null;
+        const callee = self.nameBinding(call.callee.name.value);
+        if (callee != .builtin_require) return null;
+        if (stringConst(call.args[0])) |target| return target;
+        const argument = self.eval(call.args[0]) catch return null;
+        return switch (argument) {
+            .literal => |value| stringConst(value),
+            else => null,
+        };
+    }
+
+    fn nameBootstrapSafe(self: *const Builder, name: []const u8) bool {
+        return self.env.contains(name) or std.mem.eql(u8, name, "require");
     }
 
     fn exprBootstrapSafe(self: *Builder, expr: *const lua.Expr) anyerror!bool {
@@ -149,7 +163,7 @@ pub const Builder = struct {
         }
         return switch (expr.*) {
             .nil_lit, .bool_lit, .number, .string, .function => true,
-            .name => |name| self.env.contains(name.value),
+            .name => |name| self.nameBootstrapSafe(name.value),
             .paren => |value| self.exprBootstrapSafe(value.expr),
             .table => |value| blk: {
                 for (value.fields) |field| switch (field) {
@@ -167,7 +181,7 @@ pub const Builder = struct {
     fn exprPure(self: *Builder, expr: *const lua.Expr) bool {
         return switch (expr.*) {
             .nil_lit, .bool_lit, .number, .string, .function => true,
-            .name => |name| self.env.contains(name.value),
+            .name => |name| self.nameBootstrapSafe(name.value),
             .paren => |value| self.exprPure(value.expr),
             .table => |value| blk: {
                 for (value.fields) |field| switch (field) {
@@ -259,7 +273,7 @@ pub const Builder = struct {
     fn eval(self: *Builder, expr: *const lua.Expr) anyerror!Binding {
         return switch (expr.*) {
             .nil_lit, .bool_lit, .number, .string => .{ .literal = expr },
-            .name => |n| self.env.get(n.value) orelse .unknown,
+            .name => |n| self.nameBinding(n.value),
             .paren => |p| if (literalExpr(expr)) .{ .literal = expr } else try self.eval(p.expr),
             .function => |f| .{ .function = f.span.start },
             .table => |t| try self.evalTable(t.span.start, t.fields),
@@ -273,11 +287,17 @@ pub const Builder = struct {
                 };
             },
             .call => |c| blk: {
+                if (c.callee.* == .name and c.args.len != 0) {
+                    const callee = self.nameBinding(c.callee.name.value);
+                    if (callee == .builtin_require) {
+                        if (stringConst(c.args[0])) |module| break :blk .{ .module = module };
+                        const argument = try self.eval(c.args[0]);
+                        if (argument == .literal) if (stringConst(argument.literal)) |module|
+                            break :blk .{ .module = module };
+                    }
+                }
                 const callee_name = exprPath(c.callee);
                 if (callee_name) |name| {
-                    if (std.mem.eql(u8, name, "require") and c.args.len != 0) {
-                        if (stringConst(c.args[0])) |module| break :blk .{ .module = module };
-                    }
                     if (std.mem.eql(u8, name, "mw.loadData") and c.args.len != 0) {
                         if (stringConst(c.args[0])) |module| break :blk .{ .module = module };
                     }

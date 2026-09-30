@@ -1036,6 +1036,17 @@ pub fn markPageTemplateEffect() void {
     markLoadDataOnlyEffect();
     if (module_template_effect_probe) |flag| {
         module_template_effect_reasons |= 1 << 5;
+        if (!module_template_probe_page_scope) flag.* = true;
+    }
+}
+
+/// Marks state that can differ between independent invokes on the same page.
+/// Unlike page-stable host data, this must reject both worker-global and
+/// page-scoped module-root templates.
+pub fn markInvokeTemplateEffect() void {
+    markLoadDataOnlyEffect();
+    if (module_template_effect_probe) |flag| {
+        module_template_effect_reasons |= 1 << 6;
         flag.* = true;
     }
 }
@@ -1500,6 +1511,18 @@ pub const Context = struct {
         self: *Context,
         source: *Context,
     ) !void {
+        // package.loaded is a context singleton but, when the program supplies
+        // a structural shape for it, it is intentionally not a native-
+        // namespace table. Module roots commonly capture `package.loaded` in a
+        // local. Remap that capture to the fresh Context instead of attempting
+        // to clone the source package table and its context-bound callables.
+        if (source.package_loaded) |source_loaded| if (self.package_loaded) |target_loaded|
+            try self.module_template_clone_tables.put(
+                self.allocator,
+                source_loaded,
+                target_loaded,
+            );
+
         if (source.root_globals.len == self.root_globals.len) {
             for (source.root_globals, self.root_globals) |source_value, target_value| {
                 if (source_value == .callable and target_value == .callable and
@@ -2208,8 +2231,11 @@ pub const Context = struct {
                 // environments remain uncloneable until they have an explicit
                 // remapping contract.
                 if (source_function.env.nativePtr() != null) {
-                    const value = self.remapNativeCallable(source_function) orelse
+                    const value = self.remapNativeCallable(source_function) orelse {
+                        if (work_stats.current()) |work| if (work.sampled)
+                            work_stats.logLine("module template clone unsupported: kind=native_callable entry=0x{x}\n", .{@intFromPtr(source_function.entry)});
                         return error.UnsupportedModuleTemplate;
+                    };
                     try self.callables.put(
                         self.target.allocator,
                         source_function,
@@ -2271,15 +2297,26 @@ pub const Context = struct {
                 return .{ .table = existing };
             if (source_table.native_namespace) |namespace| {
                 if (templateSingletonNamespace(namespace)) {
-                    const table = self.target.findTemplateNativeNamespace(namespace) orelse
+                    const table = self.target.findTemplateNativeNamespace(namespace) orelse {
+                        if (work_stats.current()) |work| if (work.sampled)
+                            work_stats.logLine("module template clone unsupported: kind=native_namespace namespace={s}\n", .{@tagName(namespace)});
                         return error.UnsupportedModuleTemplate;
+                    };
                     try self.tables.put(self.target.allocator, source_table, table);
                     return .{ .table = table };
                 }
             }
             if (!source_table.owns_slots or source_table.global_tail != null or
-                source_table.has_identity_key)
+                source_table.has_identity_key) {
+                if (work_stats.current()) |work| if (work.sampled)
+                    work_stats.logLine("module template clone unsupported: kind=table_flags owns_slots={} global_tail={} identity={} namespace={s}\n", .{
+                        source_table.owns_slots,
+                        source_table.global_tail != null,
+                        source_table.has_identity_key,
+                        if (source_table.native_namespace) |ns| @tagName(ns) else "none",
+                    });
                 return error.UnsupportedModuleTemplate;
+            }
 
             const table = try self.target.allocator.create(Table);
             table.* = .{
@@ -2305,7 +2342,11 @@ pub const Context = struct {
             if (source_table.choices.len != 0) {
                 table.choices = try self.target.allocator.alloc(ChoiceCell, source_table.choices.len);
                 for (source_table.choices, 0..) |choice, index| {
-                    if (Table.identityKey(choice.key)) return error.UnsupportedModuleTemplate;
+                    if (Table.identityKey(choice.key)) {
+                        if (work_stats.current()) |work| if (work.sampled)
+                            work_stats.logLine("module template clone unsupported: kind=choice_identity\n", .{});
+                        return error.UnsupportedModuleTemplate;
+                    }
                     table.choices[index] = .{
                         .key = try self.cloneValue(choice.key),
                         .value = try self.cloneValue(choice.value),
@@ -2314,7 +2355,11 @@ pub const Context = struct {
             }
             var entries = source_table.map.iterator();
             while (entries.next()) |entry| {
-                if (Table.identityKey(entry.key_ptr.*)) return error.UnsupportedModuleTemplate;
+                if (Table.identityKey(entry.key_ptr.*)) {
+                    if (work_stats.current()) |work| if (work.sampled)
+                        work_stats.logLine("module template clone unsupported: kind=map_identity\n", .{});
+                    return error.UnsupportedModuleTemplate;
+                }
                 try table.map.putContext(
                     self.target.allocator,
                     try self.cloneValue(entry.key_ptr.*),
@@ -2805,9 +2850,16 @@ pub const Context = struct {
         state.loading = false;
         if (dynamic_template_probe) {
             if (observed_template_effect) {
+                if (work_stats.current()) |work| if (work.sampled)
+                    work_stats.logLine("module template reject: id={d} page_scope={} reasons=0x{x} name={s}\n", .{
+                        module_id,
+                        self.module_template_page_scope,
+                        module_template_effect_reasons,
+                        canonical orelse "",
+                    });
                 self.module_template_rejected[module_id] = true;
             } else {
-                _ = self.promoteModuleTemplate(module_id, requested) catch |err| switch (err) {
+                const promoted = self.promoteModuleTemplate(module_id, requested) catch |err| switch (err) {
                     error.UnsupportedModuleTemplate => blk: {
                         self.module_template_eligible[module_id] = false;
                         self.module_template_rejected[module_id] = true;
@@ -2819,6 +2871,13 @@ pub const Context = struct {
                     },
                     else => return err,
                 };
+                if (!promoted) if (work_stats.current()) |work| if (work.sampled)
+                    work_stats.logLine("module template reject: id={d} page_scope={} reasons=0x{x} name={s}\n", .{
+                        module_id,
+                        self.module_template_page_scope,
+                        module_template_effect_reasons,
+                        canonical orelse "",
+                    });
             }
         }
         return value;
@@ -3847,6 +3906,7 @@ const ModuleTemplateProbe = struct {
     var root_calls = std.atomic.Value(u32).init(0);
     var effect_root_calls = std.atomic.Value(u32).init(0);
     var page_effect_root_calls = std.atomic.Value(u32).init(0);
+    var invoke_effect_root_calls = std.atomic.Value(u32).init(0);
     var existing_mutation_calls = std.atomic.Value(u32).init(0);
     var load_data_only_calls = std.atomic.Value(u32).init(0);
 
@@ -3894,6 +3954,14 @@ const ModuleTemplateProbe = struct {
     fn pageEffectRoot(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
         _ = page_effect_root_calls.fetchAdd(1, .monotonic);
         markPageTemplateEffect();
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .table = try ctx.newTable() };
+        return out;
+    }
+
+    fn invokeEffectRoot(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        _ = invoke_effect_root_calls.fetchAdd(1, .monotonic);
+        markInvokeTemplateEffect();
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = try ctx.newTable() };
         return out;
@@ -4061,6 +4129,33 @@ test "module template cloning remaps context-bound native namespace callables" {
     try std.testing.expectEqual(@as(f64, 29), out[0].number);
 }
 
+test "module template cloning remaps structural package loaded singleton" {
+    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer source_arena.deinit();
+    var source = try Context.init(source_arena.allocator(), 0);
+    defer source.deinit();
+    const source_loaded = try source.newTable();
+    source.package_loaded = source_loaded;
+
+    var target_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer target_arena.deinit();
+    var target = try Context.init(target_arena.allocator(), 0);
+    defer target.deinit();
+    const target_loaded = try target.newTable();
+    target.package_loaded = target_loaded;
+
+    try target.seedModuleTemplateNativeAliases(&source);
+    var clone = Context.ModuleTemplateClone{
+        .source = &source,
+        .target = &target,
+        .tables = target.module_template_clone_tables,
+    };
+    target.module_template_clone_tables = .empty;
+    defer clone.deinit();
+    const copied = try clone.cloneValue(.{ .table = source_loaded });
+    try std.testing.expect(copied == .table and copied.table == target_loaded);
+}
+
 test "effect-free roots promote after first execution and never rerun on fresh contexts" {
     ModuleTemplateProbe.root_calls.store(0, .monotonic);
     const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
@@ -4145,7 +4240,7 @@ test "effectful roots are rejected from dynamic module templates" {
     );
 }
 
-test "page-stable effects reject module-root reuse across invokes" {
+test "page-stable effects promote only within one page" {
     ModuleTemplateProbe.page_effect_root_calls.store(0, .monotonic);
     const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.pageEffectRoot)};
 
@@ -4197,6 +4292,73 @@ test "page-stable effects reject module-root reuse across invokes" {
     first.module_template_rejected = &rejected;
     first.module_template_page_scope = true;
     _ = try first.requireByName("Module:TemplateProbe");
+    try std.testing.expect(eligible[0]);
+    try std.testing.expect(!rejected[0]);
+
+    var second_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer second_arena.deinit();
+    var second = try page.forkProgram(second_arena.allocator());
+    defer second.deinit();
+    second.module_template_context = &page;
+    second.module_template_eligible = &eligible;
+    second.module_template_rejected = &rejected;
+    second.module_template_page_scope = true;
+    _ = try second.requireByName("Module:TemplateProbe");
+    try std.testing.expectEqual(
+        @as(u32, 1),
+        ModuleTemplateProbe.page_effect_root_calls.load(.monotonic),
+    );
+
+    // A new page owns a new page-template bitset and must execute the root once
+    // for its own page-stable state before that state can be reused there.
+    var next_eligible = [_]bool{false};
+    var next_rejected = [_]bool{false};
+    var next_page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer next_page_arena.deinit();
+    var next_page = try base.forkProgram(next_page_arena.allocator());
+    defer next_page.deinit();
+    next_page.module_template_eligible = &next_eligible;
+    next_page.module_template_rejected = &next_rejected;
+
+    var third_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer third_arena.deinit();
+    var third = try next_page.forkProgram(third_arena.allocator());
+    defer third.deinit();
+    third.module_template_context = &next_page;
+    third.module_template_eligible = &next_eligible;
+    third.module_template_rejected = &next_rejected;
+    third.module_template_page_scope = true;
+    _ = try third.requireByName("Module:TemplateProbe");
+    try std.testing.expectEqual(
+        @as(u32, 2),
+        ModuleTemplateProbe.page_effect_root_calls.load(.monotonic),
+    );
+}
+
+test "invoke-specific effects still reject page-scoped module templates" {
+    ModuleTemplateProbe.invoke_effect_root_calls.store(0, .monotonic);
+    const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.invokeEffectRoot)};
+    var eligible = [_]bool{false};
+    var rejected = [_]bool{false};
+
+    var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer page_arena.deinit();
+    var page = try Context.initProgram(page_arena.allocator(), 0, 1);
+    defer page.deinit();
+    page.module_root_entries = &roots;
+    page.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+    page.module_template_eligible = &eligible;
+    page.module_template_rejected = &rejected;
+
+    var first_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer first_arena.deinit();
+    var first = try page.forkProgram(first_arena.allocator());
+    defer first.deinit();
+    first.module_template_context = &page;
+    first.module_template_eligible = &eligible;
+    first.module_template_rejected = &rejected;
+    first.module_template_page_scope = true;
+    _ = try first.requireByName("Module:TemplateProbe");
     try std.testing.expect(!eligible[0]);
     try std.testing.expect(rejected[0]);
 
@@ -4211,7 +4373,7 @@ test "page-stable effects reject module-root reuse across invokes" {
     _ = try second.requireByName("Module:TemplateProbe");
     try std.testing.expectEqual(
         @as(u32, 2),
-        ModuleTemplateProbe.page_effect_root_calls.load(.monotonic),
+        ModuleTemplateProbe.invoke_effect_root_calls.load(.monotonic),
     );
 }
 

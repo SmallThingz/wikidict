@@ -202,7 +202,7 @@ fn newChildCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
 
 fn currentFrameCall(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     if (runtime.page_stable_host_effects)
-        rt.markPageTemplateEffect()
+        rt.markInvokeTemplateEffect()
     else
         rt.markLoadDataEffect();
     return one(if (runtime.current_frame) |frame| .{ .table = frame } else .nil);

@@ -7,7 +7,7 @@ const metadata = @import("../program_metadata.zig");
 
 const A = std.mem.Allocator;
 
-pub const EagerRequirement = struct {
+pub const ModuleRequirement = struct {
     module_id: u32,
     requested: []const u8,
 };
@@ -26,7 +26,7 @@ pub const ModuleRecord = struct {
     root_bootstrap_safe: bool = false,
     root_requires: []const []const u8 = &.{},
     eager_order: u32 = std.math.maxInt(u32),
-    eager_requirements: []const EagerRequirement = &.{},
+    module_requirements: []const ModuleRequirement = &.{},
     template_eligible: bool = false,
     load_data_snapshot: bool = false,
     direct_exports: []const emitter.DirectExport = &.{},
@@ -279,7 +279,7 @@ pub fn writeMetadata(
         module_requirement_total_usize = std.math.add(
             usize,
             module_requirement_total_usize,
-            record.eager_requirements.len,
+            record.module_requirements.len,
         ) catch return error.ProgramMetadataTooLarge;
     const module_requirement_total = try requireU32(module_requirement_total_usize);
     var synth_export_total_usize: usize = 0;
@@ -329,8 +329,8 @@ pub fn writeMetadata(
     }
 
     for (records) |record| {
-        try metadata.writeU32(w, try requireU32(record.eager_requirements.len));
-        for (record.eager_requirements) |requirement| {
+        try metadata.writeU32(w, try requireU32(record.module_requirements.len));
+        for (record.module_requirements) |requirement| {
             if (requirement.module_id >= module_count)
                 return error.InvalidModuleRequirementId;
             try metadata.writeU32(w, requirement.module_id);
