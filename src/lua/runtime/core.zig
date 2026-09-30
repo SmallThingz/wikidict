@@ -4,6 +4,7 @@ pub const LocalBumpArena = @import("local_bump_arena.zig").LocalBumpArena;
 pub const work_stats = @import("work_stats.zig");
 const static_fields = @import("lua_static_fields");
 pub const NativeNamespace = static_fields.Namespace;
+const native_namespace_count = std.meta.fields(static_fields.Namespace).len;
 
 fn templateSingletonNamespace(namespace: static_fields.Namespace) bool {
     return switch (namespace) {
@@ -998,6 +999,7 @@ threadlocal var module_template_probe_owner_id: u64 = 0;
 threadlocal var module_template_probe_next_id: u64 = 1;
 threadlocal var module_template_effect_reasons: u32 = 0;
 threadlocal var module_template_probe_page_scope: bool = false;
+threadlocal var module_template_allocation_mutation_probe: ?*u64 = null;
 
 const ModuleTemplateProbeState = struct {
     previous: ?*bool,
@@ -1152,6 +1154,7 @@ const ModuleState = struct {
     load_data_snapshot: ?Value = null,
     deferred_require_visibility: bool = false,
     template_package_observed: bool = false,
+    template_page_scoped_only: bool = false,
     template_init_probe_id: u64 = 0,
     template_mutation_probe_id: u64 = 0,
     template_overrides: []const ModuleTemplateOverride = &.{},
@@ -1377,6 +1380,7 @@ pub const Context = struct {
     module_template_clone_tables: std.AutoHashMapUnmanaged(*Table, *Table) = .empty,
     module_template_clone_cells: std.AutoHashMapUnmanaged(*Cell, *Cell) = .empty,
     module_template_clone_callables: std.AutoHashMapUnmanaged(*const FunctionValue, *const FunctionValue) = .empty,
+    template_native_namespaces: [native_namespace_count]?*Table = [_]?*Table{null} ** native_namespace_count,
     module_template_page_scope: bool = false,
     page_stable_host_effects: bool = false,
     eager_bootstrap: bool = false,
@@ -1468,6 +1472,7 @@ pub const Context = struct {
         namespace: static_fields.Namespace,
     ) ?*Table {
         if (!templateSingletonNamespace(namespace)) return null;
+        if (self.template_native_namespaces[@intFromEnum(namespace)]) |table| return table;
         var pending: [96]*Table = undefined;
         var pending_len: usize = 0;
         var seen: [96]*Table = undefined;
@@ -1525,9 +1530,16 @@ pub const Context = struct {
 
         if (source.root_globals.len == self.root_globals.len) {
             for (source.root_globals, self.root_globals) |source_value, target_value| {
-                if (source_value == .callable and target_value == .callable and
-                    source_value.callable.id == native_function_id and
-                    target_value.callable.id == native_function_id and
+                if (source_value == .table and target_value == .table and
+                    source_value.table.native_namespace == target_value.table.native_namespace)
+                {
+                    try self.module_template_clone_tables.put(
+                        self.allocator,
+                        source_value.table,
+                        target_value.table,
+                    );
+                } else if (source_value == .callable and target_value == .callable and
+                    source_value.callable.id == target_value.callable.id and
                     source_value.callable.entry == target_value.callable.entry)
                 {
                     try self.module_template_clone_callables.put(
@@ -2172,14 +2184,6 @@ pub const Context = struct {
             }
         }
 
-        fn rootAlias(self: *ModuleTemplateClone, value: Value) ?Value {
-            if (!self.promotion or self.source.root_globals.len != self.target.root_globals.len)
-                return null;
-            for (self.source.root_globals, self.target.root_globals) |source_value, target_value|
-                if (rawEqual(value, source_value)) return target_value;
-            return null;
-        }
-
         fn cloneCell(self: *ModuleTemplateClone, source_cell: *Cell) anyerror!*Cell {
             if (self.cells.get(source_cell)) |existing| return existing;
             const cell = try self.target.allocator.create(Cell);
@@ -2307,7 +2311,8 @@ pub const Context = struct {
                 }
             }
             if (!source_table.owns_slots or source_table.global_tail != null or
-                source_table.has_identity_key) {
+                source_table.has_identity_key)
+            {
                 if (work_stats.current()) |work| if (work.sampled)
                     work_stats.logLine("module template clone unsupported: kind=table_flags owns_slots={} global_tail={} identity={} namespace={s}\n", .{
                         source_table.owns_slots,
@@ -2373,7 +2378,6 @@ pub const Context = struct {
         }
 
         fn cloneValue(self: *ModuleTemplateClone, value: Value) anyerror!Value {
-            if (self.rootAlias(value)) |alias| return alias;
             return switch (value) {
                 .string => |text| if (self.promotion)
                     .{ .string = try self.target.allocator.dupe(u8, text) }
@@ -2447,6 +2451,7 @@ pub const Context = struct {
             state.value = value;
             state.preinitialized = null;
             state.template_package_observed = source_state.template_package_observed;
+            state.template_page_scoped_only = source_state.template_page_scoped_only;
             try self.target.tagModuleTemplateValue(
                 value,
                 &state.template_mutation_probe_id,
@@ -2690,6 +2695,76 @@ pub const Context = struct {
         return true;
     }
 
+    fn promoteModuleTemplateUpstreamRecursive(
+        self: *Context,
+        module_id: u32,
+        requested: ?[]const u8,
+        visiting: *std.AutoHashMapUnmanaged(u32, void),
+    ) anyerror!bool {
+        const target = self.module_template_context orelse return false;
+        if (module_id >= target.module_template_eligible.len or
+            module_id >= target.module_template_rejected.len or
+            target.module_template_rejected[module_id])
+            return false;
+        if (target.module_template_eligible[module_id]) return true;
+        const source_state = self.moduleStateConst(module_id) orelse return false;
+        if (source_state.template_page_scoped_only) return false;
+
+        const visit = try visiting.getOrPut(self.allocator, module_id);
+        if (visit.found_existing) return false;
+        defer _ = visiting.remove(module_id);
+
+        for (self.requirementsFor(module_id)) |requirement| {
+            if (requirement.module_id >= target.module_template_eligible.len)
+                return false;
+            if (!target.module_template_eligible[requirement.module_id]) {
+                if (!try self.promoteModuleTemplateUpstreamRecursive(
+                    requirement.module_id,
+                    requirement.requested,
+                    visiting,
+                )) return false;
+            }
+        }
+
+        const override_ids = try self.allocator.alloc(u32, source_state.template_overrides.len);
+        defer self.allocator.free(override_ids);
+        for (source_state.template_overrides, override_ids) |override, *id|
+            id.* = override.module_id;
+
+        target.module_template_eligible[module_id] = true;
+        var clone = ModuleTemplateClone{
+            .source = self,
+            .target = target,
+            .promotion = true,
+            .skip_modules = override_ids,
+        };
+        defer clone.deinit();
+        _ = clone.cloneModule(module_id, requested) catch |err| switch (err) {
+            error.UnsupportedModuleTemplate, error.ModuleLoadLoop => {
+                target.module_template_eligible[module_id] = false;
+                try target.clearTemplateInstalledModule(module_id, requested);
+                return false;
+            },
+            else => return err,
+        };
+        if (source_state.template_overrides.len != 0)
+            clone.applyTemplateOverrides(source_state.template_overrides) catch |err| switch (err) {
+                error.UnsupportedModuleTemplate => {
+                    target.module_template_eligible[module_id] = false;
+                    try target.clearTemplateInstalledModule(module_id, requested);
+                    return false;
+                },
+                else => return err,
+            };
+        return true;
+    }
+
+    fn promoteModuleTemplateUpstream(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!bool {
+        var visiting: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        defer visiting.deinit(self.allocator);
+        return self.promoteModuleTemplateUpstreamRecursive(module_id, requested, &visiting);
+    }
+
     pub fn preinitializeModule(self: *Context, module_id: u32, value: Value, snapshot_load_data: bool) !void {
         const state = try self.ensureModuleState(module_id);
         if (state.value == null and state.preinitialized == null) {
@@ -2803,10 +2878,29 @@ pub const Context = struct {
         const canonical = self.canonicalModuleName(module_id, requested);
         var owned_values: ?[]const Value = null;
         defer if (owned_values) |values| freeResults(values);
-        var value: Value = if (self.static_module) |load|
-            if (try load(self.static_module_ctx, self, module_id)) |static_value|
-                static_value
+        var root_executed = false;
+        var value: Value = value_blk: {
+            const previous_allocation_probe = module_template_allocation_mutation_probe;
+            module_template_allocation_mutation_probe = &state.template_mutation_probe_id;
+            defer module_template_allocation_mutation_probe = previous_allocation_probe;
+            break :value_blk if (self.static_module) |load|
+                if (try load(self.static_module_ctx, self, module_id)) |static_value|
+                    static_value
+                else blk: {
+                    root_executed = true;
+                    const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
+                    const previous_globals = try self.enterModule(module_id);
+                    defer self.restoreGlobals(previous_globals);
+                    if (work_stats.current()) |work| work.module_roots +|= 1;
+                    var root_frame: work_stats.RootFrame = .{};
+                    work_stats.beginRoot(&root_frame, module_id);
+                    defer work_stats.endRoot(&root_frame);
+                    const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
+                    owned_values = values;
+                    break :blk if (values.len == 0) .nil else values[0];
+                }
             else blk: {
+                root_executed = true;
                 const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
                 const previous_globals = try self.enterModule(module_id);
                 defer self.restoreGlobals(previous_globals);
@@ -2817,18 +2911,7 @@ pub const Context = struct {
                 const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
                 owned_values = values;
                 break :blk if (values.len == 0) .nil else values[0];
-            }
-        else blk: {
-            const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
-            const previous_globals = try self.enterModule(module_id);
-            defer self.restoreGlobals(previous_globals);
-            if (work_stats.current()) |work| work.module_roots +|= 1;
-            var root_frame: work_stats.RootFrame = .{};
-            work_stats.beginRoot(&root_frame, module_id);
-            defer work_stats.endRoot(&root_frame);
-            const values = try self.callEntry(self.module_root_entries[module_id], .{ .direct = &.{} }, argv);
-            owned_values = values;
-            break :blk if (values.len == 0) .nil else values[0];
+            };
         };
         if (value == .nil) {
             if (canonical) |text| if (self.package_loaded) |loaded| {
@@ -2841,7 +2924,9 @@ pub const Context = struct {
         state.value = value;
         if (dynamic_template_probe and module_template_effect_reasons & (1 << 3) != 0)
             state.template_package_observed = true;
-        try self.tagModuleTemplateValue(
+        if (dynamic_template_probe and module_template_effect_reasons & (1 << 5) != 0)
+            state.template_page_scoped_only = true;
+        if (!root_executed) try self.tagModuleTemplateValue(
             value,
             &state.template_mutation_probe_id,
         );
@@ -2871,6 +2956,12 @@ pub const Context = struct {
                     },
                     else => return err,
                 };
+                if (promoted and self.module_template_page_scope and
+                    !state.template_page_scoped_only)
+                {
+                    if (self.module_template_context) |page_template|
+                        _ = page_template.promoteModuleTemplateUpstream(module_id, requested) catch false;
+                }
                 if (!promoted) if (work_stats.current()) |work| if (work.sampled)
                     work_stats.logLine("module template reject: id={d} page_scope={} reasons=0x{x} name={s}\n", .{
                         module_id,
@@ -2985,7 +3076,10 @@ pub const Context = struct {
 
     pub fn newTable(self: *Context) !*Table {
         const table = try self.allocator.create(Table);
-        table.* = .{ .module_template_probe_id = module_template_probe_owner_id };
+        table.* = .{
+            .module_template_mutation_probe = module_template_allocation_mutation_probe,
+            .module_template_probe_id = module_template_probe_owner_id,
+        };
         self.assignFieldCacheIdentity(table);
         return table;
     }
@@ -3005,6 +3099,7 @@ pub const Context = struct {
         errdefer self.allocator.destroy(table);
         table.* = .{
             .shape = shape,
+            .module_template_mutation_probe = module_template_allocation_mutation_probe,
             .module_template_probe_id = module_template_probe_owner_id,
         };
         self.assignFieldCacheIdentity(table);
@@ -3225,6 +3320,7 @@ pub const Context = struct {
         errdefer self.allocator.destroy(table);
         table.* = .{
             .native_namespace = namespace,
+            .module_template_mutation_probe = module_template_allocation_mutation_probe,
             .module_template_probe_id = module_template_probe_owner_id,
         };
         const count = static_fields.fieldCount(namespace);
@@ -3232,6 +3328,8 @@ pub const Context = struct {
             table.slots = try self.allocator.alloc(Value, count);
             @memset(table.slots, .nil);
         }
+        if (templateSingletonNamespace(namespace))
+            self.template_native_namespaces[@intFromEnum(namespace)] = table;
         return table;
     }
 
