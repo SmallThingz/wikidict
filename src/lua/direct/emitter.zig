@@ -480,7 +480,10 @@ const ModuleEmitter = struct {
             for (info.bindings) |binding| {
                 if (invalid.contains(binding.name)) continue;
                 const candidate = if (!binding.mutated)
-                    if (binding.static_module) |raw| try self.facts.moduleId(self.allocator, raw) else null
+                    if (binding.static_module orelse if (binding.lazy_module_safe) binding.static_lazy_module else null) |raw|
+                        try self.facts.moduleId(self.allocator, raw)
+                    else
+                        null
                 else
                     null;
                 if (candidate) |module_id| {
@@ -1011,6 +1014,52 @@ const FnEmitter = struct {
         }
     }
 
+    fn bindingLazyModule(
+        _: *const FnEmitter,
+        owner: *const analysis.FunctionInfo,
+        binding: u32,
+    ) ?[]const u8 {
+        if (binding >= owner.bindings.len) return null;
+        const fact = owner.bindings[binding];
+        if (fact.mutated or !fact.lazy_module_safe) return null;
+        return fact.static_lazy_module;
+    }
+
+    fn upvalueLazyModule(
+        self: *const FnEmitter,
+        owner: *const analysis.FunctionInfo,
+        ordinal: u32,
+    ) ?[]const u8 {
+        var current = owner;
+        var current_ordinal = ordinal;
+        while (true) {
+            if (current_ordinal >= current.upvalues.len) return null;
+            const parent = self.analyzedFunction(current.parent_id orelse return null) orelse return null;
+            switch (current.upvalues[current_ordinal].source) {
+                .local => |binding| return self.bindingLazyModule(parent, binding),
+                .upvalue => |parent_ordinal| {
+                    current = parent;
+                    current_ordinal = parent_ordinal;
+                },
+            }
+        }
+    }
+
+    fn resolvedLazyModule(self: *const FnEmitter, resolved: Resolved) ?[]const u8 {
+        return switch (resolved) {
+            .local => |binding| self.bindingLazyModule(self.info, binding),
+            .upvalue => |ordinal| self.upvalueLazyModule(self.info, ordinal),
+            .global => null,
+        };
+    }
+
+    fn lazyModuleRequest(self: *FnEmitter, resolved: Resolved) anyerror!?StaticRequire {
+        if (!self.module.globals.stable("require")) return null;
+        const requested = self.resolvedLazyModule(resolved) orelse return null;
+        const module_id = (try self.module.facts.moduleId(self.a(), requested)) orelse return null;
+        return .{ .module_id = module_id, .requested = try self.stringRef(requested) };
+    }
+
     fn builtinRequireCallee(self: *FnEmitter, callee: *const lua.Expr) anyerror!bool {
         if (!self.module.globals.stable("require")) return false;
         return switch (callee.*) {
@@ -1068,6 +1117,13 @@ const FnEmitter = struct {
     }
 
     fn loadResolved(self: *FnEmitter, resolved: Resolved) anyerror!ValueRef {
+        if (try self.lazyModuleRequest(resolved)) |request| {
+            const module = try self.directStaticModuleRequire(request);
+            return if (module.shape) |shape|
+                .{ .shaped_boxed = .{ .ptr = module.value, .shape = shape } }
+            else
+                .{ .boxed = module.value };
+        }
         const known_shape = self.resolvedTableShape(resolved);
         const known_native = self.resolvedNativeNamespace(resolved);
         const known_array_element = self.resolvedArrayElementNativeNamespace(resolved);
@@ -1157,7 +1213,7 @@ const FnEmitter = struct {
         const fact = owner.bindings[binding];
         if (fact.static_table_span) |span|
             if (self.module.facts.tableShape(span.start)) |shape| return shape;
-        if (fact.static_module) |raw|
+        if (fact.static_module orelse if (fact.lazy_module_safe) fact.static_lazy_module else null) |raw|
             if (self.module.facts.moduleIdExact(raw)) |module_id|
                 return self.module.facts.moduleExportShape(module_id);
         if (fact.static_program_table) |kind| return switch (kind) {
@@ -2093,6 +2149,8 @@ const FnEmitter = struct {
         return switch (value.*) {
             .name => |name| blk: {
                 const resolved = try self.resolve(name.value);
+                if (try self.lazyModuleRequest(resolved)) |request|
+                    break :blk try self.directStaticModuleRequire(request);
                 if (resolved == .local) switch (self.storage[resolved.local]) {
                     .static_module => |module| break :blk module,
                     else => {},
@@ -2170,6 +2228,8 @@ const FnEmitter = struct {
         return switch (value.*) {
             .name => |name| blk: {
                 const resolved = try self.resolve(name.value);
+                if (self.resolvedLazyModule(resolved)) |requested|
+                    break :blk try self.module.facts.moduleId(self.a(), requested);
                 if (resolved == .local) switch (self.storage[resolved.local]) {
                     .static_module => |module| break :blk module.module_id,
                     else => {},
@@ -4232,6 +4292,14 @@ const FnEmitter = struct {
                 if (s.names.len == 1 and s.values.len == 1 and s.values[0].* == .call and self.binding_next < self.info.bindings.len) {
                     const binding_info = self.info.bindings[self.binding_next];
                     const call = s.values[0].call;
+                    if (!binding_info.mutated and binding_info.lazy_module_safe)
+                        if (binding_info.static_lazy_module) |requested|
+                            if (self.module.globals.stable("require"))
+                                if ((try self.module.facts.moduleId(self.a(), requested)) != null) {
+                                    const binding = try self.bindName(s.names[0]);
+                                    try self.initBinding(binding, .nil);
+                                    return false;
+                                };
                     if (!binding_info.mutated and !binding_info.captured)
                         if (try self.staticRequire(call.callee, null, call.args)) |request| {
                             const binding = try self.bindName(s.names[0]);

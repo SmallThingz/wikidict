@@ -266,6 +266,7 @@ const ModuleAbstractValue = struct {
     may_falsy: bool = false,
     may_truthy_other: bool = false,
     may_require_loader: bool = false,
+    may_lazy_require_loader: bool = false,
     may_load_data_loader: bool = false,
     may_string_namespace: bool = false,
     may_mw_namespace: bool = false,
@@ -312,6 +313,10 @@ const ModuleAbstractValue = struct {
         return .{ .may_require_loader = true };
     }
 
+    fn lazyRequireLoader() ModuleAbstractValue {
+        return .{ .may_lazy_require_loader = true };
+    }
+
     fn loadDataLoader() ModuleAbstractValue {
         return .{ .may_load_data_loader = true };
     }
@@ -319,7 +324,7 @@ const ModuleAbstractValue = struct {
     fn canBeTruthy(self: ModuleAbstractValue) bool {
         return self.strings.len != 0 or self.integers.len != 0 or self.tables.len != 0 or
             self.unknown_string or self.unknown_number or self.may_truthy_other or
-            self.may_require_loader or self.may_load_data_loader or
+            self.may_require_loader or self.may_lazy_require_loader or self.may_load_data_loader or
             self.may_string_namespace or self.may_mw_namespace or self.may_string_format;
     }
 };
@@ -508,6 +513,7 @@ const ModuleValueScanner = struct {
             .may_falsy = lhs.may_falsy or rhs.may_falsy,
             .may_truthy_other = lhs.may_truthy_other or rhs.may_truthy_other or table_overflow,
             .may_require_loader = lhs.may_require_loader or rhs.may_require_loader,
+            .may_lazy_require_loader = lhs.may_lazy_require_loader or rhs.may_lazy_require_loader,
             .may_load_data_loader = lhs.may_load_data_loader or rhs.may_load_data_loader,
             .may_string_namespace = lhs.may_string_namespace or rhs.may_string_namespace,
             .may_mw_namespace = lhs.may_mw_namespace or rhs.may_mw_namespace,
@@ -526,6 +532,7 @@ const ModuleValueScanner = struct {
             lhs.may_truthy_other or rhs.may_truthy_other or
             lhs.tables.len != 0 or rhs.tables.len != 0 or
             lhs.may_require_loader or rhs.may_require_loader or
+            lhs.may_lazy_require_loader or rhs.may_lazy_require_loader or
             lhs.may_load_data_loader or rhs.may_load_data_loader or
             lhs.may_string_namespace or rhs.may_string_namespace or
             lhs.may_mw_namespace or rhs.may_mw_namespace or
@@ -569,7 +576,7 @@ const ModuleValueScanner = struct {
             try table.integer_fields.put(self.a(), index, try self.joinValue(existing, value));
         }
         if (key.unknown_string or key.unknown_number or key.may_truthy_other or key.tables.len != 0 or
-            key.may_require_loader or key.may_load_data_loader or key.may_string_namespace or
+            key.may_require_loader or key.may_lazy_require_loader or key.may_load_data_loader or key.may_string_namespace or
             key.may_mw_namespace or key.may_string_format)
         {
             table.unknown_field = if (table.unknown_field) |existing|
@@ -603,7 +610,7 @@ const ModuleValueScanner = struct {
                 out = try self.joinValue(out, value);
         }
         if (key.unknown_string or key.unknown_number or key.may_truthy_other or key.tables.len != 0 or
-            key.may_require_loader or key.may_load_data_loader or key.may_string_namespace or
+            key.may_require_loader or key.may_lazy_require_loader or key.may_load_data_loader or key.may_string_namespace or
             key.may_mw_namespace or key.may_string_format)
             out = try self.joinValue(out, try self.allTableValues(table));
         if (table.unknown_field) |unknown| out = try self.joinValue(out, unknown);
@@ -639,11 +646,11 @@ const ModuleValueScanner = struct {
         }
         for (object.tables) |table| out = try self.joinValue(out, try self.lookupTable(table, key));
         if (object.unknown_string or object.unknown_number or object.may_truthy_other or
-            object.may_require_loader or object.may_load_data_loader or object.may_string_format)
+            object.may_require_loader or object.may_lazy_require_loader or object.may_load_data_loader or object.may_string_format)
             out = try self.joinValue(out, .unknown());
         if (!handled_namespace and object.tables.len == 0 and
             !object.unknown_string and !object.unknown_number and !object.may_truthy_other and
-            !object.may_require_loader and !object.may_load_data_loader and !object.may_string_format and
+            !object.may_require_loader and !object.may_lazy_require_loader and !object.may_load_data_loader and !object.may_string_format and
             !object.may_falsy)
             return .nilValue();
         return out;
@@ -790,7 +797,19 @@ const ModuleValueScanner = struct {
         arg: ModuleAbstractValue,
     ) !void {
         if (loader.may_require_loader) try self.addModuleTargets(arg, false);
+        if (loader.may_lazy_require_loader) try self.addModuleTargets(arg, false);
         if (loader.may_load_data_loader) try self.addModuleTargets(arg, true);
+    }
+
+    fn exactString(value: ModuleAbstractValue, expected: []const u8) bool {
+        return value.strings.len == 1 and
+            std.mem.eql(u8, value.strings[0], expected) and
+            !value.unknown_string and !value.unknown_number and
+            value.integers.len == 0 and value.tables.len == 0 and
+            !value.may_falsy and !value.may_truthy_other and
+            !value.may_require_loader and !value.may_lazy_require_loader and
+            !value.may_load_data_loader and !value.may_string_namespace and
+            !value.may_mw_namespace and !value.may_string_format;
     }
 
     fn evalExpr(self: *ModuleValueScanner, state: *ModuleFlowState, expr: *const lua.Expr) anyerror!ModuleAbstractValue {
@@ -834,6 +853,9 @@ const ModuleValueScanner = struct {
                     if (args.len == 2) break :blk try self.formatCharValue(args[0], args[1]);
                     break :blk .unknown();
                 }
+                if (callee.may_require_loader and args.len == 1 and
+                    exactString(args[0], "Module:require when needed"))
+                    break :blk .lazyRequireLoader();
                 break :blk .unknown();
             },
             .method_call => |call| blk: {
@@ -1225,6 +1247,33 @@ test "static require scanner walks nested Lua functions" {
     try std.testing.expectEqual(@as(usize, 2), refs.items.len);
     try std.testing.expectEqualStrings("Module:A", refs.items[0]);
     try std.testing.expectEqualStrings("Module:B c", refs.items[1]);
+}
+
+test "module load scanner follows require when needed targets" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a,
+        \\local lazy = require("Module:require when needed")
+        \\local first = lazy("Module:Alpha")
+        \\local function nested() return lazy("Module:Beta") end
+        \\local third = require("Module:require when needed")("Module:Gamma")
+        \\return first, nested(), third
+    );
+    defer chunk.deinit();
+    var refs: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (refs.items) |ref| a.free(ref);
+        refs.deinit(a);
+    }
+    try std.testing.expect(!try collectModuleLoads(a, chunk.body, &refs));
+    var saw_alpha = false;
+    var saw_beta = false;
+    var saw_gamma = false;
+    for (refs.items) |ref| {
+        saw_alpha = saw_alpha or std.mem.eql(u8, ref, "Module:Alpha");
+        saw_beta = saw_beta or std.mem.eql(u8, ref, "Module:Beta");
+        saw_gamma = saw_gamma or std.mem.eql(u8, ref, "Module:Gamma");
+    }
+    try std.testing.expect(saw_alpha and saw_beta and saw_gamma);
 }
 
 test "module load value sets fold concatenation aliases and pcall" {

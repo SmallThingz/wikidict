@@ -85,6 +85,8 @@ pub const Binding = struct {
     static_native_namespace: ?static_fields.Namespace = null,
     static_array_element_native_namespace: ?static_fields.Namespace = null,
     static_module: ?[]const u8 = null,
+    static_lazy_module: ?[]const u8 = null,
+    lazy_module_safe: bool = true,
     static_builtin_require: bool = false,
     callable_field_hint: ?[]const u8 = null,
     linear_index_table: bool = false,
@@ -213,6 +215,8 @@ const Analyzer = struct {
     fn markLocalMutated(self: *Analyzer, binding: u32) void {
         self.bindings.items[binding].mutated = true;
         self.bindings.items[binding].static_module = null;
+        self.bindings.items[binding].static_lazy_module = null;
+        self.bindings.items[binding].lazy_module_safe = false;
         self.bindings.items[binding].static_builtin_require = false;
         self.bindings.items[binding].linear_index_table = false;
         self.invalidateStaticTable(binding);
@@ -230,9 +234,27 @@ const Analyzer = struct {
         }
     }
 
+    fn markUpvalueLazyModuleUnsafe(self: *Analyzer, ordinal: u32) void {
+        if (ordinal >= self.upvalues.items.len) return;
+        const source = self.upvalues.items[ordinal].source;
+        const parent = self.parent orelse return;
+        switch (source) {
+            .local => |binding| {
+                if (binding < parent.bindings.items.len)
+                    parent.bindings.items[binding].lazy_module_safe = false;
+            },
+            .upvalue => |parent_ordinal| parent.markUpvalueLazyModuleUnsafe(parent_ordinal),
+        }
+    }
+
     fn captureForChild(self: *Analyzer, name: []const u8) !Capture {
         if (self.locals.get(name)) |binding| {
             self.bindings.items[binding].captured = true;
+            // A lazy `require when needed` proxy is an observable table value.
+            // Once captured, the cell itself can escape this function's local
+            // use analysis, so replacing it with the resolved module would
+            // change proxy identity/metatable/laziness semantics.
+            self.bindings.items[binding].lazy_module_safe = false;
             self.bindings.items[binding].linear_index_table = false;
             // Captured locals live in boxed cells. Any scalar type inferred by
             // aliases before this closure was seen must be invalidated too.
@@ -251,17 +273,21 @@ const Analyzer = struct {
         switch (try self.resolve(name)) {
             .local => |binding| {
                 self.bindings.items[binding].value_used = true;
+                self.bindings.items[binding].lazy_module_safe = false;
                 self.bindings.items[binding].linear_index_table = false;
             },
-            .upvalue, .global => {},
+            .upvalue => |ordinal| self.markUpvalueLazyModuleUnsafe(ordinal),
+            .global => {},
         }
     }
 
     fn indexedObjectUse(self: *Analyzer, value: *const lua.Expr) anyerror!void {
         switch (value.*) {
-            .name => |name| if (self.locals.get(name.value)) |binding| {
-                self.bindings.items[binding].value_used = true;
-            } else try self.expr(value),
+            .name => |name| switch (try self.resolve(name.value)) {
+                .local => |binding| self.bindings.items[binding].value_used = true,
+                .upvalue => {},
+                .global => try self.expr(value),
+            },
             .paren => |paren| try self.indexedObjectUse(paren.expr),
             else => try self.expr(value),
         }
@@ -269,9 +295,14 @@ const Analyzer = struct {
 
     fn lengthOperandUse(self: *Analyzer, value: *const lua.Expr) anyerror!void {
         switch (value.*) {
-            .name => |name| if (self.locals.get(name.value)) |binding| {
-                self.bindings.items[binding].value_used = true;
-            } else try self.expr(value),
+            .name => |name| switch (try self.resolve(name.value)) {
+                .local => |binding| {
+                    self.bindings.items[binding].value_used = true;
+                    self.bindings.items[binding].lazy_module_safe = false;
+                },
+                .upvalue => |ordinal| self.markUpvalueLazyModuleUnsafe(ordinal),
+                .global => try self.expr(value),
+            },
             .paren => |paren| try self.lengthOperandUse(paren.expr),
             else => try self.expr(value),
         }
@@ -349,6 +380,19 @@ const Analyzer = struct {
                 .local => |binding| self.bindings.items[binding].static_module,
                 else => null,
             },
+            else => null,
+        };
+    }
+
+    fn staticLazyModuleValue(self: *Analyzer, value: *const lua.Expr) anyerror!?[]const u8 {
+        return switch (value.*) {
+            .call => |call| blk: {
+                if (call.args.len != 1) break :blk null;
+                const loader = (try self.staticModuleValue(call.callee)) orelse break :blk null;
+                if (!std.mem.eql(u8, loader, "Module:require when needed")) break :blk null;
+                break :blk staticString(call.args[0]);
+            },
+            .paren => |paren| self.staticLazyModuleValue(paren.expr),
             else => null,
         };
     }
@@ -725,6 +769,8 @@ const Analyzer = struct {
                 .local => |binding| {
                     self.bindings.items[binding].mutated = true;
                     self.bindings.items[binding].static_module = null;
+                    self.bindings.items[binding].static_lazy_module = null;
+                    self.bindings.items[binding].lazy_module_safe = false;
                 },
                 .upvalue => |ordinal| self.markUpvalueMutated(ordinal),
                 .global => try self.globals.markMutated(name),
@@ -801,6 +847,10 @@ const Analyzer = struct {
                     try self.staticModuleValue(s.values[0])
                 else
                     null;
+                const static_lazy_module = if (s.names.len == 1 and s.values.len == 1)
+                    try self.staticLazyModuleValue(s.values[0])
+                else
+                    null;
                 const static_builtin_require = if (s.names.len == 1 and s.values.len == 1)
                     try self.staticBuiltinRequireValue(s.values[0])
                 else
@@ -828,6 +878,7 @@ const Analyzer = struct {
                             try self.addShapeDependency(source, binding);
                     }
                     if (index == 0) self.bindings.items[binding].static_module = static_module;
+                    if (index == 0) self.bindings.items[binding].static_lazy_module = static_lazy_module;
                     if (index == 0) self.bindings.items[binding].static_builtin_require = static_builtin_require;
                     if (s.values.len == s.names.len)
                         self.bindings.items[binding].callable_field_hint = staticFieldName(s.values[index]);
