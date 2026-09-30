@@ -130,6 +130,41 @@ def record_assets(root):
             for name in walk_assets(root)]
 
 
+def last_nonempty_line(path, tail_bytes=256 * 1024):
+    regular(path)
+    size = path.stat().st_size
+    if size == 0:
+        raise ValueError(f"Empty extraction asset: {path}")
+    with path.open("rb") as stream:
+        stream.seek(max(0, size - tail_bytes))
+        raw = stream.read()
+    lines = [line for line in raw.splitlines() if line]
+    if not lines:
+        raise ValueError(f"No data rows in extraction asset: {path}")
+    return lines[-1]
+
+
+def validate_extraction_completion(root):
+    """Reject internally consistent but prematurely terminated extractions."""
+    ready = root / "compiler-inputs.ready"
+    regular(ready)
+    if ready.read_bytes() != b"complete\n":
+        raise ValueError("Invalid compiler inputs completion marker")
+
+    stream_fields = last_nonempty_line(root / "dump-streams.tsv").split(b"\t")
+    page_fields = last_nonempty_line(root / "page-index.tsv").split(b"\t")
+    if len(stream_fields) != 3 or len(page_fields) < 3:
+        raise ValueError("Invalid extraction stream/page tail")
+    try:
+        final_stream = int(stream_fields[0])
+        final_page_stream = int(page_fields[0])
+    except ValueError as exc:
+        raise ValueError("Invalid extraction stream/page id") from exc
+    if final_page_stream != final_stream:
+        raise ValueError(
+            f"Incomplete extraction: final page stream {final_page_stream} != final stream {final_stream}")
+
+
 def validate(root, expected):
     marker = root / ".complete.json"
     record = read_marker(marker)
@@ -140,6 +175,7 @@ def validate(root, expected):
     assets = record.get("assets")
     if not isinstance(assets, list) or assets != record_assets(root):
         return False
+    validate_extraction_completion(root)
     return True
 
 
@@ -169,6 +205,7 @@ def publish(root, expected, source):
     prune_abandoned_partials(root)
     # Refuse symlinks in the producer tree before copytree can follow one.
     walk_assets(source)
+    validate_extraction_completion(source)
     if destination.exists() or destination.is_symlink():
         try:
             if not destination.is_symlink() and validate(destination, expected):

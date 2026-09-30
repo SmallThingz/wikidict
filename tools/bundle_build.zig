@@ -170,6 +170,13 @@ fn boundedParseWorkers(requested: usize, cpu_limit: usize, worker_running: bool,
 fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump: []const u8, root: []const u8, llvm_dir: []const u8, workers: usize, cpu_limit: usize, worker_job: *const WorkerObjectJob, leaf_job: *LeafBitcodeJob) !void {
     const ready = try std.fs.path.join(a, &.{ root, "compiler-inputs.ready" });
     const manifest = try std.fs.path.join(a, &.{ root, "manifest.jsonl" });
+    // A failed prior build can leave a readiness marker in a reused output
+    // directory. Remove it before the new extractor starts truncating and
+    // rebuilding its inputs, otherwise LLVM can race stale compiler assets.
+    std.Io.Dir.cwd().deleteFile(io, ready) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "extract compiler inputs" });
     var extraction: Extraction = .{
         .io = io,

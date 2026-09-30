@@ -105,9 +105,16 @@ const InputPages = union(enum) {
             },
         }
     }
+
+    fn consumedStreamCount(self: *const InputPages) ?usize {
+        return switch (self.*) {
+            .raw => null,
+            .compressed => |compressed| @intCast(compressed.walker.streams.stream_id),
+        };
+    }
 };
 
-fn writeStreamTable(io: std.Io, allocator: std.mem.Allocator, dump_path: []const u8, index_path: []const u8, output_path: []const u8) !void {
+fn writeStreamTable(io: std.Io, allocator: std.mem.Allocator, dump_path: []const u8, index_path: []const u8, output_path: []const u8) !usize {
     var file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .truncate = true });
     defer file.close(io);
     var buffer: [128 * 1024]u8 = undefined;
@@ -115,9 +122,13 @@ fn writeStreamTable(io: std.Io, allocator: std.mem.Allocator, dump_path: []const
     try writer.interface.writeAll(wikimedia_dump.stream_index_header ++ "\n");
     var streams = try wikimedia_dump.StreamIterator.open(io, allocator, dump_path, index_path);
     defer streams.close();
-    while (try streams.next()) |stream|
+    var count: usize = 0;
+    while (try streams.next()) |stream| {
         try writer.interface.print("{d}\t{d}\t{d}\n", .{ stream.id, stream.span.offset, stream.span.len });
+        count += 1;
+    }
     try writer.interface.flush();
+    return count;
 }
 fn writeAllFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
     var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
@@ -294,8 +305,10 @@ pub fn main(init: std.process.Init) !void {
     const title_index_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/{s}", .{ output_root, wikimedia_dump.page_title_index_filename });
     const usage_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/lua-usage.tsv", .{output_root});
     try std.Io.Dir.cwd().createDirPath(init.io, modules_dir);
-    if (emit_page_index and compressed)
-        try writeStreamTable(init.io, init.arena.allocator(), input_path, multistream_index_path.?, stream_index_path);
+    const expected_stream_count: ?usize = if (emit_page_index and compressed)
+        try writeStreamTable(init.io, init.arena.allocator(), input_path, multistream_index_path.?, stream_index_path)
+    else
+        null;
 
     var template_source_writer: ?wikimedia_dump.TemplateSourceWriter = if (emit_page_index)
         try wikimedia_dump.TemplateSourceWriter.init(init.io, init.arena.allocator(), output_root)
@@ -538,6 +551,16 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("modules={d} redirects={d} pages={d} source_bytes={d}\n", .{ modules, redirects, pages, source_bytes });
         }
         _ = arena.reset(.retain_capacity);
+    }
+    if (expected_stream_count) |expected| {
+        const consumed = input.consumedStreamCount() orelse return error.IncompleteMultistreamScan;
+        if (consumed != expected) {
+            std.debug.print(
+                "incomplete multistream scan: consumed={d} expected={d} pages={d} modules={d}\n",
+                .{ consumed, expected, pages, modules },
+            );
+            return error.IncompleteMultistreamScan;
+        }
     }
     if (uw) |usage_out| {
         try writeUsageCounts(init.arena.allocator(), usage_out, 'R', &root_template_usage);
