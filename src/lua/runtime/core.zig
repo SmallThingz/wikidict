@@ -370,6 +370,16 @@ const GlobalTail = struct {
     len: usize,
     pages: []?*GlobalPage,
 
+    fn initEmpty(allocator: std.mem.Allocator, len: usize) !*GlobalTail {
+        const self = try allocator.create(GlobalTail);
+        errdefer allocator.destroy(self);
+        const page_count = len / global_page_len + @intFromBool(len % global_page_len != 0);
+        const pages = try allocator.alloc(?*GlobalPage, page_count);
+        @memset(pages, null);
+        self.* = .{ .allocator = allocator, .len = len, .pages = pages };
+        return self;
+    }
+
     fn snapshot(allocator: std.mem.Allocator, values: []const Value, occupied_pages: ?[]const u64) !*GlobalTail {
         const self = try allocator.create(GlobalTail);
         errdefer allocator.destroy(self);
@@ -1391,6 +1401,7 @@ pub const Context = struct {
     host: ?*anyopaque = null,
     current_frame: ?*Table = null,
     package_loaded: ?*Table = null,
+    package_loaded_tail: ?*GlobalTail = null,
     // Lua's base pairs() closes over the builtin next iterator. Rebinding the
     // global name `next` must not change the iterator returned by pairs().
     builtin_next: Value = .nil,
@@ -1609,6 +1620,10 @@ pub const Context = struct {
             self.allocator.destroy(owned);
         };
         self.allocator.free(self.module_state_pages);
+        if (self.package_loaded_tail) |tail| {
+            tail.deinit();
+            self.allocator.destroy(tail);
+        }
         if (self.root_global_table) |table| {
             table.deinit(self.allocator);
             self.allocator.destroy(table);
@@ -3172,10 +3187,27 @@ pub const Context = struct {
     }
 
     pub fn newPackageLoadedTable(self: *Context) !*Table {
-        const table = if (self.package_loaded_shape_id) |shape_id|
-            try self.newProgramShape(shape_id)
-        else
-            try self.newTable();
+        const table = if (self.package_loaded_shape_id) |shape_id| blk: {
+            if (shape_id >= self.program_shapes.len) return error.BadShape;
+            if (self.package_loaded_tail != null) return error.PackageLoadedAlreadyInitialized;
+            const shape = &self.program_shapes[shape_id];
+            const owned = try self.allocator.create(Table);
+            errdefer self.allocator.destroy(owned);
+            const tail = try GlobalTail.initEmpty(self.allocator, shape.field_count);
+            errdefer {
+                tail.deinit();
+                self.allocator.destroy(tail);
+            }
+            owned.* = .{
+                .shape = shape,
+                .global_tail = tail,
+                .module_template_mutation_probe = module_template_allocation_mutation_probe,
+                .module_template_probe_id = module_template_probe_owner_id,
+            };
+            self.assignFieldCacheIdentity(owned);
+            self.package_loaded_tail = tail;
+            break :blk owned;
+        } else try self.newTable();
         table.module_template_reconstructable = true;
         return table;
     }
@@ -4022,6 +4054,52 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     try std.testing.expect(!loop_state.loading);
     try std.testing.expect(loop_state.value == null);
     try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("Module:Missing"));
+}
+
+test "package loaded structural slots allocate sparse pages lazily" {
+    const a = std.testing.allocator;
+    var ctx = try Context.initProgram(a, 0, 0);
+    defer ctx.deinit();
+
+    var keys: [130]Value = undefined;
+    for (&keys) |*key| key.* = .{ .string = "module" };
+    const shape = Shape{
+        .field_keys = &keys,
+        .sorted_string_slots = &.{},
+        .field_count = keys.len,
+        .open = true,
+        .all_string_keys = true,
+    };
+    ctx.program_shapes = &.{shape};
+    ctx.program_shapes_validated = true;
+    ctx.package_loaded_shape_id = 0;
+
+    const table = try ctx.newPackageLoadedTable();
+    defer {
+        table.deinit(a);
+        a.destroy(table);
+    }
+    ctx.package_loaded = table;
+
+    try std.testing.expectEqual(@as(usize, 0), table.slots.len);
+    try std.testing.expectEqual(@as(usize, 130), table.slotCount());
+    const tail = ctx.package_loaded_tail orelse return error.MissingPackageLoadedTail;
+    try std.testing.expect(table.global_tail == tail);
+    try std.testing.expectEqual(@as(usize, 3), tail.pages.len);
+    try std.testing.expect(tail.pages[0] == null);
+    try std.testing.expect(tail.pages[1] == null);
+    try std.testing.expect(tail.pages[2] == null);
+
+    try table.rawSetSlot(129, .{ .number = 42 });
+    try std.testing.expect(tail.pages[0] == null);
+    try std.testing.expect(tail.pages[1] == null);
+    try std.testing.expect(tail.pages[2] != null);
+    try std.testing.expectEqual(@as(f64, 42), table.rawGetSlot(129).?.number);
+    try std.testing.expect(table.rawGetSlot(64) == null);
+
+    try table.rawSetSlot(0, .{ .boolean = true });
+    try std.testing.expect(tail.pages[0] != null);
+    try std.testing.expect(table.rawGetSlot(0).?.boolean);
 }
 
 const ModuleTemplateProbe = struct {
