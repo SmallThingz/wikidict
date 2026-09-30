@@ -85,6 +85,7 @@ pub const Binding = struct {
     static_native_namespace: ?static_fields.Namespace = null,
     static_array_element_native_namespace: ?static_fields.Namespace = null,
     static_module: ?[]const u8 = null,
+    static_builtin_require: bool = false,
     callable_field_hint: ?[]const u8 = null,
     linear_index_table: bool = false,
 
@@ -212,6 +213,7 @@ const Analyzer = struct {
     fn markLocalMutated(self: *Analyzer, binding: u32) void {
         self.bindings.items[binding].mutated = true;
         self.bindings.items[binding].static_module = null;
+        self.bindings.items[binding].static_builtin_require = false;
         self.bindings.items[binding].linear_index_table = false;
         self.invalidateStaticTable(binding);
         self.invalidateStaticType(binding);
@@ -348,6 +350,30 @@ const Analyzer = struct {
                 else => null,
             },
             else => null,
+        };
+    }
+
+    fn upvalueStaticBuiltinRequire(self: *const Analyzer, ordinal: u32) bool {
+        if (ordinal >= self.upvalues.items.len) return false;
+        const parent = self.parent orelse return false;
+        return switch (self.upvalues.items[ordinal].source) {
+            .local => |binding| binding < parent.bindings.items.len and
+                parent.bindings.items[binding].static_builtin_require and
+                !parent.bindings.items[binding].mutated,
+            .upvalue => |parent_ordinal| parent.upvalueStaticBuiltinRequire(parent_ordinal),
+        };
+    }
+
+    fn staticBuiltinRequireValue(self: *Analyzer, value: *const lua.Expr) anyerror!bool {
+        return switch (value.*) {
+            .name => |name| switch (try self.resolve(name.value)) {
+                .global => std.mem.eql(u8, name.value, "require"),
+                .local => |binding| self.bindings.items[binding].static_builtin_require and
+                    !self.bindings.items[binding].mutated,
+                .upvalue => |ordinal| self.upvalueStaticBuiltinRequire(ordinal),
+            },
+            .paren => |paren| self.staticBuiltinRequireValue(paren.expr),
+            else => false,
         };
     }
 
@@ -775,6 +801,10 @@ const Analyzer = struct {
                     try self.staticModuleValue(s.values[0])
                 else
                     null;
+                const static_builtin_require = if (s.names.len == 1 and s.values.len == 1)
+                    try self.staticBuiltinRequireValue(s.values[0])
+                else
+                    false;
                 const types = try self.rhsTypes(s.values, s.names.len);
                 defer self.allocator.free(types);
                 const sources = try self.allocator.alloc(std.ArrayList(u32), s.names.len);
@@ -798,6 +828,7 @@ const Analyzer = struct {
                             try self.addShapeDependency(source, binding);
                     }
                     if (index == 0) self.bindings.items[binding].static_module = static_module;
+                    if (index == 0) self.bindings.items[binding].static_builtin_require = static_builtin_require;
                     if (s.values.len == s.names.len)
                         self.bindings.items[binding].callable_field_hint = staticFieldName(s.values[index]);
                     for (sources[index].items) |source| try self.addTypeDependency(source, binding);
@@ -1007,8 +1038,8 @@ fn applyDirectParameterShapes(module: *Module) void {
 
 fn binaryMetamethod(name: []const u8) bool {
     inline for (.{
-        "__add", "__sub", "__mul", "__div", "__mod", "__pow",
-        "__concat", "__eq", "__lt", "__le",
+        "__add",    "__sub", "__mul", "__div", "__mod", "__pow",
+        "__concat", "__eq",  "__lt",  "__le",
     }) |candidate|
         if (std.mem.eql(u8, name, candidate)) return true;
     return false;

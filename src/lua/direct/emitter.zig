@@ -981,6 +981,52 @@ const FnEmitter = struct {
         };
     }
 
+    fn bindingBuiltinRequire(
+        _: *const FnEmitter,
+        owner: *const analysis.FunctionInfo,
+        binding: u32,
+    ) bool {
+        return binding < owner.bindings.len and
+            owner.bindings[binding].static_builtin_require and
+            !owner.bindings[binding].mutated;
+    }
+
+    fn upvalueBuiltinRequire(
+        self: *const FnEmitter,
+        owner: *const analysis.FunctionInfo,
+        ordinal: u32,
+    ) bool {
+        var current = owner;
+        var current_ordinal = ordinal;
+        while (true) {
+            if (current_ordinal >= current.upvalues.len) return false;
+            const parent = self.analyzedFunction(current.parent_id orelse return false) orelse return false;
+            switch (current.upvalues[current_ordinal].source) {
+                .local => |binding| return self.bindingBuiltinRequire(parent, binding),
+                .upvalue => |parent_ordinal| {
+                    current = parent;
+                    current_ordinal = parent_ordinal;
+                },
+            }
+        }
+    }
+
+    fn builtinRequireCallee(self: *FnEmitter, callee: *const lua.Expr) anyerror!bool {
+        if (!self.module.globals.stable("require")) return false;
+        return switch (callee.*) {
+            .name => |name| switch (try self.resolve(name.value)) {
+                .global => |slot| blk: {
+                    if (!std.mem.eql(u8, name.value, "require")) break :blk false;
+                    break :blk slot == (self.module.globals.get("require") orelse break :blk false);
+                },
+                .local => |binding| self.bindingBuiltinRequire(self.info, binding),
+                .upvalue => |ordinal| self.upvalueBuiltinRequire(self.info, ordinal),
+            },
+            .paren => |paren| self.builtinRequireCallee(paren.expr),
+            else => false,
+        };
+    }
+
     fn bindingArrayElementNativeNamespace(
         _: *const FnEmitter,
         owner: *const analysis.FunctionInfo,
@@ -1830,15 +1876,7 @@ const FnEmitter = struct {
         callee: *const lua.Expr,
         args_in: []const *lua.Expr,
     ) anyerror!?static_fields.Namespace {
-        if (args_in.len != 1 or callee.* != .name or
-            !std.mem.eql(u8, callee.name.value, "require") or
-            !self.module.globals.stable("require"))
-            return null;
-        const require_slot = self.module.globals.get("require") orelse return null;
-        switch (try self.resolve("require")) {
-            .global => |slot| if (slot != require_slot) return null,
-            else => return null,
-        }
+        if (args_in.len != 1 or !try self.builtinRequireCallee(callee)) return null;
         const requested = (try self.staticStringExpr(args_in[0])) orelse return null;
         if (std.mem.eql(u8, requested, "bit32")) return .bit32;
         if (std.mem.eql(u8, requested, "libraryUtil")) return .library_util;
@@ -2000,15 +2038,16 @@ const FnEmitter = struct {
             }
             if (object == .native_boxed) {
                 const status = try llvm.call(self.builder, self.rt().get_known_native_slot, &.{
-                    self.ctx(), object_box, try self.cI32(@intFromEnum(namespace)),
-                    try self.cI32(std.math.maxInt(u32)), key.ptr, try self.cI64(key.len), out,
+                    self.ctx(),                          object_box, try self.cI32(@intFromEnum(namespace)),
+                    try self.cI32(std.math.maxInt(u32)), key.ptr,    try self.cI64(key.len),
+                    out,
                 });
                 try self.check(status);
                 return .{ .boxed = out };
             }
         }
         const status = try llvm.call(self.builder, self.rt().get_struct_field, &.{
-            self.ctx(), object_box, key.ptr, try self.cI64(key.len), try self.cI64(key_hash),
+            self.ctx(),                                         object_box, key.ptr, try self.cI64(key.len), try self.cI64(key_hash),
             try self.cI64(site_id orelse std.math.maxInt(u64)), out,
         });
         try self.check(status);
@@ -2352,14 +2391,7 @@ const FnEmitter = struct {
     }
 
     fn staticRequire(self: *FnEmitter, callee_expr: *const lua.Expr, method: ?[]const u8, args_in: []const *lua.Expr) anyerror!?StaticRequire {
-        if (method != null or args_in.len != 1 or callee_expr.* != .name) return null;
-        if (!std.mem.eql(u8, callee_expr.name.value, "require")) return null;
-        if (!self.module.globals.stable("require")) return null;
-        const require_slot = self.module.globals.get("require") orelse return null;
-        switch (try self.resolve("require")) {
-            .global => |slot| if (slot != require_slot) return null,
-            else => return null,
-        }
+        if (method != null or args_in.len != 1 or !try self.builtinRequireCallee(callee_expr)) return null;
         const requested = (try self.staticStringExpr(args_in[0])) orelse return null;
         const module_id = (try self.module.facts.moduleId(self.a(), requested)) orelse return null;
         return .{ .module_id = module_id, .requested = try self.stringRef(requested) };

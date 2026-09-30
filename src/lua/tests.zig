@@ -429,6 +429,24 @@ test "constant require lowers to module id only when global is stable" {
     defer std.testing.allocator.free(direct);
     try std.testing.expect(std.mem.indexOf(u8, direct, "call i32 @dict_lua_require_module_id(ptr %ctx, i32 7") != null);
 
+    const aliased = try compile("local req=require; local x=req('Module:Alias'); return x", facts);
+    defer std.testing.allocator.free(aliased);
+    try std.testing.expect(std.mem.indexOf(u8, aliased, "call i32 @dict_lua_require_module_id(ptr %ctx, i32 7") != null);
+
+    const captured_alias = try compile(
+        "local req=require; local function f() return req('Module:Alias') end; return f()",
+        facts,
+    );
+    defer std.testing.allocator.free(captured_alias);
+    try std.testing.expect(std.mem.indexOf(u8, captured_alias, "call i32 @dict_lua_require_module_id(ptr %ctx, i32 7") != null);
+
+    const mutated_alias = try compile(
+        "local req=require; req=function() return 1 end; return req('Module:Alias')",
+        facts,
+    );
+    defer std.testing.allocator.free(mutated_alias);
+    try std.testing.expect(std.mem.indexOf(u8, mutated_alias, "call i32 @dict_lua_require_module_id") == null);
+
     const rebound = try compile("require=function() return 1 end; return require('Module:Alias')", facts);
     defer std.testing.allocator.free(rebound);
     try std.testing.expect(std.mem.indexOf(u8, rebound, "call i32 @dict_lua_require_module_id") == null);
