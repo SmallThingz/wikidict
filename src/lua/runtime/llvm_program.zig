@@ -95,6 +95,7 @@ pub const Program = struct {
     shape_keys: []rt.Value,
     shape_sorted_slots: []u32,
     frame_args_shape_id: ?u32,
+    package_loaded_module_slots: []u32,
     package_loaded_shape_id: ?u32,
     json_object_shape_id: ?u32,
     uri_query_shape_id: ?u32,
@@ -341,6 +342,15 @@ pub const Program = struct {
         if (shape_offset != shape_field_total) return error.InvalidProgramMetadata;
         try reader.finish();
 
+        const package_loaded_module_slots = try allocator.alloc(u32, module_count);
+        errdefer allocator.free(package_loaded_module_slots);
+        @memset(package_loaded_module_slots, std.math.maxInt(u32));
+        if (package_loaded_shape_id) |shape_id| {
+            const package_shape = &program_shapes[shape_id];
+            for (module_names, package_loaded_module_slots) |name, *slot|
+                slot.* = rt.shapeStringSlot(package_shape, name) orelse std.math.maxInt(u32);
+        }
+
         var stdlib_template = try stdlib.Template.init();
         errdefer stdlib_template.deinit();
 
@@ -378,6 +388,7 @@ pub const Program = struct {
             .shape_keys = shape_keys,
             .shape_sorted_slots = shape_sorted_slots,
             .frame_args_shape_id = frame_args_shape_id,
+            .package_loaded_module_slots = package_loaded_module_slots,
             .package_loaded_shape_id = package_loaded_shape_id,
             .json_object_shape_id = json_object_shape_id,
             .uri_query_shape_id = uri_query_shape_id,
@@ -396,6 +407,7 @@ pub const Program = struct {
         self.allocator.free(self.shape_sorted_slots);
         self.allocator.free(self.shape_keys);
         self.allocator.free(self.shapes);
+        self.allocator.free(self.package_loaded_module_slots);
         self.allocator.free(self.global_sorted_slots);
         self.allocator.free(self.global_keys);
         self.allocator.free(self.synth_exports);
@@ -545,6 +557,7 @@ pub const Program = struct {
         ctx.program_shapes_validated = true;
         ctx.program_shape_generation = self.shape_generation;
         ctx.frame_args_shape_id = self.frame_args_shape_id;
+        ctx.package_loaded_module_slots = self.package_loaded_module_slots;
         ctx.package_loaded_shape_id = self.package_loaded_shape_id;
         ctx.json_object_shape_id = self.json_object_shape_id;
         ctx.uri_query_shape_id = self.uri_query_shape_id;

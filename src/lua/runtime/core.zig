@@ -262,7 +262,7 @@ pub const Shape = struct {
     all_string_keys: bool = false,
 };
 
-fn shapeStringSlot(shape: *const Shape, name: []const u8) ?u32 {
+pub fn shapeStringSlot(shape: *const Shape, name: []const u8) ?u32 {
     if (shape.field_keys.len != shape.field_count) return null;
     var low: usize = 0;
     var high = shape.sorted_string_slots.len;
@@ -1348,6 +1348,7 @@ pub const Context = struct {
     program_shape_generation: u64 = 0,
     frame_args_shape_id: ?u32 = null,
     package_loaded_shape_id: ?u32 = null,
+    package_loaded_module_slots: []const u32 = &.{},
     json_object_shape_id: ?u32 = null,
     uri_query_shape_id: ?u32 = null,
     module_export_shape_ids: []const u32 = &.{},
@@ -1433,6 +1434,7 @@ pub const Context = struct {
         child.program_shape_generation = self.program_shape_generation;
         child.frame_args_shape_id = self.frame_args_shape_id;
         child.package_loaded_shape_id = self.package_loaded_shape_id;
+        child.package_loaded_module_slots = self.package_loaded_module_slots;
         child.json_object_shape_id = self.json_object_shape_id;
         child.uri_query_shape_id = self.uri_query_shape_id;
         child.module_export_shape_ids = self.module_export_shape_ids;
@@ -1877,12 +1879,45 @@ pub const Context = struct {
         try table.rawSet(self.allocator, key, value);
     }
 
+    fn packageLoadedModuleGet(self: *Context, module_id: u32, requested: ?[]const u8) ?Value {
+        const loaded = self.package_loaded orelse return null;
+        if (module_id < self.package_loaded_module_slots.len and self.program_shapes_validated) {
+            if (self.package_loaded_shape_id) |shape_id| if (shape_id < self.program_shapes.len and
+                loaded.shape == &self.program_shapes[shape_id])
+            {
+                const slot = self.package_loaded_module_slots[module_id];
+                if (slot != std.math.maxInt(u32))
+                    if (loaded.rawGetSlot(slot)) |value| return value;
+            };
+        }
+        const canonical = self.canonicalModuleName(module_id, requested) orelse return null;
+        return loaded.rawGet(.{ .string = canonical });
+    }
+
+    fn packageLoadedModuleSet(self: *Context, module_id: u32, requested: ?[]const u8, value: Value) !void {
+        const loaded = self.package_loaded orelse return;
+        if (module_id < self.package_loaded_module_slots.len and self.program_shapes_validated) {
+            if (self.package_loaded_shape_id) |shape_id| if (shape_id < self.program_shapes.len and
+                loaded.shape == &self.program_shapes[shape_id])
+            {
+                const slot = self.package_loaded_module_slots[module_id];
+                if (slot != std.math.maxInt(u32)) {
+                    const suspended = suspendModuleTemplateEffectProbe();
+                    defer resumeModuleTemplateEffectProbe(suspended);
+                    try loaded.rawSetSlot(slot, value);
+                    return;
+                }
+            };
+        }
+        const canonical = self.canonicalModuleName(module_id, requested) orelse return;
+        try self.rawSetRuntimeBookkeeping(loaded, .{ .string = canonical }, value);
+    }
+
     pub fn deferStaticRequireRef(self: *Context, module_id: u32, out: *Value) ?*const bool {
         if (self.package_observable) return null;
         const state = self.moduleState(module_id) orelse return null;
         const value = state.value orelse state.preinitialized orelse return null;
-        const canonical = self.canonicalModuleName(module_id, null) orelse return null;
-        if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = canonical })) |visible|
+        if (self.packageLoadedModuleGet(module_id, null)) |visible|
             if (!rawEqual(visible, value)) return null;
         if (!self.eager_bootstrap) state.deferred_require_visibility = true;
         out.* = value;
@@ -2459,9 +2494,7 @@ pub const Context = struct {
             state.export_pristine = value == .table;
             if (value == .table) value.table.mutation_sentinel = &state.export_pristine;
             state.loading = false;
-            const canonical = self.target.canonicalModuleName(module_id, requested);
-            if (canonical) |text| if (self.target.package_loaded) |loaded|
-                try self.target.rawSetRuntimeBookkeeping(loaded, .{ .string = text }, value);
+            try self.target.packageLoadedModuleSet(module_id, requested, value);
             if (!self.promotion and source_state.template_package_observed)
                 try self.target.observePackage();
             return value;
@@ -2483,13 +2516,7 @@ pub const Context = struct {
                 state.export_pristine = value == .table;
                 if (value == .table) value.table.mutation_sentinel = &state.export_pristine;
                 state.loading = false;
-                const canonical = self.target.canonicalModuleName(override.module_id, null);
-                if (canonical) |text| if (self.target.package_loaded) |loaded|
-                    try self.target.rawSetRuntimeBookkeeping(
-                        loaded,
-                        .{ .string = text },
-                        value,
-                    );
+                try self.target.packageLoadedModuleSet(override.module_id, null, value);
             }
         }
     };
@@ -2593,9 +2620,7 @@ pub const Context = struct {
         requested: ?[]const u8,
     ) !void {
         if (self.moduleState(module_id)) |state| state.* = .{};
-        const canonical = self.canonicalModuleName(module_id, requested);
-        if (canonical) |text| if (self.package_loaded) |loaded|
-            try self.rawSetRuntimeBookkeeping(loaded, .{ .string = text }, .nil);
+        try self.packageLoadedModuleSet(module_id, requested, .nil);
     }
 
     fn dynamicModuleTemplateCandidate(self: *const Context, module_id: u32) bool {
@@ -2834,9 +2859,7 @@ pub const Context = struct {
             return null;
         }
 
-        const canonical = self.canonicalModuleName(module_id, requested);
-        if (canonical) |text| if (self.package_loaded) |loaded|
-            try self.rawSetRuntimeBookkeeping(loaded, .{ .string = text }, value);
+        try self.packageLoadedModuleSet(module_id, requested, value);
         state.value = value;
         state.loading = false;
         return value;
@@ -2914,13 +2937,10 @@ pub const Context = struct {
             };
         };
         if (value == .nil) {
-            if (canonical) |text| if (self.package_loaded) |loaded| {
-                if (loaded.rawGet(.{ .string = text })) |existing| value = existing;
-            };
+            if (self.packageLoadedModuleGet(module_id, requested)) |existing| value = existing;
             if (value == .nil) value = .{ .boolean = true };
         }
-        if (canonical) |text| if (self.package_loaded) |loaded|
-            try self.rawSetRuntimeBookkeeping(loaded, .{ .string = text }, value);
+        try self.packageLoadedModuleSet(module_id, requested, value);
         state.value = value;
         if (dynamic_template_probe and module_template_effect_reasons & (1 << 3) != 0)
             state.template_package_observed = true;
@@ -2993,9 +3013,13 @@ pub const Context = struct {
     pub fn requireModuleId(self: *Context, module_id: u32, raw_name: []const u8) anyerror!Value {
         if (self.eager_bootstrap)
             return self.preparedModuleValue(module_id) orelse error.EagerDependencyNotInitialized;
-        if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
+        const canonical = self.canonicalModuleName(module_id, null);
+        const canonical_request = if (canonical) |name| std.mem.eql(u8, name, raw_name) else false;
+        if (canonical_request) {
+            if (self.packageLoadedModuleGet(module_id, raw_name)) |value| return value;
+        } else if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
         const value = try self.loadModule(module_id, raw_name);
-        if (self.package_loaded) |loaded|
+        if (!canonical_request) if (self.package_loaded) |loaded|
             try self.rawSetRuntimeBookkeeping(loaded, .{ .string = raw_name }, value);
         if (self.moduleState(module_id)) |state| state.deferred_require_visibility = false;
         return value;
