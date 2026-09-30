@@ -812,6 +812,11 @@ const ModuleValueScanner = struct {
             !value.may_mw_namespace and !value.may_string_format;
     }
 
+    fn isLazyRequireLoaderName(value: ModuleAbstractValue) bool {
+        return exactString(value, "Module:require when needed") or
+            exactString(value, "Module:utilities/require when needed");
+    }
+
     fn evalExpr(self: *ModuleValueScanner, state: *ModuleFlowState, expr: *const lua.Expr) anyerror!ModuleAbstractValue {
         return switch (expr.*) {
             .nil_lit => .nilValue(),
@@ -854,7 +859,7 @@ const ModuleValueScanner = struct {
                     break :blk .unknown();
                 }
                 if (callee.may_require_loader and args.len == 1 and
-                    exactString(args[0], "Module:require when needed"))
+                    isLazyRequireLoaderName(args[0]))
                     break :blk .lazyRequireLoader();
                 break :blk .unknown();
             },
@@ -1274,6 +1279,30 @@ test "module load scanner follows require when needed targets" {
         saw_gamma = saw_gamma or std.mem.eql(u8, ref, "Module:Gamma");
     }
     try std.testing.expect(saw_alpha and saw_beta and saw_gamma);
+}
+
+test "module load scanner follows utilities require when needed targets" {
+    const a = std.testing.allocator;
+    var chunk = try lua.parse(a,
+        \\local lazy = require("Module:utilities/require when needed")
+        \\local first = lazy("Module:Alpha")
+        \\local function nested() return lazy("Module:Beta") end
+        \\return first, nested()
+    );
+    defer chunk.deinit();
+    var refs: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (refs.items) |ref| a.free(ref);
+        refs.deinit(a);
+    }
+    try std.testing.expect(!try collectModuleLoads(a, chunk.body, &refs));
+    var saw_alpha = false;
+    var saw_beta = false;
+    for (refs.items) |ref| {
+        saw_alpha = saw_alpha or std.mem.eql(u8, ref, "Module:Alpha");
+        saw_beta = saw_beta or std.mem.eql(u8, ref, "Module:Beta");
+    }
+    try std.testing.expect(saw_alpha and saw_beta);
 }
 
 test "module load value sets fold concatenation aliases and pcall" {

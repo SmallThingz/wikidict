@@ -384,12 +384,17 @@ const Analyzer = struct {
         };
     }
 
+    fn isLazyRequireLoaderModule(name: []const u8) bool {
+        return std.mem.eql(u8, name, "Module:require when needed") or
+            std.mem.eql(u8, name, "Module:utilities/require when needed");
+    }
+
     fn staticLazyModuleValue(self: *Analyzer, value: *const lua.Expr) anyerror!?[]const u8 {
         return switch (value.*) {
             .call => |call| blk: {
                 if (call.args.len != 1) break :blk null;
                 const loader = (try self.staticModuleValue(call.callee)) orelse break :blk null;
-                if (!std.mem.eql(u8, loader, "Module:require when needed")) break :blk null;
+                if (!isLazyRequireLoaderModule(loader)) break :blk null;
                 break :blk staticString(call.args[0]);
             },
             .paren => |paren| self.staticLazyModuleValue(paren.expr),

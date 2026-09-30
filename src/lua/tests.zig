@@ -411,6 +411,7 @@ test "constant require lowers to module id only when global is stable" {
     defer ids.deinit(std.testing.allocator);
     try ids.put(std.testing.allocator, "Module:Alias", 7);
     try ids.put(std.testing.allocator, "Module:require when needed", 8);
+    try ids.put(std.testing.allocator, "Module:utilities/require when needed", 9);
     const facts = llvm_emitter.ProgramFacts{ .module_ids = &ids };
     const compile = struct {
         fn run(source: []const u8, program_facts: llvm_emitter.ProgramFacts) ![]u8 {
@@ -454,6 +455,14 @@ test "constant require lowers to module id only when global is stable" {
     );
     defer std.testing.allocator.free(lazy_direct);
     try std.testing.expect(std.mem.indexOf(u8, lazy_direct, "call i32 @dict_lua_require_module_id(ptr %ctx, i32 7") != null);
+
+    const lazy_utility = try compile(
+        "local m=require('Module:utilities/require when needed')('Module:Alias'); return m.foo",
+        facts,
+    );
+    defer std.testing.allocator.free(lazy_utility);
+    try std.testing.expect(std.mem.indexOf(u8, lazy_utility, "call i32 @dict_lua_require_module_id(ptr %ctx, i32 7") != null);
+    try std.testing.expect(std.mem.indexOf(u8, lazy_utility, "call i32 @dict_lua_require_module_id(ptr %ctx, i32 9") == null);
 
     const lazy_unsafe = try compile(
         "local r=require('Module:require when needed'); local m=r('Module:Alias'); return getmetatable(m)",
