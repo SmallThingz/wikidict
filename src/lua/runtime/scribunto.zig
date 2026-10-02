@@ -189,6 +189,7 @@ pub const SharedLoadDataCache = struct {
         try table.rawSet(a, .{ .string = "mw_loadData" }, .{ .boolean = true });
         try table.rawSet(a, .{ .string = "__metatable" }, .{ .table = table });
         table.read_only = true;
+        table.cross_page_stable = true;
         self.metatable = table;
         return table;
     }
@@ -215,12 +216,13 @@ pub const SharedLoadDataCache = struct {
                     std.mem.eql(u8, entry.key_ptr.string, "pagename") or
                     std.mem.eql(u8, entry.key_ptr.string, "encoded_pagename")))
                 continue;
-            const key = try promoteLoadData(a, entry.key_ptr.*, &seen, metatable);
-            const value = try promoteLoadData(a, entry.value_ptr.*, &seen, metatable);
+            const key = try promoteLoadData(a, entry.key_ptr.*, &seen, metatable, true);
+            const value = try promoteLoadData(a, entry.value_ptr.*, &seen, metatable, true);
             try root.rawSet(a, key, value);
         }
         root.metatable = metatable;
         root.read_only = true;
+        root.cross_page_stable = true;
         const bytes = arena.queryCapacity();
         if (bytes > shared_load_data_max_entry_bytes or bytes > shared_load_data_max_bytes - self.bytes) {
             arena.deinit();
@@ -253,7 +255,7 @@ pub const SharedLoadDataCache = struct {
         const promoted = blk: {
             var seen_tables: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
             defer seen_tables.deinit(a);
-            break :blk try promoteLoadData(a, source, &seen_tables, try self.loadDataMetatable());
+            break :blk try promoteLoadData(a, source, &seen_tables, try self.loadDataMetatable(), true);
         };
         const bytes = arena.queryCapacity();
         if (bytes > shared_load_data_max_entry_bytes or bytes > shared_load_data_max_bytes - self.bytes) {
@@ -320,7 +322,13 @@ fn pageLoadDataMetatable(state: *State) !*rt.Table {
     return table;
 }
 
-fn promoteLoadData(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnmanaged(*rt.Table, *rt.Table), metatable: *rt.Table) !Value {
+fn promoteLoadData(
+    a: std.mem.Allocator,
+    value: Value,
+    seen: *std.AutoHashMapUnmanaged(*rt.Table, *rt.Table),
+    metatable: *rt.Table,
+    cross_page_stable: bool,
+) !Value {
     return switch (value) {
         .nil, .boolean, .number => value,
         .string => |text| .{ .string = try a.dupe(u8, text) },
@@ -334,13 +342,14 @@ fn promoteLoadData(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnm
             var it = source.iterator();
             while (it.next()) |entry| {
                 if (entry.key_ptr.* == .table) return error.LoadDataTableKey;
-                const key = try promoteLoadData(a, entry.key_ptr.*, seen, metatable);
-                const item = try promoteLoadData(a, entry.value_ptr.*, seen, metatable);
+                const key = try promoteLoadData(a, entry.key_ptr.*, seen, metatable, cross_page_stable);
+                const item = try promoteLoadData(a, entry.value_ptr.*, seen, metatable, cross_page_stable);
                 try copy.rawSet(a, key, item);
             }
             copy.append_index = source.append_index;
             copy.metatable = metatable;
             copy.read_only = true;
+            copy.cross_page_stable = cross_page_stable;
             break :blk .{ .table = copy };
         },
     };
@@ -351,7 +360,7 @@ fn promoteLoadDataForState(state: *State, module_id: u32, source: Value, dynamic
         if (try shared.tryPromote(module_id, source, dynamic_proven)) |value| return value;
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
     defer seen.deinit(state.allocator);
-    return promoteLoadData(state.allocator, source, &seen, try pageLoadDataMetatable(state));
+    return promoteLoadData(state.allocator, source, &seen, try pageLoadDataMetatable(state), false);
 }
 
 fn frozenInvariantLoadDataName(name: []const u8) bool {
@@ -447,7 +456,7 @@ fn headwordPageData(runtime: *rt.Context, state: *State) !Value {
     if (values.len == 0 or values[0] != .table) return error.LoadDataTableExpected;
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
     defer seen.deinit(state.allocator);
-    return promoteLoadData(state.allocator, values[0], &seen, try pageLoadDataMetatable(state));
+    return promoteLoadData(state.allocator, values[0], &seen, try pageLoadDataMetatable(state), false);
 }
 
 fn mergeHeadwordData(state: *State, static: Value, page: Value) !Value {
@@ -604,7 +613,7 @@ fn loadJsonDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     if (decoded != .table) return error.LoadJsonDataTableExpected;
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
     defer seen.deinit(state.allocator);
-    const promoted = try promoteLoadData(state.allocator, decoded, &seen, try pageLoadDataMetatable(state));
+    const promoted = try promoteLoadData(state.allocator, decoded, &seen, try pageLoadDataMetatable(state), false);
     const key = try state.allocator.dupe(u8, title);
     try state.load_json_cache.put(state.allocator, key, promoted);
     return one(promoted);

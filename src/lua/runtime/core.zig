@@ -458,6 +458,10 @@ pub const Table = struct {
     // Package/module-cache state is explicitly reconstructed by module-template
     // promotion and therefore may be mutated during an otherwise reusable root.
     module_template_reconstructable: bool = false,
+    // Worker-lifetime immutable data graphs may be shared directly by
+    // page/invoke contexts and by the worker-global module-template graph.
+    // Only the shared mw.loadData cache sets this bit.
+    cross_page_stable: bool = false,
     // Points at the owning module state's mutation epoch for export graphs.
     // Nested table mutations can then be snapshotted as root-private module
     // overrides instead of being mistaken for page-state effects.
@@ -1346,6 +1350,10 @@ pub const Context = struct {
     // Context-lifetime strings and immutable callable descriptors.
     string_arena: std.heap.ArenaAllocator,
     strings_use_context_allocator: bool = false,
+    // Reused page-local invoke contexts can outlive the nested invoke arena
+    // that owns strings reachable from a module-template graph. Those targets
+    // opt in to copying cloned strings into their page-lifetime allocator.
+    own_cloned_strings: bool = false,
     globals: []Value,
     root_globals: []Value,
     // Stable heap address because Context is returned and forked by value.
@@ -1474,6 +1482,10 @@ pub const Context = struct {
     // Strings and callable descriptors remain live until that owner exits.
     pub fn useContextAllocatorForStrings(self: *Context) void {
         self.strings_use_context_allocator = true;
+    }
+
+    pub fn ownClonedStrings(self: *Context) void {
+        self.own_cloned_strings = true;
     }
 
     fn stringAllocator(self: *Context) std.mem.Allocator {
@@ -2349,6 +2361,10 @@ pub const Context = struct {
         fn cloneTable(self: *ModuleTemplateClone, source_table: *Table) anyerror!Value {
             if (self.tables.get(source_table)) |existing|
                 return .{ .table = existing };
+            if (source_table.cross_page_stable and source_table.read_only) {
+                try self.tables.put(self.target.allocator, source_table, source_table);
+                return .{ .table = source_table };
+            }
             if (source_table.native_namespace) |namespace| {
                 if (templateSingletonNamespace(namespace)) {
                     const table = self.target.findTemplateNativeNamespace(namespace) orelse {
@@ -2429,7 +2445,7 @@ pub const Context = struct {
 
         fn cloneValue(self: *ModuleTemplateClone, value: Value) anyerror!Value {
             return switch (value) {
-                .string => |text| if (self.promotion)
+                .string => |text| if (self.promotion or self.target.own_cloned_strings)
                     .{ .string = try self.target.allocator.dupe(u8, text) }
                 else
                     value,
@@ -4276,6 +4292,34 @@ test "module template cloning recreates null-environment native descriptors" {
     const out = try target.callValue(copied, &.{});
     defer freeResults(out);
     try std.testing.expectEqual(true, out[0].boolean);
+}
+
+test "module template cloning can own strings for reused target contexts" {
+    var target_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer target_arena.deinit();
+    var target = try Context.init(target_arena.allocator(), 0);
+    defer target.deinit();
+    target.ownClonedStrings();
+
+    const copied = blk: {
+        var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer source_arena.deinit();
+        var source = try Context.init(source_arena.allocator(), 0);
+        defer source.deinit();
+        const source_text = try source.allocator.dupe(u8, "nested-invoke-string");
+
+        var clone = Context.ModuleTemplateClone{
+            .source = &source,
+            .target = &target,
+        };
+        defer clone.deinit();
+        const value = try clone.cloneValue(.{ .string = source_text });
+        try std.testing.expect(value == .string);
+        try std.testing.expect(@intFromPtr(value.string.ptr) != @intFromPtr(source_text.ptr));
+        break :blk value;
+    };
+
+    try std.testing.expectEqualStrings("nested-invoke-string", copied.string);
 }
 
 test "module template cloning remaps context-bound native namespace callables" {

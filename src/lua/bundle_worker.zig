@@ -12,7 +12,11 @@ const InvokeReuseStats = lua_program.InvokeReuseStats;
 const work_stats = lua_program.work_stats;
 const A = std.mem.Allocator;
 const L = std.os.linux;
-const expansion_memory_headroom_bytes: u64 = 512 * 1024 * 1024;
+// The compiled program, mapped corpus indexes and provider caches are already
+// resident before this limit is installed. Real first-100k pages need close to
+// 1 GiB of additional address-space growth; a 512 MiB cap turns otherwise
+// valid pages into OutOfMemory expansion fallbacks as early as ordinal 124.
+const expansion_memory_headroom_bytes: u64 = 1024 * 1024 * 1024;
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
 fn expansionProfileEnabled() !bool {

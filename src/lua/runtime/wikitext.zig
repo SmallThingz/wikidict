@@ -1428,6 +1428,7 @@ pub const Expander = struct {
                 const cached = try page_a.create(rt.Context);
                 cached.* = try outer_runtime.forkProgram(page_a);
                 cached.useContextAllocatorForStrings();
+                cached.ownClonedStrings();
                 const global_shape = if (outer_runtime.global_table) |global| global.shape else null;
                 try rt.bindGlobalTable(cached, global_shape, self.env_slot);
                 if (!try cached.bootstrapProgram()) try stdlib.install(cached);
