@@ -1901,8 +1901,7 @@ pub const Context = struct {
                 loaded.shape == &self.program_shapes[shape_id])
             {
                 const slot = self.package_loaded_module_slots[module_id];
-                if (slot != std.math.maxInt(u32))
-                    if (loaded.rawGetSlot(slot)) |value| return value;
+                if (slot != std.math.maxInt(u32)) return loaded.rawGetSlot(slot);
             };
         }
         const canonical = self.canonicalModuleName(module_id, requested) orelse return null;
@@ -4058,7 +4057,7 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
 
 test "package loaded structural slots allocate sparse pages lazily" {
     const a = std.testing.allocator;
-    var ctx = try Context.initProgram(a, 0, 0);
+    var ctx = try Context.initProgram(a, 0, 1);
     defer ctx.deinit();
 
     var keys: [130]Value = undefined;
@@ -4073,6 +4072,7 @@ test "package loaded structural slots allocate sparse pages lazily" {
     ctx.program_shapes = &.{shape};
     ctx.program_shapes_validated = true;
     ctx.package_loaded_shape_id = 0;
+    ctx.package_loaded_module_slots = &.{129};
 
     const table = try ctx.newPackageLoadedTable();
     defer {
@@ -4089,12 +4089,14 @@ test "package loaded structural slots allocate sparse pages lazily" {
     try std.testing.expect(tail.pages[0] == null);
     try std.testing.expect(tail.pages[1] == null);
     try std.testing.expect(tail.pages[2] == null);
+    try std.testing.expect(ctx.packageLoadedModuleGet(0, null) == null);
 
     try table.rawSetSlot(129, .{ .number = 42 });
     try std.testing.expect(tail.pages[0] == null);
     try std.testing.expect(tail.pages[1] == null);
     try std.testing.expect(tail.pages[2] != null);
     try std.testing.expectEqual(@as(f64, 42), table.rawGetSlot(129).?.number);
+    try std.testing.expectEqual(@as(f64, 42), ctx.packageLoadedModuleGet(0, null).?.number);
     try std.testing.expect(table.rawGetSlot(64) == null);
 
     try table.rawSetSlot(0, .{ .boolean = true });
