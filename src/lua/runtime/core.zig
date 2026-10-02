@@ -630,6 +630,16 @@ pub const Table = struct {
             const doubled = new_len +| new_len;
             new_len = @min(@as(usize, std.math.maxInt(u32)), doubled);
         }
+        // Generic arrays are an optimization, not part of Lua table
+        // semantics. Do not let gradually increasing sparse integer keys keep
+        // doubling a mostly-empty dense allocation (for example 100k, 200k,
+        // ... 2m). Require the grown array to remain at least half occupied;
+        // sparse keys stay in the exact hash-table fallback instead.
+        if (old_len != 0) {
+            var occupied: usize = 0;
+            for (self.slots) |value| occupied += @intFromBool(value != .nil);
+            if ((occupied + 1) * 2 < new_len) return null;
+        }
         const grown = if (old_len == 0) try allocator.alloc(Value, new_len) else try allocator.realloc(self.slots, new_len);
         @memset(grown[old_len..], .nil);
         self.slots = grown;
@@ -5894,6 +5904,38 @@ test "generic tables use dense numeric slots and keep sparse keys hashed" {
     try std.testing.expect(table.rawGetNumber(9) == null);
     try std.testing.expect(table.map.getContext(nine, .{}) == null);
     try std.testing.expectEqual(@as(usize, 8), table.rawLen());
+}
+
+test "generic arrays reject progressive sparse numeric densification" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+
+    for (1..102) |i|
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(i) }, .{ .number = @floatFromInt(i) });
+    try std.testing.expectEqual(@as(usize, 128), table.slots.len);
+
+    var value: usize = 200;
+    while (value <= 900) : (value += 100)
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
+    value = 1000;
+    while (value <= 9000) : (value += 1000)
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
+    value = 10_000;
+    while (value <= 90_000) : (value += 10_000)
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
+    value = 100_000;
+    while (value <= 900_000) : (value += 100_000)
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
+    try table.rawSet(ctx.allocator, .{ .number = 1_000_000 }, .{ .number = 1_000_000 });
+    try table.rawSet(ctx.allocator, .{ .number = 2_000_000 }, .{ .number = 2_000_000 });
+
+    try std.testing.expectEqual(@as(usize, 128), table.slots.len);
+    try std.testing.expectEqual(@as(f64, 2_000_000), table.rawGetNumber(2_000_000).?.number);
+    try std.testing.expectEqual(@as(f64, 900_000), table.rawGet(.{ .number = 900_000 }).?.number);
+    try std.testing.expect(table.map.getContext(.{ .number = 2_000_000 }, .{}) != null);
 }
 
 test "numeric lookups skip string-only maps and retain sparse numeric fallback" {
