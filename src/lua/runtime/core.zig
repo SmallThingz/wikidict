@@ -2189,6 +2189,9 @@ pub const Context = struct {
         }
 
         fn tagTable(self: *ModuleTemplateTagger, table: *Table) anyerror!void {
+            // Worker-owned loadData graphs cannot retain pointers into a
+            // shorter-lived module state. Their descendants are immutable too.
+            if (table.cross_page_stable and table.read_only) return;
             const gop = try self.tables.getOrPut(self.context.allocator, table);
             if (gop.found_existing) return;
             table.module_template_mutation_probe = self.marker;
@@ -2501,7 +2504,7 @@ pub const Context = struct {
                 !self.target.module_template_eligible[module_id])
                 return error.UnsupportedModuleTemplate;
 
-            const source_value = try self.source.loadModule(module_id, requested);
+            const source_value = try self.target.loadTemplateSource(self.source, module_id, requested);
             const source_state = self.source.moduleStateConst(module_id) orelse
                 return error.UnsupportedModuleTemplate;
             if (self.target.moduleState(module_id)) |existing| {
@@ -2562,13 +2565,37 @@ pub const Context = struct {
         }
     };
 
+    fn loadTemplateSource(self: *Context, source: *Context, module_id: u32, requested: ?[]const u8) anyerror!Value {
+        if (module_id < source.module_count and module_id < source.module_root_entries.len)
+            if (source.moduleStateConst(module_id)) |state|
+                if (state.value) |value| return value;
+        if (source == self) return source.loadModule(module_id, requested);
+
+        const saved_error = source.last_error;
+        const saved_error_present = source.last_error_present;
+        const saved_name = source.aot_error_name;
+        source.clearLuaError();
+        source.clearAotErrorName();
+        defer {
+            source.last_error = saved_error;
+            source.last_error_present = saved_error_present;
+            source.aot_error_name = saved_name;
+        }
+        return source.loadModule(module_id, requested) catch |err| {
+            // AotCallFailed is the compiled-call envelope. Adopt its diagnostic
+            // before restoring the source scope, including an explicit nil.
+            if (err == error.AotCallFailed) try self.adoptFailure(source);
+            return err;
+        };
+    }
+
     fn instantiateModuleTemplate(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!?Value {
         const source = self.module_template_context orelse return null;
         if (module_id >= self.module_template_eligible.len or
             !self.module_template_eligible[module_id])
             return null;
         if (source.moduleStateConst(module_id) == null) {
-            _ = source.loadModule(module_id, requested) catch |err| switch (err) {
+            _ = self.loadTemplateSource(source, module_id, requested) catch |err| switch (err) {
                 error.UnsupportedModuleTemplate => {
                     self.module_template_eligible[module_id] = false;
                     if (module_id < self.module_template_rejected.len)
@@ -4218,6 +4245,84 @@ const ModuleTemplateProbe = struct {
         return out;
     }
 };
+
+test "template root errors cross cold and warm context boundaries without stale diagnostics" {
+    const Probe = struct {
+        fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            return error.NotImplemented;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source = try Context.initProgram(arena.allocator(), 0, 1);
+    defer source.deinit();
+    const roots = [_]FunctionFn{stabilize(Probe.root)};
+    source.module_root_entries = &roots;
+    source.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+    source.setAotErrorName("prior source diagnostic");
+    source.setLuaError(.{ .string = "prior source payload" });
+    var eligible = [_]bool{true};
+    for (0..3) |_| {
+        var child = try source.forkProgram(arena.allocator());
+        defer child.deinit();
+        child.module_template_context = &source;
+        child.module_template_eligible = &eligible;
+        try std.testing.expectError(error.AotCallFailed, child.requireByName("Module:TemplateProbe"));
+        try std.testing.expectEqualStrings("NotImplemented", child.aotErrorName() orelse "missing");
+        try std.testing.expect(!child.last_error_present and child.last_error == .nil);
+        try std.testing.expectEqualStrings("prior source diagnostic", source.aotErrorName().?);
+        try std.testing.expectEqualStrings("prior source payload", source.last_error.string);
+        try std.testing.expect(source.last_error_present);
+    }
+}
+
+test "template root error nil remains present across a context boundary" {
+    const Probe = struct {
+        fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            ctx.setLuaError(.nil);
+            return error.RaisedError;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source = try Context.initProgram(arena.allocator(), 0, 1);
+    defer source.deinit();
+    const roots = [_]FunctionFn{stabilize(Probe.root)};
+    source.module_root_entries = &roots;
+    source.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+    var eligible = [_]bool{true};
+    for (0..2) |_| {
+        var child = try source.forkProgram(arena.allocator());
+        defer child.deinit();
+        child.module_template_context = &source;
+        child.module_template_eligible = &eligible;
+        try std.testing.expectError(error.AotCallFailed, child.requireByName("Module:TemplateProbe"));
+        try std.testing.expect(child.last_error_present and child.last_error == .nil);
+        try std.testing.expectEqualStrings("RaisedError", child.aotErrorName() orelse "missing");
+        try std.testing.expect(!source.last_error_present and source.aotErrorName() == null);
+    }
+}
+
+test "template tagging cannot attach short lived state to shared immutable data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const root = try ctx.newTable();
+    const shared = try ctx.newTable();
+    const nested = try ctx.newTable();
+    try shared.rawSet(ctx.allocator, .{ .string = "nested" }, .{ .table = nested });
+    shared.read_only = true;
+    shared.cross_page_stable = true;
+    nested.read_only = true;
+    nested.cross_page_stable = true;
+    try root.rawSet(ctx.allocator, .{ .string = "data" }, .{ .table = shared });
+    var marker: u64 = 0;
+    try ctx.tagModuleTemplateValue(.{ .table = root }, &marker);
+    try std.testing.expect(root.module_template_mutation_probe == &marker);
+    try std.testing.expect(shared.module_template_mutation_probe == null);
+    try std.testing.expect(nested.module_template_mutation_probe == null);
+}
 
 test "module templates run roots once while fresh contexts clone mutable closure state" {
     ModuleTemplateProbe.root_calls.store(0, .monotonic);
