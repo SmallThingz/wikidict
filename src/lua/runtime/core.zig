@@ -1901,7 +1901,8 @@ pub const Context = struct {
                 loaded.shape == &self.program_shapes[shape_id])
             {
                 const slot = self.package_loaded_module_slots[module_id];
-                if (slot != std.math.maxInt(u32)) return loaded.rawGetSlot(slot);
+                if (slot != std.math.maxInt(u32))
+                    if (loaded.rawGetSlot(slot)) |value| return value;
             };
         }
         const canonical = self.canonicalModuleName(module_id, requested) orelse return null;
