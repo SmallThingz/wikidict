@@ -1236,10 +1236,20 @@ pub const Expander = struct {
         return result[0].string;
     }
 
-    fn copyArgsTable(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
+    fn copyArgsTable(runtime: *rt.Context, source: *rt.Table, own_strings: bool) !*rt.Table {
         const out = try runtime.newTable();
         var it = source.iterator();
-        while (it.next()) |entry| try out.rawSet(runtime.allocator, entry.key_ptr.*, entry.value_ptr.*);
+        while (it.next()) |entry| {
+            const key: Value = if (own_strings and entry.key_ptr.* == .string)
+                .{ .string = try runtime.allocator.dupe(u8, entry.key_ptr.string) }
+            else
+                entry.key_ptr.*;
+            const value: Value = if (own_strings and entry.value_ptr.* == .string)
+                .{ .string = try runtime.allocator.dupe(u8, entry.value_ptr.string) }
+            else
+                entry.value_ptr.*;
+            try out.rawSet(runtime.allocator, key, value);
+        }
         return out;
     }
 
@@ -1449,12 +1459,16 @@ pub const Expander = struct {
         self.runtime = child;
         defer self.runtime = saved_runtime;
 
-        const copied_invoke_args = try copyArgsTable(child, invoke_args);
+        // Fresh invoke children die before their caller, so ordinary argument
+        // strings may be borrowed. The translations page cache outlives nested
+        // invoke arenas, however, and memoized Lua tables can retain argument
+        // strings as keys. Give that reused context page-owned strings.
+        const copied_invoke_args = try copyArgsTable(child, invoke_args, reuse_translation);
         const parent: ?Value = if (existing_parent) |frame|
             frame
         else if (parent_title) |title| blk: {
             const source_args = parent_args orelse return error.MissingInvokeParentArgs;
-            const copied_parent_args = try copyArgsTable(child, source_args);
+            const copied_parent_args = try copyArgsTable(child, source_args, reuse_translation);
             break :blk try frame_lib.makeFrameFromTable(child, title, copied_parent_args, null);
         } else null;
         const frame = try frame_lib.makeFrameFromTable(child, module_name, copied_invoke_args, parent);
@@ -2521,6 +2535,36 @@ const TranslationReuseProbe = struct {
         return out;
     }
 };
+
+test "reused invoke args own caller strings" {
+    var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer page_arena.deinit();
+    var runtime = try rt.Context.initProgram(page_arena.allocator(), 0, 0);
+    defer runtime.deinit();
+
+    var caller_arena = LocalBumpArena.init(std.testing.allocator);
+    const caller_a = caller_arena.allocator();
+    var caller = try rt.Context.initProgram(caller_a, 0, 0);
+    const source = try caller.newTable();
+    const source_key = try caller_a.dupe(u8, "memo-key");
+    const source_value = try caller_a.dupe(u8, "memo-value");
+    try source.rawSet(caller_a, .{ .string = source_key }, .{ .string = source_value });
+
+    const copied = try Expander.copyArgsTable(&runtime, source, true);
+    var copied_it = copied.iterator();
+    const copied_entry = copied_it.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(copied_entry.key_ptr.* == .string);
+    try std.testing.expect(copied_entry.value_ptr.* == .string);
+    try std.testing.expect(@intFromPtr(copied_entry.key_ptr.string.ptr) != @intFromPtr(source_key.ptr));
+    try std.testing.expect(@intFromPtr(copied_entry.value_ptr.string.ptr) != @intFromPtr(source_value.ptr));
+
+    caller.deinit();
+    caller_arena.deinit();
+
+    const retained = copied.rawGet(.{ .string = "memo-key" }) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(retained == .string);
+    try std.testing.expectEqualStrings("memo-value", retained.string);
+}
 
 test "translations show page cache resets failures and avoids reentrant reuse" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
