@@ -2157,20 +2157,20 @@ pub const Context = struct {
     }
 
     const ModuleTemplateTagger = struct {
-        context: *Context,
+        allocator: std.mem.Allocator,
         marker: *u64,
         tables: std.AutoHashMapUnmanaged(*Table, void) = .empty,
         cells: std.AutoHashMapUnmanaged(*Cell, void) = .empty,
         callables: std.AutoHashMapUnmanaged(*const FunctionValue, void) = .empty,
 
         fn deinit(self: *ModuleTemplateTagger) void {
-            self.tables.deinit(self.context.allocator);
-            self.cells.deinit(self.context.allocator);
-            self.callables.deinit(self.context.allocator);
+            self.tables.deinit(self.allocator);
+            self.cells.deinit(self.allocator);
+            self.callables.deinit(self.allocator);
         }
 
         fn tagCell(self: *ModuleTemplateTagger, cell: *Cell) anyerror!void {
-            const gop = try self.cells.getOrPut(self.context.allocator, cell);
+            const gop = try self.cells.getOrPut(self.allocator, cell);
             if (gop.found_existing) return;
             try self.tagValue(cell.value);
         }
@@ -2180,7 +2180,7 @@ pub const Context = struct {
             callable: *const FunctionValue,
         ) anyerror!void {
             if (callable.id == native_function_id) return;
-            const gop = try self.callables.getOrPut(self.context.allocator, callable);
+            const gop = try self.callables.getOrPut(self.allocator, callable);
             if (gop.found_existing) return;
             switch (callable.captures()) {
                 .direct => |captures| for (captures) |cell| try self.tagCell(cell),
@@ -2192,7 +2192,7 @@ pub const Context = struct {
             // Worker-owned loadData graphs cannot retain pointers into a
             // shorter-lived module state. Their descendants are immutable too.
             if (table.cross_page_stable and table.read_only) return;
-            const gop = try self.tables.getOrPut(self.context.allocator, table);
+            const gop = try self.tables.getOrPut(self.allocator, table);
             if (gop.found_existing) return;
             table.module_template_mutation_probe = self.marker;
             for (table.slots) |item| try self.tagValue(item);
@@ -2222,8 +2222,10 @@ pub const Context = struct {
         value: Value,
         marker: *u64,
     ) !void {
+        _ = self;
+        // Traversal sets die with this walk, not with the persistent graph.
         var tagger = ModuleTemplateTagger{
-            .context = self,
+            .allocator = std.heap.smp_allocator,
             .marker = marker,
         };
         defer tagger.deinit();
@@ -2239,10 +2241,15 @@ pub const Context = struct {
         cells: std.AutoHashMapUnmanaged(*Cell, *Cell) = .empty,
         callables: std.AutoHashMapUnmanaged(*const FunctionValue, *const FunctionValue) = .empty,
 
+        fn mapAllocator(self: *const ModuleTemplateClone) std.mem.Allocator {
+            // Promotion publishes values, never these temporary identity maps.
+            return if (self.promotion) std.heap.smp_allocator else self.target.allocator;
+        }
+
         fn deinit(self: *ModuleTemplateClone) void {
-            self.tables.deinit(self.target.allocator);
-            self.cells.deinit(self.target.allocator);
-            self.callables.deinit(self.target.allocator);
+            self.tables.deinit(self.mapAllocator());
+            self.cells.deinit(self.mapAllocator());
+            self.callables.deinit(self.mapAllocator());
         }
 
         fn skipsModule(self: *const ModuleTemplateClone, module_id: u32) bool {
@@ -2253,9 +2260,9 @@ pub const Context = struct {
 
         fn bindExisting(self: *ModuleTemplateClone, from: Value, to: Value) !void {
             if (from == .table and to == .table) {
-                try self.tables.put(self.target.allocator, from.table, to.table);
+                try self.tables.put(self.mapAllocator(), from.table, to.table);
             } else if (from == .callable and to == .callable) {
-                try self.callables.put(self.target.allocator, from.callable, to.callable);
+                try self.callables.put(self.mapAllocator(), from.callable, to.callable);
             }
         }
 
@@ -2263,7 +2270,7 @@ pub const Context = struct {
             if (self.cells.get(source_cell)) |existing| return existing;
             const cell = try self.target.allocator.create(Cell);
             cell.* = .{ .value = .nil };
-            try self.cells.put(self.target.allocator, source_cell, cell);
+            try self.cells.put(self.mapAllocator(), source_cell, cell);
             cell.value = try self.cloneValue(source_cell.value);
             return cell;
         }
@@ -2316,7 +2323,7 @@ pub const Context = struct {
                         return error.UnsupportedModuleTemplate;
                     };
                     try self.callables.put(
-                        self.target.allocator,
+                        self.mapAllocator(),
                         source_function,
                         value.callable,
                     );
@@ -2328,7 +2335,7 @@ pub const Context = struct {
                     .entry = source_function.entry,
                 });
                 try self.callables.put(
-                    self.target.allocator,
+                    self.mapAllocator(),
                     source_function,
                     value.callable,
                 );
@@ -2342,19 +2349,19 @@ pub const Context = struct {
             };
             if (source_cells.len == 0) {
                 const value = try self.target.makeFunction(source_function.id, source_function.entry, &.{});
-                try self.callables.put(self.target.allocator, source_function, value.callable);
+                try self.callables.put(self.mapAllocator(), source_function, value.callable);
                 return value;
             }
 
-            const target_cells = try self.target.allocator.alloc(*Cell, source_cells.len);
-            defer self.target.allocator.free(target_cells);
+            const target_cells = try self.mapAllocator().alloc(*Cell, source_cells.len);
+            defer self.mapAllocator().free(target_cells);
             for (source_cells, 0..) |source_cell, index| {
                 if (self.cells.get(source_cell)) |existing| {
                     target_cells[index] = existing;
                 } else {
                     const cell = try self.target.allocator.create(Cell);
                     cell.* = .{ .value = .nil };
-                    try self.cells.put(self.target.allocator, source_cell, cell);
+                    try self.cells.put(self.mapAllocator(), source_cell, cell);
                     target_cells[index] = cell;
                 }
             }
@@ -2363,7 +2370,7 @@ pub const Context = struct {
                 source_function.entry,
                 target_cells,
             );
-            try self.callables.put(self.target.allocator, source_function, value.callable);
+            try self.callables.put(self.mapAllocator(), source_function, value.callable);
             for (source_cells, target_cells) |source_cell, target_cell| {
                 if (target_cell.value == .nil and source_cell.value != .nil)
                     target_cell.value = try self.cloneValue(source_cell.value);
@@ -2375,7 +2382,7 @@ pub const Context = struct {
             if (self.tables.get(source_table)) |existing|
                 return .{ .table = existing };
             if (source_table.cross_page_stable and source_table.read_only) {
-                try self.tables.put(self.target.allocator, source_table, source_table);
+                try self.tables.put(self.mapAllocator(), source_table, source_table);
                 return .{ .table = source_table };
             }
             if (source_table.native_namespace) |namespace| {
@@ -2385,7 +2392,7 @@ pub const Context = struct {
                             work_stats.logLine("module template clone unsupported: kind=native_namespace namespace={s}\n", .{@tagName(namespace)});
                         return error.UnsupportedModuleTemplate;
                     };
-                    try self.tables.put(self.target.allocator, source_table, table);
+                    try self.tables.put(self.mapAllocator(), source_table, table);
                     return .{ .table = table };
                 }
             }
@@ -2416,7 +2423,7 @@ pub const Context = struct {
                 .module_template_reconstructable = source_table.module_template_reconstructable,
             };
             self.target.assignFieldCacheIdentity(table);
-            try self.tables.put(self.target.allocator, source_table, table);
+            try self.tables.put(self.mapAllocator(), source_table, table);
 
             if (source_table.slots.len != 0) {
                 table.slots = try self.target.allocator.alloc(Value, source_table.slots.len);
@@ -2481,7 +2488,7 @@ pub const Context = struct {
 
             if (self.source.global_table) |source_global|
                 if (self.target.global_table) |target_global|
-                    try self.tables.put(self.target.allocator, source_global, target_global);
+                    try self.tables.put(self.mapAllocator(), source_global, target_global);
 
             for (0..self.source.root_globals.len) |slot_usize| {
                 const slot: u32 = @intCast(slot_usize);
@@ -2562,6 +2569,90 @@ pub const Context = struct {
                 state.loading = false;
                 try self.target.packageLoadedModuleSet(override.module_id, null, value);
             }
+        }
+    };
+
+    // A failed upward clone must not fill the worker-lifetime arena with
+    // discarded nodes. Check already-materialized source graphs before any
+    // target allocation. Missing source modules remain the ordinary loader's
+    // responsibility; this walk never executes a root or changes package state.
+    const PromotionPreflight = struct {
+        clone: ModuleTemplateClone,
+        seen: std.AutoHashMapUnmanaged(usize, void) = .empty,
+        modules: std.AutoHashMapUnmanaged(u32, void) = .empty,
+
+        fn deinit(self: *PromotionPreflight) void {
+            self.seen.deinit(std.heap.smp_allocator);
+            self.modules.deinit(std.heap.smp_allocator);
+        }
+
+        fn first(self: *PromotionPreflight, pointer: anytype) !bool {
+            const entry = try self.seen.getOrPut(std.heap.smp_allocator, @intFromPtr(pointer));
+            return !entry.found_existing;
+        }
+
+        fn bind(self: *PromotionPreflight, from: Value, to: Value) !void {
+            if (from == .table and to == .table) {
+                _ = try self.first(from.table);
+            } else if (from == .callable and to == .callable) {
+                _ = try self.first(from.callable);
+            }
+        }
+
+        fn module(self: *PromotionPreflight, id: u32) anyerror!bool {
+            const visited = try self.modules.getOrPut(std.heap.smp_allocator, id);
+            if (visited.found_existing) return true;
+            const source = self.clone.source.moduleStateConst(id) orelse return true;
+            const exported = source.value orelse source.preinitialized orelse return true;
+            if (self.clone.target.moduleStateConst(id)) |target| if (target.value) |existing| {
+                try self.bind(exported, existing);
+                return true;
+            };
+            for (self.clone.target.requirementsFor(id)) |dependency| {
+                if (self.clone.skipsModule(dependency.module_id)) continue;
+                if (!try self.module(dependency.module_id)) return false;
+            }
+            // cloneModuleGlobals binds this environment before walking exports.
+            if (source.global_table) |table| _ = try self.first(table);
+            return self.value(exported);
+        }
+
+        fn value(self: *PromotionPreflight, input: Value) anyerror!bool {
+            switch (input) {
+                .table => |table| {
+                    if (!try self.first(table)) return true;
+                    if (table.cross_page_stable and table.read_only) return true;
+                    if (table.native_namespace) |namespace| if (templateSingletonNamespace(namespace))
+                        return self.clone.target.findTemplateNativeNamespace(namespace) != null;
+                    if (!table.owns_slots or table.global_tail != null or table.has_identity_key)
+                        return false;
+                    for (table.slots) |item| if (!try self.value(item)) return false;
+                    for (table.choices) |choice| {
+                        if (Table.identityKey(choice.key)) return false;
+                        if (!try self.value(choice.key) or !try self.value(choice.value)) return false;
+                    }
+                    var entries = table.map.iterator();
+                    while (entries.next()) |entry| {
+                        if (Table.identityKey(entry.key_ptr.*)) return false;
+                        if (!try self.value(entry.key_ptr.*) or !try self.value(entry.value_ptr.*)) return false;
+                    }
+                    if (table.metatable) |metatable|
+                        if (!try self.value(.{ .table = metatable })) return false;
+                },
+                .callable => |callable| {
+                    if (!try self.first(callable)) return true;
+                    if (callable.id == native_function_id)
+                        return callable.env.nativePtr() == null or self.clone.remapNativeCallable(callable) != null;
+                    switch (callable.captures()) {
+                        .direct => |captures| for (captures) |cell| {
+                            if (try self.first(cell)) if (!try self.value(cell.value)) return false;
+                        },
+                        .native => unreachable,
+                    }
+                },
+                else => {},
+            }
+            return true;
         }
     };
 
@@ -2823,6 +2914,17 @@ pub const Context = struct {
         defer self.allocator.free(override_ids);
         for (source_state.template_overrides, override_ids) |override, *id|
             id.* = override.module_id;
+
+        var preflight = PromotionPreflight{ .clone = .{
+            .source = self,
+            .target = target,
+            .promotion = true,
+            .skip_modules = override_ids,
+        } };
+        defer preflight.deinit();
+        if (!try preflight.module(module_id)) return false;
+        for (source_state.template_overrides) |override|
+            if (!try preflight.value(override.value)) return false;
 
         target.module_template_eligible[module_id] = true;
         var clone = ModuleTemplateClone{
@@ -4322,6 +4424,65 @@ test "template tagging cannot attach short lived state to shared immutable data"
     try std.testing.expect(root.module_template_mutation_probe == &marker);
     try std.testing.expect(shared.module_template_mutation_probe == null);
     try std.testing.expect(nested.module_template_mutation_probe == null);
+}
+
+test "template graph tagging does not retain traversal storage in its owner" {
+    const Probe = struct {
+        fn call(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    };
+    var storage: [512 * 1024]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&storage);
+    const a = fixed.allocator();
+    var ctx = try Context.init(a, 0);
+    defer ctx.deinit();
+    const root = try ctx.newTable();
+    for (0..100) |i| {
+        const table = try ctx.newTable();
+        const cell = try a.create(Cell);
+        cell.* = .{ .value = .{ .table = table } };
+        const callable = try ctx.makeFunctionKnown(@intCast(i), Probe.call, &.{cell});
+        try table.rawSet(a, .{ .string = "cycle" }, callable);
+        try root.rawSet(a, .{ .number = @floatFromInt(i + 1) }, callable);
+    }
+    const before = fixed.end_index;
+    var marker: u64 = 0;
+    for (0..4) |_| try ctx.tagModuleTemplateValue(.{ .table = root }, &marker);
+    try std.testing.expectEqual(before, fixed.end_index);
+    try std.testing.expect(root.module_template_mutation_probe == &marker);
+}
+
+test "upstream promotion rejects nonportable graphs before allocating persistent nodes" {
+    const Native = struct {
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    };
+    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer source_arena.deinit();
+    var storage: [512 * 1024]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&storage);
+    var target = try Context.initProgram(fixed.allocator(), 0, 1);
+    defer target.deinit();
+    var eligible = [_]bool{false};
+    var rejected = [_]bool{false};
+    target.module_template_eligible = &eligible;
+    target.module_template_rejected = &rejected;
+    const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
+    target.module_root_entries = &roots;
+    var source = try target.forkProgram(source_arena.allocator());
+    defer source.deinit();
+    source.module_template_context = &target;
+    var host: u64 = 123;
+    const exports = try source.newTable();
+    try exports.rawSet(source.allocator, .{ .string = "bound" }, try source.newNative(&host, Native.call));
+    try source.preinitializeModule(0, .{ .table = exports }, false);
+    const before = fixed.end_index;
+    for (0..64) |_| try std.testing.expect(!(try source.promoteModuleTemplateUpstream(0, null)));
+    try std.testing.expectEqual(before, fixed.end_index);
+    try std.testing.expect(!eligible[0]);
+    try std.testing.expect(!rejected[0]);
 }
 
 test "module templates run roots once while fresh contexts clone mutable closure state" {
