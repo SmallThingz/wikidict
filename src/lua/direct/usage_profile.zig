@@ -553,9 +553,12 @@ pub fn chooseModes(
     @memset(selected, false);
 
     // O2 is reserved for the modules that cover nearly all observed corpus use.
-    // Module fan-in gets its own coverage pass so shared libraries remain hot
-    // even when direct page invokes are sparse.
+    // Propagated page reach heavily weights deep shared dependencies, so keep a
+    // separate direct-page pass: a module executed directly by a large fraction
+    // of pages must not become O1 merely because transitive reach sums are much
+    // larger. Module fan-in gets its own coverage pass for shared libraries.
     try markCoverage(a, selected, profile.page_reach, source_sizes, 995, 1000);
+    try markCoverage(a, selected, profile.direct_page_reach, source_sizes, 950, 1000);
     try markCoverage(a, selected, profile.module_reach, source_sizes, 980, 1000);
 
     const modes = try a.alloc(CompileMode, source_sizes.len);
@@ -610,6 +613,23 @@ test "mode selection is usage first with a modest size penalty" {
     try std.testing.expectEqual(CompileMode.o2, modes[1]);
     try std.testing.expectEqual(CompileMode.o1, modes[2]);
     try std.testing.expectEqual(CompileMode.o0, modes[3]);
+}
+
+test "direct page execution can independently make a module hot" {
+    const a = std.testing.allocator;
+    var profile = Profile{
+        .page_reach = try a.dupe(u64, &.{ 1_000_000_000, 6_000_000, 1 }),
+        .module_reach = try a.dupe(u64, &.{ 1_000_000, 1, 0 }),
+        .direct_page_reach = try a.dupe(u64, &.{ 0, 6_000_000, 1 }),
+        .direct_module_fanin = try a.dupe(u32, &.{ 100, 1, 0 }),
+    };
+    defer deinitProfile(a, &profile);
+    const sizes = [_]u64{ 1024, 1024, 1024 };
+    const modes = try chooseModes(a, profile, &sizes);
+    defer a.free(modes);
+    try std.testing.expectEqual(CompileMode.o2, modes[0]);
+    try std.testing.expectEqual(CompileMode.o2, modes[1]);
+    try std.testing.expectEqual(CompileMode.o1, modes[2]);
 }
 
 test "any statically observed page or module reach stays above O0" {

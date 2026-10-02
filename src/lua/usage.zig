@@ -178,7 +178,7 @@ fn expandFiniteDynamicTemplateHead(
 }
 
 fn classifyHead(a: std.mem.Allocator, head_raw: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags) !void {
-    const head = std.mem.trim(u8, head_raw, " \t\r\n");
+    const head = stripSubst(std.mem.trim(u8, head_raw, " \t\r\n"));
     if (head.len == 0) return;
     if (preprocess.findTopDelimiter(head, ':')) |colon| {
         const name = std.mem.trim(u8, head[0..colon], " \t\r\n");
@@ -1212,6 +1212,23 @@ test "usage scanner finds static invokes and template references" {
     try std.testing.expectEqualStrings("Module:Bar baz", refs.items[1].target);
     try std.testing.expectEqual(RefKind.template, refs.items[2].kind);
     try std.testing.expectEqualStrings("Template:quux", refs.items[2].target);
+}
+
+test "template usage scanner recognizes subst-prefixed invokes" {
+    const a = std.testing.allocator;
+    var refs: std.ArrayList(Ref) = .empty;
+    defer {
+        for (refs.items) |ref| a.free(ref.target);
+        refs.deinit(a);
+    }
+    try scanTemplateWikitext(
+        a,
+        "<includeonly><onlyinclude>{{safesubst:<noinclude/>#invoke:links/templates|l_term_t}}</onlyinclude></includeonly>",
+        &refs,
+    );
+    try std.testing.expectEqual(@as(usize, 1), refs.items.len);
+    try std.testing.expectEqual(RefKind.module, refs.items[0].kind);
+    try std.testing.expectEqualStrings("Module:links/templates", refs.items[0].target);
 }
 
 test "usage scanner ignores dynamic and non-template transclusions" {
