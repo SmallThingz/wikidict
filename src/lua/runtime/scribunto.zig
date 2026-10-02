@@ -442,7 +442,16 @@ fn headwordPageData(runtime: *rt.Context, state: *State) !Value {
     defer eval_arena.deinit();
     var child = try runtime.forkProgram(eval_arena.allocator());
     defer child.deinit();
-    try installLoadDataChild(runtime, state, &child);
+    return headwordPageDataInContext(runtime, state, &child) catch |err| {
+        // The warmed headword cache must report the same failure as a cold
+        // loadData evaluation. Own the diagnostic before this child is freed.
+        try runtime.adoptFailure(&child);
+        return err;
+    };
+}
+
+fn headwordPageDataInContext(runtime: *rt.Context, state: *State, child: *rt.Context) !Value {
+    try installLoadDataChild(runtime, state, child);
     child.page_stable_host_effects = true;
     const module_name = "Module:headword/page";
     const module_id = try child.resolveModule(module_name);
@@ -457,6 +466,64 @@ fn headwordPageData(runtime: *rt.Context, state: *State) !Value {
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
     defer seen.deinit(state.allocator);
     return promoteLoadData(state.allocator, values[0], &seen, try pageLoadDataMetatable(state), false);
+}
+
+test "headword page evaluation preserves root and callback failure payloads" {
+    const Probe = struct {
+        const Payload = enum { named, text, nil_value };
+        var payload: Payload = .named;
+        var fail_root = false;
+
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            return if (std.mem.eql(u8, raw_name, "Module:headword/page")) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:headword/page" else null;
+        }
+        fn fail(ctx: *rt.Context) ![]const Value {
+            switch (payload) {
+                .named => return error.NotImplemented,
+                .text => ctx.setLuaError(.{ .string = try ctx.allocator.dupe(u8, "headword page failed") }),
+                .nil_value => ctx.setLuaError(.nil),
+            }
+            return error.RaisedError;
+        }
+        fn process(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            return fail(ctx);
+        }
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            if (fail_root) return fail(ctx);
+            const exports = try ctx.newTable();
+            try exports.rawSet(ctx.allocator, .{ .string = "process_page" }, try ctx.makeFunctionKnown(1, process, &.{}));
+            return one(.{ .table = exports });
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.initProgram(a, 24, 1);
+    defer runtime.deinit();
+    const roots = [_]rt.FunctionFn{rt.stabilize(Probe.root)};
+    runtime.module_root_entries = &roots;
+    runtime.configureModules(null, Probe.lookup, Probe.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var state = State{ .allocator = a, .env_slot = 0, .string_slot = 18, .mw_slot = 23 };
+    for ([_]bool{ true, false }) |fail_root| {
+        Probe.fail_root = fail_root;
+        for (std.enums.values(Probe.Payload)) |payload| {
+            Probe.payload = payload;
+            runtime.clearLuaError();
+            runtime.clearAotErrorName();
+            try std.testing.expectError(error.AotCallFailed, headwordPageData(&runtime, &state));
+            try std.testing.expectEqualStrings(if (payload == .named) "NotImplemented" else "RaisedError", runtime.aotErrorName() orelse "missing");
+            try std.testing.expectEqual(payload != .named, runtime.last_error_present);
+            if (payload == .text)
+                try std.testing.expectEqualStrings("headword page failed", runtime.last_error.string)
+            else
+                try std.testing.expect(runtime.last_error == .nil);
+        }
+    }
 }
 
 fn mergeHeadwordData(state: *State, static: Value, page: Value) !Value {
