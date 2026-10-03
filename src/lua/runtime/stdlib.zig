@@ -1230,6 +1230,7 @@ pub fn install(runtime: *rt.Context) !void {
     const smt = try runtime.newTable();
     try smt.rawSet(runtime.allocator, .{ .string = "__index" }, .{ .table = string });
     runtime.string_metatable = smt;
+    runtime.registerNativeMetatable(.string, smt);
     const math = try runtime.newNativeNamespace(.math);
     inline for (.{ .{ "abs", MathOp.abs }, .{ "ceil", .ceil }, .{ "floor", .floor }, .{ "sqrt", .sqrt }, .{ "exp", .exp }, .{ "log", .log }, .{ "log10", .log10 }, .{ "sin", .sin }, .{ "cos", .cos }, .{ "tan", .tan }, .{ "asin", .asin }, .{ "acos", .acos }, .{ "atan", .atan }, .{ "deg", .deg }, .{ "rad", .rad } }) |x| try addMath(runtime, math, x[0], x[1]);
     try setNativeBuffered(runtime, math, "min", mathMin);
@@ -1316,6 +1317,7 @@ pub const Template = struct {
         const string_mt = try runtime.newTable();
         try string_mt.rawSet(runtime.allocator, .{ .string = "__index" }, .{ .table = string });
         runtime.string_metatable = string_mt;
+        runtime.registerNativeMetatable(.string, string_mt);
         try installPackage(runtime);
         try installDynamicBase(runtime);
     }
@@ -2394,4 +2396,47 @@ test "guarded native find preserves native depth error payload and profiling" {
     try std.testing.expectEqual(@as(f64, 2), first);
     try std.testing.expectEqual(ctx.max_depth, ctx.depth);
     try std.testing.expectEqual(@as(u64, 2), failures.entries[0].count);
+}
+
+test "stdlib string metatable captures stay canonical across installed and templated contexts" {
+    const Probe = struct {
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:StringMeta" else null;
+        }
+        fn lookup(_: ?*const anyopaque, name_value: []const u8) ?u32 {
+            return if (std.mem.eql(u8, name_value, "Module:StringMeta")) 0 else null;
+        }
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .table = ctx.string_metatable.? };
+            return out;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source = try rt.Context.initProgram(a, global_abi.count, 1);
+    defer source.deinit();
+    try rt.bindGlobalTable(&source, null, global_abi.id("_G"));
+    try install(&source);
+    const roots = [_]rt.FunctionFn{rt.stabilize(Probe.root)};
+    source.module_root_entries = &roots;
+    source.configureModules(null, Probe.lookup, Probe.name);
+    var eligible = [_]bool{true};
+    var template = try Template.init();
+    defer template.deinit();
+    for ([_]bool{ false, true }) |cached_bootstrap| {
+        var target = try source.forkProgram(a);
+        defer target.deinit();
+        try rt.bindGlobalTable(&target, null, global_abi.id("_G"));
+        if (cached_bootstrap) try template.instantiate(&target) else try install(&target);
+        target.module_template_context = &source;
+        target.module_template_eligible = &eligible;
+        const value = try target.requireModuleId(0, "Module:StringMeta");
+        try std.testing.expect(value == .table and value.table == target.string_metatable.?);
+        try std.testing.expect(value.table != source.string_metatable.?);
+        try std.testing.expect(rt.rawEqual(value.table.rawGet(.{ .string = "__index" }).?, target.getGlobal(global_abi.id("string"))));
+        try value.table.rawSet(a, .{ .string = "target only" }, .{ .boolean = true });
+        try std.testing.expect(source.string_metatable.?.rawGet(.{ .string = "target only" }) == null);
+    }
 }
