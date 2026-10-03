@@ -405,6 +405,19 @@ const GlobalTail = struct {
         return self;
     }
 
+    fn cloneState(self: *const GlobalTail, allocator: std.mem.Allocator) !GlobalTail {
+        const pages = try allocator.alloc(?*GlobalPage, self.pages.len);
+        @memset(pages, null);
+        var out = GlobalTail{ .allocator = allocator, .len = self.len, .pages = pages };
+        errdefer out.deinit();
+        for (self.pages, pages) |source, *target| if (source) |page| {
+            const copy = try allocator.create(GlobalPage);
+            copy.* = page.*;
+            target.* = copy;
+        };
+        return out;
+    }
+
     fn deinit(self: *GlobalTail) void {
         for (self.pages) |page| if (page) |owned| self.allocator.destroy(owned);
         self.allocator.free(self.pages);
@@ -474,6 +487,9 @@ pub const Table = struct {
     // probe is active. Mutating a table owned by another probe (or no probe)
     // is an externally visible effect and makes the root non-reusable.
     module_template_probe_id: u64 = 0,
+    invoke_rollback_owner_nonce: u64 = 0,
+    invoke_rollback_allocation_id: u64 = 0,
+    invoke_rollback_snapshot_id: u64 = 0,
 
     fn markMapStructuralMutation(self: *Table) void {
         if (self.field_cache_epoch == std.math.maxInt(u64))
@@ -482,7 +498,8 @@ pub const Table = struct {
             self.field_cache_epoch += 1;
     }
 
-    fn markMutated(self: *Table) void {
+    fn markMutated(self: *Table) !void {
+        try noteInvokeTableMutation(self);
         if (module_template_effect_probe != null and self.native_metatable_namespace != null) {
             // A builtin type is shared by every object of that type. Returning
             // its metatable from a module does not make it module-private.
@@ -515,6 +532,7 @@ pub const Table = struct {
     }
 
     fn invalidateExportGuard(self: *Table) !void {
+        try noteInvokeTableMutation(self);
         self.export_pristine = false;
     }
 
@@ -670,9 +688,9 @@ pub const Table = struct {
         return if (self.slots[slot] == .nil) null else self.slots[slot];
     }
 
-    fn rawSetArraySlot(self: *Table, slot: u32, value: Value) void {
+    fn rawSetArraySlot(self: *Table, slot: u32, value: Value) !void {
         std.debug.assert(self.shape == null and self.native_namespace == null and slot < self.slots.len);
-        self.markMutated();
+        try self.markMutated();
         self.slots[slot] = value;
     }
 
@@ -696,13 +714,12 @@ pub const Table = struct {
         if (self.read_only) return error.ReadOnlyTable;
         if (self.shape == null and self.native_namespace == null) return error.BadShapeSlot;
         if (slot >= self.slotCount()) return error.BadShapeSlot;
+        try self.markMutated();
         if (self.fieldKey(slot)) |key| self.markIdentityKeyWrite(key, value);
         if (slot >= self.slots.len) {
             try self.global_tail.?.set(slot - self.slots.len, value);
-            self.markMutated();
             return;
         }
-        self.markMutated();
         self.slots[slot] = value;
     }
 
@@ -723,8 +740,8 @@ pub const Table = struct {
         if (self.read_only) return error.ReadOnlyTable;
         if (choice >= self.choices.len) return error.BadChoiceSlot;
         try validateTableKey(key);
+        try self.markMutated();
         self.markIdentityKeyWrite(key, value);
-        self.markMutated();
         if (value == .nil) {
             if (rawEqual(self.choices[choice].key, key)) self.choices[choice] = .{};
             return;
@@ -734,6 +751,12 @@ pub const Table = struct {
     pub fn rawGet(self: *const Table, key: Value) ?Value {
         if (key == .number) return self.rawGetNumber(key.number);
         if (self.slotForKey(key)) |slot| if (self.rawGetSlot(slot)) |value| return value;
+        return self.rawGetAfterSlot(key);
+    }
+
+    // The caller has already resolved the structural slot. A nil slot does
+    // not erase live choice/map overrides, including iterator-written nils.
+    fn rawGetAfterSlot(self: *const Table, key: Value) ?Value {
         for (self.choices) |cell| {
             if (cell.value != .nil and rawEqual(cell.key, key)) return cell.value;
         }
@@ -796,17 +819,17 @@ pub const Table = struct {
     pub fn rawSet(self: *Table, allocator: std.mem.Allocator, key: Value, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
         try validateTableKey(key);
+        try self.markMutated();
         self.markIdentityKeyWrite(key, value);
-        self.markMutated();
         if (key == .number) if (self.genericArrayIndex(key.number)) |index| {
             if (self.arraySlotForNumber(key.number)) |slot| {
                 if (self.map.removeContext(key, .{})) self.markMapStructuralMutation();
-                self.rawSetArraySlot(slot, value);
+                try self.rawSetArraySlot(slot, value);
                 return;
             }
             if (value != .nil) if (try self.ensureGenericArraySlot(allocator, index)) |slot| {
                 if (self.map.removeContext(key, .{})) self.markMapStructuralMutation();
-                self.rawSetArraySlot(slot, value);
+                try self.rawSetArraySlot(slot, value);
                 return;
             };
         };
@@ -836,7 +859,7 @@ pub const Table = struct {
     pub fn rawSetHashedString(self: *Table, allocator: std.mem.Allocator, name: []const u8, key_hash: u64, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
         const key = Value{ .string = name };
-        self.markMutated();
+        try self.markMutated();
         if (self.slotForKey(key)) |slot| return self.rawSetSlot(slot, value);
         for (self.choices, 0..) |cell, choice| {
             if (cell.value != .nil and rawEqual(cell.key, key))
@@ -1043,6 +1066,381 @@ threadlocal var module_template_probe_next_id: u64 = 1;
 threadlocal var module_template_effect_reasons: u32 = 0;
 threadlocal var module_template_probe_page_scope: bool = false;
 threadlocal var module_template_allocation_mutation_probe: ?*u64 = null;
+threadlocal var invoke_rollback: ?*InvokeRollbackJournal = null;
+threadlocal var invoke_rollback_next_id: u64 = 1;
+
+const InvokeTableSnapshot = struct {
+    table: *Table,
+    saved: Table,
+    borrowed_slots: []Value = &.{},
+    tail_ptr: ?*GlobalTail = null,
+    tail: ?GlobalTail = null,
+    root_cache_value: ?bool = null,
+};
+
+const InvokeCellBaseline = struct { cell: *Cell, value: Value };
+
+pub const InvokeRollbackJournal = struct {
+    allocator: std.mem.Allocator,
+    ctx: *Context,
+    id: u64,
+    owner_nonce: u64,
+    tables: std.ArrayList(InvokeTableSnapshot) = .empty,
+    previous: ?*InvokeRollbackJournal = null,
+
+    pub fn init(allocator: std.mem.Allocator, ctx: *Context) InvokeRollbackJournal {
+        const id = invoke_rollback_next_id;
+        invoke_rollback_next_id +%= 1;
+        if (invoke_rollback_next_id == 0) invoke_rollback_next_id = 1;
+        return .{
+            .allocator = allocator,
+            .ctx = ctx,
+            .id = id,
+            .owner_nonce = ctx.field_cache_nonce,
+        };
+    }
+
+    pub fn begin(self: *InvokeRollbackJournal) void {
+        self.previous = invoke_rollback;
+        invoke_rollback = self;
+    }
+
+    pub fn end(self: *InvokeRollbackJournal) void {
+        std.debug.assert(invoke_rollback == self);
+        invoke_rollback = self.previous;
+    }
+
+    fn snapshotTable(self: *InvokeRollbackJournal, table: *Table) !void {
+        if (table.invoke_rollback_owner_nonce != self.owner_nonce) return;
+        if (table.invoke_rollback_allocation_id == self.id or
+            table.invoke_rollback_snapshot_id == self.id)
+            return;
+
+        var saved = table.*;
+        saved.map = try table.map.clone(self.allocator);
+        errdefer saved.map.deinit(self.allocator);
+        if (table.owns_slots and table.slots.len != 0)
+            saved.slots = try self.allocator.dupe(Value, table.slots);
+        errdefer if (table.owns_slots and saved.slots.len != 0) self.allocator.free(saved.slots);
+        if (table.choices.len != 0) saved.choices = try self.allocator.dupe(ChoiceCell, table.choices);
+        errdefer if (saved.choices.len != 0) self.allocator.free(saved.choices);
+        if (table.numeric_mirror.len != 0)
+            saved.numeric_mirror = try self.allocator.dupe(Value, table.numeric_mirror);
+        errdefer if (saved.numeric_mirror.len != 0) self.allocator.free(saved.numeric_mirror);
+        const borrowed_slots: []Value = if (!table.owns_slots and table.slots.len != 0)
+            try self.allocator.dupe(Value, table.slots)
+        else
+            &.{};
+        errdefer if (borrowed_slots.len != 0) self.allocator.free(borrowed_slots);
+        var tail = if (table.global_tail) |value| try value.cloneState(self.allocator) else null;
+        errdefer if (tail) |*value| value.deinit();
+        try self.tables.append(self.allocator, .{
+            .table = table,
+            .saved = saved,
+            .borrowed_slots = borrowed_slots,
+            .tail_ptr = table.global_tail,
+            .tail = tail,
+            .root_cache_value = if (table.root_tail_cache_valid) |valid| valid.* else null,
+        });
+        table.invoke_rollback_snapshot_id = self.id;
+    }
+
+    pub fn rollback(self: *InvokeRollbackJournal, ctx: *Context) void {
+        self.end();
+        var table_index = self.tables.items.len;
+        while (table_index != 0) {
+            table_index -= 1;
+            var snapshot = &self.tables.items[table_index];
+            const table = snapshot.table;
+            table.deinit(self.allocator);
+            table.* = snapshot.saved;
+            if (!table.owns_slots and snapshot.borrowed_slots.len != 0)
+                @memcpy(table.slots, snapshot.borrowed_slots);
+            if (snapshot.tail) |saved_tail| {
+                const tail = snapshot.tail_ptr orelse unreachable;
+                tail.deinit();
+                tail.* = saved_tail;
+                table.global_tail = tail;
+                snapshot.tail = null;
+            }
+            if (snapshot.root_cache_value) |value| {
+                if (table.root_tail_cache_valid) |valid| valid.* = value;
+            }
+            ctx.assignFieldCacheIdentity(table);
+            snapshot.saved.map = .empty;
+            snapshot.saved.numeric_mirror = &.{};
+            if (snapshot.saved.owns_slots) snapshot.saved.slots = &.{};
+            snapshot.saved.choices = &.{};
+            if (snapshot.borrowed_slots.len != 0) self.allocator.free(snapshot.borrowed_slots);
+            snapshot.borrowed_slots = &.{};
+        }
+        self.tables.deinit(self.allocator);
+        self.tables = .empty;
+
+        // Only cloned cells survive the invoke's module-state reset. Restore
+        // that owned graph, including writes inlined into compiled Lua. A
+        // thread-local write hook also sees temporary loader contexts whose
+        // cells can already be dead here.
+        ctx.resetTemplateCloneCells();
+        ctx.resetInvokeModuleState();
+        // Cached closures survive this transaction. Rewinding their identity
+        // allocator would make a later distinct closure compare/hash equal.
+    }
+};
+
+pub fn currentInvokeRollbackId() u64 {
+    return if (invoke_rollback) |journal| journal.id else 0;
+}
+
+test "invoke rollback restores identity flags before the first keyed mutation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.init(a, 0);
+    defer ctx.deinit();
+    const key = Value{ .table = try ctx.newTable() };
+    const fields = [_]Value{key};
+    const shape = Shape{ .field_keys = &fields, .field_count = 1, .open = true };
+    for (0..3) |mode| {
+        const table = try ctx.newTable();
+        if (mode == 1) {
+            table.choices = try a.alloc(ChoiceCell, 1);
+            @memset(table.choices, .{});
+        } else if (mode == 2) {
+            table.shape = &shape;
+            table.slots = try a.alloc(Value, 1);
+            @memset(table.slots, .nil);
+        }
+        var journal = InvokeRollbackJournal.init(a, &ctx);
+        journal.begin();
+        switch (mode) {
+            0 => try table.rawSet(a, key, .{ .number = 9 }),
+            1 => try table.rawSetChoice(0, key, .{ .number = 9 }),
+            else => try table.rawSetSlot(0, .{ .number = 9 }),
+        }
+        try std.testing.expect(table.has_identity_key);
+        journal.rollback(&ctx);
+        try std.testing.expect(!table.has_identity_key);
+        try std.testing.expect(table.rawGet(key) == null);
+    }
+}
+
+test "invoke rollback retains cell baselines after clone cache rejection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source = try Context.init(a, 0);
+    defer source.deinit();
+    var child = try Context.init(a, 0);
+    defer child.deinit();
+    child.retain_invoke_cell_baselines = true;
+    var original = Cell{ .value = .{ .number = 42 } };
+    var clone = Context.ModuleTemplateClone{ .source = &source, .target = &child };
+    defer clone.deinit();
+    const cell = try clone.cloneCell(&original);
+    child.module_template_clone_source = &source;
+    child.module_template_clone_cells = clone.cells;
+    clone.cells = .empty;
+    var journal = InvokeRollbackJournal.init(a, &child);
+    journal.begin();
+    cell.value = .nil;
+    // UnsupportedModuleTemplate drops memoization, not already-owned cells.
+    child.module_template_clone_cells.clearRetainingCapacity();
+    child.module_template_clone_tables.clearRetainingCapacity();
+    child.module_template_clone_callables.clearRetainingCapacity();
+    journal.rollback(&child);
+    try std.testing.expect(cell.value == .number);
+    try std.testing.expectEqual(@as(f64, 42), cell.value.number);
+}
+
+test "cloning another closure preserves a shared capture deliberately set to nil" {
+    const Probe = struct {
+        fn call(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source = try Context.init(a, 0);
+    defer source.deinit();
+    var child = try Context.init(a, 0);
+    defer child.deinit();
+    var original = Cell{ .value = .{ .number = 42 } };
+    const first_source = try source.makeFunctionKnown(17, Probe.call, &.{&original});
+    const second_source = try source.makeFunctionKnown(18, Probe.call, &.{&original});
+    var clone = Context.ModuleTemplateClone{ .source = &source, .target = &child };
+    defer clone.deinit();
+    const first = try clone.cloneValue(first_source);
+    const shared = try first.callable.captures().cell(0);
+    shared.value = .nil;
+    const second = try clone.cloneValue(second_source);
+    try std.testing.expect(shared == try second.callable.captures().cell(0));
+    try std.testing.expect(shared.value == .nil);
+}
+
+test "invoke rollback restores owned cloned cells after inlined writes and foreign teardown" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source = try Context.init(a, 0);
+    defer source.deinit();
+    var child = try Context.init(a, 0);
+    defer child.deinit();
+    child.retain_invoke_cell_baselines = true;
+    const source_table = try source.newTable();
+    try source_table.rawSet(a, .{ .string = "state" }, .{ .number = 7 });
+    var source_cells = [_]Cell{
+        .{ .value = .{ .table = source_table } },
+        .{ .value = .{ .number = 42 } },
+        .{ .value = .{ .string = "initial" } },
+        .{ .value = .nil },
+    };
+    var clone = Context.ModuleTemplateClone{ .source = &source, .target = &child };
+    defer clone.deinit();
+    var cells: [source_cells.len]*Cell = undefined;
+    for (&source_cells, &cells) |*source_cell, *cell| cell.* = try clone.cloneCell(source_cell);
+    const cloned_table = cells[0].value.table;
+    child.module_template_clone_source = &source;
+    child.module_template_clone_tables = clone.tables;
+    child.module_template_clone_cells = clone.cells;
+    child.module_template_clone_callables = clone.callables;
+    clone.tables = .empty;
+    clone.cells = .empty;
+    clone.callables = .empty;
+
+    for (0..3) |_| {
+        var journal = InvokeRollbackJournal.init(a, &child);
+        journal.begin();
+        // The LLVM leaf can compile these stores without calling any hook.
+        for (cells) |cell| cell.value = .{ .boolean = true };
+        try cloned_table.rawSet(a, .{ .string = "state" }, .{ .number = 99 });
+        {
+            var temporary = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer temporary.deinit();
+            var foreign = try Context.init(temporary.allocator(), 0);
+            defer foreign.deinit();
+            const foreign_cell = try foreign.allocator.create(Cell);
+            foreign_cell.* = .{ .value = .{ .number = 1 } };
+            foreign_cell.value = .{ .number = 2 };
+            const foreign_table = try foreign.newTable();
+            try foreign_table.rawSet(foreign.allocator, .{ .string = "state" }, .{ .number = 2 });
+        }
+        journal.rollback(&child);
+        try std.testing.expect(cells[0].value.table == cloned_table);
+        try std.testing.expect(cloned_table != source_table);
+        try std.testing.expectEqual(@as(f64, 7), cloned_table.rawGet(.{ .string = "state" }).?.number);
+        try std.testing.expectEqual(@as(f64, 42), cells[1].value.number);
+        try std.testing.expectEqualStrings("initial", cells[2].value.string);
+        try std.testing.expect(cells[3].value == .nil);
+        try std.testing.expectEqual(@as(f64, 7), source_table.rawGet(.{ .string = "state" }).?.number);
+    }
+}
+
+pub fn noteInvokeTableMutation(table: *Table) !void {
+    if (invoke_rollback) |journal| try journal.snapshotTable(table);
+}
+
+test "invoke rollback never recycles identities of retained cloned closures" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source = try Context.init(a, 0);
+    defer source.deinit();
+    var target = try Context.init(a, 0);
+    defer target.deinit();
+    const entry = struct {
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    }.call;
+    const original = try source.newNative(null, entry);
+    var clone = Context.ModuleTemplateClone{ .source = &source, .target = &target };
+    defer clone.deinit();
+    var journal = InvokeRollbackJournal.init(a, &target);
+    journal.begin();
+    const retained = try clone.cloneValue(original);
+    journal.rollback(&target);
+    const fresh = try target.newNative(null, entry);
+    try std.testing.expect(!rawEqual(retained, fresh));
+    const keys = try target.newTable();
+    try keys.rawSet(a, retained, .{ .number = 1 });
+    try keys.rawSet(a, fresh, .{ .number = 2 });
+    try std.testing.expectEqual(@as(f64, 1), keys.rawGet(retained).?.number);
+    try std.testing.expectEqual(@as(f64, 2), keys.rawGet(fresh).?.number);
+}
+
+test "template tagging does not retain context markers in deeply immutable shared data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.init(a, 0);
+    defer ctx.deinit();
+    const root = try ctx.newTable();
+    const shared = try ctx.newTable();
+    const nested = try ctx.newTable();
+    try shared.rawSet(a, .{ .string = "nested" }, .{ .table = nested });
+    shared.read_only = true;
+    shared.cross_page_stable = true;
+    nested.read_only = true;
+    nested.cross_page_stable = true;
+    try root.rawSet(a, .{ .string = "data" }, .{ .table = shared });
+    var marker: u64 = 0;
+    try ctx.tagModuleTemplateValue(.{ .table = root }, &marker);
+    try std.testing.expect(root.module_template_mutation_probe == &marker);
+    try std.testing.expect(shared.module_template_mutation_probe == null);
+    try std.testing.expect(nested.module_template_mutation_probe == null);
+}
+
+test "template global cloning visits sparse deltas and preserves nil snapshots after root writes" {
+    for ([_]usize{ 100, 129 }) |pages| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const count = module_global_prefix_len + pages * global_page_len + 3;
+        const old_slot: u32 = module_global_prefix_len + 2 * global_page_len + 7;
+        const late_slot: u32 = module_global_prefix_len + 70 * global_page_len + 5;
+        const far_slot: u32 = @intCast(count - 1);
+        var source = try Context.initProgram(a, @intCast(count), 1);
+        defer source.deinit();
+        var target = try Context.initProgram(a, @intCast(count), 1);
+        defer target.deinit();
+        try source.setGlobal(old_slot, .{ .number = 42 });
+        try target.setGlobal(old_slot, .{ .number = 42 });
+        const previous = try source.enterModule(0);
+        try std.testing.expect(source.global_tail != null);
+        try source.setGlobal(1, .{ .number = 17 });
+        try source.setGlobal(old_slot, .nil);
+        try source.setGlobal(far_slot, .{ .number = 123 });
+        source.restoreGlobals(previous);
+        // This root write occurs after the source module's snapshot. An absent
+        // source page must clear it in the freshly instantiated target module.
+        try source.setGlobal(late_slot, .{ .number = 987 });
+        try target.setGlobal(late_slot, .{ .number = 987 });
+        var clone = Context.ModuleTemplateClone{ .source = &source, .target = &target };
+        defer clone.deinit();
+        try clone.cloneModuleGlobals(0);
+        const target_previous = try target.enterModule(0);
+        defer target.restoreGlobals(target_previous);
+        try std.testing.expectEqual(@as(f64, 17), target.getGlobal(1).number);
+        try std.testing.expectEqual(@as(f64, 123), target.getGlobal(far_slot).number);
+        try std.testing.expect(target.getGlobal(old_slot) == .nil);
+        try std.testing.expect(target.getGlobal(late_slot) == .nil);
+        try std.testing.expectEqual(@as(f64, 42), source.getGlobal(old_slot).number);
+        try std.testing.expectEqual(@as(f64, 987), source.getGlobal(late_slot).number);
+    }
+}
+
+pub fn suspendInvokeRollback() ?*InvokeRollbackJournal {
+    const previous = invoke_rollback;
+    invoke_rollback = null;
+    return previous;
+}
+
+pub fn resumeInvokeRollback(previous: ?*InvokeRollbackJournal) void {
+    std.debug.assert(invoke_rollback == null);
+    invoke_rollback = previous;
+}
 
 const ModuleTemplateProbeState = struct {
     previous: ?*bool,
@@ -1396,6 +1794,10 @@ pub const Context = struct {
     frame_args_shape_id: ?u32 = null,
     package_loaded_shape_id: ?u32 = null,
     package_loaded_module_slots: []const u32 = &.{},
+    // Immutable inverse of the compiler's canonical package slots. Dynamic
+    // require can reuse its actual package lookup instead of resolving the
+    // same canonical name again through the program's module-name index.
+    package_loaded_slot_modules: []const u32 = &.{},
     json_object_shape_id: ?u32 = null,
     uri_query_shape_id: ?u32 = null,
     module_export_shape_ids: []const u32 = &.{},
@@ -1428,6 +1830,11 @@ pub const Context = struct {
     module_template_clone_tables: std.AutoHashMapUnmanaged(*Table, *Table) = .empty,
     module_template_clone_cells: std.AutoHashMapUnmanaged(*Cell, *Cell) = .empty,
     module_template_clone_callables: std.AutoHashMapUnmanaged(*const FunctionValue, *const FunctionValue) = .empty,
+    // Transaction-owned capture baselines are not clone lookup-cache entries.
+    // Cache rejection may discard mappings while earlier closures stay live.
+    // Store the cloned target value, never a pointer into the source context.
+    retain_invoke_cell_baselines: bool = false,
+    invoke_cell_baselines: std.ArrayList(InvokeCellBaseline) = .empty,
     template_native_namespaces: [native_namespace_count]?*Table = [_]?*Table{null} ** native_namespace_count,
     // Type metatables are context singletons too. Lua may capture private
     // methods such as a title's __lt, which has no public namespace alias.
@@ -1486,6 +1893,7 @@ pub const Context = struct {
         child.frame_args_shape_id = self.frame_args_shape_id;
         child.package_loaded_shape_id = self.package_loaded_shape_id;
         child.package_loaded_module_slots = self.package_loaded_module_slots;
+        child.package_loaded_slot_modules = self.package_loaded_slot_modules;
         child.json_object_shape_id = self.json_object_shape_id;
         child.uri_query_shape_id = self.uri_query_shape_id;
         child.module_export_shape_ids = self.module_export_shape_ids;
@@ -1651,10 +2059,10 @@ pub const Context = struct {
     }
 
     pub fn deinit(self: *Context) void {
+        self.invoke_cell_baselines.deinit(self.allocator);
         self.module_template_clone_tables.deinit(self.allocator);
         self.module_template_clone_cells.deinit(self.allocator);
         self.module_template_clone_callables.deinit(self.allocator);
-        self.string_arena.deinit();
         self.static_global_scopes.deinit(self.allocator);
         for (self.module_state_pages) |page| if (page) |owned| {
             for (owned.initialized, 0..) |word, word_index| {
@@ -1687,6 +2095,7 @@ pub const Context = struct {
         }
         self.allocator.free(self.root_globals);
         self.allocator.destroy(self.root_tail_cache_valid);
+        self.string_arena.deinit();
     }
 
     pub fn setHost(self: *Context, host: ?*anyopaque) void {
@@ -1740,6 +2149,7 @@ pub const Context = struct {
     }
 
     pub fn setGlobal(self: *Context, slot: u32, value: Value) !void {
+        if (self.global_table) |table| try noteInvokeTableMutation(table);
         if (slot < self.globals.len) {
             self.globals[slot] = value;
             if (self.globals.ptr == self.root_globals.ptr) self.root_tail_cache_valid.* = false;
@@ -1747,6 +2157,47 @@ pub const Context = struct {
         }
         const tail = self.global_tail orelse return error.BadGlobalSlot;
         try tail.set(slot - self.globals.len, value);
+    }
+
+    fn retainInvokeCellBaseline(self: *Context, cell: *Cell) !void {
+        if (self.retain_invoke_cell_baselines)
+            try self.invoke_cell_baselines.append(self.allocator, .{ .cell = cell, .value = cell.value });
+    }
+
+    fn resetTemplateCloneCells(self: *Context) void {
+        for (self.invoke_cell_baselines.items) |baseline|
+            baseline.cell.value = baseline.value;
+    }
+
+    fn resetInvokeModuleState(self: *Context) void {
+        for (self.module_state_pages) |page| if (page) |states| {
+            for (states.initialized, 0..) |word, word_index| {
+                var remaining = word;
+                while (remaining != 0) {
+                    const slot = word_index * 64 + @as(usize, @intCast(@ctz(remaining)));
+                    remaining &= remaining - 1;
+                    const state = &states.states[slot];
+                    const globals = state.globals;
+                    const global_tail = state.global_tail;
+                    const global_table = state.global_table;
+                    state.* = .{
+                        .globals = globals,
+                        .global_tail = global_tail,
+                        .global_table = global_table,
+                    };
+                }
+            }
+        };
+        self.globals = self.root_globals;
+        self.global_table = self.root_global_table;
+        self.global_tail = if (self.root_global_table) |table| table.global_tail else null;
+        self.package_observable = false;
+        self.current_frame = null;
+        self.depth = 0;
+        self.static_global_scopes.clearRetainingCapacity();
+        self.next_iteration_hint = null;
+        self.clearLuaError();
+        self.clearAotErrorName();
     }
     fn takeFunctionIdentity(self: *Context) !u32 {
         const identity = self.next_identity;
@@ -1958,8 +2409,11 @@ pub const Context = struct {
                 loaded.shape == &self.program_shapes[shape_id])
             {
                 const slot = self.package_loaded_module_slots[module_id];
-                if (slot != std.math.maxInt(u32))
+                if (slot != std.math.maxInt(u32)) {
                     if (loaded.rawGetSlot(slot)) |value| return value;
+                    const canonical = self.canonicalModuleName(module_id, requested) orelse return null;
+                    return loaded.rawGetAfterSlot(.{ .string = canonical });
+                }
             };
         }
         const canonical = self.canonicalModuleName(module_id, requested) orelse return null;
@@ -2095,6 +2549,7 @@ pub const Context = struct {
                     .global_tail = tail,
                     .owns_slots = false,
                     .module_template_probe_id = module_template_probe_owner_id,
+                    .invoke_rollback_owner_nonce = self.field_cache_nonce,
                 };
                 if (self.global_env_slot) |slot| {
                     if (slot < globals.len) {
@@ -2336,10 +2791,11 @@ pub const Context = struct {
 
         fn cloneCell(self: *ModuleTemplateClone, source_cell: *Cell) anyerror!*Cell {
             if (self.cells.get(source_cell)) |existing| return existing;
-            const cell = try self.target.allocator.create(Cell);
+            const cell = try self.target.stringAllocator().create(Cell);
             cell.* = .{ .value = .nil };
             try self.cells.put(self.mapAllocator(), source_cell, cell);
             cell.value = try self.cloneValue(source_cell.value);
+            try self.target.retainInvokeCellBaseline(cell);
             return cell;
         }
 
@@ -2450,14 +2906,22 @@ pub const Context = struct {
 
             const target_cells = try self.mapAllocator().alloc(*Cell, source_cells.len);
             defer self.mapAllocator().free(target_cells);
+            var stack_created: [32]bool = undefined;
+            const created = if (source_cells.len <= stack_created.len)
+                stack_created[0..source_cells.len]
+            else
+                try self.mapAllocator().alloc(bool, source_cells.len);
+            defer if (source_cells.len > stack_created.len) self.mapAllocator().free(created);
             for (source_cells, 0..) |source_cell, index| {
                 if (self.cells.get(source_cell)) |existing| {
                     target_cells[index] = existing;
+                    created[index] = false;
                 } else {
-                    const cell = try self.target.allocator.create(Cell);
+                    const cell = try self.target.stringAllocator().create(Cell);
                     cell.* = .{ .value = .nil };
                     try self.cells.put(self.mapAllocator(), source_cell, cell);
                     target_cells[index] = cell;
+                    created[index] = true;
                 }
             }
             const value = try self.target.makeFunction(
@@ -2466,9 +2930,13 @@ pub const Context = struct {
                 target_cells,
             );
             try self.callables.put(self.mapAllocator(), source_function, value.callable);
-            for (source_cells, target_cells) |source_cell, target_cell| {
-                if (target_cell.value == .nil and source_cell.value != .nil)
+            for (source_cells, target_cells, created) |source_cell, target_cell, is_new| {
+                // nil is a valid live capture, not an uninitialized marker.
+                // The creator of a recursive placeholder completes it once.
+                if (is_new) {
                     target_cell.value = try self.cloneValue(source_cell.value);
+                    try self.target.retainInvokeCellBaseline(target_cell);
+                }
             }
             return value;
         }
@@ -2511,7 +2979,7 @@ pub const Context = struct {
             }
 
             const marker = try self.cloneMutationMarker(source_table);
-            const table = try self.target.allocator.create(Table);
+            const table = try self.target.stringAllocator().create(Table);
             table.* = .{
                 .shape = source_table.shape,
                 .native_namespace = source_table.native_namespace,
@@ -2523,6 +2991,7 @@ pub const Context = struct {
                 .dense_prefix_valid = source_table.dense_prefix_valid,
                 .module_template_probe_id = module_template_probe_owner_id,
                 .module_template_reconstructable = source_table.module_template_reconstructable,
+                .invoke_rollback_owner_nonce = self.target.field_cache_nonce,
                 .module_template_mutation_probe = marker,
             };
             self.target.assignFieldCacheIdentity(table);
@@ -2569,7 +3038,7 @@ pub const Context = struct {
         fn cloneValue(self: *ModuleTemplateClone, value: Value) anyerror!Value {
             return switch (value) {
                 .string => |text| if (self.promotion or self.target.own_cloned_strings)
-                    .{ .string = try self.target.allocator.dupe(u8, text) }
+                    .{ .string = try self.target.ownString(text) }
                 else
                     value,
                 .table => |table| self.cloneTable(table),
@@ -2593,16 +3062,33 @@ pub const Context = struct {
                 if (self.target.global_table) |target_global|
                     try self.tables.put(self.mapAllocator(), source_global, target_global);
 
-            for (0..self.source.root_globals.len) |slot_usize| {
-                const slot: u32 = @intCast(slot_usize);
-                if (self.source.global_env_slot != null and
-                    self.source.global_env_slot.? == slot)
-                    continue;
-                const source_value = self.source.getGlobal(slot);
-                if (rawEqual(source_value, self.source.root_globals[slot_usize]))
-                    continue;
-                try self.target.setGlobal(slot, try self.cloneValue(source_value));
+            for (self.source.globals, 0..) |value, slot|
+                try self.cloneGlobalDelta(slot, value);
+            if (self.source.global_tail) |tail| {
+                // Module tails are sparse snapshots, not live views of root
+                // globals. Visit allocated pages plus currently occupied root
+                // pages: the latter preserve nil tombstones after root writes.
+                _ = self.source.moduleGlobalsAreDense();
+                for (tail.pages, 0..) |page, page_index| {
+                    if (page == null and self.source.root_tail_cache_valid.* and
+                        page_index < self.source.root_tail_occupied.len * 64 and
+                        self.source.root_tail_occupied[page_index / 64] &
+                            (@as(u64, 1) << @intCast(page_index % 64)) == 0)
+                        continue;
+                    const tail_start = page_index * global_page_len;
+                    const count = @min(global_page_len, tail.len - tail_start);
+                    const start = self.source.globals.len + tail_start;
+                    for (0..count) |index|
+                        try self.cloneGlobalDelta(start + index, if (page) |values| values[index] else .nil);
+                }
             }
+        }
+
+        fn cloneGlobalDelta(self: *ModuleTemplateClone, slot_usize: usize, source_value: Value) anyerror!void {
+            const slot: u32 = @intCast(slot_usize);
+            if (self.source.global_env_slot != null and self.source.global_env_slot.? == slot) return;
+            if (rawEqual(source_value, self.source.root_globals[slot_usize])) return;
+            try self.target.setGlobal(slot, try self.cloneValue(source_value));
         }
 
         fn cloneModule(
@@ -3306,7 +3792,33 @@ pub const Context = struct {
 
     pub fn requireByName(self: *Context, raw_name: []const u8) anyerror!Value {
         if (std.mem.eql(u8, raw_name, "package")) try self.observePackage();
-        if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
+        if (self.package_loaded) |loaded| {
+            if (self.program_shapes_validated and loaded.native_namespace == null and
+                self.package_loaded_shape_id != null and
+                self.package_loaded_shape_id.? < self.program_shapes.len and
+                loaded.shape == &self.program_shapes[self.package_loaded_shape_id.?] and
+                self.package_loaded_slot_modules.len != 0)
+            {
+                const key = Value{ .string = raw_name };
+                const slot = loaded.slotForKey(key);
+                if (slot) |known| if (loaded.rawGetSlot(known)) |value| return value;
+                if (loaded.rawGetAfterSlot(key)) |value| return value;
+                if (slot) |known| if (known < self.package_loaded_slot_modules.len) {
+                    const module_id = self.package_loaded_slot_modules[known];
+                    if (module_id < self.module_count) if (self.canonicalModuleName(module_id, null)) |canonical| {
+                        if (std.mem.eql(u8, canonical, raw_name)) {
+                            // A resolved ID does not authorize executing a root
+                            // before the eager dependency graph has admitted it.
+                            if (self.eager_bootstrap)
+                                return self.preparedModuleValue(module_id) orelse error.EagerDependencyNotInitialized;
+                            const value = try self.loadModule(module_id, raw_name);
+                            if (self.moduleState(module_id)) |state| state.deferred_require_visibility = false;
+                            return value;
+                        }
+                    };
+                };
+            } else if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
+        }
         return self.requireModuleId(try self.resolveModule(raw_name), raw_name);
     }
 
@@ -3346,6 +3858,17 @@ pub const Context = struct {
             else => error.NotCallable,
         };
     }
+
+    // Lua indexing, arithmetic and comparison consume exactly the first
+    // result. Pass that demand through the native ABI instead of allocating a
+    // variable result array only to throw away its tail. The callee still
+    // evaluates every return expression and performs all side effects.
+    pub fn callValueFirst(self: *Context, callable: Value, args: []const Value) anyerror!Value {
+        var buffer: [1]Value = undefined;
+        const result = try self.callValueFixed(callable, args, &buffer);
+        defer result.deinit();
+        return if (result.values.len == 0) .nil else result.values[0];
+    }
     pub fn newNative(self: *Context, host: ?*anyopaque, comptime call: anytype) !Value {
         const identity = try self.takeFunctionIdentity();
         return self.storeFunction(.{
@@ -3378,18 +3901,36 @@ pub const Context = struct {
     }
 
     pub fn newTable(self: *Context) !*Table {
-        const table = try self.allocator.create(Table);
+        // Lua object headers have a context lifetime. Pool them with closure
+        // descriptors and cells; resizable table storage still uses the
+        // ordinary allocator so rollback and explicit frees reclaim it.
+        const table = try self.stringAllocator().create(Table);
         table.* = .{
             .module_template_mutation_probe = module_template_allocation_mutation_probe,
             .module_template_probe_id = module_template_probe_owner_id,
+            .invoke_rollback_owner_nonce = self.field_cache_nonce,
+            .invoke_rollback_allocation_id = currentInvokeRollbackId(),
         };
         self.assignFieldCacheIdentity(table);
         return table;
     }
 
+    pub fn newCell(self: *Context, initial: Value) !*Cell {
+        const cell = try self.stringAllocator().create(Cell);
+        cell.* = .{ .value = initial };
+        return cell;
+    }
+
+    /// Release a table returned by a Context constructor. Its header belongs
+    /// to the context arena; its mutable buffers have independent allocations.
+    pub fn destroyTable(self: *Context, table: *Table) void {
+        table.deinit(self.allocator);
+        self.stringAllocator().destroy(table);
+    }
+
     pub fn newArrayTable(self: *Context, capacity: u32) !*Table {
         const table = try self.newTable();
-        errdefer self.allocator.destroy(table);
+        errdefer self.destroyTable(table);
         if (capacity != 0) {
             table.slots = try self.allocator.alloc(Value, capacity);
             @memset(table.slots, .nil);
@@ -3398,13 +3939,15 @@ pub const Context = struct {
     }
 
     fn allocShapedTable(self: *Context, shape: *const Shape) !*Table {
-        const table = try self.allocator.create(Table);
-        errdefer self.allocator.destroy(table);
+        const table = try self.stringAllocator().create(Table);
         table.* = .{
             .shape = shape,
             .module_template_mutation_probe = module_template_allocation_mutation_probe,
             .module_template_probe_id = module_template_probe_owner_id,
+            .invoke_rollback_owner_nonce = self.field_cache_nonce,
+            .invoke_rollback_allocation_id = currentInvokeRollbackId(),
         };
+        errdefer self.destroyTable(table);
         self.assignFieldCacheIdentity(table);
         if (shape.field_count != 0) {
             table.slots = try self.allocator.alloc(Value, shape.field_count);
@@ -3455,8 +3998,8 @@ pub const Context = struct {
             if (shape_id >= self.program_shapes.len) return error.BadShape;
             if (self.package_loaded_tail != null) return error.PackageLoadedAlreadyInitialized;
             const shape = &self.program_shapes[shape_id];
-            const owned = try self.allocator.create(Table);
-            errdefer self.allocator.destroy(owned);
+            const owned = try self.stringAllocator().create(Table);
+            errdefer self.stringAllocator().destroy(owned);
             const tail = try GlobalTail.initEmpty(self.allocator, shape.field_count);
             errdefer {
                 tail.deinit();
@@ -3467,6 +4010,8 @@ pub const Context = struct {
                 .global_tail = tail,
                 .module_template_mutation_probe = module_template_allocation_mutation_probe,
                 .module_template_probe_id = module_template_probe_owner_id,
+                .invoke_rollback_owner_nonce = self.field_cache_nonce,
+                .invoke_rollback_allocation_id = currentInvokeRollbackId(),
             };
             self.assignFieldCacheIdentity(owned);
             self.package_loaded_tail = tail;
@@ -3636,13 +4181,15 @@ pub const Context = struct {
     }
 
     pub fn newNativeNamespace(self: *Context, namespace: static_fields.Namespace) !*Table {
-        const table = try self.allocator.create(Table);
-        errdefer self.allocator.destroy(table);
+        const table = try self.stringAllocator().create(Table);
         table.* = .{
             .native_namespace = namespace,
             .module_template_mutation_probe = module_template_allocation_mutation_probe,
             .module_template_probe_id = module_template_probe_owner_id,
+            .invoke_rollback_owner_nonce = self.field_cache_nonce,
+            .invoke_rollback_allocation_id = currentInvokeRollbackId(),
         };
+        errdefer self.destroyTable(table);
         const count = static_fields.fieldCount(namespace);
         if (count != 0) {
             table.slots = try self.allocator.alloc(Value, count);
@@ -3667,11 +4214,7 @@ pub const Context = struct {
                 if (table.metatable) |mt| if (mt.rawGet(.{ .string = "__index" })) |indexer| {
                     return switch (indexer) {
                         .table => |other| self.getIndex(.{ .table = other }, key),
-                        else => blk: {
-                            const out = try self.callValue(indexer, &.{ object, key });
-                            defer freeResults(out);
-                            break :blk if (out.len == 0) .nil else out[0];
-                        },
+                        else => self.callValueFirst(indexer, &.{ object, key }),
                     };
                 };
                 return .nil;
@@ -3679,9 +4222,7 @@ pub const Context = struct {
             .string => {
                 if (self.string_metatable) |mt| if (mt.rawGet(.{ .string = "__index" })) |indexer| {
                     if (indexer == .table) return indexer.table.rawGet(key) orelse .nil;
-                    const out = try self.callValue(indexer, &.{ object, key });
-                    defer freeResults(out);
-                    return if (out.len == 0) .nil else out[0];
+                    return self.callValueFirst(indexer, &.{ object, key });
                 };
                 return error.IndexType;
             },
@@ -3695,11 +4236,7 @@ pub const Context = struct {
         if (table.metatable) |mt| if (mt.rawGetHashedString("__index", index_hash)) |indexer| {
             return switch (indexer) {
                 .table => |other| self.getHashedField(.{ .table = other }, name, key_hash),
-                else => blk: {
-                    const out = try self.callValue(indexer, &.{ object, .{ .string = name } });
-                    defer freeResults(out);
-                    break :blk if (out.len == 0) .nil else out[0];
-                },
+                else => self.callValueFirst(indexer, &.{ object, .{ .string = name } }),
             };
         };
         return .nil;
@@ -3887,9 +4424,7 @@ pub const Context = struct {
             .string => {
                 if (self.string_metatable) |mt| if (mt.rawGetHashedString("__index", index_hash)) |indexer| {
                     if (indexer == .table) return indexer.table.rawGetHashedString(name, key_hash) orelse .nil;
-                    const out = try self.callValue(indexer, &.{ object, .{ .string = name } });
-                    defer freeResults(out);
-                    return if (out.len == 0) .nil else out[0];
+                    return self.callValueFirst(indexer, &.{ object, .{ .string = name } });
                 };
                 return error.IndexType;
             },
@@ -3905,8 +4440,9 @@ pub const Context = struct {
         if (table.metatable.?.rawGet(.{ .string = "__newindex" })) |handler| switch (handler) {
             .table => |other| return self.setIndex(.{ .table = other }, key, value),
             else => {
-                const out = try self.callValue(handler, &.{ object, key, value });
-                defer freeResults(out);
+                var buffer: [0]Value = .{};
+                const out = try self.callValueFixed(handler, &.{ object, key, value }, &buffer);
+                defer out.deinit();
                 return;
             },
         };
@@ -3942,7 +4478,7 @@ pub const Context = struct {
             if (shaped_slot != null) return table.rawSetHashedString(self.allocator, name, key_hash, value);
             if (value != .nil and table.map.available > 0) {
                 if (table.read_only) return error.ReadOnlyTable;
-                table.markMutated();
+                try table.markMutated();
                 existing.?.* = value;
                 return;
             }
@@ -3951,8 +4487,9 @@ pub const Context = struct {
         if (table.metatable.?.rawGet(.{ .string = "__newindex" })) |handler| switch (handler) {
             .table => |other| return self.setHashedField(.{ .table = other }, name, key_hash, value),
             else => {
-                const out = try self.callValue(handler, &.{ object, key, value });
-                defer freeResults(out);
+                var buffer: [0]Value = .{};
+                const out = try self.callValueFixed(handler, &.{ object, key, value }, &buffer);
+                defer out.deinit();
                 return;
             },
         };
@@ -3979,9 +4516,7 @@ pub const Context = struct {
             .pow => "__pow",
         };
         const method = self.metamethod(a, name) orelse self.metamethod(b, name) orelse return error.ArithmeticType;
-        const out = try self.callValue(method, &.{ a, b });
-        defer freeResults(out);
-        return if (out.len == 0) .nil else out[0];
+        return self.callValueFirst(method, &.{ a, b });
     }
     fn sharedComparisonMetamethod(self: *Context, a: Value, b: Value, name: []const u8) ?Value {
         const left = self.metamethod(a, name) orelse return null;
@@ -3989,9 +4524,7 @@ pub const Context = struct {
         return if (rawEqual(left, right)) left else null;
     }
     fn callComparisonMetamethod(self: *Context, method: Value, a: Value, b: Value) anyerror!bool {
-        const out = try self.callValue(method, &.{ a, b });
-        defer freeResults(out);
-        return out.len != 0 and out[0].truthy();
+        return (try self.callValueFirst(method, &.{ a, b })).truthy();
     }
     pub fn comparison(self: *Context, op: CompareOp, a: Value, b: Value) anyerror!bool {
         if (op == .eq or op == .ne) {
@@ -4000,9 +4533,7 @@ pub const Context = struct {
                 const left = self.metamethod(a, "__eq");
                 const right = self.metamethod(b, "__eq");
                 if (left != null and right != null and rawEqual(left.?, right.?)) {
-                    const out = try self.callValue(left.?, &.{ a, b });
-                    defer freeResults(out);
-                    const equal = out.len != 0 and out[0].truthy();
+                    const equal = try self.callComparisonMetamethod(left.?, a, b);
                     return if (op == .eq) equal else !equal;
                 }
             }
@@ -4022,7 +4553,7 @@ pub const Context = struct {
             return !(try self.callComparisonMetamethod(method, right, left));
         return error.CompareType;
     }
-    fn ownString(self: *Context, text: []const u8) ![]const u8 {
+    pub fn ownString(self: *Context, text: []const u8) ![]const u8 {
         return self.stringAllocator().dupe(u8, text);
     }
 
@@ -4340,10 +4871,7 @@ test "package loaded structural slots allocate sparse pages lazily" {
     ctx.package_loaded_module_slots = &.{129};
 
     const table = try ctx.newPackageLoadedTable();
-    defer {
-        table.deinit(a);
-        a.destroy(table);
-    }
+    defer ctx.destroyTable(table);
     ctx.package_loaded = table;
 
     try std.testing.expectEqual(@as(usize, 0), table.slots.len);
@@ -4457,60 +4985,54 @@ const ModuleTemplateProbe = struct {
     }
 };
 
-test "template root errors cross cold and warm context boundaries without stale diagnostics" {
+test "retained clone cells and strings pool storage without borrowing the source lifetime" {
     const Probe = struct {
-        fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
-            return error.NotImplemented;
+        fn call(_: *Context, captures: Captures, _: []const Value) ![]const Value {
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = (try captures.cell(0)).value;
+            return out;
         }
     };
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var source = try Context.initProgram(arena.allocator(), 0, 1);
-    defer source.deinit();
-    const roots = [_]FunctionFn{stabilize(Probe.root)};
-    source.module_root_entries = &roots;
-    source.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
-    source.setAotErrorName("prior source diagnostic");
-    source.setLuaError(.{ .string = "prior source payload" });
-    var eligible = [_]bool{true};
-    for (0..3) |_| {
-        var child = try source.forkProgram(arena.allocator());
-        defer child.deinit();
-        child.module_template_context = &source;
-        child.module_template_eligible = &eligible;
-        try std.testing.expectError(error.AotCallFailed, child.requireByName("Module:TemplateProbe"));
-        try std.testing.expectEqualStrings("NotImplemented", child.aotErrorName() orelse "missing");
-        try std.testing.expect(!child.last_error_present and child.last_error == .nil);
-        try std.testing.expectEqualStrings("prior source diagnostic", source.aotErrorName().?);
-        try std.testing.expectEqualStrings("prior source payload", source.last_error.string);
-        try std.testing.expect(source.last_error_present);
+    var request = RequestAllocator.init(std.testing.allocator);
+    defer request.deinit();
+    var target = try Context.init(request.allocator(), 0);
+    defer target.deinit();
+    target.ownClonedStrings();
+    target.retain_invoke_cell_baselines = true;
+    const values = try std.testing.allocator.alloc(Value, 1024);
+    defer std.testing.allocator.free(values);
+    {
+        var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer source_arena.deinit();
+        var source = try Context.init(source_arena.allocator(), 0);
+        defer source.deinit();
+        var clone = Context.ModuleTemplateClone{ .source = &source, .target = &target };
+        defer clone.deinit();
+        for (values) |*value| {
+            const cell = try source.allocator.create(Cell);
+            cell.* = .{ .value = .{ .string = try source.allocator.dupe(u8, "persistent capture") } };
+            const original = try source.makeFunctionKnown(1, Probe.call, &.{cell});
+            value.* = try clone.cloneValue(original);
+            try std.testing.expect(value.callable != original.callable);
+        }
+        // Cells, strings, and descriptors are bulk-lived objects; map growth
+        // and transient buffers still use the ordinary freeing allocator.
+        try std.testing.expect(request.live_count < 64);
     }
-}
-
-test "template root error nil remains present across a context boundary" {
-    const Probe = struct {
-        fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
-            ctx.setLuaError(.nil);
-            return error.RaisedError;
-        }
-    };
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var source = try Context.initProgram(arena.allocator(), 0, 1);
-    defer source.deinit();
-    const roots = [_]FunctionFn{stabilize(Probe.root)};
-    source.module_root_entries = &roots;
-    source.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
-    var eligible = [_]bool{true};
-    for (0..2) |_| {
-        var child = try source.forkProgram(arena.allocator());
-        defer child.deinit();
-        child.module_template_context = &source;
-        child.module_template_eligible = &eligible;
-        try std.testing.expectError(error.AotCallFailed, child.requireByName("Module:TemplateProbe"));
-        try std.testing.expect(child.last_error_present and child.last_error == .nil);
-        try std.testing.expectEqualStrings("RaisedError", child.aotErrorName() orelse "missing");
-        try std.testing.expect(!source.last_error_present and source.aotErrorName() == null);
+    try std.testing.expectEqual(values.len, target.invoke_cell_baselines.items.len);
+    for (values) |value| {
+        const cell = try value.callable.captures().cell(0);
+        try std.testing.expectEqualStrings("persistent capture", cell.value.string);
+        cell.value = .nil;
+    }
+    var journal = InvokeRollbackJournal.init(target.allocator, &target);
+    journal.begin();
+    journal.rollback(&target);
+    var buffer: [1]Value = undefined;
+    for ([_]usize{ 0, values.len - 1 }) |index| {
+        const result = try target.callValueFixed(values[index], &.{}, &buffer);
+        defer result.deinit();
+        try std.testing.expectEqualStrings("persistent capture", result.values[0].string);
     }
 }
 
@@ -5553,7 +6075,12 @@ pub inline fn touch(value: anytype) void {
 pub fn bindGlobalTable(ctx: *Context, shape: ?*const Shape, env_slot: u32) !void {
     if (ctx.root_global_table != null) return error.GlobalTableAlreadyBound;
     const table = try ctx.allocator.create(Table);
-    table.* = .{ .shape = shape, .slots = ctx.globals, .owns_slots = false };
+    table.* = .{
+        .shape = shape,
+        .slots = ctx.globals,
+        .owns_slots = false,
+        .invoke_rollback_owner_nonce = ctx.field_cache_nonce,
+    };
     ctx.global_table = table;
     ctx.root_global_table = table;
     table.root_tail_cache_valid = ctx.root_tail_cache_valid;
@@ -6279,38 +6806,6 @@ test "generic tables use dense numeric slots and keep sparse keys hashed" {
     try std.testing.expect(table.rawGetNumber(9) == null);
     try std.testing.expect(table.map.getContext(nine, .{}) == null);
     try std.testing.expectEqual(@as(usize, 8), table.rawLen());
-}
-
-test "generic arrays reject progressive sparse numeric densification" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var ctx = try Context.init(arena.allocator(), 0);
-    defer ctx.deinit();
-    const table = try ctx.newTable();
-
-    for (1..102) |i|
-        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(i) }, .{ .number = @floatFromInt(i) });
-    try std.testing.expectEqual(@as(usize, 128), table.slots.len);
-
-    var value: usize = 200;
-    while (value <= 900) : (value += 100)
-        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
-    value = 1000;
-    while (value <= 9000) : (value += 1000)
-        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
-    value = 10_000;
-    while (value <= 90_000) : (value += 10_000)
-        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
-    value = 100_000;
-    while (value <= 900_000) : (value += 100_000)
-        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
-    try table.rawSet(ctx.allocator, .{ .number = 1_000_000 }, .{ .number = 1_000_000 });
-    try table.rawSet(ctx.allocator, .{ .number = 2_000_000 }, .{ .number = 2_000_000 });
-
-    try std.testing.expectEqual(@as(usize, 128), table.slots.len);
-    try std.testing.expectEqual(@as(f64, 2_000_000), table.rawGetNumber(2_000_000).?.number);
-    try std.testing.expectEqual(@as(f64, 900_000), table.rawGet(.{ .number = 900_000 }).?.number);
-    try std.testing.expect(table.map.getContext(.{ .number = 2_000_000 }, .{}) != null);
 }
 
 test "numeric lookups skip string-only maps and retain sparse numeric fallback" {
@@ -7278,6 +7773,95 @@ test "shape site caches nil and absent slots but reads live map and inherited va
     try std.testing.expectEqual(ctx.program_shape_generation, FieldCacheStorage.dict_lua_shape_site_cache[fieldCacheIndex(slot_site)].program_generation);
 }
 
+test "generic arrays reject progressive sparse numeric densification" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+
+    for (1..102) |i|
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(i) }, .{ .number = @floatFromInt(i) });
+    try std.testing.expectEqual(@as(usize, 128), table.slots.len);
+
+    var value: usize = 200;
+    while (value <= 900) : (value += 100)
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
+    value = 1000;
+    while (value <= 9000) : (value += 1000)
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
+    value = 10_000;
+    while (value <= 90_000) : (value += 10_000)
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
+    value = 100_000;
+    while (value <= 900_000) : (value += 100_000)
+        try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(value) }, .{ .number = @floatFromInt(value) });
+    try table.rawSet(ctx.allocator, .{ .number = 1_000_000 }, .{ .number = 1_000_000 });
+    try table.rawSet(ctx.allocator, .{ .number = 2_000_000 }, .{ .number = 2_000_000 });
+
+    try std.testing.expectEqual(@as(usize, 128), table.slots.len);
+    try std.testing.expectEqual(@as(f64, 2_000_000), table.rawGetNumber(2_000_000).?.number);
+    try std.testing.expectEqual(@as(f64, 900_000), table.rawGet(.{ .number = 900_000 }).?.number);
+    try std.testing.expect(table.map.getContext(.{ .number = 2_000_000 }, .{}) != null);
+}
+
+test "template root errors cross cold and warm context boundaries without stale diagnostics" {
+    const Probe = struct {
+        fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            return error.NotImplemented;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source = try Context.initProgram(arena.allocator(), 0, 1);
+    defer source.deinit();
+    const roots = [_]FunctionFn{stabilize(Probe.root)};
+    source.module_root_entries = &roots;
+    source.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+    source.setAotErrorName("prior source diagnostic");
+    source.setLuaError(.{ .string = "prior source payload" });
+    var eligible = [_]bool{true};
+    for (0..3) |_| {
+        var child = try source.forkProgram(arena.allocator());
+        defer child.deinit();
+        child.module_template_context = &source;
+        child.module_template_eligible = &eligible;
+        try std.testing.expectError(error.AotCallFailed, child.requireByName("Module:TemplateProbe"));
+        try std.testing.expectEqualStrings("NotImplemented", child.aotErrorName() orelse "missing");
+        try std.testing.expect(!child.last_error_present and child.last_error == .nil);
+        try std.testing.expectEqualStrings("prior source diagnostic", source.aotErrorName().?);
+        try std.testing.expectEqualStrings("prior source payload", source.last_error.string);
+        try std.testing.expect(source.last_error_present);
+    }
+}
+
+test "template root error nil remains present across a context boundary" {
+    const Probe = struct {
+        fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            ctx.setLuaError(.nil);
+            return error.RaisedError;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source = try Context.initProgram(arena.allocator(), 0, 1);
+    defer source.deinit();
+    const roots = [_]FunctionFn{stabilize(Probe.root)};
+    source.module_root_entries = &roots;
+    source.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+    var eligible = [_]bool{true};
+    for (0..2) |_| {
+        var child = try source.forkProgram(arena.allocator());
+        defer child.deinit();
+        child.module_template_context = &source;
+        child.module_template_eligible = &eligible;
+        try std.testing.expectError(error.AotCallFailed, child.requireByName("Module:TemplateProbe"));
+        try std.testing.expect(child.last_error_present and child.last_error == .nil);
+        try std.testing.expectEqualStrings("RaisedError", child.aotErrorName() orelse "missing");
+        try std.testing.expect(!source.last_error_present and source.aotErrorName() == null);
+    }
+}
+
 test "promotion preserves canonical native callable aliases without merging private functions" {
     const Native = struct {
         fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
@@ -7404,6 +7988,33 @@ test "registered native metatables cannot become private module mutation state" 
     try std.testing.expect(!mt.export_pristine);
 }
 
+test "invoke rollback restores identity key metadata before the first insertion" {
+    const Native = struct {
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.init(a, 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    try table.rawSet(a, .{ .string = "kept" }, .{ .number = 7 });
+    const keys = [_]Value{ .{ .table = try ctx.newTable() }, try ctx.newNative(null, Native.call) };
+    for (keys) |key| {
+        try std.testing.expect(!table.has_identity_key);
+        var journal = InvokeRollbackJournal.init(a, &ctx);
+        journal.begin();
+        try table.rawSet(a, key, .{ .number = 42 });
+        try std.testing.expect(table.has_identity_key);
+        journal.rollback(&ctx);
+        try std.testing.expect(!table.has_identity_key);
+        try std.testing.expect(table.rawGet(key) == null);
+        try std.testing.expectEqual(@as(f64, 7), table.rawGet(.{ .string = "kept" }).?.number);
+    }
+}
+
 test "cloned dependency graphs keep their original mutation owner through aliases" {
     const Probe = struct {
         fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
@@ -7497,6 +8108,281 @@ test "template override cycles retain each source module mutation owner" {
     defer a.free(mutations);
     try std.testing.expectEqualSlices(u32, &.{0}, mutations);
     try std.testing.expect(dependency.rawGet(.{ .string = "changed" }) == null);
+}
+
+test "metamethods propagate one or zero result demand without losing effects or errors" {
+    const Probe = struct {
+        calls: usize = 0,
+        demand: usize = 99,
+        fail: bool = false,
+        empty: bool = false,
+        fn call(raw: ?*anyopaque, _: *Context, _: []const Value, buffer: ?[]Value) ![]const Value {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            self.demand = if (buffer) |values| values.len else 99;
+            if (self.fail) return error.MetamethodProbeFailure;
+            if (self.empty) return &.{};
+            const out = try returnBuffer(buffer, 3);
+            storeReturn(out, 0, .{ .number = 7 });
+            storeReturn(out, 1, .{ .boolean = false });
+            storeReturn(out, 2, .{ .string = "unused tail" });
+            return out;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    var probe: Probe = .{};
+    const callable = try ctx.newNativeBuffered(&probe, Probe.call);
+    const table = try ctx.newTable();
+    const other = try ctx.newTable();
+    const mt = try ctx.newTable();
+    table.metatable = mt;
+    other.metatable = mt;
+    for ([_][]const u8{ "__index", "__newindex", "__add", "__eq", "__lt" }) |name|
+        try mt.rawSet(ctx.allocator, .{ .string = name }, callable);
+    const object = Value{ .table = table };
+    const rhs = Value{ .table = other };
+    try std.testing.expectEqual(@as(f64, 7), (try ctx.getIndex(object, .{ .string = "missing" })).number);
+    try std.testing.expectEqual(@as(usize, 1), probe.demand);
+    try std.testing.expectEqual(@as(f64, 7), (try ctx.getHashedField(object, "missing", stringValueHash("missing"))).number);
+    try std.testing.expectEqual(@as(usize, 1), probe.demand);
+    ctx.string_metatable = mt;
+    try std.testing.expectEqual(@as(f64, 7), (try ctx.getIndex(.{ .string = "text" }, .{ .string = "missing" })).number);
+    try std.testing.expectEqual(@as(f64, 7), (try ctx.getHashedField(.{ .string = "text" }, "missing", stringValueHash("missing"))).number);
+    try std.testing.expectEqual(@as(f64, 7), (try ctx.binaryArith(.add, object, rhs)).number);
+    try std.testing.expect(try ctx.comparison(.eq, object, rhs));
+    try std.testing.expect(try ctx.comparison(.lt, object, rhs));
+    try std.testing.expectEqual(@as(usize, 1), probe.demand);
+    try ctx.setIndex(object, .{ .string = "new" }, .{ .number = 8 });
+    try std.testing.expectEqual(@as(usize, 0), probe.demand);
+    try ctx.setHashedField(object, "new", stringValueHash("new"), .{ .number = 8 });
+    try std.testing.expectEqual(@as(usize, 0), probe.demand);
+    try std.testing.expectEqual(@as(usize, 9), probe.calls);
+    probe.empty = true;
+    try std.testing.expect((try ctx.getIndex(object, .{ .string = "missing" })) == .nil);
+    try std.testing.expect(!(try ctx.comparison(.eq, object, rhs)));
+    probe.fail = true;
+    try std.testing.expectError(error.AotCallFailed, ctx.getIndex(object, .{ .string = "missing" }));
+    try std.testing.expectEqualStrings("MetamethodProbeFailure", ctx.aotErrorName().?);
+    ctx.clearAotErrorName();
+    try std.testing.expectError(error.AotCallFailed, ctx.setIndex(object, .{ .string = "new" }, .nil));
+    try std.testing.expectEqual(@as(usize, 0), probe.demand);
+    try std.testing.expectEqualStrings("MetamethodProbeFailure", ctx.aotErrorName().?);
+}
+
+test "context pools table headers and cells while large table buffers remain reclaimable" {
+    var request = RequestAllocator.init(std.testing.allocator);
+    defer request.deinit();
+    for (0..4) |_| {
+        {
+            var ctx = try Context.init(request.allocator(), 0);
+            defer ctx.deinit();
+            const initial = request.live_count;
+            var tables: [512]*Table = undefined;
+            var cells: [512]*Cell = undefined;
+            for (&tables, &cells, 0..) |*table, *cell, i| {
+                table.* = try ctx.newTable();
+                cell.* = try ctx.newCell(.{ .number = @floatFromInt(i) });
+            }
+            // These are 1024 separately addressable objects, not 1024 backing
+            // allocator calls. Their addresses and values survive arena growth.
+            try std.testing.expect(request.live_count < initial + 32);
+            for (tables, cells, 0..) |table, cell, i| {
+                try std.testing.expect(table.slots.len == 0 and table.map.count() == 0);
+                try std.testing.expectEqual(@as(f64, @floatFromInt(i)), cell.value.number);
+            }
+            const large = try ctx.newArrayTable(32768);
+            try large.rawSet(ctx.allocator, .{ .number = 32768 }, .{ .number = 19 });
+            const with_large = request.live_count;
+            ctx.destroyTable(large);
+            try std.testing.expect(request.live_count < with_large);
+            for (tables) |table| ctx.destroyTable(table);
+        }
+        try std.testing.expectEqual(@as(usize, 0), request.live_count);
+    }
+}
+
+fn pooledTableAllocationCase(a: std.mem.Allocator) !void {
+    var ctx = try Context.init(a, 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    defer ctx.destroyTable(table);
+    try table.rawSet(a, .{ .string = "value" }, .{ .number = 7 });
+    const array = try ctx.newArrayTable(17);
+    defer ctx.destroyTable(array);
+    const fields = [_]Value{ .{ .string = "a" }, .{ .string = "b" } };
+    const shape = Shape{ .field_keys = &fields, .field_count = 2, .choice_count = 3, .open = true };
+    const shaped = try ctx.newShapedTable(&shape);
+    defer ctx.destroyTable(shaped);
+    const native = try ctx.newNativeNamespace(.frame);
+    defer ctx.destroyTable(native);
+    const cell = try ctx.newCell(.{ .table = table });
+    try std.testing.expect(cell.value.table == table);
+}
+
+test "pooled table construction releases partial buffers on every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, pooledTableAllocationCase, .{});
+}
+
+test "canonical package slots preserve eager bootstrap dependency admission" {
+    const Probe = struct {
+        var roots: usize = 0;
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            return if (std.mem.eql(u8, raw_name, "Module:Eager")) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:Eager" else null;
+        }
+        fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            roots += 1;
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .number = 99 };
+            return out;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 1);
+    defer ctx.deinit();
+    const roots = [_]FunctionFn{stabilize(Probe.root)};
+    const keys = [_]Value{.{ .string = "Module:Eager" }};
+    const sorted = [_]u32{0};
+    const shapes = [_]Shape{.{ .field_keys = &keys, .field_count = 1, .sorted_string_slots = &sorted, .all_string_keys = true, .open = true }};
+    ctx.module_root_entries = &roots;
+    ctx.configureModules(null, Probe.lookup, Probe.name);
+    ctx.program_shapes = &shapes;
+    ctx.program_shapes_validated = true;
+    ctx.package_loaded_shape_id = 0;
+    ctx.package_loaded_module_slots = &.{0};
+    ctx.package_loaded_slot_modules = &.{0};
+    ctx.package_loaded = try ctx.newProgramShape(0);
+    Probe.roots = 0;
+    ctx.beginEagerBootstrap();
+    try std.testing.expectError(error.EagerDependencyNotInitialized, ctx.requireByName("Module:Eager"));
+    try std.testing.expectEqual(@as(usize, 0), Probe.roots);
+    try ctx.preinitializeModule(0, .{ .number = 42 }, false);
+    try std.testing.expectEqual(@as(f64, 42), (try ctx.requireByName("Module:Eager")).number);
+    try std.testing.expect(ctx.moduleState(0).?.preinitialized != null);
+    try std.testing.expect(!ctx.moduleState(0).?.deferred_require_visibility);
+    // A live package entry wins before module admission, just as on the
+    // ordinary name path. Eager mode must not erase that observation.
+    try ctx.package_loaded.?.rawSetSlot(0, .{ .number = 7 });
+    try std.testing.expectEqual(@as(f64, 7), (try ctx.requireByName("Module:Eager")).number);
+    try ctx.package_loaded.?.rawSetSlot(0, .nil);
+    ctx.endEagerBootstrap();
+    try std.testing.expectEqual(@as(f64, 42), (try ctx.requireByName("Module:Eager")).number);
+    try std.testing.expectEqual(@as(usize, 0), Probe.roots);
+}
+
+test "canonical requires reuse resolved package slots without repeating name lookup" {
+    const Probe = struct {
+        var lookups: u32 = 0;
+        var roots: u32 = 0;
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            lookups += 1;
+            return if (std.mem.eql(u8, raw_name, "Module:slot-probe") or
+                std.mem.eql(u8, raw_name, "Module:slot-probe-alias")) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return switch (id) {
+                0 => "Module:slot-probe",
+                1 => "Module:other",
+                else => null,
+            };
+        }
+        fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            roots += 1;
+            const result = try std.heap.smp_allocator.alloc(Value, 1);
+            result[0] = .{ .number = 42 };
+            return result;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fields = [_]Value{.{ .string = "Module:slot-probe" }};
+    const sorted = [_]u32{0};
+    const shapes = [_]Shape{.{ .field_keys = &fields, .field_count = 1, .sorted_string_slots = &sorted, .all_string_keys = true, .open = true }} ** 2;
+    const roots = [_]FunctionFn{stabilize(Probe.root)} ** 2;
+    const slots = [_]u32{ 0, std.math.maxInt(u32) };
+    for (0..4) |mode| {
+        Probe.lookups = 0;
+        Probe.roots = 0;
+        var ctx = try Context.initProgram(a, 0, 2);
+        defer ctx.deinit();
+        ctx.module_root_entries = &roots;
+        ctx.configureModules(null, Probe.lookup, Probe.name);
+        ctx.program_shapes = &shapes;
+        ctx.program_shapes_validated = true;
+        ctx.package_loaded_shape_id = 0;
+        ctx.package_loaded_module_slots = &slots;
+        const inverse = [_]u32{if (mode == 2) std.math.maxInt(u32) else if (mode == 3) 1 else 0};
+        ctx.package_loaded_slot_modules = &inverse;
+        const loaded = try ctx.newProgramShape(if (mode == 1) 1 else 0);
+        ctx.package_loaded = loaded;
+        const first = try ctx.requireByName("Module:slot-probe");
+        try std.testing.expectEqual(@as(f64, 42), first.number);
+        try std.testing.expectEqual(@as(u32, if (mode == 0) 0 else 1), Probe.lookups);
+        try std.testing.expectEqual(@as(u32, 1), Probe.roots);
+        const second = try ctx.requireByName("Module:slot-probe");
+        try std.testing.expect(rawEqual(first, second));
+        try std.testing.expectEqual(@as(u32, 1), Probe.roots);
+
+        // Canonical nil slots must still observe exact overflow/choice values.
+        try loaded.rawSetSlot(0, .nil);
+        try loaded.map.putContext(a, fields[0], .{ .number = 73 }, .{});
+        try std.testing.expectEqual(@as(f64, 73), (try ctx.requireByName("Module:slot-probe")).number);
+        try std.testing.expectEqual(@as(f64, 73), (try ctx.requireModuleId(0, "Module:slot-probe")).number);
+        loaded.choices = try a.alloc(ChoiceCell, 1);
+        loaded.choices[0] = .{ .key = fields[0], .value = .{ .number = 81 } };
+        try std.testing.expectEqual(@as(f64, 81), (try ctx.requireByName("Module:slot-probe")).number);
+        try std.testing.expectEqual(@as(f64, 81), (try ctx.requireModuleId(0, "Module:slot-probe")).number);
+        loaded.choices[0].value = .nil;
+        try loaded.map.putContext(a, fields[0], .nil, .{});
+        try std.testing.expect((try ctx.requireByName("Module:slot-probe")) == .nil);
+        try std.testing.expect((try ctx.requireModuleId(0, "Module:slot-probe")) == .nil);
+        _ = loaded.map.removeContext(fields[0], .{});
+        try loaded.rawSet(a, .{ .string = "arbitrary-loaded-key" }, .{ .boolean = false });
+        const before = Probe.lookups;
+        try std.testing.expect(!(try ctx.requireByName("arbitrary-loaded-key")).boolean);
+        try std.testing.expectEqual(before, Probe.lookups);
+
+        // Redirect spelling keeps its separate package entry and ordinary ID
+        // resolution; the inverse covers canonical names only.
+        try loaded.rawSetSlot(0, .{ .number = 42 });
+        try std.testing.expectEqual(@as(f64, 42), (try ctx.requireByName("Module:slot-probe-alias")).number);
+        try std.testing.expectEqual(before + 1, Probe.lookups);
+        try loaded.rawSet(a, .{ .string = "Module:slot-probe-alias" }, .{ .number = 91 });
+        try std.testing.expectEqual(@as(f64, 91), (try ctx.requireByName("Module:slot-probe-alias")).number);
+        try std.testing.expectEqual(before + 1, Probe.lookups);
+        var child = try ctx.forkProgram(a);
+        defer child.deinit();
+        try std.testing.expectEqualSlices(u32, &inverse, child.package_loaded_slot_modules);
+    }
+}
+
+test "invoke rollback restores the shared guard of aliased table exports" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.initProgram(a, 0, 2);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    try table.rawSet(a, .{ .string = "field" }, .{ .number = 7 });
+    try ctx.preinitializeModule(0, .{ .table = table }, false);
+    try ctx.preinitializeModule(1, .{ .table = table }, false);
+    const first = ctx.moduleValueSentinel(0, .{ .table = table }).?;
+    const second = ctx.moduleValueSentinel(1, .{ .table = table }).?;
+    try std.testing.expect(first == second);
+    var journal = InvokeRollbackJournal.init(a, &ctx);
+    journal.begin();
+    try table.rawSet(a, .{ .string = "field" }, .{ .number = 99 });
+    try std.testing.expect(!first.* and !second.*);
+    journal.rollback(&ctx);
+    try std.testing.expect(first.* and second.*);
+    try std.testing.expectEqual(@as(f64, 7), table.rawGet(.{ .string = "field" }).?.number);
 }
 
 test "aliased module exports invalidate every retained pristine guard" {

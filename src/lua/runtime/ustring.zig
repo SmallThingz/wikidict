@@ -4,9 +4,9 @@ const upat = @import("ustring_pattern.zig");
 
 const Value = rt.Value;
 
-fn one(_: std.mem.Allocator, value: Value) ![]const Value {
-    const out = try std.heap.smp_allocator.alloc(Value, 1);
-    out[0] = value;
+fn one(result_buffer: ?[]Value, value: Value) ![]const Value {
+    const out = try rt.returnBuffer(result_buffer, 1);
+    rt.storeReturn(out, 0, value);
     return out;
 }
 
@@ -52,27 +52,25 @@ fn byteOffset(source: []const u8, cp_index: usize) !usize {
     return pos;
 }
 
-fn uLen(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const a = runtime.allocator;
+fn uLen(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const source = try sourceArg(args);
-    return one(a, .{ .number = @floatFromInt(try countCodepoints(source)) });
+    return one(result_buffer, .{ .number = @floatFromInt(try countCodepoints(source)) });
 }
 
-fn uSub(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const a = runtime.allocator;
+fn uSub(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const source = try sourceArg(args);
     const len: i64 = @intCast(try countCodepoints(source));
     var first = normalizeIndex(if (args.len > 1 and args[1] != .nil) try integer(args[1]) else 1, len);
     var last = normalizeIndex(if (args.len > 2 and args[2] != .nil) try integer(args[2]) else -1, len);
     first = @max(@as(i64, 1), first);
     last = @min(len, last);
-    if (first > last or first > len) return one(a, .{ .string = "" });
+    if (first > last or first > len) return one(result_buffer, .{ .string = "" });
     const start = try byteOffset(source, @intCast(first));
     const end = try byteOffset(source, @intCast(last + 1));
-    return one(a, .{ .string = source[start..end] });
+    return one(result_buffer, .{ .string = source[start..end] });
 }
 
-fn uChar(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn uChar(_: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = runtime.allocator;
     var out: std.ArrayList(u8) = .empty;
     for (args) |arg| {
@@ -82,10 +80,10 @@ fn uChar(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Val
         const n = std.unicode.utf8Encode(@intCast(raw), &buf) catch return error.InvalidCodepoint;
         try out.appendSlice(a, buf[0..n]);
     }
-    return one(a, .{ .string = try out.toOwnedSlice(a) });
+    return one(result_buffer, .{ .string = try out.toOwnedSlice(a) });
 }
 
-fn uCodepoint(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+fn uCodepoint(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const source = try sourceArg(args);
     const len: i64 = @intCast(try countCodepoints(source));
     var first = normalizeIndex(if (args.len > 1 and args[1] != .nil) try integer(args[1]) else 1, len);
@@ -93,9 +91,11 @@ fn uCodepoint(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Valu
     first = @max(@as(i64, 1), first);
     last = @min(len, last);
     if (first > last or first > len) return &.{};
-    const out = try std.heap.smp_allocator.alloc(Value, @intCast(last - first + 1));
+    const count: usize = @intCast(last - first + 1);
+    const out = try rt.returnBuffer(result_buffer, count);
+    errdefer if (result_buffer == null) rt.freeResults(out);
     var pos = try byteOffset(source, @intCast(first));
-    for (out) |*value| value.* = .{ .number = @floatFromInt(try nextCodepoint(source, &pos)) };
+    for (0..count) |i| rt.storeReturn(out, i, .{ .number = @floatFromInt(try nextCodepoint(source, &pos)) });
     return out;
 }
 
@@ -105,16 +105,15 @@ const GcodepointCtx = struct {
     remaining: usize,
 };
 
-fn gcodepointNext(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
-    const a = runtime.allocator;
+fn gcodepointNext(ctx_raw: ?*anyopaque, _: *rt.Context, _: []const Value, result_buffer: ?[]Value) ![]const Value {
     const ctx: *GcodepointCtx = @ptrCast(@alignCast(ctx_raw.?));
     if (ctx.remaining == 0) return &.{};
     const cp = try nextCodepoint(ctx.source, &ctx.pos);
     ctx.remaining -= 1;
-    return one(a, .{ .number = @floatFromInt(cp) });
+    return one(result_buffer, .{ .number = @floatFromInt(cp) });
 }
 
-fn uGcodepoint(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn uGcodepoint(_: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = runtime.allocator;
     const source = try sourceArg(args);
     const len: i64 = @intCast(try countCodepoints(source));
@@ -128,7 +127,7 @@ fn uGcodepoint(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
         .pos = if (first <= len) try byteOffset(source, @intCast(first)) else source.len,
         .remaining = if (first <= last and first <= len) @intCast(last - first + 1) else 0,
     };
-    return one(a, try runtime.newNative(ctx, gcodepointNext));
+    return one(result_buffer, try runtime.newNativeBuffered(ctx, gcodepointNext));
 }
 
 const DecomposeFn = *const fn ([*]const u8, isize, ?[*]i32, isize, c_int) callconv(.c) isize;
@@ -160,21 +159,19 @@ fn createNormalizer(a: std.mem.Allocator) !*Normalizer {
     return normalizer;
 }
 
-fn uIsUtf8(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const a = runtime.allocator;
-    if (args.len == 0 or args[0] != .string) return one(a, .{ .boolean = false });
-    _ = countCodepoints(args[0].string) catch return one(a, .{ .boolean = false });
-    return one(a, .{ .boolean = true });
+fn uIsUtf8(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return one(result_buffer, .{ .boolean = false });
+    _ = countCodepoints(args[0].string) catch return one(result_buffer, .{ .boolean = false });
+    return one(result_buffer, .{ .boolean = true });
 }
 
-fn uByteoffset(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const a = runtime.allocator;
+fn uByteoffset(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const source = try sourceArg(args);
     const delta = if (args.len > 1 and args[1] != .nil) try integer(args[1]) else 1;
     var byte_index = if (args.len > 2 and args[2] != .nil) try integer(args[2]) else 1;
     const bytes_len: i64 = @intCast(source.len);
     if (byte_index < 0) byte_index = bytes_len + byte_index + 1;
-    if (byte_index < 1 or byte_index > bytes_len) return one(a, .nil);
+    if (byte_index < 1 or byte_index > bytes_len) return one(result_buffer, .nil);
     var starts: std.ArrayList(usize) = .empty;
     defer starts.deinit(std.heap.smp_allocator);
     var pos: usize = 0;
@@ -188,8 +185,8 @@ fn uByteoffset(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     var adjusted = delta;
     if (adjusted > 0 and starts.items[cp_index] == target) adjusted -= 1;
     const destination = @as(i64, @intCast(cp_index)) + adjusted;
-    if (destination < 0 or destination >= starts.items.len) return one(a, .nil);
-    return one(a, .{ .number = @floatFromInt(starts.items[@intCast(destination)] + 1) });
+    if (destination < 0 or destination >= starts.items.len) return one(result_buffer, .nil);
+    return one(result_buffer, .{ .number = @floatFromInt(starts.items[@intCast(destination)] + 1) });
 }
 
 pub const CaseKind = enum { lower, upper, title };
@@ -210,24 +207,24 @@ pub fn caseAlloc(normalizer: *Normalizer, a: std.mem.Allocator, source: []const 
     return a.dupe(u8, result[0..result_len]);
 }
 
-fn uCase(ctx_raw: ?*anyopaque, args: []const Value, a: std.mem.Allocator, upper: bool) ![]const Value {
+fn uCase(ctx_raw: ?*anyopaque, args: []const Value, a: std.mem.Allocator, upper: bool, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0) return error.StringExpected;
     const normalizer: *Normalizer = @ptrCast(@alignCast(ctx_raw.?));
     const source = try stringArg(a, args[0]);
-    return one(a, .{ .string = try caseAlloc(normalizer, a, source, if (upper) .upper else .lower) });
+    return one(result_buffer, .{ .string = try caseAlloc(normalizer, a, source, if (upper) .upper else .lower) });
 }
 
-fn uUpper(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn uUpper(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = runtime.allocator;
-    return uCase(ctx_raw, args, a, true);
+    return uCase(ctx_raw, args, a, true, result_buffer);
 }
 
-fn uLower(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn uLower(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = runtime.allocator;
-    return uCase(ctx_raw, args, a, false);
+    return uCase(ctx_raw, args, a, false, result_buffer);
 }
 
-fn uNormalize(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn uNormalize(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = runtime.allocator;
     const ctx: *NormalizeCtx = @ptrCast(@alignCast(ctx_raw.?));
     const source = try sourceArg(args);
@@ -240,7 +237,7 @@ fn uNormalize(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
     const byte_len = ctx.normalizer.reencode(storage.ptr, written, ctx.options);
     if (byte_len < 0) return error.UnicodeNormalizeFailed;
     const bytes = std.mem.sliceAsBytes(storage);
-    return one(a, .{ .string = bytes[0..@intCast(byte_len)] });
+    return one(result_buffer, .{ .string = bytes[0..@intCast(byte_len)] });
 }
 
 fn stringArg(a: std.mem.Allocator, value: Value) ![]const u8 {
@@ -259,19 +256,19 @@ fn unicodeCaptureValue(search: *const upat.Search, capture: upat.Capture) !Value
     };
 }
 
-fn unicodeCaptureResults(search: *const upat.Search, m: upat.Match, whole_if_empty: bool) ![]const Value {
+fn unicodeCaptureResults(search: *const upat.Search, m: upat.Match, whole_if_empty: bool, result_buffer: ?[]Value) ![]const Value {
     if (m.capture_count == 0) {
         if (!whole_if_empty) return &.{};
-        const out = try std.heap.smp_allocator.alloc(Value, 1);
-        out[0] = .{ .string = search.byteSlice(m.start, m.end) };
-        return out;
+        return one(result_buffer, .{ .string = search.byteSlice(m.start, m.end) });
     }
-    const out = try std.heap.smp_allocator.alloc(Value, m.capture_count);
-    for (out, 0..) |*value, i| value.* = try unicodeCaptureValue(search, m.captures[i]);
+    const out = try rt.returnBuffer(result_buffer, m.capture_count);
+    errdefer if (result_buffer == null) rt.freeResults(out);
+    // Validate every capture even when the caller does not consume its value.
+    for (0..m.capture_count) |i| rt.storeReturn(out, i, try unicodeCaptureValue(search, m.captures[i]));
     return out;
 }
 
-fn uFind(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn uFind(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len < 2) return error.MissingArgument;
     const normalizer: *Normalizer = @ptrCast(@alignCast(ctx_raw.?));
@@ -282,15 +279,16 @@ fn uFind(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     var search = try upat.Search.init(std.heap.smp_allocator, source, pat);
     defer search.deinit();
     const found = if (plain) search.findPlain(init_index) else try search.find(normalizer.category, init_index, true);
-    const m = found orelse return one(a, .nil);
-    const out = try std.heap.smp_allocator.alloc(Value, 2 + m.capture_count);
-    out[0] = .{ .number = @floatFromInt(m.start + 1) };
-    out[1] = .{ .number = @floatFromInt(m.end) };
-    for (0..m.capture_count) |i| out[2 + i] = try unicodeCaptureValue(&search, m.captures[i]);
+    const m = found orelse return one(result_buffer, .nil);
+    const out = try rt.returnBuffer(result_buffer, 2 + @as(usize, m.capture_count));
+    errdefer if (result_buffer == null) rt.freeResults(out);
+    rt.storeReturn(out, 0, .{ .number = @floatFromInt(m.start + 1) });
+    rt.storeReturn(out, 1, .{ .number = @floatFromInt(m.end) });
+    for (0..m.capture_count) |i| rt.storeReturn(out, 2 + i, try unicodeCaptureValue(&search, m.captures[i]));
     return out;
 }
 
-fn uMatch(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn uMatch(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len < 2) return error.MissingArgument;
     const normalizer: *Normalizer = @ptrCast(@alignCast(ctx_raw.?));
@@ -300,8 +298,8 @@ fn uMatch(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]co
     var search = try upat.Search.init(std.heap.smp_allocator, source, pat);
     defer search.deinit();
     var m: upat.Match = undefined;
-    if (!(try search.findInto(normalizer.category, init_index, true, &m))) return one(a, .nil);
-    return unicodeCaptureResults(&search, m, true);
+    if (!(try search.findInto(normalizer.category, init_index, true, &m))) return one(result_buffer, .nil);
+    return unicodeCaptureResults(&search, m, true, result_buffer);
 }
 
 const GmatchCtx = struct {
@@ -311,7 +309,7 @@ const GmatchCtx = struct {
     done: bool = false,
 };
 
-fn uGmatchNext(ctx_raw: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+fn uGmatchNext(ctx_raw: ?*anyopaque, _: *rt.Context, _: []const Value, result_buffer: ?[]Value) ![]const Value {
     const ctx: *GmatchCtx = @ptrCast(@alignCast(ctx_raw.?));
     if (ctx.done) return &.{};
     var m: upat.Match = undefined;
@@ -322,10 +320,10 @@ fn uGmatchNext(ctx_raw: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const 
     if (m.end == m.start) {
         if (m.end >= ctx.search.source.codepoints.len) ctx.done = true else ctx.next_start = m.end + 1;
     } else ctx.next_start = m.end;
-    return unicodeCaptureResults(&ctx.search, m, true);
+    return unicodeCaptureResults(&ctx.search, m, true, result_buffer);
 }
 
-fn uGmatch(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn uGmatch(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len < 2) return error.MissingArgument;
     const normalizer: *Normalizer = @ptrCast(@alignCast(ctx_raw.?));
@@ -333,7 +331,7 @@ fn uGmatch(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]c
     const pat = try stringArg(a, args[1]);
     const ctx = try a.create(GmatchCtx);
     ctx.* = .{ .search = try upat.Search.init(a, source, pat), .category = normalizer.category };
-    return one(a, try runtime.newNative(ctx, uGmatchNext));
+    return one(result_buffer, try runtime.newNativeBuffered(ctx, uGmatchNext));
 }
 
 fn appendUReplacement(out: *std.ArrayList(u8), repl: []const u8, search: *const upat.Search, m: upat.Match) !void {
@@ -389,16 +387,14 @@ fn replacementValue(runtime: *rt.Context, replacement: Value, search: *const upa
     const whole = search.byteSlice(m.start, m.end);
     const value: Value = switch (replacement) {
         .table => |table| blk: {
-            const captures = try unicodeCaptureResults(search, m, true);
-            defer rt.freeResults(captures);
+            var buffer: [1]Value = undefined;
+            const captures = try unicodeCaptureResults(search, m, true, &buffer);
             break :blk try runtime.getIndex(.{ .table = table }, captures[0]);
         },
         .callable => blk: {
-            const captures = try unicodeCaptureResults(search, m, true);
-            defer rt.freeResults(captures);
-            const result = try runtime.callValue(replacement, captures);
-            defer rt.freeResults(result);
-            break :blk if (result.len == 0) Value.nil else result[0];
+            var buffer: [upat.max_captures]Value = undefined;
+            const captures = try unicodeCaptureResults(search, m, true, &buffer);
+            break :blk try runtime.callValueFirst(replacement, captures);
         },
         else => return error.InvalidReplacement,
     };
@@ -411,7 +407,7 @@ fn replacementValue(runtime: *rt.Context, replacement: Value, search: *const upa
     };
 }
 
-fn uGsub(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn uGsub(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = runtime.allocator;
     if (args.len < 3) return error.MissingArgument;
     const normalizer: *Normalizer = @ptrCast(@alignCast(ctx_raw.?));
@@ -452,17 +448,17 @@ fn uGsub(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]con
     }
     try out.appendSlice(std.heap.smp_allocator, search.byteSlice(cursor, search.source.codepoints.len));
     const rendered = try a.dupe(u8, out.items);
-    const result = try std.heap.smp_allocator.alloc(Value, 2);
-    result[0] = .{ .string = rendered };
-    result[1] = .{ .number = @floatFromInt(count) };
+    const result = try rt.returnBuffer(result_buffer, 2);
+    rt.storeReturn(result, 0, .{ .string = rendered });
+    rt.storeReturn(result, 1, .{ .number = @floatFromInt(count) });
     return result;
 }
 
 fn setNative(runtime: *rt.Context, table: *rt.Table, comptime name: []const u8, comptime call: anytype) !void {
-    try table.rawSetNativeField(.ustring, name, try runtime.newNative(null, call));
+    try table.rawSetNativeField(.ustring, name, try runtime.newNativeBuffered(null, call));
 }
 fn setNativeCtx(runtime: *rt.Context, table: *rt.Table, comptime name: []const u8, host: ?*anyopaque, comptime call: anytype) !void {
-    try table.rawSetNativeField(.ustring, name, try runtime.newNative(host, call));
+    try table.rawSetNativeField(.ustring, name, try runtime.newNativeBuffered(host, call));
 }
 
 pub fn install(runtime: *rt.Context, table: *rt.Table) !*Normalizer {
@@ -494,6 +490,140 @@ pub fn install(runtime: *rt.Context, table: *rt.Table) !*Normalizer {
     if (runtime.package_loaded) |loaded|
         try loaded.rawSet(runtime.allocator, .{ .string = "mw.ustring" }, .{ .table = table });
     return normalizer;
+}
+
+test "Unicode native result buffers preserve every consumed prefix and zero-result validation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    _ = try install(&runtime, ustring);
+    const cases = [_]struct { name: []const u8, args: []const Value }{
+        .{ .name = "len", .args = &.{.{ .string = "αβ 12" }} },
+        .{ .name = "sub", .args = &.{ .{ .string = "hé猫" }, .{ .number = 2 }, .{ .number = -1 } } },
+        .{ .name = "char", .args = &.{ .{ .number = 104 }, .{ .number = 233 }, .{ .number = 29483 } } },
+        .{ .name = "codepoint", .args = &.{ .{ .string = "hé猫" }, .{ .number = 1 }, .{ .number = -1 } } },
+        .{ .name = "codepoint", .args = &.{ .{ .string = "hé猫" }, .{ .number = 4 } } },
+        .{ .name = "find", .args = &.{ .{ .string = "αβ 12" }, .{ .string = "β%s(%d+)" } } },
+        .{ .name = "find", .args = &.{ .{ .string = "αβ 12" }, .{ .string = "not present" } } },
+        .{ .name = "match", .args = &.{ .{ .string = "αβ 12" }, .{ .string = "(β)%s(%d+)()" } } },
+        .{ .name = "gsub", .args = &.{ .{ .string = "αβ 12" }, .{ .string = "(%d)" }, .{ .string = "[%1]" } } },
+        .{ .name = "upper", .args = &.{.{ .string = "straße ﬃ" }} },
+        .{ .name = "lower", .args = &.{.{ .string = "İ ΣΊΣΥΦΟΣ" }} },
+        .{ .name = "toNFC", .args = &.{.{ .string = "e\u{301}" }} },
+        .{ .name = "toNFD", .args = &.{.{ .string = "é" }} },
+        .{ .name = "isutf8", .args = &.{.{ .string = "hé猫" }} },
+        .{ .name = "isutf8", .args = &.{.{ .string = "\xff" }} },
+        .{ .name = "byteoffset", .args = &.{ .{ .string = "hé猫" }, .{ .number = 3 } } },
+    };
+    for (cases) |case| {
+        const callable = ustring.rawGet(.{ .string = case.name }).?;
+        const complete = try runtime.callValue(callable, case.args);
+        defer rt.freeResults(complete);
+        for (0..6) |capacity| {
+            var storage: [6]Value = undefined;
+            const result = try runtime.callValueFixed(callable, case.args, storage[0..capacity]);
+            defer result.deinit();
+            try std.testing.expect(!result.owned);
+            try std.testing.expectEqual(@min(capacity, complete.len), result.values.len);
+            if (result.values.len != 0) try std.testing.expect(result.values.ptr == &storage);
+            for (result.values, complete[0..result.values.len]) |actual, expected|
+                try std.testing.expect(rt.rawEqual(actual, expected));
+        }
+    }
+    const invalid = [_]struct { name: []const u8, args: []const Value }{
+        .{ .name = "len", .args = &.{.{ .string = "valid\xff" }} },
+        .{ .name = "char", .args = &.{ .{ .number = 65 }, .{ .number = -1 } } },
+        .{ .name = "codepoint", .args = &.{.{ .string = "valid\xff" }} },
+        .{ .name = "find", .args = &.{ .{ .string = "abc" }, .{ .string = "(" } } },
+        .{ .name = "match", .args = &.{ .{ .string = "abc" }, .{ .string = "(" } } },
+        .{ .name = "gsub", .args = &.{ .{ .string = "α" }, .{ .string = "." }, .{ .boolean = true } } },
+    };
+    for (invalid) |case| {
+        runtime.clearLuaError();
+        runtime.clearAotErrorName();
+        const callable = ustring.rawGet(.{ .string = case.name }).?;
+        try std.testing.expectError(error.AotCallFailed, runtime.callValue(callable, case.args));
+        const expected = try arena.allocator().dupe(u8, runtime.aotErrorName().?);
+        runtime.clearLuaError();
+        runtime.clearAotErrorName();
+        var none: [0]Value = .{};
+        try std.testing.expectError(error.AotCallFailed, runtime.callValueFixed(callable, case.args, &none));
+        try std.testing.expectEqualStrings(expected, runtime.aotErrorName().?);
+    }
+}
+
+test "Unicode capture truncation validates unconsumed captures and buffered iterators advance" {
+    var search = try upat.Search.init(std.testing.allocator, "αβ", ".");
+    defer search.deinit();
+    var match: upat.Match = .{ .start = 0, .end = 1, .captures = undefined, .capture_count = 2 };
+    match.captures[0] = .{ .slice = .{ .start = 0, .end = 1 } };
+    match.captures[1] = .{ .unfinished = 1 };
+    var one_slot: [1]Value = undefined;
+    try std.testing.expectError(error.UnfinishedCapture, unicodeCaptureResults(&search, match, true, &one_slot));
+    try std.testing.expectError(error.UnfinishedCapture, unicodeCaptureResults(&search, match, true, one_slot[0..0]));
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    _ = try install(&runtime, ustring);
+    for ([_][]const u8{ "gmatch", "gcodepoint" }) |name| {
+        const args: []const Value = if (std.mem.eql(u8, name, "gmatch"))
+            &.{ .{ .string = "αβ" }, .{ .string = "." } }
+        else
+            &.{.{ .string = "αβ" }};
+        const iterator = try runtime.callValueFirst(ustring.rawGet(.{ .string = name }).?, args);
+        const first = try runtime.callValueFixed(iterator, &.{}, one_slot[0..0]);
+        defer first.deinit();
+        try std.testing.expect(!first.owned and first.values.len == 0);
+        const second = try runtime.callValueFixed(iterator, &.{}, &one_slot);
+        defer second.deinit();
+        try std.testing.expect(!second.owned and second.values.len == 1);
+        if (std.mem.eql(u8, name, "gmatch")) {
+            try std.testing.expectEqualStrings("β", second.values[0].string);
+        } else try std.testing.expectEqual(@as(f64, 'β'), second.values[0].number);
+        const end = try runtime.callValueFixed(iterator, &.{}, &one_slot);
+        defer end.deinit();
+        try std.testing.expect(end.values.len == 0);
+    }
+}
+
+test "Unicode replacement callbacks retain arguments effects and errors with no requested results" {
+    const Probe = struct {
+        calls: usize = 0,
+        fail_on_second: bool = false,
+        fn call(raw: ?*anyopaque, _: *rt.Context, args: []const Value, buffer: ?[]Value) ![]const Value {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            try std.testing.expect(buffer != null and buffer.?.len == 1);
+            try std.testing.expectEqual(@as(usize, 2), args.len);
+            try std.testing.expect(args[0] == .string and args[1] == .number);
+            if (self.fail_on_second and self.calls == 2) return error.ReplacementProbeFailure;
+            return one(buffer, .{ .string = "X" });
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    _ = try install(&runtime, ustring);
+    const gsub = ustring.rawGet(.{ .string = "gsub" }).?;
+    var probe: Probe = .{};
+    const callback = try runtime.newNativeBuffered(&probe, Probe.call);
+    const args = [_]Value{ .{ .string = "αβ" }, .{ .string = "(.)()" }, callback };
+    var none: [0]Value = .{};
+    const first = try runtime.callValueFixed(gsub, &args, &none);
+    defer first.deinit();
+    try std.testing.expect(!first.owned and first.values.len == 0);
+    try std.testing.expectEqual(@as(usize, 2), probe.calls);
+    probe = .{ .fail_on_second = true };
+    try std.testing.expectError(error.AotCallFailed, runtime.callValueFixed(gsub, &args, &none));
+    try std.testing.expectEqual(@as(usize, 2), probe.calls);
+    try std.testing.expectEqualStrings("ReplacementProbeFailure", runtime.aotErrorName().?);
 }
 
 test "UTF-8 codepoint primitives" {
@@ -535,10 +665,12 @@ test "utf8proc canonical normalization" {
     defer runtime.deinit();
     const normalizer = try createNormalizer(a);
     var nfd_ctx = NormalizeCtx{ .normalizer = normalizer, .options = (1 << 1) | (1 << 4) };
-    const nfd = try uNormalize(&nfd_ctx, &runtime, &.{.{ .string = "é" }});
+    const nfd = try uNormalize(&nfd_ctx, &runtime, &.{.{ .string = "é" }}, null);
+    defer rt.freeResults(nfd);
     try std.testing.expectEqualStrings("e\u{301}", nfd[0].string);
     var nfc_ctx = NormalizeCtx{ .normalizer = normalizer, .options = (1 << 1) | (1 << 3) };
-    const nfc = try uNormalize(&nfc_ctx, &runtime, &.{.{ .string = "e\u{301}" }});
+    const nfc = try uNormalize(&nfc_ctx, &runtime, &.{.{ .string = "e\u{301}" }}, null);
+    defer rt.freeResults(nfc);
     try std.testing.expectEqualStrings("é", nfc[0].string);
 }
 
@@ -574,14 +706,14 @@ fn replacementUpper(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) !
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     const out = try runtime.allocator.dupe(u8, args[0].string);
     for (out) |*byte| byte.* = std.ascii.toUpper(byte.*);
-    return one(runtime.allocator, .{ .string = out });
+    return one(null, .{ .string = out });
 }
 
 fn replacementUpperFunction(runtime: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     const out = try runtime.allocator.dupe(u8, args[0].string);
     for (out) |*byte| byte.* = std.ascii.toUpper(byte.*);
-    return one(runtime.allocator, .{ .string = out });
+    return one(null, .{ .string = out });
 }
 
 test "AOT Unicode gsub supports table and callable replacements" {

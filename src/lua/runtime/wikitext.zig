@@ -112,7 +112,11 @@ pub const Expander = struct {
     install_scribunto: ?InstallScribuntoFn = null,
     scribunto_state: ?*anyopaque = null,
     scribunto_shared: ?*anyopaque = null,
+    page_runtime: ?*rt.Context = null,
     hot_translation_runtime: ?*rt.Context = null,
+    hot_translation_active: bool = false,
+    page_invoke_runtime: ?*rt.Context = null,
+    page_invoke_active: bool = false,
     page_template_eligible: []bool = &.{},
     page_template_rejected: []bool = &.{},
     base_template_eligible: []bool = &.{},
@@ -163,8 +167,12 @@ pub const Expander = struct {
         self.host.now_unix = now_unix;
         self.current_source = source;
         self.page_allocator = self.runtime.allocator;
+        self.page_runtime = self.runtime;
         self.scribunto_state = null;
         self.hot_translation_runtime = null;
+        self.hot_translation_active = false;
+        self.page_invoke_runtime = null;
+        self.page_invoke_active = false;
         self.page_heading_count = 0;
         self.fake_heading_count = 0;
         self.display_title = null;
@@ -1241,11 +1249,11 @@ pub const Expander = struct {
         var it = source.iterator();
         while (it.next()) |entry| {
             const key: Value = if (own_strings and entry.key_ptr.* == .string)
-                .{ .string = try runtime.allocator.dupe(u8, entry.key_ptr.string) }
+                .{ .string = try runtime.ownString(entry.key_ptr.string) }
             else
                 entry.key_ptr.*;
             const value: Value = if (own_strings and entry.value_ptr.* == .string)
-                .{ .string = try runtime.allocator.dupe(u8, entry.value_ptr.string) }
+                .{ .string = try runtime.ownString(entry.value_ptr.string) }
             else
                 entry.value_ptr.*;
             try out.rawSet(runtime.allocator, key, value);
@@ -1407,37 +1415,59 @@ pub const Expander = struct {
         const outer_runtime = self.runtime;
         try self.ensurePageModuleTemplates();
 
-        const reuse_translation = std.mem.eql(u8, module_name, "Module:translations") and
-            std.mem.eql(u8, function_name, "show") and
+        const translation_show = std.mem.eql(u8, module_name, "Module:translations") and
+            std.mem.eql(u8, function_name, "show");
+        const reuse_translation = translation_show and !self.hot_translation_active and
             self.hot_translation_runtime != self.runtime;
+        const reuse_page_runtime = !translation_show and
+            !self.page_invoke_active and
+            self.runtime == self.page_runtime and
+            self.page_invoke_runtime != self.runtime;
+        const retain_runtime = reuse_translation or reuse_page_runtime;
+        // A fresh nested invoke can itself recurse. Pointer inequality alone
+        // would re-enter the still-active cached child at the third level.
+        if (reuse_page_runtime) self.page_invoke_active = true;
+        defer if (reuse_page_runtime) {
+            self.page_invoke_active = false;
+        };
+        if (reuse_translation) self.hot_translation_active = true;
+        defer if (reuse_translation) {
+            self.hot_translation_active = false;
+        };
         var invoke_arena = LocalBumpArena.init(page_a);
-        defer if (!reuse_translation) invoke_arena.deinit();
+        defer if (!retain_runtime) invoke_arena.deinit();
+        var suspended_rollback: ?*rt.InvokeRollbackJournal = null;
+        if (!reuse_page_runtime) suspended_rollback = rt.suspendInvokeRollback();
+        defer if (!reuse_page_runtime) rt.resumeInvokeRollback(suspended_rollback);
         var stack_child: rt.Context = undefined;
         var child: *rt.Context = undefined;
         var owns_stack_child = false;
-        if (reuse_translation) {
-            if (self.hot_translation_runtime) |cached| {
+        if (retain_runtime) {
+            // The specialized translations graph is deliberately page-lived;
+            // general invoke rollback must neither reset nor overwrite it.
+            const cache = if (reuse_translation) &self.hot_translation_runtime else &self.page_invoke_runtime;
+            if (cache.*) |cached| {
                 child = cached;
-                // A fresh #invoke context never inherits a pending Lua/AOT
-                // failure or frame. Preserve that boundary while retaining the
-                // expensive, page-local translations module graph.
                 child.clearLuaError();
                 child.clearAotErrorName();
                 child.current_frame = null;
             } else {
                 const cached = try page_a.create(rt.Context);
-                cached.* = try outer_runtime.forkProgram(page_a);
-                cached.useContextAllocatorForStrings();
+                const template_runtime = self.page_runtime orelse outer_runtime;
+                cached.* = try template_runtime.forkProgram(page_a);
+                // Retained strings, cells and closure descriptors share the
+                // context arena. Resizable tables keep their freeing allocator.
                 cached.ownClonedStrings();
+                cached.retain_invoke_cell_baselines = reuse_page_runtime;
                 const global_shape = if (outer_runtime.global_table) |global| global.shape else null;
                 try rt.bindGlobalTable(cached, global_shape, self.env_slot);
                 if (!try cached.bootstrapProgram()) try stdlib.install(cached);
                 try install(&self.scribunto_state, self.scribunto_shared, page_a, cached, self.env_slot, self.string_slot, self.mw_slot);
-                cached.module_template_context = outer_runtime;
+                cached.module_template_context = template_runtime;
                 cached.module_template_eligible = self.page_template_eligible;
                 cached.module_template_rejected = self.page_template_rejected;
                 cached.module_template_page_scope = true;
-                self.hot_translation_runtime = cached;
+                cache.* = cached;
                 child = cached;
             }
         } else {
@@ -1456,20 +1486,30 @@ pub const Expander = struct {
         }
         defer if (owns_stack_child) child.deinit();
 
+        var rollback_journal: rt.InvokeRollbackJournal = undefined;
+        var rollback_active = false;
+        if (reuse_page_runtime) {
+            rollback_journal = rt.InvokeRollbackJournal.init(page_a, child);
+            rollback_journal.begin();
+            rollback_active = true;
+        }
+        defer if (rollback_active) {
+            rollback_journal.rollback(child);
+        };
+
         const saved_runtime = self.runtime;
         self.runtime = child;
         defer self.runtime = saved_runtime;
 
-        // Fresh invoke children die before their caller, so ordinary argument
-        // strings may be borrowed. The translations page cache outlives nested
-        // invoke arenas, however, and memoized Lua tables can retain argument
-        // strings as keys. Give that reused context page-owned strings.
-        const copied_invoke_args = try copyArgsTable(child, invoke_args, reuse_translation);
+        // A page-reused child can retain argument strings through memoized Lua
+        // tables until rollback, so give it page-owned copies. Fresh nested
+        // invoke children still borrow from their shorter-lived arena.
+        const copied_invoke_args = try copyArgsTable(child, invoke_args, retain_runtime);
         const parent: ?Value = if (existing_parent) |frame|
             frame
         else if (parent_title) |title| blk: {
             const source_args = parent_args orelse return error.MissingInvokeParentArgs;
-            const copied_parent_args = try copyArgsTable(child, source_args, reuse_translation);
+            const copied_parent_args = try copyArgsTable(child, source_args, retain_runtime);
             break :blk try frame_lib.makeFrameFromTable(child, title, copied_parent_args, null);
         } else null;
         const frame = try frame_lib.makeFrameFromTable(child, module_name, copied_invoke_args, parent);
@@ -2490,26 +2530,40 @@ const TranslationReuseProbe = struct {
     var active_context: ?*rt.Context = null;
 
     fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
-        return if (std.mem.eql(u8, raw_name, "Module:translations")) 0 else null;
+        if (std.mem.eql(u8, raw_name, "Module:translations")) return 0;
+        return if (std.mem.eql(u8, raw_name, "Module:Ordinary")) 1 else null;
     }
 
     fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
-        return if (id == 0) "Module:translations" else null;
+        return switch (id) {
+            0 => "Module:translations",
+            1 => "Module:Ordinary",
+            else => null,
+        };
     }
 
     fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         const exports = try ctx.newTable();
-        try exports.rawSet(ctx.allocator, .{ .string = "show" }, try ctx.makeFunctionKnown(1, show, &.{}));
+        const state = try ctx.allocator.create(rt.Cell);
+        state.* = .{ .value = .{ .number = 0 } };
+        try exports.rawSet(ctx.allocator, .{ .string = "show" }, try ctx.makeFunctionKnown(1, show, &.{state}));
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
         return out;
     }
 
-    fn show(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+    fn show(ctx: *rt.Context, captures: rt.Captures, args: []const Value) ![]const Value {
         if (args.len == 0 or args[0] != .table) return error.FrameExpected;
         const frame_args = try ctx.getIndex(args[0], .{ .string = "args" });
         const mode = try ctx.getIndex(frame_args, .{ .string = "mode" });
         if (mode != .string) return error.StringExpected;
+        if (std.mem.eql(u8, mode.string, "stateful")) {
+            const state = try captures.cell(0);
+            state.value.number += 1;
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = state.value;
+            return out;
+        }
         if (std.mem.eql(u8, mode.string, "named-failure")) {
             ctx.last_error = .{ .string = try ctx.allocator.dupe(u8, "first failure") };
             return error.LuaRaised;
@@ -2520,11 +2574,15 @@ const TranslationReuseProbe = struct {
             out[0] = .{ .string = if (active_context == ctx) "reused" else "fresh" };
             return out;
         }
+        if (std.mem.eql(u8, mode.string, "middle")) {
+            const preprocess_fn = try ctx.getIndex(args[0], .{ .string = "preprocess" });
+            return ctx.callValue(preprocess_fn, &.{ args[0], .{ .string = "{{#invoke:translations|show|mode=inner}}" } });
+        }
         if (std.mem.eql(u8, mode.string, "outer")) {
             active_context = ctx;
             defer active_context = null;
             const preprocess_fn = try ctx.getIndex(args[0], .{ .string = "preprocess" });
-            const nested = try ctx.callValue(preprocess_fn, &.{ args[0], .{ .string = "{{#invoke:translations|show|mode=inner}}" } });
+            const nested = try ctx.callValue(preprocess_fn, &.{ args[0], .{ .string = "{{#invoke:translations|show|mode=middle}}" } });
             defer rt.freeResults(nested);
             if (nested.len != 1 or nested[0] != .string) return error.ExpectedNestedResult;
             const out = try std.heap.smp_allocator.alloc(Value, 1);
@@ -2570,9 +2628,9 @@ test "reused invoke args own caller strings" {
 test "translations show page cache resets failures and avoids reentrant reuse" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
     defer runtime.deinit();
-    const functions = [_]rt.FunctionFn{rt.stabilize(TranslationReuseProbe.root)};
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TranslationReuseProbe.root), rt.stabilize(TranslationReuseProbe.root) };
     runtime.module_root_entries = &functions;
     runtime.configureModules(null, TranslationReuseProbe.lookup, TranslationReuseProbe.name);
     try rt.bindGlobalTable(&runtime, null, 0);
@@ -2605,6 +2663,33 @@ test "translations show page cache resets failures and avoids reentrant reuse" {
     try std.testing.expect(expander.hot_translation_runtime != null);
     expander.beginPage("Other page", "", 1_670_803_200);
     try std.testing.expect(expander.hot_translation_runtime == null);
+
+    // General invoke rollback must not replace the existing translations
+    // page cache or discard its retained module graph after every call.
+    const repeated = try expander.expandFragment(
+        "Page",
+        "{{#invoke:translations|show|mode=stateful}}|{{#invoke:translations|show|mode=stateful}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("1|2", repeated);
+    const next_page = try expander.expandFragment(
+        "Next page",
+        "{{#invoke:translations|show|mode=stateful}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("1", next_page);
+
+    const mixed = try expander.expandFragment(
+        "Mixed page",
+        "{{#invoke:Ordinary|show|mode=outer}}|{{#invoke:translations|show|mode=stateful}}|" ++
+            "{{#invoke:Ordinary|show|mode=stateful}}|{{#invoke:translations|show|mode=stateful}}|" ++
+            "{{#invoke:Ordinary|show|mode=stateful}}",
+        1_670_803_200,
+    );
+    try std.testing.expectEqualStrings("fresh|1|1|2|1", mixed);
+    try std.testing.expect(expander.hot_translation_runtime != expander.page_invoke_runtime);
+    try std.testing.expect(expander.hot_translation_runtime.?.module_template_context == &runtime);
+    try std.testing.expect(!expander.hot_translation_active and !expander.page_invoke_active);
 }
 
 test "native AOT wikitext expands templates parser functions and invoke" {

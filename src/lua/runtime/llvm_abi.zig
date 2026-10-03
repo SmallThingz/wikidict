@@ -323,6 +323,9 @@ export fn dict_lua_set_linear_index(ctx: *rt.Context, object: *const rt.Value, k
     }
     if (input.* == .nil) return 0;
     if (empty_choice == null) {
+        // Storage growth is already a mutation. Snapshot the original layout
+        // before realloc can replace it, not later in rawSetChoice.
+        rt.noteInvokeTableMutation(table) catch |err| return fail(ctx, err);
         const old_len = table.choices.len;
         const new_len: usize = if (old_len == 0) 8 else old_len * 2;
         const grown = if (old_len == 0)
@@ -525,9 +528,7 @@ export fn dict_lua_concat(ctx: *rt.Context, ptr: [*]const rt.Value, len: usize, 
     return 0;
 }
 export fn dict_lua_cell_new(ctx: *rt.Context, initial: *const rt.Value, out: **rt.Cell) callconv(.c) u32 {
-    const cell = ctx.allocator.create(rt.Cell) catch |err| return fail(ctx, err);
-    cell.* = .{ .value = initial.* };
-    out.* = cell;
+    out.* = ctx.newCell(initial.*) catch |err| return fail(ctx, err);
     return 0;
 }
 export fn dict_lua_cell_get(cell: *const rt.Cell, out: *rt.Value) callconv(.c) void {
@@ -1091,10 +1092,7 @@ test "static literal decoder materializes list named and keyed fields" {
         dict_lua_decode_static_literal(&ctx, bytes.items.ptr, bytes.items.len, &decoded),
     );
     try std.testing.expect(decoded == .table);
-    defer {
-        decoded.table.deinit(ctx.allocator);
-        ctx.allocator.destroy(decoded.table);
-    }
+    defer ctx.destroyTable(decoded.table);
     try std.testing.expectEqualStrings(
         "one",
         decoded.table.rawGet(.{ .number = 1 }).?.string,
@@ -1257,6 +1255,39 @@ test "fixed callable guard observes live metatable entry and environment" {
     const native: rt.Value = .{ .callable = &.{ .id = rt.native_function_id, .identity = 0, .entry = entry } };
     try second_mt.rawSet(ctx.allocator, .{ .string = "__call" }, native);
     try std.testing.expectEqual(@as(u8, 0), dict_lua_guard_table_call(&ctx, &value, rt.native_function_id, entry));
+}
+
+test "invoke rollback restores choice storage before a linear ABI write grows it" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try rt.Context.init(a, 0);
+    defer ctx.deinit();
+    for ([_]usize{ 0, 8 }) |count| {
+        const table = try ctx.newTable();
+        if (count != 0) {
+            table.choices = try a.alloc(rt.ChoiceCell, count);
+            for (table.choices, 0..) |*cell, i|
+                cell.* = .{ .key = .{ .number = @floatFromInt(i + 1) }, .value = .{ .boolean = true } };
+        }
+        const before = try a.dupe(rt.ChoiceCell, table.choices);
+        var journal = rt.InvokeRollbackJournal.init(a, &ctx);
+        journal.begin();
+        try std.testing.expectEqual(@as(u32, 0), dict_lua_set_linear_index(
+            &ctx,
+            &.{ .table = table },
+            &.{ .string = "new key" },
+            &.{ .number = 7 },
+        ));
+        try std.testing.expect(table.choices.len > count);
+        journal.rollback(&ctx);
+        try std.testing.expectEqual(count, table.choices.len);
+        for (before, table.choices) |old, restored| {
+            try std.testing.expect(rt.rawEqual(old.key, restored.key));
+            try std.testing.expect(rt.rawEqual(old.value, restored.value));
+        }
+        try std.testing.expect(table.rawGet(.{ .string = "new key" }) == null);
+    }
 }
 
 fn fixedCallableWrongEntry(_: *rt.Context, _: *const rt.Captures, _: [*]const rt.Value, _: usize, _: ?[*]rt.Value, _: usize) callconv(.c) rt.FunctionResult {

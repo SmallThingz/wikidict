@@ -193,6 +193,7 @@ fn baseGetMetatable(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, resul
 fn baseSetMetatable(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len < 2 or args[0] != .table) return error.TableExpected;
     if (args[0].table.metatable) |old| if (old.rawGet(.{ .string = "__metatable" }) != null) return error.ProtectedMetatable;
+    try rt.noteInvokeTableMutation(args[0].table);
     args[0].table.metatable = switch (args[1]) {
         .nil => null,
         .table => |t| t,

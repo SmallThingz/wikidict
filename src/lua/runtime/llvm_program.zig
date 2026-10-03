@@ -96,6 +96,7 @@ pub const Program = struct {
     shape_sorted_slots: []u32,
     frame_args_shape_id: ?u32,
     package_loaded_module_slots: []u32,
+    package_loaded_slot_modules: []u32,
     package_loaded_shape_id: ?u32,
     json_object_shape_id: ?u32,
     uri_query_shape_id: ?u32,
@@ -350,6 +351,21 @@ pub const Program = struct {
             for (module_names, package_loaded_module_slots) |name, *slot|
                 slot.* = rt.shapeStringSlot(package_shape, name) orelse std.math.maxInt(u32);
         }
+        const package_loaded_slot_modules = try allocator.alloc(u32, if (package_loaded_shape_id) |id|
+            program_shapes[id].field_count
+        else
+            0);
+        errdefer allocator.free(package_loaded_slot_modules);
+        @memset(package_loaded_slot_modules, std.math.maxInt(u32));
+        // Bind only canonical names to the exact module selected by the
+        // authoritative lookup index. Redirect aliases retain their ordinary
+        // resolution and independently observable package.loaded keys.
+        for (module_lookup_names, module_lookup_ids) |name, id| {
+            if (!std.mem.eql(u8, name, module_names[id])) continue;
+            const slot = package_loaded_module_slots[id];
+            if (slot < package_loaded_slot_modules.len)
+                package_loaded_slot_modules[slot] = id;
+        }
 
         var stdlib_template = try stdlib.Template.init();
         errdefer stdlib_template.deinit();
@@ -389,6 +405,7 @@ pub const Program = struct {
             .shape_sorted_slots = shape_sorted_slots,
             .frame_args_shape_id = frame_args_shape_id,
             .package_loaded_module_slots = package_loaded_module_slots,
+            .package_loaded_slot_modules = package_loaded_slot_modules,
             .package_loaded_shape_id = package_loaded_shape_id,
             .json_object_shape_id = json_object_shape_id,
             .uri_query_shape_id = uri_query_shape_id,
@@ -408,6 +425,7 @@ pub const Program = struct {
         self.allocator.free(self.shape_keys);
         self.allocator.free(self.shapes);
         self.allocator.free(self.package_loaded_module_slots);
+        self.allocator.free(self.package_loaded_slot_modules);
         self.allocator.free(self.global_sorted_slots);
         self.allocator.free(self.global_keys);
         self.allocator.free(self.synth_exports);
@@ -498,10 +516,7 @@ pub const Program = struct {
             const captures_value = try static_decode.decode(ctx, blob[1..]);
             if (captures_value != .table) return error.InvalidSyntheticCallableCaptures;
             const capture_table = captures_value.table;
-            defer {
-                capture_table.deinit(ctx.allocator);
-                ctx.allocator.destroy(capture_table);
-            }
+            defer ctx.destroyTable(capture_table);
             if (capture_table.shape != null or capture_table.native_namespace != null or
                 capture_table.append_index == 0)
                 return error.InvalidSyntheticCallableCaptures;
@@ -510,9 +525,7 @@ pub const Program = struct {
             const cells = try ctx.allocator.alloc(*rt.Cell, capture_count);
             defer ctx.allocator.free(cells);
             for (cells, 0..) |*cell_out, capture_index| {
-                const cell = try ctx.allocator.create(rt.Cell);
-                cell.* = .{ .value = capture_table.slots[capture_index] };
-                cell_out.* = cell;
+                cell_out.* = try ctx.newCell(capture_table.slots[capture_index]);
             }
             return try ctx.makeFunction(
                 meta.function_id,
@@ -558,6 +571,7 @@ pub const Program = struct {
         ctx.program_shape_generation = self.shape_generation;
         ctx.frame_args_shape_id = self.frame_args_shape_id;
         ctx.package_loaded_module_slots = self.package_loaded_module_slots;
+        ctx.package_loaded_slot_modules = self.package_loaded_slot_modules;
         ctx.package_loaded_shape_id = self.package_loaded_shape_id;
         ctx.json_object_shape_id = self.json_object_shape_id;
         ctx.uri_query_shape_id = self.uri_query_shape_id;
