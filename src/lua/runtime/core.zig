@@ -2615,6 +2615,7 @@ pub const Context = struct {
         self.depth += 1;
         errdefer self.depth -= 1;
         const previous = try self.enterModule(module_id);
+        errdefer self.restoreGlobals(previous);
         try self.static_global_scopes.append(self.allocator, previous);
     }
 
@@ -7771,6 +7772,36 @@ test "shape site caches nil and absent slots but reads live map and inherited va
     ctx.program_shape_generation += 1;
     try std.testing.expect((try ctx.getFieldAtSite(.{ .table = first }, "optional", optional_hash, slot_site)) == .nil);
     try std.testing.expectEqual(ctx.program_shape_generation, FieldCacheStorage.dict_lua_shape_site_cache[fieldCacheIndex(slot_site)].program_generation);
+}
+
+test "failed static scope entry restores caller globals and depth before recovery" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.initProgram(a, 2, 1);
+    defer ctx.deinit();
+    try bindGlobalTable(&ctx, null, 0);
+    try ctx.setGlobal(1, .{ .number = 17 });
+    const caller = try ctx.enterModule(0);
+    try ctx.setGlobal(1, .{ .number = 43 });
+    ctx.restoreGlobals(caller);
+    ctx.depth = 7;
+    var failed = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    ctx.allocator = failed.allocator();
+    const entered = ctx.enterStaticModule(0);
+    ctx.allocator = a;
+    try std.testing.expectError(error.OutOfMemory, entered);
+    try std.testing.expectEqual(@as(usize, 7), ctx.depth);
+    try std.testing.expectEqual(@as(usize, 0), ctx.static_global_scopes.items.len);
+    try std.testing.expect(ctx.globals.ptr == caller.globals.ptr);
+    try std.testing.expect(ctx.global_table == caller.global_table);
+    try std.testing.expect(ctx.global_tail == caller.global_tail);
+    try std.testing.expectEqual(@as(f64, 17), ctx.getGlobal(1).number);
+    try ctx.enterStaticModule(0);
+    try std.testing.expectEqual(@as(f64, 43), ctx.getGlobal(1).number);
+    ctx.leaveStaticFunction();
+    try std.testing.expectEqual(@as(f64, 17), ctx.getGlobal(1).number);
+    try std.testing.expectEqual(@as(usize, 7), ctx.depth);
 }
 
 test "generic arrays reject progressive sparse numeric densification" {
