@@ -440,7 +440,10 @@ pub const Table = struct {
     metatable: ?*Table = null,
     append_index: u32 = 1,
     read_only: bool = false,
-    mutation_sentinel: ?*bool = null,
+    // Every module alias of this table observes the same stable guard. Keep
+    // it in the table, not in one arbitrarily chosen module-state allocation.
+    has_export_guard: bool = false,
+    export_pristine: bool = false,
     root_tail_cache_valid: ?*bool = null,
     // Monotonic: only tables that have ever hashed a numeric key need numeric map probes.
     has_hashed_number: bool = false,
@@ -494,16 +497,25 @@ pub const Table = struct {
         if (module_template_effect_probe != null and
             self.module_template_probe_id != module_template_probe_owner_id and
             self.module_template_mutation_probe == null and
-            self.mutation_sentinel == null and
+            !self.has_export_guard and
             !self.module_template_reconstructable)
         {
             noteModuleTemplateEffectReason(1 << 1);
             markModuleTemplateEffect();
         }
-        if (self.mutation_sentinel) |sentinel| {
-            sentinel.* = false;
-        }
+        self.export_pristine = false;
         if (self.root_tail_cache_valid) |valid| valid.* = false;
+    }
+
+    fn prepareExportGuard(self: *Table) void {
+        // A later alias must never make an already-mutated export pristine.
+        if (self.has_export_guard) return;
+        self.has_export_guard = true;
+        self.export_pristine = true;
+    }
+
+    fn invalidateExportGuard(self: *Table) !void {
+        self.export_pristine = false;
     }
 
     fn identityKey(key: Value) bool {
@@ -1178,6 +1190,7 @@ const ModuleTemplateOverride = struct {
     module_id: u32,
     value: Value,
 };
+const non_table_export_pristine = false;
 const ModuleState = struct {
     loading: bool = false,
     value: ?Value = null,
@@ -1189,7 +1202,6 @@ const ModuleState = struct {
     template_init_probe_id: u64 = 0,
     template_mutation_probe_id: u64 = 0,
     template_overrides: []const ModuleTemplateOverride = &.{},
-    export_pristine: bool = false,
     globals: ?[]Value = null,
     global_tail: ?*GlobalTail = null,
     global_table: ?*Table = null,
@@ -1981,14 +1993,14 @@ pub const Context = struct {
             if (!rawEqual(visible, value)) return null;
         if (!self.eager_bootstrap) state.deferred_require_visibility = true;
         out.* = value;
-        return &state.export_pristine;
+        return if (value == .table) &value.table.export_pristine else &non_table_export_pristine;
     }
 
     pub fn moduleValueSentinel(self: *const Context, module_id: u32, value: Value) ?*const bool {
         const state = self.moduleStateConst(module_id) orelse return null;
         const expected = state.value orelse state.preinitialized orelse return null;
         if (!rawEqual(value, expected) or value != .table) return null;
-        return &state.export_pristine;
+        return &value.table.export_pristine;
     }
 
     pub fn deferStaticRequire(self: *Context, module_id: u32) ?Value {
@@ -2637,8 +2649,7 @@ pub const Context = struct {
             state.preinitialized = null;
             state.template_package_observed = source_state.template_package_observed;
             state.template_page_scoped_only = source_state.template_page_scoped_only;
-            state.export_pristine = value == .table;
-            if (value == .table) value.table.mutation_sentinel = &state.export_pristine;
+            if (value == .table) value.table.prepareExportGuard();
             state.loading = false;
             try self.target.packageLoadedModuleSet(module_id, requested, value);
             if (!self.promotion and source_state.template_package_observed)
@@ -2664,8 +2675,7 @@ pub const Context = struct {
                 const value = try self.cloneValue(override.value);
                 state.value = value;
                 state.preinitialized = null;
-                state.export_pristine = value == .table;
-                if (value == .table) value.table.mutation_sentinel = &state.export_pristine;
+                if (value == .table) value.table.prepareExportGuard();
                 state.loading = false;
                 try self.target.packageLoadedModuleSet(override.module_id, null, value);
             }
@@ -3072,10 +3082,7 @@ pub const Context = struct {
                 value,
                 &state.template_mutation_probe_id,
             );
-            if (value == .table) {
-                state.export_pristine = true;
-                value.table.mutation_sentinel = &state.export_pristine;
-            }
+            if (value == .table) value.table.prepareExportGuard();
         }
         if (snapshot_load_data and state.load_data_snapshot == null) {
             var seen: std.AutoHashMapUnmanaged(*Table, *Table) = .empty;
@@ -3128,7 +3135,7 @@ pub const Context = struct {
         }
 
         if (!valid) {
-            state.export_pristine = false;
+            if (value == .table) try value.table.invalidateExportGuard();
             state.loading = false;
             return null;
         }
@@ -3168,7 +3175,6 @@ pub const Context = struct {
         const state = try self.ensureModuleState(module_id);
         if (dynamic_template_probe and state.template_init_probe_id == 0)
             state.template_init_probe_id = module_template_probe_id;
-        state.export_pristine = false;
         state.loading = true;
         errdefer state.loading = false;
 
@@ -3224,8 +3230,7 @@ pub const Context = struct {
             value,
             &state.template_mutation_probe_id,
         );
-        state.export_pristine = value == .table;
-        if (value == .table) value.table.mutation_sentinel = &state.export_pristine;
+        if (value == .table) value.table.prepareExportGuard();
         state.loading = false;
         if (dynamic_template_probe) {
             if (observed_template_effect) {
@@ -7390,14 +7395,13 @@ test "registered native metatables cannot become private module mutation state" 
     try std.testing.expect(mt.module_template_mutation_probe == null);
     // Exporting the canonical object can install an export sentinel. That
     // sentinel must not turn later global type mutations into private effects.
-    var pristine = true;
-    mt.mutation_sentinel = &pristine;
+    mt.prepareExportGuard();
     var effect = false;
     const previous = beginModuleTemplateEffectProbe(&effect, true);
     defer endModuleTemplateEffectProbe(previous, effect);
     try mt.rawSet(a, .{ .string = "__custom" }, .{ .boolean = true });
     try std.testing.expect(effect);
-    try std.testing.expect(!pristine);
+    try std.testing.expect(!mt.export_pristine);
 }
 
 test "cloned dependency graphs keep their original mutation owner through aliases" {
@@ -7493,4 +7497,73 @@ test "template override cycles retain each source module mutation owner" {
     defer a.free(mutations);
     try std.testing.expectEqualSlices(u32, &.{0}, mutations);
     try std.testing.expect(dependency.rawGet(.{ .string = "changed" }) == null);
+}
+
+test "aliased module exports invalidate every retained pristine guard" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 3);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    try table.rawSet(ctx.allocator, .{ .string = "field" }, .{ .number = 1 });
+    try ctx.preinitializeModule(0, .{ .table = table }, false);
+    const first = ctx.moduleValueSentinel(0, .{ .table = table }).?;
+    try ctx.preinitializeModule(1, .{ .table = table }, false);
+    const second = ctx.moduleValueSentinel(1, .{ .table = table }).?;
+    try ctx.preinitializeModule(2, .{ .table = table }, false);
+    const third = ctx.moduleValueSentinel(2, .{ .table = table }).?;
+    try table.rawSet(ctx.allocator, .{ .string = "field" }, .{ .number = 2 });
+    try std.testing.expect(!first.*);
+    try std.testing.expect(!second.*);
+    try std.testing.expect(!third.*);
+}
+
+test "publishing another alias never revives a mutated export guard" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 2);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    try ctx.preinitializeModule(0, .{ .table = table }, false);
+    const first = ctx.moduleValueSentinel(0, .{ .table = table }).?;
+    try table.rawSet(ctx.allocator, .{ .string = "changed" }, .{ .boolean = true });
+    try std.testing.expect(!first.*);
+    try ctx.preinitializeModule(1, .{ .table = table }, false);
+    try std.testing.expect(!ctx.moduleValueSentinel(1, .{ .table = table }).?.*);
+    try std.testing.expect(!first.*);
+}
+
+test "module reinitialization cannot revive a previous export guard" {
+    const Probe = struct {
+        fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            const result = try std.heap.smp_allocator.alloc(Value, 1);
+            errdefer std.heap.smp_allocator.free(result);
+            result[0] = try ctx.requireModuleId(1, "Module:Dep");
+            return result;
+        }
+        fn dependency(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            return error.TestUnexpectedResult;
+        }
+        fn requirements(_: ?*const anyopaque, id: u32) []const ModuleRequirement {
+            return if (id == 0) &.{.{ .module_id = 1, .requested = "Module:Dep" }} else &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 0, 2);
+    defer ctx.deinit();
+    const roots = [_]FunctionFn{ stabilize(Probe.root), stabilize(Probe.dependency) };
+    ctx.module_root_entries = &roots;
+    ctx.configureModuleRequirements(null, Probe.requirements);
+    ctx.package_loaded = try ctx.newTable();
+    const previous = try ctx.newTable();
+    try ctx.preinitializeModule(1, .{ .table = previous }, false);
+    try ctx.preinitializeModule(0, .{ .table = previous }, false);
+    const old_guard = ctx.moduleValueSentinel(0, .{ .table = previous }).?;
+    const replacement = try ctx.newTable();
+    try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = "Module:Dep" }, .{ .table = replacement });
+    const current = try ctx.loadModule(0, "Module:Parent");
+    try std.testing.expect(current.table == replacement);
+    try std.testing.expect(!old_guard.*);
+    try std.testing.expect(ctx.moduleValueSentinel(0, current).?.*);
 }
