@@ -462,6 +462,7 @@ pub const Table = struct {
     // page/invoke contexts and by the worker-global module-template graph.
     // Only the shared mw.loadData cache sets this bit.
     cross_page_stable: bool = false,
+    native_metatable_namespace: ?NativeNamespace = null,
     // Points at the owning module state's mutation epoch for export graphs.
     // Nested table mutations can then be snapshotted as root-private module
     // overrides instead of being mistaken for page-state effects.
@@ -479,6 +480,12 @@ pub const Table = struct {
     }
 
     fn markMutated(self: *Table) void {
+        if (module_template_effect_probe != null and self.native_metatable_namespace != null) {
+            // A builtin type is shared by every object of that type. Returning
+            // its metatable from a module does not make it module-private.
+            noteModuleTemplateEffectReason(1 << 1);
+            markModuleTemplateEffect();
+        }
         if (module_template_effect_probe != null) {
             if (self.module_template_mutation_probe) |probe| {
                 probe.* = module_template_probe_id;
@@ -1410,6 +1417,9 @@ pub const Context = struct {
     module_template_clone_cells: std.AutoHashMapUnmanaged(*Cell, *Cell) = .empty,
     module_template_clone_callables: std.AutoHashMapUnmanaged(*const FunctionValue, *const FunctionValue) = .empty,
     template_native_namespaces: [native_namespace_count]?*Table = [_]?*Table{null} ** native_namespace_count,
+    // Type metatables are context singletons too. Lua may capture private
+    // methods such as a title's __lt, which has no public namespace alias.
+    template_native_metatables: [native_namespace_count]?*Table = [_]?*Table{null} ** native_namespace_count,
     module_template_page_scope: bool = false,
     page_stable_host_effects: bool = false,
     eager_bootstrap: bool = false,
@@ -1500,6 +1510,19 @@ pub const Context = struct {
 
     fn stringAllocator(self: *Context) std.mem.Allocator {
         return if (self.strings_use_context_allocator) self.allocator else self.string_arena.allocator();
+    }
+
+    pub fn registerNativeMetatable(self: *Context, namespace: NativeNamespace, table: *Table) void {
+        self.template_native_metatables[@intFromEnum(namespace)] = table;
+        table.native_metatable_namespace = namespace;
+        table.module_template_mutation_probe = null;
+        table.module_template_probe_id = 0;
+    }
+
+    fn nativeMetatableIndex(self: *const Context, table: *const Table) ?usize {
+        const namespace = table.native_metatable_namespace orelse return null;
+        const index = @intFromEnum(namespace);
+        return if (self.template_native_metatables[index] == table) index else null;
     }
 
     fn findTemplateNativeNamespace(
@@ -2189,6 +2212,7 @@ pub const Context = struct {
         }
 
         fn tagTable(self: *ModuleTemplateTagger, table: *Table) anyerror!void {
+            if (table.native_metatable_namespace != null) return;
             // Worker-owned loadData graphs cannot retain pointers into a
             // shorter-lived module state. Their descendants are immutable too.
             if (table.cross_page_stable and table.read_only) return;
@@ -2278,32 +2302,60 @@ pub const Context = struct {
         fn remapNativeCallable(
             self: *ModuleTemplateClone,
             source_function: *const FunctionValue,
-        ) ?Value {
+        ) error{UnsupportedModuleTemplate}!?Value {
             for (self.source.root_globals, self.target.root_globals) |source_value, target_value| {
                 if (source_value != .callable or source_value.callable != source_function)
                     continue;
-                if (target_value != .callable or target_value.callable.id != native_function_id)
-                    return null;
+                if (target_value != .callable or target_value.callable.id != native_function_id or
+                    target_value.callable.entry != source_function.entry)
+                    return error.UnsupportedModuleTemplate;
                 return target_value;
             }
 
             inline for (std.enums.values(static_fields.Namespace)) |namespace| {
                 if (comptime templateSingletonNamespace(namespace)) {
                     if (self.source.findTemplateNativeNamespace(namespace)) |source_table| {
-                        if (self.target.findTemplateNativeNamespace(namespace)) |target_table| {
+                        for (source_table.slots, 0..) |source_value, slot| {
+                            if (source_value != .callable or source_value.callable != source_function)
+                                continue;
+                            const target_table = self.target.findTemplateNativeNamespace(namespace) orelse
+                                return error.UnsupportedModuleTemplate;
                             if (source_table.slots.len != target_table.slots.len)
-                                return null;
-                            for (source_table.slots, target_table.slots) |source_value, target_value| {
-                                if (source_value != .callable or source_value.callable != source_function)
-                                    continue;
-                                if (target_value != .callable or target_value.callable.id != native_function_id)
-                                    return null;
-                                return target_value;
-                            }
+                                return error.UnsupportedModuleTemplate;
+                            const target_value = target_table.slots[slot];
+                            if (target_value != .callable or target_value.callable.id != native_function_id or
+                                target_value.callable.entry != source_function.entry)
+                                return error.UnsupportedModuleTemplate;
+                            return target_value;
                         }
                     }
                 }
             }
+            for (self.source.template_native_metatables, 0..) |source_opt, index| {
+                const source_table = source_opt orelse continue;
+                const key = nativeCallableKey(source_table, source_function) orelse continue;
+                const target_table = self.target.template_native_metatables[index] orelse
+                    return error.UnsupportedModuleTemplate;
+                const target_value = target_table.rawGet(key) orelse
+                    return error.UnsupportedModuleTemplate;
+                if (target_value != .callable or target_value.callable.id != native_function_id or
+                    target_value.callable.entry != source_function.entry)
+                    return error.UnsupportedModuleTemplate;
+                return target_value;
+            }
+            return null;
+        }
+
+        fn nativeCallableKey(table: *const Table, function: *const FunctionValue) ?Value {
+            for (table.slots, 0..) |value, slot| {
+                if (value == .callable and value.callable == function)
+                    return table.fieldKey(@intCast(slot)) orelse .{ .number = @floatFromInt(slot + 1) };
+            }
+            for (table.choices) |choice|
+                if (choice.value == .callable and choice.value.callable == function) return choice.key;
+            var entries = table.map.iterator();
+            while (entries.next()) |entry|
+                if (entry.value_ptr.* == .callable and entry.value_ptr.callable == function) return entry.key_ptr.*;
             return null;
         }
 
@@ -2311,23 +2363,22 @@ pub const Context = struct {
             if (self.callables.get(source_function)) |existing|
                 return .{ .callable = existing };
             if (source_function.id == native_function_id) {
+                // Canonical identity is observable independently of captures:
+                // title metatables compare __eq to mw.title.equals. Private
+                // same-entry functions must still receive distinct identities.
+                if (try self.remapNativeCallable(source_function)) |value| {
+                    try self.callables.put(self.mapAllocator(), source_function, value.callable);
+                    return value;
+                }
                 // The entrypoint is process code, but the descriptor itself is
                 // allocated in the owning Context arena. Never retain that
                 // pointer across page/template lifetimes. Context-bound native
                 // environments remain uncloneable until they have an explicit
                 // remapping contract.
                 if (source_function.env.nativePtr() != null) {
-                    const value = self.remapNativeCallable(source_function) orelse {
-                        if (work_stats.current()) |work| if (work.sampled)
-                            work_stats.logLine("module template clone unsupported: kind=native_callable entry=0x{x}\n", .{@intFromPtr(source_function.entry)});
-                        return error.UnsupportedModuleTemplate;
-                    };
-                    try self.callables.put(
-                        self.mapAllocator(),
-                        source_function,
-                        value.callable,
-                    );
-                    return value;
+                    if (work_stats.current()) |work| if (work.sampled)
+                        work_stats.logLine("module template clone unsupported: kind=native_callable entry=0x{x}\n", .{@intFromPtr(source_function.entry)});
+                    return error.UnsupportedModuleTemplate;
                 }
                 const value = try self.target.storeFunction(.{
                     .id = native_function_id,
@@ -2381,6 +2432,12 @@ pub const Context = struct {
         fn cloneTable(self: *ModuleTemplateClone, source_table: *Table) anyerror!Value {
             if (self.tables.get(source_table)) |existing|
                 return .{ .table = existing };
+            if (self.source.nativeMetatableIndex(source_table)) |index| {
+                const table = self.target.template_native_metatables[index] orelse
+                    return error.UnsupportedModuleTemplate;
+                try self.tables.put(self.mapAllocator(), source_table, table);
+                return .{ .table = table };
+            }
             if (source_table.cross_page_stable and source_table.read_only) {
                 try self.tables.put(self.mapAllocator(), source_table, source_table);
                 return .{ .table = source_table };
@@ -2622,6 +2679,8 @@ pub const Context = struct {
                 .table => |table| {
                     if (!try self.first(table)) return true;
                     if (table.cross_page_stable and table.read_only) return true;
+                    if (self.clone.source.nativeMetatableIndex(table)) |index|
+                        return self.clone.target.template_native_metatables[index] != null;
                     if (table.native_namespace) |namespace| if (templateSingletonNamespace(namespace))
                         return self.clone.target.findTemplateNativeNamespace(namespace) != null;
                     if (!table.owns_slots or table.global_tail != null or table.has_identity_key)
@@ -2641,8 +2700,10 @@ pub const Context = struct {
                 },
                 .callable => |callable| {
                     if (!try self.first(callable)) return true;
-                    if (callable.id == native_function_id)
-                        return callable.env.nativePtr() == null or self.clone.remapNativeCallable(callable) != null;
+                    if (callable.id == native_function_id) {
+                        const mapped = self.clone.remapNativeCallable(callable) catch return false;
+                        return mapped != null or callable.env.nativePtr() == null;
+                    }
                     switch (callable.captures()) {
                         .direct => |captures| for (captures) |cell| {
                             if (try self.first(cell)) if (!try self.value(cell.value)) return false;
@@ -7167,4 +7228,131 @@ test "shape site caches nil and absent slots but reads live map and inherited va
     ctx.program_shape_generation += 1;
     try std.testing.expect((try ctx.getFieldAtSite(.{ .table = first }, "optional", optional_hash, slot_site)) == .nil);
     try std.testing.expectEqual(ctx.program_shape_generation, FieldCacheStorage.dict_lua_shape_site_cache[fieldCacheIndex(slot_site)].program_generation);
+}
+
+test "promotion preserves canonical native callable aliases without merging private functions" {
+    const Native = struct {
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source = try Context.init(arena.allocator(), 1);
+    defer source.deinit();
+    var target = try Context.init(arena.allocator(), 1);
+    defer target.deinit();
+    const source_title = try source.newNativeNamespace(.title);
+    const target_title = try target.newNativeNamespace(.title);
+    const source_eq = try source.newNative(null, Native.call);
+    const target_eq = try target.newNative(null, Native.call);
+    try source_title.rawSetNativeField(.title, "equals", source_eq);
+    try target_title.rawSetNativeField(.title, "equals", target_eq);
+    try source.setGlobal(0, .{ .table = source_title });
+    try target.setGlobal(0, .{ .table = target_title });
+    var clone = Context.ModuleTemplateClone{ .source = &source, .target = &target, .promotion = true };
+    defer clone.deinit();
+    const canonical = try clone.cloneValue(source_eq);
+    try std.testing.expect(canonical.callable == target_eq.callable);
+    try std.testing.expect(rawEqual(canonical, target_eq));
+    const private = try source.newNative(null, Native.call);
+    const owned = try clone.cloneValue(private);
+    try std.testing.expect(owned.callable != private.callable);
+    try std.testing.expect(!rawEqual(owned, target_eq));
+    try std.testing.expect(rawEqual(owned, try clone.cloneValue(private)));
+    var missing = try Context.init(arena.allocator(), 1);
+    defer missing.deinit();
+    var no_namespace = Context.ModuleTemplateClone{ .source = &source, .target = &missing, .promotion = true };
+    defer no_namespace.deinit();
+    try std.testing.expectError(error.UnsupportedModuleTemplate, no_namespace.cloneValue(source_eq));
+}
+
+test "cloned native type metatables retain private method identity in the target context" {
+    const Native = struct {
+        fn less(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return &.{};
+        }
+        fn replacement(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return error.NotImplemented;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source = try Context.init(a, 0);
+    defer source.deinit();
+    var target = try Context.init(a, 0);
+    defer target.deinit();
+    const source_mt = try source.newTable();
+    const target_mt = try target.newTable();
+    const source_lt = try source.newNative(null, Native.less);
+    _ = try target.newNative(null, Native.less);
+    const target_lt = try target.newNative(null, Native.less);
+    try source_mt.rawSet(a, .{ .string = "__lt" }, source_lt);
+    try target_mt.rawSet(a, .{ .string = "__lt" }, target_lt);
+    source.registerNativeMetatable(.title_value, source_mt);
+    target.registerNativeMetatable(.title_value, target_mt);
+
+    for ([_]bool{ false, true }) |promotion| {
+        var clone = Context.ModuleTemplateClone{ .source = &source, .target = &target, .promotion = promotion };
+        defer clone.deinit();
+        const lt = try clone.cloneValue(source_lt);
+        try std.testing.expect(lt.callable == target_lt.callable);
+        try std.testing.expect(rawEqual(lt, target_mt.rawGet(.{ .string = "__lt" }).?));
+        const mt = try clone.cloneValue(.{ .table = source_mt });
+        try std.testing.expect(mt.table == target_mt);
+        const private = try source.newNative(null, Native.less);
+        const copied = try clone.cloneValue(private);
+        try std.testing.expect(copied.callable != target_lt.callable);
+        try std.testing.expect(!rawEqual(copied, target_lt));
+        try std.testing.expect(rawEqual(copied, try clone.cloneValue(private)));
+    }
+
+    var missing = try Context.init(a, 0);
+    defer missing.deinit();
+    var absent = Context.ModuleTemplateClone{ .source = &source, .target = &missing, .promotion = true };
+    defer absent.deinit();
+    try std.testing.expectError(error.UnsupportedModuleTemplate, absent.cloneValue(source_lt));
+    try std.testing.expectError(error.UnsupportedModuleTemplate, absent.cloneValue(.{ .table = source_mt }));
+    try target_mt.rawSet(a, .{ .string = "__lt" }, try target.newNative(null, Native.replacement));
+    var changed = Context.ModuleTemplateClone{ .source = &source, .target = &target, .promotion = true };
+    defer changed.deinit();
+    try std.testing.expectError(error.UnsupportedModuleTemplate, changed.cloneValue(source_lt));
+}
+
+test "registered native metatables cannot become private module mutation state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.init(a, 0);
+    defer ctx.deinit();
+    // A nested context can bootstrap while an outer module's allocation
+    // probe is active. Registration must cut this foreign lifetime edge.
+    var foreign_marker: u64 = 0;
+    const old_allocation_probe = module_template_allocation_mutation_probe;
+    module_template_allocation_mutation_probe = &foreign_marker;
+    const mt = ctx.newTable() catch |err| {
+        module_template_allocation_mutation_probe = old_allocation_probe;
+        return err;
+    };
+    module_template_allocation_mutation_probe = old_allocation_probe;
+    try std.testing.expect(mt.module_template_mutation_probe == &foreign_marker);
+    ctx.registerNativeMetatable(.title_value, mt);
+    try std.testing.expect(mt.module_template_mutation_probe == null);
+    const wrapper = try ctx.newTable();
+    try wrapper.rawSet(a, .{ .string = "type" }, .{ .table = mt });
+    var marker: u64 = 0;
+    try ctx.tagModuleTemplateValue(.{ .table = wrapper }, &marker);
+    try std.testing.expect(wrapper.module_template_mutation_probe == &marker);
+    try std.testing.expect(mt.module_template_mutation_probe == null);
+    // Exporting the canonical object can install an export sentinel. That
+    // sentinel must not turn later global type mutations into private effects.
+    var pristine = true;
+    mt.mutation_sentinel = &pristine;
+    var effect = false;
+    const previous = beginModuleTemplateEffectProbe(&effect, true);
+    defer endModuleTemplateEffectProbe(previous, effect);
+    try mt.rawSet(a, .{ .string = "__custom" }, .{ .boolean = true });
+    try std.testing.expect(effect);
+    try std.testing.expect(!pristine);
 }

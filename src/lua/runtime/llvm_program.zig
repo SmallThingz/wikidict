@@ -583,6 +583,9 @@ pub const Program = struct {
         const ctx = try self.allocator.create(rt.Context);
         errdefer self.allocator.destroy(ctx);
         ctx.* = try self.initContextBase(arena.allocator());
+        // A template root runs compiled Lua with the same builtin surface as
+        // its page child. Host observations still have no worker-page owner.
+        try scribunto.install(ctx, globals_abi.id("_G"), globals_abi.id("string"), globals_abi.id("mw"));
         self.template_arena = arena;
         self.template_context = ctx;
         return ctx;

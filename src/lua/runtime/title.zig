@@ -303,6 +303,7 @@ fn ensureMetatable(runtime: *rt.Context, state: *State) !*rt.Table {
     try mt.rawSet(runtime.allocator, .{ .string = "__newindex" }, try runtime.newNative(null, metaNewIndexCall));
     state.metatable = mt;
     state.equals = eq;
+    runtime.registerNativeMetatable(.title_value, mt);
     return mt;
 }
 fn pageExists(runtime: *rt.Context, title: []const u8) !bool {
