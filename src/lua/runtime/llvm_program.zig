@@ -94,6 +94,7 @@ pub const Program = struct {
     shapes: []rt.Shape,
     shape_keys: []rt.Value,
     shape_sorted_slots: []u32,
+    shape_string_indices: []u32,
     frame_args_shape_id: ?u32,
     package_loaded_module_slots: []u32,
     package_loaded_slot_modules: []u32,
@@ -343,6 +344,9 @@ pub const Program = struct {
         if (shape_offset != shape_field_total) return error.InvalidProgramMetadata;
         try reader.finish();
 
+        const shape_string_indices = try rt.buildShapeStringIndices(allocator, program_shapes);
+        errdefer allocator.free(shape_string_indices);
+
         const package_loaded_module_slots = try allocator.alloc(u32, module_count);
         errdefer allocator.free(package_loaded_module_slots);
         @memset(package_loaded_module_slots, std.math.maxInt(u32));
@@ -403,6 +407,7 @@ pub const Program = struct {
             .shapes = program_shapes,
             .shape_keys = shape_keys,
             .shape_sorted_slots = shape_sorted_slots,
+            .shape_string_indices = shape_string_indices,
             .frame_args_shape_id = frame_args_shape_id,
             .package_loaded_module_slots = package_loaded_module_slots,
             .package_loaded_slot_modules = package_loaded_slot_modules,
@@ -421,6 +426,7 @@ pub const Program = struct {
             self.allocator.destroy(self.template_arena.?);
         }
         self.stdlib_template.deinit();
+        self.allocator.free(self.shape_string_indices);
         self.allocator.free(self.shape_sorted_slots);
         self.allocator.free(self.shape_keys);
         self.allocator.free(self.shapes);

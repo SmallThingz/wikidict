@@ -255,12 +255,74 @@ pub fn stabilizeNativeBuffered(comptime function: anytype) FunctionFn {
 pub const Shape = struct {
     field_keys: []const Value = &.{},
     sorted_string_slots: []const u32 = &.{},
+    // Immutable program layout: zero means absent, otherwise slot + 1.
+    // Unlike a Lua table map, this never owns Values or changes on mutation.
+    string_lookup_slots: []const u32 = &.{},
     field_count: u32 = 0,
     choice_count: u32 = 0,
     open: bool = false,
     // Set only by producers that construct a complete all-string key index.
     all_string_keys: bool = false,
 };
+
+fn shapeStringIndexCapacity(shape: *const Shape) !usize {
+    if (shape.field_keys.len != shape.field_count) return error.BadShape;
+    var count: usize = 0;
+    for (shape.field_keys) |key| count += @intFromBool(key == .string);
+    const needed = std.math.mul(usize, count, 2) catch return error.OutOfMemory;
+    var capacity: usize = 1;
+    while (capacity < needed)
+        capacity = std.math.mul(usize, capacity, 2) catch return error.OutOfMemory;
+    return capacity;
+}
+
+/// Construct all string-to-slot layouts once in a single program-owned block.
+/// Field order remains authoritative, including partial indices and duplicate
+/// keys. Allocation failure leaves every input shape unchanged.
+pub fn buildShapeStringIndices(a: std.mem.Allocator, shapes: []Shape) ![]u32 {
+    var total: usize = 0;
+    for (shapes) |*shape| {
+        if (shape.string_lookup_slots.len != 0) return error.BadShape;
+        total = std.math.add(usize, total, try shapeStringIndexCapacity(shape)) catch return error.OutOfMemory;
+    }
+    const storage = try a.alloc(u32, total);
+    @memset(storage, 0);
+    var at: usize = 0;
+    for (shapes) |*shape| {
+        const capacity = shapeStringIndexCapacity(shape) catch unreachable;
+        const slots = storage[at..][0..capacity];
+        const mask = capacity - 1;
+        for (shape.field_keys, 0..) |key, slot| {
+            if (key != .string) continue;
+            var bucket: usize = @as(usize, @truncate(stringValueHash(key.string))) & mask;
+            while (slots[bucket] != 0) : (bucket = (bucket + 1) & mask) {
+                const previous = shape.field_keys[slots[bucket] - 1].string;
+                if (std.mem.eql(u8, previous, key.string)) break;
+            }
+            if (slots[bucket] == 0) slots[bucket] = @as(u32, @intCast(slot)) + 1;
+        }
+        shape.string_lookup_slots = slots;
+        at += capacity;
+    }
+    return storage;
+}
+
+fn indexedShapeStringSlot(shape: *const Shape, name: []const u8, key_hash: u64) ?u32 {
+    const slots = shape.string_lookup_slots;
+    const mask = slots.len - 1;
+    var bucket: usize = @as(usize, @truncate(key_hash)) & mask;
+    var remaining = slots.len;
+    while (remaining != 0) : (remaining -= 1) {
+        const encoded = slots[bucket];
+        if (encoded == 0) return null;
+        const slot = encoded - 1;
+        if (slot >= shape.field_keys.len) return null;
+        const key = shape.field_keys[slot];
+        if (key == .string and std.mem.eql(u8, key.string, name)) return slot;
+        bucket = (bucket + 1) & mask;
+    }
+    return null;
+}
 
 pub fn shapeStringSlot(shape: *const Shape, name: []const u8) ?u32 {
     if (shape.field_keys.len != shape.field_count) return null;
@@ -627,19 +689,30 @@ pub const Table = struct {
         }
     }
 
-    fn slotForKey(self: *const Table, key: Value) ?u32 {
-        if (key == .string) if (self.native_namespace) |namespace| {
+    fn slotForString(self: *const Table, name: []const u8, known_hash: ?u64) ?u32 {
+        if (self.native_namespace) |namespace| {
             // Namespace-map names are virtual aliases backed by numeric entries;
             // they must never become physical slots because that would change
             // iteration and string-key override semantics.
             if (namespace == .namespace_map) return null;
-            return static_fields.slotForName(namespace, key.string);
-        };
+            return static_fields.slotForName(namespace, name);
+        }
         const shape = self.shape orelse return null;
         if (shape.field_keys.len != shape.field_count) return null;
-        if (key != .string and shape.all_string_keys) return null;
-        if (key == .string and shape.sorted_string_slots.len == shape.field_keys.len)
-            return shapeStringSlot(shape, key.string);
+        if (shape.string_lookup_slots.len != 0)
+            return indexedShapeStringSlot(shape, name, known_hash orelse stringValueHash(name));
+        if (shape.sorted_string_slots.len == shape.field_keys.len)
+            return shapeStringSlot(shape, name);
+        for (shape.field_keys, 0..) |key, slot|
+            if (key == .string and std.mem.eql(u8, key.string, name)) return @intCast(slot);
+        return null;
+    }
+
+    fn slotForKey(self: *const Table, key: Value) ?u32 {
+        if (key == .string) return self.slotForString(key.string, null);
+        const shape = self.shape orelse return null;
+        if (shape.field_keys.len != shape.field_count) return null;
+        if (shape.all_string_keys) return null;
         for (shape.field_keys, 0..) |field_key, slot| {
             if (rawEqual(field_key, key)) return @intCast(slot);
         }
@@ -765,7 +838,7 @@ pub const Table = struct {
 
     pub fn rawGetHashedString(self: *const Table, name: []const u8, key_hash: u64) ?Value {
         const key = Value{ .string = name };
-        if (self.slotForKey(key)) |slot| if (self.rawGetSlot(slot)) |value| return value;
+        if (self.slotForString(name, key_hash)) |slot| if (self.rawGetSlot(slot)) |value| return value;
         for (self.choices) |cell| {
             if (cell.value != .nil and rawEqual(cell.key, key)) return cell.value;
         }
@@ -782,7 +855,7 @@ pub const Table = struct {
     fn ownHashedStringValuePtr(self: *Table, name: []const u8, key_hash: u64, witness: ?*OwnMissWitness) ?*Value {
         if (self.native_namespace != null or !self.owns_slots or
             self.global_tail != null or self.choices.len != 0) return null;
-        const slot = if (self.shape != null) self.slotForKey(.{ .string = name }) else null;
+        const slot = if (self.shape != null) self.slotForString(name, key_hash) else null;
         return self.ownHashedStringValuePtrAtSlot(name, key_hash, slot, witness);
     }
 
@@ -860,7 +933,7 @@ pub const Table = struct {
         if (self.read_only) return error.ReadOnlyTable;
         const key = Value{ .string = name };
         try self.markMutated();
-        if (self.slotForKey(key)) |slot| return self.rawSetSlot(slot, value);
+        if (self.slotForString(name, key_hash)) |slot| return self.rawSetSlot(slot, value);
         for (self.choices, 0..) |cell, choice| {
             if (cell.value != .nil and rawEqual(cell.key, key))
                 return self.rawSetChoice(@intCast(choice), key, value);
@@ -3975,6 +4048,26 @@ pub const Context = struct {
                     return error.BadShape;
             previous_string = current;
         }
+        if (shape.string_lookup_slots.len != 0) {
+            const slots = shape.string_lookup_slots;
+            if (slots.len & (slots.len - 1) != 0) return error.BadShape;
+            var occupied: usize = 0;
+            for (slots) |encoded| {
+                if (encoded == 0) continue;
+                if (encoded > shape.field_keys.len or shape.field_keys[encoded - 1] != .string)
+                    return error.BadShape;
+                occupied += 1;
+            }
+            if (occupied == slots.len) return error.BadShape;
+            for (shape.field_keys, 0..) |key, index| {
+                if (key != .string) continue;
+                const resolved = indexedShapeStringSlot(shape, key.string, stringValueHash(key.string)) orelse
+                    return error.BadShape;
+                // In field order, a duplicate can only resolve backward.
+                // A first occurrence must resolve exactly to its own slot.
+                if (resolved > index) return error.BadShape;
+            }
+        }
         return self.allocShapedTable(shape);
     }
 
@@ -4371,7 +4464,7 @@ pub const Context = struct {
                 shape_entry.shape_id == shape_id)
                 (if (shape_entry.slot == std.math.maxInt(u32)) null else shape_entry.slot)
             else resolve: {
-                const resolved = table.slotForKey(.{ .string = name });
+                const resolved = table.slotForString(name, key_hash);
                 shape_entry.* = .{
                     .site_id = site_id,
                     .program_generation = self.program_shape_generation,
@@ -4403,7 +4496,7 @@ pub const Context = struct {
         if (object == .table) {
             const table = object.table;
             if (table.shape != null or table.native_namespace != null) {
-                if (table.slotForKey(.{ .string = name })) |slot| {
+                if (table.slotForString(name, key_hash)) |slot| {
                     if (table.rawGetSlot(slot)) |value| return value;
                     if (table.metatable == null) return .nil;
                 }
@@ -4460,7 +4553,7 @@ pub const Context = struct {
         if (table.metatable == null)
             return table.rawSetHashedString(self.allocator, name, key_hash, value);
         const key = Value{ .string = name };
-        const shaped_slot = table.slotForKey(key);
+        const shaped_slot = table.slotForString(name, key_hash);
         if (shaped_slot) |slot| if (table.rawGetSlot(slot) != null) {
             // A global tail write can allocate; retain rawSet's failure effects.
             if (slot >= table.slots.len) return table.rawSetHashedString(self.allocator, name, key_hash, value);
@@ -7772,6 +7865,107 @@ test "shape site caches nil and absent slots but reads live map and inherited va
     ctx.program_shape_generation += 1;
     try std.testing.expect((try ctx.getFieldAtSite(.{ .table = first }, "optional", optional_hash, slot_site)) == .nil);
     try std.testing.expectEqual(ctx.program_shape_generation, FieldCacheStorage.dict_lua_shape_site_cache[fieldCacheIndex(slot_site)].program_generation);
+}
+
+test "immutable string slot indices preserve mixed duplicate and missing field semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.init(a, 0);
+    defer ctx.deinit();
+    const keys = [_]Value{ .{ .string = "z" }, .{ .number = 2 }, .{ .string = "" }, .{ .boolean = false }, .{ .string = "a" }, .{ .string = "z" }, .{ .string = "é" }, .{ .number = 1 } };
+    const sorted = [_]u32{ 4, 0 };
+    var shapes = [_]Shape{.{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = keys.len, .open = true }};
+    const index = try buildShapeStringIndices(std.testing.allocator, &shapes);
+    defer std.testing.allocator.free(index);
+    const table = try ctx.newShapedTable(&shapes[0]);
+    for (keys, 0..) |key, i| {
+        const expected: u32 = blk: {
+            for (keys, 0..) |candidate, slot| if (rawEqual(candidate, key)) break :blk @intCast(slot);
+            unreachable;
+        };
+        try std.testing.expectEqual(expected, table.slotForKey(key).?);
+        try table.rawSet(a, key, .{ .number = @floatFromInt(i + 10) });
+    }
+    try std.testing.expectEqual(@as(f64, 15), table.rawGetHashedString("z", stringValueHash("z")).?.number);
+    try std.testing.expect(table.slots[5] == .nil);
+    for ([_][]const u8{ "missing", "other", "\xff", "1" }) |missing| {
+        try std.testing.expect(table.slotForKey(.{ .string = missing }) == null);
+        try std.testing.expect(table.rawGetHashedString(missing, stringValueHash(missing)) == null);
+    }
+    try table.rawSetHashedString(a, "extra", stringValueHash("extra"), .{ .number = 37 });
+    const inherited = try ctx.newTable();
+    try inherited.rawSet(a, .{ .string = "a" }, .{ .number = 72 });
+    const mt = try ctx.newTable();
+    try mt.rawSet(a, .{ .string = "__index" }, .{ .table = inherited });
+    table.metatable = mt;
+    var rollback = InvokeRollbackJournal.init(a, &ctx);
+    rollback.begin();
+    try table.rawSetHashedString(a, "a", stringValueHash("a"), .nil);
+    try std.testing.expectEqual(@as(f64, 72), (try ctx.getStructuralFieldAtSite(.{ .table = table }, "a", stringValueHash("a"), 123)).number);
+    try table.rawSetHashedString(a, "extra", stringValueHash("extra"), .{ .number = 91 });
+    rollback.rollback(&ctx);
+    try std.testing.expectEqual(@as(f64, 14), table.rawGetHashedString("a", stringValueHash("a")).?.number);
+    try std.testing.expectEqual(@as(f64, 37), table.rawGetHashedString("extra", stringValueHash("extra")).?.number);
+}
+
+test "immutable string indices match the first-slot oracle through collisions and empty layouts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.init(a, 0);
+    defer ctx.deinit();
+    for (0..130) |size| {
+        const keys = try a.alloc(Value, size);
+        for (keys, 0..) |*key, i| key.* = if (i % 5 == 0)
+            .{ .number = @floatFromInt(i) }
+        else
+            .{ .string = try std.fmt.allocPrint(a, "field-{d}", .{i % 29}) };
+        var shapes = [_]Shape{.{ .field_keys = keys, .field_count = @intCast(size), .open = true }};
+        const index = try buildShapeStringIndices(a, &shapes);
+        defer a.free(index);
+        const table = try ctx.newShapedTable(&shapes[0]);
+        for (0..40) |number| {
+            const text = try std.fmt.allocPrint(a, "field-{d}", .{number});
+            const query = Value{ .string = text };
+            const expected: ?u32 = blk: {
+                for (keys, 0..) |key, slot| if (rawEqual(query, key)) break :blk @intCast(slot);
+                break :blk null;
+            };
+            try std.testing.expectEqual(expected, table.slotForKey(query));
+            try std.testing.expectEqual(expected, table.slotForString(text, stringValueHash(text)));
+        }
+    }
+}
+
+test "immutable string index validation rejects missing full and invalid layouts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]Value{ .{ .string = "item" }, .{ .number = 1 }, .{ .string = "item" } };
+    var shape = Shape{ .field_keys = &keys, .field_count = keys.len };
+    for ([_][]const u32{ &.{ 0, 0 }, &.{ 1, 1 }, &.{ 99, 0 }, &.{ 2, 0 }, &.{ 1, 0, 0 }, &.{ 3, 0 } }) |index| {
+        shape.string_lookup_slots = index;
+        try std.testing.expectError(error.BadShape, ctx.newShapedTable(&shape));
+    }
+}
+
+test "immutable string index construction is allocation-failure atomic" {
+    const Probe = struct {
+        fn run(a: std.mem.Allocator) !void {
+            const keys = [_]Value{ .{ .string = "a" }, .{ .string = "b" } };
+            var shapes = [_]Shape{.{ .field_keys = &keys, .field_count = keys.len }};
+            const index = buildShapeStringIndices(a, &shapes) catch |err| {
+                try std.testing.expectEqual(@as(usize, 0), shapes[0].string_lookup_slots.len);
+                return err;
+            };
+            defer a.free(index);
+            try std.testing.expectEqual(@as(u32, 0), indexedShapeStringSlot(&shapes[0], "a", stringValueHash("a")).?);
+            try std.testing.expectError(error.BadShape, buildShapeStringIndices(a, &shapes));
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Probe.run, .{});
 }
 
 test "failed static scope entry restores caller globals and depth before recovery" {
