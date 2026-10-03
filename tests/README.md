@@ -21,11 +21,11 @@ The thesaurus blob SHA-256 is:
 df626983893d887931379c19f32557c038567e3391cc3cfe86749bf011b1fe1e
 ```
 
-To regenerate using a compatible core checkout and its Zig 0.16 toolchain, from
+To regenerate using a compatible core checkout and its Zig 0.17.0 toolchain, from
 the desktop checkout:
 
 ```sh
-zig run -O ReleaseSafe --cache-dir .tmp/fixture-cache \
+zig run -O safe --cache-dir .tmp/fixture-cache \
   --dep blob_encoder -Mroot=tests/generate_fixture.zig \
   -Mblob_encoder=../wikidict/src/encoder/blob_root.zig -- tests/fixtures
 ```
