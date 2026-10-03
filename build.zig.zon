@@ -2,7 +2,7 @@
     .name = .dict,
     .version = "0.1.0",
     .fingerprint = 0xcbbec2a66a3b6496,
-    .minimum_zig_version = "0.16.0-dev.3013+abd131e33",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{},
     .paths = .{
         "README.md",

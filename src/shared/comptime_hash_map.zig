@@ -63,7 +63,7 @@ pub fn ComptimeHashMap(
 
         fn buildSlots() [slot_count]Slot {
             @setEvalBranchQuota(2_000_000);
-            var built: [slot_count]Slot = [_]Slot{.{}} ** slot_count;
+            var built: [slot_count]Slot = @as([slot_count]Slot, @splat(.{}));
             for (entries) |entry| {
                 var index = startIndex(entry.key);
                 while (built[index].used) : (index = (index + 1) & (slot_count - 1)) {

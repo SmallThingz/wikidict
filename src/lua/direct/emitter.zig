@@ -2070,7 +2070,7 @@ const FnEmitter = struct {
             if (static_fields.slotForName(namespace, name)) |slot| {
                 const status = if (object == .native_boxed)
                     try llvm.call(self.builder, self.rt().get_known_native_slot, &.{
-                        self.ctx(), object_box,             try self.cI32(@intFromEnum(namespace)), try self.cI32(slot),
+                        self.ctx(), object_box,             try self.cI32(@backingInt(namespace)), try self.cI32(slot),
                         key.ptr,    try self.cI64(key.len), out,
                     })
                 else
@@ -2094,7 +2094,7 @@ const FnEmitter = struct {
             }
             if (object == .native_boxed) {
                 const status = try llvm.call(self.builder, self.rt().get_known_native_slot, &.{
-                    self.ctx(),                          object_box, try self.cI32(@intFromEnum(namespace)),
+                    self.ctx(),                          object_box, try self.cI32(@backingInt(namespace)),
                     try self.cI32(std.math.maxInt(u32)), key.ptr,    try self.cI64(key.len),
                     out,
                 });
@@ -3394,7 +3394,7 @@ const FnEmitter = struct {
                     if (static_fields.slotForName(namespace, key_name)) |slot|
                         break :blk if (field.object == .native_boxed)
                             try llvm.call(self.builder, self.rt().set_known_native_slot, &.{
-                                self.ctx(),    object,                       try self.cI32(@intFromEnum(namespace)), try self.cI32(slot),
+                                self.ctx(),    object,                       try self.cI32(@backingInt(namespace)), try self.cI32(slot),
                                 field.key.ptr, try self.cI64(field.key.len), boxed,
                             })
                         else
@@ -4042,7 +4042,7 @@ const FnEmitter = struct {
                             self.valid = false;
                             return;
                         }
-                        var rhs_numbers = [_]bool{false} ** 128;
+                        var rhs_numbers = @as([128]bool, @splat(false));
                         // All RHS expressions see the old lexical environment.
                         for (s.values, 0..) |value, index| {
                             const number = self.expr(value, false);
@@ -4055,7 +4055,7 @@ const FnEmitter = struct {
                             self.valid = false;
                             return;
                         }
-                        var rhs_numbers = [_]bool{false} ** 128;
+                        var rhs_numbers = @as([128]bool, @splat(false));
                         for (s.values, 0..) |value, index| {
                             const number = self.expr(value, false);
                             if (index < s.targets.len) rhs_numbers[index] = number;

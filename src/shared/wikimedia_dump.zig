@@ -218,7 +218,7 @@ const BzByteReader = struct {
     end: usize = 0,
 
     fn open(allocator: std.mem.Allocator, path: []const u8) !BzByteReader {
-        const zpath = try allocator.dupeZ(u8, path);
+        const zpath = try allocator.dupeSentinel(u8, path, 0);
         defer allocator.free(zpath);
         const handle = BZ2_bzopen(zpath.ptr, "rb") orelse return error.Bzip2OpenFailed;
         return .{ .handle = handle };
@@ -923,7 +923,7 @@ pub fn buildPageTitleIndex(
 
     const header = mapped_out[0..page_title_index_header_len];
     @memcpy(header[0..8], page_title_index_magic);
-    std.mem.writeInt(u64, header[8..16], @intFromEnum(kind), .little);
+    std.mem.writeInt(u64, header[8..16], @backingInt(kind), .little);
     std.mem.writeInt(u64, header[16..24], @intCast(capacity), .little);
     std.mem.writeInt(u64, header[24..32], @intCast(row_count), .little);
     std.mem.writeInt(u64, header[32..40], @intCast(unique_count), .little);
