@@ -2218,7 +2218,10 @@ pub const Context = struct {
             if (table.cross_page_stable and table.read_only) return;
             const gop = try self.tables.getOrPut(self.allocator, table);
             if (gop.found_existing) return;
-            table.module_template_mutation_probe = self.marker;
+            // A later export may alias a dependency. Its traversal must not
+            // transfer that dependency's mutation ownership to the exporter.
+            if (table.module_template_mutation_probe == null)
+                table.module_template_mutation_probe = self.marker;
             for (table.slots) |item| try self.tagValue(item);
             for (table.choices) |choice| {
                 try self.tagValue(choice.key);
@@ -2260,6 +2263,9 @@ pub const Context = struct {
         source: *Context,
         target: *Context,
         promotion: bool = false,
+        source_mutation_marker: ?*const u64 = null,
+        mutation_marker: ?*u64 = null,
+        mutation_owners: std.AutoHashMapUnmanaged(*u64, *u64) = .empty,
         skip_modules: []const u32 = &.{},
         tables: std.AutoHashMapUnmanaged(*Table, *Table) = .empty,
         cells: std.AutoHashMapUnmanaged(*Cell, *Cell) = .empty,
@@ -2271,9 +2277,35 @@ pub const Context = struct {
         }
 
         fn deinit(self: *ModuleTemplateClone) void {
+            self.mutation_owners.deinit(std.heap.smp_allocator);
             self.tables.deinit(self.mapAllocator());
             self.cells.deinit(self.mapAllocator());
             self.callables.deinit(self.mapAllocator());
+        }
+
+        fn cloneMutationMarker(self: *ModuleTemplateClone, table: *const Table) !?*u64 {
+            const marker = table.module_template_mutation_probe orelse return self.mutation_marker;
+            if (marker == self.source_mutation_marker) return self.mutation_marker;
+            if (self.mutation_owners.get(marker)) |mapped| return mapped;
+            // Overrides can be reached through another module before their
+            // package entry is installed. Remap their original owner, not the
+            // module that happened to visit the graph first.
+            const address = @intFromPtr(marker);
+            for (self.source.module_state_pages, 0..) |page, page_index| if (page) |states| {
+                const first = @intFromPtr(&states.states[0].template_mutation_probe_id);
+                if (address < first) continue;
+                const delta = address - first;
+                if (delta % @sizeOf(ModuleState) != 0) continue;
+                const slot = delta / @sizeOf(ModuleState);
+                if (slot >= module_state_page_len or states.get(slot) == null) continue;
+                const id = (page_index << module_state_page_shift) | slot;
+                if (id >= self.source.module_count or id >= self.target.module_count) continue;
+                const target_state = try self.target.ensureModuleState(@intCast(id));
+                const mapped = &target_state.template_mutation_probe_id;
+                try self.mutation_owners.put(std.heap.smp_allocator, marker, mapped);
+                return mapped;
+            };
+            return self.mutation_marker;
         }
 
         fn skipsModule(self: *const ModuleTemplateClone, module_id: u32) bool {
@@ -2466,6 +2498,7 @@ pub const Context = struct {
                 return error.UnsupportedModuleTemplate;
             }
 
+            const marker = try self.cloneMutationMarker(source_table);
             const table = try self.target.allocator.create(Table);
             table.* = .{
                 .shape = source_table.shape,
@@ -2478,6 +2511,7 @@ pub const Context = struct {
                 .dense_prefix_valid = source_table.dense_prefix_valid,
                 .module_template_probe_id = module_template_probe_owner_id,
                 .module_template_reconstructable = source_table.module_template_reconstructable,
+                .module_template_mutation_probe = marker,
             };
             self.target.assignFieldCacheIdentity(table);
             try self.tables.put(self.mapAllocator(), source_table, table);
@@ -2589,16 +2623,20 @@ pub const Context = struct {
                 _ = try self.cloneModule(requirement.module_id, requirement.requested);
             }
 
+            const previous_source_marker = self.source_mutation_marker;
+            const previous_marker = self.mutation_marker;
+            self.source_mutation_marker = &source_state.template_mutation_probe_id;
+            self.mutation_marker = &state.template_mutation_probe_id;
+            defer {
+                self.source_mutation_marker = previous_source_marker;
+                self.mutation_marker = previous_marker;
+            }
             try self.cloneModuleGlobals(module_id);
             const value = try self.cloneValue(source_value);
             state.value = value;
             state.preinitialized = null;
             state.template_package_observed = source_state.template_package_observed;
             state.template_page_scoped_only = source_state.template_page_scoped_only;
-            try self.target.tagModuleTemplateValue(
-                value,
-                &state.template_mutation_probe_id,
-            );
             state.export_pristine = value == .table;
             if (value == .table) value.table.mutation_sentinel = &state.export_pristine;
             state.loading = false;
@@ -2612,15 +2650,20 @@ pub const Context = struct {
             self: *ModuleTemplateClone,
             overrides: []const ModuleTemplateOverride,
         ) anyerror!void {
+            const previous_source_marker = self.source_mutation_marker;
+            const previous_marker = self.mutation_marker;
+            defer {
+                self.source_mutation_marker = previous_source_marker;
+                self.mutation_marker = previous_marker;
+            }
             for (overrides) |override| {
-                const value = try self.cloneValue(override.value);
                 const state = try self.target.ensureModuleState(override.module_id);
+                const source_state = self.source.moduleState(override.module_id);
+                self.source_mutation_marker = if (source_state) |owner| &owner.template_mutation_probe_id else null;
+                self.mutation_marker = &state.template_mutation_probe_id;
+                const value = try self.cloneValue(override.value);
                 state.value = value;
                 state.preinitialized = null;
-                try self.target.tagModuleTemplateValue(
-                    value,
-                    &state.template_mutation_probe_id,
-                );
                 state.export_pristine = value == .table;
                 if (value == .table) value.table.mutation_sentinel = &state.export_pristine;
                 state.loading = false;
@@ -7355,4 +7398,99 @@ test "registered native metatables cannot become private module mutation state" 
     try mt.rawSet(a, .{ .string = "__custom" }, .{ .boolean = true });
     try std.testing.expect(effect);
     try std.testing.expect(!pristine);
+}
+
+test "cloned dependency graphs keep their original mutation owner through aliases" {
+    const Probe = struct {
+        fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            return error.TestUnexpectedResult;
+        }
+        fn requirements(_: ?*const anyopaque, id: u32) []const ModuleRequirement {
+            return if (id == 1) &.{.{ .module_id = 0, .requested = "Module:Dep" }} else &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source = try Context.initProgram(a, 0, 2);
+    defer source.deinit();
+    const roots = [_]FunctionFn{stabilize(Probe.root)} ** 2;
+    source.module_root_entries = &roots;
+    source.configureModuleRequirements(null, Probe.requirements);
+    const nested = try source.newTable();
+    try nested.rawSet(a, .{ .string = "value" }, .{ .number = 1 });
+    const dependency = try source.newTable();
+    try dependency.rawSet(a, .{ .string = "nested" }, .{ .table = nested });
+    const alias = try source.newTable();
+    try alias.rawSet(a, .{ .string = "dependency" }, .{ .table = dependency });
+    try source.preinitializeModule(0, .{ .table = dependency }, false);
+    try source.preinitializeModule(1, .{ .table = alias }, false);
+    var child = try source.forkProgram(a);
+    defer child.deinit();
+    var eligible = [_]bool{ true, true };
+    child.module_template_context = &source;
+    child.module_template_eligible = &eligible;
+    const first = try child.loadModule(0, "Module:Dep");
+    const second = try child.loadModule(1, "Module:Alias");
+    try std.testing.expect(rawEqual(first, second.table.rawGet(.{ .string = "dependency" }).?));
+    const cloned_nested = first.table.rawGet(.{ .string = "nested" }).?.table;
+    const owner = &child.moduleState(0).?.template_mutation_probe_id;
+    try std.testing.expect(cloned_nested.module_template_mutation_probe == owner);
+    var observed = false;
+    const probe = beginModuleTemplateEffectProbe(&observed, true);
+    defer endModuleTemplateEffectProbe(probe, observed);
+    try cloned_nested.rawSet(a, .{ .string = "value" }, .{ .number = 2 });
+    const mutations = try child.moduleTemplateProbeModules(a, module_template_probe_id, 1);
+    defer a.free(mutations);
+    try std.testing.expectEqualSlices(u32, &.{0}, mutations);
+    try std.testing.expectEqual(@as(f64, 1), nested.rawGet(.{ .string = "value" }).?.number);
+}
+
+test "template override cycles retain each source module mutation owner" {
+    const Probe = struct {
+        fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            return error.TestUnexpectedResult;
+        }
+        fn requirements(_: ?*const anyopaque, id: u32) []const ModuleRequirement {
+            return if (id == 1) &.{.{ .module_id = 0, .requested = "Module:Dep" }} else &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source = try Context.initProgram(a, 0, 2);
+    defer source.deinit();
+    const roots = [_]FunctionFn{stabilize(Probe.root)} ** 2;
+    source.module_root_entries = &roots;
+    source.configureModuleRequirements(null, Probe.requirements);
+    const dependency = try source.newTable();
+    try source.preinitializeModule(0, .{ .table = dependency }, false);
+    const alias = try source.newTable();
+    try alias.rawSet(a, .{ .string = "dependency" }, .{ .table = dependency });
+    try source.preinitializeModule(1, .{ .table = alias }, false);
+    try dependency.rawSet(a, .{ .string = "back" }, .{ .table = alias });
+    const overrides = [_]ModuleTemplateOverride{.{ .module_id = 0, .value = .{ .table = dependency } }};
+    source.moduleState(1).?.template_overrides = &overrides;
+    try std.testing.expect(dependency.module_template_mutation_probe == &source.moduleState(0).?.template_mutation_probe_id);
+    try std.testing.expect(alias.module_template_mutation_probe == &source.moduleState(1).?.template_mutation_probe_id);
+
+    var child = try source.forkProgram(a);
+    defer child.deinit();
+    var eligible = [_]bool{ true, true };
+    child.module_template_context = &source;
+    child.module_template_eligible = &eligible;
+    const copied_alias = (try child.loadModule(1, "Module:Alias")).table;
+    const copied_dep = copied_alias.rawGet(.{ .string = "dependency" }).?.table;
+    try std.testing.expect(copied_dep == (try child.loadModule(0, "Module:Dep")).table);
+    try std.testing.expect(copied_alias == copied_dep.rawGet(.{ .string = "back" }).?.table);
+    try std.testing.expect(copied_dep.module_template_mutation_probe == &child.moduleState(0).?.template_mutation_probe_id);
+    try std.testing.expect(copied_alias.module_template_mutation_probe == &child.moduleState(1).?.template_mutation_probe_id);
+    var observed = false;
+    const probe = beginModuleTemplateEffectProbe(&observed, true);
+    defer endModuleTemplateEffectProbe(probe, observed);
+    try copied_dep.rawSet(a, .{ .string = "changed" }, .{ .boolean = true });
+    const mutations = try child.moduleTemplateProbeModules(a, module_template_probe_id, 1);
+    defer a.free(mutations);
+    try std.testing.expectEqualSlices(u32, &.{0}, mutations);
+    try std.testing.expect(dependency.rawGet(.{ .string = "changed" }) == null);
 }
