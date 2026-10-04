@@ -1,0 +1,125 @@
+{
+  "source_commit": "65772ef",
+  "control_worker_commit": "243d29f",
+  "leaf_sha256": "b37d9a9632e19f57b63857d06ffb222804984e015b510b2907f9c388aee812fd",
+  "policy": "Same ReleaseFast blob builder, Clang23 native objects, exact leaf and metadata, four-worker dirty-host ABBA; no clean-host or full-corpus speed claim",
+  "cohorts": {
+    "rep10k": {
+      "artifact_guard": true,
+      "parity": "exact output parity passed",
+      "runs": [
+        {
+          "variant": "accepted",
+          "label": "1-accepted",
+          "selected_pages": 10000,
+          "wall_seconds": 43.704209258954506,
+          "child_cpu_seconds": 121.160247,
+          "counters": {
+            "cpu_core/instructions/u": 513601994235,
+            "cpu_core/cycles/u": 373464928619
+          },
+          "exit_code": 0
+        },
+        {
+          "variant": "memory",
+          "label": "2-memory",
+          "selected_pages": 10000,
+          "wall_seconds": 57.98460922401864,
+          "child_cpu_seconds": 116.35379199999998,
+          "counters": {
+            "cpu_core/instructions/u": 513191768282,
+            "cpu_core/cycles/u": 357474606260
+          },
+          "exit_code": 0
+        },
+        {
+          "variant": "memory",
+          "label": "3-memory",
+          "selected_pages": 10000,
+          "wall_seconds": 41.24157601199113,
+          "child_cpu_seconds": 116.07756099999995,
+          "counters": {
+            "cpu_core/instructions/u": 512819078637,
+            "cpu_core/cycles/u": 349020203399
+          },
+          "exit_code": 0
+        },
+        {
+          "variant": "accepted",
+          "label": "4-accepted",
+          "selected_pages": 10000,
+          "wall_seconds": 49.54129583603935,
+          "child_cpu_seconds": 121.457324,
+          "counters": {
+            "cpu_core/instructions/u": 512771043763,
+            "cpu_core/cycles/u": 366974979135
+          },
+          "exit_code": 0
+        }
+      ]
+    },
+    "head36": {
+      "artifact_guard": true,
+      "parity": "exact output parity passed",
+      "runs": [
+        {
+          "variant": "accepted",
+          "label": "1-accepted",
+          "selected_pages": 36,
+          "wall_seconds": 70.0295874819858,
+          "child_cpu_seconds": 167.28982599999998,
+          "counters": {
+            "cpu_core/instructions/u": 1232424543545,
+            "cpu_core/cycles/u": 518717930337
+          },
+          "exit_code": 0
+        },
+        {
+          "variant": "memory",
+          "label": "2-memory",
+          "selected_pages": 36,
+          "wall_seconds": 60.76822467602324,
+          "child_cpu_seconds": 136.31134099999997,
+          "counters": {
+            "cpu_core/instructions/u": 1231696234957,
+            "cpu_core/cycles/u": 437319240475
+          },
+          "exit_code": 0
+        },
+        {
+          "variant": "memory",
+          "label": "3-memory",
+          "selected_pages": 36,
+          "wall_seconds": 62.52554455696372,
+          "child_cpu_seconds": 137.93492399999997,
+          "counters": {
+            "cpu_core/instructions/u": 1232655027431,
+            "cpu_core/cycles/u": 445449004091
+          },
+          "exit_code": 0
+        },
+        {
+          "variant": "accepted",
+          "label": "4-accepted",
+          "selected_pages": 36,
+          "wall_seconds": 61.56803324702196,
+          "child_cpu_seconds": 137.008174,
+          "counters": {
+            "cpu_core/instructions/u": 1232185333225,
+            "cpu_core/cycles/u": 441558150864
+          },
+          "exit_code": 0
+        }
+      ]
+    }
+  },
+  "memory_replay": {
+    "requests": 196,
+    "exact_repeated_responses": true,
+    "operational_failures": 0,
+    "schedule": "mond 64 times, then official first 32 pages plus mond, repeated four times, one persistent diagnostic worker",
+    "failed_mmap_log_bytes": 0,
+    "worker_exit": 0,
+    "qualification": "Fixed working set only; first100k history qualification remains pending"
+  }
+}
