@@ -1,0 +1,107 @@
+{
+  "decision": "Not retained: exact correctness/ABI parity passed, but CPU/cycle changes overlap baseline variation; reduced instructions alone do not establish a speedup.",
+  "baseline_commit": "65772ef",
+  "hardware": "Two E cores, affinity8,10; cpu_atom counters. Separate four-P-core history job ongoing.",
+  "cohorts": {
+    "rep10k": {
+      "artifact_guard": true,
+      "parity": "exact",
+      "runs": [
+        {
+          "label": "1-accepted",
+          "selected_pages": 10000,
+          "wall_seconds": 77.95260314299958,
+          "child_cpu_seconds": 135.78597900000003,
+          "counters": {
+            "cpu_atom/instructions/u": 496905357559,
+            "cpu_atom/cycles/u": 304276791095
+          },
+          "exit_code": 0
+        },
+        {
+          "label": "2-receiver",
+          "selected_pages": 10000,
+          "wall_seconds": 92.50075006799307,
+          "child_cpu_seconds": 136.42139499999996,
+          "counters": {
+            "cpu_atom/instructions/u": 493604118580,
+            "cpu_atom/cycles/u": 302219160226
+          },
+          "exit_code": 0
+        },
+        {
+          "label": "3-receiver",
+          "selected_pages": 10000,
+          "wall_seconds": 82.39816452201921,
+          "child_cpu_seconds": 135.595821,
+          "counters": {
+            "cpu_atom/instructions/u": 493592493956,
+            "cpu_atom/cycles/u": 305670732087
+          },
+          "exit_code": 0
+        },
+        {
+          "label": "4-accepted",
+          "selected_pages": 10000,
+          "wall_seconds": 92.22921531298198,
+          "child_cpu_seconds": 137.13165399999994,
+          "counters": {
+            "cpu_atom/instructions/u": 494155206970,
+            "cpu_atom/cycles/u": 310189849476
+          },
+          "exit_code": 0
+        }
+      ]
+    },
+    "head36": {
+      "artifact_guard": true,
+      "parity": "exact",
+      "runs": [
+        {
+          "label": "1-accepted",
+          "selected_pages": 36,
+          "wall_seconds": 129.63253389898455,
+          "child_cpu_seconds": 208.41172600000002,
+          "counters": {
+            "cpu_atom/instructions/u": 1217792898901,
+            "cpu_atom/cycles/u": 484023927841
+          },
+          "exit_code": 0
+        },
+        {
+          "label": "2-receiver",
+          "selected_pages": 36,
+          "wall_seconds": 116.0347965649562,
+          "child_cpu_seconds": 203.99050000000003,
+          "counters": {
+            "cpu_atom/instructions/u": 1196184840889,
+            "cpu_atom/cycles/u": 473836695514
+          },
+          "exit_code": 0
+        },
+        {
+          "label": "3-receiver",
+          "selected_pages": 36,
+          "wall_seconds": 124.10560437297681,
+          "child_cpu_seconds": 205.39351500000006,
+          "counters": {
+            "cpu_atom/instructions/u": 1196206105292,
+            "cpu_atom/cycles/u": 478758483665
+          },
+          "exit_code": 0
+        },
+        {
+          "label": "4-accepted",
+          "selected_pages": 36,
+          "wall_seconds": 117.58956763101742,
+          "child_cpu_seconds": 203.73003400000016,
+          "counters": {
+            "cpu_atom/instructions/u": 1217835463036,
+            "cpu_atom/cycles/u": 477273502428
+          },
+          "exit_code": 0
+        }
+      ]
+    }
+  }
+}
