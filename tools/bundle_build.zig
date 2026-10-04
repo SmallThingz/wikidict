@@ -22,6 +22,7 @@ const Options = struct {
     llvm_workers: ?usize = null,
     page_workers: usize = 1,
     expansion_timeout_ms: ?u32 = null,
+    now_unix: ?i64 = null,
     parse_workers: usize = 4,
     expander_only: bool = false,
     extraction_cache_root: ?[]const u8 = null,
@@ -104,6 +105,11 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.expansion_timeout_ms != null) return error.Usage;
             options.expansion_timeout_ms = try expansion_deadline.parse(args[index]);
+        } else if (std.mem.eql(u8, args[index], "--now-unix")) {
+            index += 1;
+            if (index >= args.len or options.now_unix != null) return error.Usage;
+            options.now_unix = std.fmt.parseInt(i64, args[index], 10) catch return error.Usage;
+            if (options.now_unix.? <= 0) return error.Usage;
         } else if (std.mem.eql(u8, args[index], "--page-workers")) {
             index += 1;
             if (index >= args.len) return error.Usage;
@@ -1048,8 +1054,9 @@ pub fn main(init: std.process.Init) !void {
     }
     const page_workers_text = try std.fmt.allocPrint(a, "{d}", .{options.page_workers});
     const timeout_text = try std.fmt.allocPrint(a, "{d}", .{options.expansion_timeout_ms orelse expansion_deadline.default_ms});
+    const now_text = try std.fmt.allocPrint(a, "{d}", .{options.now_unix orelse std.Io.Clock.real.now(init.io).toSeconds()});
     try stage(init.io, marker, "expand and encode dictionary blobs", &.{
-        paths.blobs, dump, root, "--expander-root", expander_root, "--workers", page_workers_text, "--expansion-timeout-ms", timeout_text,
+        paths.blobs, dump, root, "--expander-root", expander_root, "--workers", page_workers_text, "--expansion-timeout-ms", timeout_text, "--now-unix", now_text,
     });
     try std.Io.Dir.cwd().deleteTree(init.io, expander_root);
     try std.Io.Dir.cwd().deleteFile(init.io, marker);
@@ -1064,4 +1071,13 @@ test "pipeline expansion deadline preserves the default and validates overrides"
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expansion-timeout-ms" }));
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expansion-timeout-ms", "3600001" }));
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expansion-timeout-ms", "100", "--expansion-timeout-ms", "200" }));
+}
+
+test "pipeline pins explicit build time and rejects invalid duplicate timestamps" {
+    const configured = try parseOptions(&.{ "dump.xml", "out", "--now-unix", "1791072000" });
+    try std.testing.expectEqual(@as(?i64, 1791072000), configured.now_unix);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--now-unix", "0" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--now-unix", "-1" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--now-unix", "9223372036854775808" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--now-unix", "1", "--now-unix", "2" }));
 }

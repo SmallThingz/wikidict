@@ -24,7 +24,7 @@ import urllib.request
 
 BASE = "https://dumps.wikimedia.org"
 AGENT = "Wikidict/1.0 (https://github.com/SmallThingz/wikidict)"
-JOBS = ("metacurrentdump", "categorytable", "categorylinkstable", "pagepropstable", "redirecttable", "sitestatstable", "linktargettable")
+JOBS = ("metacurrentdump", "pagetable", "categorytable", "categorylinkstable", "pagepropstable", "redirecttable", "sitestatstable", "linktargettable")
 ISO_639_3_PATHS = (
     Path("/usr/share/iso-codes/json/iso_639-3.json"),
     Path("/usr/local/share/iso-codes/json/iso_639-3.json"),
@@ -656,6 +656,40 @@ def download_all(files, root, connections):
     if result or failures:
         raise SystemExit(f"{len(failures)} downloads incomplete. Resume with the same --output and --resume.")
 
+def select_manifest_files(manifest, requested=None):
+    """Fail closed on incomplete discovery; explicit subsets may exclude failures."""
+    if not isinstance(manifest, dict) or not isinstance(manifest.get('files'), list):
+        raise ValueError('Invalid dump manifest')
+    files = manifest['files']
+    for item in files:
+        validate_item(item)
+    available = {item['wiki'] for item in files}
+    declared = manifest.get('requested_editions')
+    if declared is not None and (not isinstance(declared, list) or
+            any(not isinstance(wiki, str) or not re.fullmatch(r'[a-z0-9_-]+wiktionary', wiki) for wiki in declared) or
+            len(set(declared)) != len(declared)):
+        raise ValueError('Invalid requested edition inventory')
+    expected = set(declared) if declared is not None else available
+    if available - expected:
+        raise ValueError('Dump manifest contains undeclared editions')
+    failures = manifest.get('failures', [])
+    if not isinstance(failures, list) or any(not isinstance(error, str) for error in failures):
+        raise ValueError('Invalid discovery failure records')
+    wanted = set(requested) if requested is not None else expected
+    if not wanted:
+        raise ValueError('No editions selected')
+    if requested is None and failures:
+        raise ValueError('Incomplete edition discovery: ' + '; '.join(failures))
+    if requested is not None:
+        relevant = [error for error in failures if error.split(':', 1)[0] in wanted]
+        if relevant:
+            raise ValueError('Selected edition discovery failed: ' + '; '.join(relevant))
+    missing = wanted - available
+    if missing:
+        raise ValueError('Unknown editions: ' + ', '.join(sorted(missing)))
+    return [item for item in files if item['wiki'] in wanted]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", "--out", type=Path, default=Path("data/dumps"), metavar="DIR")
@@ -679,12 +713,15 @@ def main():
 
     if args.resume:
         manifest = json.loads((args.output / "manifest.json").read_text())
+        selected_files = select_manifest_files(manifest, args.wikis)
+        selected_editions = {item['wiki'] for item in selected_files}
         for item in manifest.get("language_registries", []):
-            validate_registry_file(args.output, item)
+            if item['wiki'] in selected_editions:
+                validate_registry_file(args.output, item)
         if args.plan:
-            print(f"{len(manifest['files'])} files in saved manifest")
+            print(f"{len(selected_files)} files in saved manifest")
         else:
-            download_all(manifest["files"], args.output, args.connections)
+            download_all(selected_files, args.output, args.connections)
         return
 
     requested = args.wikis or editions()
@@ -724,7 +761,7 @@ def main():
     registries.sort(key=lambda x: x["wiki"])
     manifest = args.output / "manifest.json"
     temp = manifest.with_suffix(".part")
-    temp.write_text(json.dumps(dict(files=files, language_registries=registries, failures=failures), indent=2) + "\n")
+    temp.write_text(json.dumps(dict(requested_editions=sorted(set(requested)), files=files, language_registries=registries, failures=failures), indent=2) + "\n")
     os.replace(temp, manifest)
     print(f"{len(files)} files, {sum(x['size'] for x in files):,} bytes; manifest: {manifest}", flush=True)
 

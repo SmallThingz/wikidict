@@ -109,7 +109,7 @@ class BuildTest(unittest.TestCase):
 
     def test_high_expansion_count_keeps_single_job_and_four_build_workers(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);(root/'manifest.json').write_text('{"files":[]}')
+            root=Path(tmp);(root/'manifest.json').write_text(json.dumps({'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]}))
             argv=['build_wiktionaries.py','--resource-mode=watchdog','--downloads',str(root),
                   '--output',str(root),'--threads','4','--expansion-workers','8']
             with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=5), \
@@ -126,7 +126,7 @@ class BuildTest(unittest.TestCase):
 
     def test_expansion_workers_within_four_charge_the_actual_job_budget(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);(root/'manifest.json').write_text('{"files":[]}')
+            root=Path(tmp);(root/'manifest.json').write_text(json.dumps({'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]}))
             argv=['build_wiktionaries.py','--downloads',str(root),'--output',str(root),
                   '--threads','1','--expansion-workers','4']
             with patch.object(sys,'argv',argv+['--jobs','2']), \
@@ -1188,9 +1188,11 @@ class BuildTest(unittest.TestCase):
                         json.dumps({'namespace':0,'title':'quoted"title','reasons':['literal_markup']})+'\n'+
                         json.dumps({'namespace':0,'title':'failed expansion','reasons':['expansion_error','expansion_error:ExpansionFailed']})+'\n')
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
-                b.build([item],root,root/'output','zig',2,interwiki_snapshot=interwiki)
+                b.build([item],root,root/'output','zig',2,interwiki_snapshot=interwiki,now_unix=1791072000)
             self.assertIn('verify-blobs',calls[1]);self.assertTrue((root/'output/testwiktionary/20260901/complete.json').exists())
             self.assertTrue(all(command[1:3]==['build','-j1'] for command in calls))
+            self.assertEqual(calls[0][calls[0].index('--now-unix')+1],'1791072000')
+            self.assertEqual(json.loads((root/'output/testwiktionary/20260901/complete.json').read_text())['now_unix'],1791072000)
             self.assertIn('--llvm-workers',calls[0])
             self.assertIn('--language-registry-snapshot',calls[0])
             self.assertIn('--interwiki-map-snapshot',calls[0])
@@ -1323,3 +1325,34 @@ class ExpansionDeadlineTests(unittest.TestCase):
             with self.assertRaises(ValueError): b.expansion_deadline_args(value)
 
 if __name__=='__main__':unittest.main()
+
+class ReproducibleBuildTimeTest(unittest.TestCase):
+    def test_explicit_time_reuses_only_identical_shards_and_preserves_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace=Path(tmp)/'work'
+            self.assertEqual(b.prepare_shard_workspace(workspace,{'source':'same'},123),123)
+            (workspace/'input').mkdir();(workspace/'input/keep').write_text('source')
+            (workspace/'old-shard').write_text('old')
+            self.assertEqual(b.prepare_shard_workspace(workspace,{'source':'same'},123),123)
+            self.assertTrue((workspace/'old-shard').exists())
+            self.assertEqual(b.prepare_shard_workspace(workspace,{'source':'same'},456),456)
+            self.assertFalse((workspace/'old-shard').exists())
+            self.assertEqual((workspace/'input/keep').read_text(),'source')
+            self.assertEqual(b.prepare_shard_workspace(workspace,{'source':'same'}),456)
+    def test_invalid_timestamps_are_rejected(self):
+        for bad in [0,-1,True,1.5,'123',1<<63]:
+            with self.subTest(value=bad),self.assertRaises(ValueError):b.validate_now_unix(bad)
+        self.assertIsNone(b.validate_now_unix(None))
+        self.assertEqual(b.validate_now_unix((1<<63)-1),(1<<63)-1)
+    def test_conflicting_embedded_timestamp_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError,'Conflicting'):
+                b.prepare_shard_workspace(Path(tmp)/'work',{'now_unix':123},456)
+    def test_main_forwards_pinned_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            item=dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)
+            (root/'manifest.json').write_text(json.dumps({'files':[item]}))
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(root),'--threads','1','--jobs','1','--now-unix','1791072000']),patch.object(b,'safe_worker_budget',return_value=4),patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.kwargs['now_unix'],1791072000)

@@ -148,7 +148,7 @@ class DownloaderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             registry={'wiki':'testwiktionary','date':'20260901','name':'language-registry.tsv','content_language':'en','size':1,'sha256':'a'*64}
-            (root/'manifest.json').write_text(__import__('json').dumps({'files':[],'language_registries':[registry]}))
+            (root/'manifest.json').write_text(__import__('json').dumps({'files':[self.item()],'language_registries':[registry]}))
             with patch.object(sys,'argv',['download_wiktionaries.py','--out',str(root),'--resume','--plan']):
                 with self.assertRaisesRegex(ValueError,'Missing or unverified language registry'):
                     d.main()
@@ -187,3 +187,26 @@ class DownloaderTest(unittest.TestCase):
                 with self.assertRaises(SystemExit):d.download_all([item],root,2)
             self.assertTrue((folder/'test.bz2.part.aria2').exists());self.assertFalse((folder/'test.bz2').exists())
 if __name__=='__main__':unittest.main()
+
+class ManifestSelectionTest(unittest.TestCase):
+    @staticmethod
+    def file(wiki):
+        return dict(wiki=wiki,date='20261001',name=wiki+'-20261001-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/'+wiki+'/20261001/'+wiki+'-20261001-pages-meta-current.xml.bz2',size=4,sha1='a'*40)
+    def test_all_fails_on_discovery_failure_and_missing_inventory(self):
+        files=[self.file('enwiktionary')]
+        with self.assertRaisesRegex(ValueError,'Incomplete edition discovery'):
+            d.select_manifest_files(dict(files=files,failures=['frwiktionary: unavailable']))
+        with self.assertRaisesRegex(ValueError,'Unknown editions'):
+            d.select_manifest_files(dict(files=files,requested_editions=['enwiktionary','frwiktionary']))
+    def test_explicit_subset_does_not_download_unrequested_editions(self):
+        en=self.file('enwiktionary');fr=self.file('frwiktionary')
+        self.assertEqual(d.select_manifest_files(dict(files=[en,fr]),['enwiktionary']),[en])
+        self.assertEqual(d.select_manifest_files(dict(files=[en],requested_editions=['enwiktionary','frwiktionary'],failures=['frwiktionary: unavailable']),['enwiktionary']),[en])
+        with self.assertRaisesRegex(ValueError,'Selected edition discovery failed'):
+            d.select_manifest_files(dict(files=[en],failures=['enwiktionary: unavailable']),['enwiktionary'])
+    def test_empty_and_undeclared_manifests_are_not_success(self):
+        with self.assertRaises(ValueError):d.select_manifest_files(dict(files=[]))
+        with self.assertRaisesRegex(ValueError,'undeclared'):
+            d.select_manifest_files(dict(files=[self.file('enwiktionary')],requested_editions=['frwiktionary']))
+    def test_required_jobs_include_page_table_for_category_tree(self):
+        self.assertIn('pagetable',d.JOBS)

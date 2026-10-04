@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from compress_blobs import compress, compress_many, default_workers, verify_round_trip
-from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry
+from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files
 
 PROJECT = Path(__file__).resolve().parent.parent
 SHARD_THRESHOLD_COMPRESSED_BYTES = 512 * 1024 * 1024
@@ -650,14 +650,25 @@ def dump_input_fingerprint(items):
     return hashlib.sha256(json.dumps(state,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 
-def prepare_shard_workspace(workspace, expected):
+def validate_now_unix(value):
+    if value is not None and (type(value) is not int or not 0 < value <= (1 << 63) - 1):
+        raise ValueError('Build time must be a positive signed 64-bit Unix timestamp')
+    return value
+
+
+def prepare_shard_workspace(workspace, expected, now_unix=None):
+    expected=dict(expected)
+    embedded=expected.pop('now_unix',None)
+    if now_unix is None: now_unix=embedded
+    elif embedded is not None and embedded!=now_unix: raise ValueError('Conflicting build timestamps')
+    validate_now_unix(now_unix)
     if workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
     state_path=workspace/'state.json'
     if state_path.is_file():
         try: existing=json.loads(state_path.read_text())
         except (OSError,json.JSONDecodeError): existing=None
         comparable={k:v for k,v in existing.items() if k!='now_unix'} if isinstance(existing,dict) else None
-        if comparable==expected and type(existing.get('now_unix')) is int and existing['now_unix']>0:
+        if comparable==expected and type(existing.get('now_unix')) is int and 0<existing['now_unix']<=(1<<63)-1 and (now_unix is None or existing['now_unix']==now_unix):
             return existing['now_unix']
     if workspace.exists():
         if not workspace.is_dir() or workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
@@ -671,7 +682,7 @@ def prepare_shard_workspace(workspace, expected):
             else: child.unlink()
     else:
         workspace.mkdir(parents=True)
-    now_unix=int(time.time())
+    now_unix=now_unix if now_unix is not None else int(time.time())
     state=dict(expected,now_unix=now_unix)
     temp=state_path.with_suffix('.part')
     temp.write_text(json.dumps(state,sort_keys=True)+'\n')
@@ -920,6 +931,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         if verified_auxiliary_hashes(auxiliary_snapshots)!=auxiliary_hashes:
             raise ValueError('Auxiliary snapshot changed during build')
         (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
+    (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
     (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
@@ -927,7 +939,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if workspace.exists(): shutil.rmtree(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None):
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None):
+    validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     for item in items:
         validate_item(item)
@@ -941,7 +954,7 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise ValueError(f'Build already running: {parent / date}') from None
-            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
+            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}))
             result['execution_mode']=mode
             return mode
 
@@ -983,6 +996,7 @@ def validate_fallback_report(path):
 VERIFIED_MARKER = '.verified-blobs'
 INTERWIKI_SHA_NAME = '.interwiki-map.sha256'
 AUXILIARY_SHA_NAME = '.auxiliary-snapshots.sha256.json'
+NOW_UNIX_NAME = '.build-now-unix.json'
 # Bump this when page framing, member encoding or index semantics change; the
 # input cache identity and published artifacts both include this contract.
 DUMP_STAGING_VERSION = 'page-aligned-zstd-parallel-v2'
@@ -1004,6 +1018,8 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     auxiliary_record=read_small_json(staging/AUXILIARY_SHA_NAME) if (staging/AUXILIARY_SHA_NAME).is_file() else {}
     if auxiliary_record!=(auxiliary_hashes or {}):
         raise ValueError('Verified staging uses different auxiliary snapshots')
+    recorded_now=read_small_json(staging/NOW_UNIX_NAME) if (staging/NOW_UNIX_NAME).is_file() else None
+    validate_now_unix(recorded_now)
     coverage=validate_page_coverage(staging,require_total=True)
     fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl')
     for part in staging.rglob('*.xz.part'):
@@ -1032,6 +1048,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
         'fallback_report':'fallback-pages.jsonl', 'compression':'xz -6; 1 MiB blocks','blobs':len(compressed),
         'input_pages':coverage['pages_seen'],'page_coverage_report':'page-coverage.json'}
+    if recorded_now is not None: metadata['now_unix']=recorded_now
     if interwiki_sha is not None: metadata['interwiki_map_sha256']=interwiki_sha
     if auxiliary_hashes: metadata['auxiliary_snapshot_sha256']=auxiliary_hashes
     (staging / 'complete.json').write_text(json.dumps(metadata)+'\n')
@@ -1045,7 +1062,8 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes)
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None):
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None):
+    validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     phase_edition,phase_date=phase_identity(items)
     with build_phase(phase_edition,phase_date,'verify_downloads',files=len(items)) as result:
@@ -1077,6 +1095,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             metadata={}
         if not isinstance(metadata,dict): metadata={}
         require_current_staging_version(target,metadata.get('dump_staging_version'))
+        if now_unix is not None and metadata.get('now_unix')!=now_unix:
+            raise ValueError('Existing output uses a different or unrecorded build time; choose a new output directory')
         if metadata.get('interwiki_map_sha256')!=interwiki_sha:
             raise ValueError('Existing output uses a different interwiki map snapshot; choose a new output directory')
         if metadata.get('auxiliary_snapshot_sha256',{})!=auxiliary_hashes:
@@ -1093,6 +1113,9 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         if not staging.is_dir() or staging.is_symlink():
             raise ValueError(f'Unsafe incomplete build path: {staging}')
         if (staging / VERIFIED_MARKER).is_file():
+            recorded_now=read_small_json(staging/NOW_UNIX_NAME) if (staging/NOW_UNIX_NAME).is_file() else None
+            if now_unix is not None and recorded_now!=now_unix:
+                raise ValueError('Verified staging uses a different or unrecorded build time')
             print(f'Resuming verified publication: {staging}', flush=True)
             publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes)
             return 'resumed_publication'
@@ -1105,12 +1128,13 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     if compressed_bytes>=SHARD_THRESHOLD_COMPRESSED_BYTES:
         print(f'Sharding {edition}: {compressed_bytes:,} compressed bytes in {SHARD_PAGES:,}-page chunks',flush=True)
         expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots)
-        now_unix=prepare_shard_workspace(workspace,expected)
+        now_unix=prepare_shard_workspace(workspace,expected,now_unix)
         dump=cached_shard_dump(xml,downloads,workspace)
         pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
         aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace)
         build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
     else:
+        now_unix=now_unix if now_unix is not None else int(time.time())
         (PROJECT / '.tmp').mkdir(exist_ok=True)
         scratch = Path(tempfile.mkdtemp(prefix=f'build-{edition}-{date}-', dir=PROJECT / '.tmp'))
         try:
@@ -1123,7 +1147,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
                          *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                          *auxiliary_snapshot_args(aux_pinned),
                          '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
-                         '--page-workers',str(min(workers,16)),*timeout_args],edition,date,'dictionary_build')
+                         '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args],edition,date,'dictionary_build')
             coverage=validate_page_coverage(staging,source_pages=source_metadata['source_pages'])
             coverage['expected_input_pages']=source_metadata['source_pages']
             (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
@@ -1136,14 +1160,17 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
                 if verified_auxiliary_hashes(aux_pinned)!=auxiliary_hashes:
                     raise ValueError('Auxiliary snapshot changed during build')
                 (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
+            (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
             (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
         finally:
             shutil.rmtree(scratch)
+    (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
     publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes)
     if workspace.exists(): shutil.rmtree(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None):
+    validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     pending=list(sorted(groups.items()))
     failures=[]
@@ -1160,6 +1187,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 options={}
                 if expansion_workers is not None: options['expansion_workers']=expansion_workers
                 if expansion_timeout_ms is not None: options['expansion_timeout_ms']=expansion_timeout_ms
+                if now_unix is not None: options['now_unix']=now_unix
                 if interwiki_snapshot is not None: options['interwiki_snapshot']=interwiki_snapshot
                 if auxiliary_snapshots: options['auxiliary_snapshots']=auxiliary_snapshots
                 future=pool.submit(build,group,downloads,output,zig,threads,**options)
@@ -1192,13 +1220,16 @@ def main():
     p.add_argument('--expansion-workers',type=int,help='Workers per sharded page expansion; default follows --threads, opt-in 5-8 requires watchdog and one edition job')
     p.add_argument('--expansion-timeout-ms',type=int,help='Explicit per-page wall deadline, 1 through 3600000 ms; default 60000. Timeouts fail the build rather than publish empty pages.')
     p.add_argument('--wikis',nargs='+',help='Build only these edition IDs')
+    p.add_argument('--now-unix',type=int,help='Pin build-time MediaWiki time for repeatable complete builds')
     p.add_argument('--interwiki-map-snapshot',type=Path,
                    help='Current siteinfo interwiki-map.tsv; its SHA-256 is part of the shard identity')
     for name in AUXILIARY_SNAPSHOT_NAMES:
         p.add_argument('--'+name+'-snapshot',type=Path,
                        help='Optional '+name+' TSV; its SHA-256 is part of the shard identity')
     a=p.parse_args()
-    try: expansion_deadline_args(a.expansion_timeout_ms)
+    try:
+        expansion_deadline_args(a.expansion_timeout_ms)
+        validate_now_unix(a.now_unix)
     except ValueError as error: p.error(str(error))
     budget=safe_worker_budget()
     if budget < 1:p.error('No worker budget within CPU load and the verified build memory cap (at most 8 GiB)')
@@ -1217,7 +1248,8 @@ def main():
         p.error('More than four expansion workers requires exactly one edition job')
     if not 1 <= a.jobs <= 16:p.error('Jobs must be 1 through 16')
     if a.jobs*admission_workers > budget:p.error(f'jobs × workers must not exceed safe host budget {budget}')
-    items=json.loads((a.downloads/'manifest.json').read_text())['files']
+    try: items=select_manifest_files(json.loads((a.downloads/'manifest.json').read_text()),a.wikis)
+    except ValueError as error: p.error(str(error))
     groups={}
     for item in items:
         validate_item(item)
@@ -1234,6 +1266,7 @@ def main():
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     options={}
     if a.expansion_timeout_ms is not None: options['expansion_timeout_ms']=a.expansion_timeout_ms
+    if a.now_unix is not None: options['now_unix']=a.now_unix
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
     if auxiliary: options['auxiliary_snapshots']=auxiliary
     failures=build_groups(groups,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads,a.jobs,
