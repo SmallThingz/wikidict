@@ -1,0 +1,40 @@
+# wikidict-namespace-registry-v1
+# wiki	zhwiktionary
+# dump-date	20261001
+# content-language	zh
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	媒体	媒体文件	媒体档案	媒體	媒體文件	媒體檔案
+-1	Special	Special	first-letter	0	0	0		compile_only	virtual_namespace	特殊
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Talk	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	对话	對話	討論	讨论
+2	User	User	first-letter	1	0	0		compile_only	standard_build_input	使用者	用戶	用户
+3	User talk	User talk	first-letter	1	0	0		compile_only	discussion_namespace	使用者对话	使用者對話	使用者討論	使用者讨论	用戶對話	用戶討論	用户对话	用户讨论
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	专案	專案	維基詞典	维基词典
+5	Wiktionary talk	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary对话	Wiktionary對話	Wiktionary討論	Wiktionary讨论	专案讨论	專案討論	維基詞典討論	维基词典讨论
+6	File	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	图像	图片	圖像	圖片	文件	档案	檔案
+7	File talk	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	图像对话	图像讨论	图片讨论	圖像對話	圖像討論	圖片討論	文件对话	文件對話	文件討論	文件讨论	档案对话	档案讨论	檔案對話	檔案討論
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki talk	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki討論	MediaWiki讨论
+10	Template	Template	first-letter	1	0	0		compile_only	standard_build_input	T	样板	模板	樣板
+11	Template talk	Template talk	first-letter	1	0	0		compile_only	discussion_namespace	样板对话	样板讨论	模板对话	模板對話	模板討論	模板讨论	樣板對話	樣板討論
+12	Help	Help	case-sensitive	1	0	0		compile_only	standard_build_input	使用說明	使用说明	帮助	幫助	說明	说明
+13	Help talk	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	使用說明討論	使用说明讨论	帮助对话	帮助讨论	幫助對話	幫助討論	說明討論	说明讨论
+14	Category	Category	case-sensitive	0	0	0		compile_only	standard_build_input	CAT	分类	分類
+15	Category talk	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	分类对话	分类讨论	分類對話	分類討論
+100	Appendix	Appendix	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	附录	附錄
+101	Appendix talk	Appendix talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Appendix talk	附录讨论	附錄討論
+102	Transwiki	Transwiki	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Transwiki talk	Transwiki talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Transwiki talk
+106	Rhymes	Rhymes	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	韵部	韻部
+107	Rhymes talk	Rhymes talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Rhymes talk	韵部讨论	韻部討論
+110	Thesaurus	Thesaurus	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	类义词库	詞庫	词库	類義詞庫
+111	Thesaurus talk	Thesaurus talk	case-sensitive	1	0	0		compile_only	discussion_namespace	类义词库讨论	詞庫討論	词库讨论	類義詞庫討論
+114	Citations	Citations	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	引文
+115	Citations talk	Citations talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Citations talk	引文討論	引文讨论
+118	Reconstruction	Reconstruction	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	RC	重建	重构	重構
+119	Reconstruction talk	Reconstruction talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Reconstruction talk	重建討論	重建讨论	重构讨论	重構討論
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace	TimedText talk
+828	Module	Module	first-letter	1	0	0		compile_only	standard_build_input	模块	模塊	模組	模组
+829	Module talk	Module talk	first-letter	1	0	0		compile_only	discussion_namespace	模块对话	模块讨论	模塊對話	模塊討論	模組對話	模組討論	模组对话	模组讨论
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input	活动	活動
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace	活动讨论	活動討論
