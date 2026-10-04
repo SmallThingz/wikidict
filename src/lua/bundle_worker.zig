@@ -272,11 +272,21 @@ pub fn run(io: std.Io, persistent: A) !void {
         var stage: []const u8 = "expand";
         var detail: ?[]const u8 = null;
         const expanded = engine.?.expand(page_a, request, &stage, &detail) catch |err| {
+            if (lua_program.moduleTemplateAllocationFailed()) {
+                logOutOfMemory(io, request, "module-template-promotion");
+                try protocol.writeError(&output.interface, "module-template-promotion", "OutOfMemory", "");
+                return error.OutOfMemory;
+            }
             if (err == error.OutOfMemory) logOutOfMemory(io, request, stage);
             try protocol.writeError(&output.interface, stage, @errorName(err), detail orelse "");
             if (err == error.OutOfMemory) return err;
             continue;
         };
+        if (lua_program.moduleTemplateAllocationFailed()) {
+            logOutOfMemory(io, request, "module-template-promotion");
+            try protocol.writeError(&output.interface, "module-template-promotion", "OutOfMemory", "");
+            return error.OutOfMemory;
+        }
         if (expanded) |value| {
             if (value.output.len > protocol.max_source_bytes or value.display_title.len > protocol.max_display_title_bytes) {
                 try protocol.writeError(&output.interface, stage, "ExpandedSourceTooLarge", "");

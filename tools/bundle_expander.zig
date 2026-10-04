@@ -75,6 +75,30 @@ pub const Worker = struct {
         self.child = null;
     }
 
+    fn reportClosed(self: *Worker, ordinal: u64, title: []const u8) void {
+        const child = if (self.child) |*value| value else return;
+        const pid = child.id orelse return;
+        const raw_fd = L.pidfd_open(pid, 0);
+        if (L.errno(raw_fd) == .SUCCESS) {
+            const fd: std.posix.fd_t = @intCast(raw_fd);
+            defer _ = L.close(fd);
+            var fds = [_]std.posix.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
+            const ready = std.posix.poll(&fds, 100) catch 0;
+            if (ready != 0 and (fds[0].revents & std.posix.POLL.IN) != 0) {
+                const term = child.wait(self.io) catch |err| {
+                    std.debug.print("bundle worker closed pid={d} ordinal={d} title={s} wait_error={s}\n", .{ pid, ordinal, title, @errorName(err) });
+                    return;
+                };
+                std.debug.print("bundle worker closed pid={d} ordinal={d} title={s} termination={any}\n", .{ pid, ordinal, title, term });
+                self.child = null;
+                return;
+            }
+        }
+        // EOF can precede process exit or be an explicit stdout close. Do not
+        // block indefinitely waiting for a worker whose pipe has disappeared.
+        std.debug.print("bundle worker closed pid={d} ordinal={d} title={s} termination=not-ready\n", .{ pid, ordinal, title });
+    }
+
     fn ensure(self: *Worker) !*std.process.Child {
         if (self.child == null) {
             self.child = try std.process.spawn(self.io, .{
@@ -131,6 +155,7 @@ pub const Worker = struct {
         const deadline = std.Io.Clock.awake.now(self.io).toNanoseconds() + @as(i128, self.timeout_ms) * std.time.ns_per_ms;
         var raw_length: [4]u8 = undefined;
         self.readExact(child.stdout.?, &raw_length, deadline) catch |err| {
+            if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
             if (err == error.Timeout) std.debug.print(
                 "bundle expansion timed out title={s} ordinal={d} source_bytes={d} timeout_ms={d}\n",
                 .{ title, page_ordinal, source.len, self.timeout_ms },
@@ -145,6 +170,7 @@ pub const Worker = struct {
         }
         const response = try a.alloc(u8, response_len);
         self.readExact(child.stdout.?, response, deadline) catch |err| {
+            if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
             if (err == error.Timeout) std.debug.print(
                 "bundle expansion response timed out title={s} ordinal={d} source_bytes={d} response_bytes={d} timeout_ms={d}\n",
                 .{ title, page_ordinal, source.len, response_len, self.timeout_ms },

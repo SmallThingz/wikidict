@@ -6,6 +6,16 @@ const static_fields = @import("lua_static_fields");
 pub const NativeNamespace = static_fields.Namespace;
 const native_namespace_count = std.meta.fields(static_fields.Namespace).len;
 
+// Promotion still mutates process-lived graphs incrementally. A failed
+// allocation can be caught by Lua pcall or an optional upward-promotion caller;
+// that must never permit the build worker to accept output or reuse the engine.
+// Keep this out of Context's generated-code ABI and sticky until process exit.
+threadlocal var module_template_allocation_failed = false;
+
+pub fn moduleTemplateAllocationFailed() bool {
+    return module_template_allocation_failed;
+}
+
 fn templateSingletonNamespace(namespace: static_fields.Namespace) bool {
     return switch (namespace) {
         .table,
@@ -3285,18 +3295,52 @@ pub const Context = struct {
                 if (self.clone.skipsModule(dependency.module_id)) continue;
                 if (!try self.module(dependency.module_id)) return false;
             }
-            // cloneModuleGlobals binds this environment before walking exports.
-            if (source.global_table) |table| _ = try self.first(table);
+            if (!try self.moduleGlobals(id, source)) return false;
             return self.value(exported);
+        }
+
+        fn globalDelta(self: *PromotionPreflight, slot: usize, input: Value) anyerror!bool {
+            if (self.clone.source.global_env_slot) |env| if (slot == env) return true;
+            if (rawEqual(input, self.clone.source.root_globals[slot])) return true;
+            return self.value(input);
+        }
+
+        fn moduleGlobals(self: *PromotionPreflight, id: u32, source: *const ModuleState) anyerror!bool {
+            const globals = source.globals orelse return true;
+            if (self.clone.source.root_globals.len != self.clone.target.root_globals.len) return false;
+            // Match cloneModuleGlobals' environment alias without constructing
+            // destination module state or allocating any persistent storage.
+            const target_has_table = blk: {
+                if (self.clone.target.moduleStateConst(id)) |target| {
+                    if (target.globals != null) break :blk target.global_table != null;
+                }
+                break :blk self.clone.target.root_global_table != null;
+            };
+            if (target_has_table) {
+                if (source.global_table) |table| _ = try self.first(table);
+            }
+            for (globals, 0..) |input, slot| if (!try self.globalDelta(slot, input)) return false;
+            if (source.global_tail) |tail| {
+                for (tail.pages, 0..) |maybe_page, page_index| {
+                    const page = maybe_page orelse continue;
+                    const start = page_index * global_page_len;
+                    const count = @min(global_page_len, tail.len - start);
+                    for (page[0..count], 0..) |input, index|
+                        if (!try self.globalDelta(globals.len + start + index, input)) return false;
+                }
+                // Absent pages are nil tombstones: always portable. The actual
+                // clone still visits them when needed to clear later root writes.
+            }
+            return true;
         }
 
         fn value(self: *PromotionPreflight, input: Value) anyerror!bool {
             switch (input) {
                 .table => |table| {
                     if (!try self.first(table)) return true;
-                    if (table.cross_page_stable and table.read_only) return true;
                     if (self.clone.source.nativeMetatableIndex(table)) |index|
                         return self.clone.target.template_native_metatables[index] != null;
+                    if (table.cross_page_stable and table.read_only) return true;
                     if (table.native_namespace) |namespace| if (templateSingletonNamespace(namespace))
                         return self.clone.target.findTemplateNativeNamespace(namespace) != null;
                     if (!table.owns_slots or table.global_tail != null or table.has_identity_key)
@@ -3497,6 +3541,13 @@ pub const Context = struct {
     }
 
     fn promoteModuleTemplate(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!bool {
+        return self.promoteModuleTemplateImpl(module_id, requested) catch |err| {
+            if (err == error.OutOfMemory) module_template_allocation_failed = true;
+            return err;
+        };
+    }
+
+    fn promoteModuleTemplateImpl(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!bool {
         const target = self.module_template_context orelse return false;
         if (module_id >= self.module_template_eligible.len or
             module_id >= self.module_template_rejected.len or
@@ -3511,6 +3562,28 @@ pub const Context = struct {
             module_id,
         );
         defer self.allocator.free(override_ids);
+        var preflight = PromotionPreflight{ .clone = .{
+            .source = self,
+            .target = target,
+            .promotion = true,
+            .skip_modules = override_ids,
+        } };
+        defer preflight.deinit();
+        const portable = blk: {
+            if (!try preflight.module(module_id)) break :blk false;
+            for (override_ids) |id| {
+                const state = self.moduleStateConst(id) orelse break :blk false;
+                const value = state.value orelse state.preinitialized orelse break :blk false;
+                if (!try preflight.value(value)) break :blk false;
+            }
+            break :blk true;
+        };
+        if (!portable) {
+            self.module_template_rejected[module_id] = true;
+            noteModuleTemplateEffectReason(1 << 4);
+            markModuleTemplateEffect();
+            return false;
+        }
         // Bundle workers execute requests serially. Temporarily expose the root
         // to the clone walker, and retain the bit only after a complete clone.
         self.module_template_eligible[module_id] = true;
@@ -3557,6 +3630,18 @@ pub const Context = struct {
     }
 
     fn promoteModuleTemplateUpstreamRecursive(
+        self: *Context,
+        module_id: u32,
+        requested: ?[]const u8,
+        visiting: *std.AutoHashMapUnmanaged(u32, void),
+    ) anyerror!bool {
+        return self.promoteModuleTemplateUpstreamImpl(module_id, requested, visiting) catch |err| {
+            if (err == error.OutOfMemory) module_template_allocation_failed = true;
+            return err;
+        };
+    }
+
+    fn promoteModuleTemplateUpstreamImpl(
         self: *Context,
         module_id: u32,
         requested: ?[]const u8,
@@ -5211,6 +5296,125 @@ test "upstream promotion rejects nonportable graphs before allocating persistent
     try std.testing.expectEqual(before, fixed.end_index);
     try std.testing.expect(!eligible[0]);
     try std.testing.expect(!rejected[0]);
+}
+
+test "promotion rejects nonportable global deltas before persistent allocation" {
+    const Native = struct {
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    };
+    const count = module_global_prefix_len + 2 * global_page_len + 3;
+    for ([_]u32{ 1, count - 1 }) |slot| {
+        for ([_]bool{ false, true }) |ordinary| {
+            var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer source_arena.deinit();
+            var storage: [512 * 1024]u8 = undefined;
+            var fixed = std.heap.FixedBufferAllocator.init(&storage);
+            var target = try Context.initProgram(fixed.allocator(), count, 1);
+            defer target.deinit();
+            var eligible = [_]bool{false};
+            var rejected = [_]bool{false};
+            target.module_template_eligible = &eligible;
+            target.module_template_rejected = &rejected;
+            const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
+            target.module_root_entries = &roots;
+            var source = try target.forkProgram(source_arena.allocator());
+            defer source.deinit();
+            source.module_template_context = &target;
+            var host: u64 = 123;
+            const hidden = try source.newTable();
+            try hidden.rawSet(source.allocator, .{ .string = "bound" }, try source.newNative(&host, Native.call));
+            try hidden.rawSet(source.allocator, .{ .string = "cycle" }, .{ .table = hidden });
+            const scope = try source.enterModule(0);
+            try source.setGlobal(slot, .{ .table = hidden });
+            try std.testing.expect(source.global_tail != null);
+            source.restoreGlobals(scope);
+            try source.preinitializeModule(0, .{ .number = 42 }, false);
+            const before = fixed.end_index;
+            for (0..64) |_| {
+                const promoted = if (ordinary)
+                    try source.promoteModuleTemplate(0, null)
+                else
+                    try source.promoteModuleTemplateUpstream(0, null);
+                try std.testing.expect(!promoted);
+                try std.testing.expect(!eligible[0]);
+                try std.testing.expect(target.moduleStateConst(0) == null);
+                try std.testing.expectEqual(before, fixed.end_index);
+            }
+            try std.testing.expectEqual(ordinary, rejected[0]);
+        }
+    }
+}
+
+test "global delta preflight skips unchanged native roots and binds environment aliases" {
+    const Native = struct {
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var target = try Context.initProgram(a, 4, 1);
+    defer target.deinit();
+    var eligible = [_]bool{false};
+    var rejected = [_]bool{false};
+    target.module_template_eligible = &eligible;
+    target.module_template_rejected = &rejected;
+    const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
+    target.module_root_entries = &roots;
+    try bindGlobalTable(&target, null, 0);
+    var host: u64 = 123;
+    try target.setGlobal(1, .{ .number = 7 });
+    var source = try target.forkProgram(a);
+    defer source.deinit();
+    source.module_template_context = &target;
+    try bindGlobalTable(&source, null, 0);
+    try source.setGlobal(1, try source.newNative(&host, Native.call));
+    const scope = try source.enterModule(0);
+    const environment = source.getGlobal(0);
+    const exported = try source.newTable();
+    try exported.rawSet(a, .{ .string = "environment" }, environment);
+    try source.setGlobal(2, .{ .table = exported });
+    source.restoreGlobals(scope);
+    try source.preinitializeModule(0, .{ .table = exported }, false);
+    try std.testing.expect(try source.promoteModuleTemplateUpstream(0, null));
+    const state = target.moduleStateConst(0).?;
+    try std.testing.expect(state.value.?.table == state.globals.?[2].table);
+    try std.testing.expect(state.value.?.table.rawGet(.{ .string = "environment" }).?.table == state.global_table.?);
+    try std.testing.expect(rawEqual(state.globals.?[1], target.root_globals[1]));
+}
+
+test "caught promotion allocation failures retain the worker fatal signal" {
+    const saved = module_template_allocation_failed;
+    defer module_template_allocation_failed = saved;
+    for ([_]bool{ false, true }) |ordinary| {
+        module_template_allocation_failed = false;
+        var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer source_arena.deinit();
+        var storage: [4096]u8 = undefined;
+        var fixed = std.heap.FixedBufferAllocator.init(&storage);
+        var target = try Context.initProgram(fixed.allocator(), 0, 1);
+        defer target.deinit();
+        var eligible = [_]bool{false};
+        var rejected = [_]bool{false};
+        target.module_template_eligible = &eligible;
+        target.module_template_rejected = &rejected;
+        const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
+        target.module_root_entries = &roots;
+        var source = try target.forkProgram(source_arena.allocator());
+        defer source.deinit();
+        source.module_template_context = &target;
+        try source.preinitializeModule(0, .{ .number = 42 }, false);
+        fixed.end_index = storage.len;
+        const promoted = if (ordinary)
+            source.promoteModuleTemplate(0, null) catch false
+        else
+            source.promoteModuleTemplateUpstream(0, null) catch false;
+        try std.testing.expect(!promoted);
+        try std.testing.expect(moduleTemplateAllocationFailed());
+    }
 }
 
 test "module templates run roots once while fresh contexts clone mutable closure state" {

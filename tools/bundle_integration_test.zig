@@ -450,6 +450,13 @@ fn failureMetadataProbe(h: *Harness, dir: []const u8) !void {
     try h.require(std.mem.eql(u8, failure.stage, "x"), "worker failure stage survives transport");
     try h.require(std.mem.eql(u8, failure.error_name, "E"), "worker failure error name survives transport");
     try h.require(std.mem.eql(u8, failure.detail, "d"), "worker failure detail survives transport");
+    const closed_script = try std.fs.path.join(h.a, &.{ dir, "closed-expander.sh" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = closed_script, .data = "#!/bin/sh\ndd bs=4096 count=1 of=/dev/null 2>/dev/null\nexit 7\n" });
+    _ = try h.run(&.{ "chmod", "755", closed_script }, 0);
+    var closed = expander.Worker.init(h.io, dir, closed_script, "missing-dump.xml");
+    defer closed.deinit();
+    try std.testing.expectError(error.WorkerClosed, closed.expand(h.a, 17, "closed-probe", "==English==\n"));
+    try h.require(closed.child == null, "closed worker is reaped after bounded status capture");
 }
 
 fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {

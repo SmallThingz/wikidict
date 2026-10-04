@@ -10,6 +10,7 @@ const global_shape_index = @import("global_shape_index.zig");
 pub const Context = rt.Context;
 pub const RequestAllocator = rt.RequestAllocator;
 pub const work_stats = rt.work_stats;
+pub const moduleTemplateAllocationFailed = rt.moduleTemplateAllocationFailed;
 
 // A generation survives every page/context fork and never aliases a later
 // Program load. Exhaustion disables cross-instance shape caching.
