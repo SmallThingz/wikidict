@@ -567,13 +567,14 @@ pub const Program = struct {
         return .{ .table = table };
     }
 
-    fn initContextBase(self: *Program, allocator: std.mem.Allocator) !rt.Context {
+    fn initContextBase(self: *Program, allocator: std.mem.Allocator, bulk_owned_strings: bool) !rt.Context {
         var ctx = try rt.Context.initProgram(
             allocator,
             self.global_keys.len,
             self.module_count,
         );
         errdefer ctx.deinit();
+        if (bulk_owned_strings) ctx.useContextAllocatorForStrings();
         const roots: [*]const rt.FunctionFn = @ptrCast(
             @alignCast(dict_lua_program_module_roots()),
         );
@@ -608,11 +609,14 @@ pub const Program = struct {
         if (self.template_context) |ctx| return ctx;
         const arena = try self.allocator.create(std.heap.ArenaAllocator);
         errdefer self.allocator.destroy(arena);
-        arena.* = std.heap.ArenaAllocator.init(self.allocator);
+        // Keep mutable process-cache growth out of the asset arena: nesting
+        // geometric arenas reserves far more virtual space than live graphs.
+        arena.* = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
         errdefer arena.deinit();
         const ctx = try self.allocator.create(rt.Context);
         errdefer self.allocator.destroy(ctx);
-        ctx.* = try self.initContextBase(arena.allocator());
+        ctx.* = try self.initContextBase(arena.allocator(), true);
+        errdefer ctx.deinit();
         // A template root runs compiled Lua with the same builtin surface as
         // its page child. Host observations still have no worker-page owner.
         try scribunto.install(ctx, globals_abi.id("_G"), globals_abi.id("string"), globals_abi.id("mw"));
@@ -634,7 +638,7 @@ pub const Program = struct {
     }
 
     pub fn initContext(self: *Program, allocator: std.mem.Allocator) !rt.Context {
-        var ctx = try self.initContextBase(allocator);
+        var ctx = try self.initContextBase(allocator, false);
         errdefer ctx.deinit();
         ctx.beginEagerBootstrap();
         const eager_status = dict_lua_program_eager_init(&ctx);

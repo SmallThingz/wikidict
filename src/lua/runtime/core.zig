@@ -8901,3 +8901,69 @@ test "program pattern cache pointer survives descendant forks and invoke reset" 
     grandchild.resetInvokeModuleState();
     try std.testing.expectEqual(parent.ustring_pattern_cache, grandchild.ustring_pattern_cache);
 }
+
+test "independent template backing owns promoted graphs without growing asset storage" {
+    const Probe = struct {
+        fn call(_: *Context, captures: Captures, _: []const Value) ![]const Value {
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = (try captures.cell(0)).value;
+            return out;
+        }
+    };
+    var outer_backing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var template_backing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    {
+        var outer = std.heap.ArenaAllocator.init(outer_backing.allocator());
+        defer outer.deinit();
+        const sentinel = try outer.allocator().dupe(u8, "asset bytes");
+        const outer_capacity = outer.queryCapacity();
+        var arena = std.heap.ArenaAllocator.init(template_backing.allocator());
+        defer arena.deinit();
+        var target = try Context.initProgram(arena.allocator(), 0, 0);
+        defer target.deinit();
+        target.useContextAllocatorForStrings();
+        var promoted: Value = undefined;
+        {
+            var page = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer page.deinit();
+            var source = try Context.initProgram(page.allocator(), 0, 0);
+            defer source.deinit();
+            const root = try source.newTable();
+            const payload = try source.allocator.alloc(u8, 512 * 1024);
+            @memset(payload, 'q');
+            try root.rawSet(source.allocator, .{ .string = "payload" }, .{ .string = payload });
+            try root.rawSet(source.allocator, .{ .string = "self" }, .{ .table = root });
+            const cell = try source.allocator.create(Cell);
+            cell.* = .{ .value = .{ .table = root } };
+            try root.rawSet(source.allocator, .{ .string = "get" }, try source.makeFunctionKnown(17, Probe.call, &.{cell}));
+            var clone = Context.ModuleTemplateClone{ .source = &source, .target = &target, .promotion = true };
+            defer clone.deinit();
+            promoted = try clone.cloneValue(.{ .table = root });
+        }
+        try std.testing.expectEqual(outer_capacity, outer.queryCapacity());
+        try std.testing.expectEqualStrings("asset bytes", sentinel);
+        try std.testing.expect(arena.queryCapacity() > 512 * 1024);
+        try std.testing.expectEqual(@as(usize, 0), target.string_arena.queryCapacity());
+        try std.testing.expect(promoted.table.rawGet(.{ .string = "self" }).?.table == promoted.table);
+        const payload = promoted.table.rawGet(.{ .string = "payload" }).?.string;
+        try std.testing.expectEqual(@as(usize, 512 * 1024), payload.len);
+        for (payload) |byte| try std.testing.expectEqual(@as(u8, 'q'), byte);
+        for (0..3) |_| {
+            var page = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer page.deinit();
+            var child = try target.forkProgram(page.allocator());
+            defer child.deinit();
+            try std.testing.expect(!child.strings_use_context_allocator);
+            var clone = Context.ModuleTemplateClone{ .source = &target, .target = &child };
+            defer clone.deinit();
+            const copied = try clone.cloneValue(promoted);
+            try copied.table.rawSet(child.allocator, .{ .string = "payload" }, .nil);
+            try std.testing.expect(promoted.table.rawGet(.{ .string = "payload" }).? == .string);
+            const result = try child.callValue(copied.table.rawGet(.{ .string = "get" }).?, &.{});
+            defer freeResults(result);
+            try std.testing.expect(result[0].table == copied.table);
+        }
+    }
+    try std.testing.expectEqual(outer_backing.allocated_bytes, outer_backing.freed_bytes);
+    try std.testing.expectEqual(template_backing.allocated_bytes, template_backing.freed_bytes);
+}
