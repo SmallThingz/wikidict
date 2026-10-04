@@ -211,10 +211,9 @@ fn baseToString(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_bu
     // object type from cross-page loadData snapshots.
     if (v == .table or v == .callable) rt.markLoadDataEffect();
     if (runtime.metamethod(v, "__tostring")) |mm| {
-        const out = try runtime.callValue(mm, &.{v});
-        defer rt.freeResults(out);
-        if (out.len == 0 or out[0] != .string) return error.StringExpected;
-        return bufferedOne(result_buffer, out[0]);
+        const value = try runtime.callValueFirst(mm, &.{v});
+        if (value != .string) return error.StringExpected;
+        return bufferedOne(result_buffer, value);
     }
     const s: []const u8 = switch (v) {
         .nil => "nil",
@@ -341,8 +340,10 @@ fn baseNext(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer
     return bufferedTwo(result_buffer, next_key, entry.value_ptr.*);
 }
 fn iteratorTripleFromCall(runtime: *rt.Context, callable: Value, object: Value, result_buffer: ?[]Value) ![]const Value {
-    const values = try runtime.callValue(callable, &.{object});
-    defer rt.freeResults(values);
+    var buffer: [3]Value = undefined;
+    const result = try runtime.callValueFixed(callable, &.{object}, &buffer);
+    defer result.deinit();
+    const values = result.values;
     const out = try rt.returnBuffer(result_buffer, 3);
     for (out, 0..) |*slot, i| slot.* = if (i < values.len) values[i] else .nil;
     return out;
@@ -540,9 +541,7 @@ fn tableMaxn(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer:
 }
 fn tableSortLess(runtime: *rt.Context, cmp: Value, a: Value, b: Value) !bool {
     if (cmp == .nil) return runtime.comparison(.lt, a, b);
-    const out = try runtime.callValue(cmp, &.{ a, b });
-    defer rt.freeResults(out);
-    return out.len != 0 and out[0].truthy();
+    return (try runtime.callValueFirst(cmp, &.{ a, b })).truthy();
 }
 
 fn tableSortSiftDown(runtime: *rt.Context, cmp: Value, values: []Value, root_in: usize, end: usize) !void {
@@ -671,17 +670,12 @@ fn captureValue(source: []const u8, capture: pattern.Capture) !Value {
     };
 }
 
-fn captureResults(a: std.mem.Allocator, source: []const u8, m: pattern.Match) ![]const Value {
-    if (m.capture_count == 0) return one(a, .{ .string = source[m.start..m.end] });
-    const out = try std.heap.smp_allocator.alloc(Value, m.capture_count);
-    for (out, 0..) |*v, i| v.* = try captureValue(source, m.captures[i]);
-    return out;
-}
-
 fn captureResultsBuffered(source: []const u8, m: pattern.Match, result_buffer: ?[]Value) ![]const Value {
     if (m.capture_count == 0) return bufferedOne(result_buffer, .{ .string = source[m.start..m.end] });
     const out = try rt.returnBuffer(result_buffer, m.capture_count);
-    for (out, 0..) |*value, i| value.* = try captureValue(source, m.captures[i]);
+    errdefer if (result_buffer == null) rt.freeResults(out);
+    // Discarded captures still validate, even when the caller wants no values.
+    for (0..m.capture_count) |i| rt.storeReturn(out, i, try captureValue(source, m.captures[i]));
     return out;
 }
 
@@ -708,9 +702,10 @@ fn stringFind(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buff
     var m: pattern.Match = undefined;
     if (!(try pattern.findIntoStart(source, needle, init, &m))) return bufferedOne(result_buffer, .nil);
     const out = try rt.returnBuffer(result_buffer, 2 + m.capture_count);
+    errdefer if (result_buffer == null) rt.freeResults(out);
     rt.storeReturn(out, 0, .{ .number = @floatFromInt(m.start + 1) });
     rt.storeReturn(out, 1, .{ .number = @floatFromInt(m.end) });
-    for (out[@min(out.len, 2)..], 0..) |*value, i| value.* = try captureValue(source, m.captures[i]);
+    for (0..m.capture_count) |i| rt.storeReturn(out, 2 + i, try captureValue(source, m.captures[i]));
     return out;
 }
 
@@ -756,7 +751,10 @@ fn stringFindThree(source: []const u8, needle: []const u8, init: i64, matched: *
     _ = findStart(source.len, init) orelse return;
     var m: pattern.Match = undefined;
     if (!(try pattern.findIntoStart(source, needle, init, &m))) return;
-    if (m.capture_count != 0) capture.* = try captureValue(source, m.captures[0]);
+    for (0..m.capture_count) |i| {
+        const value = try captureValue(source, m.captures[i]);
+        if (i == 0) capture.* = value;
+    }
     first.* = @floatFromInt(m.start + 1);
     last.* = @floatFromInt(m.end);
     matched.* = 1;
@@ -823,25 +821,19 @@ fn appendReplacement(out: *std.ArrayList(u8), a: std.mem.Allocator, repl: []cons
     }
 }
 
-fn replacementArgs(a: std.mem.Allocator, source: []const u8, m: pattern.Match) ![]const Value {
-    return captureResults(a, source, m);
-}
-
 fn replacementValue(runtime: *rt.Context, replacement: Value, source: []const u8, m: pattern.Match, a: std.mem.Allocator) !?[]const u8 {
     const original = source[m.start..m.end];
     const value: Value = switch (replacement) {
         .table => |table| blk: {
-            const captures = try replacementArgs(a, source, m);
-            defer rt.freeResults(captures);
+            var storage: [pattern.max_captures]Value = undefined;
+            const captures = try captureResultsBuffered(source, m, &storage);
             const key = if (captures.len == 0) Value{ .string = original } else captures[0];
             break :blk try runtime.getIndex(.{ .table = table }, key);
         },
         .callable => blk: {
-            const captures = try replacementArgs(a, source, m);
-            defer rt.freeResults(captures);
-            const result = try runtime.callValue(replacement, captures);
-            defer rt.freeResults(result);
-            break :blk if (result.len == 0) Value.nil else result[0];
+            var storage: [pattern.max_captures]Value = undefined;
+            const captures = try captureResultsBuffered(source, m, &storage);
+            break :blk try runtime.callValueFirst(replacement, captures);
         },
         else => return error.InvalidReplacement,
     };
@@ -1953,6 +1945,119 @@ test "string.gsub appends string replacements and preserves callback captures" {
     defer rt.freeResults(limited);
     try std.testing.expectEqualStrings(original, limited[0].string);
     try std.testing.expectEqual(@as(f64, 0), limited[1].number);
+}
+
+test "stdlib callbacks receive exact result demand even when outer results are discarded" {
+    const Probe = struct {
+        calls: usize = 0,
+        demand: usize = 1,
+        result: Value = .{ .string = "converted" },
+        fn call(raw: ?*anyopaque, _: *rt.Context, _: []const Value, buffer: ?[]Value) ![]const Value {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            try std.testing.expect(buffer != null and buffer.?.len == self.demand);
+            self.calls += 1;
+            const out = try rt.returnBuffer(buffer, 4);
+            for (out) |*value| value.* = self.result;
+            return out;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try install(&ctx);
+    var probe: Probe = .{};
+    const callback = try ctx.newNativeBuffered(&probe, Probe.call);
+    const object = try ctx.newTable();
+    const mt = try ctx.newTable();
+    object.metatable = mt;
+    try mt.rawSet(ctx.allocator, .{ .string = "__tostring" }, callback);
+    try mt.rawSet(ctx.allocator, .{ .string = "__pairs" }, callback);
+    try mt.rawSet(ctx.allocator, .{ .string = "__ipairs" }, callback);
+    var ignored: [0]Value = .{};
+    _ = try baseToString(null, &ctx, &.{.{ .table = object }}, &ignored);
+    try std.testing.expectEqual(@as(usize, 1), probe.calls);
+    probe.demand = 3;
+    _ = try basePairs(null, &ctx, &.{.{ .table = object }}, &ignored);
+    _ = try baseIpairs(null, &ctx, &.{.{ .table = object }}, &ignored);
+    try std.testing.expectEqual(@as(usize, 3), probe.calls);
+    probe.demand = 1;
+    probe.result = .{ .boolean = true };
+    try std.testing.expect(try tableSortLess(&ctx, callback, .nil, .nil));
+    try std.testing.expectEqual(@as(usize, 4), probe.calls);
+    probe.result = .nil;
+    try std.testing.expect(!try tableSortLess(&ctx, callback, .nil, .nil));
+    try std.testing.expectError(error.StringExpected, baseToString(null, &ctx, &.{.{ .table = object }}, &ignored));
+}
+
+test "byte replacement callbacks retain captures effects and errors with zero demand" {
+    const Probe = struct {
+        calls: usize = 0,
+        fail_on_second: bool = false,
+        fn call(raw: ?*anyopaque, _: *rt.Context, args: []const Value, buffer: ?[]Value) ![]const Value {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            try std.testing.expect(buffer != null and buffer.?.len == 1);
+            try std.testing.expectEqual(@as(usize, 2), args.len);
+            try std.testing.expect(args[0] == .string and args[1] == .number);
+            try std.testing.expectEqual(@as(f64, @floatFromInt(self.calls + 1)), args[1].number);
+            if (self.fail_on_second and self.calls == 2) return error.ReplacementProbeFailure;
+            return bufferedOne(buffer, .{ .string = "X" });
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try install(&ctx);
+    const gsub = ctx.getGlobal(global_abi.id("string")).table.rawGet(.{ .string = "gsub" }).?;
+    var probe: Probe = .{};
+    const callback = try ctx.newNativeBuffered(&probe, Probe.call);
+    const args = [_]Value{ .{ .string = "ab" }, .{ .string = "(.)()" }, callback };
+    var ignored: [0]Value = .{};
+    const first = try ctx.callValueFixed(gsub, &args, &ignored);
+    defer first.deinit();
+    try std.testing.expect(!first.owned and first.values.len == 0);
+    try std.testing.expectEqual(@as(usize, 2), probe.calls);
+    probe = .{ .fail_on_second = true };
+    try std.testing.expectError(error.AotCallFailed, ctx.callValueFixed(gsub, &args, &ignored));
+    try std.testing.expectEqual(@as(usize, 2), probe.calls);
+    try std.testing.expectEqualStrings("ReplacementProbeFailure", ctx.aotErrorName().?);
+}
+
+test "byte pattern calls validate captures beyond fixed result demand" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try install(&ctx);
+    const string = ctx.getGlobal(global_abi.id("string")).table;
+    const args = [_]Value{ .{ .string = "a" }, .{ .string = "()(a" } };
+    for ([_][]const u8{ "match", "find" }) |name| {
+        const callable = string.rawGet(.{ .string = name }).?;
+        var slots: [3]Value = undefined;
+        for ([_]usize{ 0, 1, 3 }) |count| {
+            ctx.clearAotErrorName();
+            try std.testing.expectError(error.AotCallFailed, ctx.callValueFixed(callable, &args, slots[0..count]));
+            try std.testing.expectEqualStrings("UnfinishedCapture", ctx.aotErrorName().?);
+        }
+        ctx.clearAotErrorName();
+        try std.testing.expectError(error.AotCallFailed, ctx.callValue(callable, &args));
+        try std.testing.expectEqualStrings("UnfinishedCapture", ctx.aotErrorName().?);
+    }
+    var matched: u8 = 0;
+    var first: f64 = 0;
+    var last: f64 = 0;
+    var capture: Value = .nil;
+    try std.testing.expectError(error.UnfinishedCapture, stringFindThree("a", "()(a", 1, &matched, &first, &last, &capture));
+
+    ctx.clearAotErrorName();
+    const gmatch = string.rawGet(.{ .string = "gmatch" }).?;
+    const iterator = try ctx.callValueFirst(gmatch, &.{ .{ .string = "ab" }, .{ .string = "." } });
+    var ignored: [0]Value = .{};
+    const discarded = try ctx.callValueFixed(iterator, &.{}, &ignored);
+    discarded.deinit();
+    try std.testing.expectEqualStrings("b", (try ctx.callValueFirst(iterator, &.{})).string);
 }
 
 test "buffered stdlib returns clip fixed calls and preserve full dynamic results" {

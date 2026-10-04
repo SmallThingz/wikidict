@@ -693,17 +693,15 @@ export fn dict_lua_call_fixed_tail(ctx: *rt.Context, callable: *const rt.Value, 
 }
 
 export fn dict_lua_call_discard(ctx: *rt.Context, callable: *const rt.Value, args_ptr: [*]const rt.Value, args_len: usize) callconv(.c) u32 {
-    const result = ctx.callValue(callable.*, values(args_ptr, args_len)) catch |err| return fail(ctx, err);
-    rt.freeResults(result);
-    return 0;
+    var ignored: [0]rt.Value = .{};
+    return fixedCall(ctx, callable.*, values(args_ptr, args_len), &ignored);
 }
 export fn dict_lua_call_discard_tail(ctx: *rt.Context, callable: *const rt.Value, fixed_ptr: [*]const rt.Value, fixed_len: usize, tail_ptr: [*]const rt.Value, tail_len: usize) callconv(.c) u32 {
     var storage: [8]rt.Value = undefined;
     const args = mergeCallArgs(values(fixed_ptr, fixed_len), values(tail_ptr, tail_len), &storage) catch |err| return fail(ctx, err);
     defer if (args.ptr != storage[0..].ptr) std.heap.smp_allocator.free(args);
-    const result = ctx.callValue(callable.*, args) catch |err| return fail(ctx, err);
-    rt.freeResults(result);
-    return 0;
+    var ignored: [0]rt.Value = .{};
+    return fixedCall(ctx, callable.*, args, &ignored);
 }
 
 fn multiResult(ctx: *rt.Context, callable: rt.Value, args: []const rt.Value) CallResult {
@@ -988,6 +986,70 @@ fn tailReturnTableCall(_: ?*anyopaque, _: *rt.Context, args: []const rt.Value, b
     const out = try rt.returnBuffer(buffer, 1);
     rt.storeReturn(out, 0, args[1]);
     return out;
+}
+
+test "discard calls propagate zero demand while preserving calls arguments and failures" {
+    const Probe = struct {
+        calls: usize = 0,
+        effects: usize = 0,
+        args_len: usize = 0,
+
+        fn call(raw: ?*anyopaque, _: *rt.Context, args: []const rt.Value, buffer: ?[]rt.Value) ![]const rt.Value {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            const slots = buffer orelse return error.UnboundedDiscard;
+            if (slots.len != 0) return error.NonzeroDiscard;
+            self.calls += 1;
+            self.args_len = args.len;
+            const out = try rt.returnBuffer(buffer, 3);
+            for (0..3) |i| {
+                self.effects += 1;
+                rt.storeReturn(out, i, .{ .number = @floatFromInt(i) });
+            }
+            if (args.len != 0 and args[0] == .boolean) return error.DiscardProbeFailure;
+            return out;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    var probe: Probe = .{};
+    const callable = try ctx.newNativeBuffered(&probe, Probe.call);
+    const args = [_]rt.Value{.{ .number = 1 }};
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_call_discard(&ctx, &callable, &args, args.len));
+    try std.testing.expectEqual(@as(usize, 1), probe.calls);
+    try std.testing.expectEqual(@as(usize, 3), probe.effects);
+    try std.testing.expectEqual(@as(usize, 1), probe.args_len);
+
+    const fixed = [_]rt.Value{.{ .number = 7 }} ** 8;
+    const tail = [_]rt.Value{.{ .number = 9 }} ** 2;
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_call_discard_tail(&ctx, &callable, &fixed, fixed.len, &tail, tail.len));
+    try std.testing.expectEqual(@as(usize, 2), probe.calls);
+    try std.testing.expectEqual(@as(usize, 6), probe.effects);
+    try std.testing.expectEqual(@as(usize, 10), probe.args_len);
+
+    const mt = try ctx.newTable();
+    const object = try ctx.newTable();
+    object.metatable = mt;
+    try mt.rawSet(ctx.allocator, .{ .string = "__call" }, callable);
+    const table_callable = rt.Value{ .table = object };
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_call_discard(&ctx, &table_callable, &args, args.len));
+    try std.testing.expectEqual(@as(usize, 2), probe.args_len);
+    try std.testing.expectEqual(@as(usize, 9), probe.effects);
+
+    const fail_args = [_]rt.Value{.{ .boolean = true }};
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_call_discard(&ctx, &callable, &fail_args, fail_args.len));
+    try std.testing.expectEqualStrings("DiscardProbeFailure", ctx.aotErrorName().?);
+    try std.testing.expectEqual(@as(usize, 12), probe.effects);
+    ctx.clearAotErrorName();
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_call_discard_tail(&ctx, &callable, &fail_args, fail_args.len, &tail, tail.len));
+    try std.testing.expectEqualStrings("DiscardProbeFailure", ctx.aotErrorName().?);
+
+    ctx.clearAotErrorName();
+    const owned = try ctx.newNative(null, fixedCallOwnedTest);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_call_discard(&ctx, &owned, &args, args.len));
+    const direct = try ctx.makeFunction(0, rt.stabilizeBuffered(fixedCallDirectTest), &.{});
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_call_discard(&ctx, &direct, &args, args.len));
 }
 
 test "tail return forwards actual arity and caller buffer" {
