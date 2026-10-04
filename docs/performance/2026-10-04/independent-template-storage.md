@@ -39,3 +39,27 @@ correctness correction, not a claim of thousands of pages per second.
 A new first-100k diagnostic qualification, with unchanged per-worker headroom,
 was started after these gates. Its outcome is recorded separately; this receipt
 does not claim that the long history completed or the full corpus fits in an hour.
+
+## Long-history outcome
+
+The new attempt also failed, safely, on OutOfMemory at ordinal 39229 (`ala`),
+after 6,315.94 wall seconds / 21,764.15 aggregate child CPU seconds. The last
+parallel progress line was selected=39300; that is not completed artifact
+coverage. The binary guard passed. The 8-GiB watchdog recorded normal child
+failure, not an aggregate-memory kill (peak sampled PSS 3,472,593,920 bytes).
+
+At failure the worker's VmSize was 3,430,854,656 bytes against its unchanged
+3,435,511,808-byte address-space limit. Outer arena capacity remained
+307,090,538 bytes, template capacity was 192,134,234, and nested string capacity
+zero. Thus this correction removed the observed outer-arena amplification but
+did not bound total retained address space. Remaining persistent graph growth
+and allocator high-water retention still need separate investigation.
+
+A fresh-worker `ala` replay succeeded in 36.33 seconds with no operational error.
+This supports a worker-history/resource issue rather than unavoidable failure
+of that page. Its one-response digest is not an independent semantic oracle.
+
+The official first-100k qualification is FAILED, not partial success. No result
+from this failed build is published. Neither thousands of pages/second nor an
+under-hour whole-Wiktionary build has been established. Exact results and memory
+telemetry are preserved in independent-template-long-history.json.

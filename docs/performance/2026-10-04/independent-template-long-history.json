@@ -1,0 +1,82 @@
+{
+  "command": [
+    ".tmp/flat-template-final/dict-blob-build-fast",
+    ".zig-cache/enwiktionary-full-20260901/enwiktionary-latest-pages-articles-multistream.xml.bz2",
+    ".tmp/flat-template-final/official100k-memory",
+    "--expander-root",
+    ".tmp/flat-template-final/diagnostic-expander",
+    "--start-page",
+    "0",
+    "--index-byte-offset",
+    "0",
+    "--limit-pages",
+    "100000",
+    "--workers",
+    "4",
+    "--expansion-timeout-ms",
+    "600000",
+    "--now-unix",
+    "1791072000"
+  ],
+  "exit_code": 1,
+  "wall_seconds": 6315.938093518023,
+  "aggregate_child_cpu_seconds": 21764.151204,
+  "timing_policy": "Diagnostic worker; dirty-host resource and exact input coverage qualification, no clean-host performance claim",
+  "binary_guard": true,
+  "watchdog": {
+    "aggregate_limit": "sampled best effort, not kernel hard cap",
+    "child_exit_status": 1,
+    "child_pid": 713732,
+    "child_start_time_ticks": 30351032,
+    "cpus": [
+      0,
+      2,
+      4,
+      6
+    ],
+    "elapsed_seconds": 6317.072683164966,
+    "guardian_cpu": 6,
+    "guardian_exit_status": 0,
+    "guardian_pid": 713731,
+    "guardian_report": ".tmp/flat-template-final/official100k-memory.watchdog-guardian.json",
+    "guardian_start_time_ticks": 30351032,
+    "max_cpus": 4,
+    "max_tasks": 256,
+    "memory_limit_bytes": 8589934592,
+    "mode": "watchdog",
+    "peak_child_pss_bytes": 3450165248,
+    "peak_pss_bytes": 3472593920,
+    "peak_rss_bytes": 8008421376,
+    "peak_tasks": 12,
+    "peak_watchdog_overhead_pss_bytes": 25616384,
+    "termination_reason": "child_exit",
+    "wall_seconds": 7200
+  },
+  "selection": {
+    "selected_rows": 100000,
+    "row_window_sha256": "abf923c141deef52263527cc8e00f81acc83eb6017a7f9d58c152f6638cc866e",
+    "generated_ids_match": true
+  },
+  "last_progress": "page compilation progress selected=39300 ordinal=39299 main_pages=38304 language_records=151260 workers=4",
+  "oom_lines": [
+    "pid=713754 memory boundary phase=OOM-post-unwind sequence=9409 ordinal=39229 vm=3430854656 peak=3435507712 rss=700559360 anon=602984448 file=97574912 limit=3435511808 outer=307090538 template=192134234 strings=0 initialized=7706 published=7705 cache_bytes=67106266 cache_entries=152",
+    "pid=713754 worker OutOfMemory pid=713754 ordinal=39229 stage=expand virtual_bytes=3430854656 address_limit=3435511808",
+    "page expansion failed title=ala ordinal=39229 ns=0 source_bytes=54991 error=OutOfMemory"
+  ],
+  "cold_replay": [
+    {
+      "sequence": 1,
+      "phase": "cold-ala",
+      "ordinal": 39229,
+      "title": "ala",
+      "wall_seconds": 36.328444094979204,
+      "response_sha256": "af5f6aa22198d845ebd048d9ca045e55536f7a44cc54abbea623f35e424182c3",
+      "reply_tag": 0,
+      "failure": null,
+      "matches_first": true
+    }
+  ],
+  "cold_replay_exit": 0,
+  "source_commit": "f0adfcc",
+  "conclusion": "Long-history qualification failed safely on OutOfMemory. Full100k and under-hour full-corpus goals remain unachieved."
+}
