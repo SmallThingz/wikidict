@@ -104,7 +104,7 @@ def build(args):
     db.execute("PRAGMA cache_size=-65536")
     db.execute("PRAGMA temp_store=FILE")
     db.executescript("""
-        CREATE TABLE pages(id INTEGER PRIMARY KEY, ns INTEGER, title BLOB);
+        CREATE TABLE pages(id INTEGER PRIMARY KEY, ns INTEGER, title BLOB, category_key BLOB);
         CREATE TABLE targets(id INTEGER PRIMARY KEY, title BLOB);
         CREATE TABLE links(target INTEGER, kind INTEGER, sortkey BLOB, from_id INTEGER);
     """)
@@ -112,9 +112,9 @@ def build(args):
     def pages():
         for page_id, namespace, title in rows(args.page, ("page_id", "page_namespace", "page_title")):
             prefix = ns[namespace]
-            yield page_id, namespace, (prefix + b":" if prefix else b"") + title.replace(b"_", b" ")
+            yield page_id, namespace, (prefix + b":" if prefix else b"") + title.replace(b"_", b" "), title if namespace == 14 else None
 
-    import_rows(db, "INSERT INTO pages VALUES (?,?,?)", pages(), "pages")
+    import_rows(db, "INSERT INTO pages VALUES (?,?,?,?)", pages(), "pages")
     import_rows(db, "INSERT INTO targets VALUES (?,?)",
                 ((page_id, title) for page_id, namespace, title in rows(
                     args.linktarget, ("lt_id", "lt_namespace", "lt_title")) if namespace == 14), "categories")
@@ -166,10 +166,10 @@ def build(args):
         """):
             write_category(out, category, [], [])
         for (title,) in db.execute("""
-            SELECT p.title FROM pages p WHERE p.ns=14 AND NOT EXISTS
-            (SELECT 1 FROM targets t WHERE t.title=CAST(replace(substr(p.title,10),' ','_') AS BLOB))
+            SELECT p.category_key FROM pages p WHERE p.ns=14 AND NOT EXISTS
+            (SELECT 1 FROM targets t WHERE t.title=p.category_key)
         """):
-            write_category(out, title[len(b"Category:"):].replace(b" ", b"_"), [], [])
+            write_category(out, title, [], [])
     db.close()
     staging.rename(args.output)
     print(f"Snapshot complete: {args.output}", flush=True)

@@ -62,5 +62,24 @@ class CategorySnapshotTest(unittest.TestCase):
             self.assertNotIn(("ignored", "main"), result)
 
 
+    def test_localized_multibyte_category_prefix_uses_original_database_key(self):
+        for prefix in ("Catégorie", "分类", "Категория"):
+            with self.subTest(prefix=prefix),tempfile.TemporaryDirectory(dir=".tmp") as directory:
+                root=Path(directory)
+                args=argparse.Namespace(**{name:root/name for name in ("xml","page","linktarget","categorylinks","database","output")})
+                args.xml.write_text('<mediawiki><siteinfo><namespaces><namespace key="0" />'+
+                                    '<namespace key="14">'+prefix+'</namespace></namespaces></siteinfo></mediawiki>')
+                sql_dump(args.page,"page",("page_id","page_namespace","page_title"),
+                         [(1,14,b"Parent"),(2,14,"Élément_vide".encode()),(3,0,b"word")])
+                sql_dump(args.linktarget,"linktarget",("lt_id","lt_namespace","lt_title"),[(10,14,b"Parent")])
+                sql_dump(args.categorylinks,"categorylinks",("cl_from","cl_sortkey","cl_type","cl_target_id"),[(3,b"word",b"page",10)])
+                with contextlib.redirect_stdout(io.StringIO()):build(args)
+                lines=[line.split('\t') for line in args.output.read_text().splitlines() if not line.startswith('#')]
+                self.assertEqual(len(lines),4)
+                self.assertIn(['Parent','main','word'],lines)
+                self.assertIn(['Élément_vide','main'],lines)
+                self.assertIn(['Élément_vide','pages'],lines)
+
+
 if __name__ == "__main__":
     unittest.main()
