@@ -4,6 +4,8 @@
 The watchdog starts this as a single detached process before its build child.
 Only one verified private session may be signalled; no shared cgroup is touched.
 """
+from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
+
 import argparse
 import json
 import os
@@ -118,8 +120,8 @@ def main():
     parser.add_argument('--observer-cpu', type=int, required=True)
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
-    if not 1 <= args.wall_seconds <= 7200:
-        raise ValueError('Guardian wall bound must be 1..7200 seconds')
+    if not 1 <= args.wall_seconds <= MAX_WATCHDOG_WALL_SECONDS:
+        raise ValueError(f'Guardian wall bound must be 1..{MAX_WATCHDOG_WALL_SECONDS} seconds')
     if not all(hasattr(os, name) for name in ('pidfd_open',)) or not hasattr(signal, 'pidfd_send_signal'):
         raise RuntimeError('pidfd signalling is required for owned cleanup')
     os.sched_setaffinity(0, {args.observer_cpu})

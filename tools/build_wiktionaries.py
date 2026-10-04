@@ -1215,6 +1215,7 @@ def main():
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
     p.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup',
                    help='Resource supervisor: strict cgroup (default), or explicit best-effort 8 GiB process-tree watchdog with a two-hour deadline')
+    p.add_argument('--build-timeout-seconds',type=int,help='Explicit watchdog build deadline, up to seven days; default two hours')
     p.add_argument('--threads',type=int,default=default_build_threads(),help='Workers per edition (up to 4 within CPU load and fixed 8 GiB aggregate cap)')
     p.add_argument('--jobs',type=int,help='Concurrent editions (up to two within CPU load and capped aggregate worker budget)')
     p.add_argument('--expansion-workers',type=int,help='Workers per sharded page expansion; default follows --threads, opt-in 5-8 requires watchdog and one edition job')
@@ -1231,6 +1232,10 @@ def main():
         expansion_deadline_args(a.expansion_timeout_ms)
         validate_now_unix(a.now_unix)
     except ValueError as error: p.error(str(error))
+    if a.build_timeout_seconds is not None:
+        from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
+        if a.resource_mode!='watchdog' or not 0<a.build_timeout_seconds<=MAX_WATCHDOG_WALL_SECONDS:
+            p.error('Explicit build deadline requires watchdog mode and must be 1 through '+str(MAX_WATCHDOG_WALL_SECONDS)+' seconds')
     budget=safe_worker_budget()
     if budget < 1:p.error('No worker budget within CPU load and the verified build memory cap (at most 8 GiB)')
     worker_limit=min(budget,MAX_PIPELINE_WORKERS)
@@ -1278,8 +1283,13 @@ def cli():
         route=argparse.ArgumentParser(add_help=False)
         route.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup')
         route.add_argument('--expansion-workers',type=int)
+        route.add_argument('--build-timeout-seconds',type=int)
         routing=route.parse_known_args()[0]
         mode=routing.resource_mode
+        if routing.build_timeout_seconds is not None:
+            from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
+            if mode!='watchdog' or not 0<routing.build_timeout_seconds<=MAX_WATCHDOG_WALL_SECONDS:
+                raise ContainmentUnavailable('Explicit build deadline requires watchdog mode and a finite bound up to seven days')
         if '-h' in sys.argv[1:] or '--help' in sys.argv[1:]:
             main()
         else:
@@ -1291,7 +1301,7 @@ def cli():
                     main()
                 else:
                     with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
-                        options={'wall_seconds':7200}
+                        options={'wall_seconds':routing.build_timeout_seconds if routing.build_timeout_seconds is not None else 7200}
                         if routing.expansion_workers is not None and routing.expansion_workers>MAX_PIPELINE_WORKERS:
                             options['max_cpus']=8
                         raise SystemExit(supervise_watchdog(**options))

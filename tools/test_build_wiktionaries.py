@@ -1356,3 +1356,16 @@ class ReproducibleBuildTimeTest(unittest.TestCase):
             with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(root),'--threads','1','--jobs','1','--now-unix','1791072000']),patch.object(b,'safe_worker_budget',return_value=4),patch.object(b,'build_groups',return_value=[]) as groups:
                 b.main()
             self.assertEqual(groups.call_args.kwargs['now_unix'],1791072000)
+
+class LongBuildDeadlineTest(unittest.TestCase):
+    def test_explicit_long_deadline_keeps_watchdog_and_default_memory_envelope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(b,'PROJECT',Path(tmp)),patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog','--build-timeout-seconds','14400']),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
+                with self.assertRaises(SystemExit) as result:b.cli()
+                self.assertEqual(result.exception.code,0)
+            watchdog.assert_called_once_with(wall_seconds=14400)
+    def test_long_deadlines_remain_explicit_finite_and_watchdog_only(self):
+        for argv in [ ['--build-timeout-seconds','14400'], ['--resource-mode=watchdog','--build-timeout-seconds','0'], ['--resource-mode=watchdog','--build-timeout-seconds',str(limits.MAX_WATCHDOG_WALL_SECONDS+1)] ]:
+            with self.subTest(argv=argv),patch.object(sys,'argv',['build_wiktionaries.py',*argv]),patch.object(limits,'supervise_watchdog') as run:
+                with self.assertRaises(SystemExit):b.cli()
+                run.assert_not_called()

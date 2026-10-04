@@ -26,6 +26,7 @@ WATCHDOG_TOKEN = 'WIKIDICT_BUILD_WATCHDOG_TOKEN'
 WATCHDOG_PARENT_PID = 'WIKIDICT_BUILD_WATCHDOG_PARENT_PID'
 WATCHDOG_PROOF_FD = 'WIKIDICT_BUILD_WATCHDOG_PROOF_FD'
 WATCHDOG_WALL_SECONDS = 2 * 60 * 60
+MAX_WATCHDOG_WALL_SECONDS = 7 * 24 * 60 * 60
 WATCHDOG_POLL_SECONDS = 0.2
 _verified_watchdog_pid = None
 
@@ -466,7 +467,7 @@ def _watchdog_cpu_set(max_cpus, available):
 def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WALL_SECONDS,
                        memory_limit_bytes=MAX_BUILD_MEMORY, max_tasks=MAX_BUILD_PIDS, max_cpus=4):
     """Opt-in sampled fallback. Its aggregate cap is best effort, not a cgroup."""
-    if not 0 < wall_seconds <= WATCHDOG_WALL_SECONDS:
+    if type(wall_seconds) not in (int, float) or not 0 < wall_seconds <= MAX_WATCHDOG_WALL_SECONDS:
         raise ContainmentUnavailable('Invalid watchdog wall limit')
     if not 0 < memory_limit_bytes <= MAX_BUILD_MEMORY or not 0 < max_tasks <= MAX_BUILD_PIDS:
         raise ContainmentUnavailable('Invalid watchdog resource limit')
@@ -568,7 +569,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             bound_rlimit(resource.RLIMIT_AS, memory_limit_bytes)
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
             bound_rlimit(resource.RLIMIT_NOFILE, 512)
-            cpu_limit = max(1, min(WATCHDOG_WALL_SECONDS, int(wall_seconds)))
+            cpu_limit = max(1, min(MAX_WATCHDOG_WALL_SECONDS, int(wall_seconds)))
             bound_rlimit(resource.RLIMIT_CPU, cpu_limit)
             child_stat = Path('/proc/self/stat').read_text()
             child_start = int(child_stat[child_stat.rfind(')') + 2:].split()[19])
