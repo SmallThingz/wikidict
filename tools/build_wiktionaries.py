@@ -968,8 +968,11 @@ def validate_fallback_report(path):
                 raise ValueError(f'Invalid fallback reasons at {path}:{line_number}')
             if len(set(reasons)) != len(reasons):
                 raise ValueError(f'Duplicate fallback reason at {path}:{line_number}')
-            if 'expansion_error:Timeout' in reasons:
-                raise ValueError(f'Operational expansion timeout at {path}:{line_number}; rebuild this output')
+            for reason in reasons:
+                parts = reason.split(':')
+                if len(parts) in (2, 3) and parts[0] == 'expansion_error' and parts[-1] in ('Timeout', 'OutOfMemory'):
+                    kind = 'timeout' if parts[-1] == 'Timeout' else 'out of memory'
+                    raise ValueError(f'Operational expansion {kind} at {path}:{line_number}; rebuild this output')
             key = (namespace, title)
             if key in seen:
                 raise ValueError(f'Duplicate fallback page at {path}:{line_number}: {namespace}:{title}')

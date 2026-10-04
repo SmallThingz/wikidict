@@ -181,6 +181,9 @@ fn expansionFallbackReasonAlloc(a: std.mem.Allocator, err: anyerror, failure: ?b
         else => return null,
     }
     const precise = if (err == error.ExpansionFailed) failure else null;
+    if (precise) |value| {
+        if (bundle_expander.operationalFailure(value) != null) return null;
+    }
     return if (precise) |value|
         try std.fmt.allocPrint(a, "expansion_error:{s}:{s}", .{ value.stage, value.error_name })
     else
@@ -798,6 +801,20 @@ test "operational expansion timeouts cannot become successful empty pages" {
     const a = std.testing.allocator;
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.Timeout, null)) == null);
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.OutOfMemory, null)) == null);
+    inline for (.{ "OutOfMemory", "Timeout" }) |name| {
+        try std.testing.expect((try expansionFallbackReasonAlloc(a, error.ExpansionFailed, .{
+            .stage = "expand",
+            .error_name = name,
+            .detail = "",
+        })) == null);
+    }
+    const semantic = (try expansionFallbackReasonAlloc(a, error.ExpansionFailed, .{
+        .stage = "expand",
+        .error_name = "NotImplemented",
+        .detail = "",
+    })).?;
+    defer a.free(semantic);
+    try std.testing.expectEqualStrings("expansion_error:expand:NotImplemented", semantic);
     const recoverable = (try expansionFallbackReasonAlloc(a, error.ExpansionFailed, null)).?;
     defer a.free(recoverable);
     try std.testing.expectEqualStrings("expansion_error:ExpansionFailed", recoverable);

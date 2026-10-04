@@ -1287,6 +1287,21 @@ class BuildTest(unittest.TestCase):
 
 
 class ExpansionDeadlineTests(unittest.TestCase):
+    def test_remote_operational_fallbacks_cannot_be_published(self):
+        for reason in ('expansion_error:OutOfMemory', 'expansion_error:expand:OutOfMemory',
+                       'expansion_error:assets:OutOfMemory', 'expansion_error:expand:Timeout'):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); staging = root / 'staging'; staging.mkdir()
+                (staging / b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+                write_coverage(staging)
+                (staging / 'fallback-pages.jsonl').write_text(json.dumps({
+                    'namespace': 0, 'title': 'failed', 'reasons': ['expansion_error', reason]}) + '\n')
+                with patch.object(b, 'compress_many') as compress:
+                    with self.assertRaisesRegex(ValueError, 'Operational expansion'):
+                        b._publish_verified_staging(staging, root / 'final', 'test', '20260901')
+                    compress.assert_not_called()
+                self.assertFalse((root / 'final').exists())
+
     def test_old_timeout_staging_cannot_be_published(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); staging=root/'staging'; staging.mkdir()

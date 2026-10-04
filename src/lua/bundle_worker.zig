@@ -63,6 +63,16 @@ fn limitAddressSpaceAfterAssets(io: std.Io, headroom: u64) !void {
     try std.posix.setrlimit(.AS, .{ .cur = @intCast(n), .max = old.max });
 }
 
+fn logOutOfMemory(io: std.Io, request: Request, stage: []const u8) void {
+    // Stack-backed diagnostics remain usable when allocation is exhausted.
+    const used = currentVirtualBytes(io) catch 0;
+    const address_limit = std.posix.getrlimit(.AS) catch null;
+    work_stats.logLine("worker OutOfMemory pid={d} ordinal={d} stage={s} virtual_bytes={d} address_limit={d}\n", .{
+        L.getpid(),                                            request.page_ordinal, stage, used,
+        if (address_limit) |value| value.cur else @as(u64, 0),
+    });
+}
+
 const Engine = struct {
     io: std.Io,
     requested_root: []const u8,
@@ -244,7 +254,9 @@ pub fn run(io: std.Io, persistent: A) !void {
         };
         if (engine == null) {
             engine = Engine.init(io, persistent, request.root, request.dump, request.now_unix, profile_enabled) catch |err| {
+                if (err == error.OutOfMemory) logOutOfMemory(io, request, "assets");
                 try protocol.writeError(&output.interface, "assets", @errorName(err), "");
+                if (err == error.OutOfMemory) return err;
                 continue;
             };
             // Generated code and the corpus index are trusted build assets and can
@@ -260,7 +272,9 @@ pub fn run(io: std.Io, persistent: A) !void {
         var stage: []const u8 = "expand";
         var detail: ?[]const u8 = null;
         const expanded = engine.?.expand(page_a, request, &stage, &detail) catch |err| {
+            if (err == error.OutOfMemory) logOutOfMemory(io, request, stage);
             try protocol.writeError(&output.interface, stage, @errorName(err), detail orelse "");
+            if (err == error.OutOfMemory) return err;
             continue;
         };
         if (expanded) |value| {

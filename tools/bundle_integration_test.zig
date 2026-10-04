@@ -488,6 +488,22 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     const text = try h.run(&.{ bin, "lookup", "failure-page", "--root", output, "--language", "English", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, text, "Script error") == null and std.mem.indexOf(u8, text, "source that must not become synthetic") == null, "operational fallback publishes no invented or original body text");
 
+    // Real framed worker response, rather than a local allocator failure.
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = "#!/bin/sh\n" ++
+        "dd bs=4096 count=1 of=/dev/null 2>/dev/null\n" ++
+        "printf '\\036\\000\\000\\000\\001\\006\\000\\000\\000\\013\\000\\000\\000\\000\\000\\000\\000expandOutOfMemory'\n" });
+    var exhausted = expander.Worker.init(h.io, root, script, dump);
+    defer exhausted.deinit();
+    try std.testing.expectError(error.OutOfMemory, exhausted.expand(h.a, 0, "probe", source_text));
+    try h.require(exhausted.child == null, "exhausted worker is retired");
+    try h.require(std.mem.eql(u8, exhausted.last_failure.?.error_name, "OutOfMemory"), "remote OOM retains diagnostics");
+    const oom_output = try std.fs.path.join(h.a, &.{ dir, "oom-dictionary" });
+    _ = try h.run(&.{ blob_builder, dump, oom_output, "--expander-root", root, "--workers", "1" }, 1);
+    try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ oom_output, "page-coverage.json" })), "remote OOM cannot publish successful coverage");
+    const oom_shards = try std.fs.path.join(h.a, &.{ dir, "oom-shards" });
+    _ = try h.run(&.{ blob_builder, dump, oom_shards, "--expander-root", root, "--workers", "1", "--shard-pages", "1", "--limit-pages", "1", "--index-byte-offset", "0" }, 1);
+    try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ oom_shards, "00000000" })), "remote OOM cannot publish a continuous shard");
+
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = "#!/bin/sh\nexec tail -f /dev/null\n" });
     const timed_out = try std.fs.path.join(h.a, &.{ dir, "timeout-dictionary" });
     try h.requireTimeout(&.{ blob_builder, dump, timed_out, "--expander-root", root, "--workers", "1", "--expansion-timeout-ms", "100" });

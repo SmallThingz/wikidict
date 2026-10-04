@@ -11,6 +11,14 @@ pub const Expansion = struct {
 
 pub const Failure = protocol.ErrorReply;
 
+// Transporting an error must not turn resource exhaustion into a semantic
+// fallback. Keep this shared with the blob writer's defensive classification.
+pub fn operationalFailure(failure: Failure) ?anyerror {
+    if (std.mem.eql(u8, failure.error_name, "OutOfMemory")) return error.OutOfMemory;
+    if (std.mem.eql(u8, failure.error_name, "Timeout")) return error.Timeout;
+    return null;
+}
+
 pub const Worker = struct {
     io: std.Io,
     root: []const u8,
@@ -160,11 +168,23 @@ pub const Worker = struct {
                     if (failure.detail.len != 0) ": " else "",
                     failure.detail,
                 });
+                if (operationalFailure(failure)) |err| {
+                    // Persistent promotion may have failed partway through.
+                    // Never reuse that process after an operational failure.
+                    self.reset();
+                    return err;
+                }
                 return error.ExpansionFailed;
             },
         }
     }
 };
+
+test "remote operational failures retain their error identity" {
+    try std.testing.expectEqual(error.OutOfMemory, operationalFailure(.{ .stage = "expand", .error_name = "OutOfMemory", .detail = "" }).?);
+    try std.testing.expectEqual(error.Timeout, operationalFailure(.{ .stage = "assets", .error_name = "Timeout", .detail = "" }).?);
+    try std.testing.expect(operationalFailure(.{ .stage = "expand", .error_name = "NotImplemented", .detail = "" }) == null);
+}
 
 test "worker restart preserves the pinned bundle timestamp" {
     var worker = Worker.init(std.testing.io, "root", "unused", "dump.xml");
