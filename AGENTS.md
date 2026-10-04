@@ -44,6 +44,7 @@
 - Optimize total dictionary build time plus shipped-reader execution time. Code/binary/blob size is secondary unless it materially affects those times or operational limits.
 - String interning/deduplication, compression, canonicalization, or compact encodings are not goals by themselves. Remove or weaken them when measured compile+run time improves and correctness/operational limits remain acceptable.
 - Profile before retaining performance work. Reject changes that reduce instructions or size but regress measured cycles/task time on representative workloads.
+- Runtime-only relinks may reuse native Lua objects only after verifying that their imported value-leaf ABI matches the current runtime Context, Table, Shape, Value, and callable layouts. Rebuild leaf bitcode and affected native batches after layout changes; output parity alone does not establish ABI compatibility. Hold the native toolchain, leaf bytes, and link order constant for matched performance comparisons.
 
 ## Encoder / decoder rules
 
