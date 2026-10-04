@@ -1,4 +1,5 @@
 const std = @import("std");
+const AllocationBudget = @import("allocation_budget.zig").AllocationBudget;
 const rt = @import("zig_runtime");
 const stdlib = @import("zig_stdlib");
 const global_abi = @import("lua_globals");
@@ -184,24 +185,36 @@ pub const SharedLoadDataCache = struct {
 
     fn loadDataMetatable(self: *SharedLoadDataCache) !*rt.Table {
         if (self.metatable) |table| return table;
-        const a = self.metatable_arena.allocator();
+        var arena = std.heap.ArenaAllocator.init(self.backing);
+        errdefer arena.deinit();
+        const a = arena.allocator();
         const table = try a.create(rt.Table);
         table.* = .{};
         try table.rawSet(a, .{ .string = "mw_loadData" }, .{ .boolean = true });
         try table.rawSet(a, .{ .string = "__metatable" }, .{ .table = table });
         table.read_only = true;
         table.cross_page_stable = true;
+        self.metatable_arena = arena;
         self.metatable = table;
         return table;
     }
 
     fn seedHeadwordStatic(self: *SharedLoadDataCache, source: Value) !void {
+        self.seedHeadwordStaticCandidate(source) catch |err| switch (err) {
+            error.OutOfMemory => {},
+            else => return err,
+        };
+    }
+
+    fn seedHeadwordStaticCandidate(self: *SharedLoadDataCache, source: Value) !void {
         if (self.headword_static != null or source != .table) return;
-        const arena = try self.backing.create(std.heap.ArenaAllocator);
-        arena.* = std.heap.ArenaAllocator.init(self.backing);
+        var budget = AllocationBudget{ .backing = self.backing, .limit = @min(shared_load_data_max_entry_bytes, shared_load_data_max_bytes -| self.bytes) };
+        const bounded = budget.allocator();
+        const arena = try bounded.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(bounded);
         errdefer {
             arena.deinit();
-            self.backing.destroy(arena);
+            bounded.destroy(arena);
         }
         const a = arena.allocator();
         const metatable = try self.loadDataMetatable();
@@ -224,17 +237,22 @@ pub const SharedLoadDataCache = struct {
         root.metatable = metatable;
         root.read_only = true;
         root.cross_page_stable = true;
-        const bytes = arena.queryCapacity();
-        if (bytes > shared_load_data_max_entry_bytes or bytes > shared_load_data_max_bytes - self.bytes) {
-            arena.deinit();
-            self.backing.destroy(arena);
-            return;
-        }
+        const bytes = budget.used;
+        // Retained chunks were forwarded unchanged to backing. Detach the
+        // temporary stack budget only after the last fallible operation.
+        arena.child_allocator = self.backing;
         self.bytes += bytes;
         self.headword_static = .{ .arena = arena, .value = .{ .table = root }, .bytes = bytes };
     }
 
     fn tryPromote(self: *SharedLoadDataCache, module_id: u32, source: Value, dynamic_proven: bool) !?Value {
+        return self.promoteCandidate(module_id, source, dynamic_proven) catch |err| switch (err) {
+            error.OutOfMemory => null,
+            else => return err,
+        };
+    }
+
+    fn promoteCandidate(self: *SharedLoadDataCache, module_id: u32, source: Value, dynamic_proven: bool) !?Value {
         if (self.pendingBlocked(module_id) or self.impure.contains(module_id) or self.dynamic_disabled) return null;
         if (!self.isCacheable(module_id) and
             !dynamic_proven) return null;
@@ -246,11 +264,13 @@ pub const SharedLoadDataCache = struct {
         if (self.entries.count() >= shared_load_data_max_entries or self.bytes >= shared_load_data_max_bytes)
             return null;
 
-        const arena = try self.backing.create(std.heap.ArenaAllocator);
-        arena.* = std.heap.ArenaAllocator.init(self.backing);
+        var budget = AllocationBudget{ .backing = self.backing, .limit = @min(shared_load_data_max_entry_bytes, shared_load_data_max_bytes -| self.bytes) };
+        const bounded = budget.allocator();
+        const arena = try bounded.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(bounded);
         errdefer {
             arena.deinit();
-            self.backing.destroy(arena);
+            bounded.destroy(arena);
         }
         const a = arena.allocator();
         const promoted = blk: {
@@ -258,13 +278,9 @@ pub const SharedLoadDataCache = struct {
             defer seen_tables.deinit(a);
             break :blk try promoteLoadData(a, source, &seen_tables, try self.loadDataMetatable(), true);
         };
-        const bytes = arena.queryCapacity();
-        if (bytes > shared_load_data_max_entry_bytes or bytes > shared_load_data_max_bytes - self.bytes) {
-            arena.deinit();
-            self.backing.destroy(arena);
-            return null;
-        }
+        const bytes = budget.used;
         try self.entries.put(self.backing, module_id, .{ .arena = arena, .value = promoted, .bytes = bytes });
+        arena.child_allocator = self.backing;
         self.bytes += bytes;
         self.promotions +|= 1;
         recordFirst(&self.first_promoted, &self.promoted_count, module_id);
@@ -310,9 +326,18 @@ fn cloneValue(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnmanage
 fn pageLoadDataMetatable(state: *State) !*rt.Table {
     if (state.load_data_metatable) |table| return table;
     if (state.shared_load_data) |shared| {
-        const table = try shared.loadDataMetatable();
-        state.load_data_metatable = table;
-        return table;
+        const table = shared.loadDataMetatable() catch |err| switch (err) {
+            error.OutOfMemory => null,
+            else => return err,
+        };
+        if (table) |value| {
+            state.load_data_metatable = value;
+            return value;
+        }
+        // No shared graph exists before its metatable is published. Stay
+        // page-local thereafter so protected metatable identity cannot change
+        // halfway through this State if the shared allocator later recovers.
+        state.shared_load_data = null;
     }
     const table = try state.allocator.create(rt.Table);
     table.* = .{};
@@ -980,6 +1005,172 @@ test "shared loadData cache survives separate page allocators" {
     try std.testing.expectEqual(@as(usize, 2), DataProbe.root_calls.load(.monotonic));
     try std.testing.expectEqual(@as(usize, 1), shared.entries.count());
     try std.testing.expect(shared.bytes != 0 and shared.bytes <= shared_load_data_max_bytes);
+}
+
+fn admissionTestGraph(a: std.mem.Allocator) !Value {
+    const root = try a.create(rt.Table);
+    root.* = .{};
+    const nested = try a.create(rt.Table);
+    nested.* = .{};
+    const payload = try a.alloc(u8, 4096);
+    @memset(payload, 'x');
+    try nested.rawSet(a, .{ .string = "payload" }, .{ .string = payload });
+    try root.rawSet(a, .{ .string = "nested" }, .{ .table = nested });
+    try root.rawSet(a, .{ .string = "alias" }, .{ .table = nested });
+    try root.rawSet(a, .{ .string = "self" }, .{ .table = root });
+    try root.rawSet(a, .{ .string = "pagename" }, .{ .string = "test page" });
+    return .{ .table = root };
+}
+
+fn checkAdmissionGraph(value: Value) !void {
+    try std.testing.expect(value.table.read_only);
+    try std.testing.expect(value.table.rawGet(.{ .string = "self" }).?.table == value.table);
+    const nested = value.table.rawGet(.{ .string = "nested" }).?.table;
+    try std.testing.expect(nested == value.table.rawGet(.{ .string = "alias" }).?.table);
+    try std.testing.expect(nested.read_only);
+    const payload = nested.rawGet(.{ .string = "payload" }).?.string;
+    try std.testing.expectEqual(@as(usize, 4096), payload.len);
+    for (payload) |byte| try std.testing.expectEqual(@as(u8, 'x'), byte);
+}
+
+test "optional loadData admission rolls back every allocation failure" {
+    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer source_arena.deinit();
+    const source = try admissionTestGraph(source_arena.allocator());
+    var offset: usize = 0;
+    while (true) : (offset += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+        var induced = false;
+        {
+            var shared = SharedLoadDataCache.init(failing.allocator(), &.{true});
+            defer shared.deinit();
+            const metatable = try shared.loadDataMetatable();
+            try std.testing.expect((try shared.tryPromote(0, source, false)) == null);
+            failing.fail_index = failing.alloc_index + offset;
+            var page = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer page.deinit();
+            var state = State{ .allocator = page.allocator(), .env_slot = 0, .string_slot = 0, .mw_slot = 0, .shared_load_data = &shared };
+            const result = try promoteLoadDataForState(&state, 0, source, false, true);
+            induced = failing.has_induced_failure;
+            try checkAdmissionGraph(result);
+            try std.testing.expect(result.table.metatable == metatable);
+            try std.testing.expectEqual(!induced, result.table.cross_page_stable);
+            try std.testing.expectEqual(@as(usize, if (induced) 0 else 1), shared.entries.count());
+            try std.testing.expectEqual(@as(u64, if (induced) 0 else 1), shared.promotions);
+            if (induced) try std.testing.expectEqual(@as(usize, 0), shared.bytes);
+        }
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+        if (!induced) break;
+    }
+}
+
+test "cold shared metatable failure stays page local after recovery" {
+    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer source_arena.deinit();
+    const source = try admissionTestGraph(source_arena.allocator());
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var shared = SharedLoadDataCache.init(failing.allocator(), &.{true});
+    defer shared.deinit();
+    var page = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer page.deinit();
+    var state = State{ .allocator = page.allocator(), .env_slot = 0, .string_slot = 0, .mw_slot = 0, .shared_load_data = &shared };
+    const first = try promoteLoadDataForState(&state, 0, source, false, true);
+    try checkAdmissionGraph(first);
+    try std.testing.expect(state.shared_load_data == null);
+    try std.testing.expect(shared.metatable == null);
+    try std.testing.expectEqual(@as(usize, 0), shared.metatable_arena.queryCapacity());
+    failing.fail_index = std.math.maxInt(usize);
+    const second = try promoteLoadDataForState(&state, 0, source, false, true);
+    try checkAdmissionGraph(second);
+    try std.testing.expect(first.table.metatable == second.table.metatable);
+    try std.testing.expect(!second.table.cross_page_stable);
+    try std.testing.expectEqual(@as(usize, 0), shared.entries.count());
+}
+
+test "shared metatable construction releases every failed partial graph" {
+    var offset: usize = 0;
+    while (true) : (offset += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = offset, .resize_fail_index = 0 });
+        var induced = false;
+        {
+            var shared = SharedLoadDataCache.init(failing.allocator(), &.{});
+            defer shared.deinit();
+            const result = shared.loadDataMetatable() catch |err| blk: {
+                try std.testing.expectEqual(error.OutOfMemory, err);
+                break :blk null;
+            };
+            induced = failing.has_induced_failure;
+            if (induced) {
+                try std.testing.expect(result == null and shared.metatable == null);
+                try std.testing.expectEqual(@as(usize, 0), shared.metatable_arena.queryCapacity());
+                try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+                failing.fail_index = std.math.maxInt(usize);
+                _ = try shared.loadDataMetatable();
+            } else try std.testing.expect(result != null);
+        }
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+        if (!induced) break;
+    }
+}
+
+test "headword cache admission is optional under every allocation failure" {
+    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer source_arena.deinit();
+    const source = try admissionTestGraph(source_arena.allocator());
+    var offset: usize = 0;
+    while (true) : (offset += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+        var induced = false;
+        {
+            var shared = SharedLoadDataCache.init(failing.allocator(), &.{});
+            defer shared.deinit();
+            _ = try shared.loadDataMetatable();
+            failing.fail_index = failing.alloc_index + offset;
+            try shared.seedHeadwordStatic(source);
+            induced = failing.has_induced_failure;
+            if (induced) {
+                try std.testing.expect(shared.headword_static == null);
+                try std.testing.expectEqual(@as(usize, 0), shared.bytes);
+            } else {
+                const result = shared.headword_static.?.value;
+                try checkAdmissionGraph(result);
+                try std.testing.expect(result.table.cross_page_stable);
+                try std.testing.expect(result.table.rawGet(.{ .string = "pagename" }) == null);
+            }
+        }
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+        if (!induced) break;
+    }
+}
+
+test "cache candidate peak allocation respects remaining capacity" {
+    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer source_arena.deinit();
+    const a = source_arena.allocator();
+    const source = try a.create(rt.Table);
+    source.* = .{};
+    const oversized = try a.alloc(u8, shared_load_data_max_entry_bytes + 4096);
+    @memset(oversized, 'x');
+    try source.rawSet(a, .{ .string = "payload" }, .{ .string = oversized });
+    for ([_]usize{ shared_load_data_max_entry_bytes, 4096, 0 }) |remaining| {
+        var backing = AllocationBudget{ .backing = std.testing.allocator, .limit = std.math.maxInt(usize) };
+        var shared = SharedLoadDataCache.init(backing.allocator(), &.{true});
+        defer shared.deinit();
+        _ = try shared.loadDataMetatable();
+        try std.testing.expect((try shared.tryPromote(0, .{ .table = source }, false)) == null);
+        shared.bytes = shared_load_data_max_bytes - remaining;
+        const baseline = backing.used;
+        backing.peak = baseline;
+        for (0..8) |_| {
+            try std.testing.expect((try shared.tryPromote(0, .{ .table = source }, false)) == null);
+            try shared.seedHeadwordStatic(.{ .table = source });
+            try std.testing.expectEqual(baseline, backing.used);
+            try std.testing.expect(backing.peak - baseline <= remaining);
+        }
+        try std.testing.expect(shared.headword_static == null);
+        try std.testing.expectEqual(@as(usize, 0), shared.entries.count());
+        try std.testing.expectEqual(shared_load_data_max_bytes - remaining, shared.bytes);
+    }
 }
 
 test "shared and page-local loadData results expose the same protected metatable" {
