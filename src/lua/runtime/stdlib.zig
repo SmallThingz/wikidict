@@ -401,6 +401,17 @@ fn protectedErrorValue(ctx: *rt.Context, err: anyerror) !Value {
     return .{ .string = @errorName(err) };
 }
 
+fn protectedBodyCall(ctx: *rt.Context, callable: Value, args: []const Value, result_buffer: ?[]Value, scratch: []Value) !rt.FixedCallResult {
+    if (result_buffer) |buffer| {
+        const wanted = buffer.len -| 1;
+        // The outer output may alias arguments or the xpcall handler. Keep
+        // bounded body returns separate until the protected call completes.
+        if (wanted <= scratch.len)
+            return ctx.callValueFixed(callable, args, scratch[0..wanted]);
+    }
+    return .{ .values = try ctx.callValue(callable, args), .owned = true };
+}
+
 fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     // A later evaluation could catch allocation failure even if this one did
     // not. Keep loadData conservative, while module-root promotion relies on
@@ -417,26 +428,29 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffe
     }
     ctx.clearLuaError();
     ctx.clearAotErrorName();
-    const result = ctx.callValue(args[0], args[1..]) catch |err| {
+    var scratch: [8]Value = undefined;
+    const result = protectedBodyCall(ctx, args[0], args[1..], result_buffer, &scratch) catch |err| {
         // A protected error can expose allocator pressure (including OOM) as
         // Lua data. Such a result cannot be shared between page evaluations.
         rt.markLoadDataOnlyEffect();
         const out = try rt.returnBuffer(result_buffer, 2);
+        errdefer if (result_buffer == null) rt.freeResults(out);
         const error_value = try protectedErrorValue(ctx, err);
         rt.storeReturn(out, 0, .{ .boolean = false });
         rt.storeReturn(out, 1, error_value);
         return out;
     };
-    defer rt.freeResults(result);
-    const out = try rt.returnBuffer(result_buffer, result.len + 1);
+    defer result.deinit();
+    const out = try rt.returnBuffer(result_buffer, result.values.len + 1);
     rt.storeReturn(out, 0, .{ .boolean = true });
-    rt.copyReturnTail(out, 1, result);
+    rt.copyReturnTail(out, 1, result.values);
     return out;
 }
 
 fn baseXpcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     rt.markLoadDataOnlyEffect();
     if (args.len < 2) return error.MissingArgument;
+    const handler = args[1];
     const saved_error = ctx.last_error;
     const saved_error_present = ctx.last_error_present;
     const saved_aot_error_name = ctx.aot_error_name;
@@ -447,24 +461,24 @@ fn baseXpcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buff
     }
     ctx.clearLuaError();
     ctx.clearAotErrorName();
-    const result = ctx.callValue(args[0], &.{}) catch |err| {
+    var scratch: [8]Value = undefined;
+    const result = protectedBodyCall(ctx, args[0], &.{}, result_buffer, &scratch) catch |err| {
         rt.markLoadDataOnlyEffect();
         const original_error = try protectedErrorValue(ctx, err);
         ctx.clearLuaError();
         ctx.clearAotErrorName();
-        const handled = ctx.callValue(args[1], &.{original_error}) catch {
+        const handled = ctx.callValueFirst(handler, &.{original_error}) catch {
             rt.markLoadDataOnlyEffect();
             const out = try bufferedTwo(result_buffer, .{ .boolean = false }, .{ .string = "error in error handling" });
             return out;
         };
-        defer rt.freeResults(handled);
-        const out = try bufferedTwo(result_buffer, .{ .boolean = false }, if (handled.len == 0) .nil else handled[0]);
+        const out = try bufferedTwo(result_buffer, .{ .boolean = false }, handled);
         return out;
     };
-    defer rt.freeResults(result);
-    const out = try rt.returnBuffer(result_buffer, result.len + 1);
+    defer result.deinit();
+    const out = try rt.returnBuffer(result_buffer, result.values.len + 1);
     rt.storeReturn(out, 0, .{ .boolean = true });
-    rt.copyReturnTail(out, 1, result);
+    rt.copyReturnTail(out, 1, result.values);
     return out;
 }
 
@@ -1632,6 +1646,167 @@ fn xpcallReturnPair(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const V
 fn xpcallHandle(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     return one(ctx.allocator, .{ .string = try std.fmt.allocPrint(ctx.allocator, "handled:{s}", .{args[0].string}) });
+}
+
+test "protected calls bound body results and restore outer error state" {
+    const Probe = struct {
+        wanted: ?usize = null,
+        argc: usize = 0,
+        calls: usize = 0,
+        effects: usize = 0,
+        fn call(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value, buffer: ?[]Value) ![]const Value {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            try std.testing.expectEqual(self.wanted, if (buffer) |b| b.len else null);
+            try std.testing.expectEqual(self.argc, args.len);
+            self.calls += 1;
+            ctx.last_error = .{ .string = "inner state" };
+            ctx.last_error_present = true;
+            ctx.setAotErrorName("InnerProbe");
+            const out = try rt.returnBuffer(buffer, 4);
+            for (0..4) |i| {
+                self.effects += 1;
+                rt.storeReturn(out, i, .{ .number = @floatFromInt(10 + i) });
+            }
+            return out;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    var probe: Probe = .{};
+    const callable = try ctx.newNativeBuffered(&probe, Probe.call);
+    inline for (.{ basePcall, baseXpcall }, 0..) |invoke, kind| {
+        for ([_]?usize{ 0, 1, 2, 3, 9, 10, null }) |capacity| {
+            probe = .{
+                .wanted = if (capacity) |n| if (n <= 9) n -| 1 else null else null,
+                .argc = if (kind == 0) 1 else 0,
+            };
+            var storage = [_]Value{.{ .string = "stale" }} ** 12;
+            const buffer: ?[]Value = if (capacity) |n| storage[0..n] else null;
+            ctx.last_error = .{ .number = 88 };
+            ctx.last_error_present = true;
+            ctx.setAotErrorName("OuterProbe");
+            const args: []const Value = if (kind == 0)
+                &.{ callable, .{ .number = 42 } }
+            else
+                &.{ callable, .nil, .{ .string = "ignored trailing argument" } };
+            const out = try invoke(null, &ctx, args, buffer);
+            defer if (buffer == null) rt.freeResults(out);
+            try std.testing.expectEqual(@min(capacity orelse 5, 5), out.len);
+            if (out.len != 0) try std.testing.expect(out[0].boolean);
+            for (out[@min(out.len, 1)..], 0..) |value, i|
+                try std.testing.expectEqual(@as(f64, @floatFromInt(10 + i)), value.number);
+            if (capacity != null) {
+                try std.testing.expect(out.ptr == storage[0..].ptr);
+                for (storage[out.len..]) |value| try std.testing.expectEqualStrings("stale", value.string);
+            }
+            try std.testing.expectEqual(@as(usize, 1), probe.calls);
+            try std.testing.expectEqual(@as(usize, 4), probe.effects);
+            try std.testing.expectEqual(@as(f64, 88), ctx.last_error.number);
+            try std.testing.expect(ctx.last_error_present);
+            try std.testing.expectEqualStrings("OuterProbe", ctx.aotErrorName().?);
+        }
+    }
+}
+
+test "protected call scratch preserves aliased arguments and handler identity" {
+    const Probe = struct {
+        handled: usize = 0,
+        fail_handler: bool = false,
+        result: Value = .nil,
+
+        fn body(_: ?*anyopaque, _: *rt.Context, args: []const Value, buffer: ?[]Value) ![]const Value {
+            try std.testing.expect(buffer != null and buffer.?.len == 1);
+            const out = try rt.returnBuffer(buffer, 1);
+            rt.storeReturn(out, 0, .{ .number = 99 });
+            try std.testing.expectEqual(@as(f64, 23), args[0].number);
+            return out;
+        }
+        fn fail(_: ?*anyopaque, ctx: *rt.Context, _: []const Value, buffer: ?[]Value) ![]const Value {
+            const out = try rt.returnBuffer(buffer, 1);
+            errdefer if (buffer == null) rt.freeResults(out);
+            rt.storeReturn(out, 0, .{ .string = "must not overwrite handler" });
+            ctx.last_error = .nil;
+            ctx.last_error_present = true;
+            return error.LuaError;
+        }
+        fn handler(raw: ?*anyopaque, _: *rt.Context, args: []const Value, buffer: ?[]Value) ![]const Value {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            try std.testing.expect(buffer != null and buffer.?.len == 1);
+            try std.testing.expect(args.len == 1 and args[0] == .nil);
+            self.handled += 1;
+            const out = try rt.returnBuffer(buffer, 2);
+            rt.storeReturn(out, 0, self.result);
+            if (self.fail_handler) return error.HandlerProbeFailure;
+            rt.storeReturn(out, 1, .{ .string = "discarded" });
+            return out;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    const callable = try ctx.newNativeBuffered(null, Probe.body);
+    var aliased = [_]Value{ callable, .{ .number = 23 } };
+    const result = try basePcall(null, &ctx, &aliased, &aliased);
+    try std.testing.expect(result[0].boolean);
+    try std.testing.expectEqual(@as(f64, 99), result[1].number);
+
+    var probe = Probe{ .result = .{ .table = try ctx.newTable() } };
+    const failure = try ctx.newNativeBuffered(null, Probe.fail);
+    const handler = try ctx.newNativeBuffered(&probe, Probe.handler);
+    for ([_]bool{ false, true }) |fail_handler| {
+        probe.fail_handler = fail_handler;
+        for (0..3) |capacity| {
+            probe.handled = 0;
+            ctx.last_error = .nil;
+            ctx.last_error_present = true;
+            ctx.setAotErrorName("OuterProtectedError");
+            var shared = [_]Value{ failure, handler };
+            const out = try baseXpcall(null, &ctx, &shared, shared[0..capacity]);
+            try std.testing.expectEqual(capacity, out.len);
+            try std.testing.expectEqual(@as(usize, 1), probe.handled);
+            if (out.len != 0) try std.testing.expect(!out[0].boolean);
+            if (out.len == 2) {
+                if (fail_handler)
+                    try std.testing.expectEqualStrings("error in error handling", out[1].string)
+                else
+                    try std.testing.expect(rt.rawEqual(probe.result, out[1]));
+            }
+            try std.testing.expect(ctx.last_error == .nil and ctx.last_error_present);
+            try std.testing.expectEqualStrings("OuterProtectedError", ctx.aotErrorName().?);
+        }
+    }
+}
+
+test "fixed protected calls release legacy owned and callable table results" {
+    const Probe = struct {
+        fn native(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+            return bufferedTwo(null, .{ .string = "left" }, .{ .number = 7 });
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    const native = try ctx.newNative(null, Probe.native);
+    const direct = try ctx.makeFunctionKnown(0, xpcallReturnPair, &.{});
+    const object = try ctx.newTable();
+    object.metatable = try ctx.newTable();
+    try object.metatable.?.rawSet(ctx.allocator, .{ .string = "__call" }, native);
+    for ([_]Value{ native, direct, .{ .table = object } }) |callable| {
+        inline for (.{ basePcall, baseXpcall }) |invoke| {
+            for (0..4) |capacity| {
+                var storage: [3]Value = undefined;
+                const out = try invoke(null, &ctx, &.{ callable, .nil }, storage[0..capacity]);
+                try std.testing.expectEqual(capacity, out.len);
+                if (capacity > 0) try std.testing.expect(out[0].boolean);
+                if (capacity > 1) try std.testing.expectEqualStrings("left", out[1].string);
+                if (capacity > 2) try std.testing.expectEqual(@as(f64, 7), out[2].number);
+            }
+        }
+    }
 }
 
 test "AOT xpcall transforms failures and preserves success results" {

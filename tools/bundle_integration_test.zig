@@ -256,6 +256,21 @@ const module_source =
     \\    assert(not xp_ok and xp_value == 'handled:xp')
     \\    local xp_success, xp_left, xp_right = xpcall(function() return 'left', 7 end, function(err) return err end)
     \\    assert(xp_success and xp_left == 'left' and xp_right == 7)
+    \\    local protected_effects = 0
+    \\    local function protected_tail() protected_effects = protected_effects + 1; return 9 end
+    \\    local function protected_values() return 7, protected_tail() end
+    \\    local protected_status = pcall(protected_values)
+    \\    pcall(protected_values)
+    \\    assert(protected_status and protected_effects == 2)
+    \\    local late_ok, late_error = pcall(function() return 7, error(nil) end)
+    \\    assert(not late_ok and late_error == nil)
+    \\    local handled_count = 0
+    \\    local function protected_handler(err) assert(err == nil); handled_count = handled_count + 1; return {}, 99 end
+    \\    xpcall(function() error(nil) end, protected_handler)
+    \\    local handled_status = xpcall(function() error(nil) end, protected_handler)
+    \\    assert(not handled_status and handled_count == 2)
+    \\    local handler_ok, handler_error = xpcall(function() error('body') end, function() return 7, error('handler tail') end)
+    \\    assert(not handler_ok and handler_error == 'error in error handling')
     \\    assert(frame:callParserFunction{ name = '#invoke', args = {'IntegrationForms', 'frame_probe', x = 'frame-parser'} } == 'frame-parser')
     \\    assert(frame:callParserFunction{ name = '#tag:syntaxhighlight', args = {'x', lang = 'text'} } == '<syntaxhighlight lang="text">x</syntaxhighlight>')
     \\    assert(frame:callParserFunction{ name = '#tag', args = {'ref', 'body', 'name=n'} } == '<ref name="n">body</ref>')
