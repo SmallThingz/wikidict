@@ -28,6 +28,10 @@ pub const Worker = struct {
     timeout_ms: u32 = expansion_deadline.default_ms,
     child: ?std.process.Child = null,
     last_failure: ?Failure = null,
+    generation: u64 = 0,
+    oom_retry_attempts: u64 = 0,
+    oom_retry_recovered: u64 = 0,
+    oom_retry_failed: u64 = 0,
 
     pub fn init(io: std.Io, root: []const u8, executable: []const u8, dump: []const u8) Worker {
         return .{
@@ -40,6 +44,9 @@ pub const Worker = struct {
     }
 
     pub fn deinit(self: *Worker) void {
+        if (self.oom_retry_attempts != 0) std.debug.print("bundle OOM recovery totals attempted={d} recovered={d} failed={d}\n", .{
+            self.oom_retry_attempts, self.oom_retry_recovered, self.oom_retry_failed,
+        });
         if (self.child) |*child| {
             // Normal EOF lets the worker print its bounded shutdown counters.
             // A stuck child is still reaped after the deadline below.
@@ -107,6 +114,7 @@ pub const Worker = struct {
                 .stdout = .pipe,
                 .stderr = .inherit,
             });
+            self.generation +|= 1;
         }
         return &self.child.?;
     }
@@ -147,12 +155,53 @@ pub const Worker = struct {
     pub fn expand(self: *Worker, a: A, page_ordinal: u64, title: []const u8, source: []const u8) !?Expansion {
         self.last_failure = null;
         if (source.len > protocol.max_source_bytes) return error.RequestTooLarge;
+        // Both attempts share one response budget. Request transmission is
+        // still the existing blocking pipe path; the outer build watchdog also
+        // remains mandatory for a stuck/non-reading child.
+        const deadline = std.Io.Clock.awake.now(self.io).toNanoseconds() + @as(i128, self.timeout_ms) * std.time.ns_per_ms;
+        var remote_oom = false;
+        return self.expandOnce(a, page_ordinal, title, source, deadline, &remote_oom) catch |err| {
+            if (!remote_oom) return err;
+            // Only a fully decoded remote OOM reaches here. Local allocator,
+            // transport, semantic and deadline failures never authorize replay.
+            const retired_generation = self.generation;
+            self.oom_retry_attempts +|= 1;
+            std.debug.print("bundle OOM recovery start ordinal={d} retired_generation={d} source_bytes={d} now_unix={d}\n", .{
+                page_ordinal, retired_generation, source.len, self.now_unix,
+            });
+            self.last_failure = null;
+            remote_oom = false;
+            const recovered = self.expandOnce(a, page_ordinal, title, source, deadline, &remote_oom) catch |cold_err| {
+                self.reset();
+                self.oom_retry_failed +|= 1;
+                std.debug.print("bundle OOM recovery failed ordinal={d} generation={d} error={s}\n", .{ page_ordinal, self.generation, @errorName(cold_err) });
+                return if (remote_oom and cold_err == error.OutOfMemory) error.OutOfMemory else error.ColdRetryFailed;
+            };
+            if (recovered) |output| {
+                self.last_failure = null;
+                self.oom_retry_recovered +|= 1;
+                var digest: [32]u8 = undefined;
+                std.crypto.hash.sha2.Sha256.hash(output.source, &digest, .{});
+                const hex = std.fmt.bytesToHex(digest, .lower);
+                std.debug.print("bundle OOM recovery success ordinal={d} generation={d} output_bytes={d} output_sha256={s}\n", .{
+                    page_ordinal, self.generation, output.source.len, hex,
+                });
+                return output;
+            }
+            self.reset();
+            self.oom_retry_failed +|= 1;
+            std.debug.print("bundle OOM recovery failed ordinal={d} generation={d} error=UnexpectedSkip\n", .{ page_ordinal, self.generation });
+            return error.ColdRetryFailed;
+        };
+    }
+
+    fn expandOnce(self: *Worker, a: A, page_ordinal: u64, title: []const u8, source: []const u8, deadline: i128, remote_oom: *bool) !?Expansion {
+        if (std.Io.Clock.awake.now(self.io).toNanoseconds() >= deadline) return error.Timeout;
         const child = try self.ensure();
         self.writeRequest(child, page_ordinal, title, source) catch |err| {
             self.reset();
             return err;
         };
-        const deadline = std.Io.Clock.awake.now(self.io).toNanoseconds() + @as(i128, self.timeout_ms) * std.time.ns_per_ms;
         var raw_length: [4]u8 = undefined;
         self.readExact(child.stdout.?, &raw_length, deadline) catch |err| {
             if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
@@ -168,7 +217,10 @@ pub const Worker = struct {
             self.reset();
             return error.InvalidResponse;
         }
-        const response = try a.alloc(u8, response_len);
+        const response = a.alloc(u8, response_len) catch |err| {
+            self.reset();
+            return err;
+        };
         self.readExact(child.stdout.?, response, deadline) catch |err| {
             if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
             if (err == error.Timeout) std.debug.print(
@@ -178,7 +230,10 @@ pub const Worker = struct {
             self.reset();
             return err;
         };
-        const reply = protocol.decodeReply(response) catch return error.InvalidResponse;
+        const reply = protocol.decodeReply(response) catch {
+            self.reset();
+            return error.InvalidResponse;
+        };
         switch (reply) {
             .output => |success| return .{
                 .source = success.output,
@@ -197,6 +252,7 @@ pub const Worker = struct {
                 if (operationalFailure(failure)) |err| {
                     // Persistent promotion may have failed partway through.
                     // Never reuse that process after an operational failure.
+                    remote_oom.* = err == error.OutOfMemory;
                     self.reset();
                     return err;
                 }

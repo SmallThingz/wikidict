@@ -459,6 +459,123 @@ fn failureMetadataProbe(h: *Harness, dir: []const u8) !void {
     try h.require(closed.child == null, "closed worker is reaped after bounded status capture");
 }
 
+fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, root: []const u8, dump: []const u8, dir: []const u8) !void {
+    const script = try std.fs.path.join(h.a, &.{ root, "dict-bundle-expander" });
+    const mode_path = try std.fs.path.join(h.a, &.{ root, "retry-mode" });
+    const count_path = try std.fs.path.join(h.a, &.{ root, "retry-count" });
+    const pids_path = try std.fs.path.join(h.a, &.{ root, "retry-pids" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data =
+        \\#!/usr/bin/env python3
+        \\import os, struct, sys, time
+        \\from pathlib import Path
+        \\root = Path(__file__).parent
+        \\mode = (root/'retry-mode').read_text().strip()
+        \\attempt = int((root/'retry-count').read_text()) + 1
+        \\(root/'retry-count').write_text(str(attempt))
+        \\with (root/'retry-pids').open('a') as f: f.write(str(os.getpid())+'\n')
+        \\def exact(n):
+        \\    out = bytearray()
+        \\    while len(out) < n:
+        \\        part = sys.stdin.buffer.read(n-len(out))
+        \\        if not part: return None
+        \\        out.extend(part)
+        \\    return bytes(out)
+        \\def failure(name):
+        \\    stage=b'expand'
+        \\    return b'\x01'+struct.pack('<III',len(stage),len(name),0)+stage+name
+        \\while True:
+        \\    head=exact(4)
+        \\    if head is None: break
+        \\    body=exact(struct.unpack('<I',head)[0])
+        \\    if body is None: break
+        \\    (root/('retry-request-'+str(attempt))).write_bytes(head+body)
+        \\    if mode=='semantic-initial': reply=failure(b'ExpectedSemanticError')
+        \\    elif mode!='output-initial' and attempt==1: reply=failure(b'OutOfMemory')
+        \\    elif mode=='oom': reply=failure(b'OutOfMemory')
+        \\    elif mode=='semantic': reply=failure(b'ExpectedSemanticError')
+        \\    elif mode=='skip': reply=b'\x02'
+        \\    elif mode=='malformed': reply=b'\xff'
+        \\    elif mode=='eof': break
+        \\    elif mode=='truncated':
+        \\        sys.stdout.buffer.write(struct.pack('<I',12)+b'\x00');sys.stdout.buffer.flush();break
+        \\    elif mode=='timeout': time.sleep(5);break
+        \\    else:
+        \\        output=b'==English==\n# recovered\n'; title=b'Recovered' if mode=='output' else b''
+        \\        reply=b'\x00'+struct.pack('<II',len(output),len(title))+output+title
+        \\    sys.stdout.buffer.write(struct.pack('<I',len(reply))+reply);sys.stdout.buffer.flush()
+        \\    if mode!='output-initial' and mode!='semantic-initial' and attempt==1: break
+        \\
+    });
+    _ = try h.run(&.{ "chmod", "755", script }, 0);
+    const input_source = "==English==\n# original input\n";
+    const cases = [_]struct { mode: []const u8, expected: ?anyerror }{
+        .{ .mode = "output", .expected = null },
+        .{ .mode = "oom", .expected = error.OutOfMemory },
+        .{ .mode = "semantic", .expected = error.ColdRetryFailed },
+        .{ .mode = "skip", .expected = error.ColdRetryFailed },
+        .{ .mode = "malformed", .expected = error.ColdRetryFailed },
+        .{ .mode = "truncated", .expected = error.ColdRetryFailed },
+        .{ .mode = "eof", .expected = error.ColdRetryFailed },
+        .{ .mode = "timeout", .expected = error.ColdRetryFailed },
+    };
+    for (cases) |case| {
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = mode_path, .data = case.mode });
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = count_path, .data = "0" });
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = pids_path, .data = "" });
+        var worker = expander.Worker.init(h.io, root, script, dump);
+        defer worker.deinit();
+        worker.now_unix = 1791072000;
+        worker.timeout_ms = 1000;
+        if (case.expected) |err| {
+            try std.testing.expectError(err, worker.expand(h.a, 17, "retry-probe", input_source));
+            try h.require(worker.child == null and worker.oom_retry_failed == 1, "failed cold retry is terminal and reaped");
+        } else {
+            const output = (try worker.expand(h.a, 17, "retry-probe", input_source)).?;
+            try std.testing.expectEqualStrings("==English==\n# recovered\n", output.source);
+            try std.testing.expectEqualStrings("Recovered", output.display_title.?);
+            try h.require(worker.last_failure == null and worker.oom_retry_recovered == 1, "recovery clears stale failure metadata");
+            const first = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, "retry-request-1" }), h.a, .limited(1024 * 1024));
+            const second = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, "retry-request-2" }), h.a, .limited(1024 * 1024));
+            try std.testing.expectEqualSlices(u8, first, second);
+            const pids = try std.Io.Dir.cwd().readFileAlloc(h.io, pids_path, h.a, .limited(1024));
+            var lines = std.mem.tokenizeScalar(u8, pids, '\n');
+            const old = lines.next().?;
+            const fresh = lines.next().?;
+            try h.require(!std.mem.eql(u8, old, fresh), "OOM replacement has a distinct process");
+            _ = (try worker.expand(h.a, 18, "next-probe", input_source)).?;
+            try h.require(worker.last_failure == null and worker.generation == 2, "subsequent page reuses only recovered healthy child");
+        }
+        try h.require(worker.oom_retry_attempts == 1 and worker.generation == 2, "remote OOM gets exactly one replacement attempt");
+    }
+    // Allocation failure in the parent is never mistaken for a remote OOM.
+    for ([_]usize{ 0, 1 }) |fail_at| {
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = mode_path, .data = if (fail_at == 0) "output-initial" else "output" });
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = count_path, .data = "0" });
+        var arena = std.heap.ArenaAllocator.init(h.a);
+        defer arena.deinit();
+        var failing = std.testing.FailingAllocator.init(arena.allocator(), .{ .fail_index = fail_at });
+        var worker = expander.Worker.init(h.io, root, script, dump);
+        defer worker.deinit();
+        try std.testing.expectError(if (fail_at == 0) error.OutOfMemory else error.ColdRetryFailed, worker.expand(failing.allocator(), 17, "allocation-probe", input_source));
+        try h.require(worker.child == null and worker.oom_retry_attempts == fail_at, "local OOM never starts an extra recovery");
+    }
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = mode_path, .data = "output-valid-display" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = count_path, .data = "0" });
+    const output_root = try std.fs.path.join(h.a, &.{ dir, "recovered-dictionary" });
+    _ = try h.run(&.{ blob_builder, dump, output_root, "--expander-root", root, "--workers", "1", "--now-unix", "1791072000" }, 0);
+    _ = try h.run(&.{ verifier, output_root }, 0);
+    const fallbacks = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ output_root, "fallback-pages.jsonl" }), h.a, .limited(1024));
+    try h.require(fallbacks.len == 0, "recovered output never becomes fallback text");
+    try h.require(exists(h.io, try std.fs.path.join(h.a, &.{ output_root, "page-coverage.json" })), "successful cold recovery has complete coverage");
+    for ([_][]const u8{ "semantic", "skip", "malformed" }) |mode| {
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = mode_path, .data = mode });
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = count_path, .data = "0" });
+        const failed_output = try std.fmt.allocPrint(h.a, "{s}/cold-failed-{s}", .{ dir, mode });
+        _ = try h.run(&.{ blob_builder, dump, failed_output, "--expander-root", root, "--workers", "1" }, 1);
+        try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ failed_output, "page-coverage.json" })), "unsuccessful cold replay cannot publish coverage");
+    }
+}
+
 fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
     const root = try std.fs.path.join(h.a, &.{ dir, "failure-root" });
     try std.Io.Dir.cwd().createDirPath(h.io, root);
@@ -510,6 +627,8 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     const oom_shards = try std.fs.path.join(h.a, &.{ dir, "oom-shards" });
     _ = try h.run(&.{ blob_builder, dump, oom_shards, "--expander-root", root, "--workers", "1", "--shard-pages", "1", "--limit-pages", "1", "--index-byte-offset", "0" }, 1);
     try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ oom_shards, "00000000" })), "remote OOM cannot publish a continuous shard");
+
+    try coldRetryProbe(h, blob_builder, verifier, root, dump, dir);
 
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = "#!/bin/sh\nexec tail -f /dev/null\n" });
     const timed_out = try std.fs.path.join(h.a, &.{ dir, "timeout-dictionary" });
