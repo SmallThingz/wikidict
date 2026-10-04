@@ -24,6 +24,22 @@ const source =
     "# Site magic: {{SERVER}} / {{SERVERNAME}}\n" ++
     "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}} / {{REVISIONUSER}} / {{PAGEID:rat}} / {{REVISIONUSER:rat}}\n";
 const module_source =
+    \\local concat_prefix = 'A'
+    \\local concat_first = concat_prefix .. ('\000' .. 'β')
+    \\assert(concat_first == 'A\000β')
+    \\assert(concat_first .. ('c' .. '') == 'A\000βc')
+    \\assert(('\255' .. '\000') == string.char(255, 0))
+    \\local function concat_dynamic(x) return x .. ('b' .. 'c') end
+    \\assert(concat_dynamic('a') == 'abc')
+    \\local concat_mutable = 'old'
+    \\local function concat_change() concat_mutable = 'new'; return 'tail' end
+    \\assert(concat_mutable .. concat_change() == 'oldtail' and concat_mutable == 'new')
+    \\assert(not pcall(function() return ('a' .. 'b') .. {} end))
+    \\assert('x' .. 12 == 'x12')
+    \\local concat_ok, concat_error = pcall(function()
+    \\    return ('a' .. 'b') .. (function() error('concat-late-error') end)()
+    \\end)
+    \\assert(not concat_ok and tostring(concat_error):find('concat-late-error', 1, true))
     \\local forms = require('Module:IntegrationFormsAlias')
     \\local synth = require('Module:IntegrationSynth')
     \\assert(synth.kind == 'mixed' and synth.answer == 42 and synth.nested.ok == true)

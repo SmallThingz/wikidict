@@ -1,0 +1,22 @@
+1/21 cache-warm-test.test.warm cached Unicode percent classes and malformed tails preserve callbacks and errors...OK
+2/21 runtime.ustring_pattern.test.unicode dot consumes one codepoint...OK
+3/21 runtime.ustring_pattern.test.unicode findInto preserves output on misses and copies live captures...OK
+4/21 runtime.ustring_pattern.test.unicode literal classes ranges captures and frontier...OK
+5/21 runtime.ustring_pattern.test.unicode balanced capture preserves inline modifier...OK
+6/21 runtime.ustring_pattern.test.prepared Unicode membership agrees with raw literal parser...OK
+7/21 runtime.ustring_pattern.test.prepared Unicode searches preserve rollback quantifiers and lazy errors...OK
+8/21 runtime.ustring_pattern.test.Unicode preparation is lazy optional and never retries failed allocation...OK
+9/21 runtime.ustring_pattern.test.percent-containing long classes preserve category callback sequence...OK
+10/21 runtime.ustring_pattern.test.cached searches retain snapshot semantics after the original pattern is freed...OK
+11/21 runtime.ustring_pattern.test.cache admission stays lazy and tiny misses do not prepare...OK
+12/21 runtime.ustring_pattern.test.cache allocation failure preserves ordinary prepared search...OK
+13/21 runtime.ustring_pattern.test.borrowed search survives cache saturation by nested searches...OK
+14/21 runtime.pattern_cache.test.pattern cache owns keys and codepoints and reuses equal content...OK
+15/21 runtime.pattern_cache.test.pattern cache accounts unmerged storage and respects exact byte budget...OK
+16/21 runtime.pattern_cache.test.full pattern cache still serves old entries...OK
+17/21 runtime.pattern_cache.test.failed cache admission releases every allocation and publishes nothing...OK
+18/21 runtime.pattern_cache.test.concurrent pattern admission publishes one stable entry...OK
+19/21 runtime.unicode_classes.test.long ranges prepare, merge, invert and retain allocation ownership...OK
+20/21 runtime.unicode_classes.test.escaped and short classes retain raw matching...OK
+21/21 runtime.unicode_classes.test.optional preparation allocation failures release partial storage...OK
+All 21 tests passed.

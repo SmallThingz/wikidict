@@ -1,0 +1,21 @@
+bundle expansion timed out title=probe ordinal=0 source_bytes=12 timeout_ms=100
+bundle expansion failed title=probe stage=x error=E: d
+BUNDLE_INTEGRATION_PASS checks=21: destination refusal, incomplete failure marker, verified pre-expanded Lua/templates, data-only final tree. Artifacts: /home/a/zig/wikidict/.zig-cache/bundle-integration-546568-285656512668581
+Build Summary: 13/13 steps succeeded
+test-bundle success
++- run exe dict-bundle-integration-test success 2m
+   +- compile exe dict-bundle-integration-test ReleaseSafe native success 40s MaxRSS:396M
+   +- compile exe dict ReleaseSafe native cached 102ms MaxRSS:34M
+   +- compile exe dict-bundle-build ReleaseSafe native success 26s MaxRSS:440M
+   |  +- options success
+   |     +- compile exe dict-module-extract ReleaseSafe native cached 716ms MaxRSS:34M
+   |     +- compile exe dict-llvm-build ReleaseSafe native success 1s MaxRSS:88M
+   |     |  +- WriteFile cached
+   |     |  +- compile obj dict-llvm-build-core ReleaseSafe native success 1m MaxRSS:680M
+   |     |  +- compile obj dict-llvm-build-core ReleaseSafe native (reused)
+   |     +- compile exe dict-blob-build ReleaseSafe native cached 737ms MaxRSS:34M
+   +- compile exe dict-blob-verify ReleaseSafe native cached 86ms MaxRSS:34M
+   +- compile exe dict-llvm-build ReleaseSafe native (+3 more reused dependencies)
+   +- compile exe dict-blob-build ReleaseSafe native (reused)
+   +- compile obj dict-lua-value-leaf-test ReleaseFast native cached 39ms MaxRSS:34M
+

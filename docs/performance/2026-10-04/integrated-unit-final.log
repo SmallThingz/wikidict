@@ -1,0 +1,820 @@
+[32mok[0m root.test.encoder root imports bundle-time presentation modules
+[32mok[0m language_source.test.language sections ignore preamble and nested fake headings
+[32mok[0m language_source.test.repeated language sections remain separate
+[32mok[0m language_source.test.language iterator accepts level-one boundaries and standalone code markers
+[32mok[0m language_source.test.table subheadings do not become language sections
+[32mok[0m language_source.test.raw section conventions classify German and Hebrew languages
+[32mok[0m blob_builder.test.wikitext writer emits only data blobs
+[32mok[0m blob_builder.test.raw language markers canonicalize templated headings
+[32mok[0m blob_builder.test.language resolution rejects fake top-level headings and uses real fallback language
+[32mok[0m blob_builder.test.fallback report names every recovered page and retains unclassified entries
+[32mok[0m presentation_compile.test.safe internal target ASCII fast path preserves Unicode and control checks
+[32mok[0m presentation_compile.test.reference identity fast paths remain exact
+[32mok[0m presentation_compile.test.renderer resolves Wiktionary definitions links labels and multiline quotations
+[32mok[0m presentation_compile.test.renderer protects nowiki decodes entities once and never executes source HTML
+[32mok[0m presentation_compile.test.renderer groups wiki tables and ordered nested lists
+[32mok[0m presentation_compile.test.renderer preserves named forward references and unknown templates explicitly
+[32mok[0m presentation_compile.test.renderer propagates allocation failures with complete page cleanup
+[32mok[0m presentation_compile.test.emphasis template boundaries and nested image captions render without raw wiki delimiters
+[32mok[0m presentation_compile.test.senseid optional list closure keeps links and nowiki semantic
+[32mok[0m presentation_compile.test.leading space preformatting still compiles links and HTML
+[32mok[0m presentation_compile.test.multitrans produces real blocks and malformed tables retain readable content
+[32mok[0m presentation_compile.test.bounded malformed wikitext stress never traps and preserves allocator ownership
+[32mok[0m presentation_compile.test.compiled template HTML tables retain cells and supplied inflections
+[32mok[0m presentation_compile.test.optional table cell closures compile semantic cells
+[32mok[0m presentation_compile.test.table span attributes decode entities and stay bounded
+[32mok[0m presentation_compile.test.translation layout tables preserve lists with optional closing tags
+[32mok[0m presentation_compile.test.anagrams render only supplied terms with language and preserve unsupported options
+[32mok[0m presentation_compile.test.supplied RQ passage is visible without claiming its citation template was expanded
+[32mok[0m presentation_compile.test.explicit positional anagrams do not turn language or ordering keys into words
+[32mok[0m presentation_compile.test.generated audio layout is rendered and media stays typed rather than emitted as HTML
+[32mok[0m presentation_compile.test.audio layout width is not mistaken for its caption
+[32mok[0m presentation_compile.test.opaque extensions render safely without leaking parser delimiters
+[32mok[0m presentation_compile.test.reference identity includes group and decodes attribute entities
+[32mok[0m presentation_compile.test.media options do not become captions
+[32mok[0m presentation_compile.test.nested wiki tables do not close their parent table early
+[32mok[0m presentation_compile.test.wide and sparse column templates render without artificial index walks
+[32mok[0m presentation_compile.test.list continuations keep list-detail semantics for nested rendering
+[32mok[0m presentation_compile.test.gallery media options stay metadata instead of leaking into captions
+[32mok[0m presentation_compile.test.HTML comments and opaque bodies cannot prematurely close an outer element
+[32mok[0m presentation_compile.test.external links ignore closing brackets inside nowiki and retain the label
+[32mok[0m presentation_compile.test.renderer preserves MediaWiki external protocols and free links
+[32mok[0m presentation_compile.test.raw anchors do not suppress free links in their visible source
+[32mok[0m presentation_compile.test.renderer preserves MediaWiki RFC PMID and ISBN magic links
+[32mok[0m presentation_compile.test.renderer accepts current MediaWiki semantic HTML tags without leaking tag source
+[32mok[0m presentation_compile.test.itemprop metadata tags follow MediaWiki visibility rules without retaining URLs
+[32mok[0m presentation_compile.test.transclusion controls and table containers keep page-context visibility
+[32mok[0m presentation_compile.test.semantic HTML decodes class language and direction attributes before use
+[32mok[0m presentation_compile.test.malformed entities stay literal while invalid Unicode scalars become replacement characters
+[32mok[0m presentation_compile.test.attribute entity decoding does not spend presentation node budget
+[32mok[0m presentation_compile.test.renderer degrades oversized templates instead of failing the whole entry
+[32mok[0m presentation_compile.test.media collection caps without turning excess assets into a render failure
+[32mok[0m presentation_compile.test.extreme nested block HTML falls back to bounded preformatted content
+[32mok[0m presentation_compile.test.structured inline edge fuzz keeps valid UTF8 and trailing content reachable
+[32mok[0m presentation_compile.test.edge renderer paths release every failed allocation
+[32mok[0m presentation_compile.test.wiki link trails stay linked while hidden category trails remain visible
+[32mok[0m presentation_compile.test.pipe trick strips syntactic colon prefixes and final disambiguators
+[32mok[0m presentation_compile.test.same-line definition lists split term and definition without splitting nested colons
+[32mok[0m presentation_compile.test.parameter defaults remain visible when preceded by ordinary text
+[32mok[0m presentation_compile.test.malformed link tail stays literal at the current cursor
+[32mok[0m presentation_compile.test.empty link remains literal while following inline content renders
+[32mok[0m presentation_compile.test.malformed template and link opener storms preserve the tail without trapping
+[32mok[0m presentation_compile.test.benign semantic HTML renders content while dangerous HTML stays inert
+[32mok[0m presentation_compile.test.numbered lists restart after non-list blocks and root-list changes
+[32mok[0m presentation_compile.test.headings follow MediaWiki whitespace width and level-six clamping
+[32mok[0m presentation_compile.test.misnested formatting follows MediaWiki visible style ownership
+[32mok[0m presentation_compile.test.multiline safe block HTML keeps inner list structure inside the container
+[32mok[0m presentation_compile.test.stray and unclosed dangerous HTML cannot swallow following dictionary text
+[32mok[0m presentation_compile.test.raw HTML anchors stay literal while attribute URLs retain MediaWiki free-link semantics
+[32mok[0m presentation_compile.test.internal link targets decode entities and normalize underscores
+[32mok[0m presentation_compile.test.list-defined references populate named citations without emitting fake markers
+[32mok[0m presentation_compile.test.list-defined reference may precede its later citation
+[32mok[0m presentation_compile.test.list-defined references ignore ref-looking text in protected regions
+[32mok[0m presentation_compile.test.control characters in decoded internal targets never become navigation links
+[32mok[0m presentation_compile.test.presentation node budget truncates explicitly instead of returning RenderLimit
+[32mok[0m presentation_compile.test.unclosed HTML opener storms are consumed once and preserve the tail
+[32mok[0m presentation_compile.test.default reference numbering stays independent of named groups
+[32mok[0m presentation_compile.test.emphasis exposes nested HTML entities and parameters to the compiler
+[32mok[0m presentation_compile.test.packed compiler span flags preserve DPR2 bit positions
+[32mok[0m presentation_compile.test.TemplateStyles before NavFrame preserves semantic conjugation tables
+[32mok[0m presentation_compile.test.unclosed formatting and rowless nested tables compile their contents
+[32mok[0m presentation_layout.test.lexemes keep homonyms and nested sense evidence separate without losing blocks
+[32mok[0m presentation_layout.test.sense ownership skips missing depths and invalidates stale deeper owners
+[32mok[0m presentation_layout.test.renderer relation hints feed layout without reparsing source
+[32mok[0m presentation_document.test.shipped presentation rejects literal source even when protected by nowiki
+[32mok[0m presentation_document.test.reported publication audits malformed external link syntax
+[32mok[0m presentation_document.test.builder sections borrow contiguous rendered block slices
+[32mok[0m presentation_document.test.compiled presentation contains no executable template syntax
+[32mok[0m presentation_document.test.edition link trail survives compiled presentation encoding
+[32mok[0m presentation_document.test.display titles compile to semantic spans after page-title validation
+[32mok[0m presentation_document.test.reported display title rejection falls back to canonical title
+[32mok[0m presentation_document.test.unknown templates are rejected at bundle time
+[32mok[0m presentation_document.test.known presentation templates cannot bypass bundle expansion
+[32mok[0m presentation_document.test.partially renderable unsupported citation templates still fail publication
+[32mok[0m presentation_document.test.template parse limits fail publication instead of preserving executable syntax
+[32mok[0m presentation_document.test.reported recovery matches MediaWiki literal and formatting fixtures
+[32mok[0m presentation_document.test.missing template recovery emits a data-only red link without argument source
+[32mok[0m presentation_media.test.only passive supported media formats are eligible for inline export
+
+pass: 97  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m blob_root.test.blob encoder root imports data-only presentation codecs
+[32mok[0m blob_format.test.data blob header carries only v8 magic and kind
+[32mok[0m blob_format.test.data blob stores only necessary record framing
+[32mok[0m blob_format.test.data blob builds runtime index over borrowed records
+[32mok[0m blob_format.test.data blob rejects malformed framing and unsorted records
+[32mok[0m blob_format.test.trusted open skips title-order scan while runtime index can validate it
+[32mok[0m blob_format.test.data blob rejects non-canonical payload lengths
+[32mok[0m blob_format.test.data blob metadata is semantic rather than length-indexed
+[32mok[0m blob_format.test.data blob empty stream needs no runtime index storage
+[32mok[0m blob_format.test.data blob payload lengths round trip at integer boundaries
+[32mok[0m blob_format.test.data blob rejects old magic and malformed record framing
+[32mok[0m blob_format.test.data blob runtime index cleans up every allocation failure
+[32mok[0m blob_catalog.test.blob catalog derives stable language filenames
+[32mok[0m blob_catalog.test.blob catalog stores only language headings
+[32mok[0m blob_catalog.test.blob catalog headings need no field escaping
+[32mok[0m blob_catalog.test.blob catalog find rejects duplicate target headings
+[32mok[0m blob_catalog.test.blob catalog names fixed feature blobs
+[32mok[0m presentation_types.test.compiled presentation validation rejects unsafe semantic indices
+[32mok[0m presentation_codec.test.enum encoding maps build-only tags without runtime name lookup
+[32mok[0m presentation_codec.test.binary presentation codec round trips semantic structure
+[32mok[0m presentation_codec.test.binary presentation codec borrows decoded strings
+[32mok[0m presentation_codec.test.binary presentation codec preserves composite semantic fields
+[32mok[0m presentation_codec.test.binary presentation codec rejects encoder collection overflow
+[32mok[0m presentation_codec.test.binary presentation codec keeps string and collection limits independent
+[32mok[0m presentation_codec.test.binary presentation codec rejects invalid UTF-8 strings
+[32mok[0m presentation_codec.test.binary presentation codec rejects invalid framing and trailing bytes
+[32mok[0m part_kind.test.optional sections never swallow descendant definitions
+
+pass: 27  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m blob_root.test.blob decoder root imports portable reader
+[32mok[0m blob_reader.test.typed blob reader exposes compiled language payload and metadata
+[32mok[0m blob_reader.test.typed blob reader exposes compiled feature payloads without source facades
+
+pass: 3  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m main.test_0
+[32mok[0m args.test.CLI options are strict and lookup shorthand is unambiguous
+[32mok[0m args.test.frontend formats and terminal options reject invalid combinations
+[32mok[0m args.test.removed runtime and web options stay rejected
+[32mok[0m args.test.language accounting can be scoped to a spelling rather than the whole catalog
+[32mok[0m args.test.export remains a JSON lookup alias
+[32mok[0m args.test.reader commands and configured defaults remain explicit
+[32mok[0m store.test.prefix ranges handle exact matches empty prefixes unicode and misses
+[32mok[0m store.test.compiled records need no resolution machinery
+[32mok[0m model.test.reader deserializes compiled presentation without wikitext parsing
+[32mok[0m model.test.reader rejects source-like payload instead of compiling it
+[32mok[0m output.test.terminal output neutralizes control and bidi sequences without corrupting unicode
+[32mok[0m output.test.JSON output is a complete versioned machine response
+[32mok[0m output.test.human renderer consumes compiled spans only
+[32mok[0m tui.test.terminal query editing is bounded and UTF8-aware
+[32mok[0m media_job.test.speech arguments are owned, polling remains responsive, result consumed once
+[32mok[0m media_job.test.media arguments are owned
+[32mok[0m media_job.test.cancel and replacement join the old job before releasing its input
+[32mok[0m media_job.test.errors are published only after task completion
+[32mok[0m media_job.test.unavailable concurrency and allocation failure leave no active job
+[32mok[0m pipeline_tests.test.all six shipped blob kinds deserialize compiled presentation only
+[32mok[0m pipeline_tests.test.reader refuses old source-shaped record payloads
+[32mok[0m terminal.test.cluster cursor boundaries keep combining marks flags and ZWJ emoji intact
+[32mok[0m terminal.test.terminal input survives split escape sequences and multibyte paste
+[32mok[0m terminal.test.cell wrapping preserves CJK and combining marks without splitting UTF8
+[32mok[0m terminal.test.styled wrapping preserves generated emphasis across Unicode cell boundaries
+[32mok[0m search.test.case-insensitive search retains only the best bounded window
+[32mok[0m search.test.exact lookup prefers byte exact and returns first folded collision
+[32mok[0m search.test.early exact lookup removes unfinished folded cache temporary file
+[32mok[0m search.test.folded prefix cache persists two bytes per record and filters later queries
+[32mok[0m reading_state.test.reading history is bounded, deduplicated and independent of saved words
+[32mok[0m reading_state.test.concurrent readers preserve saved words settings and study increments
+[32mok[0m reading_state.test.last title remains owned with history off and unchanged text adopts a newer reader
+[32mok[0m reading_state.test.concurrent history keeps fresh visits before untouched shifted rows
+[32mok[0m reading_state.test.repeated saves reclaim JSON snapshots and superseded title strings
+[32mok[0m reading_state.test.failed saves preserve both generations and reclaim staged allocations
+[32mok[0m unicode_lower.test.ASCII and empty text
+[32mok[0m unicode_lower.test.accented Latin, Cyrillic and non-BMP case pairs
+[32mok[0m unicode_lower.test.dotted I expands using default locale rules
+[32mok[0m unicode_lower.test.Greek sigma respects surrounding original cased characters
+[32mok[0m unicode_lower.test.sigma context skips characters that are both cased and case-ignorable
+[32mok[0m unicode_lower.test.uncased scripts, emoji, accents and compatibility distinctions survive
+[32mok[0m unicode_lower.test.invalid UTF-8 is rejected before writing
+[32mok[0m unicode_lower.test.writer appends and supports caller-owned reusable storage
+[32mok[0m unicode_lower.test.writer failure and allocation failure propagate
+
+pass: 45  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m wikimedia_dump.test.specialized page parser extracts Wikimedia page fields without a DOM
+[32mok[0m wikimedia_dump.test.specialized page parser handles ip contributors and self-closing text
+[32mok[0m wikimedia_dump.test.page index parser accepts legacy raw and compressed v2 rows
+[32mok[0m wikimedia_dump.test.page title index keeps latest duplicate row and supports mmap lookup
+[32mok[0m wikimedia_dump.test.zstd member reads exact offset and rejects trailing, truncated and corrupt frames
+[32mok[0m wikimedia_dump.test.zstd stream ids preserve independent member offsets for source reads
+[32mok[0m wikimedia_dump.test.zstd page index keeps compressed location and old bzip2 kind
+[32mok[0m wikimedia_dump.test.bzip2 member grows high ratio output and cleans up allocation failures
+[32mok[0m wikimedia_dump.test.bzip2 member reads multiple bounded input chunks at an exact offset
+[32mok[0m wikimedia_dump.test.bzip2 member accepts exact output cap and empty output but rejects overflow
+[32mok[0m wikimedia_dump.test.bzip2 member rejects truncated corrupt and trailing input
+[32mok[0m wikimedia_dump.test.bzip2 member rejects invalid headers and span bounds before reading
+[32mok[0m wikimedia_dump.test.page title index construction does not allocate the hash table on heap
+[32mok[0m wikimedia_dump.test.multistream offsets and source reads stay compressed
+
+pass: 14  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m tests.test_0
+[32mok[0m tests.test.static module root table omits generated root symbol
+[32mok[0m tests.test.synthesized export module omits root body but keeps export function
+[32mok[0m tests.test.LLVM batch planning omits roots with no emitted function body
+[32mok[0m tests.test.program root table stubs synthesized root and retains export entry
+[32mok[0m tests.test.direct LLVM emitter covers Lua control and closure surface
+[32mok[0m tests.test.large static string lists lower to compact static literal data
+[32mok[0m tests.test.large static string rows lower to compact static literal data
+[32mok[0m tests.test.large nested static tables lower to compact static literal data
+[32mok[0m tests.test.immutable numeric locals stay native LLVM SSA
+[32mok[0m tests.test.undeclared stable globals use checked access for global metatable semantics
+[32mok[0m tests.test.mutable proven scalar locals stay native LLVM storage
+[32mok[0m tests.test.mutable logical results use generic storage
+[32mok[0m tests.test.loop-carried scalar dependencies invalidate stale aliases
+[32mok[0m tests.test.late capture invalidates native scalar aliases
+[32mok[0m tests.test.constant require lowers to module id only when global is stable
+[32mok[0m tests.test.known module export shapes survive boxed require semantics
+[32mok[0m tests.test.eager canonical require uses prepared module fast path with semantic fallback
+[32mok[0m tests.test.reading package or global environment flushes deferred require visibility
+[32mok[0m tests.test.pure string keyed tables lower to process shapes
+[32mok[0m tests.test.static table shapes survive captured and shape-stable mutable locals
+[32mok[0m tests.test.list and numeric table keys lower to fixed shape slots
+[32mok[0m tests.test.dynamic keys on known table shapes stay structural
+[32mok[0m tests.test.dense numeric accesses and len-plus-one appends bypass generic table indexing
+[32mok[0m tests.test.non-escaping index-only tables lower dynamic keys to linear struct cells
+[32mok[0m tests.test.metamethod parameters retain guarded receiver struct shapes
+[32mok[0m tests.test.nested table fields retain child struct shapes
+[32mok[0m tests.test.local function returns retain table struct shapes
+[32mok[0m tests.test.incrementally populated local tables promote to fixed shapes
+[32mok[0m tests.test.computed-key module exports stay generic
+[32mok[0m tests.test.module model promotes incremental exports to guarded shape slots
+[32mok[0m tests.test.fixed LLVM results use the audited 24-byte Value stride
+[32mok[0m tests.test.literal field reads carry exact hashes while dynamic keys retain generic lookup
+[32mok[0m tests.test.immutable parameters borrow argument slots without Value copies
+[32mok[0m tests.test.stable ABI globals borrow their Context slot while mutable globals stay checked
+[32mok[0m tests.test.call-only local functions bypass callable boxing and dynamic dispatch
+[32mok[0m tests.test.call-only captured closures pass cells without materializing callable identity
+[32mok[0m tests.test.escaping local functions keep Lua callable identity
+[32mok[0m tests.test.stable native namespaces use compile-time field slots
+[32mok[0m tests.test.native namespace fields and returns retain structural types
+[32mok[0m tests.test.captured native results retain structural types
+[32mok[0m tests.test.exported Scribunto entry first argument is a guarded frame struct
+[32mok[0m tests.test.global table escape disables native namespace slot assumptions
+[32mok[0m tests.test.length and dynamic comparison stay native scalar values
+[32mok[0m tests.test.nil and known boolean equality avoid dynamic comparison
+[32mok[0m tests.test.nil equality emits both operand calls in source order
+[32mok[0m tests.test.fixed returns expose clipped caller buffers and retain owned fallback
+[32mok[0m tests.test.empty returns construct a constant result without allocation
+[32mok[0m tests.test.fixed return evaluates all operands before testing caller capacity
+[32mok[0m tests.test.direct call success bypasses error-name helper
+[32mok[0m tests.test.nonrecursive local function syntax uses direct static call
+[32mok[0m tests.test.recursive local function keeps callable self cell
+[32mok[0m tests.test.captured local calls guard analyzed function and use live closure captures
+[32mok[0m tests.test.known module export emits guarded direct LLVM call
+[32mok[0m tests.test.known module function returns retain table struct shapes
+[32mok[0m tests.test.eager pristine module export bypasses field lookup on direct branch
+[32mok[0m tests.test.captured eager module value keeps mutation-guarded direct export call
+[32mok[0m tests.test.captured static module export keeps guarded direct target
+[32mok[0m tests.test.module model preserves static literal export fields and rejects untracked list roots
+[32mok[0m tests.test.module root purity only accepts context-free local construction
+[32mok[0m tests.test.module bootstrap safety admits literal require chains but rejects dynamic loads
+[32mok[0m tests.test.saved method local uses exact callable guard at fixed and return arities
+[32mok[0m tests.test.reassigned saved method local retains ordinary dynamic call
+[32mok[0m tests.test.guarded numeric continuations keep proven local results native after one normal call | err: LLVM_NUMERIC_CONTINUATION function_id=1 span_start=7 span_end=185 
+[32mok[0m tests.test.bounded scalar regions retain immutable snapshots across callbacks and loops | err: LLVM_SCALAR_REGION function_id=1 span_start=7 span_end=51 LLVM_SCALAR_REGION function_id=1 span_start=7 span_end=135 LLVM_SCALAR_REGION function_id=1 span_start=7 span_end=102 
+[32mok[0m tests.test.closed numeric loop preserves guarded recurrence and rejects unknown writes | err: LLVM_CLOSED_NUMERIC_LOOP function_id=1 span_start=7 span_end=143 LLVM_CLOSED_NUMERIC_LOOP function_id=1 span_start=7 span_end=73 LLVM_CLOSED_NUMERIC_LOOP function_id=1 span_start=7 span_end=77 LLVM_CL...
+[32mok[0m tests.test.optimized field reads snapshot imported positive hits before later effects
+[32mok[0m tests.test.deferred numeric joins keep chained arithmetic unboxed and promote numeric fallbacks | err: LLVM_DEFERRED_NUMERIC function_id=1 operations=3 LLVM_DEFERRED_NUMERIC function_id=1 operations=1 LLVM_DEFERRED_NUMERIC function_id=1 operations=1 LLVM_DEFERRED_NUMERIC function_id=1 operations=2 LLVM...
+[32mok[0m tests.test.reviewed guarded methods admit bounded one-argument demanded-result entries | err: LLVM_DEMANDED_EDGE caller_id=3 function_id=1 args=1 results=1 source_bytes=150 LLVM_DEMANDED_ENTRY function_id=1 args=1 results=1 span_bytes=150 LLVM_DEMANDED_EDGE caller_id=3 function_id=1 args=1 res...
+[32mok[0m tests.test.guarded native find retains scalar positions through captured aliases | err: LLVM_NUMERIC_CONTINUATION function_id=1 span_start=31 span_end=156 LLVM_NATIVE_FIND_THREE function_id=1 operations=1 LLVM_NATIVE_FIND_THREE function_id=2 operations=1 LLVM_NATIVE_FIND_THREE function_i...
+[32mok[0m tests.test.structural callable table entries use bounded fixed pointer ABI | err: LLVM_FIXED_CALLABLE caller_id=2 target_id=1 args=3 results=1 LLVM_FIXED_CALLABLE caller_id=2 target_id=1 args=3 results=1 
+[32mok[0m parser.root.test.Lua 5.1 unknown escapes are accepted
+[32mok[0m parser.root.test.parses representative Lua 5.1 syntax
+[32mok[0m parser.root.test.parentheses preserve single-result semantics
+[32mok[0m direct.analysis.test.analysis marks unused local functions and descendants dead
+[32mok[0m direct.analysis.test.analysis prunes unrooted recursive functions but keeps called recursion
+[32mok[0m direct.analysis.test.analysis roots function values through live captured dependencies only
+[32mok[0m direct.analysis.test.analysis propagates captured upvalue mutation through descendants
+[32mok[0m abi.globals.test.native binding IDs have one stable spelling
+[32mok[0m abi.static_fields.test.namespace slot layouts round trip
+[32mok[0m direct.emitter.test.direct LLVM module smoke
+[32mok[0m direct.emitter.test.dead local functions do not enter LLVM
+[32mok[0m direct.emitter.test.field-site ID is unique across function and ordinal and saturates
+[32mok[0m direct.emitter.test.constant string concatenation emits a single immutable literal
+[32mok[0m direct.emitter.test.dynamic numeric and captured concatenation keeps runtime evaluation
+[32mok[0m direct.emitter.test.folded literal emission releases transferred buffers on allocation failure
+[32mok[0m direct.shapes.test.static root shape collection keeps only top-level table
+[32mok[0m direct.shapes.test.module shape index preserves ids and replacements across out-of-order modules
+[32mok[0m direct.shapes.test.static runtime layouts are hash-consed by exact slot order
+[32mok[0m direct.shapes.test.shape append rolls back on every allocation failure
+[32mok[0m direct.static_literal_encode.test.static literal encoder uses compact self-identifying framing
+[32mok[0m direct.static_literal_encode.test.pure incremental data builder lowers to static literal
+[32mok[0m direct.static_literal_encode.test.literal data reuses repeated nested runtime layouts
+[32mok[0m direct.static_literal_encode.test.pure data evaluator rejects calls loops and shared table identity
+[32mok[0m direct.static_literal_encode.test.static root literal detection excludes executable values
+[32mok[0m direct.numbers.test.Lua numeric literals parse
+[32mok[0m usage.test.usage scanner finds static invokes and template references
+[32mok[0m usage.test.template usage scanner recognizes subst-prefixed invokes
+[32mok[0m usage.test.usage scanner ignores dynamic and non-template transclusions
+[32mok[0m usage.test.template usage profiling fails soft on malformed transclusion tags
+[32mok[0m usage.test.static require scanner walks nested Lua functions
+[32mok[0m usage.test.module load scanner follows require when needed targets
+[32mok[0m usage.test.module load scanner follows utilities require when needed targets
+[32mok[0m usage.test.module load value sets fold concatenation aliases and pcall
+[32mok[0m usage.test.module load value sets join reassignment branches
+[32mok[0m usage.test.module load value sets resolve table ranges and string format
+[32mok[0m usage.test.module load value sets resolve bounded table and numeric format loops
+[32mok[0m usage.test.module load value sets keep unknown parameters dynamic
+[32mok[0m usage.test.wikitext scan expands finite dynamic template heads
+[32mok[0m usage.test.wikitext scan separates unresolved invokes from dynamic template targets
+[32mok[0m direct.usage_profile.test.usage propagation collapses cycles before accumulating reach
+[32mok[0m direct.usage_profile.test.mode selection is usage first with a modest size penalty
+[32mok[0m direct.usage_profile.test.direct page execution can independently make a module hot
+[32mok[0m direct.usage_profile.test.any statically observed page or module reach stays above O0
+[32mok[0m direct.usage_profile.test.reachability prunes zero-reach modules without dynamic targets
+[32mok[0m direct.usage_profile.test.reachable dynamic module load conservatively retains whole module set
+[32mok[0m program_metadata.test.program metadata primitive framing round trips
+[32mok[0m wikitext.expression.test.MediaWiki ExprParser precedence and functions
+[32mok[0m wikitext.preprocess.test.template opener scan skips literal extension bodies but enters wikitext extensions
+[32mok[0m wikitext.preprocess.test.nested template and parameter boundaries match MediaWiki preprocessing
+[32mok[0m wikitext.preprocess.test.decoded comments and transclusion tags share one preprocessing core
+[32mok[0m runtime.pattern.test.literal classes captures and anchors
+[32mok[0m runtime.pattern.test.findInto preserves output on misses and errors and copies live captures
+[32mok[0m runtime.pattern.test.language-code class accepts literal trailing hyphen
+[32mok[0m runtime.pattern.test.literal and required-prefix searches skip impossible starts without changing pattern semantics
+[32mok[0m runtime.pattern.test.lazy dot skips impossible suffix starts without changing captures or errors
+[32mok[0m runtime.pattern.test.required initial byte class skips nonmatching starts and preserves suffix errors
+[32mok[0m runtime.pattern.test.balanced frontier backref and nongreedy
+[32mok[0m runtime.pattern.test.required start skips leading captures and literal escapes without hiding errors
+[32mok[0m runtime.pattern.test.lazy suffix respects total captures already open
+[32mok[0m runtime.request_allocator.test.request allocator honors frees and bulk-reclaims leftovers
+[32mok[0m runtime.request_allocator.test.request allocator survives repeated allocation churn
+[32mok[0m runtime.request_allocator.test.request allocator keeps realloc tracking exact
+[32mok[0m runtime.request_allocator.test.request allocator preserves over-aligned allocations
+
+pass: 134  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m core.test.invoke rollback restores identity flags before the first keyed mutation
+[32mok[0m core.test.invoke rollback retains cell baselines after clone cache rejection
+[32mok[0m core.test.cloning another closure preserves a shared capture deliberately set to nil
+[32mok[0m core.test.invoke rollback restores owned cloned cells after inlined writes and foreign teardown
+[32mok[0m core.test.invoke rollback never recycles identities of retained cloned closures
+[32mok[0m core.test.template tagging does not retain context markers in deeply immutable shared data
+[32mok[0m core.test.template global cloning visits sparse deltas and preserves nil snapshots after root writes
+[32mok[0m core.test.numeric value hashing preserves prior iteration order
+[32mok[0m core.test.Lua numeric coercion trims whitespace and accepts hexadecimal strings
+[32mok[0m core.test.Lua 5.1 number stringification uses fourteen significant digits
+[32mok[0m core.test.string value hashing preserves prior iteration order
+[32mok[0m core.test.prehashed string lookup preserves mutable map shape choice and native slots
+[32mok[0m core.test.prehashed field lookup keeps metatable callbacks and string semantics live
+[32mok[0m core.test.AOT module resolver caches numeric identities and exposes package.loaded aliases
+[32mok[0m core.test.package loaded structural slots allocate sparse pages lazily
+[32mok[0m core.test.retained clone cells and strings pool storage without borrowing the source lifetime
+[32mok[0m core.test.template tagging cannot attach short lived state to shared immutable data
+[32mok[0m core.test.template graph tagging does not retain traversal storage in its owner
+[32mok[0m core.test.upstream promotion rejects nonportable graphs before allocating persistent nodes
+[32mok[0m core.test.module templates run roots once while fresh contexts clone mutable closure state
+[32mok[0m core.test.module template cloning recreates null-environment native descriptors
+[32mok[0m core.test.module template cloning can own strings for reused target contexts
+[32mok[0m core.test.module template cloning remaps context-bound native namespace callables
+[32mok[0m core.test.module template cloning remaps structural package loaded singleton
+[32mok[0m core.test.effect-free roots promote after first execution and never rerun on fresh contexts
+[32mok[0m core.test.effectful roots are rejected from dynamic module templates
+[32mok[0m core.test.page-stable effects promote only within one page
+[32mok[0m core.test.invoke-specific effects still reject page-scoped module templates
+[32mok[0m core.test.mutating a pre-existing table rejects dynamic module templates
+[32mok[0m core.test.loadData-only effects do not block module-root promotion
+[32mok[0m core.test.promoted roots replay nested dependency overrides without rerunning roots
+[32mok[0m core.test.eager module export mutation invalidates pristine direct-call state
+[32mok[0m core.test.prepared export sentinel invalidates on package observation and respects loaded override
+[32mok[0m core.test.prepared static require stays hidden until package becomes observable
+[32mok[0m core.test.eager bootstrap static require does not create deferred package visibility
+[32mok[0m core.test.eager module dependencies stay private and fall back on package.loaded override
+[32mok[0m core.test.recursive module loads keep distinct cache slots
+[32mok[0m core.test.module globals are isolated for dynamic and static calls
+[32mok[0m core.test.AOT native calls carry independent host context
+[32mok[0m core.test.AOT runtime globals are numeric slots without hash storage
+[32mok[0m core.test.Lua 5.1 ordering metamethods require shared functions and fall back from le to reversed lt
+[32mok[0m core.test.bounded argument merge truncates excess tail without heap storage
+[32mok[0m core.test.small argument merge borrows stack storage and falls back without truncation
+[32mok[0m core.test.callable tables use full small arguments and heap fallback without changing self
+[32mok[0m core.test.callable table metamethod tables retain recursive call semantics
+[32mok[0m core.test.fixed dynamic calls borrow and truncate caller result storage
+[32mok[0m core.test.buffered results borrow caller storage across direct and stable calls
+[32mok[0m core.test.Lua closures retain their compiled entrypoint
+[32mok[0m core.test.native calls invoke the callable entrypoint directly
+[32mok[0m core.test.native failure diagnostics cover ordinary and fixed calls without changing errors
+[32mok[0m core.test.AOT context startup stays independent of corpus module count
+[32mok[0m core.test.module state pages initialize only touched modules and preserve pointers
+[32mok[0m core.test.package observation visits initialized module states across bitmap words and pages
+[32mok[0m core.test.sparse module globals preserve root snapshots aliases and iteration
+[32mok[0m core.test.sparse and dense module globals clean up allocation failures
+[32mok[0m core.test.module global density counts false and partial tail pages
+[32mok[0m core.test.cached root tail occupancy preserves first touch across root writes and deletion
+[32mok[0m core.test.large root tail falls back without caching occupancy
+[32mok[0m core.test.shapeless module globals keep numeric array aliases
+[32mok[0m core.test.forked AOT context shares native module entries but resets runtime state
+[32mok[0m core.test.native namespace fields use fixed slots with generic fallback
+[32mok[0m core.test.indexed global shape preserves slot aliases iteration and context isolation
+[32mok[0m core.test.generic tables use dense numeric slots and keep sparse keys hashed
+[32mok[0m core.test.numeric lookups skip string-only maps and retain sparse numeric fallback
+[32mok[0m core.test.program string shapes use sorted slots with open fallback
+[32mok[0m core.test.compact callable descriptors preserve copies identities and live captures
+[32mok[0m core.test.captured function stores copied pointer tails in its owning context
+[32mok[0m core.test.prehashed field writes retain growth nil and newindex behavior
+[32mok[0m core.test.prehashed field writes preserve shaped choices redirects and readonly errors
+[32mok[0m core.test.compact native descriptors preserve host pointers through arena growth
+[32mok[0m core.test.runtime Value stays compact and function identities never wrap
+[32mok[0m core.test.concat strings use owned arena without interning
+[32mok[0m core.test.all-string shaped tables mirror numeric reads without changing iteration
+[32mok[0m core.test.numeric mirror does not hide metatable fallback or out-of-range keys
+[32mok[0m core.test.numeric mirror and dense prefix match baseline after sparse mutations
+[32mok[0m core.test.numeric mirror allocation is optional and map failures leave it coherent
+[32mok[0m core.test.numeric mirror rejects out-of-range integer conversion
+[32mok[0m core.test.iterator mutable value pointer invalidates shaped numeric mirror
+[32mok[0m core.test.adoptFailure distinguishes explicit nil and owns string payload
+[32mok[0m core.test.prehashed field-site cache follows alias writes and callback mutation
+[32mok[0m core.test.prehashed field-site cache preserves shaped slot and overflow field
+[32mok[0m core.test.field site shares a positive program shape slot across fresh tables
+[32mok[0m core.test.bounded inherited site cache reads live three-link field and invalidates mutations
+[32mok[0m core.test.bounded inherited site cache keeps callable indexers live and context-local
+[32mok[0m core.test.invoke-local strings and captured callables release with the invoke arena
+[32mok[0m core.test.invoke-local owned strings and errors survive explicit parent copies
+[32mok[0m core.test.program shape leaf ignores identity exhaustion but preserves semantic guards
+[32mok[0m core.test.shape site caches nil and absent slots but reads live map and inherited values
+[32mok[0m core.test.immutable string slot indices preserve mixed duplicate and missing field semantics
+[32mok[0m core.test.immutable string indices match the first-slot oracle through collisions and empty layouts
+[32mok[0m core.test.immutable string index validation rejects missing full and invalid layouts
+[32mok[0m core.test.immutable string index construction is allocation-failure atomic
+[32mok[0m core.test.failed static scope entry restores caller globals and depth before recovery
+[32mok[0m core.test.generic arrays reject progressive sparse numeric densification
+[32mok[0m core.test.template root errors cross cold and warm context boundaries without stale diagnostics
+[32mok[0m core.test.template root error nil remains present across a context boundary
+[32mok[0m core.test.promotion preserves canonical native callable aliases without merging private functions
+[32mok[0m core.test.cloned native type metatables retain private method identity in the target context
+[32mok[0m core.test.registered native metatables cannot become private module mutation state
+[32mok[0m core.test.invoke rollback restores identity key metadata before the first insertion
+[32mok[0m core.test.cloned dependency graphs keep their original mutation owner through aliases
+[32mok[0m core.test.template override cycles retain each source module mutation owner
+[32mok[0m core.test.metamethods propagate one or zero result demand without losing effects or errors
+[32mok[0m core.test.context pools table headers and cells while large table buffers remain reclaimable
+[32mok[0m core.test.pooled table construction releases partial buffers on every allocation failure
+[32mok[0m core.test.canonical package slots preserve eager bootstrap dependency admission
+[32mok[0m core.test.canonical requires reuse resolved package slots without repeating name lookup
+[32mok[0m core.test.invoke rollback restores the shared guard of aliased table exports
+[32mok[0m core.test.aliased module exports invalidate every retained pristine guard
+[32mok[0m core.test.publishing another alias never revives a mutated export guard
+[32mok[0m core.test.module reinitialization cannot revive a previous export guard
+[32mok[0m core.test.program pattern cache pointer survives descendant forks and invoke reset
+[32mok[0m work_stats.test.expansion profile requires an explicit one flag
+[32mok[0m request_allocator.test.request allocator honors frees and bulk-reclaims leftovers
+[32mok[0m request_allocator.test.request allocator survives repeated allocation churn
+[32mok[0m request_allocator.test.request allocator keeps realloc tracking exact
+[32mok[0m request_allocator.test.request allocator preserves over-aligned allocations
+[32mok[0m local_bump_arena.test.local bump arena honors alignment and bulk cleanup
+[32mok[0m local_bump_arena.test.local bump arena rejects impossible alignment without changing a live block
+[32mok[0m local_bump_arena.test.local bump OOM and remap preserve existing allocations
+[32mok[0m local_bump_arena.test.local bump nested invocations preserve parent data and release all backing blocks
+
+pass: 121  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m global_shape_index.test.global index sorts a permutation without changing slot order
+[32mok[0m global_shape_index.test.global index keeps native ABI keys and high slots intact
+[32mok[0m global_shape_index.test.duplicate global names discard index and preserve linear fallback
+[32mok[0m global_shape_index.test.global index handles empty singleton and case-distinct keys
+[32mok[0m global_shape_index.test.global index cleans up allocations on unique and duplicate inputs
+
+pass: 5  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m llvm_abi.test.argument and cell ABI leaf operations preserve borrowed pointers and boxed values
+[32mok[0m llvm_abi.test.native global pointer remains stable across sparse writes
+[32mok[0m llvm_abi.test.LLVM ABI layouts and primitive helpers
+[32mok[0m llvm_abi.test.function status normalization leaves success inert and preserves errors
+[32mok[0m llvm_abi.test.local static call depth remains balanced across normalized errors
+[32mok[0m llvm_abi.test.callable leaf ABI preserves exact ID and live capture pointer
+[32mok[0m llvm_abi.test.fixed call results fill only missing slots for buffered owned and static calls
+[32mok[0m llvm_abi.test.discard calls propagate zero demand while preserving calls arguments and failures
+[32mok[0m llvm_abi.test.tail return forwards actual arity and caller buffer
+[32mok[0m llvm_abi.test.static literal decoder materializes list named and keyed fields
+[32mok[0m llvm_abi.test.shape-only leaf defers mutable map hits to the full runtime cache
+[32mok[0m llvm_abi.test.field-hit leaf reuses program shape metadata across fresh table instances
+[32mok[0m llvm_abi.test.fixed callable guard observes live metatable entry and environment
+[32mok[0m llvm_abi.test.invoke rollback restores choice storage before a linear ABI write grows it
+
+pass: 14  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m stdlib.test.AOT package main loader resolves and caches numeric module loaders
+[32mok[0m stdlib.test.AOT standard library installs numeric globals and executes core helpers
+[32mok[0m stdlib.test.AOT sparse array borders survive table remove and insert
+[32mok[0m stdlib.test.Lua 5.1 math random matches glibc sequence and reseeding
+[32mok[0m stdlib.test.AOT pcall preserves Lua error values
+[32mok[0m stdlib.test.AOT pcall preserves stable generated-function error names
+[32mok[0m stdlib.test.protected calls bound body results and restore outer error state
+[32mok[0m stdlib.test.protected call scratch preserves aliased arguments and handler identity
+[32mok[0m stdlib.test.fixed protected calls release legacy owned and callable table results
+[32mok[0m stdlib.test.AOT xpcall transforms failures and preserves success results
+[32mok[0m stdlib.test.AOT native next and ipairs iterators borrow fixed result storage
+[32mok[0m stdlib.test.AOT pairs and ipairs use hidden real metamethods including false call errors
+[32mok[0m stdlib.test.AOT pairs keeps builtin next after global next is overwritten
+[32mok[0m stdlib.test.AOT next resumes sequential table iteration and falls back after interleaving
+[32mok[0m stdlib.test.stdlib template keeps page mutation isolated
+[32mok[0m stdlib.test.stdlib template callable owners outlive children and random hosts stay isolated
+[32mok[0m stdlib.test.string.gsub appends string replacements and preserves callback captures
+[32mok[0m stdlib.test.stdlib callbacks receive exact result demand even when outer results are discarded
+[32mok[0m stdlib.test.byte replacement callbacks retain captures effects and errors with zero demand
+[32mok[0m stdlib.test.byte pattern calls validate captures beyond fixed result demand
+[32mok[0m stdlib.test.buffered stdlib returns clip fixed calls and preserve full dynamic results
+[32mok[0m stdlib.test.buffered base and namespace calls borrow fixed slots and keep dynamic arity
+[32mok[0m stdlib.test.protected calls retain explicit nil errors and clear nested payload state
+[32mok[0m stdlib.test.metamethod nil payload and xpcall nil handler result survive protected calls
+[32mok[0m stdlib.test.guarded string find three matches fixed builtin results and errors
+[32mok[0m stdlib.test.guarded string find refuses replaced callable environment and coercion
+[32mok[0m stdlib.test.guarded native find preserves native depth error payload and profiling
+[32mok[0m stdlib.test.stdlib string metatable captures stay canonical across installed and templated contexts
+[32mok[0m format.test.AOT Lua string.format core conversions
+[32mok[0m pattern.test.literal classes captures and anchors
+[32mok[0m pattern.test.findInto preserves output on misses and errors and copies live captures
+[32mok[0m pattern.test.language-code class accepts literal trailing hyphen
+[32mok[0m pattern.test.literal and required-prefix searches skip impossible starts without changing pattern semantics
+[32mok[0m pattern.test.lazy dot skips impossible suffix starts without changing captures or errors
+[32mok[0m pattern.test.required initial byte class skips nonmatching starts and preserves suffix errors
+[32mok[0m pattern.test.balanced frontier backref and nongreedy
+[32mok[0m pattern.test.required start skips leading captures and literal escapes without hiding errors
+[32mok[0m pattern.test.lazy suffix respects total captures already open
+
+pass: 38  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m ustring.test.Unicode native result buffers preserve every consumed prefix and zero-result validation
+[32mok[0m ustring.test.Unicode capture truncation validates unconsumed captures and buffered iterators advance
+[32mok[0m ustring.test.Unicode replacement callbacks retain arguments effects and errors with no requested results
+[32mok[0m ustring.test.UTF-8 codepoint primitives
+[32mok[0m ustring.test.Scribunto full Unicode case mappings match MediaWiki expansions
+[32mok[0m ustring.test.utf8proc canonical normalization
+[32mok[0m ustring.test.Scribunto Unicode pattern functions operate on codepoints
+[32mok[0m ustring.test.AOT Unicode gsub supports table and callable replacements
+[32mok[0m ustring.test.program pattern metadata outlives pages and abandoned Unicode iterators
+[32mok[0m ustring.test.nested Unicode replacement matching cannot invalidate outer cache metadata
+[32mok[0m ustring_pattern.test.unicode dot consumes one codepoint
+[32mok[0m ustring_pattern.test.unicode findInto preserves output on misses and copies live captures
+[32mok[0m ustring_pattern.test.unicode literal classes ranges captures and frontier
+[32mok[0m ustring_pattern.test.unicode balanced capture preserves inline modifier
+[32mok[0m ustring_pattern.test.prepared Unicode membership agrees with raw literal parser
+[32mok[0m ustring_pattern.test.prepared Unicode searches preserve rollback quantifiers and lazy errors
+[32mok[0m ustring_pattern.test.Unicode preparation is lazy optional and never retries failed allocation
+[32mok[0m ustring_pattern.test.percent-containing long classes preserve category callback sequence
+[32mok[0m ustring_pattern.test.cached searches retain snapshot semantics after the original pattern is freed
+[32mok[0m ustring_pattern.test.cache admission stays lazy and tiny misses do not prepare
+[32mok[0m ustring_pattern.test.cache allocation failure preserves ordinary prepared search
+[32mok[0m ustring_pattern.test.borrowed search survives cache saturation by nested searches
+[32mok[0m ustring_pattern.test_0
+[32mok[0m pattern_cache.test.pattern cache owns keys and codepoints and reuses equal content
+[32mok[0m pattern_cache.test.pattern cache accounts unmerged storage and respects exact byte budget
+[32mok[0m pattern_cache.test.full pattern cache still serves old entries
+[32mok[0m pattern_cache.test.failed cache admission releases every allocation and publishes nothing
+[32mok[0m pattern_cache.test.concurrent pattern admission publishes one stable entry
+[32mok[0m unicode_classes.test.long ranges prepare, merge, invert and retain allocation ownership
+[32mok[0m unicode_classes.test.escaped and short classes retain raw matching
+[32mok[0m unicode_classes.test.optional preparation allocation failures release partial storage
+[32mok[0m pattern_cache_tests.test.warm cached Unicode percent classes and malformed tails preserve callbacks and errors
+
+pass: 32  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m scribunto.test.frozen invariant loadData names stay limited to audited corpus data modules
+[32mok[0m scribunto.test.headword static split never shares page-specific fields
+[32mok[0m scribunto.test.headword page evaluation preserves root and callback failure payloads
+[32mok[0m scribunto.test.AOT Scribunto installs mw.ustring, html, loadData, clone, and string aliases
+[32mok[0m scribunto.test.AOT loadData runs in an isolated context and promotes a cached read-only graph
+[32mok[0m scribunto.test.AOT expander loadData cache survives fresh invoke contexts
+[32mok[0m scribunto.test.shared loadData cache survives separate page allocators
+[32mok[0m scribunto.test.shared and page-local loadData results expose the same protected metatable
+[32mok[0m scribunto.test.effect-free loadData root shares its read-only graph across pages
+[32mok[0m scribunto.test.shared loadData cache rejects oversized entries before destroying promotion arena
+[32mok[0m scribunto.test.shared loadData cache skips page-sensitive modules
+[32mok[0m scribunto.test.shared loadData cache excludes clock, identity, and caught errors
+[32mok[0m scribunto.test.immutable interwiki provider admits loadData while ordinary mutable host does not
+[32mok[0m scribunto.test.nested shared loadData permits an outer read-only result after dependency proof
+[32mok[0m scribunto.test.nested page-sensitive loadData keeps the outer result page-local
+[32mok[0m scribunto.test.AOT loadJsonData reads corpus JSON once and returns a cached read-only graph
+[32mok[0m scribunto.test.AOT clone preserves cycles while returning mutable tables
+[32mok[0m scribunto.test.AOT host survives Context return by value
+[32mok[0m scribunto.test.AOT mw.text split and gsplit preserve Unicode and empty fields
+[32mok[0m scribunto.test.AOT mw.text trim listToText truncate encode tag killMarkers and nowiki match Scribunto behavior
+[32mok[0m scribunto.test.AOT mw.text JSON preserves Scribunto array and flag semantics
+[32mok[0m scribunto.test.AOT Scribunto compiler-known namespaces use native slots
+[32mok[0m scribunto.test.AOT loadData uses eager private snapshot without exposing mutable module value
+[32mok[0m ustring.test.Unicode native result buffers preserve every consumed prefix and zero-result validation
+[32mok[0m ustring.test.Unicode capture truncation validates unconsumed captures and buffered iterators advance
+[32mok[0m ustring.test.Unicode replacement callbacks retain arguments effects and errors with no requested results
+[32mok[0m ustring.test.UTF-8 codepoint primitives
+[32mok[0m ustring.test.Scribunto full Unicode case mappings match MediaWiki expansions
+[32mok[0m ustring.test.utf8proc canonical normalization
+[32mok[0m ustring.test.Scribunto Unicode pattern functions operate on codepoints
+[32mok[0m ustring.test.AOT Unicode gsub supports table and callable replacements
+[32mok[0m ustring.test.program pattern metadata outlives pages and abandoned Unicode iterators
+[32mok[0m ustring.test.nested Unicode replacement matching cannot invalidate outer cache metadata
+[32mok[0m ustring_pattern.test.unicode dot consumes one codepoint
+[32mok[0m ustring_pattern.test.unicode findInto preserves output on misses and copies live captures
+[32mok[0m ustring_pattern.test.unicode literal classes ranges captures and frontier
+[32mok[0m ustring_pattern.test.unicode balanced capture preserves inline modifier
+[32mok[0m ustring_pattern.test.prepared Unicode membership agrees with raw literal parser
+[32mok[0m ustring_pattern.test.prepared Unicode searches preserve rollback quantifiers and lazy errors
+[32mok[0m ustring_pattern.test.Unicode preparation is lazy optional and never retries failed allocation
+[32mok[0m ustring_pattern.test.percent-containing long classes preserve category callback sequence
+[32mok[0m ustring_pattern.test.cached searches retain snapshot semantics after the original pattern is freed
+[32mok[0m ustring_pattern.test.cache admission stays lazy and tiny misses do not prepare
+[32mok[0m ustring_pattern.test.cache allocation failure preserves ordinary prepared search
+[32mok[0m ustring_pattern.test.borrowed search survives cache saturation by nested searches
+[32mok[0m ustring_pattern.test_0
+[32mok[0m html.test.html table setters honor pairs metamethod
+[32mok[0m html.test.html builder chaining and serialization
+[32mok[0m html.test.html builder matches MediaWiki attribute class and style semantics
+[32mok[0m html.test.html builder table setters and removals match MediaWiki behavior
+[32mok[0m html.test.html builder matches MediaWiki self-closing tag semantics
+[32mok[0m text.test.nowiki protocol helper escapes matrix and wikipedia without URL slashes
+[32mok[0m text.test.mw.text encode honors selective Unicode charset
+[32mok[0m text.test.mw.text JSON encode accepts zero-based arrays
+[32mok[0m text.test.mw.text JSON encode reindexes digit-string keys
+[32mok[0m text.test.mw.text JSON preserve keys keeps numeric object keys
+[32mok[0m text.test.mw.text JSON encode honors pairs metamethod
+[32mok[0m text.test.mw.text tag honors pairs and ordinary table indexing
+[32mok[0m title.test.AOT title exposes namespace fragment and subpage semantics
+[32mok[0m title.test.AOT title subpage fields respect namespace settings
+[32mok[0m title.test.AOT title constructors and current title use the live host
+[32mok[0m language.test.civil conversion round trips unix epoch and leap dates
+[32mok[0m language.test.MediaWiki date formats used by was-wotd
+[32mok[0m language.test.MediaWiki partial and word date grammar
+[32mok[0m language.test.parse date forms used by Wiktionary modules
+[32mok[0m language.test.AOT language objects expose MediaWiki helpers
+[32mok[0m language.test.AOT language known tags use pinned host registry
+[32mok[0m frame.test.AOT frame exposes parent title and typed host callbacks
+[32mok[0m frame.test.AOT frame invoke binds current frame around numeric module call
+[32mok[0m frame.test.current frame access is page-sensitive for reusable module roots
+[32mok[0m uri.test.AOT URI encode decode and anchors match MediaWiki modes
+[32mok[0m uri.test.AOT URI builders sort query parameters and expose URI fields
+[32mok[0m uri.test.AOT URI new and validate parse production URL fields
+[32mok[0m mw_basics.test.AOT mw basics expose logging, dumpObject and site namespaces
+[32mok[0m mw_basics.test.AOT mw ext data reads explicit tabular snapshot exactly and fails closed
+[32mok[0m mw_basics.test.AOT mw site pagesInCategory reads pinned category statistics
+[32mok[0m mw_basics.test.AOT mw message reads dump-backed interface messages
+[32mok[0m mw_basics.test.AOT mw site interwikiMap uses typed host rows and filters
+[32mok[0m mw_basics.test.AOT mw wikibase sitelink uses pinned host state and legacy alias
+[32mok[0m mw_basics.test.AOT mw wikibase label and description use pinned host state
+[32mok[0m namespaces.test.Wiktionary namespace lookup preserves canonical names and aliases
+[32mok[0m namespaces.test.namespace entry shapes remain open and mutable
+[32mok[0m hash.test.AOT mw hash exposes corpus-used MD5
+[32mok[0m os.test.Scribunto os date time difftime and clock use pinned UTC semantics
+[32mok[0m host.test.invoke host probe excludes bookkeeping and propagates nested observations
+[32mok[0m host.test.mutable interwiki host remains page-sensitive and stable capability is explicit
+[32mok[0m host.test.stable page reads stay loadData effects without invalidating same-page invoke reuse
+[32mok[0m pattern_cache.test.pattern cache owns keys and codepoints and reuses equal content
+[32mok[0m pattern_cache.test.pattern cache accounts unmerged storage and respects exact byte budget
+[32mok[0m pattern_cache.test.full pattern cache still serves old entries
+[32mok[0m pattern_cache.test.failed cache admission releases every allocation and publishes nothing
+[32mok[0m pattern_cache.test.concurrent pattern admission publishes one stable entry
+[32mok[0m unicode_classes.test.long ranges prepare, merge, invert and retain allocation ownership
+[32mok[0m unicode_classes.test.escaped and short classes retain raw matching
+[32mok[0m unicode_classes.test.optional preparation allocation failures release partial storage
+[32mok[0m pattern_cache_tests.test.warm cached Unicode percent classes and malformed tails preserve callbacks and errors
+
+pass: 96  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m wikitext.test.reused invoke args own caller strings
+[32mok[0m wikitext.test.translations show page cache resets failures and avoids reentrant reuse
+[32mok[0m wikitext.test.native AOT wikitext expands templates parser functions and invoke
+[32mok[0m wikitext.test.bundle title magic words resolve subject talk and parameterized namespaces
+[32mok[0m wikitext.test.bundle parser functions cover corpus time date sub and iferror forms
+[32mok[0m wikitext.test.bundle titleparts matches MediaWiki segment slicing
+[32mok[0m wikitext.test.missing bundle interwiki metadata fails explicitly
+[32mok[0m wikitext.test.parser nesting budget is independent from template recursion budget
+[32mok[0m wikitext.test.plain pages defer Scribunto installation until mw is required
+[32mok[0m wikitext.test.native AOT page boundary resets shared Scribunto state
+[32mok[0m wikitext.test.native AOT frame callbacks recurse through the same page expander
+[32mok[0m wikitext.test.native AOT nowiki strip markers share page host state
+[32mok[0m ustring.test.Unicode native result buffers preserve every consumed prefix and zero-result validation
+[32mok[0m ustring.test.Unicode capture truncation validates unconsumed captures and buffered iterators advance
+[32mok[0m ustring.test.Unicode replacement callbacks retain arguments effects and errors with no requested results
+[32mok[0m ustring.test.UTF-8 codepoint primitives
+[32mok[0m ustring.test.Scribunto full Unicode case mappings match MediaWiki expansions
+[32mok[0m ustring.test.utf8proc canonical normalization
+[32mok[0m ustring.test.Scribunto Unicode pattern functions operate on codepoints
+[32mok[0m ustring.test.AOT Unicode gsub supports table and callable replacements
+[32mok[0m ustring.test.program pattern metadata outlives pages and abandoned Unicode iterators
+[32mok[0m ustring.test.nested Unicode replacement matching cannot invalidate outer cache metadata
+[32mok[0m ustring_pattern.test.unicode dot consumes one codepoint
+[32mok[0m ustring_pattern.test.unicode findInto preserves output on misses and copies live captures
+[32mok[0m ustring_pattern.test.unicode literal classes ranges captures and frontier
+[32mok[0m ustring_pattern.test.unicode balanced capture preserves inline modifier
+[32mok[0m ustring_pattern.test.prepared Unicode membership agrees with raw literal parser
+[32mok[0m ustring_pattern.test.prepared Unicode searches preserve rollback quantifiers and lazy errors
+[32mok[0m ustring_pattern.test.Unicode preparation is lazy optional and never retries failed allocation
+[32mok[0m ustring_pattern.test.percent-containing long classes preserve category callback sequence
+[32mok[0m ustring_pattern.test.cached searches retain snapshot semantics after the original pattern is freed
+[32mok[0m ustring_pattern.test.cache admission stays lazy and tiny misses do not prepare
+[32mok[0m ustring_pattern.test.cache allocation failure preserves ordinary prepared search
+[32mok[0m ustring_pattern.test.borrowed search survives cache saturation by nested searches
+[32mok[0m ustring_pattern.test_0
+[32mok[0m text.test.nowiki protocol helper escapes matrix and wikipedia without URL slashes
+[32mok[0m text.test.mw.text encode honors selective Unicode charset
+[32mok[0m text.test.mw.text JSON encode accepts zero-based arrays
+[32mok[0m text.test.mw.text JSON encode reindexes digit-string keys
+[32mok[0m text.test.mw.text JSON preserve keys keeps numeric object keys
+[32mok[0m text.test.mw.text JSON encode honors pairs metamethod
+[32mok[0m text.test.mw.text tag honors pairs and ordinary table indexing
+[32mok[0m uri.test.AOT URI encode decode and anchors match MediaWiki modes
+[32mok[0m uri.test.AOT URI builders sort query parameters and expose URI fields
+[32mok[0m uri.test.AOT URI new and validate parse production URL fields
+[32mok[0m language.test.civil conversion round trips unix epoch and leap dates
+[32mok[0m language.test.MediaWiki date formats used by was-wotd
+[32mok[0m language.test.MediaWiki partial and word date grammar
+[32mok[0m language.test.parse date forms used by Wiktionary modules
+[32mok[0m language.test.AOT language objects expose MediaWiki helpers
+[32mok[0m language.test.AOT language known tags use pinned host registry
+[32mok[0m invoke_reuse_stats.test.exact invocation diagnostic counts only identical successful prior keys
+[32mok[0m invoke_reuse_stats.test.function diagnostic counts all invokes and subtracts nested CPU
+[32mok[0m invoke_reuse_stats.test.function groups respect entry and shared owned-byte limits
+[32mok[0m invoke_reuse_stats.test.function diagnostic drops exclusive timing when child clock fails
+[32mok[0m invoke_reuse_stats.test.exact invocation diagnostic rejects oversized keys and nonstring arguments
+[32mok[0m host.test.invoke host probe excludes bookkeeping and propagates nested observations
+[32mok[0m host.test.mutable interwiki host remains page-sensitive and stable capability is explicit
+[32mok[0m host.test.stable page reads stay loadData effects without invalidating same-page invoke reuse
+[32mok[0m frame.test.AOT frame exposes parent title and typed host callbacks
+[32mok[0m frame.test.AOT frame invoke binds current frame around numeric module call
+[32mok[0m frame.test.current frame access is page-sensitive for reusable module roots
+[32mok[0m namespaces.test.Wiktionary namespace lookup preserves canonical names and aliases
+[32mok[0m namespaces.test.namespace entry shapes remain open and mutable
+[32mok[0m dateformat.test.MediaWiki DateFormatter source grammar and preferences
+[32mok[0m dateformat.test.MediaWiki DateFormatter partial and BC dates
+[32mok[0m pattern_cache.test.pattern cache owns keys and codepoints and reuses equal content
+[32mok[0m pattern_cache.test.pattern cache accounts unmerged storage and respects exact byte budget
+[32mok[0m pattern_cache.test.full pattern cache still serves old entries
+[32mok[0m pattern_cache.test.failed cache admission releases every allocation and publishes nothing
+[32mok[0m pattern_cache.test.concurrent pattern admission publishes one stable entry
+[32mok[0m unicode_classes.test.long ranges prepare, merge, invert and retain allocation ownership
+[32mok[0m unicode_classes.test.escaped and short classes retain raw matching
+[32mok[0m unicode_classes.test.optional preparation allocation failures release partial storage
+[32mok[0m pattern_cache_tests.test.warm cached Unicode percent classes and malformed tails preserve callbacks and errors
+
+pass: 75  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m bundle_protocol.test.binary bundle request round trips without copying fields
+[32mok[0m bundle_protocol.test.binary bundle replies preserve output and errors
+[32mok[0m bundle_protocol.test.binary bundle protocol rejects malformed framing
+
+pass: 3  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m bundle_build.test.worker overlap reserves compile slots without reducing completed jobs
+[32mok[0m bundle_build.test.snapshot install resolves relative sources before linking
+[32mok[0m bundle_build.test.batch compile modes preserve explicit flags
+[32mok[0m bundle_build.test.empty native compile queue launches no workers | err: dictionary build: LLVM compile workers=0 missing_batches=0 
+[32mok[0m bundle_build.test.two failed Clang batches leave no object and join every owned child | err: dictionary build: LLVM compile workers=2 missing_batches=2 dictionary build: compile -O0 LLVM batch count=1 first=0 last=0 source_bytes=21 dictionary build: compile -O0 LLVM batch count=1 first=0 last...
+[32mok[0m bundle_build.test.object cache hit bitmap is exact and includes the program object
+[32mok[0m bundle_build.test.default LLVM worker count is one plus one third logical CPUs
+[32mok[0m bundle_build.test.LLVM worker override accepts positive integers only
+[32mok[0m bundle_build.test.extraction cache requires both verified staged input digests
+[32mok[0m bundle_build.test.supplemental transclusion redirect snapshot option is strict
+[32mok[0m bundle_build.test.expander-only option is strict
+[32mok[0m bundle_build.test.page worker override accepts bounded positive integers only
+[32mok[0m bundle_build.test.pipeline expansion deadline preserves the default and validates overrides
+[32mok[0m expansion_deadline.test.page expansion deadlines stay positive and bounded
+
+pass: 14  fail: 0  skip: 0  leak: 0  crash: 0
+READER_INTEGRATION_PASS checks=30: precompiled fixture, data-only JSON/CLI/FFI, no source/runtime/core fallback. Artifacts: /home/a/zig/wikidict/.zig-cache/reader-integration-285759399833563
+[32mok[0m blob_build.test.blob shard options preserve explicit byte offset and page limit
+[32mok[0m blob_build.test.blob shard offset begins exactly at a data row
+[32mok[0m blob_build.test.page coverage rejects short explicit shards and records actual selection
+[32mok[0m blob_build.test.blob expansion timeout is explicit bounded and rejects duplicates
+[32mok[0m blob_build.test.operational expansion timeouts cannot become successful empty pages
+[32mok[0m bundle_expander.test.worker restart preserves the pinned bundle timestamp
+[32mok[0m expansion_deadline.test.page expansion deadlines stay positive and bounded
+
+pass: 7  fail: 0  skip: 0  leak: 0  crash: 0
+[32mok[0m storage.test.incremental derived index accepts every byte boundary and rejects damaged framing
+[32mok[0m storage.test.an unavailable cache remains an explicit memory-only index
+[32mok[0m storage.test.derived cache checksum corruption forces a rebuild
+[32mok[0m storage.test.cached storage releases every failed allocation
+
+pass: 4  fail: 0  skip: 0  leak: 0  crash: 0
+STORAGE_INTEGRATION_PASS cached=true mapped_cache=true zero_heap_warm_index=true selective_blocks=2/129 single_block=true concatenated=true source_invalidation=true corrupted_cache_rebuilt=true corrupt_xz_rejected=true records=256
+Artifacts: /home/a/zig/wikidict/.zig-cache/storage-548210-285759543124245
+Build Summary: 50/50 steps succeeded
+test success
++- run test success 20ms
+|  +- compile test ReleaseSafe native cached 220ms MaxRSS:34M
+|  +- run test success 560ms
+|     +- compile test ReleaseSafe native success 25s MaxRSS:417M
+|     |  +- options cached
+|     |     +- compile exe dict-module-extract ReleaseSafe native cached 26ms MaxRSS:34M
+|     |     +- compile exe dict-llvm-build ReleaseSafe native cached 25ms MaxRSS:33M
+|     |     |  +- WriteFile cached
+|     |     |  +- compile obj dict-llvm-build-core ReleaseSafe native cached 20ms MaxRSS:35M
+|     |     |  +- compile obj dict-llvm-build-core ReleaseSafe native (reused)
+|     |     +- compile exe dict-blob-build ReleaseSafe native cached 21ms MaxRSS:35M
+|     +- compile obj dict-blob-wasm-smoke ReleaseSafe wasm32-freestanding cached 13ms MaxRSS:36M
+|        +- run test success 15ms
+|           +- compile test ReleaseSafe native cached 22ms MaxRSS:32M
+|           +- run test success 452ms
+|              +- compile test ReleaseSafe native cached 29ms MaxRSS:36M
+|                 +- run test success 534ms
+|                    +- compile test ReleaseSafe native cached 20ms MaxRSS:36M
+|                       +- run test success 182ms
+|                          +- compile test ReleaseSafe native cached 27ms MaxRSS:36M
+|                             +- run test success 154ms
+|                                +- compile test ReleaseSafe native cached 26ms MaxRSS:36M
+|                                   +- run test success 52ms
+|                                      +- compile test ReleaseSafe native cached 28ms MaxRSS:36M
+|                                         +- run test success 20ms
+|                                            +- compile test ReleaseSafe native cached 12ms MaxRSS:36M
+|                                               +- run test success 616ms
+|                                                  +- compile test ReleaseSafe native cached 17ms MaxRSS:36M
+|                                                     +- run test success 2s
+|                                                        +- compile test ReleaseSafe native cached 28ms MaxRSS:35M
+|                                                           +- run test success 129ms
+|                                                              +- compile test ReleaseSafe native cached 23ms MaxRSS:36M
+|                                                                 +- run test success 299ms
+|                                                                    +- compile test ReleaseSafe native cached 37ms MaxRSS:36M
+|                                                                       +- run test success 14ms
+|                                                                          +- compile test ReleaseSafe native cached 20ms MaxRSS:35M
+|                                                                             +- run test success 60ms
+|                                                                                +- compile test ReleaseSafe native cached 11ms MaxRSS:36M
+|                                                                                   +- run test success 3s
+|                                                                                      +- compile test ReleaseSafe native cached 22ms MaxRSS:32M
++- run exe dict-storage-integration-test success 481ms
+   +- compile exe dict-storage-integration-test ReleaseSafe native cached 26ms MaxRSS:34M
+   +- run test success 40ms
+      +- compile test ReleaseSafe native cached 24ms MaxRSS:34M
+      +- run exe dict-reader-integration-test success 73ms
+         +- compile exe dict-reader-integration-test ReleaseSafe native cached 13ms MaxRSS:35M
+         +- compile exe dict ReleaseSafe native cached 27ms MaxRSS:35M
+         +- compile exe dict-ffi-integration-test ReleaseSafe native cached 31ms MaxRSS:34M
+            +- WriteFile cached
+            +- compile lib dictffi ReleaseSafe native cached 35ms MaxRSS:35M
+            +- compile lib dictffi ReleaseSafe native (reused)
+

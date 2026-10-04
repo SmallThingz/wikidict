@@ -1930,6 +1930,8 @@ pub const Context = struct {
     global_env_slot: ?u32 = null,
     static_global_scopes: std.ArrayList(GlobalScope) = .empty,
     next_iteration_hint: ?NextIterationHint = null,
+    // Borrowed program-owned immutable Unicode pattern metadata cache.
+    ustring_pattern_cache: ?*anyopaque = null,
 
     pub fn init(allocator: std.mem.Allocator, global_count: usize) !Context {
         return initProgram(allocator, global_count, 0);
@@ -1960,6 +1962,7 @@ pub const Context = struct {
 
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
         var child = try initProgram(allocator, self.root_globals.len, self.module_count);
+        child.ustring_pattern_cache = self.ustring_pattern_cache;
         child.program_shapes = self.program_shapes;
         child.program_shapes_validated = self.program_shapes_validated;
         child.program_shape_generation = self.program_shape_generation;
@@ -8677,4 +8680,20 @@ test "module reinitialization cannot revive a previous export guard" {
     try std.testing.expect(current.table == replacement);
     try std.testing.expect(!old_guard.*);
     try std.testing.expect(ctx.moduleValueSentinel(0, current).?.*);
+}
+
+test "program pattern cache pointer survives descendant forks and invoke reset" {
+    const a = std.testing.allocator;
+    var parent = try Context.init(a, 0);
+    defer parent.deinit();
+    var sentinel: usize = 42;
+    parent.ustring_pattern_cache = &sentinel;
+    var child = try parent.forkProgram(a);
+    defer child.deinit();
+    var grandchild = try child.forkProgram(a);
+    defer grandchild.deinit();
+    try std.testing.expectEqual(parent.ustring_pattern_cache, child.ustring_pattern_cache);
+    try std.testing.expectEqual(parent.ustring_pattern_cache, grandchild.ustring_pattern_cache);
+    grandchild.resetInvokeModuleState();
+    try std.testing.expectEqual(parent.ustring_pattern_cache, grandchild.ustring_pattern_cache);
 }

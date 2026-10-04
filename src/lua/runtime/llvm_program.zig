@@ -104,6 +104,7 @@ pub const Program = struct {
     stdlib_template: stdlib.Template,
     template_arena: ?*std.heap.ArenaAllocator = null,
     template_context: ?*rt.Context = null,
+    pattern_cache: ?*scribunto.PatternCache = null,
 
     pub fn init(
         io: std.Io,
@@ -415,6 +416,9 @@ pub const Program = struct {
             .json_object_shape_id = json_object_shape_id,
             .uri_query_shape_id = uri_query_shape_id,
             .stdlib_template = stdlib_template,
+            // Stable independent storage: Program may move, and its allocator
+            // may be an arena that cannot reclaim rejected cache admissions.
+            .pattern_cache = scribunto.PatternCache.create(io, std.heap.smp_allocator) catch null,
         };
     }
 
@@ -426,6 +430,10 @@ pub const Program = struct {
             self.allocator.destroy(self.template_arena.?);
         }
         self.stdlib_template.deinit();
+        if (self.pattern_cache) |cache| {
+            cache.logDiagnostics();
+            cache.destroy();
+        }
         self.allocator.free(self.shape_string_indices);
         self.allocator.free(self.shape_sorted_slots);
         self.allocator.free(self.shape_keys);
@@ -568,6 +576,7 @@ pub const Program = struct {
         const roots: [*]const rt.FunctionFn = @ptrCast(
             @alignCast(dict_lua_program_module_roots()),
         );
+        ctx.ustring_pattern_cache = if (self.pattern_cache) |cache| @ptrCast(cache) else null;
         ctx.module_root_entries = roots[0..self.module_count];
         ctx.module_export_shape_ids = self.module_export_shape_ids;
         ctx.module_template_eligible = self.module_template_eligible;

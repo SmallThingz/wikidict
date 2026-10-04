@@ -1,0 +1,7 @@
+{
+  "exit_code": 0,
+  "wall_seconds": 490.79362937400583,
+  "child_cpu_seconds": 367.798188,
+  "program_metadata_identical": true,
+  "batch_plan": ".tmp/optimize-20261004-pass17/llvm/batch-plan.tsv"
+}

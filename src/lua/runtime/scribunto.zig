@@ -3,6 +3,7 @@ const rt = @import("zig_runtime");
 const stdlib = @import("zig_stdlib");
 const global_abi = @import("lua_globals");
 const ustring_lib = @import("ustring.zig");
+pub const PatternCache = ustring_lib.PatternCache;
 const html_lib = @import("html.zig");
 const text_lib = @import("text.zig");
 const title_lib = @import("title.zig");

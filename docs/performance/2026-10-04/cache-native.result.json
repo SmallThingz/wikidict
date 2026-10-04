@@ -1,0 +1,1291 @@
+{
+  "objects": [
+    {
+      "index": 48,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000048.o",
+      "sha256": "d10a8eaa373b7bfb425e46d3de27fd9df9e273046df4fe51e76f5a5a35a9f705"
+    },
+    {
+      "index": 49,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000049.o",
+      "sha256": "744e23f9fa22254b543c6933b85305b7f46a6b82720ed9cfa17b4bf99aacc08f"
+    },
+    {
+      "index": 50,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000050.o",
+      "sha256": "9699c589977fc2b5c72ae1db43cba613d30abda1130706be41b848fbe31fd18b"
+    },
+    {
+      "index": 51,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000051.o",
+      "sha256": "a668c3473bbb7286393b3b566c81ab6f7b19a671636f5eb5404619bfa3306daf"
+    },
+    {
+      "index": 52,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000052.o",
+      "sha256": "4b22c7b98b57a12c4782e1c6c701a1a4d84906511c71b127e147d78f1cf17ff1"
+    },
+    {
+      "index": 53,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000053.o",
+      "sha256": "ba6b22fb92414419e4a7c4cccbea82eed082676cdac0d0583bc89a6a172957b9"
+    },
+    {
+      "index": 54,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000054.o",
+      "sha256": "8326d4e2e1bdc12d298860e0c2d32bd86c721fca8b52df7cde9bf305d8fa1578"
+    },
+    {
+      "index": 55,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000055.o",
+      "sha256": "e894fb7061887208669958a868bde5572994af5034d15220b3e510244dec99d3"
+    },
+    {
+      "index": 56,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000056.o",
+      "sha256": "54683f07d22555ffb846812df7635bbbff87eb00b79261cb7d7f402796658a3b"
+    },
+    {
+      "index": 57,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000057.o",
+      "sha256": "36683eef22b2c8a76b85f0e7fdcf83863e7e5eecb2506ca21391a5deb98ff4ff"
+    },
+    {
+      "index": 58,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000058.o",
+      "sha256": "75246342729f7d67e8e2d9c4024c36292c625edb848941512a921e5d20a397b3"
+    },
+    {
+      "index": 59,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000059.o",
+      "sha256": "7623bbd9962ba5f76ec942c9886e2f9e60f95c75bccfea8cc284c768a8324081"
+    },
+    {
+      "index": 60,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000060.o",
+      "sha256": "2b8fc373033291a3a666a7eca6bd887886350831b0f73c6d7904ad98528d4a0f"
+    },
+    {
+      "index": 61,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000061.o",
+      "sha256": "737c4a273f3f9d068f1c71d575b73a8634b8ccf5d3a55acae534ec1f24da0350"
+    },
+    {
+      "index": 62,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000062.o",
+      "sha256": "1f0710bcffb58426df1a543c8d7f1cb174b67fb776ac578e0a9748e04dd02595"
+    },
+    {
+      "index": 63,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000063.o",
+      "sha256": "833095f0dd73f0d9a5d5c958368da870736201afd946ef1c9d8714850b26447f"
+    },
+    {
+      "index": 64,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000064.o",
+      "sha256": "0c05ed783edd52a74580ee0475bdd139d8f9475e95177f06fd5ba16d5c771aed"
+    },
+    {
+      "index": 65,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000065.o",
+      "sha256": "d26031d084fc6ee4081f9a03374efd8a401e5129a88bab5ec94c93edadf4bfa8"
+    },
+    {
+      "index": 66,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000066.o",
+      "sha256": "a8124d336daeb60f56c20d89285c4b23354e043e195230354b468f3f6e70365b"
+    },
+    {
+      "index": 67,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000067.o",
+      "sha256": "b214bb073aaf2c184e788b9efcdb2590ae2c8ac3ee7ad7a7e0388d724f92aa34"
+    },
+    {
+      "index": 68,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000068.o",
+      "sha256": "6c61717430d4d4c480b7c5e8d5cb036ba52c109598ba6a0b31f5c010ef2f49ea"
+    },
+    {
+      "index": 69,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000069.o",
+      "sha256": "90c0138e926b7facdeae00e5876606b2b55763c7e6c9f9d5da72423d404fe983"
+    },
+    {
+      "index": 70,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000070.o",
+      "sha256": "9438a28b18649f02d9d56f0fda5f8f6c450cfbda4e6147d6c81e5a13e749f537"
+    },
+    {
+      "index": 71,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000071.o",
+      "sha256": "ae313d8fd0ac163640047675019b1d8653eace8425d791ceaaac3118baa4e82e"
+    },
+    {
+      "index": 72,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000072.o",
+      "sha256": "46cf7a91c7f30814f2c434ce0b9807c7b1616c6b6ae99d3adae0da6e61037a0d"
+    },
+    {
+      "index": 73,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000073.o",
+      "sha256": "accff25591085795ae904927a2b736c7d497e31d57d28c436fa8cc2e2e731c06"
+    },
+    {
+      "index": 74,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000074.o",
+      "sha256": "23130a95464268f0783ee54eadfbe553b59695d68fdb34b9a2d6aac278b5ae63"
+    },
+    {
+      "index": 75,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000075.o",
+      "sha256": "36df03f4f5f046737ed0551e664bb4084957dcf009e7ba82827566d0d17659fd"
+    },
+    {
+      "index": 76,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000076.o",
+      "sha256": "cd4156c9cab2f948c2bf84426332f7b8900516d45957a3320a22d168a3886b43"
+    },
+    {
+      "index": 77,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000077.o",
+      "sha256": "454b49e05eadd0e56fecbc5266d5576e2ef339e71793f3fc7e95ad0737d9144f"
+    },
+    {
+      "index": 78,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000078.o",
+      "sha256": "ef59d861abc9fa1b96b350263c2dd635f46a6fe08b8bd05e071a4a474c41373b"
+    },
+    {
+      "index": 79,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000079.o",
+      "sha256": "dca3b5efb6e70ae65e42218070ecbd6af2a0e1a4b96b5a784818aefbd892d720"
+    },
+    {
+      "index": 80,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000080.o",
+      "sha256": "2577451b1d5e6e42a282a453086c8f20054fcba51e8584ef32de7e9bb0d40e23"
+    },
+    {
+      "index": 81,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000081.o",
+      "sha256": "3fe7916ba42e0e82f8121152d6e069d1940b0d28eb9bc52d1fbb67cb44fee886"
+    },
+    {
+      "index": 82,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000082.o",
+      "sha256": "490ef179b3e51f019ca742c0a02ed5abd93f18c08de84b67214623eeecf1006f"
+    },
+    {
+      "index": 83,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000083.o",
+      "sha256": "33f6f341ca7c5f5185160b16d24bf41827913c25d29ec320c5ca7adc10d88762"
+    },
+    {
+      "index": 84,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000084.o",
+      "sha256": "e227b1eaf1fb1ec2d917e7734e99930be259822984ae769c06ba815aa803c1b1"
+    },
+    {
+      "index": 85,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000085.o",
+      "sha256": "934e8d655fa234d50a22fbaf720eab9e1c1caafbf7784f58125e3a84a2738200"
+    },
+    {
+      "index": 86,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000086.o",
+      "sha256": "49e9190ea5e85b0c619f90ecfa4973479e36e6eb6da3f5d1ac1f3aa381977cae"
+    },
+    {
+      "index": 87,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000087.o",
+      "sha256": "d06cfb307d8eb035ecf0db959a62c11b42cac1a75aa09c9ab7b358c584129989"
+    },
+    {
+      "index": 88,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000088.o",
+      "sha256": "b90d81cad6c6b647309d29ac65230bae7ea9e428d99a7908027ff5427e18ec35"
+    },
+    {
+      "index": 89,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000089.o",
+      "sha256": "172f6ec0f23fc9b5f3e591573a6b29c5baaf8007e6d5ceec57c1de22a1b47502"
+    },
+    {
+      "index": 90,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000090.o",
+      "sha256": "2f2a417e462b37ac7436110790c2afc9f2c06350c509294cc7bb94f3f27b8d30"
+    },
+    {
+      "index": 91,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000091.o",
+      "sha256": "0a8364d2383098df4d642a24f7fbac87c7f3b4f921a4b9d62b6acf15fb4b62f7"
+    },
+    {
+      "index": 92,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000092.o",
+      "sha256": "2a5efdb8fdce9ac94606c70f36744b522313845ab4be712cc03a9450cef9ff4e"
+    },
+    {
+      "index": 93,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000093.o",
+      "sha256": "414e1c20f574550e8498847c9ab00e2c9ec0695edd29bf5f262a6aab5e79e417"
+    },
+    {
+      "index": 94,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000094.o",
+      "sha256": "7009f12c622fba5f637e2adefd1b013a2351bcafba610badb9c76d2e7e2bfc0d"
+    },
+    {
+      "index": 95,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000095.o",
+      "sha256": "421f9b05e9c930ebf4510e65d93a56dfa23984e2e60d9d4d99e22b1247fa3d56"
+    },
+    {
+      "index": 96,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000096.o",
+      "sha256": "125f143039d8dd419c0526801e04b3942b5c23c398794aa98435e4c896a78a0f"
+    },
+    {
+      "index": 97,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000097.o",
+      "sha256": "a21f188d74fbf090cadeba9926fc4099de6056bc939e558034929e2670e8f9cc"
+    },
+    {
+      "index": 98,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000098.o",
+      "sha256": "270040d1650b16b3778a25f4d7822e83ba039da3b16ad313aae97c475116181a"
+    },
+    {
+      "index": 99,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000099.o",
+      "sha256": "bf7b4a7c5faf69bdc3d4eee30fae2b648fa4bf70a2619dcdc3cbb0d823ec6c7b"
+    },
+    {
+      "index": 100,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000100.o",
+      "sha256": "88c417cd3eb114beeb17d72dc1303ac9f10adee98a01c6a63af3c23a51b03ba1"
+    },
+    {
+      "index": 101,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000101.o",
+      "sha256": "72f10a7d23326b380290f5c70a72b31557494d850f31cd8d11dd2f9db961a040"
+    },
+    {
+      "index": 102,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000102.o",
+      "sha256": "eefb350f7ff8744e5c0bd3fa82f70b61a335af5b43f6cc39232bc06eb9373005"
+    },
+    {
+      "index": 103,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000103.o",
+      "sha256": "a0fb8f9b27b88d90455e58d7e197bbb04f32811a155a2a2310c94b8838311cd8"
+    },
+    {
+      "index": 104,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000104.o",
+      "sha256": "6d9f0bae9f430c88da29db4403df2b5b171c1ed0566bd7ea88ef57ad20cdb930"
+    },
+    {
+      "index": 105,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000105.o",
+      "sha256": "310195b4af890811e77d388f23c601cd5b9afea3241b59a4c1e55d5727156d76"
+    },
+    {
+      "index": 106,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000106.o",
+      "sha256": "1a5ab4b425bfe288a0052fc3d0f15f15061772cd5ecea007f274cc9749b5e05e"
+    },
+    {
+      "index": 107,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000107.o",
+      "sha256": "6017ad2d150df11a93dcb42ba0ee593d15b6c9d66cbf65651b343815c3e252c6"
+    },
+    {
+      "index": 108,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000108.o",
+      "sha256": "eac55940e78af61dcad2c8096000cc4cb7a358c2292fcf3d0a3ebc59156a78f9"
+    },
+    {
+      "index": 109,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000109.o",
+      "sha256": "6c2aae9df0efe47c53b4c60a1c638dc302046548a80518ba4499185b24ea8487"
+    },
+    {
+      "index": 110,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000110.o",
+      "sha256": "efb4bfbfe369d1c6bd92678ec6e8d670a1561e0ca9497afd251603647790655b"
+    },
+    {
+      "index": 111,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000111.o",
+      "sha256": "3f6324e74757fd50b135d2a6e60ecdac106702cb07ba73bcc7797a46a12823ca"
+    },
+    {
+      "index": 112,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000112.o",
+      "sha256": "37ba73475618a8d82209f23efc95648d7b745ed8b34178662ce2a04238a8dd84"
+    },
+    {
+      "index": 113,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000113.o",
+      "sha256": "73ddcd9c86b870cfe0625d9e380fde1f65b0d4c7031c0a4a10fdbdc79fb6763d"
+    },
+    {
+      "index": 114,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000114.o",
+      "sha256": "03ab02181d26da85cd77ae3d2624c09bca5b419a5a8000112f64b6ec455f2da8"
+    },
+    {
+      "index": 115,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000115.o",
+      "sha256": "39115a3978b886b4e1fb58ee989b693ae61a5276e783083a86d53662e483767d"
+    },
+    {
+      "index": 116,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000116.o",
+      "sha256": "65b44566de85c1450fd9650e8ff9eae6a1cedc9111cd1dcb760e881d7f6a8982"
+    },
+    {
+      "index": 117,
+      "cached": true,
+      "object": ".tmp/optimize-20261004-pass17/llvm/program.o",
+      "sha256": "296084b130bf37334e89dfaceb6c349aef096fbe53066deb863026d0b628f985"
+    },
+    {
+      "index": 1,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O2",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o2_000001.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000001.o"
+      ],
+      "wall_seconds": 21.75848604994826,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000001.o",
+      "sha256": "704b24242978b2b9d96254bee6681c5eabbd9542480d8d3e6a4fd01d16e017d1"
+    },
+    {
+      "index": 0,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O2",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o2_000000.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000000.o"
+      ],
+      "wall_seconds": 23.418704253970645,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000000.o",
+      "sha256": "aecf8cfaedb4148dabbd2b5860a8a3ec8c56ac13a973c884b1d83bb260a993b5"
+    },
+    {
+      "index": 3,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O2",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o2_000003.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000003.o"
+      ],
+      "wall_seconds": 19.41221975395456,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000003.o",
+      "sha256": "5de515335b9d5dfc6549b8f7154a551fd03d260d79543aa132d7978b44338c60"
+    },
+    {
+      "index": 2,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O2",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o2_000002.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000002.o"
+      ],
+      "wall_seconds": 24.605218401004095,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000002.o",
+      "sha256": "e513588363f107b999319d186b3be7b0656a2c471d52b0da7ac2c5dbe11bef19"
+    },
+    {
+      "index": 5,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O2",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o2_000005.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000005.o"
+      ],
+      "wall_seconds": 0.6672575119882822,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000005.o",
+      "sha256": "333abe18667b95cca90c434a2b087d0325d3626ea7972deb3c5c9dda2eb24dcf"
+    },
+    {
+      "index": 4,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O2",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o2_000004.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000004.o"
+      ],
+      "wall_seconds": 10.842958884022664,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000004.o",
+      "sha256": "f4443aab6421ef8582929994f185a7cb9c34e23762c8eda11fd38d6b9d90587f"
+    },
+    {
+      "index": 6,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000000.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000006.o"
+      ],
+      "wall_seconds": 24.27926156297326,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000006.o",
+      "sha256": "3edcb7c09aa58e43ff0655b9ae7b77bd72325ecf292b2ca9495df4a8b1f2e1f0"
+    },
+    {
+      "index": 7,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000001.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000007.o"
+      ],
+      "wall_seconds": 22.767285833018832,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000007.o",
+      "sha256": "4a00d9b1379b822956a20ed9c6a289749418d9fde56cfbe248fde19ddc6f3649"
+    },
+    {
+      "index": 9,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000003.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000009.o"
+      ],
+      "wall_seconds": 17.622872778971214,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000009.o",
+      "sha256": "0626dda141fe66c9bbb78ec058e38b5d998f4b9d2b5c81f8caba7b4e498a08d6"
+    },
+    {
+      "index": 8,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000002.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000008.o"
+      ],
+      "wall_seconds": 23.665076609991957,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000008.o",
+      "sha256": "2540f591039bb70f7fd0aa476e1483e5e88c554c914be00d500a0b5782c842fe"
+    },
+    {
+      "index": 11,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000005.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000011.o"
+      ],
+      "wall_seconds": 17.503722643014044,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000011.o",
+      "sha256": "2111d25725f231e873e9e5020b8bf1133cd0fbaaad5768eabfac6aa9a9d5c3c4"
+    },
+    {
+      "index": 10,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000004.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000010.o"
+      ],
+      "wall_seconds": 24.456723843002692,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000010.o",
+      "sha256": "fcbc501da42ebcda271693528dfed0ac3aaaabe284d848700506b68d5dfbd9a0"
+    },
+    {
+      "index": 12,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000006.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000012.o"
+      ],
+      "wall_seconds": 19.109360460017342,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000012.o",
+      "sha256": "7b89a447c3e994e854e0ab5ef24042b6017a27c75a70b0d1f4ba7fa61b9528fa"
+    },
+    {
+      "index": 13,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000007.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000013.o"
+      ],
+      "wall_seconds": 37.20941364503233,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000013.o",
+      "sha256": "09fa0d2b70f51612c51e93927026ece4ce216a427e9ba780cd6789bbff191c8a"
+    },
+    {
+      "index": 14,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000008.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000014.o"
+      ],
+      "wall_seconds": 24.2552457129932,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000014.o",
+      "sha256": "3a1933a28762d3bae19bc3e8b586a0f0228ad62ecf4f7c4d5c2bb68ee4f60b75"
+    },
+    {
+      "index": 16,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000010.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000016.o"
+      ],
+      "wall_seconds": 15.412765030981973,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000016.o",
+      "sha256": "7d0eb024a0d699ad1791377c0c37a5d0a6cf689e528049a06669da67d787a507"
+    },
+    {
+      "index": 17,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000011.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000017.o"
+      ],
+      "wall_seconds": 0.06430219701724127,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000017.o",
+      "sha256": "bfa8828b6c73fac40446518bfa7b973c8935125bd029c6bcba70bff86457c801"
+    },
+    {
+      "index": 15,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000009.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000015.o"
+      ],
+      "wall_seconds": 16.608850229997188,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000015.o",
+      "sha256": "4cbca025e2806a8f74794cbfa6c5f6b89f64b76b4aba38e86dbc01d419f4f254"
+    },
+    {
+      "index": 19,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000013.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000019.o"
+      ],
+      "wall_seconds": 24.58464198902948,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000019.o",
+      "sha256": "e17641bca5387496d37964bbed431ca76f036eba083b8b9f19b00a0a0f71bb0d"
+    },
+    {
+      "index": 18,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000012.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000018.o"
+      ],
+      "wall_seconds": 26.90875264798524,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000018.o",
+      "sha256": "6be8d258dd459c664b7520bd7bdeb0d276ec51a4fa95a20e7d155e45b2c06236"
+    },
+    {
+      "index": 21,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000015.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000021.o"
+      ],
+      "wall_seconds": 16.79499536298681,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000021.o",
+      "sha256": "06c1ae19a7334d274132da2b1861eb5054468bbeeb37e4cf678370af75e6524d"
+    },
+    {
+      "index": 20,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000014.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000020.o"
+      ],
+      "wall_seconds": 27.614445679006167,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000020.o",
+      "sha256": "f0e31229e1c75f87f26f70182915b54ec3c4e61ed1631a5122d5844a4408b222"
+    },
+    {
+      "index": 22,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000016.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000022.o"
+      ],
+      "wall_seconds": 27.29991544195218,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000022.o",
+      "sha256": "5def1f61599b8777631184685b2cb6092f56ec4436052cdf13626b4ffceb0277"
+    },
+    {
+      "index": 23,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000017.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000023.o"
+      ],
+      "wall_seconds": 30.896973701019306,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000023.o",
+      "sha256": "75781f5f3f40549b7312c8a99eeba0e7a539ce06377b15a6618e657d1180f0c1"
+    },
+    {
+      "index": 24,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000018.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000024.o"
+      ],
+      "wall_seconds": 28.072801975009497,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000024.o",
+      "sha256": "af111a2e1c52bc120253064c4d7f61893787c8382d0a45dfd4c26468b7abcb01"
+    },
+    {
+      "index": 25,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000019.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000025.o"
+      ],
+      "wall_seconds": 37.19297101802658,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000025.o",
+      "sha256": "72824f4f6baffccef337fb7c9df0c1b7397ea89f4cc2832776ebc83b52621367"
+    },
+    {
+      "index": 26,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000020.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000026.o"
+      ],
+      "wall_seconds": 33.45834814402042,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000026.o",
+      "sha256": "b32d590e8740c097429e80237dbb6c9b201cce5ae644834ed9de16ebe77eec30"
+    },
+    {
+      "index": 27,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000021.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000027.o"
+      ],
+      "wall_seconds": 35.81167775701033,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000027.o",
+      "sha256": "154de2dbc1ac6e9d14ad971fa31d09b8f2fd41bc5217d1e14ca6cf5c07e42d42"
+    },
+    {
+      "index": 28,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000022.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000028.o"
+      ],
+      "wall_seconds": 35.08271158102434,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000028.o",
+      "sha256": "8b79682a905af99ed022976538a927f8bfd4bb0c9d2263bce467028f6216b819"
+    },
+    {
+      "index": 29,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000023.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000029.o"
+      ],
+      "wall_seconds": 30.932771112013143,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000029.o",
+      "sha256": "e8e1e011c1de17d364d76f450e4c828a338f14125b64121c080b4a7534464532"
+    },
+    {
+      "index": 30,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000024.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000030.o"
+      ],
+      "wall_seconds": 26.676077320007607,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000030.o",
+      "sha256": "b1ecb12ed9f153ff0a482c13fc8a094e9c0ee648fd42ab9b3210fa887fbf03f9"
+    },
+    {
+      "index": 31,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000025.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000031.o"
+      ],
+      "wall_seconds": 30.04045100597432,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000031.o",
+      "sha256": "bcf2326c76ae920547e3dac3914f5c351e14302bb9b8f0118ac9d5c9dc329740"
+    },
+    {
+      "index": 32,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000026.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000032.o"
+      ],
+      "wall_seconds": 28.762797763978597,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000032.o",
+      "sha256": "307e068fcff20adc1097194faf7de7f2e15a1ee55c24ea2c3358d80dc07d506c"
+    },
+    {
+      "index": 34,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000028.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000034.o"
+      ],
+      "wall_seconds": 10.408105003007222,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000034.o",
+      "sha256": "c4b174757f785d2368774d93353f9d0bbcee2eb2ae2051b3c936dd99a0e61542"
+    },
+    {
+      "index": 33,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000027.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000033.o"
+      ],
+      "wall_seconds": 25.332097253995016,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000033.o",
+      "sha256": "59cfd82222b65ab3fa4bad91abdfaad0a5acc22c561ed24f0b4a0a78930a7c62"
+    },
+    {
+      "index": 36,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000030.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000036.o"
+      ],
+      "wall_seconds": 8.856004567991477,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000036.o",
+      "sha256": "8ee127d4a725c9d10c1de0983b29b9a8b0990621202d95b664c40dcd236c305f"
+    },
+    {
+      "index": 37,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000031.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000037.o"
+      ],
+      "wall_seconds": 2.188050184980966,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000037.o",
+      "sha256": "9634efbc61926226019c34a35fef6f11c5cb5aa42de6292e9f67e250fb822182"
+    },
+    {
+      "index": 35,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000029.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000035.o"
+      ],
+      "wall_seconds": 28.045026230975054,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000035.o",
+      "sha256": "3c6422f7534c0c4efb23274fb259657455482dce0b4ac4c6860640e1f3130f62"
+    },
+    {
+      "index": 39,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000033.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000039.o"
+      ],
+      "wall_seconds": 48.45460398297291,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000039.o",
+      "sha256": "5e0c7a84379cda25f5b6e6f1ba6d22ef5920eea45406f9ca1a82c64ff9877517"
+    },
+    {
+      "index": 38,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000032.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000038.o"
+      ],
+      "wall_seconds": 64.15473389800172,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000038.o",
+      "sha256": "a16bb612f4ca1a84f7957eaada5ef565634d77f74d9f886567e252e5fcc5db25"
+    },
+    {
+      "index": 41,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000035.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000041.o"
+      ],
+      "wall_seconds": 34.96906833304092,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000041.o",
+      "sha256": "5f50b6b2d3ec59b65ebae34289e571fb729639b6a2066bfc8c3762b7277177cd"
+    },
+    {
+      "index": 40,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000034.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000040.o"
+      ],
+      "wall_seconds": 52.5231351859984,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000040.o",
+      "sha256": "3c7d1a9663519c91779da0c7579f7fff55c21f71cf587f54dc159d471c25f1a6"
+    },
+    {
+      "index": 43,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000037.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000043.o"
+      ],
+      "wall_seconds": 20.162331722967792,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000043.o",
+      "sha256": "d118dad17abcb51093fdaaf53930933063424651116fdbc6771cea9ed1c33706"
+    },
+    {
+      "index": 42,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000036.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000042.o"
+      ],
+      "wall_seconds": 44.16741554701002,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000042.o",
+      "sha256": "e0bd391d8f6720e957a5efcc47dcc0f1c3bb0c664d4eb619c1df3ff3444eb991"
+    },
+    {
+      "index": 44,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000038.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000044.o"
+      ],
+      "wall_seconds": 27.122087947034743,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000044.o",
+      "sha256": "3601e89a433354dd2902dc30334e8f05b5093eb7573bb21918192b1f116a86bd"
+    },
+    {
+      "index": 46,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000040.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000046.o"
+      ],
+      "wall_seconds": 22.115560193022247,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000046.o",
+      "sha256": "5f16e7ecb7a5b8c984b83b51b0621472de126fc5c2117eed2cdb6fcd25bbf937"
+    },
+    {
+      "index": 45,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000039.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000045.o"
+      ],
+      "wall_seconds": 34.33774564100895,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000045.o",
+      "sha256": "4f429be43e062d1cde12193f49bc0a4a33169a1d8e5bf041cf427ecd405349d2"
+    },
+    {
+      "index": 47,
+      "cached": false,
+      "command": [
+        "clang",
+        "-O1",
+        "-march=native",
+        "-fno-lto",
+        "-Wno-override-module",
+        "-c",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_o1_000041.bc",
+        "-o",
+        ".tmp/optimize-20261004-pass17/llvm/module_batch_000047.o"
+      ],
+      "wall_seconds": 23.748628334957175,
+      "object": ".tmp/optimize-20261004-pass17/llvm/module_batch_000047.o",
+      "sha256": "d626f0e11716743b335b88ef1594fc2ffccf1f5b57ee012c7a0ec11fb3de8d4c"
+    }
+  ],
+  "binary": ".tmp/optimize-20261004-pass17/snapshot-expander/dict-bundle-expander",
+  "sha256": "6a6b8c0f9a3630a355e8d5ea12c28b1cfb2830431d33ba405be7318c349a1b55",
+  "metadata_identical": true
+}

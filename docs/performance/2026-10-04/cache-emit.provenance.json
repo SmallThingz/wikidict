@@ -1,0 +1,24 @@
+{
+  "command": [
+    ".tmp/optimize-20261004-pass17/dict-llvm-build",
+    ".tmp/optimize-20261004-pass14/main-expander/manifest.jsonl",
+    ".tmp/optimize-20261004-pass14/main-expander",
+    ".tmp/optimize-20261004-pass17/llvm",
+    "--parse-workers",
+    "2",
+    "--value-leaf-bc",
+    ".tmp/optimize-20261004-pass17/llvm/value_leaf.bc"
+  ],
+  "head": "6e41ce00068b8f682959d016d23083d5202b820d",
+  "compiler_source_manifest": ".tmp/optimize-20261004-pass17/compiler.sources.sha256",
+  "compiler_source_manifest_sha256": "4ce49233744f04cca5702ace184053fe10eed31c9e01c2a4d2ab846336d29712",
+  "inputs": {
+    ".tmp/optimize-20261004-pass17/dict-llvm-build": "d6b839fc6d08e6862f0e1b8d38879503e94072e54d833201289069900168b5ac",
+    ".tmp/optimize-20261004-pass14/main-expander/manifest.jsonl": "86054348bfb6078174aa604c4b86815465cb99527f6b79bd18a0651324a4d47e",
+    ".tmp/optimize-20261004-pass14/main-expander/lua-usage.tsv": "f41f9642e720f358acf7b52968e9c0dfc960f06bee2e7ff411f70ba78add97a7",
+    ".tmp/optimize-20261004-pass14/main-expander/lua-program.meta": "770d476c2197b66e5885c3ceb25840e92ccc53a4dc8c4c50102619fce8229100",
+    ".tmp/optimize-20261004-pass17/llvm/value_leaf.bc": "b37d9a9632e19f57b63857d06ffb222804984e015b510b2907f9c388aee812fd"
+  },
+  "source_variant": "Clang23 folded compiler with program-owned cache runtime and newly emitted exact leaf",
+  "resource_policy": "8GiB sampled aggregate PSS watchdog; compiler 6GiB address-space ceiling; 2 parser workers"
+}

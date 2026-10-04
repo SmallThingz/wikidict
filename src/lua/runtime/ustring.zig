@@ -1,6 +1,12 @@
 const std = @import("std");
 const rt = @import("zig_runtime");
 const upat = @import("ustring_pattern.zig");
+pub const PatternCache = upat.PatternCache;
+
+fn patternCache(runtime: *rt.Context) ?*PatternCache {
+    const raw = runtime.ustring_pattern_cache orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
 
 const Value = rt.Value;
 
@@ -276,7 +282,7 @@ fn uFind(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, result
     const pat = try stringArg(a, args[1]);
     const init_index = if (args.len > 2 and args[2] != .nil) try integer(args[2]) else 1;
     const plain = args.len > 3 and args[3].truthy();
-    var search = try upat.Search.init(std.heap.smp_allocator, source, pat);
+    var search = try upat.Search.initWithCache(std.heap.smp_allocator, source, pat, patternCache(runtime));
     defer search.deinit();
     const found = if (plain) search.findPlain(init_index) else try search.find(normalizer.category, init_index, true);
     const m = found orelse return one(result_buffer, .nil);
@@ -295,7 +301,7 @@ fn uMatch(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, resul
     const source = try stringArg(a, args[0]);
     const pat = try stringArg(a, args[1]);
     const init_index = if (args.len > 2 and args[2] != .nil) try integer(args[2]) else 1;
-    var search = try upat.Search.init(std.heap.smp_allocator, source, pat);
+    var search = try upat.Search.initWithCache(std.heap.smp_allocator, source, pat, patternCache(runtime));
     defer search.deinit();
     var m: upat.Match = undefined;
     if (!(try search.findInto(normalizer.category, init_index, true, &m))) return one(result_buffer, .nil);
@@ -330,7 +336,7 @@ fn uGmatch(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, resu
     const source = try stringArg(a, args[0]);
     const pat = try stringArg(a, args[1]);
     const ctx = try a.create(GmatchCtx);
-    ctx.* = .{ .search = try upat.Search.init(a, source, pat), .category = normalizer.category };
+    ctx.* = .{ .search = try upat.Search.initWithCache(a, source, pat, patternCache(runtime)), .category = normalizer.category };
     return one(result_buffer, try runtime.newNativeBuffered(ctx, uGmatchNext));
 }
 
@@ -424,7 +430,7 @@ fn uGsub(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, result
         @intCast(@max(@as(i64, 0), try integer(args[3])))
     else
         std.math.maxInt(usize);
-    var search = try upat.Search.init(std.heap.smp_allocator, source, pat);
+    var search = try upat.Search.initWithCache(std.heap.smp_allocator, source, pat, patternCache(runtime));
     defer search.deinit();
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(std.heap.smp_allocator);
@@ -751,4 +757,71 @@ test "AOT Unicode gsub supports table and callable replacements" {
     defer rt.freeResults(numeric_out);
     try std.testing.expectEqualStrings("a123", numeric_out[0].string);
     try std.testing.expectEqual(@as(f64, 1), numeric_out[1].number);
+}
+
+test "program pattern metadata outlives pages and abandoned Unicode iterators" {
+    var cache = PatternCache.init(std.testing.io, std.testing.allocator);
+    defer cache.deinit();
+    const key = "[" ++ ("q" ** 128) ++ "]";
+    for (0..2) |_| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var runtime = try rt.Context.init(arena.allocator(), 0);
+        defer runtime.deinit();
+        runtime.ustring_pattern_cache = &cache;
+        const ustring = try runtime.newNativeNamespace(.ustring);
+        _ = try install(&runtime, ustring);
+        const gsub = ustring.rawGet(.{ .string = "gsub" }).?;
+        const result = try runtime.callValue(gsub, &.{ .{ .string = "qqqqqqqq" }, .{ .string = key }, .{ .string = "X" } });
+        defer rt.freeResults(result);
+        try std.testing.expectEqualStrings("XXXXXXXX", result[0].string);
+        try std.testing.expectEqual(@as(f64, 8), result[1].number);
+        const gmatch = ustring.rawGet(.{ .string = "gmatch" }).?;
+        const iterator = try runtime.callValue(gmatch, &.{ .{ .string = "qqqqqqqq" }, .{ .string = key } });
+        defer rt.freeResults(iterator);
+        const first = try runtime.callValue(iterator[0], &.{});
+        defer rt.freeResults(first);
+        try std.testing.expectEqualStrings("q", first[0].string);
+        // Deliberately abandon the iterator. Page teardown reclaims its local
+        // allocations; the Program-owned metadata needs no iterator finalizer.
+        try std.testing.expectEqual(@as(usize, 1), cache.entry_count);
+    }
+    try std.testing.expect(cache.hits >= 3);
+    try std.testing.expect(cache.lookup(key) != null);
+}
+
+test "nested Unicode replacement matching cannot invalidate outer cache metadata" {
+    const Probe = struct {
+        matcher: Value,
+        calls: usize = 0,
+        fn call(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value, buffer: ?[]Value) ![]const Value {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            const key = "[" ++ ("z" ** 128) ++ "]+";
+            var one_slot: [1]Value = undefined;
+            const nested = try runtime.callValueFixed(self.matcher, &.{ .{ .string = "zzzzzzzz" }, .{ .string = key } }, &one_slot);
+            defer nested.deinit();
+            try std.testing.expectEqualStrings("zzzzzzzz", nested.values[0].string);
+            return one(buffer, .{ .string = "X" });
+        }
+    };
+    var cache = PatternCache.init(std.testing.io, std.testing.allocator);
+    defer cache.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    runtime.ustring_pattern_cache = &cache;
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    _ = try install(&runtime, ustring);
+    var probe = Probe{ .matcher = ustring.rawGet(.{ .string = "match" }).? };
+    const callback = try runtime.newNativeBuffered(&probe, Probe.call);
+    const gsub = ustring.rawGet(.{ .string = "gsub" }).?;
+    const key = "[" ++ ("q" ** 128) ++ "]";
+    const result = try runtime.callValue(gsub, &.{ .{ .string = "qqqqqqqq" }, .{ .string = key }, callback });
+    defer rt.freeResults(result);
+    try std.testing.expectEqualStrings("XXXXXXXX", result[0].string);
+    try std.testing.expectEqual(@as(usize, 8), probe.calls);
+    try std.testing.expectEqual(@as(usize, 2), cache.entry_count);
+    try std.testing.expect(cache.hits >= 7);
 }

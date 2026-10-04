@@ -221,10 +221,13 @@ const MultiRef = struct {
 const StringPool = struct {
     map: std.StringHashMapUnmanaged(u32) = .empty,
     items: std.ArrayList(StringRef) = .empty,
+    owned: std.ArrayList([]u8) = .empty,
 
     fn deinit(self: *StringPool, a: A) void {
         self.map.deinit(a);
         self.items.deinit(a);
+        for (self.owned.items) |bytes| a.free(bytes);
+        self.owned.deinit(a);
     }
 };
 
@@ -540,6 +543,19 @@ const ModuleEmitter = struct {
         try self.strings.items.append(self.allocator, ref);
         try self.strings.map.put(self.allocator, value, id);
         return ref;
+    }
+
+    // Synthesized literals must survive all function emission in this module.
+    // Parser-owned literals remain borrowed; only folded buffers go here.
+    fn ownedStringRef(self: *ModuleEmitter, value: []u8) anyerror!StringRef {
+        errdefer self.allocator.free(value);
+        if (self.strings.map.get(value)) |id| {
+            self.allocator.free(value);
+            return self.strings.items.items[id];
+        }
+        try self.strings.owned.append(self.allocator, value);
+        errdefer _ = self.strings.owned.pop();
+        return try self.stringRef(value);
     }
 
     const StaticLiteralBlob = struct {
@@ -1548,7 +1564,36 @@ const FnEmitter = struct {
         } else try out.append(allocator, node);
     }
 
+    fn collectStaticConcat(self: *FnEmitter, node: *const lua.Expr, out: *std.ArrayList([]const u8)) anyerror!bool {
+        switch (node.*) {
+            .paren => |paren| return self.collectStaticConcat(paren.expr, out),
+            .binary => |expr_binary| if (expr_binary.op == .concat) {
+                return try self.collectStaticConcat(expr_binary.lhs, out) and
+                    try self.collectStaticConcat(expr_binary.rhs, out);
+            },
+            else => {},
+        }
+        // Only literals or existing immutable direct string locals qualify.
+        // No expression is evaluated, and mutable/captured cells stay dynamic.
+        const bytes = try self.staticStringExpr(node) orelse return false;
+        try out.append(self.a(), bytes);
+        return true;
+    }
+
     fn concat(self: *FnEmitter, lhs: *const lua.Expr, rhs: *const lua.Expr) anyerror!ValueRef {
+        var literal_parts: std.ArrayList([]const u8) = .empty;
+        defer literal_parts.deinit(self.a());
+        if (try self.collectStaticConcat(lhs, &literal_parts) and try self.collectStaticConcat(rhs, &literal_parts)) {
+            var size: usize = 0;
+            for (literal_parts.items) |part| size = try std.math.add(usize, size, part.len);
+            const bytes = try self.a().alloc(u8, size);
+            var offset: usize = 0;
+            for (literal_parts.items) |part| {
+                @memcpy(bytes[offset..][0..part.len], part);
+                offset += part.len;
+            }
+            return .{ .string = try self.module.ownedStringRef(bytes) };
+        }
         var parts: std.ArrayList(*const lua.Expr) = .empty;
         defer parts.deinit(self.a());
         try collectConcat(lhs, &parts, self.a());
@@ -4686,7 +4731,8 @@ pub const Batch = struct {
         facts: ProgramFacts,
     ) anyerror!AppendResult {
         const functions = try allocator.alloc(V, module.functions.items.len);
-        errdefer allocator.free(functions);
+        var functions_transferred = false;
+        errdefer if (!functions_transferred) allocator.free(functions);
         const function_base = module.functions.items[0].id;
         const function_ty = try generatedFunctionType(&self.module);
         for (module.functions.items, 0..) |info, index| {
@@ -4714,6 +4760,7 @@ pub const Batch = struct {
             .functions = functions,
             .function_base = function_base,
         };
+        functions_transferred = true;
         defer emitter.deinit();
         try emitter.collectStaticModules();
 
@@ -4806,4 +4853,67 @@ test "field-site ID is unique across function and ordinal and saturates" {
     try std.testing.expectEqual(@as(?u64, 1), FnEmitter.fieldSiteId(0, 1));
     try std.testing.expectEqual(@as(?u64, (@as(u64, std.math.maxInt(u32)) << 32) | (std.math.maxInt(u32) - 1)), FnEmitter.fieldSiteId(std.math.maxInt(u32), std.math.maxInt(u32) - 1));
     try std.testing.expect(FnEmitter.fieldSiteId(1, std.math.maxInt(u32)) == null);
+}
+
+test "constant string concatenation emits a single immutable literal" {
+    const source =
+        \\local prefix = "A"
+        \\local first = "A" .. ""
+        \\local folded = first .. (("\000" .. "β") .. "")
+        \\return folded, "A" .. "\000β", "" .. ("A" .. "\000β")
+    ;
+    var chunk = try lua.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_concat"));
+    try std.testing.expect(std.mem.indexOf(u8, ir, "A\\00\\CE\\B2") != null);
+}
+
+test "dynamic numeric and captured concatenation keeps runtime evaluation" {
+    const sources = [_][]const u8{
+        "local x='a'; local function f() x='b'; return 'c' end; return x .. f()",
+        "local x='a'; x=...; return x .. ('b' .. 'c')",
+        "return 'x' .. 12",
+        "local x=...; return x .. 'b'",
+        "local x='a'; local function f() return x .. 'b' end; return f",
+        "local t=setmetatable({}, {__concat=function(a,b) return 'ok' end}); return ('a'..'b') .. t",
+        "local function f() return 'a' end; return f() .. ('b'..'c')",
+    };
+    for (sources) |source| {
+        var chunk = try lua.parse(std.testing.allocator, source);
+        defer chunk.deinit();
+        var globals = try analysis.Globals.init(std.testing.allocator);
+        defer globals.deinit();
+        var module = try analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+        defer module.deinit();
+        var generated = try generate(std.testing.allocator, &globals, &module, .{});
+        defer generated.deinit();
+        const ir = try generated.toText(std.testing.allocator);
+        defer std.testing.allocator.free(ir);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_concat"));
+    }
+}
+
+test "folded literal emission releases transferred buffers on allocation failure" {
+    const source = "local a='a'..'b'; return a..'c', ('a'..'b')..'c'";
+    var chunk = try lua.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    const Runner = struct {
+        fn run(a: A, g: *const analysis.Globals, m: *const analysis.Module) !void {
+            var generated = try generate(a, g, m, .{});
+            defer generated.deinit();
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Runner.run, .{ &globals, &module });
 }
