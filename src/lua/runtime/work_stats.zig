@@ -66,7 +66,7 @@ pub const Page = struct {
 const RequestKey = struct {
     len: usize = 0,
     hash: u64 = 0,
-    prefix: [64]u8 = [_]u8{0} ** 64,
+    prefix: [64]u8 = @as([64]u8, @splat(0)),
 
     fn init(value: []const u8) RequestKey {
         var key: RequestKey = .{ .len = value.len, .hash = std.hash.Wyhash.hash(0, value) };
@@ -93,7 +93,7 @@ fn RequestBag(comptime capacity: usize) type {
             second: RequestKey = .{},
             count: u64 = 0,
         };
-        entries: [capacity]Entry = [_]Entry{.{}} ** capacity,
+        entries: [capacity]Entry = @as([capacity]Entry, @splat(.{})),
         len: usize = 0,
         overflow: u64 = 0,
 
@@ -159,7 +159,7 @@ pub const NativeFailures = struct {
         address: usize = 0,
         count: u64 = 0,
     };
-    entries: [64]Entry = [_]Entry{.{}} ** 64,
+    entries: [64]Entry = @as([64]Entry, @splat(.{})),
     len: usize = 0,
     overflow: u64 = 0,
 

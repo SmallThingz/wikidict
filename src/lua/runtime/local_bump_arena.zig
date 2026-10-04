@@ -110,11 +110,11 @@ test "local bump arena rejects impossible alignment without changing a live bloc
     _ = a.rawAlloc(1, .of(u8), @returnAddress()) orelse return error.TestUnexpectedResult;
     const head = arena.head.?;
     const used = head.used;
-    try std.testing.expect(a.rawAlloc(1, @enumFromInt(@bitSizeOf(usize) - 1), @returnAddress()) == null);
+    try std.testing.expect(a.rawAlloc(1, @fromBackingInt(@intCast(@bitSizeOf(usize) - 1)), @returnAddress()) == null);
     try std.testing.expect(arena.head.? == head);
     try std.testing.expectEqual(used, head.used);
     // A failed extreme request must not poison an ordinary aligned allocation.
-    const high = a.rawAlloc(8, @enumFromInt(12), @returnAddress()) orelse return error.TestUnexpectedResult;
+    const high = a.rawAlloc(8, @fromBackingInt(@intCast(12)), @returnAddress()) orelse return error.TestUnexpectedResult;
     try std.testing.expect(@intFromPtr(high) % 4096 == 0);
 }
 
@@ -137,10 +137,10 @@ test "local bump OOM and remap preserve existing allocations" {
     try std.testing.expect(!a.rawResize(live, .of(u8), 128, @returnAddress()));
     try std.testing.expect(a.rawRemap(live, .of(u8), 128, @returnAddress()) == null);
     try std.testing.expect(a.rawResize(live, .of(u8), 16, @returnAddress()));
-    try std.testing.expectEqualSlices(u8, &([_]u8{0x5a} ** 16), live[0..16]);
+    try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0x5a))), live[0..16]);
     const next = try a.alloc(u64, 8);
     @memset(next, 17);
-    try std.testing.expectEqualSlices(u8, &([_]u8{0x5a} ** 16), live[0..16]);
+    try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0x5a))), live[0..16]);
 }
 
 test "local bump nested invocations preserve parent data and release all backing blocks" {

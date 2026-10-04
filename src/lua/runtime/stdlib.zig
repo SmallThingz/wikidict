@@ -963,7 +963,7 @@ fn debugTraceback(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_bu
 }
 
 const MathRandomState = struct {
-    state: [31]u32 = [_]u32{0} ** 31,
+    state: [31]u32 = @as([31]u32, @splat(0)),
     front: u8 = 3,
     rear: u8 = 0,
 

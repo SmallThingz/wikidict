@@ -218,13 +218,13 @@ pub const Module = struct {
     }
 
     pub fn addFunction(self: *const Module, name: []const u8, ty: TypeRef) !ValueRef {
-        const z = try std.heap.smp_allocator.dupeZ(u8, name);
+        const z = try std.heap.smp_allocator.dupeSentinel(u8, name, 0);
         defer std.heap.smp_allocator.free(z);
         return req(ValueRef, LLVMAddFunction(self.ref, z.ptr, ty));
     }
 
     pub fn getFunction(self: *const Module, name: []const u8) ?ValueRef {
-        const z = std.heap.smp_allocator.dupeZ(u8, name) catch return null;
+        const z = std.heap.smp_allocator.dupeSentinel(u8, name, 0) catch return null;
         defer std.heap.smp_allocator.free(z);
         return LLVMGetNamedFunction(self.ref, z.ptr);
     }
@@ -285,7 +285,7 @@ pub const Module = struct {
             // distinct public name during linking, then make it private again.
             const target_name = try std.fmt.allocPrint(allocator, "dict_lua_leaf_import_target_{s}", .{suffix});
             defer allocator.free(target_name);
-            target_names[target_count] = try allocator.dupeZ(u8, target_name);
+            target_names[target_count] = try allocator.dupeSentinel(u8, target_name, 0);
             target_count += 1;
             LLVMSetValueName2(target, target_names[target_count - 1].ptr, target_names[target_count - 1].len);
             LLVMSetLinkage(target, .external);
@@ -328,7 +328,7 @@ pub const Module = struct {
     }
 
     pub fn addGlobal(self: *const Module, name: []const u8, ty: TypeRef, initializer: ValueRef, linkage: Linkage, alignment: u32) !ValueRef {
-        const z = try std.heap.smp_allocator.dupeZ(u8, name);
+        const z = try std.heap.smp_allocator.dupeSentinel(u8, name, 0);
         defer std.heap.smp_allocator.free(z);
         const value = try req(ValueRef, LLVMAddGlobal(self.ref, ty, z.ptr));
         LLVMSetInitializer(value, initializer);
@@ -357,7 +357,7 @@ pub const Module = struct {
     }
 
     pub fn writeBitcode(self: *const Module, allocator: std.mem.Allocator, path: []const u8) !void {
-        const z = try allocator.dupeZ(u8, path);
+        const z = try allocator.dupeSentinel(u8, path, 0);
         defer allocator.free(z);
         if (LLVMWriteBitcodeToFile(self.ref, z.ptr) != 0) return error.BitcodeWriteFailed;
     }
@@ -411,7 +411,7 @@ pub fn addFunctionEnumAttribute(ctx: ContextRef, function: ValueRef, name: []con
 }
 
 pub fn appendBlock(ctx: ContextRef, function: ValueRef, name: []const u8) !BasicBlockRef {
-    const z = try std.heap.smp_allocator.dupeZ(u8, name);
+    const z = try std.heap.smp_allocator.dupeSentinel(u8, name, 0);
     defer std.heap.smp_allocator.free(z);
     return req(BasicBlockRef, LLVMAppendBasicBlockInContext(ctx, function, z.ptr));
 }

@@ -445,8 +445,7 @@ pub fn indexElementNamespace(namespace: Namespace) ?Namespace {
     };
 }
 test "namespace slot layouts round trip" {
-    inline for (std.meta.fields(Namespace)) |field| {
-        const namespace: Namespace = @enumFromInt(field.value);
+    inline for (std.enums.values(Namespace)) |namespace| {
         try std.testing.expectEqual(@as(u32, @intCast(namespaceNames(namespace).len)), fieldCount(namespace));
         for (namespaceNames(namespace), 0..) |field_name, expected| {
             try std.testing.expectEqual(@as(u32, @intCast(expected)), slotForName(namespace, field_name).?);

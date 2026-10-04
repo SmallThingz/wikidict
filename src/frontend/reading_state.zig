@@ -72,11 +72,11 @@ pub const State = struct {
         };
         const latest = if (existing) |bytes| try std.json.parseFromSliceLeaky(Data, scratch, bytes, .{ .allocate = .alloc_always, .ignore_unknown_fields = true }) else Data{};
         var next = self.data;
-        inline for (@typeInfo(Data).@"struct".fields) |field| {
-            if (comptime std.mem.eql(u8, field.name, "last_title")) {
+        inline for (@typeInfo(Data).@"struct".field_names) |field| {
+            if (comptime std.mem.eql(u8, field, "last_title")) {
                 if (std.mem.eql(u8, next.last_title, self.baseline.last_title)) next.last_title = latest.last_title;
-            } else if (comptime !std.mem.eql(u8, field.name, "saved") and !std.mem.eql(u8, field.name, "history") and !std.mem.eql(u8, field.name, "right") and !std.mem.eql(u8, field.name, "wrong")) {
-                if (std.meta.eql(@field(next, field.name), @field(self.baseline, field.name))) @field(next, field.name) = @field(latest, field.name);
+            } else if (comptime !std.mem.eql(u8, field, "saved") and !std.mem.eql(u8, field, "history") and !std.mem.eql(u8, field, "right") and !std.mem.eql(u8, field, "wrong")) {
+                if (std.meta.eql(@field(next, field), @field(self.baseline, field))) @field(next, field) = @field(latest, field);
             }
         }
         next.history_limit = @min(100_000, next.history_limit);

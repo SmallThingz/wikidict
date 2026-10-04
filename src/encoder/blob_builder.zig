@@ -804,8 +804,8 @@ pub const Writer = struct {
         if (fallbacks.any() or extra_reasons.len != 0) {
             var reasons: std.ArrayList([]const u8) = .empty;
             defer reasons.deinit(page_allocator);
-            inline for (@typeInfo(presentation_document.Fallbacks).@"struct".fields) |field|
-                if (@field(fallbacks, field.name)) try reasons.append(page_allocator, field.name);
+            inline for (@typeInfo(presentation_document.Fallbacks).@"struct".field_names) |field|
+                if (@field(fallbacks, field)) try reasons.append(page_allocator, field);
             for (extra_reasons) |reason| {
                 if (reason.len == 0) continue;
                 var duplicate = false;

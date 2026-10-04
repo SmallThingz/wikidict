@@ -29,7 +29,7 @@ const Handle = struct {
     threaded: std.Io.Threaded,
     root: []u8,
     selected: ?Selected = null,
-    last_error: [512]u8 = [_]u8{0} ** 512,
+    last_error: [512]u8 = @as([512]u8, @splat(0)),
     error_len: usize = 0,
 
     fn io(self: *Handle) std.Io {
@@ -101,11 +101,11 @@ fn openHandle(root: []const u8) !*Handle {
 
 export fn dict_open(root_ptr: ?[*]const u8, root_len: usize, out_handle: *?*Handle) callconv(.c) c_int {
     out_handle.* = null;
-    const root = input(root_ptr, root_len, 4096) catch |err| return @intFromEnum(statusFor(err));
-    if (root.len == 0) return @intFromEnum(Status.invalid_argument);
-    const handle = openHandle(root) catch |err| return @intFromEnum(statusFor(err));
+    const root = input(root_ptr, root_len, 4096) catch |err| return @backingInt(statusFor(err));
+    if (root.len == 0) return @backingInt(Status.invalid_argument);
+    const handle = openHandle(root) catch |err| return @backingInt(statusFor(err));
     out_handle.* = handle;
-    return @intFromEnum(Status.ok);
+    return @backingInt(Status.ok);
 }
 
 export fn dict_close(handle: ?*Handle) callconv(.c) void {
@@ -137,14 +137,14 @@ export fn dict_select(
     kind_ptr: ?[*]const u8,
     kind_len: usize,
 ) callconv(.c) c_int {
-    const h = handle orelse return @intFromEnum(Status.invalid_argument);
-    const language = input(language_ptr, language_len, 4096) catch |err| return @intFromEnum(h.fail("language", err));
-    const kind_text = input(kind_ptr, kind_len, 64) catch |err| return @intFromEnum(h.fail("kind", err));
-    const kind = store.parseKind(kind_text) orelse return @intFromEnum(h.fail("kind", error.InvalidArgument));
-    if (kind == .language and language.len == 0) return @intFromEnum(h.fail("language", error.InvalidArgument));
-    selectImpl(h, language, kind) catch |err| return @intFromEnum(h.fail("select", err));
+    const h = handle orelse return @backingInt(Status.invalid_argument);
+    const language = input(language_ptr, language_len, 4096) catch |err| return @backingInt(h.fail("language", err));
+    const kind_text = input(kind_ptr, kind_len, 64) catch |err| return @backingInt(h.fail("kind", err));
+    const kind = store.parseKind(kind_text) orelse return @backingInt(h.fail("kind", error.InvalidArgument));
+    if (kind == .language and language.len == 0) return @backingInt(h.fail("language", error.InvalidArgument));
+    selectImpl(h, language, kind) catch |err| return @backingInt(h.fail("select", err));
     h.clearError();
-    return @intFromEnum(Status.ok);
+    return @backingInt(Status.ok);
 }
 fn lookupInternal(handle: *Handle, query: []const u8, out: *Buffer) !bool {
     const current = try selected(handle);
@@ -178,11 +178,11 @@ export fn dict_lookup_json(
     out: *Buffer,
 ) callconv(.c) c_int {
     resetBuffer(out);
-    const h = handle orelse return @intFromEnum(Status.invalid_argument);
-    const query = input(query_ptr, query_len, 4096) catch |err| return @intFromEnum(h.fail("lookup", err));
-    if (query.len == 0) return @intFromEnum(h.fail("lookup", error.InvalidArgument));
-    const found = lookupInternal(h, query, out) catch |err| return @intFromEnum(h.fail("lookup", err));
-    return @intFromEnum(if (found) Status.ok else Status.not_found);
+    const h = handle orelse return @backingInt(Status.invalid_argument);
+    const query = input(query_ptr, query_len, 4096) catch |err| return @backingInt(h.fail("lookup", err));
+    if (query.len == 0) return @backingInt(h.fail("lookup", error.InvalidArgument));
+    const found = lookupInternal(h, query, out) catch |err| return @backingInt(h.fail("lookup", err));
+    return @backingInt(if (found) Status.ok else Status.not_found);
 }
 
 export fn dict_search_json(
@@ -194,20 +194,20 @@ export fn dict_search_json(
     out: *Buffer,
 ) callconv(.c) c_int {
     resetBuffer(out);
-    const h = handle orelse return @intFromEnum(Status.invalid_argument);
-    const query = input(query_ptr, query_len, 4096) catch |err| return @intFromEnum(h.fail("search", err));
-    if (limit == 0 or limit > 1000) return @intFromEnum(h.fail("search", error.InvalidArgument));
-    const current = selected(h) catch |err| return @intFromEnum(h.fail("search", err));
-    const range = current.db.prefix(query) catch |err| return @intFromEnum(h.fail("search", err));
+    const h = handle orelse return @backingInt(Status.invalid_argument);
+    const query = input(query_ptr, query_len, 4096) catch |err| return @backingInt(h.fail("search", err));
+    if (limit == 0 or limit > 1000) return @backingInt(h.fail("search", error.InvalidArgument));
+    const current = selected(h) catch |err| return @backingInt(h.fail("search", err));
+    const range = current.db.prefix(query) catch |err| return @backingInt(h.fail("search", err));
     const total = range.end - range.start;
     const start = range.start + @min(offset, total);
     const end = start + @min(limit, range.end - start);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const matches = a.alloc(output.Match, end - start) catch |err| return @intFromEnum(h.fail("search", err));
+    const matches = a.alloc(output.Match, end - start) catch |err| return @backingInt(h.fail("search", err));
     for (matches, start..) |*match, index| {
-        match.* = .{ .title = current.db.titleAt(index) catch |err| return @intFromEnum(h.fail("search", err)) };
+        match.* = .{ .title = current.db.titleAt(index) catch |err| return @backingInt(h.fail("search", err)) };
     }
     const response: output.Response = .{
         .operation = .search,
@@ -220,46 +220,46 @@ export fn dict_search_json(
         .has_more = end < range.end,
         .matches = matches,
     };
-    jsonBuffer(h, response, out) catch |err| return @intFromEnum(h.fail("search", err));
-    return @intFromEnum(Status.ok);
+    jsonBuffer(h, response, out) catch |err| return @backingInt(h.fail("search", err));
+    return @backingInt(Status.ok);
 }
 
 export fn dict_random_json(handle: ?*Handle, out: *Buffer) callconv(.c) c_int {
     resetBuffer(out);
-    const h = handle orelse return @intFromEnum(Status.invalid_argument);
-    const current = selected(h) catch |err| return @intFromEnum(h.fail("random", err));
+    const h = handle orelse return @backingInt(Status.invalid_argument);
+    const current = selected(h) catch |err| return @backingInt(h.fail("random", err));
     if (current.db.count() == 0) {
         h.clearError();
-        return @intFromEnum(Status.not_found);
+        return @backingInt(Status.not_found);
     }
     const entropy: u128 = @intCast(std.Io.Clock.awake.now(h.io()).toNanoseconds());
     const index: usize = @intCast(entropy % @as(u128, current.db.count()));
-    const title = current.db.titleAt(index) catch |err| return @intFromEnum(h.fail("random", err));
-    const found = lookupInternal(h, title, out) catch |err| return @intFromEnum(h.fail("random", err));
-    return @intFromEnum(if (found) Status.ok else Status.not_found);
+    const title = current.db.titleAt(index) catch |err| return @backingInt(h.fail("random", err));
+    const found = lookupInternal(h, title, out) catch |err| return @backingInt(h.fail("random", err));
+    return @backingInt(if (found) Status.ok else Status.not_found);
 }
 export fn dict_languages_json(handle: ?*Handle, out: *Buffer) callconv(.c) c_int {
     resetBuffer(out);
-    const h = handle orelse return @intFromEnum(Status.invalid_argument);
+    const h = handle orelse return @backingInt(Status.invalid_argument);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const path = std.fs.path.join(a, &.{ h.root, store.catalog.manifest_filename }) catch |err| return @intFromEnum(h.fail("languages", err));
-    const bytes = std.Io.Dir.cwd().readFileAlloc(h.io(), path, a, .limited(16 * 1024 * 1024)) catch |err| return @intFromEnum(h.fail("languages", err));
-    var it = store.catalog.Iterator.init(bytes) catch |err| return @intFromEnum(h.fail("languages", err));
+    const path = std.fs.path.join(a, &.{ h.root, store.catalog.manifest_filename }) catch |err| return @backingInt(h.fail("languages", err));
+    const bytes = std.Io.Dir.cwd().readFileAlloc(h.io(), path, a, .limited(16 * 1024 * 1024)) catch |err| return @backingInt(h.fail("languages", err));
+    var it = store.catalog.Iterator.init(bytes) catch |err| return @backingInt(h.fail("languages", err));
     var names: std.ArrayList([]const u8) = .empty;
-    while (it.next() catch |err| return @intFromEnum(h.fail("languages", err))) |entry| {
-        names.append(a, entry.heading) catch |err| return @intFromEnum(h.fail("languages", err));
+    while (it.next() catch |err| return @backingInt(h.fail("languages", err))) |entry| {
+        names.append(a, entry.heading) catch |err| return @backingInt(h.fail("languages", err));
     }
     const payload = .{ .schema = "dict.languages.v1", .languages = names.items };
-    jsonBuffer(h, payload, out) catch |err| return @intFromEnum(h.fail("languages", err));
-    return @intFromEnum(Status.ok);
+    jsonBuffer(h, payload, out) catch |err| return @backingInt(h.fail("languages", err));
+    return @backingInt(Status.ok);
 }
 
 export fn dict_stats_json(handle: ?*Handle, out: *Buffer) callconv(.c) c_int {
     resetBuffer(out);
-    const h = handle orelse return @intFromEnum(Status.invalid_argument);
-    const current = selected(h) catch |err| return @intFromEnum(h.fail("stats", err));
+    const h = handle orelse return @backingInt(Status.invalid_argument);
+    const current = selected(h) catch |err| return @backingInt(h.fail("stats", err));
     const payload = .{
         .schema = "dict.stats.v1",
         .kind = @tagName(current.kind),
@@ -269,8 +269,8 @@ export fn dict_stats_json(handle: ?*Handle, out: *Buffer) callconv(.c) c_int {
         .index_heap_bytes = current.db.file.indexHeapBytes(),
         .cache_map_bytes = current.db.file.cacheMappedBytes(),
     };
-    jsonBuffer(h, payload, out) catch |err| return @intFromEnum(h.fail("stats", err));
-    return @intFromEnum(Status.ok);
+    jsonBuffer(h, payload, out) catch |err| return @backingInt(h.fail("stats", err));
+    return @backingInt(Status.ok);
 }
 export fn dict_buffer_free(handle: ?*Handle, buffer: ?*Buffer) callconv(.c) void {
     _ = handle;
@@ -290,12 +290,12 @@ export fn dict_last_error(handle: ?*const Handle, out_len: ?*usize) callconv(.c)
 
 export fn dict_status_name(raw_status: c_int) callconv(.c) [*:0]const u8 {
     return switch (raw_status) {
-        @intFromEnum(Status.ok) => "ok",
-        @intFromEnum(Status.not_found) => "not_found",
-        @intFromEnum(Status.invalid_argument) => "invalid_argument",
-        @intFromEnum(Status.io_error) => "io_error",
-        @intFromEnum(Status.out_of_memory) => "out_of_memory",
-        @intFromEnum(Status.internal_error) => "internal_error",
+        @backingInt(Status.ok) => "ok",
+        @backingInt(Status.not_found) => "not_found",
+        @backingInt(Status.invalid_argument) => "invalid_argument",
+        @backingInt(Status.io_error) => "io_error",
+        @backingInt(Status.out_of_memory) => "out_of_memory",
+        @backingInt(Status.internal_error) => "internal_error",
         else => "unknown",
     };
 }

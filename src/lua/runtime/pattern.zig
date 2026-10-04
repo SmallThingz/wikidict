@@ -512,16 +512,17 @@ test "lazy dot skips impossible suffix starts without changing captures or error
 }
 
 test "required initial byte class skips nonmatching starts and preserves suffix errors" {
-    const source = "!" ** 80 ++ "az123";
+    const padding: [80]u8 = @splat('!');
+    const source = padding ++ "az123";
     const bracket = (try find(source, "[a-z]+%d+", 1)).?;
     try std.testing.expectEqual(@as(usize, 80), bracket.start);
     try std.testing.expectEqual(@as(usize, 85), bracket.end);
     const escaped = (try find(source, "%a+%d+", 1)).?;
     try std.testing.expectEqual(@as(usize, 80), escaped.start);
-    try std.testing.expect((try find("!" ** 80, "[a-z]+%d+", 1)) == null);
+    try std.testing.expect((try find(&padding, "[a-z]+%d+", 1)) == null);
     try std.testing.expectError(error.MalformedPattern, find(source, "[a-z]+[", 1));
     // A zero-width first item must still be tried at the initial position.
-    const optional = (try find("!" ** 80 ++ "b", "[a]?b", 1)).?;
+    const optional = (try find(padding ++ "b", "[a]?b", 1)).?;
     try std.testing.expectEqual(@as(usize, 80), optional.start);
     try std.testing.expectError(error.MalformedPattern, find(source, "[", 1));
 }

@@ -204,7 +204,7 @@ test "request allocator keeps realloc tracking exact" {
     defer request.deinit();
     const a = request.allocator();
 
-    var bytes = try a.realloc(try a.dupe(u8, &([_]u8{0x5a} ** 128)), 4096);
+    var bytes = try a.realloc(try a.dupe(u8, &(@as([128]u8, @splat(0x5a)))), 4096);
     try std.testing.expectEqual(@as(usize, 1), request.live_count);
     try std.testing.expectEqual(@as(u8, 0x5a), bytes[127]);
     bytes = try a.realloc(bytes, 64);

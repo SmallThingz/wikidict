@@ -52,24 +52,24 @@ const Encoder = struct {
     }
     inline fn enumByteValue(comptime E: type, value: anytype) !u8 {
         const Source = @TypeOf(value);
-        const fields = std.meta.fields(Source);
+        const fields = @typeInfo(Source).@"enum";
         const invalid = std.math.maxInt(u8);
         const map = comptime blk: {
-            const target_fields = std.meta.fields(E);
-            var result: [fields.len]u8 = undefined;
-            for (fields, 0..) |field, i| {
-                if (field.value != i) @compileError("enumByte source must use dense zero-based values");
+            const target_fields = @typeInfo(E).@"enum";
+            var result: [fields.field_names.len]u8 = undefined;
+            for (fields.field_names, fields.field_values, 0..) |name, source_value, i| {
+                if (source_value != i) @compileError("enumByte source must use dense zero-based values");
                 result[i] = invalid;
-                for (target_fields) |target| {
-                    if (std.mem.eql(u8, field.name, target.name)) {
-                        result[i] = @intCast(target.value);
+                for (target_fields.field_names, target_fields.field_values) |target_name, target_value| {
+                    if (std.mem.eql(u8, name, target_name)) {
+                        result[i] = @intCast(target_value);
                         break;
                     }
                 }
             }
             break :blk result;
         };
-        const mapped = map[@intFromEnum(value)];
+        const mapped = map[@backingInt(value)];
         if (mapped == invalid) return error.UncompiledTemplate;
         return mapped;
     }
@@ -502,7 +502,7 @@ test "enum encoding maps build-only tags without runtime name lookup" {
     defer encoder.deinit();
 
     try encoder.enumByte(types.InlineKind, BuildInlineKind.link);
-    try std.testing.expectEqualSlices(u8, &.{@intFromEnum(types.InlineKind.link)}, encoder.out.items);
+    try std.testing.expectEqualSlices(u8, &.{@backingInt(types.InlineKind.link)}, encoder.out.items);
     try std.testing.expectError(error.UncompiledTemplate, encoder.enumByte(types.InlineKind, BuildInlineKind.template));
 }
 
