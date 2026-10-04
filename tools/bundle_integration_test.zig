@@ -387,6 +387,18 @@ const Harness = struct {
         std.debug.print("bundle integration assertion failed after {d} checks: {s}\n", .{ self.checks, label });
         return error.AssertionFailed;
     }
+
+    fn requireTimeout(self: *Harness, argv: []const []const u8) !void {
+        const result = try std.process.run(self.a, self.io, .{
+            .argv = argv,
+            .stdout_limit = .limited(1024 * 1024),
+            .stderr_limit = .limited(1024 * 1024),
+            .timeout = (std.Io.Timeout{ .duration = .{ .raw = .fromSeconds(30), .clock = .awake } }).toDeadline(self.io),
+        });
+        try self.require(result.term == .exited and result.term.exited == 1, "timeout fixture exits with failure");
+        try self.require(std.mem.indexOf(u8, result.stderr, "error=Timeout") != null, "timeout fixture reached actual page expansion deadline");
+        self.checks += 1;
+    }
 };
 
 fn exists(io: std.Io, path: []const u8) bool {
@@ -459,6 +471,14 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     try h.require(std.mem.eql(u8, reasons.array.items[1].string, "expansion_error:x:E"), "operational fallback report preserves worker stage and error name");
     const text = try h.run(&.{ bin, "lookup", "failure-page", "--root", output, "--language", "English", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, text, "Script error") == null and std.mem.indexOf(u8, text, "source that must not become synthetic") == null, "operational fallback publishes no invented or original body text");
+
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = "#!/bin/sh\nexec tail -f /dev/null\n" });
+    const timed_out = try std.fs.path.join(h.a, &.{ dir, "timeout-dictionary" });
+    try h.requireTimeout(&.{ blob_builder, dump, timed_out, "--expander-root", root, "--workers", "1", "--expansion-timeout-ms", "100" });
+    try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ timed_out, "page-coverage.json" })), "timed-out build cannot publish successful coverage");
+    const timed_shards = try std.fs.path.join(h.a, &.{ dir, "timeout-shards" });
+    try h.requireTimeout(&.{ blob_builder, dump, timed_shards, "--expander-root", root, "--workers", "1", "--shard-pages", "1", "--limit-pages", "1", "--index-byte-offset", "0", "--expansion-timeout-ms", "100" });
+    try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ timed_shards, "00000000" })), "timed-out continuous shard cannot publish");
 }
 
 fn compilerPipelineProbe(h: *Harness, compiler: []const u8, leaf_bc: []const u8, dir: []const u8) !void {

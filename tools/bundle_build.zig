@@ -1,6 +1,7 @@
 //! Coordinated build-time Lua/template expansion and data-only blob bundling.
 const std = @import("std");
 const paths = @import("pipeline_paths");
+const expansion_deadline = @import("expansion_deadline.zig");
 const max_parallel_workers: usize = 4;
 const clang_common_flags = [_][]const u8{ "-march=native", "-fno-lto", "-Wno-override-module" };
 const clang_program_mode = "-O1";
@@ -20,6 +21,7 @@ const Options = struct {
     transclusion_redirects_snapshot: ?[]const u8 = null,
     llvm_workers: ?usize = null,
     page_workers: usize = 1,
+    expansion_timeout_ms: ?u32 = null,
     parse_workers: usize = 4,
     expander_only: bool = false,
     extraction_cache_root: ?[]const u8 = null,
@@ -98,6 +100,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.verified_index_sha256 != null) return error.Usage;
             options.verified_index_sha256 = args[index];
+        } else if (std.mem.eql(u8, args[index], "--expansion-timeout-ms")) {
+            index += 1;
+            if (index >= args.len or options.expansion_timeout_ms != null) return error.Usage;
+            options.expansion_timeout_ms = try expansion_deadline.parse(args[index]);
         } else if (std.mem.eql(u8, args[index], "--page-workers")) {
             index += 1;
             if (index >= args.len) return error.Usage;
@@ -944,7 +950,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -1041,10 +1047,21 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     const page_workers_text = try std.fmt.allocPrint(a, "{d}", .{options.page_workers});
+    const timeout_text = try std.fmt.allocPrint(a, "{d}", .{options.expansion_timeout_ms orelse expansion_deadline.default_ms});
     try stage(init.io, marker, "expand and encode dictionary blobs", &.{
-        paths.blobs, dump, root, "--expander-root", expander_root, "--workers", page_workers_text,
+        paths.blobs, dump, root, "--expander-root", expander_root, "--workers", page_workers_text, "--expansion-timeout-ms", timeout_text,
     });
     try std.Io.Dir.cwd().deleteTree(init.io, expander_root);
     try std.Io.Dir.cwd().deleteFile(init.io, marker);
     std.debug.print("dictionary build complete: {s}\n", .{root});
+}
+
+test "pipeline expansion deadline preserves the default and validates overrides" {
+    const defaults = try parseOptions(&.{ "dump.xml", "out" });
+    try std.testing.expect(defaults.expansion_timeout_ms == null);
+    const configured = try parseOptions(&.{ "dump.xml", "out", "--expansion-timeout-ms", "600000" });
+    try std.testing.expectEqual(@as(?u32, 600_000), configured.expansion_timeout_ms);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expansion-timeout-ms" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expansion-timeout-ms", "3600001" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expansion-timeout-ms", "100", "--expansion-timeout-ms", "200" }));
 }

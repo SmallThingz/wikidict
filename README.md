@@ -149,6 +149,13 @@ memory limit each. Compression works in waves of at most three files; outputs
 are verified one at a time, and the raw files remain until the whole wave passes.
 Failures join the workers and remove partial outputs before returning.
 
+Waiting for a page expansion response has a 60-second wall-clock deadline by default. On a contended
+developer machine, `--expansion-timeout-ms 600000` explicitly allows ten minutes
+per page; the Python launcher, native pipeline and blob builder all accept this
+option (1 through 3,600,000 milliseconds). This does not extend the whole-build
+resource deadline. An operational page timeout fails the build instead of
+publishing an empty page as successful output.
+
 The native dump reader accepts the Zstandard v3 page index and retains support
 for the bzip2 v2 index. It validates each Zstandard frame's magic, exact compressed
 span and known decoded length before allocating its output, with a 128 MiB decoded

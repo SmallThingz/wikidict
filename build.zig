@@ -244,6 +244,25 @@ pub fn build(b: *std.Build) void {
     const run_bundle_pipeline_tests = b.addRunArtifact(bundle_pipeline_tests);
     const run_bundle_pipeline_tests_only = b.addRunArtifact(bundle_pipeline_tests);
 
+    const blob_build_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/blob_build.zig"),
+            .target = b.graph.host,
+            .optimize = test_optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "encoder", .module = encoder_mod_test },
+                .{ .name = "xml_decode", .module = shared_xml_decode_mod_test },
+                .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
+                .{ .name = "bundle_protocol", .module = bundle_protocol_mod_test },
+            },
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    blob_build_tests.root_module.linkSystemLibrary("bz2", .{});
+    blob_build_tests.root_module.linkSystemLibrary("zstd", .{});
+    const run_blob_build_tests = b.addRunArtifact(blob_build_tests);
+
     const encoder_tests = b.addTest(.{
         .root_module = encoder_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -500,7 +519,8 @@ pub fn build(b: *std.Build) void {
     b.step("test-lua-abi", "Run Lua LLVM ABI tests serially").dependOn(&run_lua_abi_tests_only.step);
     blob_wasm_smoke.step.dependOn(&run_bundle_protocol_tests.step);
     run_bundle_pipeline_tests.step.dependOn(&blob_wasm_smoke.step);
-    test_step.dependOn(&run_bundle_pipeline_tests.step);
+    run_blob_build_tests.step.dependOn(&run_bundle_pipeline_tests.step);
+    test_step.dependOn(&run_blob_build_tests.step);
     b.step("test-bundle-pipeline", "Run bundle build scheduler and cache bitmap unit tests only").dependOn(&run_bundle_pipeline_tests_only.step);
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });
     addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}, b.args), &.{});

@@ -37,10 +37,19 @@ AUXILIARY_SNAPSHOT_NAMES = (
 MAX_TOTAL_BUILD_WORKERS = 8
 MAX_PIPELINE_WORKERS = 4
 MAX_PAGE_EXPANSION_WORKERS = 8
+MAX_EXPANSION_TIMEOUT_MS = 3_600_000
 MAX_PAGE_INDEX_LINE_BYTES = 1024 * 1024
 MAX_PAGE_COVERAGE_BYTES = 64 * 1024
 MEMORY_PER_BUILD_WORKER = 1536 * 1024 * 1024
 CPU_UTILIZATION_TARGET = 0.75
+
+def expansion_deadline_args(value):
+    if value is None:
+        return []
+    if type(value) is not int or not 1 <= value <= MAX_EXPANSION_TIMEOUT_MS:
+        raise ValueError('Expansion timeout must be 1 through 3600000 milliseconds')
+    return ['--expansion-timeout-ms',str(value)]
+
 
 def acquire_build_resource_lock(path):
     """Serialize corpus envelopes so two snapshots cannot spend the same RAM."""
@@ -750,7 +759,8 @@ def timed_run(command, edition, date, phase, **fields):
         run_checked(command)
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None):
+    timeout_args=expansion_deadline_args(expansion_timeout_ms)
     edition,date=items[0]['wiki'],items[0]['date']
     workers=min(workers,MAX_PIPELINE_WORKERS)
     expansion_workers=workers if expansion_workers is None else expansion_workers
@@ -824,7 +834,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                    '--limit-pages',str(indexed_pages-first),
                    '--index-byte-offset',str(index['offsets'][first]),
                    '--shard-pages',str(SHARD_PAGES),
-                   '--workers',str(expansion_workers),'--now-unix',str(now_unix)],
+                   '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args],
                   edition,date,'continuous_shard_build',start_page=first,pages=indexed_pages-first)
         require_index_identity(index_path,index)
         for start in missing_starts:
@@ -864,7 +874,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shard),
                                  '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
                                  '--index-byte-offset',str(offset),
-                                 '--workers',str(expansion_workers),'--now-unix',str(now_unix)],
+                                 '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args],
                               edition,date,'shard_build',start_page=start,pages=limit,attempt=attempt)
                 except subprocess.CalledProcessError as error:
                     last_error=error
@@ -917,7 +927,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if workspace.exists(): shutil.rmtree(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None):
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None):
+    timeout_args=expansion_deadline_args(expansion_timeout_ms)
     for item in items:
         validate_item(item)
     edition, date = items[0]['wiki'], items[0]['date']
@@ -930,7 +941,7 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise ValueError(f'Build already running: {parent / date}') from None
-            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots)
+            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
             result['execution_mode']=mode
             return mode
 
@@ -957,6 +968,8 @@ def validate_fallback_report(path):
                 raise ValueError(f'Invalid fallback reasons at {path}:{line_number}')
             if len(set(reasons)) != len(reasons):
                 raise ValueError(f'Duplicate fallback reason at {path}:{line_number}')
+            if 'expansion_error:Timeout' in reasons:
+                raise ValueError(f'Operational expansion timeout at {path}:{line_number}; rebuild this output')
             key = (namespace, title)
             if key in seen:
                 raise ValueError(f'Duplicate fallback page at {path}:{line_number}: {namespace}:{title}')
@@ -1029,7 +1042,8 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes)
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None):
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None):
+    timeout_args=expansion_deadline_args(expansion_timeout_ms)
     phase_edition,phase_date=phase_identity(items)
     with build_phase(phase_edition,phase_date,'verify_downloads',files=len(items)) as result:
         verified_bytes=0
@@ -1092,7 +1106,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         dump=cached_shard_dump(xml,downloads,workspace)
         pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
         aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes)
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
     else:
         (PROJECT / '.tmp').mkdir(exist_ok=True)
         scratch = Path(tempfile.mkdtemp(prefix=f'build-{edition}-{date}-', dir=PROJECT / '.tmp'))
@@ -1106,7 +1120,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
                          *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                          *auxiliary_snapshot_args(aux_pinned),
                          '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
-                         '--page-workers',str(min(workers,16))],edition,date,'dictionary_build')
+                         '--page-workers',str(min(workers,16)),*timeout_args],edition,date,'dictionary_build')
             coverage=validate_page_coverage(staging,source_pages=source_metadata['source_pages'])
             coverage['expected_input_pages']=source_metadata['source_pages']
             (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
@@ -1126,7 +1140,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     if workspace.exists(): shutil.rmtree(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None):
+    timeout_args=expansion_deadline_args(expansion_timeout_ms)
     pending=list(sorted(groups.items()))
     failures=[]
     admission_workers=threads if expansion_workers is None or expansion_workers>MAX_PIPELINE_WORKERS else max(threads,expansion_workers)
@@ -1141,6 +1156,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 key,group=pending.pop(0)
                 options={}
                 if expansion_workers is not None: options['expansion_workers']=expansion_workers
+                if expansion_timeout_ms is not None: options['expansion_timeout_ms']=expansion_timeout_ms
                 if interwiki_snapshot is not None: options['interwiki_snapshot']=interwiki_snapshot
                 if auxiliary_snapshots: options['auxiliary_snapshots']=auxiliary_snapshots
                 future=pool.submit(build,group,downloads,output,zig,threads,**options)
@@ -1171,6 +1187,7 @@ def main():
     p.add_argument('--threads',type=int,default=default_build_threads(),help='Workers per edition (up to 4 within CPU load and fixed 8 GiB aggregate cap)')
     p.add_argument('--jobs',type=int,help='Concurrent editions (up to two within CPU load and capped aggregate worker budget)')
     p.add_argument('--expansion-workers',type=int,help='Workers per sharded page expansion; default follows --threads, opt-in 5-8 requires watchdog and one edition job')
+    p.add_argument('--expansion-timeout-ms',type=int,help='Explicit per-page wall deadline, 1 through 3600000 ms; default 60000. Timeouts fail the build rather than publish empty pages.')
     p.add_argument('--wikis',nargs='+',help='Build only these edition IDs')
     p.add_argument('--interwiki-map-snapshot',type=Path,
                    help='Current siteinfo interwiki-map.tsv; its SHA-256 is part of the shard identity')
@@ -1178,6 +1195,8 @@ def main():
         p.add_argument('--'+name+'-snapshot',type=Path,
                        help='Optional '+name+' TSV; its SHA-256 is part of the shard identity')
     a=p.parse_args()
+    try: expansion_deadline_args(a.expansion_timeout_ms)
+    except ValueError as error: p.error(str(error))
     budget=safe_worker_budget()
     if budget < 1:p.error('No worker budget within CPU load and the verified build memory cap (at most 8 GiB)')
     worker_limit=min(budget,MAX_PIPELINE_WORKERS)
@@ -1211,6 +1230,7 @@ def main():
         p.error('Auxiliary snapshots require exactly one edition')
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     options={}
+    if a.expansion_timeout_ms is not None: options['expansion_timeout_ms']=a.expansion_timeout_ms
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
     if auxiliary: options['auxiliary_snapshots']=auxiliary
     failures=build_groups(groups,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads,a.jobs,

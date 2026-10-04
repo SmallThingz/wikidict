@@ -175,13 +175,14 @@ class BuildTest(unittest.TestCase):
                     Path(command[command.index('--')+1]).mkdir()
             with patch.object(b,'run_checked',side_effect=run):
                 b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
-                                [{'wiki':'test','date':'20260901'}],123,8)
+                                [{'wiki':'test','date':'20260901'}],123,8,expansion_timeout_ms=600000)
             compiler=next(c for c in calls if 'build-dictionary' in c)
             blob=next(c for c in calls if 'build-blobs' in c)
             self.assertEqual(compiler[compiler.index('--llvm-workers')+1],'4')
             self.assertEqual(compiler[compiler.index('--parse-workers')+1],'4')
             self.assertEqual(compiler[compiler.index('--page-workers')+1],'4')
             self.assertEqual(blob[blob.index('--workers')+1],'8')
+            self.assertEqual(blob[blob.index('--expansion-timeout-ms')+1],'600000')
 
     def test_only_verified_watchdog_child_enters_main(self):
         with patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode','watchdog']),patch.object(limits,'inside_watchdog',return_value=True),patch.object(limits,'inside_envelope') as envelope,patch.object(limits,'supervise_watchdog') as watchdog,patch.object(b,'main') as main:
@@ -1185,7 +1186,7 @@ class BuildTest(unittest.TestCase):
                     write_coverage(dest)
                     (dest/'fallback-pages.jsonl').write_text(
                         json.dumps({'namespace':0,'title':'quoted"title','reasons':['literal_markup']})+'\n'+
-                        json.dumps({'namespace':0,'title':'timeout','reasons':['expansion_error','expansion_error:Timeout']})+'\n')
+                        json.dumps({'namespace':0,'title':'failed expansion','reasons':['expansion_error','expansion_error:ExpansionFailed']})+'\n')
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
                 b.build([item],root,root/'output','zig',2,interwiki_snapshot=interwiki)
             self.assertIn('verify-blobs',calls[1]);self.assertTrue((root/'output/testwiktionary/20260901/complete.json').exists())
@@ -1283,4 +1284,27 @@ class BuildTest(unittest.TestCase):
             final=root/'output/testwiktionary/20260901'
             self.assertEqual(json.loads((final/'complete.json').read_text())['status'],'empty')
             self.assertFalse((final/'old').exists())
+
+
+class ExpansionDeadlineTests(unittest.TestCase):
+    def test_old_timeout_staging_cannot_be_published(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); staging=root/'staging'; staging.mkdir()
+            (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+            write_coverage(staging)
+            (staging/'fallback-pages.jsonl').write_text(json.dumps({
+                'namespace':0,'title':'timed out','reasons':['expansion_error','expansion_error:Timeout']})+'\n')
+            with patch.object(b,'compress_many') as compress:
+                with self.assertRaisesRegex(ValueError,'Operational expansion timeout'):
+                    b._publish_verified_staging(staging,root/'final','test','20260901')
+                compress.assert_not_called()
+            self.assertTrue((staging/b.VERIFIED_MARKER).exists())
+            self.assertFalse((root/'final').exists())
+
+    def test_bounded_optional_timeout_arguments(self):
+        self.assertEqual(b.expansion_deadline_args(None),[])
+        self.assertEqual(b.expansion_deadline_args(600000),['--expansion-timeout-ms','600000'])
+        for value in (0,-1,3600001,True,'600000'):
+            with self.assertRaises(ValueError): b.expansion_deadline_args(value)
+
 if __name__=='__main__':unittest.main()

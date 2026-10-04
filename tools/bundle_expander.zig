@@ -2,6 +2,7 @@ const std = @import("std");
 const A = std.mem.Allocator;
 const L = std.os.linux;
 const protocol = @import("bundle_protocol");
+const expansion_deadline = @import("expansion_deadline.zig");
 
 pub const Expansion = struct {
     source: []const u8,
@@ -16,7 +17,7 @@ pub const Worker = struct {
     executable: []const u8,
     dump: []const u8,
     now_unix: i64,
-    timeout_ms: u32 = 60_000,
+    timeout_ms: u32 = expansion_deadline.default_ms,
     child: ?std.process.Child = null,
     last_failure: ?Failure = null,
 

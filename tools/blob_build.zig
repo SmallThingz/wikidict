@@ -4,6 +4,7 @@ const xml_decode = @import("xml_decode");
 const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
 const bundle_expander = @import("bundle_expander.zig");
+const expansion_deadline = @import("expansion_deadline.zig");
 const max_worker_count: usize = 8;
 
 const Options = struct {
@@ -12,6 +13,7 @@ const Options = struct {
     limit_pages: ?usize = null,
     expander_root: []const u8 = "",
     workers: usize = 1,
+    expansion_timeout_ms: ?u32 = null,
     now_unix: ?i64 = null,
     shard_pages: ?usize = null,
 };
@@ -175,7 +177,7 @@ const ExpansionJob = struct {
 
 fn expansionFallbackReasonAlloc(a: std.mem.Allocator, err: anyerror, failure: ?bundle_expander.Failure) !?[]const u8 {
     switch (err) {
-        error.ExpansionFailed, error.Timeout, error.RequestTooLarge => {},
+        error.ExpansionFailed, error.RequestTooLarge => {},
         else => return null,
     }
     const precise = if (err == error.ExpansionFailed) failure else null;
@@ -244,9 +246,9 @@ const ExpansionSlot = struct {
                 .{ self.job.title, self.job.ordinal, self.job.ns, self.job.source.len, @errorName(err) },
             );
             const fallback_reason = (try expansionFallbackReasonAlloc(self.arena.allocator(), err, self.worker.last_failure)) orelse return err;
-            // Ordinary Scribunto failures are already rendered inside the page
-            // expander. This outer path is operational failure: retain the page
-            // as empty semantic data and keep the exact cause in the audit report.
+            // Retain explicitly recoverable expansion failures with their exact
+            // audit cause. Operational deadlines propagate through the classifier
+            // above rather than masquerading as successfully encoded empty pages.
             try writer.addExpansionFailure(self.arena.allocator(), self.job.ns, self.job.title, &.{fallback_reason});
             return true;
         }
@@ -277,6 +279,7 @@ const ExpansionPool = struct {
         dump: []const u8,
         count: usize,
         now_unix: ?i64,
+        timeout_ms: u32,
     ) !ExpansionPool {
         const completion = try allocator.create(std.Io.Event);
         errdefer allocator.destroy(completion);
@@ -287,6 +290,7 @@ const ExpansionPool = struct {
         for (slots) |*slot| {
             var worker = bundle_expander.Worker.init(io, root, executable, dump);
             worker.now_unix = pinned_now;
+            worker.timeout_ms = timeout_ms;
             slot.* = .{
                 .io = io,
                 .completion = completion,
@@ -379,6 +383,10 @@ fn parseOptions(args: []const []const u8) !Options {
             if (index >= args.len) return error.Usage;
             out.workers = try std.fmt.parseInt(usize, args[index], 10);
             if (out.workers == 0 or out.workers > max_worker_count) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--expansion-timeout-ms")) {
+            index += 1;
+            if (index >= args.len or out.expansion_timeout_ms != null) return error.Usage;
+            out.expansion_timeout_ms = try expansion_deadline.parse(args[index]);
         } else if (std.mem.eql(u8, arg, "--now-unix")) {
             index += 1;
             if (index >= args.len or out.now_unix != null) return error.Usage;
@@ -410,15 +418,15 @@ test "blob shard options preserve explicit byte offset and page limit" {
     try std.testing.expectEqual(@as(?usize, 2048), options.index_byte_offset);
     try std.testing.expectEqual(@as(?usize, 100), options.limit_pages);
     const continuous = try parseOptions(&.{
-        "dict-blob-build", "dump.zst", "shards", "--expander-root", "bundle",
-        "--start-page", "100", "--index-byte-offset", "2048", "--limit-pages", "7",
-        "--shard-pages", "100",
+        "dict-blob-build", "dump.zst",      "shards",              "--expander-root", "bundle",
+        "--start-page",    "100",           "--index-byte-offset", "2048",            "--limit-pages",
+        "7",               "--shard-pages", "100",
     });
     try std.testing.expectEqual(@as(?usize, 100), continuous.shard_pages);
     try std.testing.expectError(error.Usage, parseOptions(&.{
-        "dict-blob-build", "dump.zst", "shards", "--expander-root", "bundle",
-        "--start-page", "101", "--index-byte-offset", "2048", "--limit-pages", "7",
-        "--shard-pages", "100",
+        "dict-blob-build", "dump.zst",      "shards",              "--expander-root", "bundle",
+        "--start-page",    "101",           "--index-byte-offset", "2048",            "--limit-pages",
+        "7",               "--shard-pages", "100",
     }));
     try std.testing.expectError(error.Usage, parseOptions(&.{
         "dict-blob-build",     "dump.bz2", "out",                 "--expander-root", "bundle",
@@ -527,8 +535,7 @@ const PendingShard = struct {
         errdefer std.Io.Dir.cwd().deleteTree(io, temporary) catch {};
         var writer = try encoder.blob_builder.Writer.init(io, a, temporary);
         writer.language_codes = codes;
-        return .{ .io = io, .allocator = a, .temporary = temporary, .final = final,
-            .writer = writer, .start = start, .requested = requested, .offset = offset };
+        return .{ .io = io, .allocator = a, .temporary = temporary, .final = final, .writer = writer, .start = start, .requested = requested, .offset = offset };
     }
 
     fn deinit(self: *PendingShard) void {
@@ -619,7 +626,7 @@ fn runContinuous(
         if (selected % 100_000 == 0 or progress_now >= next_progress) {
             next_progress = progress_now + 10 * std.time.ns_per_s;
             std.debug.print("page compilation progress selected={d} ordinal={d} shard_start={d} main_pages={d} language_records={d} workers={d}\n", .{
-                selected, page_ordinal, shard.start, shard.writer.?.stats.main_pages,
+                selected,                              page_ordinal,   shard.start, shard.writer.?.stats.main_pages,
                 shard.writer.?.stats.language_records, pool.slots.len,
             });
         }
@@ -637,11 +644,11 @@ pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX] [--shard-pages N]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--now-unix UNIX] [--shard-pages N]\n", .{});
+        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N]\n", .{});
         return error.Usage;
     };
     const cpu_limit = @min(max_worker_count, std.Thread.getCpuCount() catch 1);
@@ -701,7 +708,7 @@ pub fn main(init: std.process.Init) !void {
 
     const worker_path = try std.fs.path.join(a, &.{ options.expander_root, "dict-bundle-expander" });
     defer a.free(worker_path);
-    var pool = try ExpansionPool.init(init.io, a, options.expander_root, worker_path, args[1], options.workers, options.now_unix);
+    var pool = try ExpansionPool.init(init.io, a, options.expander_root, worker_path, args[1], options.workers, options.now_unix, options.expansion_timeout_ms orelse expansion_deadline.default_ms);
     defer pool.deinit();
 
     const page_index_path = try std.fs.path.join(a, &.{ options.expander_root, "page-index.tsv" });
@@ -775,4 +782,23 @@ pub fn main(init: std.process.Init) !void {
             stats.fallback_pages,
         },
     );
+}
+
+test "blob expansion timeout is explicit bounded and rejects duplicates" {
+    const defaults = try parseOptions(&.{ "dict-blob-build", "dump.bz2", "out", "--expander-root", "root" });
+    try std.testing.expect(defaults.expansion_timeout_ms == null);
+    const configured = try parseOptions(&.{ "dict-blob-build", "dump.bz2", "out", "--expander-root", "root", "--expansion-timeout-ms", "600000" });
+    try std.testing.expectEqual(@as(?u32, 600_000), configured.expansion_timeout_ms);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dict-blob-build", "dump.bz2", "out", "--expander-root", "root", "--expansion-timeout-ms" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dict-blob-build", "dump.bz2", "out", "--expander-root", "root", "--expansion-timeout-ms", "0" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dict-blob-build", "dump.bz2", "out", "--expander-root", "root", "--expansion-timeout-ms", "100", "--expansion-timeout-ms", "200" }));
+}
+
+test "operational expansion timeouts cannot become successful empty pages" {
+    const a = std.testing.allocator;
+    try std.testing.expect((try expansionFallbackReasonAlloc(a, error.Timeout, null)) == null);
+    try std.testing.expect((try expansionFallbackReasonAlloc(a, error.OutOfMemory, null)) == null);
+    const recoverable = (try expansionFallbackReasonAlloc(a, error.ExpansionFailed, null)).?;
+    defer a.free(recoverable);
+    try std.testing.expectEqualStrings("expansion_error:ExpansionFailed", recoverable);
 }
