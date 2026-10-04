@@ -1,0 +1,275 @@
+diff --git a/src/lua/runtime/core.zig b/src/lua/runtime/core.zig
+index 60f38e8..7f14cc5 100644
+--- a/src/lua/runtime/core.zig
++++ b/src/lua/runtime/core.zig
+@@ -57,6 +57,11 @@ pub const Env = struct {
+     captures: []const *Cell,
+     capture_view: Captures,
+ };
++pub const TemplateCaptures = struct {
++    source_function: *const FunctionValue,
++    materialized: ?[]const *Cell = null,
++    mutation_marker: ?*u64 = null,
++};
+ pub const FunctionEnv = struct {
+     raw: usize = 0,
+ 
+@@ -80,11 +85,12 @@ pub const FunctionEnv = struct {
+ pub const Captures = union(enum) {
+     direct: []const *Cell,
+     native: ?*anyopaque,
++    template: *TemplateCaptures,
+ 
+     pub fn cell(self: Captures, ordinal: u32) !*Cell {
+         return switch (self) {
+             .direct => |cells| if (ordinal < cells.len) cells[ordinal] else error.BadUpvalue,
+-            .native => error.BadUpvalue,
++            .native, .template => error.BadUpvalue,
+         };
+     }
+ };
+@@ -1746,6 +1752,78 @@ pub const Context = struct {
+         return self.makeFunction(id, stabilize(entry), captures);
+     }
+ 
++    fn makeTemplateFunction(self: *Context, source_function: *const FunctionValue) !Value {
++        const identity = try self.takeFunctionIdentity();
++        const Record = struct {
++            function: FunctionValue,
++            env: Env,
++            template: TemplateCaptures,
++        };
++        const record = try self.stringAllocator().create(Record);
++        record.template = .{ .source_function = source_function };
++        record.env = .{
++            .captures = &.{},
++            .capture_view = .{ .template = &record.template },
++        };
++        record.function = .{
++            .id = source_function.id,
++            .env = FunctionEnv.closure(&record.env),
++            .identity = identity,
++            .entry = source_function.entry,
++        };
++        return .{ .callable = &record.function };
++    }
++
++    fn directCaptureCells(self: *Context, captures: Captures) anyerror![]const *Cell {
++        return switch (captures) {
++            .direct => |cells| cells,
++            .template => |template| try self.materializeTemplateCaptures(template),
++            .native => error.BadUpvalue,
++        };
++    }
++
++    pub fn materializeTemplateCaptures(self: *Context, template: *TemplateCaptures) anyerror![]const *Cell {
++        if (template.materialized) |cells| return cells;
++        const source = self.module_template_clone_source orelse return error.MissingModuleTemplateSource;
++        const source_cells = try source.directCaptureCells(template.source_function.captures());
++        const target_cells = try self.allocator.alloc(*Cell, source_cells.len);
++        errdefer self.allocator.free(target_cells);
++
++        var clone = ModuleTemplateClone{
++            .source = source,
++            .target = self,
++            .tables = self.module_template_clone_tables,
++            .cells = self.module_template_clone_cells,
++            .callables = self.module_template_clone_callables,
++        };
++        self.module_template_clone_tables = .empty;
++        self.module_template_clone_cells = .empty;
++        self.module_template_clone_callables = .empty;
++        defer {
++            self.module_template_clone_tables = clone.tables;
++            self.module_template_clone_cells = clone.cells;
++            self.module_template_clone_callables = clone.callables;
++            clone.tables = .empty;
++            clone.cells = .empty;
++            clone.callables = .empty;
++            clone.deinit();
++        }
++
++        for (source_cells, target_cells) |source_cell, *target_cell|
++            target_cell.* = try clone.cloneCell(source_cell);
++        template.materialized = target_cells;
++        if (template.mutation_marker) |marker| for (target_cells) |cell|
++            try self.tagModuleTemplateValue(cell.value, marker);
++        return target_cells;
++    }
++
++    fn resolvedCaptures(self: *Context, function: *const FunctionValue) !Captures {
++        return switch (function.captures()) {
++            .template => |template| .{ .direct = try self.materializeTemplateCaptures(template) },
++            else => |captures| captures,
++        };
++    }
++
+     pub fn callEntryBuffered(self: *Context, entry: FunctionFn, captures: Captures, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+         const result = entry(
+             self,
+@@ -1759,7 +1837,7 @@ pub const Context = struct {
+         if (result.status == 1) {
+             switch (captures) {
+                 .native => work_stats.noteNativeFailure(@intFromPtr(entry), self.aotErrorName() orelse "AotCallFailed"),
+-                .direct => {},
++                .direct, .template => {},
+             }
+             if (self.aotErrorName() == null) self.setAotErrorName("AotCallFailed");
+             return error.AotCallFailed;
+@@ -1780,7 +1858,7 @@ pub const Context = struct {
+         defer self.depth -= 1;
+         const previous = try self.enterFunctionModule(value.id);
+         defer if (previous) |scope| self.restoreGlobals(scope);
+-        return self.callEntryBuffered(value.entry, value.captures(), args, result_buffer);
++        return self.callEntryBuffered(value.entry, try self.resolvedCaptures(value), args, result_buffer);
+     }
+ 
+     pub fn callFunction(self: *Context, value: *const FunctionValue, args: []const Value) anyerror![]const Value {
+@@ -1804,7 +1882,7 @@ pub const Context = struct {
+         defer self.depth -= 1;
+         const previous = try self.enterFunctionModule(value.id);
+         defer if (previous) |scope| self.restoreGlobals(scope);
+-        return direct(self, value.captures(), args);
++        return direct(self, try self.resolvedCaptures(&value), args);
+     }
+ 
+     pub inline fn callBufferedDirectFunction(self: *Context, value: FunctionValue, direct: BufferedDirectFunctionFn, args: []const Value, result_buffer: ?[]Value) anyerror![]const Value {
+@@ -1813,7 +1891,7 @@ pub const Context = struct {
+         defer self.depth -= 1;
+         const previous = try self.enterFunctionModule(value.id);
+         defer if (previous) |scope| self.restoreGlobals(scope);
+-        return direct(self, value.captures(), args, result_buffer);
++        return direct(self, try self.resolvedCaptures(&value), args, result_buffer);
+     }
+ 
+     pub fn configureProgramBootstrap(self: *Context, raw: ?*const anyopaque, bootstrap: ProgramBootstrapFn) void {
+@@ -2174,6 +2252,11 @@ pub const Context = struct {
+             if (gop.found_existing) return;
+             switch (callable.captures()) {
+                 .direct => |captures| for (captures) |cell| try self.tagCell(cell),
++                .template => |template| {
++                    template.mutation_marker = self.marker;
++                    if (template.materialized) |captures|
++                        for (captures) |cell| try self.tagCell(cell);
++                },
+                 .native => unreachable,
+             }
+         }
+@@ -2323,8 +2406,22 @@ pub const Context = struct {
+             }
+ 
+             const captures = source_function.captures();
++            if (!self.promotion) switch (captures) {
++                .direct => |cells| if (cells.len != 0) {
++                    const value = try self.target.makeTemplateFunction(source_function);
++                    try self.callables.put(self.target.allocator, source_function, value.callable);
++                    return value;
++                },
++                .template => {
++                    const value = try self.target.makeTemplateFunction(source_function);
++                    try self.callables.put(self.target.allocator, source_function, value.callable);
++                    return value;
++                },
++                .native => unreachable,
++            };
+             const source_cells = switch (captures) {
+                 .direct => |cells| cells,
++                .template => |template| try self.source.materializeTemplateCaptures(template),
+                 .native => unreachable,
+             };
+             if (source_cells.len == 0) {
+@@ -2507,10 +2604,18 @@ pub const Context = struct {
+                 state.template_init_probe_id = module_template_probe_id;
+             state.loading = true;
+             errdefer state.loading = false;
+-            for (self.target.requirementsFor(module_id)) |requirement| {
+-                if (self.skipsModule(requirement.module_id)) continue;
+-                _ = try self.cloneModule(requirement.module_id, requirement.requested);
+-            }
++            // Promotion builds a self-contained longer-lived template and must
++            // own its full dependency graph. Fresh child instantiation can
++            // defer dependencies until they are actually required: captured
++            // dependency values retain aliasing through the shared clone maps,
++            // and a later require binds that existing clone into module state.
++            // If the source root observed package.loaded, preserve the visible
++            // dependency set eagerly because package membership is semantic.
++            if (self.promotion or source_state.template_package_observed)
++                for (self.target.requirementsFor(module_id)) |requirement| {
++                    if (self.skipsModule(requirement.module_id)) continue;
++                    _ = try self.cloneModule(requirement.module_id, requirement.requested);
++                };
+ 
+             try self.cloneModuleGlobals(module_id);
+             const value = try self.cloneValue(source_value);
+@@ -4257,6 +4362,50 @@ test "module templates run roots once while fresh contexts clone mutable closure
+     try std.testing.expectEqual(@as(f64, 1), second_once[0].number);
+ }
+ 
++test "module template callables materialize captured state only on first call" {
++    const Probe = struct {
++        fn call(_: *Context, captures: Captures, _: []const Value) ![]const Value {
++            const cell = try captures.cell(0);
++            const next = if (cell.value == .number) cell.value.number + 1 else 1;
++            cell.value = .{ .number = next };
++            const out = try std.heap.smp_allocator.alloc(Value, 1);
++            out[0] = .{ .number = next };
++            return out;
++        }
++    };
++
++    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
++    defer source_arena.deinit();
++    var source = try Context.init(source_arena.allocator(), 0);
++    defer source.deinit();
++    const source_cell = try source.allocator.create(Cell);
++    source_cell.* = .{ .value = .{ .number = 0 } };
++    const original = try source.makeFunctionKnown(17, Probe.call, &.{source_cell});
++
++    var child_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
++    defer child_arena.deinit();
++    var child = try Context.init(child_arena.allocator(), 0);
++    defer child.deinit();
++    child.module_template_clone_source = &source;
++    var clone = Context.ModuleTemplateClone{ .source = &source, .target = &child };
++    defer clone.deinit();
++    const lazy = try clone.cloneValue(original);
++    try std.testing.expect(lazy == .callable and lazy.callable != original.callable);
++    try std.testing.expect(lazy.callable.captures() == .template);
++    try std.testing.expectEqual(@as(usize, 0), child.module_template_clone_cells.count());
++
++    const first = try child.callValue(lazy, &.{});
++    defer freeResults(first);
++    try std.testing.expectEqual(@as(f64, 1), first[0].number);
++    try std.testing.expectEqual(@as(f64, 0), source_cell.value.number);
++    try std.testing.expectEqual(@as(usize, 1), child.module_template_clone_cells.count());
++
++    const second = try child.callValue(lazy, &.{});
++    defer freeResults(second);
++    try std.testing.expectEqual(@as(f64, 2), second[0].number);
++    try std.testing.expectEqual(@as(f64, 0), source_cell.value.number);
++}
++
+ test "module template cloning recreates null-environment native descriptors" {
+     const NativeProbe = struct {
+         fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+@@ -5199,7 +5348,7 @@ fn comparisonFalseProbe(_: ?*anyopaque, _: *Context, _: []const Value) ![]const
+ fn guardCapture(captures: Captures) f64 {
+     return switch (captures) {
+         .direct => |cells| if (cells.len == 0) 0 else cells[0].value.number,
+-        .native => 0,
++        .native, .template => 0,
+     };
+ }
+ 
+diff --git a/src/lua/runtime/llvm_abi.zig b/src/lua/runtime/llvm_abi.zig
+index e086cce..680185d 100644
+--- a/src/lua/runtime/llvm_abi.zig
++++ b/src/lua/runtime/llvm_abi.zig
+@@ -544,6 +544,7 @@ export fn dict_lua_direct_capture_cells(
+ ) callconv(.c) u32 {
+     const cells = switch (captures.*) {
+         .direct => |direct_cells| direct_cells,
++        .template => |template| ctx.materializeTemplateCaptures(template) catch |err| return fail(ctx, err),
+         .native => return fail(ctx, error.BadUpvalue),
+     };
+     if (cells.len < expected_len or (expected_len != 0 and cells.len == 0))

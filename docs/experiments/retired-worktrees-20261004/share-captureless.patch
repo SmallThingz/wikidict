@@ -1,0 +1,67 @@
+diff --git a/src/lua/runtime/core.zig b/src/lua/runtime/core.zig
+index b1d6f78..ed9dda3 100644
+--- a/src/lua/runtime/core.zig
++++ b/src/lua/runtime/core.zig
+@@ -2316,6 +2316,11 @@ pub const Context = struct {
+                 .native => unreachable,
+             };
+             if (source_cells.len == 0) {
++                // A child context cannot mutate a captureless Lua descriptor.
++                // Template sources outlive their fresh children, so ordinary
++                // instantiation may borrow it directly. Promotion reverses the
++                // lifetime relationship and must retain an owned descriptor.
++                if (!self.promotion) return .{ .callable = source_function };
+                 const value = try self.target.makeFunction(source_function.id, source_function.entry, &.{});
+                 try self.callables.put(self.target.allocator, source_function, value.callable);
+                 return value;
+@@ -4238,6 +4243,50 @@ test "module templates run roots once while fresh contexts clone mutable closure
+     try std.testing.expectEqual(@as(f64, 1), second_once[0].number);
+ }
+ 
++test "module template instantiation borrows captureless Lua descriptors only downward" {
++    const Probe = struct {
++        fn call(_: *Context, _: Captures, _: []const Value) ![]const Value {
++            const out = try std.heap.smp_allocator.alloc(Value, 1);
++            out[0] = .{ .boolean = true };
++            return out;
++        }
++    };
++
++    var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
++    defer source_arena.deinit();
++    var source = try Context.init(source_arena.allocator(), 0);
++    defer source.deinit();
++    const original = try source.makeFunctionKnown(7, Probe.call, &.{});
++
++    var child_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
++    defer child_arena.deinit();
++    var child = try Context.init(child_arena.allocator(), 0);
++    defer child.deinit();
++    var child_clone = Context.ModuleTemplateClone{
++        .source = &source,
++        .target = &child,
++    };
++    defer child_clone.deinit();
++    const borrowed = try child_clone.cloneValue(original);
++    try std.testing.expect(borrowed == .callable);
++    try std.testing.expectEqual(original.callable, borrowed.callable);
++
++    var promoted_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
++    defer promoted_arena.deinit();
++    var promoted = try Context.init(promoted_arena.allocator(), 0);
++    defer promoted.deinit();
++    var promotion = Context.ModuleTemplateClone{
++        .source = &source,
++        .target = &promoted,
++        .promotion = true,
++    };
++    defer promotion.deinit();
++    const owned = try promotion.cloneValue(original);
++    try std.testing.expect(owned == .callable);
++    try std.testing.expect(owned.callable != original.callable);
++    try std.testing.expectEqual(original.callable.entry, owned.callable.entry);
++}
++
+ test "module template cloning recreates null-environment native descriptors" {
+     const NativeProbe = struct {
+         fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
