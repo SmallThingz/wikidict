@@ -1,5 +1,20 @@
 # Compiler/runtime performance qualification
 
+## Final status
+
+All three Wikidict repositories are consolidated on their sole local main
+worktrees. The retained compiler/runtime changes pass full unit and bundle tests.
+Rejected and inconclusive optimization candidates were not installed.
+
+The performance target remains unmet. The latest first-100k attempt failed
+safely at page ordinal 39229 with a worker address-space OOM; a cold replay of
+that page succeeds. See [memory ownership and long-history results](independent-template-storage.md).
+No whole-Wiktionary under-hour or thousands-of-pages/second result is claimed.
+
+See [request allocation experiments](request-allocation-experiments.md) for
+rejected pool/remap changes, and the individual receipts for bounded cache
+admission, promotion preflight/fail-stop and receiver-shape measurements.
+
 These measurements use dc-box under concurrent unrelated workloads. Wall-clock
 throughput is an observed lower bound, not a clean-host speed claim.
 
