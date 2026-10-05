@@ -1302,7 +1302,7 @@ class BuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
-            data=bz2.compress(b'<mediawiki><page>word</page></mediawiki>')
+            data=bz2.compress(b'<mediawiki><page>word</page><page>second</page></mediawiki>')
             (folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,
                       url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
@@ -1313,7 +1313,7 @@ class BuildTest(unittest.TestCase):
                 if 'build-dictionary' in command:
                     dest=Path(command[command.index('--')+2]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
                     (dest/'.incomplete').write_text('expander ready')
-                    (exp/'page-index.tsv').write_text('0\n')
+                    (exp/'page-index.tsv').write_text('0\n1\n')
                     (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
                 elif 'build-blobs' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True,exist_ok=True)
@@ -1325,7 +1325,7 @@ class BuildTest(unittest.TestCase):
                     (dest/'fallback-pages.jsonl').write_text('')
                     if 'merge-blobs' in command:write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in command[command.index('--')+2:]))
             real_stage=b.stage_seekable_dump
-            with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_COMPRESSED_BYTES',1), \
+            with patch.object(b,'PROJECT',root), \
                  patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'), \
                  patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run), \
                  patch.object(b,'stage_seekable_dump',wraps=real_stage) as stage:
@@ -1371,7 +1371,7 @@ class BuildTest(unittest.TestCase):
                     if 'merge-blobs' in command:write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in command[command.index('--')+2:]))
                     (dest/'languages.tsv').write_text('heading\n')
                     (dest/'merged.wikblb').write_bytes(b'WIKBLB08merged')
-            with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_COMPRESSED_BYTES',1),patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
+            with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
                 b.build([item],root,root/'output','zig',2,interwiki_snapshot=interwiki,
                         auxiliary_snapshots={'category-stats':category})
             blob_calls=[c for c in calls if 'build-blobs' in c]
@@ -1587,7 +1587,9 @@ class BuildTest(unittest.TestCase):
             calls=[]
             real_run=subprocess.run
             def run(command,**kwargs):
-                if command[0]=='xz': return real_run(command,**kwargs)
+                if command[0]=='xz':
+                    self.assertFalse((root/'output/testwiktionary/20260901.shards').exists())
+                    return real_run(command,**kwargs)
                 calls.append(command)
                 if 'build-dictionary' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir();(dest/'en.wikblb').write_bytes(b'WIKBLB08payload')
@@ -1621,7 +1623,7 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(len((final/'fallback-pages.jsonl').read_text().splitlines()),2)
             self.assertFalse((final/'en.wikblb').exists())
             self.assertEqual(lzma.open(final/'en.wikblb.xz').read(),b'WIKBLB08payload')
-            self.assertEqual(list((root/'.tmp').iterdir()),[])
+            self.assertTrue(not (root/'.tmp').exists() or not any((root/'.tmp').iterdir()))
     def test_verified_partial_compression_resumes_without_rebuilding(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
@@ -1939,3 +1941,84 @@ class LongBuildDeadlineTest(unittest.TestCase):
             with self.subTest(argv=argv),patch.object(sys,'argv',['build_wiktionaries.py',*argv]),patch.object(limits,'supervise_watchdog') as run:
                 with self.assertRaises(SystemExit):b.cli()
                 run.assert_not_called()
+
+
+class PageCountRoutingTests(unittest.TestCase):
+    class RouteReached(RuntimeError):
+        pass
+
+    def _check_route(self, pages, attempts=1):
+        # Real small compressed input and real verified repack: the branch must
+        # depend on the staged source count, not compression ratio or file size.
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            folder=root/'testwiktionary/20260901'
+            write_namespace_fixture(folder)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            raw=b'<mediawiki>'+b'<page>word</page>'*pages+b'</mediawiki>'
+            data=bz2.compress(raw)
+            self.assertLess(len(data),512*1024*1024)
+            (folder/name).write_bytes(data)
+            item=dict(wiki='testwiktionary',date='20260901',name=name,
+                      url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                      size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            tool=root/'zig'
+            tool.write_bytes(b'fixture identity only; never executed')
+            tool.chmod(0o700)
+            workspace=root/'output/testwiktionary/20260901.shards'
+            dump=workspace/'input/pages.xml.zst'
+            calls=[]
+            def stop_one_shot(command, edition, date, phase, **fields):
+                self.assertEqual(phase,'dictionary_build')
+                self.assertIn('build-dictionary',command)
+                self.assertNotIn('--expander-only',command)
+                actual=Path(command[command.index('--')+1])
+                calls.append(('one-shot',actual))
+                self.assertEqual(actual,dump)
+                self.assertTrue(actual.is_file())
+                raise self.RouteReached()
+            def stop_sharded(actual, staging, actual_workspace, *args, **kwargs):
+                calls.append(('sharded',Path(actual)))
+                self.assertEqual(Path(actual),dump)
+                self.assertEqual(actual_workspace,workspace)
+                self.assertTrue(Path(actual).is_file())
+                raise self.RouteReached()
+            real_prepare=b.prepare_shard_workspace
+            real_cached=b.cached_shard_dump
+            real_stage=b.stage_seekable_dump
+            with patch.object(b,'PROJECT',root), \
+                 patch.object(b,'source_fingerprint',return_value='source'), \
+                 patch.object(b.time,'time',return_value=123), \
+                 patch.object(b,'prepare_shard_workspace',wraps=real_prepare) as prepare, \
+                 patch.object(b,'cached_shard_dump',wraps=real_cached) as cached, \
+                 patch.object(b,'stage_seekable_dump',wraps=real_stage) as stage, \
+                 patch.object(b,'timed_run',side_effect=stop_one_shot), \
+                 patch.object(b,'build_sharded',side_effect=stop_sharded):
+                for attempt in range(attempts):
+                    with self.assertRaises(self.RouteReached):
+                        b.build([item],root,root/'output',str(tool),1)
+                    # A dispatch failure retains the same verified input for
+                    # retry, and one-shot must never create a second repack.
+                    self.assertEqual(prepare.call_count,attempt+1)
+                    self.assertEqual(cached.call_count,attempt+1)
+                    self.assertEqual(stage.call_count,1)
+                    self.assertEqual(stage.call_args.args[:3],([item],root,workspace/'input'))
+                    cached.assert_called_with([item],root,workspace)
+                    source=json.loads((workspace/'input/.complete.json').read_text())
+                    self.assertEqual(source['source_pages'],pages)
+                    self.assertEqual(source['dump_sha256'],b.sha256_file(dump))
+                    self.assertEqual(source['index_sha256'],b.sha256_file(dump.with_name('pages-index.txt.bz2')))
+            expected='sharded' if pages>100_000 else 'one-shot'
+            self.assertEqual(calls,[(expected,dump)]*attempts)
+
+    def test_verified_source_page_count_boundary_routes_zero_and_exact_shard_once(self):
+        self.assertEqual(b.SHARD_PAGES,100_000)
+        for pages in (0,100_000,100_001):
+            with self.subTest(pages=pages):
+                self._check_route(pages)
+
+    def test_failed_dispatch_reuses_verified_staging_for_both_routes(self):
+        self.assertEqual(b.SHARD_PAGES,100_000)
+        for pages in (1,100_001):
+            with self.subTest(pages=pages):
+                self._check_route(pages,attempts=2)

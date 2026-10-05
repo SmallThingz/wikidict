@@ -158,20 +158,20 @@ pub const BlobView = struct {
 pub fn encodeHeader(kind: BlobKind) [header_len]u8 {
     var out: [header_len]u8 = undefined;
     @memcpy(out[0..magic.len], magic);
-    out[magic.len] = @intFromEnum(kind);
+    out[magic.len] = @backingInt(kind);
     return out;
 }
 
-fn decodeKind(bytes: []const u8) error{InvalidBlob}!BlobKind {
+pub fn decodeKind(bytes: []const u8) error{InvalidBlob}!BlobKind {
     if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..magic.len], magic)) return error.InvalidBlob;
     return switch (bytes[magic.len]) {
-        @intFromEnum(BlobKind.language) => .language,
-        @intFromEnum(BlobKind.thesaurus) => .thesaurus,
-        @intFromEnum(BlobKind.citations) => .citations,
-        @intFromEnum(BlobKind.reconstruction) => .reconstruction,
-        @intFromEnum(BlobKind.rhymes) => .rhymes,
-        @intFromEnum(BlobKind.sign_gloss) => .sign_gloss,
-        @intFromEnum(BlobKind.supplemental) => .supplemental,
+        @backingInt(BlobKind.language) => .language,
+        @backingInt(BlobKind.thesaurus) => .thesaurus,
+        @backingInt(BlobKind.citations) => .citations,
+        @backingInt(BlobKind.reconstruction) => .reconstruction,
+        @backingInt(BlobKind.rhymes) => .rhymes,
+        @backingInt(BlobKind.sign_gloss) => .sign_gloss,
+        @backingInt(BlobKind.supplemental) => .supplemental,
         else => error.InvalidBlob,
     };
 }
@@ -326,7 +326,7 @@ fn readNulFieldMetadata(bytes: []const u8, cursor: *usize) error{InvalidMetadata
 test "data blob header carries only v8 magic and kind" {
     const encoded = encodeHeader(.rhymes);
     try std.testing.expectEqualSlices(u8, &.{
-        'W', 'I', 'K', 'B', 'L', 'B', '0', '8', @intFromEnum(BlobKind.rhymes),
+        'W', 'I', 'K', 'B', 'L', 'B', '0', '8', @backingInt(BlobKind.rhymes),
     }, encoded[0..header_len]);
     try std.testing.expectEqual(BlobKind.rhymes, try decodeKind(&encoded));
 }
@@ -400,7 +400,7 @@ test "trusted open skips title-order scan while runtime index can validate it" {
 }
 test "data blob rejects non-canonical payload lengths" {
     const broken = [_]u8{
-        'W', 'I', 'K',  'B',  'L', 'B', '0', '5', @intFromEnum(BlobKind.citations),
+        'W', 'I', 'K',  'B',  'L', 'B', '0', '5', @backingInt(BlobKind.citations),
         'a', 0,   0x81, 0x00, 'x',
     };
     try std.testing.expectError(error.InvalidBlob, inspect(&broken));

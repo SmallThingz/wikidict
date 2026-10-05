@@ -11,7 +11,6 @@ from collections import deque
 from contextlib import contextmanager
 import fcntl
 import hashlib
-import tempfile
 import json
 import os
 import re
@@ -26,7 +25,6 @@ from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files
 
 PROJECT = Path(__file__).resolve().parent.parent
-SHARD_THRESHOLD_COMPRESSED_BYTES = 512 * 1024 * 1024
 SHARD_PAGES = 100_000
 SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 2
@@ -1587,49 +1585,45 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         shutil.rmtree(staging)
     workers = min(compression_workers or default_build_threads(),MAX_PIPELINE_WORKERS)
     workspace=target.with_name(date+'.shards')
-    compressed_bytes=sum(item['size'] for item in xml)
-    if compressed_bytes>=SHARD_THRESHOLD_COMPRESSED_BYTES:
-        print(f'Sharding {edition}: {compressed_bytes:,} compressed bytes in {SHARD_PAGES:,}-page chunks',flush=True)
-        expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots)
-        now_unix=prepare_shard_workspace(workspace,expected,now_unix)
-        dump=cached_shard_dump(xml,downloads,workspace)
-        pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
-        aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
-            build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}))
+    expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots)
+    now_unix=prepare_shard_workspace(workspace,expected,now_unix)
+    dump=cached_shard_dump(xml,downloads,workspace)
+    source_metadata=read_small_json(workspace/'input/.complete.json')
+    if not isinstance(source_metadata,dict) or type(source_metadata.get('source_pages')) is not int or source_metadata['source_pages']<0:
+        raise ValueError('Staged dump lacks a verified source page count')
+    source_pages=source_metadata['source_pages']
+    pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
+    aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
+        build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}))
+    # XML compression ratio does not bound the writer's whole-bucket sort.
+    # Reuse the verified repack for either path, retaining it after failures.
+    if source_pages>SHARD_PAGES:
+        print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
         build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
     else:
-        now_unix=now_unix if now_unix is not None else int(time.time())
-        (PROJECT / '.tmp').mkdir(exist_ok=True)
-        scratch = Path(tempfile.mkdtemp(prefix=f'build-{edition}-{date}-', dir=PROJECT / '.tmp'))
-        try:
-            source_metadata={}
-            dump = stage_seekable_dump(xml,downloads,scratch,source_metadata)
-            pinned=copy_verified_snapshot(interwiki_snapshot,scratch/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
-            aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,scratch,
-                build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}))
-            timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
-                         *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
-                         *pipeline_snapshot_args(registry,aux_pinned),
-                         '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
-                         '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args],edition,date,'dictionary_build')
-            coverage=validate_page_coverage(staging,source_pages=source_metadata['source_pages'])
-            coverage['expected_input_pages']=source_metadata['source_pages']
-            (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
-            timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(staging)],
-                      edition,date,'dictionary_verify')
-            if interwiki_sha is not None:
-                if sha256_file(pinned)!=interwiki_sha: raise ValueError('Interwiki map snapshot changed during build')
-                (staging/INTERWIKI_SHA_NAME).write_text(interwiki_sha+'\n')
-            if auxiliary_hashes:
-                if verified_auxiliary_hashes(aux_pinned)!=auxiliary_hashes:
-                    raise ValueError('Auxiliary snapshot changed during build')
-                (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
-            require_auxiliary_capture_identity(aux_pinned,build_identity)
-            (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
-            persist_build_identity(staging,build_identity)
-            (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
-        finally:
-            shutil.rmtree(scratch)
+        timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
+                     *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
+                     *pipeline_snapshot_args(registry,aux_pinned),
+                     '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
+                     '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args],edition,date,'dictionary_build')
+        coverage=validate_page_coverage(staging,source_pages=source_pages)
+        coverage['expected_input_pages']=source_pages
+        (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
+        timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(staging)],
+                  edition,date,'dictionary_verify')
+        if interwiki_sha is not None:
+            if sha256_file(pinned)!=interwiki_sha: raise ValueError('Interwiki map snapshot changed during build')
+            (staging/INTERWIKI_SHA_NAME).write_text(interwiki_sha+'\n')
+        if auxiliary_hashes:
+            if verified_auxiliary_hashes(aux_pinned)!=auxiliary_hashes:
+                raise ValueError('Auxiliary snapshot changed during build')
+            (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
+        require_auxiliary_capture_identity(aux_pinned,build_identity)
+        (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
+        persist_build_identity(staging,build_identity)
+        (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
+        # Verified staging can now resume publication without the input cache.
+        shutil.rmtree(workspace)
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
     publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace)
     if workspace.exists(): shutil.rmtree(workspace)

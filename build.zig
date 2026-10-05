@@ -296,6 +296,18 @@ pub fn build(b: *std.Build) void {
     blob_build_tests.root_module.addImport("namespace_registry", namespace_registry_test_mod);
     const run_blob_build_tests = b.addRunArtifact(blob_build_tests);
 
+    const blob_file_tools_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/blob_file_tools_test.zig"),
+            .target = b.graph.host,
+            .optimize = test_optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "encoder", .module = encoder_mod_test }},
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const run_blob_file_tools_tests = b.addRunArtifact(blob_file_tools_tests);
+
     const encoder_tests = b.addTest(.{
         .root_module = encoder_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -630,6 +642,8 @@ pub fn build(b: *std.Build) void {
     run_bundle_pipeline_tests.step.dependOn(&blob_wasm_smoke.step);
     run_blob_build_tests.step.dependOn(&run_bundle_pipeline_tests.step);
     test_step.dependOn(&run_blob_build_tests.step);
+    run_blob_file_tools_tests.step.dependOn(&run_blob_build_tests.step);
+    test_step.dependOn(&run_blob_file_tools_tests.step);
     test_step.dependOn(&run_closure_tests.step);
     test_step.dependOn(&run_provider_tests.step);
     b.step("test-bundle-pipeline", "Run bundle build scheduler and cache bitmap unit tests only").dependOn(&run_bundle_pipeline_tests_only.step);

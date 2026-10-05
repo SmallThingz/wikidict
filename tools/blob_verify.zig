@@ -4,26 +4,8 @@ const encoder = @import("encoder");
 const format = encoder.blob_format;
 const catalog = encoder.blob_catalog;
 const presentation_codec = encoder.presentation_codec;
+const file_reader = @import("blob_file_reader.zig");
 const feature_kinds = [_]format.BlobKind{ .thesaurus, .citations, .reconstruction, .rhymes, .sign_gloss, .supplemental };
-
-const Mapped = struct {
-    bytes: []align(std.heap.page_size_min) const u8,
-
-    fn deinit(self: *Mapped) void {
-        if (self.bytes.len != 0) std.posix.munmap(self.bytes);
-        self.bytes = &.{};
-    }
-};
-
-fn mmapPath(io: std.Io, path: []const u8) !Mapped {
-    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
-    var file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
-    defer file.close(io);
-    const stat = try file.stat(io);
-    const len = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
-    if (len == 0) return error.InvalidBlob;
-    return .{ .bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0) };
-}
 
 const Stats = struct {
     language_blobs: usize = 0,
@@ -54,12 +36,14 @@ fn verifyRecord(
     allocator: std.mem.Allocator,
     kind: format.BlobKind,
     metadata: ?format.LanguageMetadata,
-    record: format.RecordView,
+    reader: *file_reader.Reader,
+    record: file_reader.Record,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    _ = presentation_codec.decodeAlloc(a, record.payload, record.title, kind, metadata) catch |err| switch (err) {
+    const payload = try reader.readPayloadAlloc(a, record);
+    _ = presentation_codec.decodeAlloc(a, payload, record.title, kind, metadata) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidPresentation,
     };
@@ -73,12 +57,12 @@ fn verifyBlob(
     expected_language: ?[]const u8,
     stats: *Stats,
 ) !void {
-    var mapped = try mmapPath(io, path);
-    defer mapped.deinit();
-    const blob = try format.inspect(mapped.bytes);
-    if (blob.kind != expected_kind) return error.UnexpectedBlobKind;
+    var reader = try file_reader.Reader.init(io, allocator, path);
+    defer reader.deinit();
+    try reader.validate();
+    if (reader.kind != expected_kind) return error.UnexpectedBlobKind;
 
-    const metadata = if (expected_kind == .language) try blob.languageMetadata() else null;
+    const metadata = if (expected_kind == .language) try reader.languageMetadata() else null;
     const unverified = if (metadata) |language| language.code.len == 0 else false;
     // The encoder retains unresolved language declarations in this reserved
     // bucket. It remains unverified and receives the same payload validation.
@@ -87,10 +71,9 @@ fn verifyBlob(
         if (metadata == null or !std.mem.eql(u8, metadata.?.heading, heading)) return error.UnexpectedLanguageBlob;
     } else if (metadata != null) return error.InvalidBlob;
 
-    var records = blob.iterator();
     var count: usize = 0;
-    while (try records.next()) |record| {
-        try verifyRecord(allocator, expected_kind, metadata, record);
+    while (try reader.next()) |record| {
+        try verifyRecord(allocator, expected_kind, metadata, &reader, record);
         count += 1;
     }
     stats.add(expected_kind, count);
@@ -119,22 +102,31 @@ fn verifyOptionalFeature(
 fn verifyLanguages(io: std.Io, allocator: std.mem.Allocator, root: []const u8, stats: *Stats) !void {
     const manifest_path = try std.fs.path.join(allocator, &.{ root, catalog.manifest_filename });
     defer allocator.free(manifest_path);
-    var manifest = try mmapPath(io, manifest_path);
+    var manifest = try file_reader.Window.init(io, manifest_path);
     defer manifest.deinit();
-
-    var previous: ?[]const u8 = null;
-    var entries = try catalog.Iterator.init(manifest.bytes);
-    while (try entries.next()) |entry| {
-        if (previous) |old| if (std.mem.order(u8, old, entry.heading) != .lt) return error.InvalidManifest;
-        previous = entry.heading;
-
+    if (manifest.size == 0) return error.InvalidBlob;
+    var line: std.ArrayList(u8) = .empty;
+    defer line.deinit(allocator);
+    var previous: std.ArrayList(u8) = .empty;
+    defer previous.deinit(allocator);
+    var cursor: usize = 0;
+    try manifest.readDelimited(allocator, &cursor, '\n', &line, true);
+    _ = try catalog.Iterator.init(line.items);
+    while (cursor < manifest.size) {
+        line.clearRetainingCapacity();
+        try manifest.readDelimited(allocator, &cursor, '\n', &line, true);
+        if (line.items.len == 0) return error.InvalidManifest;
+        if (previous.items.len != 0 and std.mem.order(u8, previous.items, line.items) != .lt) return error.InvalidManifest;
+        previous.clearRetainingCapacity();
+        try previous.appendSlice(allocator, line.items);
         var filename_buf: [catalog.language_blob_filename_len]u8 = undefined;
-        const filename = catalog.languageBlobFilename(entry.heading, &filename_buf);
+        const filename = catalog.languageBlobFilename(line.items, &filename_buf);
         const path = try std.fs.path.join(allocator, &.{ root, catalog.language_directory, filename });
         defer allocator.free(path);
-        try verifyBlob(io, allocator, path, .language, entry.heading, stats);
+        try verifyBlob(io, allocator, path, .language, line.items, stats);
         stats.language_blobs += 1;
     }
+    try manifest.checkIdentity();
 }
 
 fn verifyNamespaceRecords(io: std.Io, allocator: std.mem.Allocator, root: []const u8, stats: *const Stats) !void {
@@ -188,4 +180,80 @@ pub fn main(init: std.process.Init) !void {
         },
     );
     std.debug.print("unverified language data: blobs={d} records={d}\n", .{ stats.unverified_blobs, stats.unverified_records });
+}
+
+test "window verification preserves framing kind metadata and presentation error precedence" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/input", .{tmp.sub_path});
+    defer a.free(path);
+    var stats: Stats = .{};
+    // Later malformed framing must win over an earlier undecodable payload.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x07a\x00\x00b\x00\x80" });
+    try std.testing.expectError(error.InvalidBlob, verifyBlob(io, a, path, .supplemental, null, &stats));
+    // Even a wrong-kind source is fully framing-validated first.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x02a\x00\x80" });
+    try std.testing.expectError(error.InvalidBlob, verifyBlob(io, a, path, .supplemental, null, &stats));
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x02a\x00\x00" });
+    try std.testing.expectError(error.UnexpectedBlobKind, verifyBlob(io, a, path, .supplemental, null, &stats));
+    // Correct framing and kind now reaches presentation validation.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x07a\x00\x00" });
+    try std.testing.expectError(error.InvalidPresentation, verifyBlob(io, a, path, .supplemental, null, &stats));
+    // Unclassified is the sole accepted empty-code language heading.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x01\x00English\x00" });
+    try std.testing.expectError(error.UnverifiedLanguage, verifyBlob(io, a, path, .language, "English", &stats));
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x01en\x00English\x00" });
+    try std.testing.expectError(error.UnexpectedLanguageBlob, verifyBlob(io, a, path, .language, "French", &stats));
+    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+}
+
+test "window verification streams manifest lines and retains empty-line rules" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const manifest_path = try std.fs.path.join(a, &.{ root, catalog.manifest_filename });
+    defer a.free(manifest_path);
+    for ([_][]const u8{ "heading", "heading\n" }) |bytes| {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_path, .data = bytes });
+        var stats: Stats = .{};
+        try verifyLanguages(io, a, root, &stats);
+        try std.testing.expectEqual(@as(usize, 0), stats.language_blobs);
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_path, .data = "" });
+    var stats: Stats = .{};
+    try std.testing.expectError(error.InvalidBlob, verifyLanguages(io, a, root, &stats));
+    for ([_][]const u8{ "wrong", "heading\n\n" }) |bytes| {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_path, .data = bytes });
+        try std.testing.expectError(error.InvalidManifest, verifyLanguages(io, a, root, &stats));
+    }
+    // A valid heading crossing a default window must remain available while
+    // its separately opened blob is validated against that exact heading.
+    const heading = try a.alloc(u8, 256 * 1024 + 17);
+    defer a.free(heading);
+    @memset(heading, 'h');
+    var manifest: std.Io.Writer.Allocating = .init(a);
+    defer manifest.deinit();
+    try manifest.writer.writeAll("heading\n");
+    try manifest.writer.writeAll(heading); // No final newline is legal.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_path, .data = manifest.written() });
+    const language_root = try std.fs.path.join(a, &.{ root, catalog.language_directory });
+    defer a.free(language_root);
+    try std.Io.Dir.cwd().createDirPath(io, language_root);
+    var filename_buffer: [catalog.language_blob_filename_len]u8 = undefined;
+    const filename = catalog.languageBlobFilename(heading, &filename_buffer);
+    const blob_path = try std.fs.path.join(a, &.{ language_root, filename });
+    defer a.free(blob_path);
+    const metadata = try format.buildLanguageMetadataAlloc(a, "en", heading);
+    defer a.free(metadata);
+    const blob = try format.buildAlloc(a, .language, metadata, &.{});
+    defer a.free(blob);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = blob_path, .data = blob });
+    try verifyLanguages(io, a, root, &stats);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
 }

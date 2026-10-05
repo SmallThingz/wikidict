@@ -292,10 +292,10 @@ pub const Provider = struct {
         self.wikibase_entity_text.deinit(self.a);
         if (self.wikibase_entity_text_storage) |*mapped| mapped.deinit();
         if (self.wikibase_entity_cache) |cache| {
-            lua_program.work_stats.logLine("wikibase parsed cache: entries={d} requested_bytes={d} peak_requested_bytes={d} budget={d} hits={d} misses={d} capacity_bypasses={d} allocation_bypasses={d} parse_bypasses={d}\n", .{
-                cache.entry_count,    cache.budget.used, cache.budget.peak,       cache.budget.limit,
-                cache.hits,           cache.misses,      cache.capacity_bypasses, cache.allocation_bypasses,
-                cache.parse_bypasses,
+            lua_program.work_stats.logLine("wikibase parsed cache: entries={d} requested_bytes={d} peak_requested_bytes={d} budget={d} hits={d} misses={d} capacity_bypasses={d} allocation_bypasses={d} parse_bypasses={d} validation_bypasses={d}\n", .{
+                cache.entry_count,    cache.budget.used,         cache.budget.peak,       cache.budget.limit,
+                cache.hits,           cache.misses,              cache.capacity_bypasses, cache.allocation_bypasses,
+                cache.parse_bypasses, cache.validation_bypasses,
             });
             cache.destroy();
         }
@@ -1239,7 +1239,11 @@ pub const Provider = struct {
             }
             if (self.wikibase_entity_cache) |cache| parsed = cache.lookupOrAdmit(source);
         };
-        return .{ .source = entry.source, .parsed = parsed };
+        return .{
+            .source = entry.source,
+            .parsed = parsed,
+            .parsed_numbers_validated = parsed != null,
+        };
     }
 
     fn wikibaseEntityTerms(ctx: ?*anyopaque, entity_id: []const u8) anyerror!WikibaseEntityTerms {
@@ -1482,21 +1486,22 @@ test "provider parsed backing survives relocation preserves Q redirects and bypa
     }.relocated(a, root);
     defer provider.deinit();
     const first = try Provider.wikibaseEntity(&provider, "Q1");
-    try std.testing.expect(first.parsed != null);
+    try std.testing.expect(first.parsed != null and first.parsed_numbers_validated);
     try std.testing.expect((try Provider.wikibaseEntity(&provider, "Q1")).parsed.? == first.parsed.?);
     const redirect = try Provider.wikibaseEntity(&provider, "Q2");
     try std.testing.expect(redirect.parsed.? != first.parsed.?);
     try std.testing.expectEqualStrings("redirect row", redirect.parsed.?.object.get("labels").?.object.get("en").?.object.get("value").?.string);
     try std.testing.expect((try Provider.wikibaseEntity(&provider, "P1")).parsed != null);
-    try std.testing.expect((try Provider.wikibaseEntity(&provider, "L1")).parsed == null);
+    const lexeme = try Provider.wikibaseEntity(&provider, "L1");
+    try std.testing.expect(lexeme.parsed == null and !lexeme.parsed_numbers_validated);
     const missing = try Provider.wikibaseEntity(&provider, "Q9");
-    try std.testing.expect(missing.source == null and missing.parsed == null);
+    try std.testing.expect(missing.source == null and missing.parsed == null and !missing.parsed_numbers_validated);
     try std.testing.expectError(error.WikibaseEntitySnapshotMissing, Provider.wikibaseEntity(&provider, "Q404"));
     provider.wikibase_entity_cache.?.destroy();
     provider.wikibase_entity_cache = null;
     provider.wikibase_entity_cache = try WikibaseEntityCache.create(a, @sizeOf(WikibaseEntityCache), WikibaseEntityCache.max_entries);
     const raw = try Provider.wikibaseEntity(&provider, "Q1");
-    try std.testing.expect(raw.parsed == null);
+    try std.testing.expect(raw.parsed == null and !raw.parsed_numbers_validated);
     try std.testing.expectEqualStrings(first.source.?, raw.source.?);
     try std.testing.expect((try Provider.wikibaseEntity(&provider, "Q1")).parsed == null);
     try std.testing.expectEqual(@as(u64, 1), provider.wikibase_entity_cache.?.allocation_bypasses);

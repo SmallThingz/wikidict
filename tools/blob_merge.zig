@@ -2,30 +2,11 @@ const std = @import("std");
 const encoder = @import("encoder");
 const format = encoder.blob_format;
 const catalog = encoder.blob_catalog;
-
-const Mapped = struct {
-    bytes: []align(std.heap.page_size_min) const u8,
-
-    fn deinit(self: *Mapped) void {
-        if (self.bytes.len != 0) std.posix.munmap(self.bytes);
-        self.bytes = &.{};
-    }
-};
-
-fn mmapPath(io: std.Io, path: []const u8) !Mapped {
-    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
-    var file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
-    defer file.close(io);
-    const stat = try file.stat(io);
-    const len = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
-    if (len == 0) return .{ .bytes = &.{} };
-    return .{ .bytes = try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0) };
-}
+const file_reader = @import("blob_file_reader.zig");
 
 const MergeSource = struct {
-    mapped: Mapped,
-    iterator: format.RecordIterator,
-    current: ?format.RecordView,
+    reader: file_reader.Reader,
+    current: ?file_reader.Record,
 };
 
 fn sourceLess(sources: []const MergeSource, lhs: usize, rhs: usize) bool {
@@ -68,13 +49,13 @@ fn heapPop(heap: *std.ArrayList(usize), sources: []const MergeSource) usize {
     return result;
 }
 
-fn writeRecord(out: *std.Io.Writer, record: format.RecordView) !void {
-    try format.validateRecordInput(.{ .title = record.title, .payload = record.payload });
+fn writeRecord(out: *std.Io.Writer, reader: *file_reader.Reader, record: file_reader.Record) !void {
+    try format.validateRecordInput(.{ .title = record.title, .payload = &.{} });
     try out.writeAll(record.title);
     try out.writeByte(0);
     var encoded_len: [format.max_varuint_len]u8 = undefined;
-    try out.writeAll(format.encodePayloadLength(record.payload.len, &encoded_len));
-    try out.writeAll(record.payload);
+    try out.writeAll(format.encodePayloadLength(record.payload_len, &encoded_len));
+    try reader.copyPayload(record, out);
 }
 
 fn mergeOne(
@@ -86,24 +67,23 @@ fn mergeOne(
 ) !usize {
     var sources: std.ArrayList(MergeSource) = .empty;
     defer {
-        for (sources.items) |*source| source.mapped.deinit();
+        for (sources.items) |*source| source.reader.deinit();
         sources.deinit(a);
     }
     var metadata: ?[]const u8 = null;
     for (input_paths) |path| {
-        var mapped = mmapPath(io, path) catch |err| switch (err) {
+        var reader = file_reader.Reader.init(io, a, path) catch |err| switch (err) {
             error.FileNotFound => continue,
             else => return err,
         };
-        errdefer mapped.deinit();
-        const blob = try format.inspect(mapped.bytes);
-        if (blob.kind != kind) return error.KindMismatch;
+        errdefer reader.deinit();
+        try reader.validate();
+        if (reader.kind != kind) return error.KindMismatch;
         if (metadata) |expected| {
-            if (!std.mem.eql(u8, expected, blob.metadata)) return error.MetadataMismatch;
-        } else metadata = blob.metadata;
-        var iterator = blob.iterator();
-        const current = try iterator.next();
-        try sources.append(a, .{ .mapped = mapped, .iterator = iterator, .current = current });
+            if (!std.mem.eql(u8, expected, reader.metadata.items)) return error.MetadataMismatch;
+        } else metadata = reader.metadata.items;
+        const current = try reader.next();
+        try sources.append(a, .{ .reader = reader, .current = current });
     }
     if (sources.items.len == 0) return 0;
     try format.validateMetadata(kind, metadata.?);
@@ -122,17 +102,21 @@ fn mergeOne(
     for (sources.items, 0..) |source, index| if (source.current != null)
         try heapPush(&heap, a, sources.items, index);
 
-    var previous_title: ?[]const u8 = null;
+    var previous_title: std.ArrayList(u8) = .empty;
+    defer previous_title.deinit(a);
     var count: usize = 0;
     while (heap.items.len != 0) {
         const index = heapPop(&heap, sources.items);
         const record = sources.items[index].current.?;
-        if (previous_title) |previous| if (std.mem.order(u8, previous, record.title) != .lt)
+        if (count != 0 and std.mem.order(u8, previous_title.items, record.title) != .lt)
             return error.DuplicateRecord;
-        try writeRecord(out, record);
-        previous_title = record.title;
+        try writeRecord(out, &sources.items[index].reader, record);
+        // next() reuses this source's title buffers, so the global ordering key
+        // must be owned separately before advancing that source.
+        previous_title.clearRetainingCapacity();
+        try previous_title.appendSlice(a, record.title);
         count += 1;
-        sources.items[index].current = try sources.items[index].iterator.next();
+        sources.items[index].current = try sources.items[index].reader.next();
         if (sources.items[index].current != null) try heapPush(&heap, a, sources.items, index);
     }
     try out.flush();
@@ -140,7 +124,7 @@ fn mergeOne(
 }
 
 // Each heading maps to a distinct hashed output file. Keep one worker on the
-// caller and allow at most one additional worker to bound simultaneous mmap IO.
+// caller and allow at most one additional worker to bound simultaneous IO.
 const LanguageMergePool = struct {
     io: std.Io,
     language_root: []const u8,
@@ -266,9 +250,10 @@ fn mergeFallbackReports(io: std.Io, a: std.mem.Allocator, output_root: []const u
     for (roots) |root| {
         const path = try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" });
         defer a.free(path);
-        var mapped = try mmapPath(io, path);
-        defer mapped.deinit();
-        try writer.interface.writeAll(mapped.bytes);
+        var input = try file_reader.Window.init(io, path);
+        defer input.deinit();
+        try input.copyRange(0, input.size, &writer.interface);
+        try input.checkIdentity();
     }
     try writer.interface.flush();
 }
@@ -331,4 +316,82 @@ pub fn main(init: std.process.Init) !void {
     }
     try coverage.write(init.io, a, output_root);
     std.debug.print("merged shards={d} language_blobs={d} language_records={d} fixed_records={d}\n", .{ roots.len, headings.len, language_records, fixed_records });
+}
+
+test "streamed merge keeps cross-source payload association and global title lifetime" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const left = try std.fs.path.join(a, &.{ root, "left" });
+    defer a.free(left);
+    const right = try std.fs.path.join(a, &.{ root, "right" });
+    defer a.free(right);
+    const out = try std.fs.path.join(a, &.{ root, "out" });
+    defer a.free(out);
+    // Three consecutive records in one source plus interleaving source records
+    // exercise source title-buffer reuse and the global previous-title copy.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = left, .data = "WIKBLB08\x07a\x00\x01Ab\x00\x01Bd\x00\x01Df\x00\x01F" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = right, .data = "WIKBLB08\x07c\x00\x01Ce\x00\x00g\x00\x01G" });
+    try std.testing.expectEqual(@as(usize, 7), try mergeOne(io, a, out, .supplemental, &.{ left, right }));
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, out, a, .limited(4096));
+    defer a.free(bytes);
+    try std.testing.expectEqualSlices(u8, "WIKBLB08\x07a\x00\x01Ab\x00\x01Bc\x00\x01Cd\x00\x01De\x00\x00f\x00\x01Fg\x00\x01G", bytes);
+    _ = try format.inspect(bytes);
+}
+
+test "streamed merge keeps source-order and cross-source-duplicate errors distinct" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const left = try std.fs.path.join(a, &.{ root, "left" });
+    defer a.free(left);
+    const right = try std.fs.path.join(a, &.{ root, "right" });
+    defer a.free(right);
+    const out = try std.fs.path.join(a, &.{ root, "out" });
+    defer a.free(out);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = right, .data = "WIKBLB08\x07a\x00\x01R" });
+    for ([_][]const u8{
+        "WIKBLB08\x07a\x00\x01Aa\x00\x01B",
+        "WIKBLB08\x07b\x00\x01Ba\x00\x01A",
+    }) |invalid| {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = left, .data = invalid });
+        try std.testing.expectError(error.InvalidBlob, mergeOne(io, a, out, .supplemental, &.{ left, right }));
+        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, out, .{}));
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = left, .data = "WIKBLB08\x07a\x00\x01L" });
+    // Both shards individually valid; no silent first/last-wins deduplication.
+    try std.testing.expectError(error.DuplicateRecord, mergeOne(io, a, out, .supplemental, &.{ left, right }));
+}
+
+test "streamed merge preserves per-input validation and mismatch precedence" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const left = try std.fs.path.join(a, &.{ root, "left" });
+    defer a.free(left);
+    const right = try std.fs.path.join(a, &.{ root, "right" });
+    defer a.free(right);
+    const out = try std.fs.path.join(a, &.{ root, "out" });
+    defer a.free(out);
+    // The same input must be framing/order-validated before kind is checked.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = left, .data = "WIKBLB08\x02a\x00\x80" });
+    try std.testing.expectError(error.InvalidBlob, mergeOne(io, a, out, .supplemental, &.{left}));
+    // But an earlier valid wrong-kind source wins over a later corrupt source.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = left, .data = "WIKBLB08\x02a\x00\x00" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = right, .data = "WIKBLB08\x07a\x00\x80" });
+    try std.testing.expectError(error.KindMismatch, mergeOne(io, a, out, .supplemental, &.{ left, right }));
+    // Empty codes are legal, but byte-different language metadata cannot merge.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = left, .data = "WIKBLB08\x01en\x00English\x00" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = right, .data = "WIKBLB08\x01fr\x00English\x00" });
+    try std.testing.expectError(error.MetadataMismatch, mergeOne(io, a, out, .language, &.{ left, right }));
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, out, .{}));
 }

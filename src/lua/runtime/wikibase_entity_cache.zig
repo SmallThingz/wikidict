@@ -3,6 +3,31 @@
 const std = @import("std");
 const AllocationBudget = @import("allocation_budget.zig").AllocationBudget;
 
+pub fn projectionNumber(value: std.json.Value) !f64 {
+    const number: f64 = switch (value) {
+        .integer => |integer| @floatFromInt(integer),
+        .float => |float| float,
+        .number_string => |raw| std.fmt.parseFloat(f64, raw) catch return error.InvalidWikibaseEntitySnapshot,
+        else => return error.InvalidWikibaseEntitySnapshot,
+    };
+    if (!std.math.isFinite(number)) return error.InvalidWikibaseEntitySnapshot;
+    return number;
+}
+
+pub fn validateProjectionNumbers(value: std.json.Value) error{InvalidWikibaseEntitySnapshot}!void {
+    // Full conversion used to reject invalid numbers even in fields that the
+    // caller did not request. Preserve that boundary without allocating Lua.
+    switch (value) {
+        .integer, .float, .number_string => _ = try projectionNumber(value),
+        .array => |array| for (array.items) |item| try validateProjectionNumbers(item),
+        .object => |object| {
+            var it = object.iterator();
+            while (it.next()) |entry| try validateProjectionNumbers(entry.value_ptr.*);
+        },
+        else => {},
+    }
+}
+
 pub const Cache = struct {
     pub const max_entries = 128;
     pub const max_bytes = 32 * 1024 * 1024;
@@ -25,6 +50,7 @@ pub const Cache = struct {
     capacity_bypasses: u64 = 0,
     allocation_bypasses: u64 = 0,
     parse_bypasses: u64 = 0,
+    validation_bypasses: u64 = 0,
 
     pub fn create(backing: std.mem.Allocator, byte_limit: usize, entry_limit: usize) !*Cache {
         const limit = @min(byte_limit, max_bytes);
@@ -92,6 +118,16 @@ pub const Cache = struct {
             }
             // Do not repeatedly attempt an impossible admission before doing
             // the authoritative request parse. Existing hits remain usable.
+            self.admission_stopped = true;
+            return null;
+        };
+        // Certify the entire immutable tree once, including unrequested fields.
+        // A failed optional admission must leave the authoritative raw path.
+        validateProjectionNumbers(parsed.value) catch {
+            parsed.deinit();
+            allocator.destroy(entry);
+            std.debug.assert(self.budget.used == before);
+            self.validation_bypasses += 1;
             self.admission_stopped = true;
             return null;
         };
@@ -188,4 +224,20 @@ test "parsed entity cache optional OOM and malformed parse preserve prior hits" 
     defer disabled.destroy();
     try std.testing.expect(disabled.lookupOrAdmit(first_source) == null);
     try std.testing.expectEqual(@as(usize, @sizeOf(Cache)), disabled.budget.used);
+}
+
+test "parsed entity cache validates unrequested nested numbers before admission" {
+    const cache = try Cache.create(std.testing.allocator, Cache.max_bytes, Cache.max_entries);
+    defer cache.destroy();
+    const good_source = "{\"id\":\"Q1\",\"schemaVersion\":2,\"unused\":[{\"n\":1.5}]}";
+    const good = cache.lookupOrAdmit(good_source).?;
+    const retained = cache.budget.used;
+    const invalid_source = "{\"id\":\"Q2\",\"schemaVersion\":2,\"unused\":[{\"n\":1e9999}]}";
+    try std.testing.expect(cache.lookupOrAdmit(invalid_source) == null);
+    try std.testing.expectEqual(retained, cache.budget.used);
+    try std.testing.expectEqual(@as(usize, 1), cache.entry_count);
+    try std.testing.expectEqual(@as(u64, 1), cache.validation_bypasses);
+    try std.testing.expect(cache.admission_stopped);
+    try std.testing.expect(cache.lookupOrAdmit(good_source).? == good);
+    try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, validateProjectionNumbers(.{ .number_string = "1e9999" }));
 }

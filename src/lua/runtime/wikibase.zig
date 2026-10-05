@@ -159,30 +159,8 @@ const EntityProjection = struct {
     }
 };
 
-fn projectionNumber(value: std.json.Value) !f64 {
-    const number: f64 = switch (value) {
-        .integer => |integer| @floatFromInt(integer),
-        .float => |float| float,
-        .number_string => |raw| std.fmt.parseFloat(f64, raw) catch return error.InvalidWikibaseEntitySnapshot,
-        else => return error.InvalidWikibaseEntitySnapshot,
-    };
-    if (!std.math.isFinite(number)) return error.InvalidWikibaseEntitySnapshot;
-    return number;
-}
-
-fn validateProjectionNumbers(value: std.json.Value) error{InvalidWikibaseEntitySnapshot}!void {
-    // Full conversion used to reject invalid numbers even in fields that the
-    // caller did not request. Preserve that boundary without allocating Lua.
-    switch (value) {
-        .integer, .float, .number_string => _ = try projectionNumber(value),
-        .array => |array| for (array.items) |item| try validateProjectionNumbers(item),
-        .object => |object| {
-            var it = object.iterator();
-            while (it.next()) |entry| try validateProjectionNumbers(entry.value_ptr.*);
-        },
-        else => {},
-    }
-}
+const projectionNumber = @import("wikibase_entity_cache.zig").projectionNumber;
+const validateProjectionNumbers = @import("wikibase_entity_cache.zig").validateProjectionNumbers;
 
 fn projectionField(table: std.json.Value, key: []const u8) ?std.json.Value {
     // jsonToLua turns canonical i64 object keys into numeric Lua keys. These
@@ -236,7 +214,8 @@ fn readProjectedEntity(runtime: *rt.Context, id: []const u8) !?EntityProjection 
         break :blk .{ .value = owned.value, .owned = owned };
     };
     errdefer parsed.deinit();
-    try validateProjectionNumbers(parsed.value);
+    if (entry.parsed == null or !entry.parsed_numbers_validated)
+        try validateProjectionNumbers(parsed.value);
     if (parsed.value != .object) return error.InvalidWikibaseEntitySnapshot;
     const version = projectionField(parsed.value, "schemaVersion") orelse return error.InvalidWikibaseEntitySnapshot;
     if (try projectionNumber(version) < 2) return error.InvalidWikibaseEntitySnapshot;
@@ -1063,10 +1042,11 @@ test "Wikibase entity object methods preserve subentity identity and clone state
 const ProjectionProbe = struct {
     source: []const u8,
     parsed: ?*const std.json.Value = null,
+    parsed_numbers_validated: bool = false,
 
     fn entity(raw: ?*anyopaque, _: []const u8) !host_api.WikibaseEntity {
         const self: *@This() = @ptrCast(@alignCast(raw.?));
-        return .{ .source = self.source, .parsed = self.parsed };
+        return .{ .source = self.source, .parsed = self.parsed, .parsed_numbers_validated = self.parsed_numbers_validated };
     }
 
     fn scalar(runtime: *rt.Context, selector: []const u8, comptime sitelink: bool) ![]const Value {
@@ -1279,7 +1259,7 @@ test "Wikibase cached JSON remains immutable across fresh mutable entities and p
     const cache = try Cache.create(std.testing.allocator, Cache.max_bytes, Cache.max_entries);
     defer cache.destroy();
     const backing = cache.lookupOrAdmit(source).?;
-    var probe = ProjectionProbe{ .source = source, .parsed = backing };
+    var probe = ProjectionProbe{ .source = source, .parsed = backing, .parsed_numbers_validated = true };
     for (0..2) |_| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
@@ -1393,4 +1373,18 @@ test "Wikibase borrowed JSON does not suppress page conversion allocation failur
         try std.testing.expect(failing.has_induced_failure);
         runtime.allocator = original;
     }
+}
+
+test "Wikibase finite-number attestation does not bypass raw-source validation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var probe = ProjectionProbe{
+        .source = "{\"id\":\"Q1\",\"schemaVersion\":2,\"unused\":[{\"n\":1e9999}]}",
+        .parsed_numbers_validated = true,
+    };
+    var host = host_api.Host{ .ctx = &probe, .wikibase_entity = ProjectionProbe.entity };
+    host_api.set(&runtime, &host);
+    try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } }));
 }
