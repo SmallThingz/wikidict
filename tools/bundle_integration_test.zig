@@ -1,6 +1,7 @@
 //! End-to-end bundle test: Lua/templates execute before data blobs are published.
 const std = @import("std");
 const expander = @import("bundle_expander.zig");
+const encoder = @import("encoder");
 
 const source =
     "==English==\n===Noun===\n{{forms-alias|mouse}}\n" ++
@@ -11,6 +12,7 @@ const source =
     "# Missing transclusions: {{User:Absent}} / {{:Absent article}} / {{Category:Absent}}\n" ++
     "# Styled kanji: '''<span class=\"Jpan\" lang=\"ja\">兇</span>''' / '''<span lang=\"ja\">[[:凶#Japanese|凶]]</span>'''\n" ++
     "# Title magic: {{SUBJECTSPACE:Wiktionary talk:Sandbox}} / {{TALKSPACE:WT:Sandbox}}\n" ++
+    "# Foreign parser aliases: {{#استدعاء:IntegrationExports|ok}} / {{#لو:yes|wrong Arabic if|bad}} / {{نط:10}}\n" ++
     "# Parser functions: {{#time:Y M d|2013-3-31 +8 days}} / {{#formatdate:2010-01-02|dmy}} / {{#sub:αβγ|-1}} / {{#iferror:{{#expr:bogus}}|ERR|OK}}\n" ++
     "# Synth fork: {{#invoke:IntegrationSynth|run|forked}}\n" ++
     "# Pure fork: {{#invoke:IntegrationPureDataProbe|run}}\n" ++
@@ -347,6 +349,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms]]", .redirect = "Template:show-forms" },
         .{ .title = "Template:Template:nested", .ns = 10, .id = 12, .body = "nested namespace retained" },
         .{ .title = "Template:nested", .ns = 10, .id = 13, .body = "ordinary namespace distinct" },
+        .{ .title = "Template:نط:10", .ns = 10, .id = 31, .body = "English ordinary namespace template" },
         .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = module_source },
         .{ .title = "Module:IntegrationExports", .ns = 828, .id = 30, .body = "return {ok=function() return 'OK' end, value=17, callable=setmetatable({}, {__call=function() return 'BAD' end})}" },
         .{ .title = "Module:IntegrationSynth", .ns = 828, .id = 8, .body = "local answer = 42; local export = { kind = 'mixed', nested = { ok = true } }; local alias = export; alias.answer = answer; function alias.run(x) if type(x) == 'table' then return 'synth:' .. x.args[1] end; return 'synth:' .. x end; return export" },
@@ -698,6 +701,179 @@ fn compilerPipelineProbe(h: *Harness, compiler: []const u8, leaf_bc: []const u8,
     _ = try h.run(&.{ compiler, manifest, root, parallel, "--analysis-only", "--parse-workers", "4" }, 0);
 }
 
+fn verifyFixture(h: *Harness, verifier: []const u8, root: []const u8, expected_error: ?[]const u8) ![]const u8 {
+    const result = try std.process.run(h.a, h.io, .{
+        .argv = &.{ verifier, root },
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
+        .timeout = (std.Io.Timeout{ .duration = .{ .raw = .fromSeconds(30), .clock = .awake } }).toDeadline(h.io),
+    });
+    const expected_exit: u8 = if (expected_error != null) 1 else 0;
+    if (result.term != .exited or result.term.exited != expected_exit) {
+        std.debug.print("blob verifier fixture failed: {any}, expected {d}\n{s}\n{s}\n", .{ result.term, expected_exit, result.stdout, result.stderr });
+        return error.ChildFailed;
+    }
+    if (expected_error) |name| try h.require(std.mem.indexOf(u8, result.stderr, name) != null, name);
+    h.checks += 1;
+    return result.stderr;
+}
+
+fn unclassifiedLanguageProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const format = encoder.blob_format;
+    const catalog = encoder.blob_catalog;
+    const root = try std.fs.path.join(h.a, &.{ dir, "unclassified-dictionary" });
+    const dump = try std.fs.path.join(h.a, &.{ dir, "unclassified.xml" });
+    const namespaces = try std.fs.path.join(h.a, &.{ dir, "unclassified-namespaces.tsv" });
+    const languages = try std.fs.path.join(h.a, &.{ dir, "unclassified-languages.tsv" });
+    const magic = try std.fs.path.join(h.a, &.{ dir, "unclassified-magic-words.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = namespaces,
+        .data = "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+            "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+            "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+            "14\tتصنيف\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
+            "828\tوحدة\tModule\tcase-sensitive\t1\t0\t0\tScribunto\tcompile_only\tmodules\n",
+    });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = languages,
+        .data = "# wikidict-language-registry-v2\n# content-language\tar\n# mediawiki\nar\tالعربية\tar\tArabic\tara\n# iso-639-3\n",
+    });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = magic,
+        .data = "# wikidict-magic-words-v2\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+            "invoke\t0\tاستدعاء\ninvoke\t0\tinvoke\nif\t0\tلو\nif\t0\tif\n" ++
+            "ns\t0\tنط:\nns\t0\tNS:\nuc\t0\tكبير:\nuc\t0\tUC:\n" ++
+            "displaytitle\t1\tDISPLAYTITLE\ndisplaytitle\t1\tعرض_العنوان\n" ++
+            "defaultsort\t1\tDEFAULTSORT:\ndefaultsort\t1\tترتيب_افتراضي:\n",
+    });
+    try writePages(h.io, h.a, dump, &.{
+        .{ .title = "mixed", .ns = 0, .id = 1, .body = "{{DISPLAYTITLE:''mixed''}}{{ترتيب_افتراضي:sort-key}}\n==العربية==\n# Known Arabic definition.\n" ++
+            "# Localized parser: {{localized-wrapper|passed}}\n" ++
+            "# Namespace and case aliases: {{نط:10}} / {{كبير:abc}}\n" ++
+            "# Sensitive misses: {{displaytitle:wrong}} / {{defaultsort:wrong}}\n" ++
+            "=={{اللغة|Fixture unknown language}}==\n===Noun===\n# Isolated unknown definition.\n" },
+        .{ .title = "unknown-only", .ns = 0, .id = 2, .body = "=={{اللغة|Fixture unknown language}}==\n# Second isolated definition.\n" },
+        .{ .title = "قالب:اللغة", .ns = 10, .id = 3, .body = "{{{1|}}}" },
+        .{ .title = "قالب:localized-wrapper", .ns = 10, .id = 4, .body = "{{#لو:{{{1|}}}|{{#استدعاء:AliasProbe|run|{{{1|}}}}}|{{unselected-loop}}}}" },
+        .{ .title = "قالب:unselected-loop", .ns = 10, .id = 5, .body = "{{unselected-loop}}" },
+        .{ .title = "قالب:displaytitle:wrong", .ns = 10, .id = 6, .body = "ordinary displaytitle template" },
+        .{ .title = "قالب:defaultsort:wrong", .ns = 10, .id = 7, .body = "ordinary defaultsort template" },
+        .{ .title = "وحدة:AliasProbe", .ns = 828, .id = 8, .body = "return {run=function(frame) " ++
+            "assert(frame.args[1] == 'passed'); " ++
+            "local nested = frame:callParserFunction{name='#استدعاء',args={'AliasTarget','run',x='native'}}; " ++
+            "assert(nested == 'nested-native'); " ++
+            "return 'localized native ' .. frame.args[1] .. '; ' .. nested end}" },
+        .{ .title = "وحدة:AliasTarget", .ns = 828, .id = 9, .body = "return {run=function(frame) return 'nested-' .. frame.args.x end}" },
+    });
+    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespaces, "--language-registry-snapshot", languages, "--magic-words-snapshot", magic, "--llvm-workers", "1", "--page-workers", "1" }, 0);
+    const verified = try verifyFixture(h, verifier, root, null);
+    try h.require(std.mem.indexOf(u8, verified, "verified compiled blobs: language_blobs=2 language_records=3 ") != null, "language-kind totals include retained unclassified records");
+    try h.require(std.mem.indexOf(u8, verified, "unverified language data: blobs=1 records=2\n") != null, "verifier separately reports unverified records");
+
+    const inventory = try h.run(&.{ bin, "languages", "--root", root, "--format", "json" }, 0);
+    var inventory_json = try std.json.parseFromSlice(std.json.Value, h.a, inventory, .{});
+    defer inventory_json.deinit();
+    const object = inventory_json.value.object;
+    try h.require(object.get("heading_count").?.integer == 2 and object.get("language_count").?.integer == 1 and object.get("unverified_count").?.integer == 1, "reader distinguishes known languages from the unclassified bucket");
+    var known_found = false;
+    var unverified_found = false;
+    for (object.get("accounting").?.array.items) |item| {
+        const row = item.object;
+        if (std.mem.eql(u8, row.get("heading").?.string, "Unclassified")) {
+            unverified_found = true;
+            try h.require(row.get("code").?.string.len == 0 and std.mem.eql(u8, row.get("classification").?.string, "unverified") and row.get("records").?.integer == 2, "reserved bucket keeps an empty code and unverified classification");
+        } else {
+            known_found = true;
+            try h.require(std.mem.eql(u8, row.get("heading").?.string, "العربية") and std.mem.eql(u8, row.get("code").?.string, "ar") and std.mem.eql(u8, row.get("classification").?.string, "language") and row.get("records").?.integer == 1, "known Arabic language metadata remains verified");
+        }
+    }
+    try h.require(known_found and unverified_found, "both language classifications are present");
+    const known = try h.run(&.{ bin, "lookup", "mixed", "--root", root, "--language", "العربية", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, known, "Known Arabic definition.") != null and std.mem.indexOf(u8, known, "Isolated unknown definition.") == null, "an unresolved explicit declaration never inherits the previous language");
+    try h.require(std.mem.indexOf(u8, known, "Localized parser: localized native passed; nested-native") != null, "localized invoke works through a parameterized lazy template and the compiled Lua frame API");
+    try h.require(std.mem.indexOf(u8, known, "Namespace and case aliases: قالب / ABC") != null, "localized no-hash parser aliases retain captured trailing-colon semantics");
+    try h.require(std.mem.indexOf(u8, known, "Sensitive misses: ordinary displaytitle template / ordinary defaultsort template") != null, "sensitive alias misses do not fall through to case-insensitive English parser functions");
+    const unknown = try h.run(&.{ bin, "lookup", "mixed", "--root", root, "--language", "Unclassified", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, unknown, "Isolated unknown definition.") != null and std.mem.indexOf(u8, unknown, "Fixture unknown language") != null and std.mem.indexOf(u8, unknown, "Known Arabic definition.") == null, "unclassified lookup preserves the exact unknown heading and its own definition");
+
+    const fallback_path = try std.fs.path.join(h.a, &.{ root, "fallback-pages.jsonl" });
+    const fallback_bytes = try std.Io.Dir.cwd().readFileAlloc(h.io, fallback_path, h.a, .limited(4096));
+    var lines = std.mem.tokenizeScalar(u8, fallback_bytes, '\n');
+    var fallback_count: usize = 0;
+    var mixed_reported = false;
+    var only_reported = false;
+    while (lines.next()) |line| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, h.a, line, .{});
+        defer parsed.deinit();
+        const row = parsed.value.object;
+        const title = row.get("title").?.string;
+        if (std.mem.eql(u8, title, "mixed")) mixed_reported = true else if (std.mem.eql(u8, title, "unknown-only")) only_reported = true else return error.UnexpectedFallback;
+        const reasons = row.get("reasons").?.array.items;
+        try h.require(row.get("namespace").?.integer == 0 and reasons.len == 1 and std.mem.eql(u8, reasons[0].string, "unresolved_language_heading"), "unclassified records retain their precise fallback diagnostic");
+        fallback_count += 1;
+    }
+    try h.require(fallback_count == 2 and mixed_reported and only_reported, "every isolated page is reported without losing content");
+
+    var filename: [catalog.language_blob_filename_len]u8 = undefined;
+    const unclassified_path = try std.fs.path.join(h.a, &.{ root, catalog.language_directory, catalog.languageBlobFilename("Unclassified", &filename) });
+    const complete = try std.Io.Dir.cwd().readFileAlloc(h.io, unclassified_path, h.a, .limited(1024 * 1024));
+    const blob = try format.inspect(complete);
+    var records = blob.iterator();
+    const record = (try records.next()) orelse return error.MissingUnclassifiedRecord;
+    const corrupted_payload = try h.a.dupe(u8, record.payload);
+    corrupted_payload[0] ^= 0xff;
+    const Rejection = struct { name: []const u8, heading: []const u8, catalog_heading: ?[]const u8 = null, corrupt: bool = false, expected: []const u8 };
+    const rejections = [_]Rejection{
+        .{ .name = "ordinary-empty-code", .heading = "English", .expected = "UnverifiedLanguage" },
+        .{ .name = "lowercase-reserved-name", .heading = "unclassified", .expected = "UnverifiedLanguage" },
+        .{ .name = "spaced-reserved-name", .heading = "Unclassified ", .expected = "UnverifiedLanguage" },
+        .{ .name = "catalog-mismatch", .heading = "Unclassified", .catalog_heading = "English", .expected = "UnexpectedLanguageBlob" },
+        .{ .name = "corrupt-unclassified-payload", .heading = "Unclassified", .corrupt = true, .expected = "InvalidPresentation" },
+    };
+    for (rejections) |rejection| {
+        const rejected_root = try std.fs.path.join(h.a, &.{ dir, rejection.name });
+        try std.Io.Dir.cwd().createDirPath(h.io, try std.fs.path.join(h.a, &.{ rejected_root, catalog.language_directory }));
+        const heading = rejection.catalog_heading orelse rejection.heading;
+        const manifest = try std.fmt.allocPrint(h.a, "{s}\n{s}\n", .{ catalog.manifest_header, heading });
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(h.a, &.{ rejected_root, catalog.manifest_filename }), .data = manifest });
+        const metadata = try format.buildLanguageMetadataAlloc(h.a, "", rejection.heading);
+        const bytes = try format.buildAlloc(h.a, .language, metadata, &.{.{ .title = record.title, .payload = if (rejection.corrupt) corrupted_payload else record.payload }});
+        const path = try std.fs.path.join(h.a, &.{ rejected_root, catalog.language_directory, catalog.languageBlobFilename(heading, &filename) });
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = path, .data = bytes });
+        _ = try verifyFixture(h, verifier, rejected_root, rejection.expected);
+    }
+    _ = try verifyFixture(h, verifier, root, null);
+}
+
+fn japaneseParserAliasProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const root = try std.fs.path.join(h.a, &.{ dir, "japanese-dictionary" });
+    const dump = try std.fs.path.join(h.a, &.{ dir, "japanese.xml" });
+    const namespaces = try std.fs.path.join(h.a, &.{ dir, "japanese-namespaces.tsv" });
+    const languages = try std.fs.path.join(h.a, &.{ dir, "japanese-languages.tsv" });
+    const magic = try std.fs.path.join(h.a, &.{ dir, "japanese-magic-words.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = namespaces,
+        .data = "# wikidict-namespace-registry-v1\n# wiki\tjawiktionary\n# dump-date\t20261001\n# content-language\tja\n" ++
+            "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+            "10\tテンプレート\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+            "14\tカテゴリ\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n",
+    });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = languages, .data = "# wikidict-language-registry-v2\n# content-language\tja\n# mediawiki\nja\t日本語\tja\tjpn\n# iso-639-3\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = magic,
+        // Register the insensitive parser alias first; the exact sensitive
+        // title-function match must still win across the two function families.
+        .data = "# wikidict-magic-words-v2\n# wiki\tjawiktionary\n# dump-date\t20261001\n# content-language\tja\n" ++
+            "ns\t0\t名前空間:\nnamespace\t1\t名前空間\nns\t0\t空間：\n",
+    });
+    try writePages(h.io, h.a, dump, &.{.{ .title = "単語", .ns = 0, .id = 1, .body = "==日本語==\n# Cross-family collision: {{名前空間:Template:Child}}\n# Fullwidth namespace alias: {{空間：10}}\n" }});
+    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespaces, "--language-registry-snapshot", languages, "--magic-words-snapshot", magic, "--llvm-workers", "1", "--page-workers", "1" }, 0);
+    _ = try verifyFixture(h, verifier, root, null);
+    const word = try h.run(&.{ bin, "lookup", "単語", "--root", root, "--language", "日本語", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, word, "Cross-family collision: テンプレート") != null, "sensitive Japanese title alias wins over an insensitive parser alias");
+    try h.require(std.mem.indexOf(u8, word, "Fullwidth namespace alias: テンプレート") != null, "captured fullwidth colon aliases resolve before native publication");
+}
+
 fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
     const namespaces = @import("namespace_registry");
     const german_root = try std.fs.path.join(h.a, &.{ dir, "german-dictionary" });
@@ -918,6 +1094,8 @@ pub fn main(init: std.process.Init) !void {
     try usageRebuildProbe(&h, argv[8], dir);
     try compilerPipelineProbe(&h, argv[5], argv[7], dir);
     try localizedEditionProbe(&h, pipeline, verifier, bin, dir);
+    try unclassifiedLanguageProbe(&h, pipeline, verifier, bin, dir);
+    try japaneseParserAliasProbe(&h, pipeline, verifier, bin, dir);
     try deadlineProbe(init.io, a, dir);
     try failureMetadataProbe(&h, dir);
     try expansionFallbackProbe(&h, argv[6], verifier, bin, dir);
@@ -997,6 +1175,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "project namespace transclusion") != null, "namespace-alias transclusion is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Styled kanji: 兇 / 凶") != null, "emphasized HTML compiles to semantic styled text and links");
     try h.require(std.mem.indexOf(u8, text, "Title magic: Wiktionary / Wiktionary talk") != null, "title magic words are resolved before publication");
+    try h.require(std.mem.indexOf(u8, text, "Foreign parser aliases: {{#استدعاء:IntegrationExports|ok}} / {{#لو:yes|wrong Arabic if|bad}} / English ordinary namespace template") != null, "Arabic parser aliases remain inert or ordinary templates in the English edition");
     try h.require(std.mem.indexOf(u8, text, "Parser functions: 2013 Apr 08 / 2 January 2010 / γ / ERR") != null, "corpus parser functions are baked into data");
     try h.require(std.mem.indexOf(u8, text, "Synth fork: synth:forked") != null, "synthesized roots materialize in fresh invoke contexts");
     try h.require(std.mem.indexOf(u8, text, "Pure fork: x") != null, "pure-data roots materialize independently in fresh invoke contexts");

@@ -624,6 +624,7 @@ pub fn build(b: *std.Build) void {
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });
     addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}), &.{});
     const bundle_test_exe = addCliExecutable(b, "dict-bundle-integration-test", b.path("tools/bundle_integration_test.zig"), b.graph.host, test_optimize, &.{ .{ .name = "bundle_protocol", .module = bundle_protocol_mod_test }, .{ .name = "namespace_registry", .module = namespace_registry_test_mod } });
+    bundle_test_exe.root_module.addImport("encoder", encoder_mod_test);
     const bundle_test_run = b.addRunArtifact(bundle_test_exe);
     bundle_test_run.addFileArg(blob_query_exe.getEmittedBin());
     bundle_test_run.addFileArg(pipeline_exe.getEmittedBin());

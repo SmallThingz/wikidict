@@ -28,6 +28,8 @@ fn mmapPath(io: std.Io, path: []const u8) !Mapped {
 const Stats = struct {
     language_blobs: usize = 0,
     language_records: usize = 0,
+    unverified_blobs: usize = 0,
+    unverified_records: usize = 0,
     thesaurus_records: usize = 0,
     citations_records: usize = 0,
     reconstruction_records: usize = 0,
@@ -77,7 +79,10 @@ fn verifyBlob(
     if (blob.kind != expected_kind) return error.UnexpectedBlobKind;
 
     const metadata = if (expected_kind == .language) try blob.languageMetadata() else null;
-    if (metadata) |language| if (language.code.len == 0) return error.UnverifiedLanguage;
+    const unverified = if (metadata) |language| language.code.len == 0 else false;
+    // The encoder retains unresolved language declarations in this reserved
+    // bucket. It remains unverified and receives the same payload validation.
+    if (unverified and !std.mem.eql(u8, metadata.?.heading, "Unclassified")) return error.UnverifiedLanguage;
     if (expected_language) |heading| {
         if (metadata == null or !std.mem.eql(u8, metadata.?.heading, heading)) return error.UnexpectedLanguageBlob;
     } else if (metadata != null) return error.InvalidBlob;
@@ -89,6 +94,10 @@ fn verifyBlob(
         count += 1;
     }
     stats.add(expected_kind, count);
+    if (unverified) {
+        stats.unverified_blobs += 1;
+        stats.unverified_records += count;
+    }
 }
 
 fn verifyOptionalFeature(
@@ -178,4 +187,5 @@ pub fn main(init: std.process.Init) !void {
             stats.supplemental_records,
         },
     );
+    std.debug.print("unverified language data: blobs={d} records={d}\n", .{ stats.unverified_blobs, stats.unverified_records });
 }
