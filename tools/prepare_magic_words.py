@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture and verify edition-scoped title magic words without changing old captures.
+"""Capture, derive, and verify edition-scoped magic words without changing old captures.
 
 The dump date associates this input with a corpus snapshot. The API response is
 an observation at its recorded retrieval time, not historical dump metadata.
@@ -22,12 +22,22 @@ SUPPORTED = frozenset('''pagename pagenamee fullpagename fullpagenamee namespace
 namespacee namespacenumber basepagename basepagenamee rootpagename rootpagenamee
 subpagename subpagenamee subjectspace subjectspacee talkspace talkspacee
 subjectpagename subjectpagenamee talkpagename talkpagenamee'''.split())
+PARSER_FUNCTIONS = frozenset('''special tag formatdate time len sub titleparts iferror
+invoke categorytree if ifeq ifexist switch expr ifexpr displaytitle defaultsort ns
+uc lc ucfirst lcfirst formatnum plural anchorencode fullurl fullurle localurl
+canonicalurl urlencode padleft padright'''.split())
+TITLE_PROFILE = 'title-v1'
+PARSER_PROFILE = 'title-and-parser-functions-v1'
+DERIVED_DIRECTORY = 'magic-words-parser-v1'
 MAX_RAW_BYTES = 4 * 1024 * 1024
 MAX_TSV_BYTES = 1024 * 1024
 AGENT = 'Wikidict/1.0 (https://github.com/SmallThingz/wikidict)'
 ARTIFACTS = frozenset(('magic-words.raw.json', 'magic-words.tsv',
     'magic-words.request.json', 'namespace-siteinfo.raw.json',
     'namespace-capture.complete.json'))
+SOURCE_MANIFEST = 'magic-words.source.manifest.json'
+SOURCE_TSV = 'magic-words.source.tsv'
+DERIVED_ARTIFACTS = ARTIFACTS | {SOURCE_MANIFEST, SOURCE_TSV}
 
 
 def digest(data):
@@ -74,9 +84,12 @@ def source_url(wiki):
     return 'https://' + prefix + '.wiktionary.org/w/api.php?' + urllib.parse.urlencode(params)
 
 
-def render_snapshot(data, wiki, date, content_language):
+def render_snapshot(data, wiki, date, content_language, profile=TITLE_PROFILE):
     identity(wiki, date)
     language(content_language)
+    if profile not in (TITLE_PROFILE, PARSER_PROFILE):
+        raise ValueError('Unknown magic-word projection profile')
+    supported = SUPPORTED | PARSER_FUNCTIONS if profile == PARSER_PROFILE else SUPPORTED
     if not isinstance(data, dict) or any(data.get(k) for k in ('error', 'errors', 'warnings', 'continue')):
         raise ValueError('Incomplete or unsuccessful siteinfo response')
     query = data.get('query')
@@ -93,7 +106,7 @@ def render_snapshot(data, wiki, date, content_language):
         if not isinstance(word, dict) or not isinstance(word.get('name'), str):
             raise ValueError('Invalid magic-word record')
         name = word['name']
-        if name not in SUPPORTED:
+        if name not in supported:
             continue
         if name in seen_ids:
             raise ValueError('Duplicate canonical magic word: ' + name)
@@ -112,15 +125,33 @@ def render_snapshot(data, wiki, date, content_language):
             # rows; the native resolver applies variable/function registration
             # precedence, which cannot be inferred from TSV sorting.
             rows.add((name, int(sensitive), alias))
-    if seen_ids != SUPPORTED:
+    if not SUPPORTED.issubset(seen_ids):
         raise ValueError('Incomplete supported title magic words: ' + ','.join(sorted(SUPPORTED - seen_ids)))
-    header = ('# wikidict-magic-words-v1\n# wiki\t' + wiki + '\n# dump-date\t' + date
+    header = ('# wikidict-magic-words-' + ('v2' if profile == PARSER_PROFILE else 'v1')
+              + '\n# wiki\t' + wiki + '\n# dump-date\t' + date
               + '\n# content-language\t' + content_language + '\n')
     body = ''.join(name + '\t' + str(flag) + '\t' + alias + '\n' for name, flag, alias in sorted(rows))
     output = (header + body).encode('utf-8')
     if len(output) > MAX_TSV_BYTES:
         raise ValueError('Title magic-word table exceeds the native registry limit')
     return output, len(rows)
+
+
+def canonical_word_count(output):
+    return len({line.split(b'\t', 1)[0] for line in output.splitlines()
+                if line and not line.startswith(b'#')})
+
+
+def capture_profile(manifest):
+    if not isinstance(manifest, dict) or type(manifest.get('version')) is not int:
+        raise ValueError('Invalid magic-word capture version')
+    version = manifest['version']
+    profile = manifest.get('profile', TITLE_PROFILE if version == 1 else None)
+    if version == 1 and profile == TITLE_PROFILE:
+        return profile, ARTIFACTS
+    if version == 2 and profile == PARSER_PROFILE:
+        return profile, DERIVED_ARTIFACTS
+    raise ValueError('Invalid magic-word capture version/profile')
 
 
 def read_regular(path, limit=MAX_RAW_BYTES):
@@ -168,32 +199,53 @@ def validate_snapshot(path, wiki=None, date=None):
     if root.is_symlink() or not root.is_dir():
         raise ValueError('Unsafe magic-word capture directory')
     manifest = parse_json(read_regular(root / 'magic-words.manifest.json'))
-    if not isinstance(manifest, dict):
-        raise ValueError('Invalid magic-word capture manifest')
+    _, artifacts = capture_profile(manifest)
+    blobs = {name: read_regular(root / name) for name in artifacts}
+    return validate_capture(manifest, blobs, wiki, date)
+
+
+def validate_capture(manifest, blobs, wiki=None, date=None):
+    """Validate either projection, including an embedded original v1 capture."""
+    profile, artifacts = capture_profile(manifest)
     if (wiki is not None and manifest.get('wiki') != wiki
             or date is not None and manifest.get('date') != date):
         raise ValueError('Magic-word capture differs from requested edition/date')
     wiki, date = manifest.get('wiki'), manifest.get('date')
     identity(wiki, date)
-    if (type(manifest.get('version')) is not int or manifest['version'] != 1
-            or manifest.get('wiki') != wiki or manifest.get('date') != date
+    if (manifest.get('wiki') != wiki or manifest.get('date') != date
             or manifest.get('temporal_scope') != 'current-at-retrieval'):
         raise ValueError('Magic-word capture identity or temporal scope mismatch')
-    if not isinstance(manifest.get('artifacts'), dict) or set(manifest['artifacts']) != ARTIFACTS:
+    if not isinstance(manifest.get('artifacts'), dict) or set(manifest['artifacts']) != artifacts:
         raise ValueError('Incomplete magic-word capture provenance')
-    blobs = {name: read_regular(root / name) for name in ARTIFACTS}
+    if set(blobs) != artifacts:
+        raise ValueError('Incomplete magic-word capture artifacts')
     if any(digest(raw) != manifest['artifacts'][name] for name, raw in blobs.items()):
         raise ValueError('Changed magic-word capture artifact')
     content_language = namespace_input(blobs['namespace-siteinfo.raw.json'],
         blobs['namespace-capture.complete.json'], wiki, date)
     if manifest.get('content_language') != content_language:
         raise ValueError('Magic-word capture language differs from pinned namespace')
-    output, rows = render_snapshot(parse_json(blobs['magic-words.raw.json']), wiki, date, content_language)
+    if profile == PARSER_PROFILE:
+        source_manifest = parse_json(blobs[SOURCE_MANIFEST])
+        if capture_profile(source_manifest)[0] != TITLE_PROFILE or source_manifest['version'] != 1:
+            raise ValueError('Derived magic words require an original v1 source capture')
+        source_blobs = {name: blobs[name] for name in ARTIFACTS}
+        source_blobs['magic-words.tsv'] = blobs[SOURCE_TSV]
+        validate_capture(source_manifest, source_blobs, wiki, date)
+        expected_source = dict(profile=TITLE_PROFILE,
+            manifest_sha256=digest(blobs[SOURCE_MANIFEST]), output_sha256=digest(blobs[SOURCE_TSV]))
+        if manifest.get('source_capture') != expected_source:
+            raise ValueError('Derived magic-word source identity mismatch')
+        if timestamp(manifest.get('derived_utc')) < timestamp(manifest.get('retrieved_utc')):
+            raise ValueError('Derivation predates the source retrieval')
+    output, rows = render_snapshot(parse_json(blobs['magic-words.raw.json']), wiki, date, content_language, profile)
     if output != blobs['magic-words.tsv']:
         raise ValueError('Magic-word output does not replay from its raw response')
     if (manifest.get('raw_sha256') != digest(blobs['magic-words.raw.json'])
             or manifest.get('output_sha256') != digest(output)
-            or manifest.get('output_bytes') != len(output) or manifest.get('rows') != rows):
+            or manifest.get('output_bytes') != len(output) or manifest.get('rows') != rows
+            or type(manifest.get('canonical_words')) is not int
+            or manifest['canonical_words'] != canonical_word_count(output)):
         raise ValueError('Magic-word output identity mismatch')
     request = parse_json(blobs['magic-words.request.json'])
     if not isinstance(request, dict):
@@ -212,6 +264,71 @@ def validate_snapshot(path, wiki=None, date=None):
     if not re.fullmatch(r'[0-9a-f]{64}', manifest.get('generator_sha256', '')):
         raise ValueError('Missing capture generator identity')
     return manifest
+
+
+def selected_snapshot_root(capture_root):
+    """Prefer the expanded projection; an incomplete new capture must not fall back."""
+    root = Path(capture_root)
+    derived = root / DERIVED_DIRECTORY
+    if derived.exists() or derived.is_symlink():
+        manifest = validate_snapshot(derived)
+        if manifest['version'] != 2 or manifest.get('profile') != PARSER_PROFILE:
+            raise ValueError('Expanded capture directory requires the parser profile')
+        return derived
+    return root / 'magic-words'
+
+
+def write_capture(output, artifacts, manifest):
+    output.mkdir(parents=True, exist_ok=False)
+    # The manifest is published last; partial directories are never reusable.
+    for name, body in [*artifacts.items(), ('magic-words.manifest.json', document(manifest))]:
+        with (output / name).open('xb') as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        (output / name).chmod(0o444)
+
+
+def derive_snapshot(source, output, wiki=None, date=None):
+    """Derive an immutable parser profile from saved raw bytes, without networking."""
+    source = Path(source)
+    source = source.parent if source.name == 'magic-words.tsv' else source
+    output = Path(output)
+    original = validate_snapshot(source, wiki, date)
+    if original['version'] != 1:
+        raise ValueError('Derivation requires an original v1 source capture')
+    wiki, date = original['wiki'], original['date']
+    blobs = {name: read_regular(source / name) for name in ARTIFACTS}
+    source_manifest_raw = read_regular(source / 'magic-words.manifest.json')
+    if parse_json(source_manifest_raw) != original:
+        raise ValueError('Source capture changed during derivation')
+    validate_capture(original, blobs, wiki, date)
+    source_identity = dict(profile=TITLE_PROFILE, manifest_sha256=digest(source_manifest_raw),
+                           output_sha256=digest(blobs['magic-words.tsv']))
+    if output.exists() or output.is_symlink():
+        existing = validate_snapshot(output, wiki, date)
+        if existing.get('profile') != PARSER_PROFILE or existing.get('source_capture') != source_identity:
+            raise ValueError('Existing derivation uses a different source capture')
+        return existing, False
+    tsv, rows = render_snapshot(parse_json(blobs['magic-words.raw.json']), wiki, date,
+                                original['content_language'], PARSER_PROFILE)
+    artifacts = {**blobs, SOURCE_MANIFEST: source_manifest_raw,
+                 SOURCE_TSV: blobs['magic-words.tsv'], 'magic-words.tsv': tsv}
+    manifest = dict(version=2, profile=PARSER_PROFILE, wiki=wiki, date=date,
+        content_language=original['content_language'], temporal_scope=original['temporal_scope'],
+        retrieved_utc=original['retrieved_utc'], source_url=original['source_url'],
+        raw_sha256=original['raw_sha256'], output_sha256=digest(tsv), output_bytes=len(tsv),
+        rows=rows, canonical_words=canonical_word_count(tsv), generator_sha256=PRODUCER_SHA256,
+        derived_utc=dt.datetime.now(dt.timezone.utc).isoformat(), source_capture=source_identity,
+        artifacts={name: digest(body) for name, body in artifacts.items()})
+    validate_capture(manifest, artifacts, wiki, date)
+    if digest(Path(__file__).read_bytes()) != PRODUCER_SHA256:
+        raise ValueError('Derivation generator changed during execution')
+    if (read_regular(source / 'magic-words.manifest.json') != source_manifest_raw
+            or any(read_regular(source / name) != raw for name, raw in blobs.items())):
+        raise ValueError('Source capture changed during derivation')
+    write_capture(output, artifacts, manifest)
+    return validate_snapshot(output, wiki, date), True
 
 
 def fetch_response(url):
@@ -274,14 +391,7 @@ def capture_snapshot(capture_root, wiki, date, output=None, fetcher=None):
             or read_regular(capture_root / 'namespace-siteinfo.raw.json') != pinned_raw
             or read_regular(capture_root / 'capture.complete.json') != pinned_complete):
         raise ValueError('Capture producer or pinned namespace input changed')
-    output.mkdir(parents=True, exist_ok=False)
-    # The manifest is published last; partial directories are never reusable.
-    for name, body in [*artifacts.items(), ('magic-words.manifest.json', document(manifest))]:
-        with (output / name).open('xb') as stream:
-            stream.write(body)
-            stream.flush()
-            os.fsync(stream.fileno())
-        (output / name).chmod(0o444)
+    write_capture(output, artifacts, manifest)
     return validate_snapshot(output, wiki, date), True
 
 
@@ -296,6 +406,8 @@ def main():
     parser.add_argument('--project', type=Path, default=Path('.'))
     parser.add_argument('--wikis', nargs='+')
     parser.add_argument('--verify', action='store_true')
+    parser.add_argument('--derive-existing', action='store_true',
+        help='Derive the expanded parser profile offline from each existing title capture')
     args = parser.parse_args()
     selected = []
     if args.capture_root:
@@ -324,8 +436,12 @@ def main():
         started = time.monotonic()
         try:
             if args.verify:
-                result = validate_snapshot(output or root / 'magic-words', wiki, date)
+                result = validate_snapshot(output or root / (DERIVED_DIRECTORY if args.derive_existing else 'magic-words'), wiki, date)
+                if args.derive_existing and (result['version'] != 2 or result.get('profile') != PARSER_PROFILE):
+                    raise ValueError('Expanded capture verification requires the parser profile')
                 created = False
+            elif args.derive_existing:
+                result, created = derive_snapshot(root / 'magic-words', output or root / DERIVED_DIRECTORY, wiki, date)
             else:
                 result, created = capture_snapshot(root, wiki, date, output)
             print(json.dumps(dict(wiki=wiki, date=date, status='verified', created=created,

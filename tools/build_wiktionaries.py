@@ -272,7 +272,8 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 present=[p.exists() or p.is_symlink() for p in (path,sidecar)]
                 if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
                 if all(present):snapshots[name]=path
-            magic_root=root/'magic-words'
+            from prepare_magic_words import selected_snapshot_root
+            magic_root=selected_snapshot_root(root)
             if magic_root.exists() or magic_root.is_symlink():
                 if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
                 path=magic_root/'magic-words.tsv'
@@ -327,11 +328,12 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         if name=='magic-words':
             # Keep the immutable API observation with the private TSV copy so
             # revalidation after a long build still checks the captured source.
-            from prepare_magic_words import ARTIFACTS, validate_snapshot
-            validate_snapshot(source)
-            for filename in sorted((ARTIFACTS|{'magic-words.manifest.json'})-{'magic-words.tsv'}):
+            from prepare_magic_words import validate_snapshot
+            capture=validate_snapshot(source)
+            for filename in sorted((set(capture['artifacts'])|{'magic-words.manifest.json'})-{'magic-words.tsv'}):
                 path=source.with_name(filename)
-                expected=(capture_hashes or {}).get(name) if filename=='magic-words.manifest.json' else None
+                expected=((capture_hashes or {}).get(name) if filename=='magic-words.manifest.json'
+                          else capture['artifacts'][filename])
                 copy_verified_snapshot(path,destination/path.name,expected or sha256_file(path))
             validate_snapshot(pinned[name])
     return pinned

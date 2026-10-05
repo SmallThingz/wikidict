@@ -29,7 +29,7 @@ def write_namespace_fixture(folder, edition=None, date=None):
     return {'namespace-registry':namespace,'language-registry':language}
 
 
-def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observation='first', alias='اسم_الصفحة'):
+def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observation='first', alias='اسم_الصفحة', parser_functions=False):
     import prepare_magic_words as magic
     folder.mkdir(parents=True,exist_ok=True)
     namespace=magic.document({'query':{'general':{'wikiid':edition,'lang':'ar'}}})
@@ -38,6 +38,9 @@ def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observa
         artifacts={'namespace-siteinfo.raw.json':magic.digest(namespace)})))
     words=[{'name':name,'case-sensitive':True,'aliases':[name.upper()]+([alias] if name=='pagename' else [])}
            for name in sorted(magic.SUPPORTED)]
+    if parser_functions:
+        words += [{'name':name,'aliases':[name]+(['استدعاء'] if name=='invoke' else [])}
+                  for name in sorted(magic.PARSER_FUNCTIONS)]
     raw=magic.document({'query':{'general':{'wikiid':edition,'lang':'ar','sitename':observation},'magicwords':words}})
     def fetcher(url):
         return raw,dict(source_url=url,response_url=url,status=200,
@@ -212,6 +215,33 @@ class ProvenanceBindingTests(unittest.TestCase):
             (exp/'magic-words.tsv').write_bytes(first.read_bytes())
             self.assertTrue(b.expander_ready(root,b.verified_auxiliary_hashes(snapshots)))
             self.assertFalse(b.expander_ready(root,b.verified_auxiliary_hashes(changed)))
+
+    def test_expanded_magic_capture_pins_embedded_original_and_binds_profile_identity(self):
+        import prepare_magic_words as magic
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); tool=root/'zig'; tool.write_bytes(b'tool')
+            original=write_magic_fixture(root/'capture',parser_functions=True)
+            expanded=root/'capture'/magic.DERIVED_DIRECTORY
+            manifest,_=magic.derive_snapshot(original,expanded)
+            self.assertEqual(magic.selected_snapshot_root(root/'capture'),expanded)
+            snapshots={'magic-words':expanded/'magic-words.tsv'}
+            hashes=b.verified_auxiliary_hashes(snapshots,'arwiktionary','20261001')
+            item=dict(wiki='arwiktionary',date='20261001',name='dump',size=1,sha1='a')
+            with patch.object(b.shutil,'which',return_value=str(tool)),patch.object(b,'source_fingerprint',return_value='source'):
+                identity=b.build_input_identity([item],'zig',hashes,None,None,snapshots)
+                old=b.build_input_identity([item],'zig',b.verified_auxiliary_hashes({'magic-words':original}),None,None,{'magic-words':original})
+            with self.assertRaisesRegex(ValueError,'Build inputs or compiler changed'):
+                b.require_build_identity(identity,old)
+            destination=root/'pinned'; destination.mkdir()
+            pinned=b.pinned_auxiliary_snapshots(snapshots,hashes,destination,identity['auxiliary_capture_sha256'])
+            self.assertEqual(magic.validate_snapshot(pinned['magic-words']),manifest)
+            self.assertEqual(set(path.name for path in destination.iterdir()),magic.DERIVED_ARTIFACTS|{'magic-words.manifest.json'})
+            for name in magic.DERIVED_ARTIFACTS:
+                self.assertEqual((destination/name).read_bytes(),(expanded/name).read_bytes())
+            source_manifest=destination/magic.SOURCE_MANIFEST
+            source_manifest.write_bytes(source_manifest.read_bytes()+b' ')
+            with self.assertRaisesRegex(ValueError,'Changed magic-word capture artifact'):
+                b.verified_auxiliary_hashes(pinned)
 
 
 class BuildTest(unittest.TestCase):
