@@ -144,6 +144,91 @@ fn readCapturedSubentity(runtime: *rt.Context, id: []const u8, dash: usize) anye
     return null;
 }
 
+// Ordinary entity projections retain no parsed input between calls. Returned
+// Lua graphs/scalars own fresh copies; Forms/Senses keep readEntity's exact
+// captured-parent fallback and canonical-child handling.
+fn projectionNumber(value: std.json.Value) !f64 {
+    const number: f64 = switch (value) {
+        .integer => |integer| @floatFromInt(integer),
+        .float => |float| float,
+        .number_string => |raw| std.fmt.parseFloat(f64, raw) catch return error.InvalidWikibaseEntitySnapshot,
+        else => return error.InvalidWikibaseEntitySnapshot,
+    };
+    if (!std.math.isFinite(number)) return error.InvalidWikibaseEntitySnapshot;
+    return number;
+}
+
+fn validateProjectionNumbers(value: std.json.Value) error{InvalidWikibaseEntitySnapshot}!void {
+    // Full conversion used to reject invalid numbers even in fields that the
+    // caller did not request. Preserve that boundary without allocating Lua.
+    switch (value) {
+        .integer, .float, .number_string => _ = try projectionNumber(value),
+        .array => |array| for (array.items) |item| try validateProjectionNumbers(item),
+        .object => |object| {
+            var it = object.iterator();
+            while (it.next()) |entry| try validateProjectionNumbers(entry.value_ptr.*);
+        },
+        else => {},
+    }
+}
+
+fn projectionField(table: std.json.Value, key: []const u8) ?std.json.Value {
+    // jsonToLua turns canonical i64 object keys into numeric Lua keys. These
+    // string lookups cannot find those keys, or an array's numeric indices.
+    if (table != .object) return null;
+    const integer = std.fmt.parseInt(i64, key, 10) catch return table.object.get(key);
+    var buffer: [32]u8 = undefined;
+    const canonical = std.fmt.bufPrint(&buffer, "{d}", .{integer}) catch unreachable;
+    if (std.mem.eql(u8, canonical, key)) return null;
+    return table.object.get(key);
+}
+
+fn projectionTableField(table: std.json.Value, key: []const u8) !?std.json.Value {
+    const value = projectionField(table, key) orelse return null;
+    return switch (value) {
+        .null => null,
+        .array, .object => value,
+        else => error.InvalidWikibaseEntitySnapshot,
+    };
+}
+
+fn projectionStringField(table: std.json.Value, key: []const u8) !?[]const u8 {
+    const value = projectionField(table, key) orelse return null;
+    return switch (value) {
+        .null => null,
+        .string => |string| string,
+        else => error.InvalidWikibaseEntitySnapshot,
+    };
+}
+
+fn readProjectedEntity(runtime: *rt.Context, id: []const u8) !?std.json.Parsed(std.json.Value) {
+    std.debug.assert(std.mem.indexOfScalar(u8, id, '-') == null);
+    const host = host_api.getForStablePageRead(runtime) orelse {
+        logSnapshotFailure(id, "entity", "unavailable");
+        return error.MissingScribuntoHost;
+    };
+    const get = host.wikibase_entity orelse {
+        logSnapshotFailure(id, "entity", "unavailable");
+        return error.NotImplemented;
+    };
+    const entry = get(host.ctx, id) catch |err| {
+        if (err == error.WikibaseEntitySnapshotMissing) try snapshotFailure(runtime, id, "entity");
+        return err;
+    };
+    const source = entry.source orelse return null;
+    var parsed = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return error.InvalidWikibaseEntitySnapshot,
+    };
+    errdefer parsed.deinit();
+    try validateProjectionNumbers(parsed.value);
+    if (parsed.value != .object) return error.InvalidWikibaseEntitySnapshot;
+    const version = projectionField(parsed.value, "schemaVersion") orelse return error.InvalidWikibaseEntitySnapshot;
+    if (try projectionNumber(version) < 2) return error.InvalidWikibaseEntitySnapshot;
+    _ = (try projectionStringField(parsed.value, "id")) orelse return error.InvalidWikibaseEntitySnapshot;
+    return parsed;
+}
+
 fn protectStatement(statement: *rt.Table) !void {
     if (try tableField(statement, "qualifiers")) |qualifiers| qualifiers.read_only = true;
     if (try tableField(statement, "references")) |references| references.read_only = true;
@@ -404,6 +489,21 @@ pub fn getAllStatementsCall(_: ?*anyopaque, runtime: *rt.Context, args: []const 
     if (args.len < 2 or args[1] != .string) return error.StringExpected;
     const property = (try canonicalEntityId(runtime, args[1].string)) orelse return error.InvalidPropertyId;
     if (property[0] != 'P') return error.InvalidPropertyId;
+    if (std.mem.indexOfScalar(u8, id, '-') == null) {
+        var parsed = (try readProjectedEntity(runtime, id)) orelse return one(.{ .table = try runtime.newTable() });
+        defer parsed.deinit();
+        if (try projectionTableField(parsed.value, "claims")) |claims|
+            if (try projectionTableField(claims, property)) |source| {
+                const decoded = text.jsonToLua(runtime, source, false) catch |err| switch (err) {
+                    error.OutOfMemory => return err,
+                    else => return error.InvalidWikibaseEntitySnapshot,
+                };
+                if (decoded != .table) return error.InvalidWikibaseEntitySnapshot;
+                try protectStatements(decoded.table);
+                return one(decoded);
+            };
+        return one(.{ .table = try runtime.newTable() });
+    }
     const entity = try readEntity(runtime, id);
     if (entity) |value| if (try tableField(value, "claims")) |claims|
         if (try tableField(claims, property)) |statements| {
@@ -446,6 +546,14 @@ pub fn getBestStatementsCall(_: ?*anyopaque, runtime: *rt.Context, args: []const
 pub fn getLabelByLangCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const id = try entityId(runtime, args);
     if (args.len < 2 or args[1] != .string) return error.StringExpected;
+    if (std.mem.indexOfScalar(u8, id, '-') == null) {
+        var parsed = (try readProjectedEntity(runtime, id)) orelse return one(.nil);
+        defer parsed.deinit();
+        const labels = (try projectionTableField(parsed.value, "labels")) orelse return one(.nil);
+        const label = (try projectionTableField(labels, args[1].string)) orelse return one(.nil);
+        const value = (try projectionStringField(label, "value")) orelse return one(.nil);
+        return one(.{ .string = try runtime.allocator.dupe(u8, value) });
+    }
     const entity = (try readEntity(runtime, id)) orelse return one(.nil);
     const labels = (try tableField(entity, "labels")) orelse return one(.nil);
     const label = (try tableField(labels, args[1].string)) orelse return one(.nil);
@@ -497,6 +605,14 @@ pub fn getSitelinkCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value
     else
         return error.StringExpected;
     rt.work_stats.noteSitelink(id, site);
+    if (std.mem.indexOfScalar(u8, id, '-') == null) {
+        var parsed = (try readProjectedEntity(runtime, id)) orelse return one(.nil);
+        defer parsed.deinit();
+        const sitelinks = (try projectionTableField(parsed.value, "sitelinks")) orelse return one(.nil);
+        const sitelink = (try projectionTableField(sitelinks, site)) orelse return one(.nil);
+        const value = (try projectionStringField(sitelink, "title")) orelse return one(.nil);
+        return one(.{ .string = try runtime.allocator.dupe(u8, value) });
+    }
     const entity = (try readEntity(runtime, id)) orelse return one(.nil);
     const sitelinks = (try tableField(entity, "sitelinks")) orelse return one(.nil);
     const sitelink = (try tableField(sitelinks, site)) orelse return one(.nil);
@@ -927,4 +1043,210 @@ test "Wikibase entity object methods preserve subentity identity and clone state
     defer rt.freeResults(missing);
     try std.testing.expect(missing[0] == .nil);
     try std.testing.expectError(error.LuaRaised, getEntityCall(null, &runtime, &.{.{ .string = "L999" }}));
+}
+
+const ProjectionProbe = struct {
+    source: []const u8,
+
+    fn entity(raw: ?*anyopaque, _: []const u8) !host_api.WikibaseEntity {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        return .{ .source = self.source };
+    }
+
+    fn scalar(runtime: *rt.Context, selector: []const u8, comptime sitelink: bool) ![]const Value {
+        const args = [_]Value{ .{ .string = "Q1" }, .{ .string = selector } };
+        return if (sitelink) getSitelinkCall(null, runtime, &args) else getLabelByLangCall(null, runtime, &args);
+    }
+};
+
+test "Wikibase projections retain numeric key conversion and copied escaped scalar values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const fields =
+        \\{"12":{"value":"numeric","title":"numeric"},
+        \\"-12":{"value":"negative","title":"negative"},
+        \\"012":{"value":"leading zero","title":"leading zero"},
+        \\"-0":{"value":"negative zero","title":"negative zero"},
+        \\"9223372036854775808":{"value":"outside i64","title":"outside i64"},
+        \\"en":{"value":"caf\u00e9","title":"caf\u00e9"},
+        \\"missing":null,"array":[],"null":{"value":null,"title":null},
+        \\"scalar":7,"bad":{"value":7,"title":7}}
+    ;
+    // The native read contract accepts a numeric version >=2 and a string ID;
+    // it does not impose the production Provider's stricter exact-version rule.
+    const source = "{\"id\":\"\",\"schemaVersion\":2.5,\"labels\":" ++ fields ++ ",\"sitelinks\":" ++ fields ++ "}";
+    var probe = ProjectionProbe{ .source = source };
+    var host = host_api.Host{ .ctx = &probe, .wikibase_entity = ProjectionProbe.entity };
+    host_api.set(&runtime, &host);
+    inline for (.{ false, true }) |sitelink| {
+        for ([_][]const u8{ "12", "-12", "missing", "array", "null", "absent" }) |key| {
+            const result = try ProjectionProbe.scalar(&runtime, key, sitelink);
+            defer rt.freeResults(result);
+            try std.testing.expect(result[0] == .nil);
+        }
+        const cases = .{
+            .{ "012", "leading zero" },
+            .{ "-0", "negative zero" },
+            .{ "9223372036854775808", "outside i64" },
+            .{ "en", "café" },
+        };
+        inline for (cases) |case| {
+            const result = try ProjectionProbe.scalar(&runtime, case[0], sitelink);
+            defer rt.freeResults(result);
+            // The parse lease has already been destroyed when the call returns.
+            try std.testing.expectEqualStrings(case[1], result[0].string);
+        }
+        inline for (.{ "scalar", "bad" }) |key|
+            try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, ProjectionProbe.scalar(&runtime, key, sitelink));
+    }
+}
+
+test "Wikibase projections preserve null array and scalar intermediate fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var probe = ProjectionProbe{ .source = undefined };
+    var host = host_api.Host{ .ctx = &probe, .wikibase_entity = ProjectionProbe.entity };
+    host_api.set(&runtime, &host);
+    inline for (.{ "null", "[]", "{}" }) |value| {
+        probe.source = "{\"id\":\"Q1\",\"schemaVersion\":2,\"labels\":" ++ value ++ ",\"sitelinks\":" ++ value ++ ",\"claims\":" ++ value ++ "}";
+        inline for (.{ false, true }) |sitelink| {
+            const result = try ProjectionProbe.scalar(&runtime, "en", sitelink);
+            defer rt.freeResults(result);
+            try std.testing.expect(result[0] == .nil);
+        }
+        const statements = try getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } });
+        defer rt.freeResults(statements);
+        try std.testing.expectEqual(@as(usize, 0), statements[0].table.rawLen());
+    }
+    probe.source = "{\"id\":\"Q1\",\"schemaVersion\":2,\"labels\":false,\"sitelinks\":3,\"claims\":\"bad\"}";
+    inline for (.{ false, true }) |sitelink|
+        try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, ProjectionProbe.scalar(&runtime, "en", sitelink));
+    try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } }));
+
+    // Runtime table lookup also accepts object-shaped statement collections.
+    // Production capture validation is a separate, stricter boundary.
+    probe.source = "{\"id\":\"Q1\",\"schemaVersion\":2,\"claims\":{\"P1\":{\"1\":{\"rank\":\"normal\"}},\"P2\":null,\"P3\":7}}";
+    const object_statements = try getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } });
+    defer rt.freeResults(object_statements);
+    try std.testing.expectEqualStrings("normal", (try stringField(object_statements[0].table.rawGet(.{ .number = 1 }).?.table, "rank")).?);
+    const null_statements = try getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P2" } });
+    defer rt.freeResults(null_statements);
+    try std.testing.expectEqual(@as(usize, 0), null_statements[0].table.rawLen());
+    try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P3" } }));
+}
+
+test "Wikibase projections reject invalid numbers outside the selected subtree" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var probe = ProjectionProbe{ .source = undefined };
+    var host = host_api.Host{ .ctx = &probe, .wikibase_entity = ProjectionProbe.entity };
+    host_api.set(&runtime, &host);
+    const invalid_sources = .{
+        "{\"id\":\"Q1\",\"schemaVersion\":2,\"unrelated\":[{\"number\":1e9999}]}",
+        "{\"id\":\"Q1\",\"schemaVersion\":2,\"unrelated\":-1e9999}",
+        "{\"id\":\"Q1\",\"schemaVersion\":\"2\"}",
+        "{\"id\":null,\"schemaVersion\":2}",
+        "{\"id\":\"Q1\",\"schemaVersion\":1.9}",
+        "[]",
+        "{",
+    };
+    inline for (invalid_sources) |source| {
+        probe.source = source;
+        try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, readEntity(&runtime, "Q1"));
+        inline for (.{ false, true }) |sitelink|
+            try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, ProjectionProbe.scalar(&runtime, "en", sitelink));
+        try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } }));
+    }
+}
+
+test "Wikibase projections propagate allocation failure after ID validation and recover" {
+    const AllocationProbe = struct {
+        runtime: *rt.Context,
+        allocator: std.mem.Allocator,
+
+        fn entity(raw: ?*anyopaque, _: []const u8) !host_api.WikibaseEntity {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.runtime.allocator = self.allocator;
+            return .{ .source = Probe.item };
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const original = runtime.allocator;
+    defer runtime.allocator = original;
+    inline for (0..3) |operation| {
+        runtime.allocator = original;
+        var failing = std.testing.FailingAllocator.init(original, .{ .fail_index = 0 });
+        var probe = AllocationProbe{ .runtime = &runtime, .allocator = failing.allocator() };
+        var host = host_api.Host{ .ctx = &probe, .wikibase_entity = AllocationProbe.entity };
+        host_api.set(&runtime, &host);
+        // The host switches allocators only after entity/property IDs have
+        // been validated. The failure is inside the ordinary projection read.
+        switch (operation) {
+            0 => try std.testing.expectError(error.OutOfMemory, getLabelByLangCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "fr" } })),
+            1 => try std.testing.expectError(error.OutOfMemory, getSitelinkCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "enwiktionary" } })),
+            2 => try std.testing.expectError(error.OutOfMemory, getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } })),
+            else => unreachable,
+        }
+        try std.testing.expect(failing.has_induced_failure);
+        runtime.allocator = original;
+    }
+    var host = host_api.Host{ .wikibase_entity = Probe.entity };
+    host_api.set(&runtime, &host);
+    const recovered = try getLabelByLangCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "fr" } });
+    defer rt.freeResults(recovered);
+    try std.testing.expectEqualStrings("bonjour", recovered[0].string);
+}
+
+test "Wikibase projected globals preserve redirected parent and captured missing child semantics" {
+    const ChildProbe = struct {
+        const source =
+            \\{"id":"L2","type":"lexeme","schemaVersion":2,"senses":[
+            \\{"id":"L2-S1","claims":{"P1":[{"rank":"normal","mainsnak":{"snaktype":"value"}}]},
+            \\"labels":{"en":{"value":"child label"}},"sitelinks":{"en":{"title":"child link"}}},
+            \\{"id":"L2-S2","claims":{"P1":[{"rank":"normal"}]}}],
+            \\"forms":[{"id":"L2-F1","claims":{"P1":[{"rank":"normal"}]}}]}
+        ;
+        fn entity(_: ?*anyopaque, id: []const u8) !host_api.WikibaseEntity {
+            if (std.mem.eql(u8, id, "L4") or std.mem.eql(u8, id, "L2")) return .{ .source = source };
+            if (std.mem.eql(u8, id, "L4-S2") or std.mem.eql(u8, id, "L9")) return .{ .source = null };
+            return error.WikibaseEntitySnapshotMissing;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .wikibase_entity = ChildProbe.entity };
+    host_api.set(&runtime, &host);
+    const first = try getAllStatementsCall(null, &runtime, &.{ .{ .string = "L4-S1" }, .{ .string = "P1" } });
+    defer rt.freeResults(first);
+    try (try tableField(first[0].table.rawGet(.{ .number = 1 }).?.table, "mainsnak")).?.rawSet(runtime.allocator, .{ .string = "snaktype" }, .{ .string = "changed" });
+    const again = try getAllStatementsCall(null, &runtime, &.{ .{ .string = "L4-S1" }, .{ .string = "P1" } });
+    defer rt.freeResults(again);
+    try std.testing.expectEqualStrings("value", (try stringField((try tableField(again[0].table.rawGet(.{ .number = 1 }).?.table, "mainsnak")).?, "snaktype")).?);
+    const label = try getLabelByLangCall(null, &runtime, &.{ .{ .string = "L4-S1" }, .{ .string = "en" } });
+    defer rt.freeResults(label);
+    try std.testing.expectEqualStrings("child label", label[0].string);
+    const sitelink = try getSitelinkCall(null, &runtime, &.{ .{ .string = "L4-S1" }, .{ .string = "en" } });
+    defer rt.freeResults(sitelink);
+    try std.testing.expectEqualStrings("child link", sitelink[0].string);
+    const form = try getAllStatementsCall(null, &runtime, &.{ .{ .string = "L4-F1" }, .{ .string = "P1" } });
+    defer rt.freeResults(form);
+    try std.testing.expectEqual(@as(usize, 1), form[0].table.rawLen());
+    for ([_][]const u8{ "L4-S2", "L4-S3", "L9-S1" }) |id| {
+        const missing = try getAllStatementsCall(null, &runtime, &.{ .{ .string = id }, .{ .string = "P1" } });
+        defer rt.freeResults(missing);
+        try std.testing.expectEqual(@as(usize, 0), missing[0].table.rawLen());
+    }
+    try std.testing.expectError(error.LuaRaised, getAllStatementsCall(null, &runtime, &.{ .{ .string = "L999-S1" }, .{ .string = "P1" } }));
+    try std.testing.expectEqualStrings("Wikibase entity snapshot missing entity=L999", runtime.last_error.string);
 }
