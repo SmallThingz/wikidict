@@ -455,14 +455,19 @@ def pipeline_snapshot_args(registry, snapshots):
 
 def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=None, capture_artifact_hashes=None):
     pinned={};copies={};captures={}
-    def add_copy(source,filename,digest):
-        if filename in copies and copies[filename][1]!=digest:
+    def add_copy(source,folder,filename,digest):
+        key=(folder,filename)
+        if key in copies and copies[key][1]!=digest:
             raise ValueError('Conflicting auxiliary capture artifact: '+filename)
-        copies.setdefault(filename,(source,digest))
+        copies.setdefault(key,(source,digest))
     for name,source in sorted((snapshots or {}).items()):
         source=Path(source)
-        pinned[name]=destination/(auxiliary_snapshot_filename(name))
-        add_copy(source,auxiliary_snapshot_filename(name),hashes[name])
+        # Commons replay certifies the entire directory, including absence of
+        # extra payloads. Keep its capture separate from other pins and input.
+        folder=destination/'commons-data' if name=='commons-data' else destination
+        if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
+        pinned[name]=folder/(auxiliary_snapshot_filename(name))
+        add_copy(source,folder,auxiliary_snapshot_filename(name),hashes[name])
         capture=validated_auxiliary_capture(name,source)
         if capture is None:
             if name in (capture_hashes or {}) or name in (capture_artifact_hashes or {}):
@@ -474,11 +479,11 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         if capture_artifact_hashes is not None and auxiliary_artifact_digest(inventory)!=capture_artifact_hashes.get(name):
             raise ValueError('Auxiliary capture artifacts changed before pinning: '+name)
         captures[name]=inventory
-        for filename,digest in inventory.items():add_copy(source.with_name(filename),filename,digest)
+        for filename,digest in inventory.items():add_copy(source.with_name(filename),folder,filename,digest)
     # Validate every source and detect conflicting paired captures before
     # copying. Shared payloads are copied once and revalidated as a whole.
-    for filename,(source,digest) in sorted(copies.items()):
-        copy_verified_snapshot(source,destination/filename,digest)
+    for (folder,filename),(source,digest) in sorted(copies.items()):
+        copy_verified_snapshot(source,folder/filename,digest)
     for name,inventory in captures.items():
         capture=validated_auxiliary_capture(name,pinned[name])
         if capture is None or capture[1]!=inventory:

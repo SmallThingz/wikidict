@@ -87,6 +87,20 @@ def write_language_messages_fixture(folder):
     return {name:args.output/(name+'.tsv') for name in ('language-fallbacks','interface-messages')}
 
 
+def write_commons_capture_fixture(folder, namespace):
+    import prepare_commons_data as commons
+    from test_prepare_commons_data import TITLE, response
+    raw=json.dumps(response(),ensure_ascii=False).encode()
+    args=SimpleNamespace(wiki='arwiktionary',date='20261001',title=[TITLE],
+        namespace_registry=namespace,output=folder,delay=0,wall_seconds=30)
+    def transport(url,timeout):
+        assert url==commons.query_url(TITLE)
+        assert timeout>0
+        return 200,{'content-type':'application/json'},raw
+    commons.capture(args,transport=transport,sleep=lambda _:None)
+    return folder/'commons-data.tsv'
+
+
 def write_test_manifest(root, manifest):
     records=[]
     for item in manifest.get('files',[]):
@@ -156,6 +170,62 @@ def write_coverage(root, command=None):
 
 
 class ProvenanceBindingTests(unittest.TestCase):
+    def test_commons_pin_isolates_inventory_from_other_captures_and_staged_input(self):
+        import prepare_commons_data as commons
+        import prepare_language_messages as messages
+        for staged_input in (False,True):
+            with self.subTest(staged_input=staged_input),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                snapshots=write_language_messages_fixture(root/'messages')
+                snapshots['namespace-registry']=root/'messages'/'namespace-registry.tsv'
+                snapshots['commons-data']=write_commons_capture_fixture(root/'commons',snapshots['namespace-registry'])
+                manifest=commons.validate_snapshot(snapshots['commons-data'],'arwiktionary','20261001')
+                inventory=commons.capture_artifacts(snapshots['commons-data'],manifest)
+                message_inventory=messages.capture_artifacts(snapshots['interface-messages'])
+                hashes=b.verified_auxiliary_hashes(snapshots,'arwiktionary','20261001')
+                captures=b.auxiliary_capture_identities(snapshots,'arwiktionary','20261001')
+                destination=root/'pinned';destination.mkdir()
+                if staged_input:
+                    (destination/'input').mkdir()
+                    (destination/'input'/'pages.xml').write_bytes(b'<mediawiki/>')
+                with patch.object(commons.evidence,'get_response',side_effect=AssertionError('unexpected network')):
+                    pinned=b.pinned_auxiliary_snapshots(snapshots,hashes,destination,*captures)
+                    self.assertEqual(pinned['commons-data'],destination/'commons-data'/'commons-data.tsv')
+                    self.assertEqual(set(inventory),{p.name for p in pinned['commons-data'].parent.iterdir()})
+                    self.assertEqual(inventory,commons.capture_artifacts(pinned['commons-data'],commons.validate_snapshot(pinned['commons-data'])))
+                    for name,digest in inventory.items():
+                        self.assertEqual(digest,b.sha256_file(pinned['commons-data'].parent/name))
+                    self.assertEqual(hashes,b.verified_auxiliary_hashes(pinned,'arwiktionary','20261001'))
+                    self.assertEqual(captures,b.auxiliary_capture_identities(pinned,'arwiktionary','20261001'))
+                    for name in ('language-fallbacks','interface-messages','namespace-registry'):
+                        self.assertEqual(destination/(name+'.tsv'),pinned[name])
+                    for name,digest in message_inventory.items():
+                        self.assertEqual(digest,b.sha256_file(destination/name))
+                    if staged_input:self.assertEqual(b'<mediawiki/>',(destination/'input'/'pages.xml').read_bytes())
+                    (pinned['commons-data'].parent/'unexpected.txt').write_text('unrecorded')
+                    with self.assertRaisesRegex(ValueError,'Commons payload inventory mismatch'):
+                        b.verified_auxiliary_hashes(pinned,'arwiktionary','20261001')
+
+    def test_commons_pin_rejects_symlink_capture_directory_before_copying(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            namespace=write_namespace_fixture(root/'source','arwiktionary','20261001')['namespace-registry']
+            namespace.write_text(namespace.read_text().replace('# content-language\ten\n','# content-language\tar\n'))
+            snapshots={'commons-data':write_commons_capture_fixture(root/'commons',namespace)}
+            hashes=b.verified_auxiliary_hashes(snapshots,'arwiktionary','20261001')
+            captures=b.auxiliary_capture_identities(snapshots,'arwiktionary','20261001')
+            destination=root/'pinned';destination.mkdir()
+            outside=root/'outside';outside.mkdir()
+            sentinel=outside/'sentinel';sentinel.write_bytes(b'preserve')
+            (destination/'commons-data').symlink_to(outside,target_is_directory=True)
+            with patch.object(b,'copy_verified_snapshot',wraps=b.copy_verified_snapshot) as copy:
+                with self.assertRaises(ValueError):
+                    b.pinned_auxiliary_snapshots(snapshots,hashes,destination,*captures)
+            copy.assert_not_called()
+            self.assertEqual({'sentinel'},{p.name for p in outside.iterdir()})
+            self.assertEqual(b'preserve',sentinel.read_bytes())
+            self.assertTrue((destination/'commons-data').is_symlink())
+
     def test_paired_captures_pin_every_validated_artifact_once_without_network(self):
         import prepare_language_messages as messages
         import prepare_wikibase_entities as entities
