@@ -15,6 +15,7 @@ const FileMetadata = lua_program.WikitextProvider.FileMetadata;
 const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
 const WikibaseEntityText = lua_program.WikitextProvider.WikibaseEntityText;
 const WikibaseEntity = lua_program.WikitextProvider.WikibaseEntity;
+const WikibaseEntityCache = lua_program.WikibaseEntityCache;
 const WikibaseTerm = lua_program.WikitextProvider.WikibaseTerm;
 const WikibaseEntityTerms = lua_program.WikitextProvider.WikibaseEntityTerms;
 const TransclusionBody = lua_program.WikitextProvider.TransclusionBody;
@@ -204,6 +205,8 @@ pub const Provider = struct {
     wikibase_entity_text_available: bool = false,
     wikibase_entities: std.StringHashMapUnmanaged(StructuredEntityRow) = .empty,
     wikibase_entities_storage: ?Mapped = null,
+    wikibase_entity_cache: ?*WikibaseEntityCache = null,
+    wikibase_entity_cache_disabled: bool = false,
     wikibase_entity_terms: std.StringHashMapUnmanaged(WikibaseEntityTerms) = .empty,
     wikibase_entity_terms_storage: ?Mapped = null,
     wikibase_entity_terms_arena: ?std.heap.ArenaAllocator = null,
@@ -288,6 +291,14 @@ pub const Provider = struct {
         if (self.wikibase_sitelinks_storage) |*mapped| mapped.deinit();
         self.wikibase_entity_text.deinit(self.a);
         if (self.wikibase_entity_text_storage) |*mapped| mapped.deinit();
+        if (self.wikibase_entity_cache) |cache| {
+            lua_program.work_stats.logLine("wikibase parsed cache: entries={d} requested_bytes={d} peak_requested_bytes={d} budget={d} hits={d} misses={d} capacity_bypasses={d} allocation_bypasses={d} parse_bypasses={d}\n", .{
+                cache.entry_count,    cache.budget.used, cache.budget.peak,       cache.budget.limit,
+                cache.hits,           cache.misses,      cache.capacity_bypasses, cache.allocation_bypasses,
+                cache.parse_bypasses,
+            });
+            cache.destroy();
+        }
         self.wikibase_entities.deinit(self.a);
         if (self.wikibase_entities_storage) |*mapped| mapped.deinit();
         self.wikibase_entity_terms.deinit(self.a);
@@ -1218,7 +1229,17 @@ pub const Provider = struct {
     fn wikibaseEntity(ctx: ?*anyopaque, entity_id: []const u8) anyerror!WikibaseEntity {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         const entry = self.wikibase_entities.get(entity_id) orelse return error.WikibaseEntitySnapshotMissing;
-        return .{ .source = entry.source };
+        var parsed: ?*const std.json.Value = null;
+        if (entry.source) |source| if (entity_id[0] == 'Q' or entity_id[0] == 'P') {
+            if (self.wikibase_entity_cache == null and !self.wikibase_entity_cache_disabled) {
+                self.wikibase_entity_cache = WikibaseEntityCache.create(std.heap.smp_allocator, WikibaseEntityCache.max_bytes, WikibaseEntityCache.max_entries) catch blk: {
+                    self.wikibase_entity_cache_disabled = true;
+                    break :blk null;
+                };
+            }
+            if (self.wikibase_entity_cache) |cache| parsed = cache.lookupOrAdmit(source);
+        };
+        return .{ .source = entry.source, .parsed = parsed };
     }
 
     fn wikibaseEntityTerms(ctx: ?*anyopaque, entity_id: []const u8) anyerror!WikibaseEntityTerms {
@@ -1437,6 +1458,48 @@ test "provider structured entities preserve redirects missing records resolved t
             defer provider.deinit();
         }
     }.load, .{root});
+}
+
+test "provider parsed backing survives relocation preserves Q redirects and bypasses capped admission" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entities.tsv", .data = entity_test_headers ++
+        "Q1\tE\tQ1\t{\"id\":\"Q1\",\"type\":\"item\",\"schemaVersion\":2,\"labels\":{\"en\":{\"value\":\"first\"}}}\n" ++
+        "Q2\tE\tQ1\t{\"id\":\"Q1\",\"type\":\"item\",\"schemaVersion\":2,\"labels\":{\"en\":{\"value\":\"redirect row\"}}}\n" ++
+        "P1\tE\tP1\t{\"id\":\"P1\",\"type\":\"property\",\"schemaVersion\":2}\n" ++
+        "L1\tE\tL1\t{\"id\":\"L1\",\"type\":\"lexeme\",\"schemaVersion\":2}\nQ9\tM\t\t\n" });
+    var provider = try struct {
+        fn relocated(allocator: A, directory: []const u8) !Provider {
+            var original = try Provider.init(std.testing.io, allocator, directory, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml");
+            errdefer original.deinit();
+            _ = try Provider.wikibaseEntity(&original, "Q1");
+            return original;
+        }
+    }.relocated(a, root);
+    defer provider.deinit();
+    const first = try Provider.wikibaseEntity(&provider, "Q1");
+    try std.testing.expect(first.parsed != null);
+    try std.testing.expect((try Provider.wikibaseEntity(&provider, "Q1")).parsed.? == first.parsed.?);
+    const redirect = try Provider.wikibaseEntity(&provider, "Q2");
+    try std.testing.expect(redirect.parsed.? != first.parsed.?);
+    try std.testing.expectEqualStrings("redirect row", redirect.parsed.?.object.get("labels").?.object.get("en").?.object.get("value").?.string);
+    try std.testing.expect((try Provider.wikibaseEntity(&provider, "P1")).parsed != null);
+    try std.testing.expect((try Provider.wikibaseEntity(&provider, "L1")).parsed == null);
+    const missing = try Provider.wikibaseEntity(&provider, "Q9");
+    try std.testing.expect(missing.source == null and missing.parsed == null);
+    try std.testing.expectError(error.WikibaseEntitySnapshotMissing, Provider.wikibaseEntity(&provider, "Q404"));
+    provider.wikibase_entity_cache.?.destroy();
+    provider.wikibase_entity_cache = null;
+    provider.wikibase_entity_cache = try WikibaseEntityCache.create(a, @sizeOf(WikibaseEntityCache), WikibaseEntityCache.max_entries);
+    const raw = try Provider.wikibaseEntity(&provider, "Q1");
+    try std.testing.expect(raw.parsed == null);
+    try std.testing.expectEqualStrings(first.source.?, raw.source.?);
+    try std.testing.expect((try Provider.wikibaseEntity(&provider, "Q1")).parsed == null);
+    try std.testing.expectEqual(@as(u64, 1), provider.wikibase_entity_cache.?.allocation_bypasses);
 }
 
 test "structured entity provider rejects inconsistent identity duplicate rows and payloads" {

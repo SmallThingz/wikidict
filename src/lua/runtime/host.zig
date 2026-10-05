@@ -68,6 +68,9 @@ pub const WikibaseEntityTextFn = *const fn (?*anyopaque, []const u8) anyerror!Wi
 pub const WikibaseEntity = struct {
     // Null is a captured missing entity; an uncaptured ID is an error.
     source: ?[]const u8,
+    // Optional immutable parse of exactly source, owned by the snapshot host.
+    // It must outlive every read. Lua callers only receive fresh conversions.
+    parsed: ?*const std.json.Value = null,
 };
 pub const WikibaseEntityFn = *const fn (?*anyopaque, []const u8) anyerror!WikibaseEntity;
 pub const WikibaseTerm = struct { value: []const u8, language: []const u8, source_language: ?[]const u8 = null };

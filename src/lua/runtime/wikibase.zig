@@ -111,7 +111,10 @@ fn readEntity(runtime: *rt.Context, id: []const u8) anyerror!?*rt.Table {
     const source = entry.source orelse return null;
     // flags=0 preserves Lua's one-based arrays. Each call owns a fresh graph;
     // mutations of returned lemmas, forms or statements cannot poison capture.
-    const decoded = text.jsonDecodeValue(runtime, source, 0) catch |err| switch (err) {
+    const decoded = (if (entry.parsed) |parsed|
+        text.jsonToLua(runtime, parsed.*, false)
+    else
+        text.jsonDecodeValue(runtime, source, 0)) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return error.InvalidWikibaseEntitySnapshot,
     };
@@ -144,9 +147,18 @@ fn readCapturedSubentity(runtime: *rt.Context, id: []const u8, dash: usize) anye
     return null;
 }
 
-// Ordinary entity projections retain no parsed input between calls. Returned
-// Lua graphs/scalars own fresh copies; Forms/Senses keep readEntity's exact
-// captured-parent fallback and canonical-child handling.
+// A lease either borrows immutable snapshot backing or owns one request parse.
+// Returned Lua graphs/scalars always own fresh copies. Forms/Senses retain
+// readEntity's captured-parent fallback and canonical-child handling.
+const EntityProjection = struct {
+    value: std.json.Value,
+    owned: ?std.json.Parsed(std.json.Value) = null,
+
+    fn deinit(self: *EntityProjection) void {
+        if (self.owned) |*parsed| parsed.deinit();
+    }
+};
+
 fn projectionNumber(value: std.json.Value) !f64 {
     const number: f64 = switch (value) {
         .integer => |integer| @floatFromInt(integer),
@@ -201,7 +213,7 @@ fn projectionStringField(table: std.json.Value, key: []const u8) !?[]const u8 {
     };
 }
 
-fn readProjectedEntity(runtime: *rt.Context, id: []const u8) !?std.json.Parsed(std.json.Value) {
+fn readProjectedEntity(runtime: *rt.Context, id: []const u8) !?EntityProjection {
     std.debug.assert(std.mem.indexOfScalar(u8, id, '-') == null);
     const host = host_api.getForStablePageRead(runtime) orelse {
         logSnapshotFailure(id, "entity", "unavailable");
@@ -216,9 +228,12 @@ fn readProjectedEntity(runtime: *rt.Context, id: []const u8) !?std.json.Parsed(s
         return err;
     };
     const source = entry.source orelse return null;
-    var parsed = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        else => return error.InvalidWikibaseEntitySnapshot,
+    var parsed: EntityProjection = if (entry.parsed) |borrowed| .{ .value = borrowed.* } else blk: {
+        const owned = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.InvalidWikibaseEntitySnapshot,
+        };
+        break :blk .{ .value = owned.value, .owned = owned };
     };
     errdefer parsed.deinit();
     try validateProjectionNumbers(parsed.value);
@@ -1047,10 +1062,11 @@ test "Wikibase entity object methods preserve subentity identity and clone state
 
 const ProjectionProbe = struct {
     source: []const u8,
+    parsed: ?*const std.json.Value = null,
 
     fn entity(raw: ?*anyopaque, _: []const u8) !host_api.WikibaseEntity {
         const self: *@This() = @ptrCast(@alignCast(raw.?));
-        return .{ .source = self.source };
+        return .{ .source = self.source, .parsed = self.parsed };
     }
 
     fn scalar(runtime: *rt.Context, selector: []const u8, comptime sitelink: bool) ![]const Value {
@@ -1249,4 +1265,132 @@ test "Wikibase projected globals preserve redirected parent and captured missing
     }
     try std.testing.expectError(error.LuaRaised, getAllStatementsCall(null, &runtime, &.{ .{ .string = "L999-S1" }, .{ .string = "P1" } }));
     try std.testing.expectEqualStrings("Wikibase entity snapshot missing entity=L999", runtime.last_error.string);
+}
+
+test "Wikibase cached JSON remains immutable across fresh mutable entities and page teardown" {
+    const Cache = @import("wikibase_entity_cache.zig").Cache;
+    const source =
+        \\{"id":"Q1","type":"item","schemaVersion":2,
+        \\"labels":{"fr":{"language":"fr","value":"bonjour"}},
+        \\"sitelinks":{"enwiktionary":{"site":"enwiktionary","title":"word"}},
+        \\"claims":{"P1":[{"rank":"normal","mainsnak":{"snaktype":"value"},
+        \\"qualifiers":{"P2":[{"snaktype":"somevalue"}]},"references":[{"snaks":{}}]}]}}
+    ;
+    const cache = try Cache.create(std.testing.allocator, Cache.max_bytes, Cache.max_entries);
+    defer cache.destroy();
+    const backing = cache.lookupOrAdmit(source).?;
+    var probe = ProjectionProbe{ .source = source, .parsed = backing };
+    for (0..2) |_| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var runtime = try rt.Context.init(arena.allocator(), 0);
+        defer runtime.deinit();
+        runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+        var host = host_api.Host{ .ctx = &probe, .wikibase_entity = ProjectionProbe.entity, .wikibase_entity_terms = Probe.terms };
+        host_api.set(&runtime, &host);
+        const first = try getEntityCall(null, &runtime, &.{.{ .string = "Q1" }});
+        defer rt.freeResults(first);
+        const labels = (try tableField(first[0].table, "labels")).?;
+        const label = (try tableField(labels, "fr")).?;
+        try std.testing.expectEqualStrings("bonjour", (try stringField(label, "value")).?);
+        try label.rawSet(runtime.allocator, .{ .string = "value" }, .{ .string = "changed entity" });
+        const claims = (try tableField(first[0].table, "claims")).?;
+        const statement = (try tableField(claims, "P1")).?.rawGet(.{ .number = 1 }).?.table;
+        try (try tableField(statement, "mainsnak")).?.rawSet(runtime.allocator, .{ .string = "snaktype" }, .{ .string = "changed entity" });
+        const all = try getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } });
+        defer rt.freeResults(all);
+        const projected = all[0].table.rawGet(.{ .number = 1 }).?.table;
+        try std.testing.expectEqualStrings("value", (try stringField((try tableField(projected, "mainsnak")).?, "snaktype")).?);
+        try std.testing.expect((try tableField(projected, "qualifiers")).?.read_only);
+        try std.testing.expect((try tableField(projected, "references")).?.read_only);
+        try (try tableField(projected, "mainsnak")).?.rawSet(runtime.allocator, .{ .string = "snaktype" }, .{ .string = "changed result" });
+        const next = try getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } });
+        defer rt.freeResults(next);
+        try std.testing.expectEqualStrings("value", (try stringField((try tableField(next[0].table.rawGet(.{ .number = 1 }).?.table, "mainsnak")).?, "snaktype")).?);
+        const exact = try getLabelByLangCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "fr" } });
+        defer rt.freeResults(exact);
+        try std.testing.expectEqualStrings("bonjour", exact[0].string);
+        const site = try getSitelinkCall(null, &runtime, &.{.{ .string = "Q1" }});
+        defer rt.freeResults(site);
+        try std.testing.expectEqualStrings("word", site[0].string);
+        try std.testing.expect(cache.lookupOrAdmit(source).? == backing);
+    }
+    try std.testing.expectEqualStrings("bonjour", backing.object.get("labels").?.object.get("fr").?.object.get("value").?.string);
+    try std.testing.expect(backing.object.get("labels").?.object.get("en") == null);
+}
+
+test "Wikibase borrowed JSON preserves schema nonfinite and captured absence boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const invalid_sources = .{
+        "{\"id\":\"Q1\",\"schemaVersion\":2,\"unrelated\":1e9999}",
+        "{\"id\":\"Q1\",\"schemaVersion\":\"2\"}",
+        "{\"id\":null,\"schemaVersion\":2}",
+        "{\"id\":\"Q1\",\"schemaVersion\":1.9}",
+        "[]",
+    };
+    inline for (invalid_sources) |source| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, source, .{});
+        defer parsed.deinit();
+        var probe = ProjectionProbe{ .source = source, .parsed = &parsed.value };
+        var host = host_api.Host{ .ctx = &probe, .wikibase_entity = ProjectionProbe.entity };
+        host_api.set(&runtime, &host);
+        try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, getEntityCall(null, &runtime, &.{.{ .string = "Q1" }}));
+        try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } }));
+        inline for (.{ false, true }) |sitelink|
+            try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, ProjectionProbe.scalar(&runtime, "en", sitelink));
+    }
+    const Missing = struct {
+        fn entity(_: ?*anyopaque, id: []const u8) !host_api.WikibaseEntity {
+            if (std.mem.eql(u8, id, "Q9")) return .{ .source = null };
+            return error.WikibaseEntitySnapshotMissing;
+        }
+    };
+    var missing_host = host_api.Host{ .wikibase_entity = Missing.entity };
+    host_api.set(&runtime, &missing_host);
+    const absent = try getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q9" }, .{ .string = "P1" } });
+    defer rt.freeResults(absent);
+    try std.testing.expectEqual(@as(usize, 0), absent[0].table.rawLen());
+    try std.testing.expectError(error.LuaRaised, getLabelByLangCall(null, &runtime, &.{ .{ .string = "Q10" }, .{ .string = "en" } }));
+    try std.testing.expectEqualStrings("Wikibase entity snapshot missing entity=Q10", runtime.last_error.string);
+}
+
+test "Wikibase borrowed JSON does not suppress page conversion allocation failure" {
+    const AllocationProbe = struct {
+        runtime: *rt.Context,
+        allocator: std.mem.Allocator,
+        parsed: *const std.json.Value,
+        fn entity(raw: ?*anyopaque, _: []const u8) !host_api.WikibaseEntity {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.runtime.allocator = self.allocator;
+            return .{ .source = Probe.item, .parsed = self.parsed };
+        }
+    };
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, Probe.item, .{});
+    defer parsed.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    runtime.useContextAllocatorForStrings();
+    const original = runtime.allocator;
+    defer runtime.allocator = original;
+    inline for (0..4) |operation| {
+        runtime.allocator = original;
+        var failing = std.testing.FailingAllocator.init(original, .{ .fail_index = 0 });
+        var probe = AllocationProbe{ .runtime = &runtime, .allocator = failing.allocator(), .parsed = &parsed.value };
+        var host = host_api.Host{ .ctx = &probe, .wikibase_entity = AllocationProbe.entity };
+        host_api.set(&runtime, &host);
+        switch (operation) {
+            0 => try std.testing.expectError(error.OutOfMemory, getEntityCall(null, &runtime, &.{.{ .string = "Q1" }})),
+            1 => try std.testing.expectError(error.OutOfMemory, getLabelByLangCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "fr" } })),
+            2 => try std.testing.expectError(error.OutOfMemory, getSitelinkCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "enwiktionary" } })),
+            3 => try std.testing.expectError(error.OutOfMemory, getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } })),
+            else => unreachable,
+        }
+        try std.testing.expect(failing.has_induced_failure);
+        runtime.allocator = original;
+    }
 }

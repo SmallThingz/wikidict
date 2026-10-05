@@ -13,6 +13,7 @@ pub const namespace_registry = rt.namespace_registry;
 pub const RequestAllocator = rt.RequestAllocator;
 pub const RequestPool = rt.RequestPool;
 pub const work_stats = rt.work_stats;
+pub const WikibaseEntityCache = scribunto.WikibaseEntityCache;
 pub const moduleTemplateAllocationFailed = rt.moduleTemplateAllocationFailed;
 
 // A generation survives every page/context fork and never aliases a later

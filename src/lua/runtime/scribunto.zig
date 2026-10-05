@@ -5,6 +5,11 @@ const stdlib = @import("zig_stdlib");
 const global_abi = @import("lua_globals");
 const ustring_lib = @import("ustring.zig");
 pub const PatternCache = ustring_lib.PatternCache;
+pub const WikibaseEntityCache = @import("wikibase_entity_cache.zig").Cache;
+
+test {
+    _ = @import("wikibase_entity_cache.zig");
+}
 const html_lib = @import("html.zig");
 const text_lib = @import("text.zig");
 const title_lib = @import("title.zig");
