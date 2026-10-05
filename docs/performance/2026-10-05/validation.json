@@ -1,0 +1,464 @@
+{
+  "cleanup": {
+    "head": "6cf2d86505a5e9498984ead968f2b9c762177ea1",
+    "local_branches": "main 6cf2d86505a5e9498984ead968f2b9c762177ea1\n",
+    "observed_at": "2026-10-05T02:02:04.194011+00:00",
+    "remote_heads": "04bffaaa4085eba64df97ba447c3e337c4bde78b\trefs/heads/main\n",
+    "stashes_preserved": "stash@{0} 019137fb133166fa89462458bcc437c10c2b125b On main: cleanup: preserve unfinished transclusion body snapshot\nstash@{1} 2218d36b8d30d26a5e38a01defca004e3a9f445c On lua2-zig-aot-analysis-20260908: wip native field candidate adapter before main refresh 20260910\nstash@{2} a27dc04d17b42530ed7017141681c3ff97b16ba6 WIP on main: 2fc0757 faster building and better dependency graph! The bin is even smaller\n",
+    "status_porcelain": "",
+    "worktrees": "worktree /home/a/zig/wikidict\nHEAD 6cf2d86505a5e9498984ead968f2b9c762177ea1\nbranch refs/heads/main\n\n"
+  },
+  "completed_dictionaries": 0,
+  "consolidation_commit": "2f29b17213037f6a561bc7f29ccac114cdfb0b72",
+  "inputs": {
+    "elapsed_seconds": 18.875743546988815,
+    "failures": [],
+    "files": 1609,
+    "manifest_sha256": "92e0a7425e89dcb183e401bc70ad68194b1c0ed64668cce86f133b2909a2c144",
+    "manifest_unchanged": true,
+    "requested_editions": 198,
+    "verified_bytes": 13235967656,
+    "verified_files": 1609
+  },
+  "merge_commit": "6cf2d86505a5e9498984ead968f2b9c762177ea1",
+  "merge_tree": "1b35d4d42a619464004f89eb4204a9677d63dcc3",
+  "pending_corpus_plan": {
+    "auxiliary": {
+      "argv": [
+        "-B",
+        "tools/prepare_auxiliary_snapshots.py",
+        "--manifest",
+        "data/dumps/manifest.json",
+        "--downloads",
+        "data/dumps",
+        "--project",
+        ".",
+        "--scratch",
+        ".tmp/auxiliary-completion-20261005",
+        "--category-tree",
+        "--wikis",
+        "huwiktionary",
+        "hywiktionary",
+        "idwiktionary",
+        "itwiktionary",
+        "jawiktionary",
+        "kuwiktionary",
+        "ltwiktionary",
+        "mgwiktionary",
+        "nlwiktionary",
+        "plwiktionary",
+        "ptwiktionary",
+        "ruwiktionary",
+        "svwiktionary",
+        "tawiktionary",
+        "thwiktionary",
+        "trwiktionary",
+        "viwiktionary",
+        "zhwiktionary"
+      ],
+      "resource_lock": ".tmp/build-resources.lock",
+      "strict_supervisor": "build_resource_limits.supervise",
+      "watchdog_options": {
+        "max_cpus": 1,
+        "report_path": ".tmp/completion-20261005/auxiliary-watchdog.json",
+        "wall_seconds": 86400
+      }
+    },
+    "dictionaries": {
+      "argv": [
+        "python",
+        "-B",
+        "tools/build_wiktionaries.py",
+        "--downloads",
+        "data/dumps",
+        "--output",
+        "data/dictionaries",
+        "--zig",
+        ".tmp/toolchains/zig-x86_64-linux-0.17.0/zig",
+        "--jobs",
+        "1",
+        "--threads",
+        "4",
+        "--expansion-workers",
+        "4",
+        "--expansion-timeout-ms",
+        "600000",
+        "--now-unix",
+        "1791158400"
+      ],
+      "watchdog_append": [
+        "--resource-mode=watchdog",
+        "--build-timeout-seconds",
+        "604800"
+      ]
+    },
+    "dump_date": "20261001",
+    "now_unix": 1791158400,
+    "requested_editions": 198,
+    "status": "pending_resource_authorization",
+    "watchdog_limit_description": "Sampled aggregate process-tree memory limit, not a hard kernel-enforced cgroup limit.",
+    "watchdog_memory_limit_bytes": 8589934592,
+    "watchdog_permission_required": true,
+    "working_directory": "/home/a/zig/wikidict"
+  },
+  "qualifications": [
+    {
+      "build_summaries": [
+        "Build Summary: 58/58 steps succeeded"
+      ],
+      "changed_paths": [],
+      "command": [
+        "zig",
+        "build",
+        "test",
+        "-j2",
+        "--summary",
+        "all"
+      ],
+      "elapsed_seconds": 356.47603493899805,
+      "end_head": "aea3e5a9c96e88fa3679b4a1e00ed31f39c76aad",
+      "exit_code": 0,
+      "head": "aea3e5a9c96e88fa3679b4a1e00ed31f39c76aad",
+      "label": "unit",
+      "log_path": ".tmp/completion-20261005/unit.log",
+      "log_sha256": "c63a6e46b1c7f6c68dbf259edf41c1af62346fbfe263cc7fda01f38fde320267",
+      "reported_unit_results": {
+        "crashed": 0,
+        "failed": 0,
+        "leaked": 0,
+        "passed": 780,
+        "skipped": 0
+      },
+      "source_guard": true,
+      "source_snapshot_sha256": "7fe46d06d1e6d69453a731346f867f20d955eb915f990c623a6ebb329505b8c7"
+    },
+    {
+      "build_summaries": [
+        "Build Summary: 64/64 steps succeeded"
+      ],
+      "changed_paths": [],
+      "command": [
+        "zig",
+        "build",
+        "test",
+        "test-bundle",
+        "-j2",
+        "--summary",
+        "all"
+      ],
+      "elapsed_seconds": 227.05221768899355,
+      "end_head": "aea3e5a9c96e88fa3679b4a1e00ed31f39c76aad",
+      "exit_code": 0,
+      "head": "aea3e5a9c96e88fa3679b4a1e00ed31f39c76aad",
+      "label": "repaired-zig",
+      "log_path": ".tmp/completion-20261005/repaired-zig.log",
+      "log_sha256": "970f38353ab6dae27f14d99a6338ddee4bd8b517cd1989be8b01986df0714d3d",
+      "reported_unit_results": {
+        "crashed": 0,
+        "failed": 0,
+        "leaked": 0,
+        "passed": 783,
+        "skipped": 0
+      },
+      "source_guard": true,
+      "source_snapshot_sha256": "7db6a7a5913d4ab4035ce42c3de3eef3b6612be2f9c640ffd0be06afb78895b8"
+    },
+    {
+      "build_summaries": [],
+      "changed_paths": [],
+      "command": [
+        "python",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools",
+        "-p",
+        "*test*.py"
+      ],
+      "elapsed_seconds": 12.02684845100157,
+      "end_head": "aea3e5a9c96e88fa3679b4a1e00ed31f39c76aad",
+      "exit_code": 1,
+      "head": "aea3e5a9c96e88fa3679b4a1e00ed31f39c76aad",
+      "label": "repaired-python",
+      "log_path": ".tmp/completion-20261005/repaired-python.log",
+      "log_sha256": "ecf9173155e621151d7d8563b7e501d639da655580882f9b7cc8d07bec1f99a1",
+      "python_tests": 190,
+      "source_guard": true,
+      "source_snapshot_sha256": "7db6a7a5913d4ab4035ce42c3de3eef3b6612be2f9c640ffd0be06afb78895b8"
+    },
+    {
+      "build_summaries": [],
+      "changed_paths": [],
+      "command": [
+        "env",
+        "PYTHONPATH=tools",
+        "TMPDIR=/home/a/zig/wikidict/.tmp/completion-20261005/python-temp",
+        "python",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools",
+        "-p",
+        "*test*.py"
+      ],
+      "elapsed_seconds": 10.583471507998183,
+      "end_head": "aea3e5a9c96e88fa3679b4a1e00ed31f39c76aad",
+      "exit_code": 0,
+      "head": "aea3e5a9c96e88fa3679b4a1e00ed31f39c76aad",
+      "label": "repaired-python-env",
+      "log_path": ".tmp/completion-20261005/repaired-python-env.log",
+      "log_sha256": "e814b9298768684e3ad165b7fd24e98a6ddfc4a04180f12201d1a4ee0ae2b134",
+      "python_tests": 190,
+      "source_guard": true,
+      "source_snapshot_sha256": "7db6a7a5913d4ab4035ce42c3de3eef3b6612be2f9c640ffd0be06afb78895b8"
+    },
+    {
+      "build_summaries": [
+        "Build Summary: 40/65 steps succeeded (3 failed)"
+      ],
+      "changed_paths": [],
+      "command": [
+        ".tmp/toolchains/zig-x86_64-linux-0.17.0/zig",
+        "build",
+        "test",
+        "test-bundle",
+        "-j2",
+        "--summary",
+        "all"
+      ],
+      "elapsed_seconds": 246.05382728000404,
+      "end_head": "2f29b17213037f6a561bc7f29ccac114cdfb0b72",
+      "exit_code": 1,
+      "head": "2f29b17213037f6a561bc7f29ccac114cdfb0b72",
+      "label": "merged017-first",
+      "log_path": ".tmp/completion-20261005/merged017-first.log",
+      "log_sha256": "f1b1b1dc83c1b27695a72b41691aa54a4b06f77c713b666f38a6f8cc73991dbb",
+      "reported_unit_results": {
+        "crashed": 0,
+        "failed": 0,
+        "leaked": 0,
+        "passed": 334,
+        "skipped": 0
+      },
+      "source_guard": true,
+      "source_snapshot_sha256": "882871bf247d62f2de029009026025b5eecd9cd86170b3ff3d433e952c707d45"
+    },
+    {
+      "build_summaries": [],
+      "changed_paths": [],
+      "command": [
+        "env",
+        "PYTHONPATH=tools",
+        "TMPDIR=/home/a/zig/wikidict/.tmp/completion-20261005/python-temp",
+        "python",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools",
+        "-p",
+        "*test*.py"
+      ],
+      "elapsed_seconds": 13.533971663971897,
+      "end_head": "2f29b17213037f6a561bc7f29ccac114cdfb0b72",
+      "exit_code": 0,
+      "head": "2f29b17213037f6a561bc7f29ccac114cdfb0b72",
+      "label": "merged017-python",
+      "log_path": ".tmp/completion-20261005/merged017-python.log",
+      "log_sha256": "ce87ae1431df1504eb4191355dc5983c0ce894da131161103e49251284d91602",
+      "python_tests": 190,
+      "source_guard": true,
+      "source_snapshot_sha256": "882871bf247d62f2de029009026025b5eecd9cd86170b3ff3d433e952c707d45"
+    },
+    {
+      "build_summaries": [
+        "Build Summary: 65/65 steps succeeded"
+      ],
+      "changed_paths": [],
+      "command": [
+        ".tmp/toolchains/zig-x86_64-linux-0.17.0/zig",
+        "build",
+        "test",
+        "test-bundle",
+        "-j2",
+        "--summary",
+        "all"
+      ],
+      "elapsed_seconds": 375.9188232710003,
+      "end_head": "2f29b17213037f6a561bc7f29ccac114cdfb0b72",
+      "exit_code": 0,
+      "head": "2f29b17213037f6a561bc7f29ccac114cdfb0b72",
+      "label": "merged017-repaired",
+      "log_path": ".tmp/completion-20261005/merged017-repaired.log",
+      "log_sha256": "3fb4b0f8c02376ebe790fd801521c1904f8e687b104dffe2f0d1373105d2b467",
+      "reported_unit_results": {
+        "crashed": 0,
+        "failed": 0,
+        "leaked": 0,
+        "passed": 783,
+        "skipped": 0
+      },
+      "source_guard": true,
+      "source_snapshot_sha256": "5b8bbe1dee470cedc06e89e5923737c0bea3b47b4f579315a321c32d40a06892"
+    },
+    {
+      "build_summaries": [],
+      "changed_paths": [],
+      "command": [
+        "env",
+        "PYTHONPATH=tools",
+        "TMPDIR=/home/a/zig/wikidict/.tmp/completion-20261005/python-temp",
+        "python",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools",
+        "-p",
+        "*test*.py"
+      ],
+      "elapsed_seconds": 11.330283285991754,
+      "end_head": "2f29b17213037f6a561bc7f29ccac114cdfb0b72",
+      "exit_code": 0,
+      "head": "2f29b17213037f6a561bc7f29ccac114cdfb0b72",
+      "label": "merged017-python-final",
+      "log_path": ".tmp/completion-20261005/merged017-python-final.log",
+      "log_sha256": "6d3c7213fd7f8a817feb1eb96f9cfd242fec65e2b265576d201315d6e296cdd1",
+      "python_tests": 190,
+      "source_guard": true,
+      "source_snapshot_sha256": "5b8bbe1dee470cedc06e89e5923737c0bea3b47b4f579315a321c32d40a06892"
+    }
+  ],
+  "readiness": {
+    "completed_dictionary_editions": [],
+    "date": "20261001",
+    "edition_count": 198,
+    "local_head": "aea3e5a9c96e88fa3679b4a1e00ed31f39c76aad",
+    "missing_category_trees": [
+      "huwiktionary",
+      "hywiktionary",
+      "idwiktionary",
+      "itwiktionary",
+      "jawiktionary",
+      "kuwiktionary",
+      "ltwiktionary",
+      "mgwiktionary",
+      "nlwiktionary",
+      "plwiktionary",
+      "ptwiktionary",
+      "ruwiktionary",
+      "svwiktionary",
+      "tawiktionary",
+      "thwiktionary",
+      "trwiktionary",
+      "viwiktionary",
+      "zhwiktionary"
+    ],
+    "remote_head": "04bffaaa4085eba64df97ba447c3e337c4bde78b",
+    "resource_blocker": "No writable delegated cgroup with cpu, memory and pids controllers"
+  },
+  "recorded_at": "2026-10-05T02:03:20.409180+00:00",
+  "requested_editions": 198,
+  "resource_readiness": {
+    "cgroup": {
+      "controllers": [
+        "cpu",
+        "memory",
+        "pids"
+      ],
+      "current": "/sys/fs/cgroup",
+      "delegated_parent": null,
+      "delegation_error": "A writable delegated cgroup with cpu, memory and pids controllers is required",
+      "mode": "0o755",
+      "mounts": [
+        {
+          "fstype": "cgroup2",
+          "options": "ro,nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot,memory_hugetlb_accounting",
+          "source": "cgroup2",
+          "target": "/sys/fs/cgroup"
+        }
+      ],
+      "owner_gid": 0,
+      "owner_uid": 0,
+      "subtree_control": [],
+      "writable": false
+    },
+    "conclusion": "No supported unprivileged systemd delegation path is available in this RD environment: cgroup2 is mounted read-only and neither manager bus is available.",
+    "inventory": {
+      "auxiliary_capture_roots": 198,
+      "requested_editions": 198
+    },
+    "mutations_performed": "Only this task evidence JSON is to be written; no source, cgroups, units, settings or corpus jobs changed.",
+    "observed_utc": "2026-10-05T01:53:29.928480+00:00",
+    "pid1_command": "bash",
+    "required_environment": "An RD session or launcher providing a writable private delegated cgroup v2 subtree with cpu, memory and pids controllers.",
+    "schema": "wikidict.cgroup-readiness.v1",
+    "strict_hard_cap_ready": false,
+    "system_manager": {
+      "available": false,
+      "exit_code": 1,
+      "stderr": "System has not been booted with systemd as init system (PID 1). Can't operate.\nFailed to connect to system scope bus via local transport: Host is down",
+      "stdout": ""
+    },
+    "uid": 1000,
+    "user_manager": {
+      "available": false,
+      "exit_code": 1,
+      "stderr": "Failed to connect to user scope bus via local transport: No such file or directory",
+      "stdout": ""
+    }
+  },
+  "status": "code_integrated_corpus_blocked",
+  "strict_attempt": {
+    "argv": [
+      "-B",
+      "tools/prepare_auxiliary_snapshots.py",
+      "--manifest",
+      "data/dumps/manifest.json",
+      "--downloads",
+      "data/dumps",
+      "--project",
+      ".",
+      "--scratch",
+      ".tmp/auxiliary-completion-20261005",
+      "--category-tree",
+      "--wikis",
+      "huwiktionary",
+      "hywiktionary",
+      "idwiktionary",
+      "itwiktionary",
+      "jawiktionary",
+      "kuwiktionary",
+      "ltwiktionary",
+      "mgwiktionary",
+      "nlwiktionary",
+      "plwiktionary",
+      "ptwiktionary",
+      "ruwiktionary",
+      "svwiktionary",
+      "tawiktionary",
+      "thwiktionary",
+      "trwiktionary",
+      "viwiktionary",
+      "zhwiktionary"
+    ],
+    "error": "A writable delegated cgroup with cpu, memory and pids controllers is required",
+    "error_type": "ContainmentUnavailable",
+    "head": "6cf2d86505a5e9498984ead968f2b9c762177ea1",
+    "mode": "cgroup",
+    "observed_at": "2026-10-05T02:01:15.352534+00:00",
+    "status": "blocked_before_launch"
+  },
+  "toolchain": {
+    "shasum": "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026",
+    "size": "57332648",
+    "tarball": "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
+  },
+  "upstream_tip": "04bffaaa4085eba64df97ba447c3e337c4bde78b"
+}
