@@ -76,6 +76,8 @@ pub const WikibaseEntity = struct {
     parsed_numbers_validated: bool = false,
 };
 pub const WikibaseEntityFn = *const fn (?*anyopaque, []const u8) anyerror!WikibaseEntity;
+// Null is an explicitly captured absent page link; an uncovered title is an error.
+pub const WikibasePageEntityIdFn = *const fn (?*anyopaque, []const u8) anyerror!?[]const u8;
 pub const WikibaseTerm = struct { value: []const u8, language: []const u8, source_language: ?[]const u8 = null };
 pub const WikibaseEntityTerms = struct { label: ?WikibaseTerm, description: ?WikibaseTerm };
 pub const WikibaseEntityTermsFn = *const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityTerms;
@@ -113,12 +115,15 @@ pub const Host = struct {
     file_metadata: ?FileMetadataFn = null,
     // Exact captured site constant; owned by the immutable bundle provider.
     site_server: ?[]const u8 = null,
+    site_script: ?[]const u8 = null,
+    site_article_path: ?[]const u8 = null,
     site_interwiki_map: ?SiteInterwikiMapFn = null,
     // Only a native provider backed by one immutable snapshot may set this.
     stable_site_interwiki_map: bool = false,
     wikibase_sitelink: ?WikibaseSitelinkFn = null,
     wikibase_entity_text: ?WikibaseEntityTextFn = null,
     wikibase_entity: ?WikibaseEntityFn = null,
+    wikibase_page_entity_id: ?WikibasePageEntityIdFn = null,
     wikibase_entity_terms: ?WikibaseEntityTermsFn = null,
     language_fallbacks: ?LanguageFallbacksFn = null,
     language_names: ?LanguageNamesFn = null,
@@ -133,6 +138,19 @@ pub const Host = struct {
 pub fn siteServerForInstall(runtime: *const rt.Context) ?[]const u8 {
     const host: *const Host = @ptrCast(@alignCast(runtime.host orelse return null));
     return host.site_server;
+}
+
+pub const SiteUrlConfig = struct { server: []const u8, script: []const u8, article_path: []const u8 };
+
+// These captured edition constants cannot vary with a page or a Lua call.
+// Reading them must not make a loadData module spuriously effectful.
+pub fn siteUrlConfig(runtime: *const rt.Context) !SiteUrlConfig {
+    const host: *const Host = @ptrCast(@alignCast(runtime.host orelse return error.SiteInfoSnapshotMissing));
+    return .{
+        .server = host.site_server orelse return error.SiteInfoSnapshotMissing,
+        .script = host.site_script orelse return error.SiteInfoSnapshotMissing,
+        .article_path = host.site_article_path orelse return error.SiteInfoSnapshotMissing,
+    };
 }
 
 pub fn set(runtime: *rt.Context, host: ?*Host) void {

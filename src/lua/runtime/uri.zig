@@ -1,5 +1,6 @@
 const std = @import("std");
 const rt = @import("zig_runtime");
+const host_api = @import("host.zig");
 const Value = rt.Value;
 
 pub const site_server = "//en.wiktionary.org";
@@ -160,11 +161,17 @@ fn appendAmpEscaped(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []con
 }
 
 pub fn buildWikiUrlRawQuery(a: std.mem.Allocator, raw_title: []const u8, query: ?[]const u8, kind: WikiUrlKind, escaped: bool, proto_override: ?[]const u8) ![]const u8 {
+    return buildSiteWikiUrlRawQuery(a, raw_title, query, kind, escaped, proto_override, .{ .server = site_server, .script = "/w/index.php", .article_path = "/wiki/$1" });
+}
+
+fn buildSiteWikiUrlRawQuery(a: std.mem.Allocator, raw_title: []const u8, query: ?[]const u8, kind: WikiUrlKind, escaped: bool, proto_override: ?[]const u8, site: host_api.SiteUrlConfig) ![]const u8 {
     const title = std.mem.trim(u8, raw_title, " \t\r\n");
     const hash = std.mem.indexOfScalar(u8, title, '#');
     const base_title = if (hash) |i| title[0..i] else title;
     const fragment = if (hash) |i| title[i + 1 ..] else "";
     var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    const relative_server = if (std.mem.indexOf(u8, site.server, "://")) |at| site.server[at + 1 ..] else site.server;
     switch (kind) {
         .local => {},
         .full => {
@@ -172,27 +179,30 @@ pub fn buildWikiUrlRawQuery(a: std.mem.Allocator, raw_title: []const u8, query: 
                 if (std.ascii.eqlIgnoreCase(proto, "http") or std.ascii.eqlIgnoreCase(proto, "https")) {
                     try out.appendSlice(a, proto);
                     try out.append(a, ':');
-                    try out.appendSlice(a, site_server);
+                    try out.appendSlice(a, relative_server);
                 } else {
-                    try out.appendSlice(a, site_server);
+                    try out.appendSlice(a, site.server);
                 }
-            } else try out.appendSlice(a, site_server);
+            } else try out.appendSlice(a, site.server);
         },
         .canonical => {
-            try out.appendSlice(a, "https:");
-            try out.appendSlice(a, site_server);
+            if (std.mem.startsWith(u8, site.server, "//")) try out.appendSlice(a, "https:");
+            try out.appendSlice(a, site.server);
         },
     }
     if (query) |q| {
-        try out.appendSlice(a, "/w/index.php?title=");
+        try out.appendSlice(a, site.script);
+        try out.appendSlice(a, "?title=");
         try appendWikiEncoded(&out, a, base_title);
         if (q.len != 0) {
             try out.appendSlice(a, if (escaped) "&amp;" else "&");
             try appendAmpEscaped(&out, a, q, escaped);
         }
     } else {
-        try out.appendSlice(a, "/wiki/");
+        const marker = std.mem.indexOf(u8, site.article_path, "$1") orelse return error.InvalidSiteInfoSnapshot;
+        try appendAmpEscaped(&out, a, site.article_path[0..marker], escaped);
         try appendWikiEncoded(&out, a, base_title);
+        try appendAmpEscaped(&out, a, site.article_path[marker + 2 ..], escaped);
     }
     if (fragment.len != 0) {
         try out.append(a, '#');
@@ -524,7 +534,7 @@ fn uriUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value, kind: W
     const a = runtime.allocator;
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     const query = try buildQueryArgument(runtime, if (args.len > 1) args[1] else .nil);
-    const url = try buildWikiUrlRawQuery(runtime.allocator, args[0].string, query, kind, false, null);
+    const url = try buildSiteWikiUrlRawQuery(runtime.allocator, args[0].string, query, kind, false, null, try host_api.siteUrlConfig(runtime));
     return one(a, try makeUriObject(runtime, url));
 }
 
@@ -688,6 +698,8 @@ test "AOT URI builders sort query parameters and expose URI fields" {
     defer arena.deinit();
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
+    var host = host_api.Host{ .site_server = "//en.wiktionary.org", .site_script = "/w/index.php", .site_article_path = "/wiki/$1" };
+    host_api.set(&runtime, &host);
     const mw = try runtime.newTable();
     try install(&runtime, mw);
     const uri = mw.rawGet(.{ .string = "uri" }).?.table;
@@ -705,6 +717,37 @@ test "AOT URI builders sort query parameters and expose URI fields" {
     try std.testing.expectEqualStrings("en.wiktionary.org", (try runtime.getIndex(built[0], .{ .string = "host" })).string);
     try std.testing.expectEqualStrings("/w/index.php", (try runtime.getIndex(built[0], .{ .string = "path" })).string);
     try std.testing.expectEqualStrings("Frag", (try runtime.getIndex(built[0], .{ .string = "fragment" })).string);
+}
+
+test "URI wiki URLs use captured edition paths without page or loadData effects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    try std.testing.expectError(error.SiteInfoSnapshotMissing, uriFullUrlCall(null, &runtime, &.{.{ .string = "A B" }}));
+    var host = host_api.Host{ .site_server = "//ar.wiktionary.org", .site_script = "/w/index.php", .site_article_path = "/wiki/$1" };
+    host_api.set(&runtime, &host);
+    var effect = false;
+    const previous = rt.beginLoadDataEffectProbe(&effect);
+    defer rt.endLoadDataEffectProbe(previous);
+    const arabic = try uriFullUrlCall(null, &runtime, &.{ .{ .string = "علم النفس الرياضي" }, .{ .string = "action=edit&section=0" } });
+    defer rt.freeResults(arabic);
+    try std.testing.expectEqualStrings("ar.wiktionary.org", (try runtime.getIndex(arabic[0], .{ .string = "host" })).string);
+    try std.testing.expectEqualStrings("/w/index.php", (try runtime.getIndex(arabic[0], .{ .string = "path" })).string);
+    try std.testing.expect(!effect);
+    host.site_server = "https://captured.example:8443";
+    host.site_script = "/custom/run.php";
+    host.site_article_path = "/view/$1/end?lang=x";
+    const article = try uriFullUrlCall(null, &runtime, &.{.{ .string = "A B#Frag" }});
+    defer rt.freeResults(article);
+    const rendered = try runtime.callValue(runtime.metamethod(article[0], "__tostring").?, &.{article[0]});
+    defer rt.freeResults(rendered);
+    try std.testing.expectEqualStrings("https://captured.example:8443/view/A_B/end?lang=x#Frag", rendered[0].string);
+    const local = try uriLocalUrlCall(null, &runtime, &.{ .{ .string = "A B" }, .{ .string = "action=edit" } });
+    defer rt.freeResults(local);
+    try std.testing.expectEqualStrings("/custom/run.php", (try runtime.getIndex(local[0], .{ .string = "path" })).string);
+    host.site_article_path = null;
+    try std.testing.expectError(error.SiteInfoSnapshotMissing, uriFullUrlCall(null, &runtime, &.{.{ .string = "A" }}));
 }
 
 test "AOT URI new and validate parse production URL fields" {

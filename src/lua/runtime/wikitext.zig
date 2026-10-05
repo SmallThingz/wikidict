@@ -94,11 +94,14 @@ pub const Provider = struct {
     file_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!FileMetadata = null,
     category_tree: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, CategoryTreeScope) anyerror![]const []const u8 = null,
     site_server: ?[]const u8 = null,
+    site_script: ?[]const u8 = null,
+    site_article_path: ?[]const u8 = null,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
     stable_interwiki_map: bool = false,
     wikibase_sitelink: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror!?[]const u8 = null,
     wikibase_entity_text: ?*const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityText = null,
     wikibase_entity: ?host_api.WikibaseEntityFn = null,
+    wikibase_page_entity_id: ?host_api.WikibasePageEntityIdFn = null,
     wikibase_entity_terms: ?host_api.WikibaseEntityTermsFn = null,
     language_fallbacks: ?host_api.LanguageFallbacksFn = null,
     language_names: ?host_api.LanguageNamesFn = null,
@@ -115,6 +118,7 @@ pub const Provider = struct {
 const LazyTemplateArgs = struct {
     target: *rt.Table,
     raw_values: *rt.Table,
+    named_numeric_keys: []const f64,
     caller_params: *rt.Table,
     caller_title: []const u8,
     depth: usize,
@@ -171,11 +175,14 @@ pub const Expander = struct {
         self.host.interface_message = if (self.provider.interface_message != null) hostInterfaceMessage else null;
         self.host.file_metadata = hostFileMetadata;
         self.host.site_server = self.provider.site_server;
+        self.host.site_script = self.provider.site_script;
+        self.host.site_article_path = self.provider.site_article_path;
         self.host.site_interwiki_map = hostSiteInterwikiMap;
         self.host.stable_site_interwiki_map = self.provider.stable_interwiki_map;
         self.host.wikibase_sitelink = hostWikibaseSitelink;
         self.host.wikibase_entity_text = hostWikibaseEntityText;
         self.host.wikibase_entity = if (self.provider.wikibase_entity != null) hostWikibaseEntity else null;
+        self.host.wikibase_page_entity_id = if (self.provider.wikibase_page_entity_id != null) hostWikibasePageEntityId else null;
         self.host.wikibase_entity_terms = if (self.provider.wikibase_entity_terms != null) hostWikibaseEntityTerms else null;
         self.host.language_fallbacks = if (self.provider.language_fallbacks != null) hostLanguageFallbacks else null;
         self.host.language_names = if (self.provider.language_names != null) hostLanguageNames else null;
@@ -359,6 +366,11 @@ pub const Expander = struct {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.language_known_tag orelse return error.NotImplemented;
         return get(self.provider.ctx, code);
+    }
+
+    fn hostWikibasePageEntityId(raw: ?*anyopaque, title: []const u8) anyerror!?[]const u8 {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        return (self.provider.wikibase_page_entity_id orelse return error.WikibasePageLinkSnapshotMissing)(self.provider.ctx, title);
     }
 
     fn hostWikibaseEntity(raw: ?*anyopaque, entity_id: []const u8) anyerror!host_api.WikibaseEntity {
@@ -626,7 +638,13 @@ pub const Expander = struct {
         const lazy = self.lazyTemplateArgsFor(params) orelse return null;
         const raw = lazy.raw_values.rawGet(key) orelse return null;
         if (raw != .string) return error.StringExpected;
-        const expanded = try self.expandWikitext(raw.string, lazy.caller_params, lazy.caller_title, lazy.depth + 1);
+        const expanded_raw = try self.expandWikitext(raw.string, lazy.caller_params, lazy.caller_title, lazy.depth + 1);
+        const trim_value = key == .string or
+            (key == .number and std.mem.indexOfScalar(f64, lazy.named_numeric_keys, key.number) != null);
+        const expanded = if (trim_value)
+            std.mem.trim(u8, expanded_raw, " \t\r\n\x00\x0b")
+        else
+            expanded_raw;
         try params.rawSet(self.runtime.allocator, key, .{ .string = expanded });
         return expanded;
     }
@@ -658,6 +676,9 @@ pub const Expander = struct {
         const out = try self.runtime.newTable();
         if (raw_args.len == 0) return out;
         const raw_values = try self.runtime.newTable();
+        const page_a = self.page_allocator orelse self.runtime.allocator;
+        var named_numeric_keys: std.ArrayList(f64) = .empty;
+        defer named_numeric_keys.deinit(page_a);
         var positional: i64 = 1;
         for (raw_args) |raw| {
             if (preprocess.findTopDelimiter(raw, '=')) |eq| {
@@ -668,9 +689,13 @@ pub const Expander = struct {
                     .{ .number = @floatFromInt(number) }
                 else |_|
                     .{ .string = key_text };
-                const value_raw = std.mem.trim(u8, raw[eq + 1 ..], " \t\r\n");
-                try raw_values.rawSet(self.runtime.allocator, key, .{ .string = value_raw });
+                try raw_values.rawSet(self.runtime.allocator, key, .{ .string = raw[eq + 1 ..] });
+                // String keys are inherently named; only numeric keys need provenance.
+                if (key == .number and std.mem.indexOfScalar(f64, named_numeric_keys.items, key.number) == null)
+                    try named_numeric_keys.append(page_a, key.number);
             } else {
+                if (std.mem.indexOfScalar(f64, named_numeric_keys.items, @floatFromInt(positional))) |index|
+                    _ = named_numeric_keys.swapRemove(index);
                 try raw_values.rawSet(
                     self.runtime.allocator,
                     .{ .number = @floatFromInt(positional) },
@@ -679,10 +704,10 @@ pub const Expander = struct {
                 positional += 1;
             }
         }
-        const page_a = self.page_allocator orelse self.runtime.allocator;
         try self.lazy_template_args.append(page_a, .{
             .target = out,
             .raw_values = raw_values,
+            .named_numeric_keys = try named_numeric_keys.toOwnedSlice(page_a),
             .caller_params = caller_params,
             .caller_title = host_title,
             .depth = depth,
@@ -702,8 +727,8 @@ pub const Expander = struct {
                     .{ .number = @floatFromInt(number) }
                 else |_|
                     .{ .string = key_text };
-                const value_raw = std.mem.trim(u8, raw[eq + 1 ..], " \t\r\n");
-                const value = try self.expandWikitext(value_raw, caller_params, host_title, depth + 1);
+                // PPTemplateFrame_Hash trims named arguments after expansion.
+                const value = std.mem.trim(u8, try self.expandWikitext(raw[eq + 1 ..], caller_params, host_title, depth + 1), " \t\r\n\x00\x0b");
                 try out.rawSet(self.runtime.allocator, key, .{ .string = value });
             } else {
                 const value = try self.expandWikitext(raw, caller_params, host_title, depth + 1);
@@ -3548,4 +3573,66 @@ test "native AOT nowiki strip markers share page host state" {
     try std.testing.expectError(error.AotCallFailed, runtime.callValue(unstrip, &.{.{ .string = "x\x7fy" }}));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
+}
+
+test "named invoke and forwarded template values trim after expansion" {
+    const Source = struct {
+        fn get(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "Template:NamedInvoke"))
+                return "{{#invoke:Test|run|x={{{1}}}}}";
+            return TestProvider.get(raw, a, title);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail), rt.stabilize(TestModule.random), rt.stabilize(TestModule.stateful), rt.stabilize(TestModule.nested), rt.stabilize(TestModule.repair), rt.stabilize(TestModule.repairParent), rt.stabilizeBuffered(TestModule.multi), rt.stabilizeBuffered(TestModule.empty), rt.stabilizeBuffered(TestModule.nilReturn), rt.stabilizeBuffered(TestModule.numericReturn) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TestModule.lookup, TestModule.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = Source.get, .exists = TestProvider.exists }, .install_scribunto = installTestInvoke };
+    // The named #invoke value is the same forwarding shape as wikidata={{{1}}}.
+    // The lazy named template value also trims, while the unnamed value stays padded.
+    const got = try expander.expandFragment("Page", "{{NamedInvoke|L1486313 }}|{{LazyForward| L1486313 |{{Loop}}}}|{{Hello| L1486313 }}", 1_670_803_200);
+    try std.testing.expectEqualStrings("L1486313|used=L1486313|Hi  L1486313  N", got);
+}
+
+test "argument post-expansion trim preserves unnamed values and last assignment provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 0);
+    defer runtime.deinit();
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 0, .mw_slot = 0, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    const caller = try runtime.newTable();
+    const padded = "\x00\x0b \tL1486313 \r\n\x00\x0b";
+    try caller.rawSet(a, .{ .number = 1 }, .{ .string = padded });
+    try caller.rawSet(a, .{ .number = 2 }, .{ .string = "\xc2\xa0inner\xc2\xa0" });
+    const named_wins = [_][]const u8{ "{{{1}}}", "1={{{1}}}", "wikidata={{{1}}}", "unicode={{{2}}}" };
+    const unnamed_wins = [_][]const u8{ "1={{{1}}}", "{{{1}}}", "wikidata={{{1}}}" };
+    inline for (.{ false, true }) |lazy| {
+        const named = if (lazy)
+            try expander.buildTemplateArgs(&named_wins, caller, "Page", 0)
+        else
+            try expander.buildExpandedArgs(&named_wins, caller, "Page", 0);
+        if (lazy) try expander.materializeLazyTemplateArgs(named);
+        try std.testing.expectEqualStrings("L1486313", named.rawGet(.{ .number = 1 }).?.string);
+        try std.testing.expectEqualStrings("L1486313", named.rawGet(.{ .string = "wikidata" }).?.string);
+        try std.testing.expectEqualStrings("\xc2\xa0inner\xc2\xa0", named.rawGet(.{ .string = "unicode" }).?.string);
+        const unnamed = if (lazy)
+            try expander.buildTemplateArgs(&unnamed_wins, caller, "Page", 0)
+        else
+            try expander.buildExpandedArgs(&unnamed_wins, caller, "Page", 0);
+        if (lazy) try expander.materializeLazyTemplateArgs(unnamed);
+        try std.testing.expectEqualStrings(padded, unnamed.rawGet(.{ .number = 1 }).?.string);
+        try std.testing.expectEqualStrings("L1486313", unnamed.rawGet(.{ .string = "wikidata" }).?.string);
+        if (lazy) {
+            try caller.rawSet(a, .{ .number = 1 }, .{ .string = "changed" });
+            try std.testing.expectEqualStrings("L1486313", try expander.expandParameter("wikidata", named, "Page", 0));
+            try caller.rawSet(a, .{ .number = 1 }, .{ .string = padded });
+        }
+    }
 }

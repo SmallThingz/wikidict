@@ -32,7 +32,7 @@ SHARD_STATE_VERSION = 2
 AUXILIARY_SNAPSHOT_NAMES = (
     'site-info', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
-    'wikibase-entity-terms', 'language-fallbacks', 'language-names', 'file-metadata',
+    'wikibase-entity-terms', 'wikibase-page-links', 'language-fallbacks', 'language-names', 'file-metadata',
     'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words',
 )
 MAX_TOTAL_BUILD_WORKERS = 8
@@ -220,6 +220,9 @@ def auxiliary_manifest_filename(name):
 
 
 def auxiliary_capture_helper(name, path):
+    if name=='wikibase-page-links':
+        import prepare_wikibase_page_links
+        return prepare_wikibase_page_links
     if name=='site-info':
         import site_info_snapshot
         return site_info_snapshot
@@ -304,7 +307,7 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
             raise ValueError(f'Unknown auxiliary snapshot: {name}')
         path=Path(source)
         capture=validated_auxiliary_capture(name,path,edition,date)
-        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','site-info'):
+        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','site-info','wikibase-page-links'):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
@@ -352,6 +355,12 @@ def validate_capture_artifacts(root, record, required=()):
 
 
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
+    if name=='wikibase-page-links':
+        record=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))[0]
+        for source in record['source_dump_files']:selected_source(source,selected)
+        if capture_root is not None and record['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
+            raise ValueError('Page-link supplement namespace differs from selected capture')
+        return
     if name=='site-info':
         bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
         if capture_root is not None and bound[1]['capture.complete.json']!=sha256_file(capture_root/'capture.complete.json'):
@@ -443,6 +452,8 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 ('commons-data',),edition,date))
             preferred.update(discover_auxiliary_generation(root,'language-names',
                 ('language-names',),edition,date))
+            preferred.update(discover_auxiliary_generation(root,'wikibase-page-links',
+                ('wikibase-page-links',),edition,date))
             for name in AUXILIARY_SNAPSHOT_NAMES:
                 if name in preferred:continue
                 path=root/(auxiliary_snapshot_filename(name))
@@ -493,9 +504,10 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
     return result
 
 
-def pipeline_snapshot_args(registry, snapshots):
+def pipeline_snapshot_args(registry, snapshots, page_links_snapshot=None):
     merged=dict(snapshots or {})
     merged.setdefault('language-registry',registry)
+    if page_links_snapshot is not None:merged['wikibase-page-links']=page_links_snapshot
     return auxiliary_snapshot_args(merged)
 
 
@@ -1114,7 +1126,7 @@ def cached_shard_dump(items, downloads, workspace):
     return dump
 
 
-def expander_ready(root, auxiliary_hashes=None, interwiki_sha=None):
+def expander_ready(root, auxiliary_hashes=None, interwiki_sha=None, page_links_sha=None):
     marker=root/'.incomplete'
     expander=root/'.bundle-expander'
     try: ready=marker.read_text()=='expander ready'
@@ -1123,7 +1135,10 @@ def expander_ready(root, auxiliary_hashes=None, interwiki_sha=None):
     try:
         if interwiki_sha is not None and sha256_file(expander/'interwiki-map.tsv')!=interwiki_sha:return False
         if interwiki_sha is None and (expander/'interwiki-map.tsv').exists():return False
-        return all(sha256_file(expander/(auxiliary_snapshot_filename(name)))==digest for name,digest in (auxiliary_hashes or {}).items())
+        if page_links_sha is not None and sha256_file(expander/'wikibase-page-links.tsv')!=page_links_sha:return False
+        if page_links_sha is None and 'wikibase-page-links' not in (auxiliary_hashes or {}) and (expander/'wikibase-page-links.tsv').exists():return False
+        return all(sha256_file(expander/(auxiliary_snapshot_filename(name)))==digest for name,digest in (auxiliary_hashes or {}).items()
+                   if name!='wikibase-page-links' or page_links_sha is None)
     except OSError:return False
 
 
@@ -1158,7 +1173,7 @@ def timed_run(command, edition, date, phase, **fields):
         run_checked(command)
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None):
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     edition,date=items[0]['wiki'],items[0]['date']
     workers=min(workers,MAX_PIPELINE_WORKERS)
@@ -1166,13 +1181,14 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if type(expansion_workers) is not int or not 1 <= expansion_workers <= MAX_PAGE_EXPANSION_WORKERS:
         raise ValueError('Invalid page expansion worker count')
     expander_build=workspace/'expander'
-    if not expander_ready(expander_build,auxiliary_hashes,interwiki_sha):
+    page_links_sha=sha256_file(page_links_snapshot) if page_links_snapshot is not None else None
+    if not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha):
         if expander_build.exists(): shutil.rmtree(expander_build)
         staged=json.loads((workspace/'input/.complete.json').read_text())
         extraction_cache=workspace/'input'/'extraction-cache'
         timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(expander_build),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
-                     *pipeline_snapshot_args(registry,auxiliary_snapshots),
+                     *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot),
                      '--llvm-workers',str(workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
                      '--extraction-cache-root',str(extraction_cache),
@@ -1326,6 +1342,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             raise ValueError('Auxiliary snapshot changed during build')
         (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
     require_auxiliary_capture_identity(auxiliary_snapshots,build_identity)
+    if page_links_snapshot is not None and sha256_file(page_links_snapshot)!=page_links_sha:
+        raise ValueError('Derived page links changed during sharded build')
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
     persist_build_identity(staging,build_identity)
     (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
@@ -1646,15 +1664,20 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
     aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
         build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}))
+    from prepare_wikibase_page_links import prepare_from_dumps
+    with build_phase(edition,date,'wikibase_page_links') as result:
+        page_links_snapshot=prepare_from_dumps(items,downloads,namespace,workspace,aux_pinned.get('wikibase-page-links'))
+        page_links_sha=sha256_file(page_links_snapshot) if page_links_snapshot is not None else None
+        result.update(provider_installed=page_links_snapshot is not None,sha256=page_links_sha)
     # XML compression ratio does not bound the writer's whole-bucket sort.
     # Reuse the verified repack for either path, retaining it after failures.
     if source_pages>SHARD_PAGES:
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
     else:
         timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
-                     *pipeline_snapshot_args(registry,aux_pinned),
+                     *pipeline_snapshot_args(registry,aux_pinned,page_links_snapshot),
                      '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                      '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args],edition,date,'dictionary_build')
         coverage=validate_page_coverage(staging,source_pages=source_pages)
@@ -1670,6 +1693,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
                 raise ValueError('Auxiliary snapshot changed during build')
             (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
         require_auxiliary_capture_identity(aux_pinned,build_identity)
+        if page_links_snapshot is not None and sha256_file(page_links_snapshot)!=page_links_sha:
+            raise ValueError('Derived page links changed during build')
         (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
         persist_build_identity(staging,build_identity)
         (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)

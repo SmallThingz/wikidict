@@ -49,6 +49,20 @@ fn validServer(value: []const u8) bool {
 pub const Snapshot = struct {
     allocator: A,
     server: []const u8,
+    script: ?[]const u8,
+    article_path: ?[]const u8,
+
+    fn urlPath(general: std.json.Value, name: []const u8, article: bool) !?[]const u8 {
+        const value = general.object.get(name) orelse return null;
+        if (value != .string) return error.InvalidSiteInfoSnapshot;
+        const path = value.string;
+        if (path.len == 0 or path.len > 4096 or path[0] != '/' or std.mem.startsWith(u8, path, "//")) return error.InvalidSiteInfoSnapshot;
+        for (path) |c| if (c <= 32 or c == 127 or c == '\\' or c == '#') return error.InvalidSiteInfoSnapshot;
+        if (article) {
+            if (std.mem.count(u8, path, "$1") != 1) return error.InvalidSiteInfoSnapshot;
+        } else if (std.mem.indexOfAny(u8, path, "?$")) |_| return error.InvalidSiteInfoSnapshot;
+        return path;
+    }
 
     pub fn init(a: A, bytes: []const u8, wiki: []const u8, language: []const u8) !Snapshot {
         if (bytes.len > max_bytes or !std.unicode.utf8ValidateSlice(bytes)) return error.InvalidSiteInfoSnapshot;
@@ -62,16 +76,26 @@ pub const Snapshot = struct {
             return error.SiteInfoIdentityMismatch;
         const server = try string(general, "server");
         if (!validServer(server)) return error.InvalidSiteInfoSnapshot;
-        return .{ .allocator = a, .server = try a.dupe(u8, server) };
+        const script = try urlPath(general, "script", false);
+        const article_path = try urlPath(general, "articlepath", true);
+        const owned_server = try a.dupe(u8, server);
+        errdefer a.free(owned_server);
+        const owned_script = if (script) |value| try a.dupe(u8, value) else null;
+        errdefer if (owned_script) |value| a.free(value);
+        return .{ .allocator = a, .server = owned_server, .script = owned_script, .article_path = if (article_path) |value| try a.dupe(u8, value) else null };
     }
 
     pub fn deinit(self: *Snapshot) void {
         self.allocator.free(self.server);
+        if (self.script) |value| self.allocator.free(value);
+        if (self.article_path) |value| self.allocator.free(value);
         self.server = "";
+        self.script = null;
+        self.article_path = null;
     }
 };
 
-const test_raw = "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\"}}}";
+const test_raw = "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\",\"script\":\"/w/index.php\",\"articlepath\":\"/wiki/$1\"}}}";
 
 test "site info preserves exact captured server independently of JSON storage" {
     const a = std.testing.allocator;
@@ -81,6 +105,8 @@ test "site info preserves exact captured server independently of JSON storage" {
     defer snapshot.deinit();
     @memset(input, 'x');
     try std.testing.expectEqualStrings("//ar.wiktionary.org", snapshot.server);
+    try std.testing.expectEqualStrings("/w/index.php", snapshot.script.?);
+    try std.testing.expectEqualStrings("/wiki/$1", snapshot.article_path.?);
     var norwegian = try Snapshot.init(a, "{\"query\":{\"general\":{\"wikiid\":\"nowiktionary\",\"lang\":\"nb\",\"server\":\"//no.wiktionary.org\"}}}", "nowiktionary", "nb");
     defer norwegian.deinit();
     try std.testing.expectEqualStrings("//no.wiktionary.org", norwegian.server);
@@ -115,4 +141,22 @@ test "site info allocation failures preserve OutOfMemory and release parser stor
             defer snapshot.deinit();
         }
     }.load, .{});
+}
+
+test "site info URL path configuration is captured or explicitly absent" {
+    const a = std.testing.allocator;
+    for ([_][]const u8{
+        "\"script\":\"//other.example/path\"",
+        "\"script\":\"/w/index.php?extra\"",
+        "\"articlepath\":\"/wiki/no-title\"",
+        "\"articlepath\":\"/wiki/$1/$1\"",
+        "\"articlepath\":null",
+    }) |extra| {
+        const raw = try std.fmt.allocPrint(a, "{{\"query\":{{\"general\":{{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\",{s}}}}}}}", .{extra});
+        defer a.free(raw);
+        try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, raw, "arwiktionary", "ar"));
+    }
+    var missing = try Snapshot.init(a, "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\"}}}", "arwiktionary", "ar");
+    defer missing.deinit();
+    try std.testing.expect(missing.script == null and missing.article_path == null);
 }

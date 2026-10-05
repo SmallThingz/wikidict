@@ -1113,6 +1113,22 @@ fn libraryUtilCheckType(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) !
     return raiseLibraryUtilTypeError(ctx, name, arg_index, expected, actual);
 }
 
+fn libraryUtilCheckTypeForNamedArg(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len < 4) return error.MissingArgument;
+    if (args[2] == .nil and args.len > 4 and args[4].truthy()) return &.{};
+    const actual = valueTypeName(args[2]);
+    if (args[3] == .string and std.mem.eql(u8, actual, args[3].string)) return &.{};
+    const name = try str(ctx.allocator, args[0]);
+    const arg_name = try str(ctx.allocator, args[1]);
+    const expected = try str(ctx.allocator, args[3]);
+    ctx.last_error = .{ .string = try std.fmt.allocPrint(
+        ctx.allocator,
+        "bad named argument {s} to '{s}' ({s} expected, got {s})",
+        .{ arg_name, name, expected, actual },
+    ) };
+    return error.LuaRaised;
+}
+
 fn libraryUtilCheckTypeMulti(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
     if (args.len < 4) return error.MissingArgument;
     if (args[3] != .table) return error.TableExpected;
@@ -1152,6 +1168,7 @@ fn makeLibraryUtil(runtime: *rt.Context) !*rt.Table {
     const library_util = try runtime.newNativeNamespace(.library_util);
     try setNative(runtime, library_util, "checkType", libraryUtilCheckType);
     try setNative(runtime, library_util, "checkTypeMulti", libraryUtilCheckTypeMulti);
+    try setNative(runtime, library_util, "checkTypeForNamedArg", libraryUtilCheckTypeForNamedArg);
     return library_util;
 }
 
@@ -1376,6 +1393,43 @@ test "AOT package main loader resolves and caches numeric module loaders" {
     defer rt.freeResults(loaded);
     try std.testing.expectEqualStrings("loaded", loaded[0].string);
     try std.testing.expectEqualStrings("loaded", ctx.package_loaded.?.rawGet(.{ .string = "Module:A" }).?.string);
+}
+
+test "AOT libraryUtil named arguments preserve valid values optional nil and exact errors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
+    try install(&ctx);
+    const require = ctx.getGlobal(global_abi.id("require"));
+    const library = try ctx.callValue(require, &.{.{ .string = "libraryUtil" }});
+    defer rt.freeResults(library);
+    const check = try ctx.getIndex(library[0], .{ .string = "checkTypeForNamedArg" });
+    try std.testing.expect(check == .callable);
+    try std.testing.expectEqual(@as(usize, 0), library[0].table.map.count());
+
+    // The exact mandatory check reached by Arabic Distinguish -> Format link.
+    const valid = try ctx.callValue(check, &.{ .{ .string = "_formatLink" }, .{ .string = "link" }, .{ .string = "سِجِلّ" }, .{ .string = "string" }, .{ .boolean = true } });
+    defer rt.freeResults(valid);
+    try std.testing.expectEqual(@as(usize, 0), valid.len);
+    // Successful type/nil checks do not format otherwise unused diagnostic names.
+    const unnamed = try ctx.callValue(check, &.{ .nil, .nil, .{ .string = "ok" }, .{ .string = "string" } });
+    defer rt.freeResults(unnamed);
+    try std.testing.expectEqual(@as(usize, 0), unnamed.len);
+    const optional_nil = try ctx.callValue(check, &.{ .nil, .nil, .nil, .nil, .{ .boolean = true } });
+    defer rt.freeResults(optional_nil);
+    try std.testing.expectEqual(@as(usize, 0), optional_nil.len);
+
+    const pcall = ctx.getGlobal(global_abi.id("pcall"));
+    const wrong_type = try ctx.callValue(pcall, &.{ check, .{ .string = "_formatLink" }, .{ .string = "link" }, .{ .number = 7 }, .{ .string = "string" }, .{ .boolean = true } });
+    defer rt.freeResults(wrong_type);
+    try std.testing.expect(!wrong_type[0].boolean);
+    try std.testing.expectEqualStrings("bad named argument link to '_formatLink' (string expected, got number)", wrong_type[1].string);
+    const required_nil = try ctx.callValue(pcall, &.{ check, .{ .string = "_formatLink" }, .{ .string = "link" }, .nil, .{ .string = "string" }, .{ .boolean = false } });
+    defer rt.freeResults(required_nil);
+    try std.testing.expect(!required_nil[0].boolean);
+    try std.testing.expectEqualStrings("bad named argument link to '_formatLink' (string expected, got nil)", required_nil[1].string);
 }
 
 test "AOT standard library installs numeric globals and executes core helpers" {

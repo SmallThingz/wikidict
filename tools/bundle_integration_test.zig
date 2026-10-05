@@ -85,6 +85,11 @@ const module_source =
     \\local type_ok, type_err = pcall(libraryUtil.checkType, 'integration', 2, 7, 'string')
     \\assert(not type_ok and type_err == "bad argument #2 to 'integration' (string expected, got number)")
     \\libraryUtil.checkTypeMulti('integration', 1, 7, {'string', 'number'})
+    \\local checkNamed = libraryUtil.checkTypeForNamedArg
+    \\checkNamed('_formatLink', 'link', 'سِجِلّ', 'string', true)
+    \\checkNamed('_formatLink', 'display', nil, 'string', true)
+    \\local named_ok, named_err = pcall(checkNamed, 'integration', 'target', 7, 'string')
+    \\assert(not named_ok and named_err == "bad named argument target to 'integration' (string expected, got number)")
     \\assert(require('libraryUtil') == libraryUtil)
     \\assert(type(debug) == 'table' and type(debug.traceback) == 'function')
     \\assert(debug.getmetatable == nil and debug.getinfo == nil)
@@ -935,15 +940,16 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
     const namespaces = try std.fs.path.join(h.a, &.{ dir, "wikibase-namespaces.tsv" });
     const languages = try std.fs.path.join(h.a, &.{ dir, "wikibase-languages.tsv" });
     const entities = try std.fs.path.join(h.a, &.{ dir, "wikibase-entities.tsv" });
+    const page_links = try std.fs.path.join(h.a, &.{ dir, "wikibase-page-links.tsv" });
     const terms = try std.fs.path.join(h.a, &.{ dir, "wikibase-entity-terms.tsv" });
     const fallbacks = try std.fs.path.join(h.a, &.{ dir, "wikibase-language-fallbacks.tsv" });
     const messages = try std.fs.path.join(h.a, &.{ dir, "wikibase-interface-messages.tsv" });
     const site_info = try std.fs.path.join(h.a, &.{ dir, "wikibase-siteinfo.raw.json" });
-    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = site_info, .data = "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\"}}}" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = site_info, .data = "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\",\"script\":\"/w/index.php\",\"articlepath\":\"/wiki/$1\"}}}" });
     try std.Io.Dir.cwd().writeFile(h.io, .{
         .sub_path = namespaces,
         .data = "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
-            "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+            "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
             "8\tميدياويكي\tMediaWiki\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tstandard_build_input\n" ++
             "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
             "14\tتصنيف\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
@@ -954,6 +960,7 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
         .data = "# wikidict-language-registry-v2\n# content-language\tar\n# mediawiki\nar\tالعربية\tar\tArabic\tara\n# iso-639-3\n",
     });
     const entity_identity = "# wiki=arwiktionary\n# date=20261001\n# content-language=ar\n# repository=https://www.wikidata.org\n";
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = page_links, .data = "# wikidict-wikibase-page-links-v1\tpartial\n1\tQ200\n2\t-\n3\t-\n# end\t3\n" });
     const lexeme = "{\"id\":\"L100\",\"type\":\"lexeme\",\"schemaVersion\":2,\"language\":\"Q13955\",\"lexicalCategory\":\"Q24905\"," ++
         "\"lemmas\":{\"ar\":{\"language\":\"ar\",\"value\":\"كَتَبَ\"}}," ++
         "\"claims\":{\"P5920\":[{\"rank\":\"normal\",\"mainsnak\":{\"snaktype\":\"value\",\"property\":\"P5920\",\"datatype\":\"wikibase-lexeme\",\"datavalue\":{\"type\":\"wikibase-entityid\",\"value\":{\"entity-type\":\"lexeme\",\"id\":\"L101\"}}}}]," ++
@@ -1011,11 +1018,28 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
         \\end
         \\local site_configuration = mw.loadData('وحدة:SiteServerConfiguration')
         \\assert(site_configuration.code == 'ar' and site_configuration.server == '//ar.wiktionary.org')
+        \\local captured_page_item = mw.wikibase.getEntityIdForCurrentPage()
         \\return {run=function(frame)
+        \\  local expected_page_item = frame.args[1] == 'first' and 'Q200' or nil
+        \\  assert(captured_page_item == expected_page_item)
+        \\  assert(mw.wikibase.getEntityIdForCurrentPage() == expected_page_item)
+        \\  local current_entity, nil_entity = mw.wikibase.getEntity(), mw.wikibase.getEntity(nil)
+        \\  if expected_page_item then
+        \\    assert(current_entity.id == 'Q200' and nil_entity.id == 'Q200' and current_entity ~= nil_entity)
+        \\  else
+        \\    assert(current_entity == nil and nil_entity == nil)
+        \\  end
         \\  assert(mw.site.server == '//ar.wiktionary.org' and rawget(mw.site, 'server') == mw.site.server)
         \\  local found_server = false
         \\  for key, value in pairs(mw.site) do if key == 'server' then found_server = value == '//ar.wiktionary.org' end end
         \\  assert(found_server)
+        \\  local footer_title = 'علم النفس الرياضي'
+        \\  local footer_encoded = mw.uri.encode(footer_title, 'WIKI')
+        \\  for _, mode in ipairs({'action', 'veaction'}) do
+        \\    local footer = tostring(mw.uri.fullUrl(footer_title, mode .. '=edit&section=0'))
+        \\    assert(footer == '//ar.wiktionary.org/w/index.php?title=' .. footer_encoded .. '&' .. mode .. '=edit&section=0')
+        \\  end
+        \\  assert(tostring(mw.uri.fullUrl(footer_title)) == '//ar.wiktionary.org/wiki/' .. footer_encoded)
         \\  local entity = mw.wikibase.getEntity('L100')
         \\  assert(entity.id == 'L100' and entity.schemaVersion == 2 and entity.type == 'lexeme')
         \\  assert(entity.language == 'Q13955' and entity.lexicalCategory == 'Q24905')
@@ -1173,13 +1197,14 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
             "end\nreturn {code=this_wiki_code, server=mw.site.server}" },
     });
     _ = try h.run(&.{
-        pipeline,                           dump,                            root,
-        "--namespace-registry-snapshot",    namespaces,                      "--language-registry-snapshot",
-        languages,                          "--wikibase-entities-snapshot",  entities,
-        "--wikibase-entity-terms-snapshot", terms,                           "--language-fallbacks-snapshot",
-        fallbacks,                          "--interface-messages-snapshot", messages,
-        "--site-info-snapshot",             site_info,                       "--llvm-workers",
-        "1",                                "--page-workers",                "1",
+        pipeline,                         dump,                            root,
+        "--namespace-registry-snapshot",  namespaces,                      "--language-registry-snapshot",
+        languages,                        "--wikibase-entities-snapshot",  entities,
+        "--wikibase-page-links-snapshot", page_links,                      "--wikibase-entity-terms-snapshot",
+        terms,                            "--language-fallbacks-snapshot", fallbacks,
+        "--interface-messages-snapshot",  messages,                        "--site-info-snapshot",
+        site_info,                        "--llvm-workers",                "1",
+        "--page-workers",                 "1",
     }, 0);
     _ = try verifyFixture(h, verifier, root, null);
     const cases = [_]struct { title: []const u8, caption: []const u8 }{

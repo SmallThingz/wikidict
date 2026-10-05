@@ -23,6 +23,40 @@ const CategoryTreeScope = lua_program.WikitextProvider.CategoryTreeScope;
 
 const InterfaceMessageEntry = struct { source_raw: ?[]const u8 };
 const StructuredEntityRow = struct { requested_id: []const u8, canonical_id: []const u8, source: ?[]const u8 };
+const WikibasePageLinks = std.AutoHashMapUnmanaged(u64, ?[]const u8);
+
+fn parseWikibasePageLinks(a: A, source: []const u8) !WikibasePageLinks {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    if (!std.mem.eql(u8, lines.next() orelse return error.InvalidWikibasePageLinkSnapshot, "# wikidict-wikibase-page-links-v1\tpartial")) return error.InvalidWikibasePageLinkSnapshot;
+    var entries: WikibasePageLinks = .empty;
+    errdefer entries.deinit(a);
+    var previous: u64 = 0;
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "# end\t")) {
+            const raw_count = line[6..];
+            if (raw_count.len == 0 or (raw_count.len > 1 and raw_count[0] == '0')) return error.InvalidWikibasePageLinkSnapshot;
+            for (raw_count) |c| if (!std.ascii.isDigit(c)) return error.InvalidWikibasePageLinkSnapshot;
+            const count = std.fmt.parseInt(usize, raw_count, 10) catch return error.InvalidWikibasePageLinkSnapshot;
+            if (count != entries.count() or !std.mem.eql(u8, lines.next() orelse return error.InvalidWikibasePageLinkSnapshot, "") or lines.next() != null) return error.InvalidWikibasePageLinkSnapshot;
+            return entries;
+        }
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        const raw_page_id = fields.next() orelse return error.InvalidWikibasePageLinkSnapshot;
+        const entity_id = fields.next() orelse return error.InvalidWikibasePageLinkSnapshot;
+        if (fields.next() != null or !validEntityDigits(raw_page_id)) return error.InvalidWikibasePageLinkSnapshot;
+        const page_id = std.fmt.parseInt(u64, raw_page_id, 10) catch return error.InvalidWikibasePageLinkSnapshot;
+        if (page_id <= previous) return error.InvalidWikibasePageLinkSnapshot;
+        const absent = std.mem.eql(u8, entity_id, "-");
+        if (!absent) {
+            if (!validEntityId(entity_id) or entity_id[0] != 'Q') return error.InvalidWikibasePageLinkSnapshot;
+            const number = std.fmt.parseInt(u32, entity_id[1..], 10) catch return error.InvalidWikibasePageLinkSnapshot;
+            if (number > 2_147_483_647) return error.InvalidWikibasePageLinkSnapshot;
+        }
+        try entries.put(a, page_id, if (absent) null else entity_id);
+        previous = page_id;
+    }
+    return error.InvalidWikibasePageLinkSnapshot;
+}
 
 fn expectSnapshotHeader(lines: *std.mem.SplitIterator(u8, .scalar), prefix: []const u8, expected: []const u8) !void {
     const line = lines.next() orelse return error.InvalidSnapshotIdentity;
@@ -203,6 +237,8 @@ pub const Provider = struct {
     wikibase_entity_text: std.StringHashMapUnmanaged(WikibaseEntityText) = .empty,
     wikibase_entity_text_storage: ?Mapped = null,
     wikibase_entity_text_available: bool = false,
+    wikibase_page_links: WikibasePageLinks = .empty,
+    wikibase_page_links_storage: ?Mapped = null,
     wikibase_entities: std.StringHashMapUnmanaged(StructuredEntityRow) = .empty,
     wikibase_entities_storage: ?Mapped = null,
     wikibase_entity_cache: ?*WikibaseEntityCache = null,
@@ -233,6 +269,7 @@ pub const Provider = struct {
         try self.loadInterwikiMap();
         try self.loadWikibaseSitelinks();
         try self.loadWikibaseEntityText();
+        try self.loadWikibasePageLinks();
         try self.loadWikibaseEntities();
         try self.loadWikibaseEntityTerms();
         try self.loadLanguageFallbacks();
@@ -290,6 +327,8 @@ pub const Provider = struct {
         self.wikibase_sitelinks.deinit(self.a);
         if (self.wikibase_sitelinks_storage) |*mapped| mapped.deinit();
         self.wikibase_entity_text.deinit(self.a);
+        self.wikibase_page_links.deinit(self.a);
+        if (self.wikibase_page_links_storage) |*mapped| mapped.deinit();
         if (self.wikibase_entity_text_storage) |*mapped| mapped.deinit();
         if (self.wikibase_entity_cache) |cache| {
             lua_program.work_stats.logLine("wikibase parsed cache: entries={d} requested_bytes={d} peak_requested_bytes={d} budget={d} hits={d} misses={d} capacity_bypasses={d} allocation_bypasses={d} parse_bypasses={d} validation_bypasses={d}\n", .{
@@ -328,6 +367,8 @@ pub const Provider = struct {
             .exists = exists,
             .external_data = if (self.external_data_available) externalData else null,
             .site_server = if (self.site_info) |snapshot| snapshot.server else null,
+            .site_script = if (self.site_info) |snapshot| snapshot.script else null,
+            .site_article_path = if (self.site_info) |snapshot| snapshot.article_path else null,
             .category_stats = if (self.category_stats_available) categoryStats else null,
             .interface_message = if (self.interface_messages_available) interfaceMessage else null,
             .category_tree = if (self.category_tree_available) categoryTree else null,
@@ -339,6 +380,7 @@ pub const Provider = struct {
             .wikibase_sitelink = if (self.wikibase_sitelinks_available) wikibaseSitelink else null,
             .wikibase_entity_text = if (self.wikibase_entity_text_available) wikibaseEntityText else null,
             .wikibase_entity = if (self.wikibase_entities_storage != null) wikibaseEntity else null,
+            .wikibase_page_entity_id = if (self.wikibase_page_links_storage != null) wikibasePageEntityId else null,
             .wikibase_entity_terms = if (self.wikibase_entity_terms_storage != null) wikibaseEntityTerms else null,
             .language_fallbacks = if (self.language_fallbacks_storage != null) languageFallbacks else null,
             .language_names = if (self.language_names != null) languageNames else null,
@@ -702,6 +744,13 @@ pub const Provider = struct {
         try expectSnapshotHeader(lines, "# content-language=", self.namespace_catalog.content_language);
         try expectSnapshotHeader(lines, "# repository=", "https://www.wikidata.org");
         try expectSnapshotHeader(lines, "# profile=", if (terms) "resolved-default-terms-v1" else "complete-entities-v1");
+    }
+
+    fn loadWikibasePageLinks(self: *Provider) !void {
+        var mapped = (try self.mapOptional("wikibase-page-links.tsv")) orelse return;
+        errdefer mapped.deinit();
+        self.wikibase_page_links = try parseWikibasePageLinks(self.a, mapped.bytes);
+        self.wikibase_page_links_storage = mapped;
     }
 
     fn loadWikibaseEntities(self: *Provider) !void {
@@ -1226,6 +1275,14 @@ pub const Provider = struct {
         return self.wikibase_entity_text.get(entity_id) orelse error.WikibaseEntityTextSnapshotMissing;
     }
 
+    fn wikibasePageEntityId(ctx: ?*anyopaque, title: []const u8) anyerror!?[]const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        const page = (try self.findPage(title)) orelse return error.WikibasePageLinkSnapshotMissing;
+        // Sparse SQL proves positive links only. Nil requires an explicit
+        // captured repository-negative row, never an uncovered map entry.
+        return (self.wikibase_page_links.getPtr(page.page_id) orelse return error.WikibasePageLinkSnapshotMissing).*;
+    }
+
     fn wikibaseEntity(ctx: ?*anyopaque, entity_id: []const u8) anyerror!WikibaseEntity {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         const entry = self.wikibase_entities.get(entity_id) orelse return error.WikibaseEntitySnapshotMissing;
@@ -1404,6 +1461,70 @@ test "provider keeps the later duplicate page row as canonical" {
     try std.testing.expectEqual(@as(u64, 2), metadata.page_id);
     try std.testing.expectEqual(@as(u64, 22), metadata.revision_id);
     try std.testing.expectEqualStrings("2024-01-02T00:00:00Z", metadata.revision_timestamp);
+}
+
+test "partial Wikibase page links reject malformed coverage and free failed allocations" {
+    const header = "# wikidict-wikibase-page-links-v1\tpartial\n";
+    const ParseProbe = struct {
+        fn run(a: A) !void {
+            var links = try parseWikibasePageLinks(a, "# wikidict-wikibase-page-links-v1\tpartial\n1\tQ1\n2\t-\n# end\t2\n");
+            defer links.deinit(a);
+            try std.testing.expectEqualStrings("Q1", links.getPtr(1).?.*.?);
+            try std.testing.expect(links.getPtr(2).?.* == null);
+            try std.testing.expect(links.getPtr(3) == null);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, ParseProbe.run, .{});
+    inline for (.{
+        "1\tQ1\n",
+        "1\tQ1\n# end\t0\n",
+        "1\tQ1\n# end\t1",
+        "1\tQ1\n# end\t1\nextra\n",
+        "1\tQ1\n1\tQ2\n# end\t2\n",
+        "2\tQ1\n1\tQ2\n# end\t2\n",
+        "01\tQ1\n# end\t1\n",
+        "0\tQ1\n# end\t1\n",
+        "1\tQ0\n# end\t1\n",
+        "1\tL1\n# end\t1\n",
+        "1\tq1\n# end\t1\n",
+        "1\t\n# end\t1\n",
+        "1\tQ1\textra\n# end\t1\n",
+    }) |tail| try std.testing.expectError(error.InvalidWikibasePageLinkSnapshot, parseWikibasePageLinks(std.testing.allocator, header ++ tail));
+    var empty = try parseWikibasePageLinks(std.testing.allocator, header ++ "# end\t0\n");
+    defer empty.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(u32, 0), empty.count());
+}
+
+test "provider page links resolve page IDs and preserve explicit negative versus uncovered" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const dump_path = try std.fs.path.join(a, &.{ root, "dump.xml" });
+    defer a.free(dump_path);
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(index_path);
+    const links_path = try std.fs.path.join(a, &.{ root, "wikibase-page-links.tsv" });
+    defer a.free(links_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = "abc" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "0\t1\tLinked\t\t1\t11\t2024-01-01T00:00:00Z\tEditor\twikitext\t0\t1\t0\n" ++
+        "1\t1\tUnlinked\t\t2\t22\t2024-01-01T00:00:00Z\tEditor\twikitext\t0\t1\t0\n" ++
+        "2\t1\tUncovered\t\t3\t33\t2024-01-01T00:00:00Z\tEditor\twikitext\t0\t1\t0\n" });
+    {
+        var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), dump_path);
+        defer provider.deinit();
+        try std.testing.expect(provider.api().wikibase_page_entity_id == null);
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = links_path, .data = "# wikidict-wikibase-page-links-v1\tpartial\n1\tQ1\n2\t-\n# end\t2\n" });
+    var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), dump_path);
+    defer provider.deinit();
+    const get = provider.api().wikibase_page_entity_id.?;
+    try std.testing.expectEqualStrings("Q1", (try get(&provider, "Linked")).?);
+    try std.testing.expect((try get(&provider, "Unlinked")) == null);
+    try std.testing.expectError(error.WikibasePageLinkSnapshotMissing, get(&provider, "Uncovered"));
+    try std.testing.expectError(error.WikibasePageLinkSnapshotMissing, get(&provider, "Unknown"));
 }
 
 const entity_test_headers = "# wikidict-wikibase-entities-v1\n# wiki=enwiktionary\n# date=20261001\n# content-language=en\n# repository=https://www.wikidata.org\n# profile=complete-entities-v1\n";

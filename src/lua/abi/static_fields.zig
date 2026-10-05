@@ -147,7 +147,7 @@ const package_loaded_names = [_][]const u8{
     "_G", "table", "string", "math", "debug", "bit32", "libraryUtil", "package", "strict",
 };
 const bit32_names = [_][]const u8{ "band", "bor" };
-const library_util_names = [_][]const u8{ "checkType", "checkTypeMulti" };
+const library_util_names = [_][]const u8{ "checkType", "checkTypeMulti", "checkTypeForNamedArg" };
 
 const NamespaceMapEntry = struct { name: []const u8, id: i32 };
 const namespace_map_entries = [_]NamespaceMapEntry{

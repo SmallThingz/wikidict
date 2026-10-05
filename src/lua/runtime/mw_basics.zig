@@ -851,11 +851,11 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const wikibase = try runtime.newNativeNamespace(.wikibase);
     inline for (.{
         "getEntityIdForTitle",
-        "getEntityIdForCurrentPage",
         "formatValue",
         "entityExists",
     }) |name| try setNative(runtime, wikibase, name, notImplementedCall);
     try setNative(runtime, wikibase, "getEntity", wikibase_lib.getEntityCall);
+    try setNative(runtime, wikibase, "getEntityIdForCurrentPage", wikibase_lib.getEntityIdForCurrentPageCall);
     try setNative(runtime, wikibase, "getAllStatements", wikibase_lib.getAllStatementsCall);
     try setNative(runtime, wikibase, "getBestStatements", wikibase_lib.getBestStatementsCall);
     try setNative(runtime, wikibase, "getLabelWithLang", wikibase_lib.getLabelWithLangCall);

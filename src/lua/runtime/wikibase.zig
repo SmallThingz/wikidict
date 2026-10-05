@@ -53,6 +53,42 @@ fn entityId(runtime: *rt.Context, args: []const Value) ![]const u8 {
     return (try canonicalEntityId(runtime, args[0].string)) orelse error.InvalidEntityId;
 }
 
+fn pageLinkFailure(runtime: *rt.Context, title: []const u8) !void {
+    const prefix = "Wikibase page-link snapshot missing title=";
+    const title_limit = 128 - 15 - prefix.len - 1 - 3;
+    var end = @min(title.len, title_limit);
+    if (end < title.len) while (end > 0 and title[end] & 0xc0 == 0x80) {
+        end -= 1;
+    };
+    rt.work_stats.logLine(prefix ++ "{s}{s}\n", .{ title[0..end], if (end < title.len) "..." else "" });
+    runtime.last_error = .{ .string = try std.fmt.allocPrint(runtime.allocator, "Wikibase page-link snapshot missing title={s}", .{title}) };
+    return error.LuaRaised;
+}
+
+fn currentEntityId(runtime: *rt.Context) !?[]const u8 {
+    // The immutable lookup is stable within a page; its current-title argument
+    // must still prevent a captured module root from escaping to another page.
+    rt.markPageTemplateEffect();
+    const host = host_api.getForStablePageRead(runtime) orelse return error.MissingScribuntoHost;
+    if (host.current_title.len == 0) return error.MissingCurrentTitle;
+    const get = host.wikibase_page_entity_id orelse {
+        try pageLinkFailure(runtime, host.current_title);
+        unreachable;
+    };
+    const raw = (get(host.ctx, host.current_title) catch |err| {
+        if (err == error.WikibasePageLinkSnapshotMissing) try pageLinkFailure(runtime, host.current_title);
+        return err;
+    }) orelse return null;
+    if (raw.len < 2 or raw[0] != 'Q') return error.InvalidWikibasePageLinkSnapshot;
+    for (raw[1..]) |c| if (!std.ascii.isDigit(c)) return error.InvalidWikibasePageLinkSnapshot;
+    if (!validNumericPart(raw[1..])) return error.InvalidWikibasePageLinkSnapshot;
+    return try runtime.allocator.dupe(u8, raw);
+}
+
+pub fn getEntityIdForCurrentPageCall(_: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
+    return one(if (try currentEntityId(runtime)) |id| .{ .string = id } else .nil);
+}
+
 fn field(table: *rt.Table, key: []const u8) ?Value {
     return table.rawGet(.{ .string = key });
 }
@@ -470,7 +506,10 @@ fn installEntityMethods(runtime: *rt.Context, entity: *rt.Table, kind: []const u
 }
 
 pub fn getEntityCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const id = try entityId(runtime, args);
+    const id = if (args.len == 0 or args[0] == .nil)
+        (try currentEntityId(runtime)) orelse return one(.nil)
+    else
+        try entityId(runtime, args);
     const entity = (try readEntity(runtime, id)) orelse return one(.nil);
     const kind = (try stringField(entity, "type")) orelse return error.InvalidWikibaseEntitySnapshot;
     try overlayEntityTerms(runtime, id, entity, kind);
@@ -857,7 +896,7 @@ test "Wikibase captured absence unknown inputs and provider failures stay distin
     try std.testing.expectError(error.AccessDenied, getEntityCall(null, &runtime, &.{.{ .string = "Q7" }}));
     try std.testing.expectError(error.AccessDenied, getDescriptionCall(null, &runtime, &.{.{ .string = "Q7" }}));
     try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, getEntityCall(null, &runtime, &.{.{ .string = "Q8" }}));
-    try std.testing.expectError(error.NotImplemented, getEntityCall(null, &runtime, &.{}));
+    try std.testing.expectError(error.MissingCurrentTitle, getEntityCall(null, &runtime, &.{}));
     try std.testing.expectError(error.InvalidEntityId, getEntityCall(null, &runtime, &.{.{ .string = "Q0" }}));
     try std.testing.expectEqualStrings("Q42", (try canonicalEntityId(&runtime, "q42")).?);
     try std.testing.expectEqualStrings("L12-F2", (try canonicalEntityId(&runtime, "L12-F2")).?);
@@ -870,6 +909,135 @@ test "Wikibase captured absence unknown inputs and provider failures stay distin
     host_api.set(&runtime, &host);
     try std.testing.expectError(error.NotImplemented, getEntityCall(null, &runtime, &.{.{ .string = "L1" }}));
     try std.testing.expectError(error.NotImplemented, getLabelCall(null, &runtime, &.{.{ .string = "Q1" }}));
+}
+
+test "Wikibase current page distinguishes captured links absence coverage and host errors" {
+    const PageProbe = struct {
+        fn linked(_: ?*anyopaque, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "Linked")) return "Q1";
+            if (std.mem.eql(u8, title, "Unlinked")) return null;
+            if (std.mem.eql(u8, title, "OOM")) return error.OutOfMemory;
+            if (std.mem.eql(u8, title, "Denied")) return error.AccessDenied;
+            if (std.mem.eql(u8, title, "Invalid")) return "L1";
+            return error.WikibasePageLinkSnapshotMissing;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .current_title = "Linked", .wikibase_page_entity_id = PageProbe.linked, .wikibase_entity = Probe.entity, .wikibase_entity_terms = Probe.terms, .stable_page_reads = true };
+    host_api.set(&runtime, &host);
+    const id = try getEntityIdForCurrentPageCall(null, &runtime, &.{});
+    defer rt.freeResults(id);
+    try std.testing.expectEqualStrings("Q1", id[0].string);
+    inline for (.{ @as([]const Value, &.{}), @as([]const Value, &.{.nil}) }) |args| {
+        const entity = try getEntityCall(null, &runtime, args);
+        defer rt.freeResults(entity);
+        try std.testing.expectEqualStrings("Q1", (try stringField(entity[0].table, "id")).?);
+    }
+    host.current_title = "Unlinked";
+    host.wikibase_entity = null;
+    host.wikibase_entity_terms = null;
+    const missing_id = try getEntityIdForCurrentPageCall(null, &runtime, &.{});
+    defer rt.freeResults(missing_id);
+    try std.testing.expect(missing_id[0] == .nil);
+    const missing_entity = try getEntityCall(null, &runtime, &.{});
+    defer rt.freeResults(missing_entity);
+    try std.testing.expect(missing_entity[0] == .nil);
+    host.current_title = "Uncovered";
+    try std.testing.expectError(error.LuaRaised, getEntityCall(null, &runtime, &.{}));
+    try std.testing.expectEqualStrings("Wikibase page-link snapshot missing title=Uncovered", runtime.last_error.string);
+    host.wikibase_page_entity_id = null;
+    try std.testing.expectError(error.LuaRaised, getEntityIdForCurrentPageCall(null, &runtime, &.{}));
+    host.wikibase_page_entity_id = PageProbe.linked;
+    host.current_title = "OOM";
+    try std.testing.expectError(error.OutOfMemory, getEntityCall(null, &runtime, &.{}));
+    host.current_title = "Denied";
+    try std.testing.expectError(error.AccessDenied, getEntityCall(null, &runtime, &.{}));
+    host.current_title = "Invalid";
+    try std.testing.expectError(error.InvalidWikibasePageLinkSnapshot, getEntityCall(null, &runtime, &.{}));
+    // Explicit IDs never consult the page-linked mapping.
+    host.wikibase_entity = Probe.entity;
+    const explicit = try getEntityCall(null, &runtime, &.{.{ .string = "L1" }});
+    defer rt.freeResults(explicit);
+    try std.testing.expectEqualStrings("L1", (try stringField(explicit[0].table, "id")).?);
+}
+
+test "current Wikibase link module captures stay page scoped with stable providers" {
+    const PageProbe = struct {
+        var roots = std.atomic.Value(u32).init(0);
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            return if (std.mem.eql(u8, raw_name, "Module:PageItem")) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:PageItem" else null;
+        }
+        fn linked(_: ?*anyopaque, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "First")) return "Q1";
+            if (std.mem.eql(u8, title, "Second")) return "Q2";
+            return null;
+        }
+        fn root(runtime: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            _ = roots.fetchAdd(1, .monotonic);
+            const current = try getEntityIdForCurrentPageCall(null, runtime, &.{});
+            defer rt.freeResults(current);
+            const cell = try runtime.allocator.create(rt.Cell);
+            cell.* = .{ .value = current[0] };
+            const exports = try runtime.newTable();
+            try exports.rawSet(runtime.allocator, .{ .string = "item" }, try runtime.makeFunctionKnown(1, item, &.{cell}));
+            return one(.{ .table = exports });
+        }
+        fn item(_: *rt.Context, captures: rt.Captures, _: []const Value) ![]const Value {
+            return one((try captures.cell(0)).value);
+        }
+    };
+    PageProbe.roots.store(0, .monotonic);
+    var worker_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer worker_arena.deinit();
+    var worker = try rt.Context.initProgram(worker_arena.allocator(), 0, 1);
+    defer worker.deinit();
+    const roots = [_]rt.FunctionFn{rt.stabilize(PageProbe.root)};
+    worker.module_root_entries = &roots;
+    worker.configureModules(null, PageProbe.lookup, PageProbe.name);
+    var worker_eligible = [_]bool{false};
+    var worker_rejected = [_]bool{false};
+    worker.module_template_eligible = &worker_eligible;
+    worker.module_template_rejected = &worker_rejected;
+    var worker_host = host_api.Host{ .stable_page_reads = true, .wikibase_page_entity_id = PageProbe.linked };
+    host_api.set(&worker, &worker_host);
+    for ([_][]const u8{ "First", "Second", "Unlinked" }, 0..) |title, page_index| {
+        var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer page_arena.deinit();
+        var page = try worker.forkProgram(page_arena.allocator());
+        defer page.deinit();
+        page.module_template_context = &worker;
+        var page_eligible = worker_eligible;
+        var page_rejected = worker_rejected;
+        page.module_template_eligible = &page_eligible;
+        page.module_template_rejected = &page_rejected;
+        var host = host_api.Host{ .current_title = title, .stable_page_reads = true, .wikibase_page_entity_id = PageProbe.linked };
+        host_api.set(&page, &host);
+        for (0..2) |_| {
+            var invoke_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer invoke_arena.deinit();
+            var invocation = try page.forkProgram(invoke_arena.allocator());
+            defer invocation.deinit();
+            invocation.module_template_context = &page;
+            invocation.module_template_page_scope = true;
+            host_api.set(&invocation, &host);
+            const module = try invocation.requireByName("Module:PageItem");
+            const function = try invocation.getIndex(module, .{ .string = "item" });
+            const output = try invocation.callValue(function, &.{});
+            defer rt.freeResults(output);
+            if (page_index == 2) {
+                try std.testing.expect(output[0] == .nil);
+            } else try std.testing.expectEqualStrings(if (page_index == 0) "Q1" else "Q2", output[0].string);
+            try std.testing.expectEqual(@as(u32, @intCast(page_index + 1)), PageProbe.roots.load(.monotonic));
+            try std.testing.expect(page_eligible[0] and !page_rejected[0]);
+            try std.testing.expect(!worker_eligible[0] and !worker_rejected[0]);
+        }
+    }
 }
 
 test "Wikibase native entity decode preserves allocation failure and recovers on a fresh read" {
