@@ -6,12 +6,9 @@ const language_source = @import("language_source.zig");
 const presentation_document = @import("presentation_document.zig");
 
 const language_bucket_count = 32;
-const ns_main: u32 = 0;
-const ns_rhymes: u32 = 106;
-const ns_thesaurus: u32 = 110;
-const ns_citations: u32 = 114;
-const ns_sign_gloss: u32 = 116;
-const ns_reconstruction: u32 = 118;
+/// Edition-aware routing is resolved once by the caller. Namespace IDs alone
+/// cannot identify a lexical feature across different Wiktionaries.
+pub const PageNamespace = struct { id: u32, kind: blob_format.BlobKind };
 
 pub const BuildStats = struct {
     pages_seen: usize = 0,
@@ -22,6 +19,7 @@ pub const BuildStats = struct {
     reconstruction_records: usize = 0,
     rhymes_records: usize = 0,
     sign_gloss_records: usize = 0,
+    supplemental_records: usize = 0,
     language_blobs: usize = 0,
     fallback_pages: usize = 0,
 };
@@ -36,6 +34,7 @@ fn noLanguageCode(_: ?*const anyopaque, _: []const u8) ?[]const u8 {
 }
 
 pub const LanguageCodes = struct {
+    namespace_catalog: ?*const @import("namespace_registry").Registry = null,
     ctx: ?*const anyopaque = null,
     get_fn: *const fn (?*const anyopaque, []const u8) ?[]const u8 = noLanguageCode,
     resolve_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
@@ -177,6 +176,7 @@ const Spools = struct {
     reconstruction: SpoolFile,
     rhymes: SpoolFile,
     sign_gloss: SpoolFile,
+    supplemental: SpoolFile,
 
     fn init(io: std.Io, allocator: std.mem.Allocator, output_root: []const u8) !Spools {
         const spool_root = try std.fmt.allocPrint(allocator, "{s}/.spool", .{output_root});
@@ -215,6 +215,7 @@ const Spools = struct {
             .reconstruction = try initFixed(io, allocator, spool_root, "reconstruction"),
             .rhymes = try initFixed(io, allocator, spool_root, "rhymes"),
             .sign_gloss = try initFixed(io, allocator, spool_root, "sign-gloss"),
+            .supplemental = try initFixed(io, allocator, spool_root, "supplemental"),
         };
     }
 
@@ -225,6 +226,7 @@ const Spools = struct {
         self.reconstruction.close(self.io);
         self.rhymes.close(self.io);
         self.sign_gloss.close(self.io);
+        self.supplemental.close(self.io);
     }
 
     fn cleanup(self: *Spools) void {
@@ -232,7 +234,7 @@ const Spools = struct {
             std.Io.Dir.cwd().deleteFile(self.io, spool.path) catch {};
             spool.deinitPath(self.allocator);
         }
-        inline for (.{ &self.thesaurus, &self.citations, &self.reconstruction, &self.rhymes, &self.sign_gloss }) |spool| {
+        inline for (.{ &self.thesaurus, &self.citations, &self.reconstruction, &self.rhymes, &self.sign_gloss, &self.supplemental }) |spool| {
             std.Io.Dir.cwd().deleteFile(self.io, spool.path) catch {};
             spool.deinitPath(self.allocator);
         }
@@ -538,6 +540,7 @@ fn processMain(
             "",
             null,
             codes.link_trail,
+            codes.namespace_catalog,
             fallbacks,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
@@ -604,6 +607,7 @@ fn processMain(
             source,
             if (display_title) |value| .{ .source = value, .page_title = title } else null,
             codes.link_trail,
+            codes.namespace_catalog,
             fallbacks,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
@@ -628,6 +632,7 @@ fn processMain(
             group.source.items,
             if (display_title) |value| .{ .source = value, .page_title = title } else null,
             codes.link_trail,
+            codes.namespace_catalog,
             fallbacks,
         );
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
@@ -639,22 +644,18 @@ fn processNamespace(
     page_allocator: std.mem.Allocator,
     spools: *Spools,
     link_trail: blobs.document_ir.LinkTrail,
-    ns: u32,
+    namespace_catalog: ?*const @import("namespace_registry").Registry,
+    ns: PageNamespace,
     title: []const u8,
     source: []const u8,
     display_title: ?[]const u8,
     stats: *BuildStats,
     fallbacks: *presentation_document.Fallbacks,
 ) !void {
-    const local_title = localNamespaceTitle(title);
-    const kind: blob_format.BlobKind = switch (ns) {
-        ns_thesaurus => .thesaurus,
-        ns_citations => .citations,
-        ns_reconstruction => .reconstruction,
-        ns_rhymes => .rhymes,
-        ns_sign_gloss => .sign_gloss,
-        else => unreachable,
-    };
+    const kind = ns.kind;
+    // Supplemental namespaces share one file, so keep their full localized
+    // names to avoid collisions between identically named namespace suffixes.
+    const local_title = if (kind == .supplemental) title else localNamespaceTitle(title);
     const payload = try presentation_document.compileReportedWithLinkTrailAlloc(
         page_allocator,
         local_title,
@@ -664,6 +665,7 @@ fn processNamespace(
         source,
         if (display_title) |value| .{ .source = value, .page_title = title } else null,
         link_trail,
+        namespace_catalog,
         fallbacks,
     );
     switch (kind) {
@@ -687,6 +689,10 @@ fn processNamespace(
             try spools.sign_gloss.append(spools.io, page_allocator, "", local_title, payload);
             stats.sign_gloss_records += 1;
         },
+        .supplemental => {
+            try spools.supplemental.append(spools.io, page_allocator, "", local_title, payload);
+            stats.supplemental_records += 1;
+        },
         else => unreachable,
     }
 }
@@ -699,6 +705,7 @@ fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
 }
 
 pub const Writer = struct {
+    namespace_coverage: blobs.namespace_coverage.Table = .{},
     io: std.Io,
     allocator: std.mem.Allocator,
     output_root: []const u8,
@@ -743,6 +750,7 @@ pub const Writer = struct {
     }
 
     pub fn deinit(self: *Writer) void {
+        self.namespace_coverage.deinit(self.allocator);
         if (!self.closed) self.spools.close();
         self.fallback_file.close(self.io);
         self.spools.cleanup();
@@ -750,19 +758,19 @@ pub const Writer = struct {
         self.* = undefined;
     }
 
-    pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8, display_title: ?[]const u8) !void {
+    pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, display_title: ?[]const u8) !void {
         return self.addPageInternal(page_allocator, ns, title, source, source, display_title, .{}, &.{});
     }
 
-    pub fn addExpandedPage(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8) !void {
+    pub fn addExpandedPage(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8) !void {
         return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, &.{});
     }
 
-    pub fn addPageWithFallback(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, source: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks) !void {
+    pub fn addPageWithFallback(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks) !void {
         return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, &.{});
     }
 
-    pub fn addExpansionFailure(self: *Writer, page_allocator: std.mem.Allocator, ns: u32, title: []const u8, reasons: []const []const u8) !void {
+    pub fn addExpansionFailure(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, reasons: []const []const u8) !void {
         // Operational expansion failures have no MediaWiki page semantics to
         // synthesize. Retain an empty data-only record and put the exact cause
         // in the build report instead of inventing visible reader content.
@@ -773,7 +781,7 @@ pub const Writer = struct {
     pub fn addPageWithFallbackReasons(
         self: *Writer,
         page_allocator: std.mem.Allocator,
-        ns: u32,
+        ns: PageNamespace,
         title: []const u8,
         source: []const u8,
         display_title: ?[]const u8,
@@ -786,7 +794,7 @@ pub const Writer = struct {
     fn addPageInternal(
         self: *Writer,
         page_allocator: std.mem.Allocator,
-        ns: u32,
+        ns: PageNamespace,
         title: []const u8,
         source: []const u8,
         raw_source: ?[]const u8,
@@ -796,10 +804,10 @@ pub const Writer = struct {
     ) !void {
         if (self.finished) return error.WriterFinished;
         var fallbacks = initial_fallbacks;
-        if (ns == ns_main) {
+        if (ns.kind == .language) {
             try processMain(page_allocator, &self.spools, self.language_codes, title, source, raw_source, display_title, &self.stats, &fallbacks);
-        } else if (ns == ns_rhymes or ns == ns_thesaurus or ns == ns_citations or ns == ns_sign_gloss or ns == ns_reconstruction) {
-            try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, ns, title, source, display_title, &self.stats, &fallbacks);
+        } else {
+            try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, self.language_codes.namespace_catalog, ns, title, source, display_title, &self.stats, &fallbacks);
         }
         if (fallbacks.any() or extra_reasons.len != 0) {
             var reasons: std.ArrayList([]const u8) = .empty;
@@ -816,7 +824,7 @@ pub const Writer = struct {
                 if (!duplicate) try reasons.append(page_allocator, reason);
             }
             const line = try std.json.Stringify.valueAlloc(page_allocator, .{
-                .namespace = ns,
+                .namespace = ns.id,
                 .title = title,
                 .reasons = reasons.items,
             }, .{});
@@ -832,6 +840,8 @@ pub const Writer = struct {
 
     pub fn finish(self: *Writer, codes: LanguageCodes) !BuildStats {
         if (self.finished) return error.WriterFinished;
+        if (self.namespace_coverage.rows.count() != 0) try self.namespace_coverage.validate(self.stats.pages_seen);
+        self.namespace_coverage.registry_sha256 = if (codes.namespace_catalog) |registry| registry.source_sha256 else null;
         if (!self.closed) {
             self.spools.close();
             self.closed = true;
@@ -865,6 +875,8 @@ pub const Writer = struct {
         try finalizeFixedSpool(self.io, self.allocator, &self.spools.reconstruction, self.output_root, "reconstruction", .reconstruction);
         try finalizeFixedSpool(self.io, self.allocator, &self.spools.rhymes, self.output_root, "rhymes", .rhymes);
         try finalizeFixedSpool(self.io, self.allocator, &self.spools.sign_gloss, self.output_root, "sign-gloss", .sign_gloss);
+        try finalizeFixedSpool(self.io, self.allocator, &self.spools.supplemental, self.output_root, "supplemental", .supplemental);
+        try self.namespace_coverage.write(self.io, self.allocator, self.output_root);
         self.finished = true;
         return self.stats;
     }
@@ -899,11 +911,11 @@ test "wikitext writer emits only data blobs" {
     writer.stats.pages_seen = 3;
     var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer page_arena.deinit();
-    try writer.addPage(page_arena.allocator(), 0, "cat", "==English==\n===Noun===\n# [[cat]]\n==French==\n===Nom===\n# [[chat]]\n==English==\n===Verb===\n# purr\n", "<i>cat</i>");
+    try writer.addPage(page_arena.allocator(), .{ .id = 0, .kind = .language }, "cat", "==English==\n===Noun===\n# [[cat]]\n==French==\n===Nom===\n# [[chat]]\n==English==\n===Verb===\n# purr\n", "<i>cat</i>");
     _ = page_arena.reset(.retain_capacity);
-    try writer.addPage(page_arena.allocator(), 114, "Citations:cat", "citation raw", null);
+    try writer.addPage(page_arena.allocator(), .{ .id = 114, .kind = .citations }, "Citations:cat", "citation raw", null);
     _ = page_arena.reset(.retain_capacity);
-    try writer.addPage(page_arena.allocator(), 118, "Reconstruction:Proto-Germanic/kattuz", "==Proto-Germanic==\n===Noun===\n# cat\n", null);
+    try writer.addPage(page_arena.allocator(), .{ .id = 118, .kind = .reconstruction }, "Reconstruction:Proto-Germanic/kattuz", "==Proto-Germanic==\n===Noun===\n# cat\n", null);
     _ = page_arena.reset(.retain_capacity);
     const stats = try writer.finish(codes);
     try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
@@ -1028,7 +1040,7 @@ test "raw language markers canonicalize templated headings" {
 
     try writer.addExpandedPage(
         a,
-        0,
+        .{ .id = 0, .kind = .language },
         "Hallo",
         "== Hallo ([[:Template:Sprache]]) ==\n===Wortart===\n# greeting\n",
         "== Hallo ({{Sprache|Deutsch}}) ==\n===Wortart===\n# greeting\n",
@@ -1061,7 +1073,7 @@ test "language resolution rejects fake top-level headings and uses real fallback
 
     try writer.addExpandedPage(
         a,
-        0,
+        .{ .id = 0, .kind = .language },
         "springen/vervoeging",
         "==Nederlands==\n# conjugation\n==Nederlandse vervoeging==\n# support\n",
         "{{=nld=}}\n# conjugation\n==Nederlandse vervoeging==\n# support\n",
@@ -1069,16 +1081,16 @@ test "language resolution rejects fake top-level headings and uses real fallback
     );
     try writer.addExpandedPage(
         a,
-        0,
+        .{ .id = 0, .kind = .language },
         "kuća",
         "== kuća ([[:Template:hrvatski jezik]]) ==\n# house\n",
         "== kuća ({{hrvatski jezik}}) ==\n# house\n",
         null,
     );
-    try writer.addPage(a, 0, "ház", "{{hunfn}}\n# house\n", null);
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "ház", "{{hunfn}}\n# house\n", null);
     try writer.addExpandedPage(
         a,
-        0,
+        .{ .id = 0, .kind = .language },
         "ik",
         "==Middelengels==\n# I\n",
         "{{=enm=}}\n# I\n",
@@ -1086,21 +1098,21 @@ test "language resolution rejects fake top-level headings and uses real fallback
     );
     try writer.addPage(
         a,
-        0,
+        .{ .id = 0, .kind = .language },
         "tamma",
         "==Aari==\n===Numeraali===\n{{num-k|aiw}}\n# ten\n",
         null,
     );
     try writer.addPage(
         a,
-        0,
+        .{ .id = 0, .kind = .language },
         "Kazalo:Hrvatski/a",
         "==Ak==\n* index material without an akq language marker\n",
         null,
     );
     try writer.addPage(
         a,
-        0,
+        .{ .id = 0, .kind = .language },
         "fatuus",
         "==Latyn==\n# foolish\n",
         null,
@@ -1152,10 +1164,10 @@ test "fallback report names every recovered page and retains unclassified entrie
             }
         }.strong,
     };
-    try writer.addPage(a, 0, "quoted\"title", "No heading, but readable content.", null);
-    try writer.addPage(a, 0, "broken", "==English==\nB ]]word]]", null);
-    try writer.addExpansionFailure(a, 0, "timeout", &.{"expansion_error:Timeout"});
-    try writer.addPage(a, 0, "normal", "==English==\n# Normal definition.", null);
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "quoted\"title", "No heading, but readable content.", null);
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "broken", "==English==\nB ]]word]]", null);
+    try writer.addExpansionFailure(a, .{ .id = 0, .kind = .language }, "timeout", &.{"expansion_error:Timeout"});
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "normal", "==English==\n# Normal definition.", null);
     const stats = try writer.finish(.{ .get_fn = struct {
         fn get(_: ?*const anyopaque, _: []const u8) ?[]const u8 {
             return null;
@@ -1188,4 +1200,31 @@ test "fallback report names every recovered page and retains unclassified entrie
     const parsed = try blobs.presentation_codec.decodeAlloc(a, timeout.payload, "timeout", .language, metadata);
     try std.testing.expectEqual(@as(usize, 0), parsed.entry.sections.len);
     try std.testing.expect(std.mem.indexOf(u8, timeout.payload, "Script error") == null);
+}
+
+test "supplemental namespaces keep full titles and cannot collide by suffix" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    var writer = try Writer.init(io, a, root);
+    defer writer.deinit();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    try writer.addPage(arena.allocator(), .{ .id = 116, .kind = .supplemental }, "Conjugaison:aller", "A conjugation.", null);
+    try writer.addPage(arena.allocator(), .{ .id = 118, .kind = .supplemental }, "Racine:aller", "A root.", null);
+    const stats = try writer.finish(.{});
+    try std.testing.expectEqual(@as(usize, 2), stats.supplemental_records);
+    const path = try std.fs.path.join(a, &.{ root, "supplemental.wikblb" });
+    defer a.free(path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024));
+    defer a.free(bytes);
+    const blob = try blob_format.inspect(bytes);
+    try std.testing.expectEqual(blob_format.BlobKind.supplemental, blob.kind);
+    var iterator = blob.iterator();
+    try std.testing.expectEqualStrings("Conjugaison:aller", (try iterator.next()).?.title);
+    try std.testing.expectEqualStrings("Racine:aller", (try iterator.next()).?.title);
+    try std.testing.expect((try iterator.next()) == null);
 }

@@ -124,7 +124,7 @@ const Engine = struct {
         if (!try fileExists(io, manifest)) return error.BundleAssetsMissing;
         var program = try lua_program.Program.init(io, a, requested_root);
         errdefer program.deinit();
-        var provider = try pages.Provider.init(io, a, requested_root, requested_dump);
+        var provider = try pages.Provider.init(io, a, requested_root, program.namespace_catalog, requested_dump);
         errdefer provider.deinit();
         var load_data_cache = lua_program.SharedLoadDataCache.init(
             std.heap.smp_allocator,
@@ -235,6 +235,8 @@ pub fn run(io: std.Io, persistent: A) !void {
     var input = std.Io.File.stdin().readerStreaming(io, &in_buf);
     var out_buf: [8192]u8 = undefined;
     var output = std.Io.File.stdout().writer(io, &out_buf);
+    var request_pool = lua_program.RequestPool.init(std.heap.page_allocator, 160 * 1024 * 1024);
+    defer request_pool.deinit();
     while (true) {
         var raw_length: [4]u8 = undefined;
         input.interface.readSliceAll(&raw_length) catch |err| switch (err) {
@@ -243,8 +245,11 @@ pub fn run(io: std.Io, persistent: A) !void {
         };
         const length = std.mem.readInt(u32, &raw_length, .little);
         if (length == 0 or length > protocol.max_frame_bytes) return error.InvalidFrame;
-        var page = RequestAllocator.init(std.heap.smp_allocator);
-        defer page.deinit();
+        var page = RequestAllocator.init(request_pool.allocator());
+        defer {
+            page.deinit();
+            request_pool.resetAndTrim();
+        }
         const page_a = page.allocator();
         const bytes = try page_a.alloc(u8, length);
         try input.interface.readSliceAll(bytes);
@@ -269,7 +274,7 @@ pub fn run(io: std.Io, persistent: A) !void {
                 continue;
             };
         }
-        var stage: []const u8 = "expand";
+        var stage: []const u8 = "request";
         var detail: ?[]const u8 = null;
         const expanded = engine.?.expand(page_a, request, &stage, &detail) catch |err| {
             if (lua_program.moduleTemplateAllocationFailed()) {

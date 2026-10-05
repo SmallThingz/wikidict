@@ -5,6 +5,7 @@ pub const language_source = @import("language_source.zig");
 pub const document_ir = blobs.document_ir;
 pub const blob_format = blobs.blob_format;
 pub const blob_catalog = blobs.blob_catalog;
+pub const namespace_coverage = blobs.namespace_coverage;
 pub const presentation_types = blobs.presentation_types;
 pub const presentation_codec = blobs.presentation_codec;
 pub const blob_files = @import("blob_files.zig");

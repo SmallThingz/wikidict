@@ -16,6 +16,11 @@ pub const Failure = protocol.ErrorReply;
 pub fn operationalFailure(failure: Failure) ?anyerror {
     if (std.mem.eql(u8, failure.error_name, "OutOfMemory")) return error.OutOfMemory;
     if (std.mem.eql(u8, failure.error_name, "Timeout")) return error.Timeout;
+    // Asset loading, protocol validation and bootstrap are compiler operations,
+    // not per-page MediaWiki semantics. Never publish empty pages for them.
+    if (!std.mem.eql(u8, failure.stage, "expand")) return error.BundleInfrastructureFailed;
+    inline for (&.{ "BundleRootChanged", "BundleDumpChanged", "BundleTimeChanged", "InvalidPageIndex", "InvalidPageTitleIndex", "PageIndexChanged", "InvalidProgramMetadata" }) |name|
+        if (std.mem.eql(u8, failure.error_name, name)) return error.BundleInfrastructureFailed;
     return null;
 }
 
@@ -266,6 +271,8 @@ test "remote operational failures retain their error identity" {
     try std.testing.expectEqual(error.OutOfMemory, operationalFailure(.{ .stage = "expand", .error_name = "OutOfMemory", .detail = "" }).?);
     try std.testing.expectEqual(error.Timeout, operationalFailure(.{ .stage = "assets", .error_name = "Timeout", .detail = "" }).?);
     try std.testing.expect(operationalFailure(.{ .stage = "expand", .error_name = "NotImplemented", .detail = "" }) == null);
+    inline for (&.{ "request", "assets", "install", "unknown" }) |stage|
+        try std.testing.expectEqual(error.BundleInfrastructureFailed, operationalFailure(.{ .stage = stage, .error_name = "FileNotFound", .detail = "" }).?);
 }
 
 test "worker restart preserves the pinned bundle timestamp" {

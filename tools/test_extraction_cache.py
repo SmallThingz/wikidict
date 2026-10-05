@@ -21,6 +21,9 @@ class ExtractionCacheTest(unittest.TestCase):
         (self.source / "modules" / "123.lua").write_text("return 1")
         for name in cache.FILES:
             (self.source / name).write_bytes(name.encode())
+        (self.source / "compiler-inputs.ready").write_bytes(b"complete\n")
+        (self.source / "dump-streams.tsv").write_bytes(b"0\t0\t100\n")
+        (self.source / "page-index.tsv").write_bytes(b"0\t0\t10\tTemplate:fixture\n")
         self.root = self.base / "cache"
         self.expected = {"version": 1, "dump_sha256": "a" * 64,
                          "index_sha256": "d" * 64,
@@ -50,11 +53,25 @@ class ExtractionCacheTest(unittest.TestCase):
         changed_index = dict(self.expected, index_sha256="e" * 64)
         self.assertEqual(cache.MISS, cache.probe(self.root, changed_index, output))
 
+    def test_incomplete_extraction_never_publishes(self):
+        (self.source / "compiler-inputs.ready").write_bytes(b"incomplete\n")
+        with self.assertRaises(ValueError):cache.publish(self.root,self.expected,self.source)
+        (self.source / "compiler-inputs.ready").write_bytes(b"complete\n")
+        (self.source / "dump-streams.tsv").write_bytes(b"1\t100\t100\n")
+        with self.assertRaises(ValueError):cache.publish(self.root,self.expected,self.source)
+
+    def test_namespace_registry_is_part_of_identity(self):
+        with mock.patch.object(cache, "tool_identity", return_value={}):
+            original=cache.identity(Path("extractor"), "a"*64, "d"*64, "e"*64)
+            changed=cache.identity(Path("extractor"), "a"*64, "d"*64, "f"*64)
+        self.assertNotEqual(original,changed)
+        self.assertEqual(2,len(original["unicode_case"]["libraries"]))
+
     def test_extractor_argv_is_part_of_identity(self):
         with mock.patch.object(cache, "tool_identity", return_value=self.expected["tool"]):
-            original = cache.identity(Path("extractor"), "a" * 64, "d" * 64)
+            original = cache.identity(Path("extractor"), "a" * 64, "d" * 64, "e" * 64)
             with mock.patch.object(cache, "EXTRACTOR_ARGS", ("--other-mode",)):
-                changed = cache.identity(Path("extractor"), "a" * 64, "d" * 64)
+                changed = cache.identity(Path("extractor"), "a" * 64, "d" * 64, "e" * 64)
         self.assertEqual(["--page-index"], original["extractor_args"])
         self.assertNotEqual(original, changed)
 

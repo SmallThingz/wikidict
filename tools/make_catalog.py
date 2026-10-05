@@ -29,7 +29,7 @@ def blob_label(path):
             if source.read(8) != b'WIKBLB08':
                 raise ValueError(f'not a WIKBLB08 dictionary: {path}')
             kind = source.read(1)
-            if kind not in [bytes([i]) for i in range(1, 7)]:
+            if kind not in [bytes([i]) for i in range(1, 8)]:
                 raise ValueError(f'invalid blob kind: {path}')
 
             def nul():
@@ -52,7 +52,7 @@ def blob_label(path):
                     raise ValueError(f'unverified language code: {path}')
                 label = nul()
             else:
-                label = {2:'Thesaurus',3:'Citations',4:'Reconstructions',5:'Rhymes',6:'Sign glosses'}[kind[0]]
+                label = {2:'Thesaurus',3:'Citations',4:'Reconstructions',5:'Rhymes',6:'Sign glosses',7:'Supplemental pages'}[kind[0]]
     except lzma.LZMAError as error:
         raise ValueError(f'invalid XZ dictionary: {path}: {error}') from None
 

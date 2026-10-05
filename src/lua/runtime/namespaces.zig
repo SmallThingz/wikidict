@@ -1,14 +1,7 @@
 const std = @import("std");
 const rt = @import("zig_runtime");
 
-pub const Spec = struct {
-    id: i32,
-    name: []const u8,
-    canonical_name: []const u8,
-    has_subpages: bool,
-    is_capitalized: bool = false,
-    aliases: []const []const u8 = &.{},
-};
+pub const Spec = rt.namespace_registry.Spec;
 const entry_keys = [_]rt.Value{
     .{ .string = "id" },
     .{ .string = "name" },
@@ -30,152 +23,32 @@ const entry_keys = [_]rt.Value{
 };
 const entry_sorted_slots = [_]u32{ 5, 16, 2, 13, 6, 7, 3, 0, 4, 8, 9, 10, 11, 12, 1, 14, 15 };
 const entry_shape = rt.Shape{
-    .field_keys = &entry_keys,
+    .keys = .{ .boxed = &entry_keys },
     .sorted_string_slots = &entry_sorted_slots,
     .field_count = entry_keys.len,
     .open = true,
 };
 
-pub const all = [_]Spec{
-    .{ .id = -2, .name = "Media", .canonical_name = "Media", .has_subpages = false },
-    .{ .id = -1, .name = "Special", .canonical_name = "Special", .has_subpages = false, .is_capitalized = true },
-    .{ .id = 0, .name = "", .canonical_name = "", .has_subpages = false },
-    .{ .id = 1, .name = "Talk", .canonical_name = "Talk", .has_subpages = true },
-    .{ .id = 2, .name = "User", .canonical_name = "User", .has_subpages = true, .is_capitalized = true },
-    .{ .id = 3, .name = "User talk", .canonical_name = "User talk", .has_subpages = true, .is_capitalized = true },
-    .{ .id = 4, .name = "Wiktionary", .canonical_name = "Project", .has_subpages = true, .aliases = &.{"WT"} },
-    .{ .id = 5, .name = "Wiktionary talk", .canonical_name = "Project talk", .has_subpages = true },
-    .{ .id = 6, .name = "File", .canonical_name = "File", .has_subpages = false, .aliases = &.{"Image"} },
-    .{ .id = 7, .name = "File talk", .canonical_name = "File talk", .has_subpages = true, .aliases = &.{"Image talk"} },
-    .{ .id = 8, .name = "MediaWiki", .canonical_name = "MediaWiki", .has_subpages = true, .is_capitalized = true },
-    .{ .id = 9, .name = "MediaWiki talk", .canonical_name = "MediaWiki talk", .has_subpages = true, .is_capitalized = true },
-    .{ .id = 10, .name = "Template", .canonical_name = "Template", .has_subpages = true, .aliases = &.{"T"} },
-    .{ .id = 11, .name = "Template talk", .canonical_name = "Template talk", .has_subpages = true },
-    .{ .id = 12, .name = "Help", .canonical_name = "Help", .has_subpages = true },
-    .{ .id = 13, .name = "Help talk", .canonical_name = "Help talk", .has_subpages = true },
-    .{ .id = 14, .name = "Category", .canonical_name = "Category", .has_subpages = false, .aliases = &.{"CAT"} },
-    .{ .id = 15, .name = "Category talk", .canonical_name = "Category talk", .has_subpages = true },
-    .{ .id = 90, .name = "Thread", .canonical_name = "Thread", .has_subpages = false },
-    .{ .id = 91, .name = "Thread talk", .canonical_name = "Thread talk", .has_subpages = false },
-    .{ .id = 92, .name = "Summary", .canonical_name = "Summary", .has_subpages = false },
-    .{ .id = 93, .name = "Summary talk", .canonical_name = "Summary talk", .has_subpages = false },
-    .{ .id = 100, .name = "Appendix", .canonical_name = "Appendix", .has_subpages = true, .aliases = &.{"AP"} },
-    .{ .id = 101, .name = "Appendix talk", .canonical_name = "Appendix talk", .has_subpages = true },
-    .{ .id = 106, .name = "Rhymes", .canonical_name = "Rhymes", .has_subpages = true },
-    .{ .id = 107, .name = "Rhymes talk", .canonical_name = "Rhymes talk", .has_subpages = true },
-    .{ .id = 108, .name = "Transwiki", .canonical_name = "Transwiki", .has_subpages = true },
-    .{ .id = 109, .name = "Transwiki talk", .canonical_name = "Transwiki talk", .has_subpages = true },
-    .{ .id = 110, .name = "Thesaurus", .canonical_name = "Thesaurus", .has_subpages = true, .aliases = &.{ "WS", "Wikisaurus" } },
-    .{ .id = 111, .name = "Thesaurus talk", .canonical_name = "Thesaurus talk", .has_subpages = true, .aliases = &.{"Wikisaurus talk"} },
-    .{ .id = 114, .name = "Citations", .canonical_name = "Citations", .has_subpages = true },
-    .{ .id = 115, .name = "Citations talk", .canonical_name = "Citations talk", .has_subpages = true },
-    .{ .id = 116, .name = "Sign gloss", .canonical_name = "Sign gloss", .has_subpages = true },
-    .{ .id = 117, .name = "Sign gloss talk", .canonical_name = "Sign gloss talk", .has_subpages = true },
-    .{ .id = 118, .name = "Reconstruction", .canonical_name = "Reconstruction", .has_subpages = true, .aliases = &.{"RC"} },
-    .{ .id = 119, .name = "Reconstruction talk", .canonical_name = "Reconstruction talk", .has_subpages = true },
-    .{ .id = 710, .name = "TimedText", .canonical_name = "TimedText", .has_subpages = false },
-    .{ .id = 711, .name = "TimedText talk", .canonical_name = "TimedText talk", .has_subpages = false },
-    .{ .id = 828, .name = "Module", .canonical_name = "Module", .has_subpages = true, .aliases = &.{"MOD"} },
-    .{ .id = 829, .name = "Module talk", .canonical_name = "Module talk", .has_subpages = true },
-    .{ .id = 1728, .name = "Event", .canonical_name = "Event", .has_subpages = true },
-    .{ .id = 1729, .name = "Event talk", .canonical_name = "Event talk", .has_subpages = true },
-    .{ .id = 2600, .name = "Topic", .canonical_name = "Topic", .has_subpages = false, .is_capitalized = true },
-};
-
-const alias_slot_count: usize = blk: {
-    var total: usize = 0;
-    for (all) |spec| total += spec.aliases.len;
-    break :blk total;
-};
-
-pub fn byId(id: i32) ?Spec {
-    for (all) |spec| if (spec.id == id) return spec;
-    return null;
+pub fn byId(runtime: *const rt.Context, id: i32) ?Spec {
+    return (runtime.namespace_catalog orelse return null).byId(id);
 }
-
-fn nameEqual(raw: []const u8, expected: []const u8) bool {
-    if (raw.len != expected.len) return false;
-    for (raw, expected) |lhs_raw, rhs_raw| {
-        const lhs = if (lhs_raw == '_') ' ' else lhs_raw;
-        if (std.ascii.toLower(lhs) != std.ascii.toLower(rhs_raw)) return false;
-    }
-    return true;
+pub fn byName(runtime: *const rt.Context, name: []const u8) ?Spec {
+    return (runtime.namespace_catalog orelse return null).byName(name);
 }
-
-pub fn byName(name: []const u8) ?Spec {
-    if (name.len == 0) return byId(0);
-    for (all) |spec| {
-        if (nameEqual(name, spec.name) or nameEqual(name, spec.canonical_name)) return spec;
-        for (spec.aliases) |alias| if (nameEqual(name, alias)) return spec;
-    }
-    return null;
+pub fn subjectSpec(runtime: *const rt.Context, id: i32) ?Spec {
+    return (runtime.namespace_catalog orelse return null).subjectSpec(id);
 }
-
-pub fn subjectSpec(id: i32) ?Spec {
-    const spec = byId(id) orelse return null;
-    if (id > 0 and @mod(id, 2) == 1) return byId(id - 1) orelse spec;
-    return spec;
+pub fn talkSpec(runtime: *const rt.Context, id: i32) ?Spec {
+    return (runtime.namespace_catalog orelse return null).talkSpec(id);
 }
-
-pub fn talkSpec(id: i32) ?Spec {
-    if (id < 0) return null;
-    const spec = byId(id) orelse return null;
-    if (id == 0) return byId(1);
-    if (@mod(id, 2) == 1) return spec;
-    return byId(id + 1);
+pub fn ofTitle(runtime: *const rt.Context, title: []const u8) struct { id: i32, name: []const u8, text: []const u8 } {
+    const registry = runtime.namespace_catalog orelse @panic("missing edition namespace registry");
+    const result = registry.ofTitle(title);
+    return .{ .id = result.id, .name = result.name, .text = result.text };
 }
-
-pub fn ofTitle(title: []const u8) struct { id: i32, name: []const u8, text: []const u8 } {
-    if (std.mem.indexOfScalar(u8, title, ':')) |colon| {
-        if (byName(title[0..colon])) |spec| return .{ .id = spec.id, .name = spec.name, .text = title[colon + 1 ..] };
-    }
-    return .{ .id = 0, .name = "", .text = title };
-}
-
-fn isTitleSpace(cp: u21) bool {
-    return cp == ' ' or cp == '_' or cp == '\t' or cp == '\r' or cp == '\n' or
-        cp == 0x00a0 or cp == 0x1680 or cp == 0x180e or
-        (cp >= 0x2000 and cp <= 0x200a) or cp == 0x2028 or cp == 0x2029 or
-        cp == 0x202f or cp == 0x205f or cp == 0x3000;
-}
-
-fn isBidiOverride(cp: u21) bool {
-    return cp == 0x200e or cp == 0x200f or (cp >= 0x202a and cp <= 0x202e);
-}
-
-fn normalizeTitleSpacingAlloc(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(a);
-    var pending_space = false;
-    var pos: usize = 0;
-    while (pos < raw.len) {
-        const len = std.unicode.utf8ByteSequenceLength(raw[pos]) catch return error.InvalidPageTitle;
-        if (pos + len > raw.len) return error.InvalidPageTitle;
-        const cp = std.unicode.utf8Decode(raw[pos .. pos + len]) catch return error.InvalidPageTitle;
-        if (isBidiOverride(cp)) {
-            pos += len;
-            continue;
-        }
-        if (isTitleSpace(cp)) {
-            pending_space = out.items.len != 0;
-            pos += len;
-            continue;
-        }
-        if (pending_space) try out.append(a, ' ');
-        pending_space = false;
-        try out.appendSlice(a, raw[pos .. pos + len]);
-        pos += len;
-    }
-    return out.toOwnedSlice(a);
-}
-
-pub fn canonicalizeTitle(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    const normalized = try normalizeTitleSpacingAlloc(a, raw);
-    const colon = std.mem.indexOfScalar(u8, normalized, ':') orelse return normalized;
-    const prefix = std.mem.trim(u8, normalized[0..colon], " ");
-    const spec = byName(prefix) orelse return normalized;
-    const body = std.mem.trimStart(u8, normalized[colon + 1 ..], " ");
-    return std.fmt.allocPrint(a, "{s}:{s}", .{ spec.name, body });
+pub fn canonicalizeTitle(a: std.mem.Allocator, runtime: *const rt.Context, raw: []const u8) ![]const u8 {
+    const registry = runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+    return registry.normalizeTitle(a, raw, 0, .any);
 }
 
 fn one(value: rt.Value) ![]const rt.Value {
@@ -184,13 +57,17 @@ fn one(value: rt.Value) ![]const rt.Value {
     return out;
 }
 
-fn namespaceIndexCall(_: ?*anyopaque, _: *rt.Context, args: []const rt.Value) ![]const rt.Value {
+fn namespaceIndexCall(_: ?*anyopaque, runtime: *rt.Context, args: []const rt.Value) ![]const rt.Value {
     if (args.len < 2 or args[0] != .table or args[1] != .string) return one(.nil);
-    const spec = byName(args[1].string) orelse return one(.nil);
+    const spec = byName(runtime, args[1].string) orelse return one(.nil);
     return one(args[0].table.rawGet(.{ .number = @floatFromInt(spec.id) }) orelse .nil);
 }
 
 pub fn makeTable(runtime: *rt.Context) !*rt.Table {
+    const registry = runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+    const all = registry.entries;
+    var alias_slot_count: usize = 0;
+    for (all) |spec| alias_slot_count += spec.aliases.len;
     // IDs 1..15 are the dense prefix produced by this namespace catalog.
     // The namespace objects and their fixed slots have page lifetime, so allocate
     // them in contiguous arena-backed batches instead of ~2 allocations per object.
@@ -224,13 +101,13 @@ pub fn makeTable(runtime: *rt.Context) !*rt.Table {
         slots[5] = .{ .table = aliases };
         slots[6] = if (spec.id == 0) .{ .string = "(Main)" } else .nil;
         slots[7] = .{ .boolean = spec.id == 2 or spec.id == 3 };
-        slots[8] = .{ .boolean = spec.id == 0 };
-        slots[9] = .{ .boolean = true };
+        slots[8] = .{ .boolean = spec.is_content };
+        slots[9] = .{ .boolean = spec.is_includable };
         slots[10] = .{ .boolean = spec.id >= 0 and spec.id != 2600 };
         const is_talk = spec.id > 0 and @mod(spec.id, 2) == 1;
         slots[11] = .{ .boolean = !is_talk };
         slots[12] = .{ .boolean = is_talk };
-        slots[13] = if (spec.id == 2600) .{ .string = "flow-board" } else .nil;
+        slots[13] = if (spec.default_content_model.len != 0) .{ .string = spec.default_content_model } else .nil;
         slots[14] = .nil;
         slots[15] = .nil;
         slots[16] = .nil;
@@ -242,12 +119,12 @@ pub fn makeTable(runtime: *rt.Context) !*rt.Table {
     // namespaces such as Topic's 2601 resolve to nil.
     for (all, 0..) |spec, index| {
         const value = &entries[index];
-        if (subjectSpec(spec.id)) |subject|
+        if (subjectSpec(runtime, spec.id)) |subject|
             value.slots[14] = namespaces.rawGet(.{ .number = @floatFromInt(subject.id) }) orelse .nil;
-        if (talkSpec(spec.id)) |talk|
+        if (talkSpec(runtime, spec.id)) |talk|
             value.slots[15] = namespaces.rawGet(.{ .number = @floatFromInt(talk.id) }) orelse .nil;
         if (spec.id >= 0) {
-            const associated = if (spec.id > 0 and @mod(spec.id, 2) == 1) subjectSpec(spec.id) else talkSpec(spec.id);
+            const associated = if (spec.id > 0 and @mod(spec.id, 2) == 1) subjectSpec(runtime, spec.id) else talkSpec(runtime, spec.id);
             if (associated) |other|
                 value.slots[16] = namespaces.rawGet(.{ .number = @floatFromInt(other.id) }) orelse .nil;
         }
@@ -261,28 +138,30 @@ pub fn makeTable(runtime: *rt.Context) !*rt.Table {
 }
 
 test "Wiktionary namespace lookup preserves canonical names and aliases" {
-    try std.testing.expectEqual(@as(i32, 4), byName("WT").?.id);
-    try std.testing.expectEqual(@as(i32, 4), byName("Project").?.id);
-    try std.testing.expectEqual(@as(i32, 3), byName("user_talk").?.id);
-    try std.testing.expectEqual(@as(i32, 828), byName("MOD").?.id);
-    try std.testing.expect(byId(2).?.is_capitalized);
-    try std.testing.expect(!byId(10).?.is_capitalized);
-    try std.testing.expectEqual(@as(i32, 4), subjectSpec(5).?.id);
-    try std.testing.expectEqual(@as(i32, 5), talkSpec(4).?.id);
-    try std.testing.expectEqual(@as(i32, 1), talkSpec(0).?.id);
-    try std.testing.expect(talkSpec(-1) == null);
-    try std.testing.expect(talkSpec(2600) == null);
-    const split = ofTitle("MOD:example/sub");
+    var runtime = try rt.Context.init(std.testing.allocator, 0);
+    defer runtime.deinit();
+    try std.testing.expectEqual(@as(i32, 4), byName(&runtime, "WT").?.id);
+    try std.testing.expectEqual(@as(i32, 4), byName(&runtime, "Project").?.id);
+    try std.testing.expectEqual(@as(i32, 3), byName(&runtime, "user_talk").?.id);
+    try std.testing.expectEqual(@as(i32, 828), byName(&runtime, "MOD").?.id);
+    try std.testing.expect(byId(&runtime, 2).?.is_capitalized);
+    try std.testing.expect(!byId(&runtime, 10).?.is_capitalized);
+    try std.testing.expectEqual(@as(i32, 4), subjectSpec(&runtime, 5).?.id);
+    try std.testing.expectEqual(@as(i32, 5), talkSpec(&runtime, 4).?.id);
+    try std.testing.expectEqual(@as(i32, 1), talkSpec(&runtime, 0).?.id);
+    try std.testing.expect(talkSpec(&runtime, -1) == null);
+    try std.testing.expect(talkSpec(&runtime, 2600) == null);
+    const split = ofTitle(&runtime, "MOD:example/sub");
     try std.testing.expectEqual(@as(i32, 828), split.id);
     try std.testing.expectEqualStrings("Module", split.name);
     try std.testing.expectEqualStrings("example/sub", split.text);
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    try std.testing.expectEqualStrings("Wiktionary:foo bar", try canonicalizeTitle(arena.allocator(), "WT:foo_bar"));
-    try std.testing.expectEqualStrings("Wiktionary:Foo", try canonicalizeTitle(arena.allocator(), "Project:Foo"));
-    try std.testing.expectEqualStrings("NotNs:foo bar", try canonicalizeTitle(arena.allocator(), "NotNs:foo_bar"));
-    try std.testing.expectEqualStrings("Template:RQ:William Burroughs Soft Machine", try canonicalizeTitle(arena.allocator(), "  Template:RQ:William  Burroughs___Soft Machine  "));
-    try std.testing.expectEqualStrings("Template:Foo bar", try canonicalizeTitle(arena.allocator(), "Template :  Foo__bar"));
+    try std.testing.expectEqualStrings("Wiktionary:foo bar", try canonicalizeTitle(arena.allocator(), &runtime, "WT:foo_bar"));
+    try std.testing.expectEqualStrings("Wiktionary:Foo", try canonicalizeTitle(arena.allocator(), &runtime, "Project:Foo"));
+    try std.testing.expectEqualStrings("NotNs:foo bar", try canonicalizeTitle(arena.allocator(), &runtime, "NotNs:foo_bar"));
+    try std.testing.expectEqualStrings("Template:RQ:William Burroughs Soft Machine", try canonicalizeTitle(arena.allocator(), &runtime, "  Template:RQ:William  Burroughs___Soft Machine  "));
+    try std.testing.expectEqualStrings("Template:Foo bar", try canonicalizeTitle(arena.allocator(), &runtime, "Template :  Foo__bar"));
 }
 
 test "namespace entry shapes remain open and mutable" {
@@ -297,7 +176,7 @@ test "namespace entry shapes remain open and mutable" {
         try std.testing.expect(entry.key_ptr.* == .number);
         namespace_count += 1;
     }
-    try std.testing.expectEqual(all.len, namespace_count);
+    try std.testing.expectEqual(runtime.namespace_catalog.?.entries.len, namespace_count);
     try std.testing.expect(namespaces.rawGet(.{ .string = "Template" }) == null);
     const template_by_name = try runtime.getIndex(.{ .table = namespaces }, .{ .string = "template" });
     try std.testing.expect(template_by_name == .table);
@@ -358,4 +237,28 @@ test "namespace entry shapes remain open and mutable" {
     try aliases.append(runtime.allocator, .{ .string = "Extra" });
     try std.testing.expectEqual(@as(usize, 2), aliases.rawLen());
     try std.testing.expectEqualStrings("Extra", aliases.rawGet(.{ .number = 2 }).?.string);
+}
+
+test "compiled namespace fields stay edition local across simultaneous contexts" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var french = try rt.namespace_registry.Registry.init(a, rt.namespace_registry.french_test_fixture);
+    defer french.deinit();
+    var en = try rt.Context.init(arena.allocator(), 0);
+    defer en.deinit();
+    var fr = try rt.Context.init(arena.allocator(), 0);
+    defer fr.deinit();
+    fr.namespace_catalog = &french;
+    const en_table = try makeTable(&en);
+    const fr_table = try makeTable(&fr);
+    const en_rhymes = try en.getKnownNativeField(.{ .table = en_table }, .namespace_map, 0, "Rhymes");
+    const fr_rhymes = try fr.getKnownNativeField(.{ .table = fr_table }, .namespace_map, 0, "Rhymes");
+    try std.testing.expect(en_rhymes == .table);
+    try std.testing.expect(fr_rhymes == .nil);
+    const thesaurus = try fr.getIndex(.{ .table = fr_table }, .{ .string = "THÉSAURUS" });
+    try std.testing.expectEqual(@as(f64, 106), thesaurus.table.rawGet(.{ .string = "id" }).?.number);
+    try std.testing.expectEqualStrings("Thésaurus", thesaurus.table.rawGet(.{ .string = "name" }).?.string);
+    const module = fr_table.rawGet(.{ .number = 828 }).?.table;
+    try std.testing.expect(module.rawGet(.{ .string = "defaultContentModel" }) == null or module.rawGet(.{ .string = "defaultContentModel" }).? == .nil);
 }

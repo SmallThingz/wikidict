@@ -1,4 +1,5 @@
 const std = @import("std");
+const Registry = @import("namespace_registry").Registry;
 const lua = @import("parser/root.zig");
 const analysis = @import("direct/analysis.zig");
 const emitter = @import("direct/emitter.zig");
@@ -97,10 +98,17 @@ fn unescapeTsv(a: A, raw: []const u8) ![]u8 {
     return out.toOwnedSlice(a);
 }
 
-fn buildModuleIds(io: std.Io, a: A, source_root: []const u8, records: anytype) !emitter.ModuleIdMap {
+fn buildModuleIds(io: std.Io, a: A, registry: *const Registry, source_root: []const u8, records: anytype) !emitter.ModuleIdMap {
     var ids: emitter.ModuleIdMap = .empty;
     errdefer ids.deinit(a);
-    for (records, 0..) |record, index| try ids.put(a, record.title, @intCast(index));
+    // Keys live in the compiler arena alongside manifest records.
+    for (records, 0..) |record, index| {
+        const title = try registry.normalizeTitle(a, record.title, 0, .any);
+        if (registry.ofTitle(title).id != 828) return error.InvalidModuleNamespace;
+        const entry = try ids.getOrPut(a, title);
+        if (entry.found_existing) return error.DuplicateModuleIdentity;
+        entry.value_ptr.* = @intCast(index);
+    }
 
     const redirect_path = try std.fs.path.join(a, &.{ source_root, "module-redirects.tsv" });
     const bytes = readAll(io, a, redirect_path) catch |err| switch (err) {
@@ -116,7 +124,13 @@ fn buildModuleIds(io: std.Io, a: A, source_root: []const u8, records: anytype) !
         _ = fields.next();
         const from_raw = fields.next() orelse continue;
         const to_raw = fields.next() orelse continue;
-        try redirects.put(a, try unescapeTsv(a, from_raw), try unescapeTsv(a, to_raw));
+        const from = try registry.normalizeTitle(a, try unescapeTsv(a, from_raw), 0, .any);
+        const target = try registry.normalizeTitle(a, try unescapeTsv(a, to_raw), 0, .any);
+        if (registry.ofTitle(from).id != 828) return error.InvalidModuleNamespace;
+        if (registry.ofTitle(target).id != 828) continue;
+        const entry = try redirects.getOrPut(a, from);
+        if (entry.found_existing and !std.mem.eql(u8, entry.value_ptr.*, target)) return error.DuplicateModuleRedirect;
+        entry.value_ptr.* = target;
     }
     var it = redirects.iterator();
     while (it.next()) |entry| {
@@ -128,7 +142,11 @@ fn buildModuleIds(io: std.Io, a: A, source_root: []const u8, records: anytype) !
             current = next;
         }
         if (depth > 32) continue;
-        if (ids.get(current)) |id| try ids.put(a, entry.key_ptr.*, id);
+        if (ids.get(current)) |id| {
+            const slot = try ids.getOrPut(a, entry.key_ptr.*);
+            if (slot.found_existing and slot.value_ptr.* != id) return error.DuplicateModuleIdentity;
+            slot.value_ptr.* = id;
+        }
     }
     return ids;
 }
@@ -157,16 +175,18 @@ fn eagerEdgeLess(_: void, lhs: EagerEdge, rhs: EagerEdge) bool {
 
 fn resolveEagerModule(
     a: A,
+    registry: *const Registry,
     module_ids: *const emitter.ModuleIdMap,
     raw: []const u8,
 ) !?u32 {
-    const canonical = (try usage.canonicalModule(a, raw)) orelse return null;
+    const canonical = (try registry.normalizeModuleLoader(a, raw)) orelse return null;
     defer a.free(canonical);
     return module_ids.get(canonical);
 }
 
 fn planEagerInit(
     a: A,
+    registry: *const Registry,
     records: []ModuleRecord,
     module_ids: *const emitter.ModuleIdMap,
     stable_require: bool,
@@ -201,7 +221,7 @@ fn planEagerInit(
     while (needed_read < needed_queue.items.len) : (needed_read += 1) {
         const module_id: usize = @intCast(needed_queue.items[needed_read]);
         for (records[module_id].root_requires) |raw| {
-            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse continue;
+            const dependency = (try resolveEagerModule(a, registry, module_ids, raw)) orelse continue;
             if (dependency >= records.len or !candidate[dependency] or needed[dependency]) continue;
             needed[dependency] = true;
             try needed_queue.append(a, dependency);
@@ -213,7 +233,7 @@ fn planEagerInit(
     for (records, 0..) |record, module_index| {
         if (!candidate[module_index] or !needed[module_index]) continue;
         for (record.root_requires) |raw| {
-            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse {
+            const dependency = (try resolveEagerModule(a, registry, module_ids, raw)) orelse {
                 blocked[module_index] = true;
                 continue;
             };
@@ -280,6 +300,7 @@ fn planEagerInit(
 
 fn planModuleRequirements(
     a: A,
+    registry: *const Registry,
     records: []ModuleRecord,
     module_ids: *const emitter.ModuleIdMap,
 ) !usize {
@@ -288,7 +309,7 @@ fn planModuleRequirements(
         var requirements: std.ArrayList(program.ModuleRequirement) = .empty;
         defer requirements.deinit(a);
         for (record.root_requires) |raw| {
-            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse continue;
+            const dependency = (try resolveEagerModule(a, registry, module_ids, raw)) orelse continue;
             try requirements.append(a, .{
                 .module_id = dependency,
                 .requested = raw,
@@ -306,6 +327,7 @@ fn planModuleRequirements(
 
 fn planModuleTemplates(
     a: A,
+    registry: *const Registry,
     records: []ModuleRecord,
     module_ids: *const emitter.ModuleIdMap,
     stable_require: bool,
@@ -333,7 +355,7 @@ fn planModuleTemplates(
     for (records, candidate, 0..) |record, can, module_index| {
         if (!can) continue;
         for (record.root_requires) |raw| {
-            const dependency = (try resolveEagerModule(a, module_ids, raw)) orelse {
+            const dependency = (try resolveEagerModule(a, registry, module_ids, raw)) orelse {
                 blocked[module_index] = true;
                 continue;
             };
@@ -423,6 +445,9 @@ test "module templates are reserved for executable roots" {
 
 test "runtime module requirements retain resolvable root require edges" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var records = [_]ModuleRecord{
         .{
             .title = "Module:A",
@@ -451,7 +476,7 @@ test "runtime module requirements retain resolvable root require edges" {
     try ids.put(a, records[0].title, 0);
     try ids.put(a, records[1].title, 1);
 
-    try std.testing.expectEqual(@as(usize, 1), try planModuleRequirements(a, &records, &ids));
+    try std.testing.expectEqual(@as(usize, 1), try planModuleRequirements(a, registry, &records, &ids));
     defer a.free(records[0].module_requirements);
     try std.testing.expectEqual(@as(usize, 1), records[0].module_requirements.len);
     try std.testing.expectEqual(@as(u32, 1), records[0].module_requirements[0].module_id);
@@ -534,6 +559,7 @@ const ManifestAnalysis = struct {
 fn analyzeManifest(
     io: std.Io,
     a: A,
+    registry: *const Registry,
     manifest: []const u8,
     source_root: []const u8,
     globals: *analysis.Globals,
@@ -555,7 +581,7 @@ fn analyzeManifest(
         if (line.len == 0) continue;
         try rows.append(a, try std.json.parseFromSliceLeaky(ManifestRow, a, line, .{ .ignore_unknown_fields = true }));
     }
-    var ids = try buildModuleIds(io, a, source_root, rows.items);
+    var ids = try buildModuleIds(io, a, registry, source_root, rows.items);
     defer ids.deinit(a);
     const usage_path = try std.fs.path.join(a, &.{ source_root, "lua-usage.tsv" });
     defer a.free(usage_path);
@@ -573,7 +599,7 @@ fn analyzeManifest(
         }
     }
     var all_reachable = seeds.dynamic_module_target;
-    var pool = try parse_pipeline.Pool.init(io, source_root, parse_workers);
+    var pool = try parse_pipeline.Pool.init(io, source_root, registry, parse_workers);
     defer pool.deinit();
     var scheduled: usize = 0;
     var index: usize = 0;
@@ -946,6 +972,7 @@ const max_batch_source_bytes: u64 = 1 * 1024 * 1024;
 fn appendModuleToBatch(
     io: std.Io,
     scratch: A,
+    registry: *const Registry,
     index: usize,
     record: ModuleRecord,
     source_root: []const u8,
@@ -983,6 +1010,7 @@ fn appendModuleToBatch(
     defer table_shapes.deinit(scratch);
     const facts = emitter.ProgramFacts{
         .module_ids = module_ids,
+        .namespace_registry = registry,
         .module_facts = module_facts,
         .shape_registry = shape_registry,
         .method_candidates = method_candidates,
@@ -1010,6 +1038,7 @@ fn appendModuleToBatch(
 fn emitBatches(
     io: std.Io,
     a: A,
+    registry: *const Registry,
     records: []const ModuleRecord,
     modes: []const usage_profile.CompileMode,
     source_root: []const u8,
@@ -1076,6 +1105,7 @@ fn emitBatches(
                 try appendModuleToBatch(
                     io,
                     scratch,
+                    registry,
                     index,
                     records[index],
                     source_root,
@@ -1641,6 +1671,21 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     const manifest_path = args[1];
     const source_root = args[2];
     const output_root = args[3];
+    const inputs_lock_path = try std.fs.path.join(a, &.{ source_root, ".compiler-inputs.lock" });
+    var inputs_lock = try std.Io.Dir.cwd().createFile(io, inputs_lock_path, .{ .truncate = false, .lock = .shared });
+    defer inputs_lock.close(io);
+    const indexed_path = try std.fs.path.join(a, &.{ source_root, "page-index.tsv" });
+    if (std.Io.Dir.cwd().access(io, indexed_path, .{})) |_| {
+        const ready_path = try std.fs.path.join(a, &.{ source_root, "compiler-inputs.ready" });
+        const ready = try std.Io.Dir.cwd().readFileAlloc(io, ready_path, a, .limited(32));
+        if (!std.mem.eql(u8, ready, "complete\n")) return error.IncompleteExtraction;
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+    var registry_storage = try Registry.load(io, a, source_root);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
 
     try std.Io.Dir.cwd().createDirPath(io, output_root);
     const manifest = try readAll(io, a, manifest_path);
@@ -1658,6 +1703,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     const analyzed = try analyzeManifest(
         io,
         a,
+        registry,
         manifest,
         source_root,
         &globals,
@@ -1692,7 +1738,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         shape_registry.fieldCount(),
     });
 
-    var module_ids = try buildModuleIds(io, a, source_root, records);
+    var module_ids = try buildModuleIds(io, a, registry, source_root, records);
     defer module_ids.deinit(a);
     if (module_ids.count() > std.math.maxInt(u32)) return error.TooManyModuleNames;
     if (shape_registry.count() > std.math.maxInt(u32)) return error.TooManyShapes;
@@ -1733,12 +1779,13 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         try selected_eager_seed.append(a, mode == .o2);
     };
 
-    var selected_module_ids = try buildModuleIds(io, a, source_root, selected_records.items);
+    var selected_module_ids = try buildModuleIds(io, a, registry, source_root, selected_records.items);
     defer selected_module_ids.deinit(a);
     if (selected_module_ids.count() > std.math.maxInt(u32)) return error.TooManyModuleNames;
 
     const eager_count = try planEagerInit(
         a,
+        registry,
         selected_records.items,
         &selected_module_ids,
         globals.stable("require"),
@@ -1750,6 +1797,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     });
     const template_count = try planModuleTemplates(
         a,
+        registry,
         selected_records.items,
         &selected_module_ids,
         globals.stable("require"),
@@ -1760,6 +1808,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     });
     const module_requirement_count = try planModuleRequirements(
         a,
+        registry,
         selected_records.items,
         &selected_module_ids,
     );
@@ -1878,6 +1927,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     try emitBatches(
         io,
         a,
+        registry,
         selected_records.items,
         selected_modes.items,
         source_root,

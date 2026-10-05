@@ -1,4 +1,6 @@
+pub const RequestPool = @import("request_pool.zig").RequestPool;
 const std = @import("std");
+pub const namespace_registry = @import("namespace_registry");
 pub const RequestAllocator = @import("request_allocator.zig").RequestAllocator;
 pub const LocalBumpArena = @import("local_bump_arena.zig").LocalBumpArena;
 pub const work_stats = @import("work_stats.zig");
@@ -263,7 +265,12 @@ pub fn stabilizeNativeBuffered(comptime function: anytype) FunctionFn {
 }
 
 pub const Shape = struct {
-    field_keys: []const Value = &.{},
+    pub const Keys = union(enum) {
+        boxed: []const Value,
+        strings: []const []const u8,
+        dense_array,
+    };
+    keys: Keys = .{ .boxed = &.{} },
     sorted_string_slots: []const u32 = &.{},
     // Immutable program layout: zero means absent, otherwise slot + 1.
     // Unlike a Lua table map, this never owns Values or changes on mutation.
@@ -273,12 +280,43 @@ pub const Shape = struct {
     open: bool = false,
     // Set only by producers that construct a complete all-string key index.
     all_string_keys: bool = false,
+
+    pub fn validStorage(self: *const Shape) bool {
+        return switch (self.keys) {
+            .boxed => |keys| keys.len == self.field_count,
+            .strings => |keys| keys.len == self.field_count,
+            .dense_array => true,
+        };
+    }
+
+    pub fn keyAt(self: *const Shape, slot: usize) ?Value {
+        if (slot >= self.field_count) return null;
+        return switch (self.keys) {
+            .boxed => |keys| if (slot < keys.len) keys[slot] else null,
+            .strings => |keys| if (slot < keys.len) .{ .string = keys[slot] } else null,
+            .dense_array => .{ .number = @floatFromInt(slot + 1) },
+        };
+    }
+
+    pub fn stringKeyAt(self: *const Shape, slot: usize) ?[]const u8 {
+        if (slot >= self.field_count) return null;
+        return switch (self.keys) {
+            .strings => |keys| if (slot < keys.len) keys[slot] else null,
+            .boxed => |keys| if (slot < keys.len and keys[slot] == .string) keys[slot].string else null,
+            .dense_array => null,
+        };
+    }
 };
 
 fn shapeStringIndexCapacity(shape: *const Shape) !usize {
-    if (shape.field_keys.len != shape.field_count) return error.BadShape;
+    if (!shape.validStorage()) return error.BadShape;
     var count: usize = 0;
-    for (shape.field_keys) |key| count += @intFromBool(key == .string);
+    if (shape.keys == .dense_array) return 0;
+    if (shape.keys == .strings) {
+        count = shape.field_count;
+    } else for (shape.keys.boxed) |key| {
+        count += @intFromBool(key == .string);
+    }
     const needed = std.math.mul(usize, count, 2) catch return error.OutOfMemory;
     var capacity: usize = 1;
     while (capacity < needed)
@@ -301,13 +339,14 @@ pub fn buildShapeStringIndices(a: std.mem.Allocator, shapes: []Shape) ![]u32 {
     for (shapes) |*shape| {
         const capacity = shapeStringIndexCapacity(shape) catch unreachable;
         const slots = storage[at..][0..capacity];
+        if (capacity == 0) continue;
         const mask = capacity - 1;
-        for (shape.field_keys, 0..) |key, slot| {
-            if (key != .string) continue;
-            var bucket: usize = @as(usize, @truncate(stringValueHash(key.string))) & mask;
+        for (0..shape.field_count) |slot| {
+            const name = shape.stringKeyAt(slot) orelse continue;
+            var bucket: usize = @as(usize, @truncate(stringValueHash(name))) & mask;
             while (slots[bucket] != 0) : (bucket = (bucket + 1) & mask) {
-                const previous = shape.field_keys[slots[bucket] - 1].string;
-                if (std.mem.eql(u8, previous, key.string)) break;
+                const previous = shape.stringKeyAt(slots[bucket] - 1).?;
+                if (std.mem.eql(u8, previous, name)) break;
             }
             if (slots[bucket] == 0) slots[bucket] = @as(u32, @intCast(slot)) + 1;
         }
@@ -319,6 +358,7 @@ pub fn buildShapeStringIndices(a: std.mem.Allocator, shapes: []Shape) ![]u32 {
 
 fn indexedShapeStringSlot(shape: *const Shape, name: []const u8, key_hash: u64) ?u32 {
     const slots = shape.string_lookup_slots;
+    if (slots.len == 0) return null;
     const mask = slots.len - 1;
     var bucket: usize = @as(usize, @truncate(key_hash)) & mask;
     var remaining = slots.len;
@@ -326,23 +366,22 @@ fn indexedShapeStringSlot(shape: *const Shape, name: []const u8, key_hash: u64) 
         const encoded = slots[bucket];
         if (encoded == 0) return null;
         const slot = encoded - 1;
-        if (slot >= shape.field_keys.len) return null;
-        const key = shape.field_keys[slot];
-        if (key == .string and std.mem.eql(u8, key.string, name)) return slot;
+        const candidate = shape.stringKeyAt(slot) orelse return null;
+        if (std.mem.eql(u8, candidate, name)) return slot;
         bucket = (bucket + 1) & mask;
     }
     return null;
 }
 
 pub fn shapeStringSlot(shape: *const Shape, name: []const u8) ?u32 {
-    if (shape.field_keys.len != shape.field_count) return null;
+    if (!shape.validStorage()) return null;
     var low: usize = 0;
     var high = shape.sorted_string_slots.len;
     while (low < high) {
         const mid = low + (high - low) / 2;
         const slot = shape.sorted_string_slots[mid];
-        if (slot >= shape.field_keys.len or shape.field_keys[slot] != .string) return null;
-        switch (std.mem.order(u8, name, shape.field_keys[slot].string)) {
+        const key = shape.stringKeyAt(slot) orelse return null;
+        switch (std.mem.order(u8, name, key)) {
             .lt => high = mid,
             .gt => low = mid + 1,
             .eq => return slot,
@@ -643,7 +682,7 @@ pub const Table = struct {
     fn allStringShape(self: *const Table) bool {
         const shape = self.shape orelse return false;
         return shape.all_string_keys and self.native_namespace == null and self.choices.len == 0 and
-            shape.sorted_string_slots.len == shape.field_keys.len;
+            shape.sorted_string_slots.len == shape.field_count;
     }
 
     fn positiveInteger(number: f64) ?usize {
@@ -708,22 +747,31 @@ pub const Table = struct {
             return static_fields.slotForName(namespace, name);
         }
         const shape = self.shape orelse return null;
-        if (shape.field_keys.len != shape.field_count) return null;
+        if (!shape.validStorage()) return null;
         if (shape.string_lookup_slots.len != 0)
             return indexedShapeStringSlot(shape, name, known_hash orelse stringValueHash(name));
-        if (shape.sorted_string_slots.len == shape.field_keys.len)
+        if (shape.sorted_string_slots.len == shape.field_count)
             return shapeStringSlot(shape, name);
-        for (shape.field_keys, 0..) |key, slot|
-            if (key == .string and std.mem.eql(u8, key.string, name)) return @intCast(slot);
+        if (shape.keys == .dense_array) return null;
+        for (0..shape.field_count) |slot| {
+            const candidate = shape.stringKeyAt(slot) orelse continue;
+            if (std.mem.eql(u8, candidate, name)) return @intCast(slot);
+        }
         return null;
     }
 
     fn slotForKey(self: *const Table, key: Value) ?u32 {
         if (key == .string) return self.slotForString(key.string, null);
         const shape = self.shape orelse return null;
-        if (shape.field_keys.len != shape.field_count) return null;
-        if (shape.all_string_keys) return null;
-        for (shape.field_keys, 0..) |field_key, slot| {
+        if (!shape.validStorage()) return null;
+        if (shape.all_string_keys or shape.keys == .strings) return null;
+        if (shape.keys == .dense_array) {
+            if (key != .number or !std.math.isFinite(key.number) or key.number < 1 or
+                key.number > @as(f64, @floatFromInt(shape.field_count)) or @floor(key.number) != key.number) return null;
+            return @as(u32, @intFromFloat(key.number)) - 1;
+        }
+        for (0..shape.field_count) |slot| {
+            const field_key = shape.keyAt(slot) orelse return null;
             if (rawEqual(field_key, key)) return @intCast(slot);
         }
         return null;
@@ -733,8 +781,8 @@ pub const Table = struct {
             return .{ .string = static_fields.nameAt(namespace, slot) orelse return null };
         }
         const shape = self.shape orelse return null;
-        if (shape.field_keys.len != shape.field_count or slot >= shape.field_count) return null;
-        return shape.field_keys[slot];
+        if (!shape.validStorage()) return null;
+        return shape.keyAt(slot);
     }
 
     fn ensureGenericArraySlot(self: *Table, allocator: std.mem.Allocator, index: u32) !?u32 {
@@ -798,7 +846,8 @@ pub const Table = struct {
         if (self.shape == null and self.native_namespace == null) return error.BadShapeSlot;
         if (slot >= self.slotCount()) return error.BadShapeSlot;
         try self.markMutated();
-        if (self.fieldKey(slot)) |key| self.markIdentityKeyWrite(key, value);
+        if (self.shape == null or self.shape.?.keys == .boxed)
+            if (self.fieldKey(slot)) |key| self.markIdentityKeyWrite(key, value);
         if (slot >= self.slots.len) {
             try self.global_tail.?.set(slot - self.slots.len, value);
             return;
@@ -1283,7 +1332,7 @@ test "invoke rollback restores identity flags before the first keyed mutation" {
     defer ctx.deinit();
     const key = Value{ .table = try ctx.newTable() };
     const fields = [_]Value{key};
-    const shape = Shape{ .field_keys = &fields, .field_count = 1, .open = true };
+    const shape = Shape{ .keys = .{ .boxed = &fields }, .field_count = 1, .open = true };
     for (0..3) |mode| {
         const table = try ctx.newTable();
         if (mode == 1) {
@@ -1853,6 +1902,7 @@ threadlocal var inherited_site_cache: [inherited_site_entries]InheritedSiteCache
     [_]InheritedSiteCache{.{}} ** inherited_site_entries;
 
 pub const Context = struct {
+    namespace_catalog: ?*const namespace_registry.Registry = null,
     allocator: std.mem.Allocator,
     field_cache_nonce: u64 = 0,
     next_field_cache_table_nonce: u64 = 1,
@@ -1960,6 +2010,7 @@ pub const Context = struct {
         root_tail_cache_valid.* = false;
         return .{
             .allocator = allocator,
+            .namespace_catalog = if (@import("builtin").is_test) try namespace_registry.englishTestRegistry() else null,
             .field_cache_nonce = takeFieldCacheContextNonce(),
             .string_arena = .init(allocator),
             .globals = globals,
@@ -1972,6 +2023,7 @@ pub const Context = struct {
 
     pub fn forkProgram(self: *const Context, allocator: std.mem.Allocator) !Context {
         var child = try initProgram(allocator, self.root_globals.len, self.module_count);
+        child.namespace_catalog = self.namespace_catalog;
         child.ustring_pattern_cache = self.ustring_pattern_cache;
         child.program_shapes = self.program_shapes;
         child.program_shapes_validated = self.program_shapes_validated;
@@ -3928,6 +3980,11 @@ pub const Context = struct {
     pub fn resolveModule(self: *const Context, raw_name: []const u8) !u32 {
         const lookup = self.module_lookup orelse return error.ModuleNotFound;
         if (lookup(self.module_lookup_ctx, raw_name)) |id| return id;
+        if (self.namespace_catalog) |registry| {
+            const name = (try registry.normalizeModuleLoader(self.allocator, raw_name)) orelse return error.ModuleNotFound;
+            defer self.allocator.free(name);
+            return lookup(self.module_lookup_ctx, name) orelse error.ModuleNotFound;
+        }
         const trimmed = std.mem.trim(u8, raw_name, " \t\r\n");
         if (std.mem.indexOfScalar(u8, trimmed, '_') == null)
             return lookup(self.module_lookup_ctx, trimmed) orelse error.ModuleNotFound;
@@ -3938,13 +3995,13 @@ pub const Context = struct {
     }
 
     pub fn requireModuleId(self: *Context, module_id: u32, raw_name: []const u8) anyerror!Value {
-        if (self.eager_bootstrap)
-            return self.preparedModuleValue(module_id) orelse error.EagerDependencyNotInitialized;
         const canonical = self.canonicalModuleName(module_id, null);
         const canonical_request = if (canonical) |name| std.mem.eql(u8, name, raw_name) else false;
         if (canonical_request) {
             if (self.packageLoadedModuleGet(module_id, raw_name)) |value| return value;
         } else if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
+        if (self.eager_bootstrap)
+            return self.preparedModuleValue(module_id) orelse error.EagerDependencyNotInitialized;
         const value = try self.loadModule(module_id, raw_name);
         if (!canonical_request) if (self.package_loaded) |loaded|
             try self.rawSetRuntimeBookkeeping(loaded, .{ .string = raw_name }, value);
@@ -4123,14 +4180,12 @@ pub const Context = struct {
     }
 
     pub fn newShapedTable(self: *Context, shape: *const Shape) !*Table {
-        if (shape.field_keys.len != shape.field_count or
-            shape.sorted_string_slots.len > shape.field_keys.len)
+        if (!shape.validStorage() or
+            shape.sorted_string_slots.len > shape.field_count)
             return error.BadShape;
         var previous_string: ?[]const u8 = null;
         for (shape.sorted_string_slots) |slot| {
-            if (slot >= shape.field_keys.len or shape.field_keys[slot] != .string)
-                return error.BadShape;
-            const current = shape.field_keys[slot].string;
+            const current = shape.stringKeyAt(slot) orelse return error.BadShape;
             if (previous_string) |previous|
                 if (std.mem.order(u8, previous, current) != .lt)
                     return error.BadShape;
@@ -4142,12 +4197,12 @@ pub const Context = struct {
             var occupied: usize = 0;
             for (slots) |encoded| {
                 if (encoded == 0) continue;
-                if (encoded > shape.field_keys.len or shape.field_keys[encoded - 1] != .string)
-                    return error.BadShape;
+                if (shape.stringKeyAt(encoded - 1) == null) return error.BadShape;
                 occupied += 1;
             }
             if (occupied == slots.len) return error.BadShape;
-            for (shape.field_keys, 0..) |key, index| {
+            for (0..shape.field_count) |index| {
+                const key = shape.keyAt(index) orelse return error.BadShape;
                 if (key != .string) continue;
                 const resolved = indexedShapeStringSlot(shape, key.string, stringValueHash(key.string)) orelse
                     return error.BadShape;
@@ -4289,8 +4344,8 @@ pub const Context = struct {
         if (object == .table and object.table.native_namespace == namespace) {
             if (namespace == .namespace_map) {
                 if (object.table.rawGet(.{ .string = name })) |override| return override;
-                if (static_fields.namespaceMapId(name)) |id|
-                    return object.table.rawGetNumber(@floatFromInt(id)) orelse .nil;
+                // Namespace identities are edition metadata, not ABI constants.
+                return self.getIndex(object, .{ .string = name });
             }
             if (object.table.fieldKey(slot)) |expected|
                 if (rawEqual(expected, .{ .string = name })) {
@@ -4924,7 +4979,7 @@ test "prehashed string lookup preserves mutable map shape choice and native slot
     try std.testing.expectEqual(@as(f64, 3), table.rawGetHashedString("field", hash).?.number);
 
     const keys = [_]Value{.{ .string = "slot" }};
-    const shape = Shape{ .field_keys = &keys, .field_count = 1, .choice_count = 1 };
+    const shape = Shape{ .keys = .{ .boxed = &keys }, .field_count = 1, .choice_count = 1 };
     const shaped = try ctx.newShapedTable(&shape);
     try shaped.rawSetSlot(0, .{ .number = 4 });
     try shaped.rawSetChoice(0, .{ .string = "choice" }, .{ .number = 5 });
@@ -5041,7 +5096,7 @@ test "package loaded structural slots allocate sparse pages lazily" {
     var keys: [130]Value = undefined;
     for (&keys) |*key| key.* = .{ .string = "module" };
     const shape = Shape{
-        .field_keys = &keys,
+        .keys = .{ .boxed = &keys },
         .sorted_string_slots = &.{},
         .field_count = keys.len,
         .open = true,
@@ -6822,7 +6877,7 @@ test "sparse module globals preserve root snapshots aliases and iteration" {
     keys[1] = .{ .string = "native" };
     keys[64] = .{ .string = "early" };
     keys[128] = .{ .string = "late" };
-    const shape: Shape = .{ .field_keys = &keys, .field_count = count, .open = true };
+    const shape: Shape = .{ .keys = .{ .boxed = &keys }, .field_count = count, .open = true };
     var ctx = try Context.initProgram(std.testing.allocator, count, 2);
     defer ctx.deinit();
     try bindGlobalTable(&ctx, &shape, 0);
@@ -6867,7 +6922,7 @@ test "sparse module globals preserve root snapshots aliases and iteration" {
 fn moduleGlobalAllocationCase(allocator: std.mem.Allocator, dense: bool) !void {
     var keys = [_]Value{.nil} ** 257;
     keys[256] = .{ .string = "_G" };
-    const shape: Shape = .{ .field_keys = &keys, .field_count = keys.len, .open = true };
+    const shape: Shape = .{ .keys = .{ .boxed = &keys }, .field_count = keys.len, .open = true };
     var ctx = try Context.initProgram(allocator, keys.len, 1);
     defer ctx.deinit();
     try bindGlobalTable(&ctx, &shape, 256);
@@ -6907,7 +6962,7 @@ test "cached root tail occupancy preserves first touch across root writes and de
     keys[128] = .{ .string = "later" };
     keys[192] = .{ .string = "last" };
     keys[256] = .{ .string = "dense" };
-    const shape: Shape = .{ .field_keys = &keys, .field_count = keys.len, .open = true };
+    const shape: Shape = .{ .keys = .{ .boxed = &keys }, .field_count = keys.len, .open = true };
     var ctx = try Context.initProgram(std.testing.allocator, keys.len, 3);
     defer ctx.deinit();
     try bindGlobalTable(&ctx, &shape, 0);
@@ -7031,7 +7086,7 @@ test "indexed global shape preserves slot aliases iteration and context isolatio
     };
     const sorted_slots = [_]u32{ 0, 2, 3, 1 };
     const shape: Shape = .{
-        .field_keys = &keys,
+        .keys = .{ .boxed = &keys },
         .sorted_string_slots = &sorted_slots,
         .field_count = keys.len,
         .open = true,
@@ -7148,7 +7203,7 @@ test "program string shapes use sorted slots with open fallback" {
     const keys = [_]Value{ .{ .string = "zeta" }, .{ .string = "alpha" }, .{ .string = "middle" } };
     const sorted = [_]u32{ 1, 2, 0 };
     const shapes = [_]Shape{.{
-        .field_keys = &keys,
+        .keys = .{ .boxed = &keys },
         .sorted_string_slots = &sorted,
         .field_count = keys.len,
         .open = true,
@@ -7334,7 +7389,7 @@ test "prehashed field writes preserve shaped choices redirects and readonly erro
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
     const keys = [_]Value{.{ .string = "slot" }};
-    const shape = Shape{ .field_keys = &keys, .field_count = 1, .choice_count = 1 };
+    const shape = Shape{ .keys = .{ .boxed = &keys }, .field_count = 1, .choice_count = 1 };
     const original = try ctx.newShapedTable(&shape);
     const hashed = try ctx.newShapedTable(&shape);
     for ([_]*Table{ original, hashed }) |table| {
@@ -7448,7 +7503,7 @@ test "all-string shaped tables mirror numeric reads without changing iteration" 
     defer ctx.deinit();
     const keys = [_]Value{.{ .string = "_parse_data" }};
     const sorted = [_]u32{0};
-    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const shape: Shape = .{ .keys = .{ .boxed = &keys }, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
     const table = try ctx.newShapedTable(&shape);
     try table.rawSet(ctx.allocator, keys[0], .{ .string = "metadata" });
     try std.testing.expectEqual(@as(usize, 0), table.rawLen());
@@ -7481,7 +7536,7 @@ test "numeric mirror does not hide metatable fallback or out-of-range keys" {
     defer ctx.deinit();
     const keys = [_]Value{.{ .string = "name" }};
     const sorted = [_]u32{0};
-    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const shape: Shape = .{ .keys = .{ .boxed = &keys }, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
     const table = try ctx.newShapedTable(&shape);
     const mt = try ctx.newTable();
     const fallback = try ctx.newTable();
@@ -7505,8 +7560,8 @@ test "numeric mirror and dense prefix match baseline after sparse mutations" {
     defer ctx.deinit();
     const keys = [_]Value{.{ .string = "label" }};
     const sorted = [_]u32{0};
-    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
-    const unoptimized_shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true };
+    const shape: Shape = .{ .keys = .{ .boxed = &keys }, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const unoptimized_shape: Shape = .{ .keys = .{ .boxed = &keys }, .sorted_string_slots = &sorted, .field_count = 1, .open = true };
     const fast = try ctx.newShapedTable(&shape);
     const old = try ctx.newShapedTable(&unoptimized_shape);
     const writes = [_]struct { key: f64, value: Value }{
@@ -7548,7 +7603,7 @@ test "numeric mirror allocation is optional and map failures leave it coherent" 
     defer ctx.deinit();
     const keys = [_]Value{.{ .string = "field" }};
     const sorted = [_]u32{0};
-    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const shape: Shape = .{ .keys = .{ .boxed = &keys }, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
     const first = try ctx.newShapedTable(&shape);
     try first.map.ensureTotalCapacity(ctx.allocator, 8);
     var fail_mirror = std.testing.FailingAllocator.init(ctx.allocator, .{ .fail_index = 0 });
@@ -7583,7 +7638,7 @@ test "numeric mirror rejects out-of-range integer conversion" {
     defer ctx.deinit();
     const keys = [_]Value{.{ .string = "field" }};
     const sorted = [_]u32{0};
-    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const shape: Shape = .{ .keys = .{ .boxed = &keys }, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
     const table = try ctx.newShapedTable(&shape);
     const huge: f64 = 0x1p64;
     try table.rawSet(ctx.allocator, .{ .number = huge }, .{ .string = "huge" });
@@ -7599,7 +7654,7 @@ test "iterator mutable value pointer invalidates shaped numeric mirror" {
     defer ctx.deinit();
     const keys = [_]Value{.{ .string = "field" }};
     const sorted = [_]u32{0};
-    const shape: Shape = .{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
+    const shape: Shape = .{ .keys = .{ .boxed = &keys }, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true };
     const table = try ctx.newShapedTable(&shape);
     try table.rawSet(ctx.allocator, .{ .number = 1 }, .{ .number = 1 });
     try std.testing.expectEqual(@as(usize, 1), table.rawLen());
@@ -7685,7 +7740,7 @@ test "prehashed field-site cache preserves shaped slot and overflow field" {
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
     const keys = [_]Value{.{ .string = "slot" }};
-    const shape = Shape{ .field_keys = &keys, .field_count = 1 };
+    const shape = Shape{ .keys = .{ .boxed = &keys }, .field_count = 1 };
     const table = try ctx.newShapedTable(&shape);
     const hash = comptime static_fields.hashStringKey("slot");
     const object = Value{ .table = table };
@@ -7714,8 +7769,8 @@ test "field site shares a positive program shape slot across fresh tables" {
     const y_keys = [_]Value{.{ .string = "y" }};
     const sorted = [_]u32{0};
     var shapes = [_]Shape{
-        .{ .field_keys = &x_keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true },
-        .{ .field_keys = &y_keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true },
+        .{ .keys = .{ .boxed = &x_keys }, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true },
+        .{ .keys = .{ .boxed = &y_keys }, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true },
     };
     ctx.program_shapes = &shapes;
     ctx.program_shape_generation = 83;
@@ -7769,7 +7824,7 @@ test "bounded inherited site cache reads live three-link field and invalidates m
     const hash = comptime static_fields.hashStringKey("method");
     const site: u64 = (@as(u64, 110068) << 32) | 0;
     const keys = [_]Value{.{ .string = "method" }};
-    const shape = Shape{ .field_keys = &keys, .field_count = 1 };
+    const shape = Shape{ .keys = .{ .boxed = &keys }, .field_count = 1 };
     const receiver = try ctx.newShapedTable(&shape);
     const mt0 = try ctx.newTable();
     const mt1 = try ctx.newTable();
@@ -7954,7 +8009,7 @@ test "program shape leaf ignores identity exhaustion but preserves semantic guar
     defer ctx.deinit();
     const keys = [_]Value{.{ .string = "x" }};
     const sorted = [_]u32{0};
-    const shapes = [_]Shape{.{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .all_string_keys = true }};
+    const shapes = [_]Shape{.{ .keys = .{ .boxed = &keys }, .sorted_string_slots = &sorted, .field_count = 1, .all_string_keys = true }};
     ctx.program_shapes = &shapes;
     ctx.program_shape_generation = 991;
     const cache = try arena.allocator().create([field_cache_entries]ShapeSiteCache);
@@ -8025,7 +8080,7 @@ test "shape site caches nil and absent slots but reads live map and inherited va
     defer ctx.deinit();
     const keys = [_]Value{.{ .string = "optional" }};
     const sorted = [_]u32{0};
-    const shapes = [_]Shape{.{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true }};
+    const shapes = [_]Shape{.{ .keys = .{ .boxed = &keys }, .sorted_string_slots = &sorted, .field_count = 1, .open = true, .all_string_keys = true }};
     ctx.program_shapes = &shapes;
     ctx.program_shape_generation = 1707;
     const first = try ctx.newProgramShape(0);
@@ -8082,7 +8137,7 @@ test "immutable string slot indices preserve mixed duplicate and missing field s
     defer ctx.deinit();
     const keys = [_]Value{ .{ .string = "z" }, .{ .number = 2 }, .{ .string = "" }, .{ .boolean = false }, .{ .string = "a" }, .{ .string = "z" }, .{ .string = "é" }, .{ .number = 1 } };
     const sorted = [_]u32{ 4, 0 };
-    var shapes = [_]Shape{.{ .field_keys = &keys, .sorted_string_slots = &sorted, .field_count = keys.len, .open = true }};
+    var shapes = [_]Shape{.{ .keys = .{ .boxed = &keys }, .sorted_string_slots = &sorted, .field_count = keys.len, .open = true }};
     const index = try buildShapeStringIndices(std.testing.allocator, &shapes);
     defer std.testing.allocator.free(index);
     const table = try ctx.newShapedTable(&shapes[0]);
@@ -8128,7 +8183,7 @@ test "immutable string indices match the first-slot oracle through collisions an
             .{ .number = @floatFromInt(i) }
         else
             .{ .string = try std.fmt.allocPrint(a, "field-{d}", .{i % 29}) };
-        var shapes = [_]Shape{.{ .field_keys = keys, .field_count = @intCast(size), .open = true }};
+        var shapes = [_]Shape{.{ .keys = .{ .boxed = keys }, .field_count = @intCast(size), .open = true }};
         const index = try buildShapeStringIndices(a, &shapes);
         defer a.free(index);
         const table = try ctx.newShapedTable(&shapes[0]);
@@ -8151,7 +8206,7 @@ test "immutable string index validation rejects missing full and invalid layouts
     var ctx = try Context.init(arena.allocator(), 0);
     defer ctx.deinit();
     const keys = [_]Value{ .{ .string = "item" }, .{ .number = 1 }, .{ .string = "item" } };
-    var shape = Shape{ .field_keys = &keys, .field_count = keys.len };
+    var shape = Shape{ .keys = .{ .boxed = &keys }, .field_count = keys.len };
     for ([_][]const u32{ &.{ 0, 0 }, &.{ 1, 1 }, &.{ 99, 0 }, &.{ 2, 0 }, &.{ 1, 0, 0 }, &.{ 3, 0 } }) |index| {
         shape.string_lookup_slots = index;
         try std.testing.expectError(error.BadShape, ctx.newShapedTable(&shape));
@@ -8162,7 +8217,7 @@ test "immutable string index construction is allocation-failure atomic" {
     const Probe = struct {
         fn run(a: std.mem.Allocator) !void {
             const keys = [_]Value{ .{ .string = "a" }, .{ .string = "b" } };
-            var shapes = [_]Shape{.{ .field_keys = &keys, .field_count = keys.len }};
+            var shapes = [_]Shape{.{ .keys = .{ .boxed = &keys }, .field_count = keys.len }};
             const index = buildShapeStringIndices(a, &shapes) catch |err| {
                 try std.testing.expectEqual(@as(usize, 0), shapes[0].string_lookup_slots.len);
                 return err;
@@ -8645,7 +8700,7 @@ fn pooledTableAllocationCase(a: std.mem.Allocator) !void {
     const array = try ctx.newArrayTable(17);
     defer ctx.destroyTable(array);
     const fields = [_]Value{ .{ .string = "a" }, .{ .string = "b" } };
-    const shape = Shape{ .field_keys = &fields, .field_count = 2, .choice_count = 3, .open = true };
+    const shape = Shape{ .keys = .{ .boxed = &fields }, .field_count = 2, .choice_count = 3, .open = true };
     const shaped = try ctx.newShapedTable(&shape);
     defer ctx.destroyTable(shaped);
     const native = try ctx.newNativeNamespace(.frame);
@@ -8681,7 +8736,7 @@ test "canonical package slots preserve eager bootstrap dependency admission" {
     const roots = [_]FunctionFn{stabilize(Probe.root)};
     const keys = [_]Value{.{ .string = "Module:Eager" }};
     const sorted = [_]u32{0};
-    const shapes = [_]Shape{.{ .field_keys = &keys, .field_count = 1, .sorted_string_slots = &sorted, .all_string_keys = true, .open = true }};
+    const shapes = [_]Shape{.{ .keys = .{ .boxed = &keys }, .field_count = 1, .sorted_string_slots = &sorted, .all_string_keys = true, .open = true }};
     ctx.module_root_entries = &roots;
     ctx.configureModules(null, Probe.lookup, Probe.name);
     ctx.program_shapes = &shapes;
@@ -8736,7 +8791,7 @@ test "canonical requires reuse resolved package slots without repeating name loo
     const a = arena.allocator();
     const fields = [_]Value{.{ .string = "Module:slot-probe" }};
     const sorted = [_]u32{0};
-    const shapes = [_]Shape{.{ .field_keys = &fields, .field_count = 1, .sorted_string_slots = &sorted, .all_string_keys = true, .open = true }} ** 2;
+    const shapes = [_]Shape{.{ .keys = .{ .boxed = &fields }, .field_count = 1, .sorted_string_slots = &sorted, .all_string_keys = true, .open = true }} ** 2;
     const roots = [_]FunctionFn{stabilize(Probe.root)} ** 2;
     const slots = [_]u32{ 0, std.math.maxInt(u32) };
     for (0..4) |mode| {
@@ -8966,4 +9021,14 @@ test "independent template backing owns promoted graphs without growing asset st
     }
     try std.testing.expectEqual(outer_backing.allocated_bytes, outer_backing.freed_bytes);
     try std.testing.expectEqual(template_backing.allocated_bytes, template_backing.freed_bytes);
+}
+
+test "worker pool participates in runtime ownership qualification" {
+    var pool = RequestPool.init(std.testing.allocator, 1024 * 1024);
+    defer pool.deinit();
+    var page = RequestAllocator.init(pool.allocator());
+    _ = try page.allocator().alloc(u8, 100);
+    page.deinit();
+    pool.resetAndTrim();
+    try std.testing.expect(pool.mapped_bytes <= pool.retained_limit);
 }

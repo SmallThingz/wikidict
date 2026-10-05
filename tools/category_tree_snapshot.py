@@ -36,7 +36,8 @@ def rows(path, wanted):
     in_schema = False
     in_insert = False
     with gzip.open(path, "rb") as source:
-        for line in source:
+        while line := source.readline(16 * 1024 * 1024 + 1):
+            if len(line)>16*1024*1024:raise ValueError(f"SQL line exceeds bounded 16 MiB admission limit: {path}")
             if line.startswith(b"CREATE TABLE "):
                 in_schema = True
             elif in_schema and line.startswith(b"  `"):
@@ -65,6 +66,7 @@ def rows(path, wanted):
             if line.rstrip().endswith(b";"):
                 in_insert = False
 
+    if indexes is None or in_schema or in_insert:raise ValueError(f"Missing schema or incomplete SQL insert: {path}")
 
 def namespaces(xml):
     for _, element in ET.iterparse(xml, events=("end",)):
@@ -103,6 +105,9 @@ def build(args):
     db.execute("PRAGMA synchronous=OFF")
     db.execute("PRAGMA cache_size=-65536")
     db.execute("PRAGMA temp_store=FILE")
+    db.execute("PRAGMA mmap_size=0")
+    db.execute("PRAGMA threads=0")
+    db.execute("PRAGMA hard_heap_limit=268435456")
     db.executescript("""
         CREATE TABLE pages(id INTEGER PRIMARY KEY, ns INTEGER, title BLOB, category_key BLOB);
         CREATE TABLE targets(id INTEGER PRIMARY KEY, title BLOB);

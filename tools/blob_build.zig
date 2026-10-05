@@ -1,4 +1,5 @@
 const std = @import("std");
+const namespace_registry = @import("namespace_registry");
 const encoder = @import("encoder");
 const xml_decode = @import("xml_decode");
 const dump_source = @import("wikimedia_dump");
@@ -170,7 +171,7 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
 
 const ExpansionJob = struct {
     ordinal: u64,
-    ns: u32,
+    ns: encoder.blob_builder.PageNamespace,
     title: []const u8,
     source: []const u8,
 };
@@ -246,24 +247,27 @@ const ExpansionSlot = struct {
         if (self.failure) |err| {
             std.debug.print(
                 "page expansion failed title={s} ordinal={d} ns={d} source_bytes={d} error={s}\n",
-                .{ self.job.title, self.job.ordinal, self.job.ns, self.job.source.len, @errorName(err) },
+                .{ self.job.title, self.job.ordinal, self.job.ns.id, self.job.source.len, @errorName(err) },
             );
             const fallback_reason = (try expansionFallbackReasonAlloc(self.arena.allocator(), err, self.worker.last_failure)) orelse return err;
             // Retain explicitly recoverable expansion failures with their exact
             // audit cause. Operational deadlines propagate through the classifier
             // above rather than masquerading as successfully encoded empty pages.
             try writer.addExpansionFailure(self.arena.allocator(), self.job.ns, self.job.title, &.{fallback_reason});
+            try writer.namespace_coverage.outcome(self.job.ns.id, .fallback);
             return true;
         }
         if (self.expansion) |expanded| {
+            const fallback_before = writer.stats.fallback_pages;
             writer.addExpandedPage(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title) catch |err| {
                 std.debug.print(
                     "blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n",
-                    .{ self.job.title, self.job.ordinal, self.job.ns, self.job.source.len, expanded.source.len, @errorName(err) },
+                    .{ self.job.title, self.job.ordinal, self.job.ns.id, self.job.source.len, expanded.source.len, @errorName(err) },
                 );
                 return err;
             };
-        }
+            try writer.namespace_coverage.outcome(self.job.ns.id, if (writer.stats.fallback_pages != fallback_before) .fallback else .expanded);
+        } else try writer.namespace_coverage.outcome(self.job.ns.id, .duplicate);
         return true;
     }
 };
@@ -491,11 +495,24 @@ fn dispatchIndexedPage(
     writer: *encoder.blob_builder.Writer,
     dump: *dump_source.SourceReader,
     kind: dump_source.PageIndexKind,
+    namespaces: *const namespace_registry.Registry,
     line: []const u8,
     ordinal: usize,
 ) !void {
     const page = try dump_source.parsePageIndexLine(kind, line);
-    if (!page.has_source or !dump_source.relevantNamespace(page.ns)) return;
+    const spec = namespaces.byId(std.math.cast(i32, page.ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace;
+    const role: ?encoder.blob_format.BlobKind = switch (spec.role) {
+        .main => .language,
+        .compile_only => null,
+        .supplemental => .supplemental,
+        .thesaurus => .thesaurus,
+        .citations => .citations,
+        .reconstruction => .reconstruction,
+        .rhymes => .rhymes,
+        .sign_gloss => .sign_gloss,
+    };
+    try writer.namespace_coverage.input(writer.allocator, page.ns, spec.name, role, page.has_source);
+    if (!page.has_source or role == null) return;
     const slot = try pool.acquire(writer);
     const page_allocator = slot.arena.allocator();
     const raw_source = try dump.readAlloc(page_allocator, page.source);
@@ -505,7 +522,7 @@ fn dispatchIndexedPage(
         raw_source;
     slot.dispatch(.{
         .ordinal = @intCast(ordinal),
-        .ns = page.ns,
+        .ns = .{ .id = page.ns, .kind = role.? },
         .title = page.title,
         .source = source,
     });
@@ -583,6 +600,7 @@ fn runContinuous(
     output_root: []const u8,
     options: Options,
     codes: encoder.blob_builder.LanguageCodes,
+    namespaces: *const namespace_registry.Registry,
     pool: *ExpansionPool,
     dump: *dump_source.SourceReader,
     page_index: *const Mapped,
@@ -624,7 +642,7 @@ fn runContinuous(
         shard.selected += 1;
         shard.writer.?.stats.pages_seen = shard.selected;
         selected += 1;
-        try dispatchIndexedPage(pool, &shard.writer.?, dump, kind, line, page_ordinal);
+        try dispatchIndexedPage(pool, &shard.writer.?, dump, kind, namespaces, line, page_ordinal);
         const progress_now = std.Io.Clock.awake.now(io).toNanoseconds();
         if (selected % 100_000 == 0 or progress_now >= next_progress) {
             next_progress = progress_now + 10 * std.time.ns_per_s;
@@ -660,9 +678,12 @@ pub fn main(init: std.process.Init) !void {
         return error.ResourceLimit;
     }
 
+    var namespaces = try namespace_registry.Registry.load(init.io, a, options.expander_root);
+    defer namespaces.deinit();
     var registry = try loadLanguageRegistry(init.io, a, options.expander_root);
     defer registry.deinit();
     const codes: encoder.blob_builder.LanguageCodes = .{
+        .namespace_catalog = &namespaces,
         .ctx = &registry,
         .get_fn = struct {
             fn get(raw: ?*const anyopaque, heading: []const u8) ?[]const u8 {
@@ -731,7 +752,7 @@ pub fn main(init: std.process.Init) !void {
     );
     defer dump.deinit();
     if (options.shard_pages != null) {
-        try runContinuous(init.io, a, args[2], options, codes, &pool, &dump, &page_index, page_index_kind, page_index_path);
+        try runContinuous(init.io, a, args[2], options, codes, &namespaces, &pool, &dump, &page_index, page_index_kind, page_index_path);
         return;
     }
 
@@ -751,7 +772,7 @@ pub fn main(init: std.process.Init) !void {
         if (options.limit_pages) |limit| if (pages_selected >= limit) break;
         pages_selected += 1;
         writer.stats.pages_seen = pages_selected;
-        try dispatchIndexedPage(&pool, &writer, &dump, page_index_kind, line, page_ordinal);
+        try dispatchIndexedPage(&pool, &writer, &dump, page_index_kind, &namespaces, line, page_ordinal);
         const progress_now = std.Io.Clock.awake.now(init.io).toNanoseconds();
         if (pages_selected % 100_000 == 0 or progress_now >= next_progress) {
             next_progress = progress_now + 10 * std.time.ns_per_s;
@@ -771,7 +792,7 @@ pub fn main(init: std.process.Init) !void {
     try writePageCoverage(init.io, a, args[2], coverage);
 
     std.debug.print(
-        "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} fallback_pages={d}\n",
+        "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} supplemental={d} fallback_pages={d}\n",
         .{
             stats.pages_seen,
             stats.main_pages,
@@ -782,6 +803,7 @@ pub fn main(init: std.process.Init) !void {
             stats.reconstruction_records,
             stats.rhymes_records,
             stats.sign_gloss_records,
+            stats.supplemental_records,
             stats.fallback_pages,
         },
     );

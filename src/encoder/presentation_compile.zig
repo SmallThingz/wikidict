@@ -32,6 +32,7 @@ fn optionalTableEnd(input: []const u8, opening: syntax.Tag) syntax.Pair {
 pub const media_types = @import("presentation_media.zig");
 pub const Error = A.Error || error{RenderLimit};
 pub const Context = struct {
+    namespace_catalog: ?*const @import("namespace_registry").Registry = null,
     title: []const u8 = "Entry",
     language: []const u8 = "English",
     link_trail: ir.LinkTrail = .{},
@@ -430,6 +431,18 @@ pub const Renderer = struct {
     in_reference: bool = false,
     semantic_capture: ?*SemanticHints = null,
 
+    fn namespaceOfTarget(self: *const Renderer, title: []const u8) ?i32 {
+        const colon = std.mem.indexOfScalar(u8, title, ':') orelse return null;
+        const prefix = title[0..colon];
+        if (self.context.namespace_catalog) |registry|
+            return if (registry.byName(prefix)) |spec| spec.id else null;
+        // Canonical standard names are also useful to standalone semantic
+        // presentation callers that have no edition-local aliases.
+        if (std.ascii.eqlIgnoreCase(prefix, "Category")) return 14;
+        if (std.ascii.eqlIgnoreCase(prefix, "File") or std.ascii.eqlIgnoreCase(prefix, "Image")) return 6;
+        return null;
+    }
+
     pub fn mediaFile(self: *Renderer, raw: []const u8, caption: []const u8) Error!void {
         // Media is supplemental presentation. Pathological nesting or a page with
         // hundreds of assets must not make the entry itself unreadable.
@@ -693,7 +706,7 @@ pub const Renderer = struct {
             const pipe = syntax.delimiter(line, "|", 0);
             const raw_file = trim(line[0 .. pipe orelse line.len]);
             const colon = std.mem.indexOfScalar(u8, raw_file, ':');
-            const file = if (colon != null and (std.ascii.eqlIgnoreCase(raw_file[0..colon.?], "File") or std.ascii.eqlIgnoreCase(raw_file[0..colon.?], "Image"))) raw_file[colon.? + 1 ..] else raw_file;
+            const file = if (colon != null and self.namespaceOfTarget(raw_file) == 6) raw_file[colon.? + 1 ..] else raw_file;
             if (media_types.kind(file) == null) continue;
             const options = if (pipe) |at_pipe| trim(line[at_pipe + 1 ..]) else "";
             const caption = mediaCaption(options, file);
@@ -1015,11 +1028,11 @@ pub const Renderer = struct {
                         target = target[1..];
                         if (!token.link_has_pipe) label_value = target;
                     }
-                    if (!explicit and std.ascii.startsWithIgnoreCase(target, "Category:")) {
+                    if (!explicit and self.namespaceOfTarget(target) == 14) {
                         try self.text(trail, s);
                         continue;
                     }
-                    if (!explicit and (std.ascii.startsWithIgnoreCase(target, "File:") or std.ascii.startsWithIgnoreCase(target, "Image:"))) {
+                    if (!explicit and self.namespaceOfTarget(target) == 6) {
                         const file_name = target[(std.mem.indexOfScalar(u8, target, ':').? + 1)..];
                         label_value = mediaCaption(label_value, file_name);
                         try self.mediaFile(file_name, label_value);
@@ -2678,4 +2691,19 @@ test "unclosed formatting and rowless nested tables compile their contents" {
     try std.testing.expectEqualStrings("one", try flattened(a, blocks[0].spans));
     try std.testing.expectEqualStrings("two", try flattened(a, blocks[1].spans));
     try std.testing.expectEqualStrings("|} After", try flattened(a, blocks[2].spans));
+}
+
+test "localized namespace aliases classify media and category membership" {
+    const a = std.testing.allocator;
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").french_test_fixture);
+    defer registry.deinit();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var renderer: Renderer = .{ .a = arena.allocator(), .context = .{ .namespace_catalog = &registry } };
+    const spans = try renderer.parseSpans("[[Fichier:Cat.jpg|thumb|Un chat]] [[Catégorie:Animaux]] [[:Catégorie:Animaux]]", .{});
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    const text = try plainText(arena.allocator(), spans);
+    try std.testing.expect(std.mem.indexOf(u8, text, "Un chat") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "Catégorie:Animaux"));
+    try std.testing.expect(std.mem.indexOf(u8, text, "Fichier:Cat.jpg") == null);
 }

@@ -1,4 +1,6 @@
 const std = @import("std");
+const ns = @import("namespace_registry");
+const Registry = ns.Registry;
 const lua = @import("parser/root.zig");
 const preprocess = @import("wikitext/preprocess.zig");
 
@@ -17,39 +19,6 @@ fn containsDynamicSyntax(raw: []const u8) bool {
         std.mem.indexOf(u8, raw, "}}") != null;
 }
 
-fn nameEqual(raw: []const u8, expected: []const u8) bool {
-    if (raw.len != expected.len) return false;
-    for (raw, expected) |lhs_raw, rhs_raw| {
-        const lhs = if (lhs_raw == '_') ' ' else lhs_raw;
-        if (std.ascii.toLower(lhs) != std.ascii.toLower(rhs_raw)) return false;
-    }
-    return true;
-}
-
-fn isNonTemplateNamespace(raw: []const u8) bool {
-    inline for (&.{
-        "Media",          "Special",         "Talk",
-        "User",           "User talk",       "Wiktionary",
-        "Project",        "WT",              "Wiktionary talk",
-        "Project talk",   "File",            "Image",
-        "File talk",      "Image talk",      "MediaWiki",
-        "MediaWiki talk", "Template talk",   "Help",
-        "Help talk",      "Category",        "CAT",
-        "Category talk",  "Thread",          "Thread talk",
-        "Summary",        "Summary talk",    "Appendix",
-        "AP",             "Appendix talk",   "Rhymes",
-        "Rhymes talk",    "Transwiki",       "Transwiki talk",
-        "Thesaurus",      "WS",              "Wikisaurus",
-        "Thesaurus talk", "Wikisaurus talk", "Citations",
-        "Citations talk", "Sign gloss",      "Sign gloss talk",
-        "Reconstruction", "RC",              "Reconstruction talk",
-        "TimedText",      "TimedText talk",  "Module",
-        "MOD",            "Module talk",     "Event",
-        "Event talk",     "Topic",
-    }) |namespace| if (nameEqual(raw, namespace)) return true;
-    return false;
-}
-
 fn stripSubst(raw: []const u8) []const u8 {
     var value = std.mem.trim(u8, raw, " \t\r\n");
     inline for (&.{ "subst:", "safesubst:" }) |prefix| {
@@ -59,43 +28,22 @@ fn stripSubst(raw: []const u8) []const u8 {
     return value;
 }
 
-pub fn canonicalTemplate(a: std.mem.Allocator, raw_in: []const u8) !?[]const u8 {
+pub fn canonicalTemplate(a: std.mem.Allocator, registry: *const Registry, host_title: ?[]const u8, raw_in: []const u8) !?[]const u8 {
     const raw = stripSubst(raw_in);
-    if (raw.len == 0 or raw[0] == '#' or raw[0] == ':' or containsDynamicSyntax(raw))
-        return null;
-
-    if (std.mem.indexOfScalar(u8, raw, ':')) |colon| {
-        const prefix = raw[0..colon];
-        if (nameEqual(prefix, "Template") or nameEqual(prefix, "T")) {
-            const suffix = std.mem.trim(u8, raw[colon + 1 ..], " \t\r\n");
-            if (suffix.len == 0) return null;
-            const out = try std.fmt.allocPrint(a, "Template:{s}", .{suffix});
-            std.mem.replaceScalar(u8, out, '_', ' ');
-            return out;
-        }
-
-        if (isNonTemplateNamespace(prefix)) return null;
-    }
-
-    const out = try std.fmt.allocPrint(a, "Template:{s}", .{raw});
-    std.mem.replaceScalar(u8, out, '_', ' ');
-    return out;
+    if (raw.len == 0 or raw[0] == '#' or containsDynamicSyntax(raw)) return null;
+    return registry.normalizeTransclusion(a, raw, host_title) catch |err| switch (err) {
+        error.InvalidPageTitle => null,
+        else => return err,
+    };
 }
 
-pub fn canonicalModule(a: std.mem.Allocator, raw_in: []const u8) !?[]const u8 {
+pub fn canonicalModule(a: std.mem.Allocator, registry: *const Registry, raw_in: []const u8) !?[]const u8 {
     const raw = std.mem.trim(u8, raw_in, " \t\r\n");
     if (raw.len == 0 or containsDynamicSyntax(raw)) return null;
-
-    const suffix = if (std.mem.indexOfScalar(u8, raw, ':')) |colon| blk: {
-        const prefix = raw[0..colon];
-        if (!nameEqual(prefix, "Module") and !nameEqual(prefix, "MOD")) break :blk raw;
-        break :blk std.mem.trim(u8, raw[colon + 1 ..], " \t\r\n");
-    } else raw;
-    if (suffix.len == 0) return null;
-
-    const out = try std.fmt.allocPrint(a, "Module:{s}", .{suffix});
-    std.mem.replaceScalar(u8, out, '_', ' ');
-    return out;
+    return registry.normalizeTitle(a, raw, 828, .only_default) catch |err| switch (err) {
+        error.InvalidPageTitle => null,
+        else => return err,
+    };
 }
 
 fn firstTopLevelPart(body: []const u8) []const u8 {
@@ -110,18 +58,22 @@ pub const ScanFlags = struct {
 
 fn appendLiteralTemplateCandidate(
     a: std.mem.Allocator,
+    registry: *const Registry,
+    host_title: ?[]const u8,
     raw: []const u8,
     out: *std.ArrayList(Ref),
 ) !bool {
     const value = std.mem.trim(u8, raw, " \t\r\n");
     if (value.len == 0) return true;
-    const target = try canonicalTemplate(a, value) orelse return false;
+    const target = try canonicalTemplate(a, registry, host_title, value) orelse return false;
     try out.append(a, .{ .kind = .template, .target = target });
     return true;
 }
 
 fn expandFiniteDynamicTemplateHead(
     a: std.mem.Allocator,
+    registry: *const Registry,
+    host_title: ?[]const u8,
     head_raw: []const u8,
     out: *std.ArrayList(Ref),
 ) !bool {
@@ -141,11 +93,11 @@ fn expandFiniteDynamicTemplateHead(
     if (std.ascii.eqlIgnoreCase(name, "#if")) {
         if (parts.items.len < 2) return false;
         const checkpoint = out.items.len;
-        if (!try appendLiteralTemplateCandidate(a, parts.items[1], out)) {
+        if (!try appendLiteralTemplateCandidate(a, registry, host_title, parts.items[1], out)) {
             while (out.items.len > checkpoint) a.free(out.pop().?.target);
             return false;
         }
-        if (parts.items.len >= 3 and !try appendLiteralTemplateCandidate(a, parts.items[2], out)) {
+        if (parts.items.len >= 3 and !try appendLiteralTemplateCandidate(a, registry, host_title, parts.items[2], out)) {
             while (out.items.len > checkpoint) a.free(out.pop().?.target);
             return false;
         }
@@ -159,11 +111,11 @@ fn expandFiniteDynamicTemplateHead(
     if (std.ascii.eqlIgnoreCase(name, "#ifeq")) {
         if (parts.items.len < 3) return false;
         const checkpoint = out.items.len;
-        if (!try appendLiteralTemplateCandidate(a, parts.items[2], out)) {
+        if (!try appendLiteralTemplateCandidate(a, registry, host_title, parts.items[2], out)) {
             while (out.items.len > checkpoint) a.free(out.pop().?.target);
             return false;
         }
-        if (parts.items.len >= 4 and !try appendLiteralTemplateCandidate(a, parts.items[3], out)) {
+        if (parts.items.len >= 4 and !try appendLiteralTemplateCandidate(a, registry, host_title, parts.items[3], out)) {
             while (out.items.len > checkpoint) a.free(out.pop().?.target);
             return false;
         }
@@ -177,74 +129,90 @@ fn expandFiniteDynamicTemplateHead(
     return false;
 }
 
-fn classifyHead(a: std.mem.Allocator, head_raw: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags) !void {
+fn classifyHead(a: std.mem.Allocator, registry: *const Registry, host_title: ?[]const u8, head_raw: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags) !void {
     const head = stripSubst(std.mem.trim(u8, head_raw, " \t\r\n"));
     if (head.len == 0) return;
     if (preprocess.findTopDelimiter(head, ':')) |colon| {
         const name = std.mem.trim(u8, head[0..colon], " \t\r\n");
         if (std.ascii.eqlIgnoreCase(name, "#invoke")) {
-            if (try canonicalModule(a, head[colon + 1 ..])) |target|
+            if (try canonicalModule(a, registry, head[colon + 1 ..])) |target|
                 try out.append(a, .{ .kind = .module, .target = target })
             else
                 flags.dynamic_module_target = true;
             return;
         }
         if (name.len != 0 and name[0] == '#') return;
-        if (!containsDynamicSyntax(name) and isNonTemplateNamespace(name)) return;
+        // An unrecognized prefix can be a pinned current-wiki interwiki alias.
+        // Until this scanner proves that mapping, do not prune its dependencies.
+        if (name.len != 0 and registry.byName(name) == null) flags.dynamic_module_target = true;
     } else if (head[0] == '#') {
         return;
     }
-    if (try canonicalTemplate(a, head)) |target| {
+    if (try canonicalTemplate(a, registry, host_title, head)) |target| {
         try out.append(a, .{ .kind = .template, .target = target });
     } else if (containsDynamicSyntax(head)) {
-        if (!try expandFiniteDynamicTemplateHead(a, head, out))
+        if (!try expandFiniteDynamicTemplateHead(a, registry, host_title, head, out))
             flags.dynamic_template_target = true;
     }
 }
 
-fn scanRange(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags, depth: usize) anyerror!void {
-    if (depth >= 128) return;
+fn scanRange(a: std.mem.Allocator, registry: *const Registry, host_title: ?[]const u8, source: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags, depth: usize) anyerror!void {
+    if (depth >= 128) {
+        flags.dynamic_module_target = true;
+        flags.dynamic_template_target = true;
+        return;
+    }
     var pos: usize = 0;
     while (preprocess.findNextConstructOutsideLiteralTags(source, pos)) |construct| {
         switch (construct.kind) {
             .parameter => {
                 if (construct.close > construct.open + 3)
-                    try scanRange(a, source[construct.open + 3 .. construct.close], out, flags, depth + 1);
+                    try scanRange(a, registry, host_title, source[construct.open + 3 .. construct.close], out, flags, depth + 1);
                 pos = @min(construct.close + 3, source.len);
             },
             .template => {
                 const body = source[construct.open + 2 .. construct.close];
-                try classifyHead(a, firstTopLevelPart(body), out, flags);
-                if (body.len != 0) try scanRange(a, body, out, flags, depth + 1);
+                try classifyHead(a, registry, host_title, firstTopLevelPart(body), out, flags);
+                if (body.len != 0) try scanRange(a, registry, host_title, body, out, flags, depth + 1);
                 pos = @min(construct.close + 2, source.len);
             },
         }
     }
 }
 
-pub fn scanWikitextFlags(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref)) !ScanFlags {
+pub fn scanWikitextFlags(a: std.mem.Allocator, registry: *const Registry, host_title: ?[]const u8, source: []const u8, out: *std.ArrayList(Ref)) !ScanFlags {
     var flags: ScanFlags = .{};
-    try scanRange(a, source, out, &flags, 0);
+    if (std.mem.indexOf(u8, source, "<!--") != null) {
+        const joined = try preprocess.stripDecodedComments(a, source);
+        defer a.free(joined);
+        try scanRange(a, registry, host_title, joined, out, &flags, 0);
+    } else try scanRange(a, registry, host_title, source, out, &flags, 0);
     return flags;
 }
 
-pub fn scanWikitext(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref)) !void {
-    _ = try scanWikitextFlags(a, source, out);
+pub fn scanWikitext(a: std.mem.Allocator, registry: *const Registry, host_title: ?[]const u8, source: []const u8, out: *std.ArrayList(Ref)) !void {
+    _ = try scanWikitextFlags(a, registry, host_title, source, out);
 }
 
-pub fn scanTemplateWikitextFlags(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref)) !ScanFlags {
+pub fn scanTemplateWikitextFlags(a: std.mem.Allocator, registry: *const Registry, host_title: ?[]const u8, source: []const u8, out: *std.ArrayList(Ref)) !ScanFlags {
     const body = preprocess.transcludeDecodedAlloc(a, source) catch |err| switch (err) {
         error.OutOfMemory => return err,
-        else => return .{},
+        else => return .{ .dynamic_module_target = true, .dynamic_template_target = true },
     };
     defer a.free(body);
     var flags: ScanFlags = .{};
-    try scanRange(a, body, out, &flags, 0);
+    try scanRange(a, registry, host_title, body, out, &flags, 0);
     return flags;
 }
 
-pub fn scanTemplateWikitext(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(Ref)) !void {
-    _ = try scanTemplateWikitextFlags(a, source, out);
+pub fn scanTemplateWikitext(a: std.mem.Allocator, registry: *const Registry, host_title: ?[]const u8, source: []const u8, out: *std.ArrayList(Ref)) !void {
+    _ = try scanTemplateWikitextFlags(a, registry, host_title, source, out);
+}
+
+fn isTransclusionMethod(name: []const u8) bool {
+    inline for (&.{ "preprocess", "expandTemplate", "callParserFunction", "extensionTag" }) |method|
+        if (std.mem.eql(u8, name, method)) return true;
+    return false;
 }
 
 fn staticString(expr: *const lua.Expr) ?[]const u8 {
@@ -373,6 +341,7 @@ const ModuleFlowState = struct {
 };
 
 const ModuleValueScanner = struct {
+    registry: *const Registry,
     output_allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     out: *std.ArrayList([]const u8),
@@ -382,11 +351,13 @@ const ModuleValueScanner = struct {
 
     fn init(
         allocator: std.mem.Allocator,
+        registry: *const Registry,
         out: *std.ArrayList([]const u8),
         load_data: ?*std.ArrayList([]const u8),
     ) ModuleValueScanner {
         return .{
             .output_allocator = allocator,
+            .registry = registry,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .out = out,
             .load_data = load_data,
@@ -622,6 +593,10 @@ const ModuleValueScanner = struct {
         object: ModuleAbstractValue,
         key: ModuleAbstractValue,
     ) !ModuleAbstractValue {
+        for (key.strings) |name| if (isTransclusionMethod(name)) {
+            self.dynamic = true;
+        };
+        if (key.unknown_string) self.dynamic = true;
         var out = ModuleAbstractValue.nilValue();
         var handled_namespace = false;
         if (object.may_mw_namespace) {
@@ -783,7 +758,7 @@ const ModuleValueScanner = struct {
     }
 
     fn addModuleTargets(self: *ModuleValueScanner, value: ModuleAbstractValue, is_load_data: bool) !void {
-        for (value.strings) |raw| if (try canonicalModule(self.output_allocator, raw)) |target| {
+        for (value.strings) |raw| if (try canonicalModule(self.output_allocator, self.registry, raw)) |target| {
             try self.out.append(self.output_allocator, target);
             if (is_load_data) if (self.load_data) |items|
                 try items.append(self.output_allocator, try self.output_allocator.dupe(u8, target));
@@ -796,6 +771,9 @@ const ModuleValueScanner = struct {
         loader: ModuleAbstractValue,
         arg: ModuleAbstractValue,
     ) !void {
+        // Unknown callable effects can hide frame expansion or a loader alias.
+        // Preserve all modules for precisely those unresolved calls.
+        if (loader.unknown_string or loader.unknown_number or loader.may_truthy_other) self.dynamic = true;
         if (loader.may_require_loader) try self.addModuleTargets(arg, false);
         if (loader.may_lazy_require_loader) try self.addModuleTargets(arg, false);
         if (loader.may_load_data_loader) try self.addModuleTargets(arg, true);
@@ -849,6 +827,8 @@ const ModuleValueScanner = struct {
                 const callee = try self.evalExpr(state, call.callee);
                 const args = try self.a().alloc(ModuleAbstractValue, call.args.len);
                 for (call.args, args) |arg_expr, *arg| arg.* = try self.evalExpr(state, arg_expr);
+                if (call.callee.* == .name and std.mem.eql(u8, call.callee.name.value, "rawget") and args.len >= 2)
+                    break :blk try self.evalIndex(args[0], args[1]);
                 if (call.callee.* == .name and std.mem.eql(u8, call.callee.name.value, "pcall") and args.len >= 2) {
                     try self.scanLoaderCall(args[0], args[1]);
                 } else if (args.len != 0) {
@@ -864,7 +844,9 @@ const ModuleValueScanner = struct {
                 break :blk .unknown();
             },
             .method_call => |call| blk: {
-                _ = try self.evalExpr(state, call.object);
+                if (isTransclusionMethod(call.method)) self.dynamic = true;
+                const object = try self.evalExpr(state, call.object);
+                if (object.unknown_string or object.unknown_number or object.may_truthy_other) self.dynamic = true;
                 for (call.args) |arg| _ = try self.evalExpr(state, arg);
                 break :blk .unknown();
             },
@@ -1172,29 +1154,34 @@ const ModuleValueScanner = struct {
 
 pub fn collectModuleLoadsDetailed(
     a: std.mem.Allocator,
+    registry: *const Registry,
     body: lua.Block,
     out: *std.ArrayList([]const u8),
     load_data: ?*std.ArrayList([]const u8),
 ) !bool {
-    var scanner = ModuleValueScanner.init(a, out, load_data);
+    var scanner = ModuleValueScanner.init(a, registry, out, load_data);
     defer scanner.deinit();
     return scanner.run(body);
 }
 
 pub fn collectModuleLoads(
     a: std.mem.Allocator,
+    registry: *const Registry,
     body: lua.Block,
     out: *std.ArrayList([]const u8),
 ) !bool {
-    return collectModuleLoadsDetailed(a, body, out, null);
+    return collectModuleLoadsDetailed(a, registry, body, out, null);
 }
 
-pub fn collectStaticRequires(a: std.mem.Allocator, body: lua.Block, out: *std.ArrayList([]const u8)) !void {
-    _ = try collectModuleLoads(a, body, out);
+pub fn collectStaticRequires(a: std.mem.Allocator, registry: *const Registry, body: lua.Block, out: *std.ArrayList([]const u8)) !void {
+    _ = try collectModuleLoads(a, registry, body, out);
 }
 
 test "usage scanner finds static invokes and template references" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var refs: std.ArrayList(Ref) = .empty;
     defer {
         for (refs.items) |ref| a.free(ref.target);
@@ -1202,6 +1189,8 @@ test "usage scanner finds static invokes and template references" {
     }
     try scanWikitext(
         a,
+        registry,
+        null,
         "A {{foo|{{#invoke:Bar_baz|run}}}} <nowiki>{{#invoke:Nope|x}}</nowiki> {{T:quux}}",
         &refs,
     );
@@ -1216,6 +1205,9 @@ test "usage scanner finds static invokes and template references" {
 
 test "template usage scanner recognizes subst-prefixed invokes" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var refs: std.ArrayList(Ref) = .empty;
     defer {
         for (refs.items) |ref| a.free(ref.target);
@@ -1223,6 +1215,8 @@ test "template usage scanner recognizes subst-prefixed invokes" {
     }
     try scanTemplateWikitext(
         a,
+        registry,
+        null,
         "<includeonly><onlyinclude>{{safesubst:<noinclude/>#invoke:links/templates|l_term_t}}</onlyinclude></includeonly>",
         &refs,
     );
@@ -1231,8 +1225,11 @@ test "template usage scanner recognizes subst-prefixed invokes" {
     try std.testing.expectEqualStrings("Module:links/templates", refs.items[0].target);
 }
 
-test "usage scanner ignores dynamic and non-template transclusions" {
+test "usage scanner follows every explicit transclusion namespace" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var refs: std.ArrayList(Ref) = .empty;
     defer {
         for (refs.items) |ref| a.free(ref.target);
@@ -1240,24 +1237,35 @@ test "usage scanner ignores dynamic and non-template transclusions" {
     }
     try scanWikitext(
         a,
+        registry,
+        null,
         "{{:Main page}}{{Module:X}}{{Thesaurus:foo}}{{#if:1|{{good}}|{{other}}}}{{{{{name}}}|x}}",
         &refs,
     );
-    try std.testing.expectEqual(@as(usize, 2), refs.items.len);
-    try std.testing.expectEqualStrings("Template:good", refs.items[0].target);
-    try std.testing.expectEqualStrings("Template:other", refs.items[1].target);
+    try std.testing.expectEqual(@as(usize, 5), refs.items.len);
+    try std.testing.expectEqualStrings("Main page", refs.items[0].target);
+    try std.testing.expectEqualStrings("Module:X", refs.items[1].target);
+    try std.testing.expectEqualStrings("Thesaurus:foo", refs.items[2].target);
+    try std.testing.expectEqualStrings("Template:good", refs.items[3].target);
+    try std.testing.expectEqualStrings("Template:other", refs.items[4].target);
 }
 
 test "template usage profiling fails soft on malformed transclusion tags" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var refs: std.ArrayList(Ref) = .empty;
     defer refs.deinit(a);
-    try scanTemplateWikitext(a, "A<noinclude>broken {{#invoke:Nope|x}}", &refs);
+    try scanTemplateWikitext(a, registry, null, "A<noinclude>broken {{#invoke:Nope|x}}", &refs);
     try std.testing.expectEqual(@as(usize, 0), refs.items.len);
 }
 
 test "static require scanner walks nested Lua functions" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var chunk = try lua.parse(a, "local a=require('A'); local function f() return require('Module:B_c') end");
     defer chunk.deinit();
     var refs: std.ArrayList([]const u8) = .empty;
@@ -1265,7 +1273,7 @@ test "static require scanner walks nested Lua functions" {
         for (refs.items) |ref| a.free(ref);
         refs.deinit(a);
     }
-    try collectStaticRequires(a, chunk.body, &refs);
+    try collectStaticRequires(a, registry, chunk.body, &refs);
     try std.testing.expectEqual(@as(usize, 2), refs.items.len);
     try std.testing.expectEqualStrings("Module:A", refs.items[0]);
     try std.testing.expectEqualStrings("Module:B c", refs.items[1]);
@@ -1273,6 +1281,9 @@ test "static require scanner walks nested Lua functions" {
 
 test "module load scanner follows require when needed targets" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var chunk = try lua.parse(a,
         \\local lazy = require("Module:require when needed")
         \\local first = lazy("Module:Alpha")
@@ -1286,7 +1297,7 @@ test "module load scanner follows require when needed targets" {
         for (refs.items) |ref| a.free(ref);
         refs.deinit(a);
     }
-    try std.testing.expect(!try collectModuleLoads(a, chunk.body, &refs));
+    try std.testing.expect(!try collectModuleLoads(a, registry, chunk.body, &refs));
     var saw_alpha = false;
     var saw_beta = false;
     var saw_gamma = false;
@@ -1300,6 +1311,9 @@ test "module load scanner follows require when needed targets" {
 
 test "module load scanner follows utilities require when needed targets" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var chunk = try lua.parse(a,
         \\local lazy = require("Module:utilities/require when needed")
         \\local first = lazy("Module:Alpha")
@@ -1312,7 +1326,7 @@ test "module load scanner follows utilities require when needed targets" {
         for (refs.items) |ref| a.free(ref);
         refs.deinit(a);
     }
-    try std.testing.expect(!try collectModuleLoads(a, chunk.body, &refs));
+    try std.testing.expect(!try collectModuleLoads(a, registry, chunk.body, &refs));
     var saw_alpha = false;
     var saw_beta = false;
     for (refs.items) |ref| {
@@ -1324,6 +1338,9 @@ test "module load scanner follows utilities require when needed targets" {
 
 test "module load value sets fold concatenation aliases and pcall" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var chunk = try lua.parse(a,
         \\local loader = require
         \\local data_loader = mw.loadData
@@ -1344,7 +1361,7 @@ test "module load value sets fold concatenation aliases and pcall" {
         for (load_data.items) |ref| a.free(ref);
         load_data.deinit(a);
     }
-    const dynamic = try collectModuleLoadsDetailed(a, chunk.body, &refs, &load_data);
+    const dynamic = try collectModuleLoadsDetailed(a, registry, chunk.body, &refs, &load_data);
     try std.testing.expect(!dynamic);
     try std.testing.expectEqual(@as(usize, 5), refs.items.len);
     try std.testing.expectEqualStrings("Module:Static data", refs.items[0]);
@@ -1358,6 +1375,9 @@ test "module load value sets fold concatenation aliases and pcall" {
 
 test "module load value sets join reassignment branches" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var chunk = try lua.parse(a,
         \\local name = "Module:A"
         \\if flag then name = "Module:B" end
@@ -1369,7 +1389,7 @@ test "module load value sets join reassignment branches" {
         for (refs.items) |ref| a.free(ref);
         refs.deinit(a);
     }
-    try std.testing.expect(!try collectModuleLoads(a, chunk.body, &refs));
+    try std.testing.expect(!try collectModuleLoads(a, registry, chunk.body, &refs));
     try std.testing.expectEqual(@as(usize, 2), refs.items.len);
     try std.testing.expectEqualStrings("Module:A", refs.items[0]);
     try std.testing.expectEqualStrings("Module:B", refs.items[1]);
@@ -1377,6 +1397,9 @@ test "module load value sets join reassignment branches" {
 
 test "module load value sets resolve table ranges and string format" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var chunk = try lua.parse(a,
         \\local string = string
         \\local format = string.format
@@ -1393,7 +1416,7 @@ test "module load value sets resolve table ranges and string format" {
         for (refs.items) |ref| a.free(ref);
         refs.deinit(a);
     }
-    try std.testing.expect(!try collectModuleLoads(a, chunk.body, &refs));
+    try std.testing.expect(!try collectModuleLoads(a, registry, chunk.body, &refs));
     try std.testing.expect(refs.items.len >= 8);
     var saw_one = false;
     var saw_two = false;
@@ -1410,6 +1433,9 @@ test "module load value sets resolve table ranges and string format" {
 
 test "module load value sets resolve bounded table and numeric format loops" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var chunk = try lua.parse(a,
         \\local format = string.format
         \\local modules = {"Module:A", "Module:B"}
@@ -1425,7 +1451,7 @@ test "module load value sets resolve bounded table and numeric format loops" {
         for (refs.items) |ref| a.free(ref);
         refs.deinit(a);
     }
-    try std.testing.expect(!try collectModuleLoads(a, chunk.body, &refs));
+    try std.testing.expect(!try collectModuleLoads(a, registry, chunk.body, &refs));
     try std.testing.expectEqual(@as(usize, 12), refs.items.len);
     try std.testing.expectEqualStrings("Module:A", refs.items[0]);
     try std.testing.expectEqualStrings("Module:B", refs.items[1]);
@@ -1435,6 +1461,9 @@ test "module load value sets resolve bounded table and numeric format loops" {
 
 test "module load value sets keep unknown parameters dynamic" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var chunk = try lua.parse(a, "return function(name) return require(name) end");
     defer chunk.deinit();
     var refs: std.ArrayList([]const u8) = .empty;
@@ -1442,12 +1471,15 @@ test "module load value sets keep unknown parameters dynamic" {
         for (refs.items) |ref| a.free(ref);
         refs.deinit(a);
     }
-    try std.testing.expect(try collectModuleLoads(a, chunk.body, &refs));
+    try std.testing.expect(try collectModuleLoads(a, registry, chunk.body, &refs));
     try std.testing.expectEqual(@as(usize, 0), refs.items.len);
 }
 
 test "wikitext scan expands finite dynamic template heads" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var refs: std.ArrayList(Ref) = .empty;
     defer {
         for (refs.items) |ref| a.free(ref.target);
@@ -1456,6 +1488,8 @@ test "wikitext scan expands finite dynamic template heads" {
 
     const flags = try scanWikitextFlags(
         a,
+        registry,
+        null,
         "{{ {{#if:{{{lang|}}}|check deprecated lang param usage|no deprecated lang param usage}}|x=1 }}",
         &refs,
     );
@@ -1468,6 +1502,8 @@ test "wikitext scan expands finite dynamic template heads" {
     refs.clearRetainingCapacity();
     const ifeq_flags = try scanWikitextFlags(
         a,
+        registry,
+        null,
         "{{{{#ifeq:{{{x|}}}|yes|alpha|beta}}|1}}",
         &refs,
     );
@@ -1479,23 +1515,28 @@ test "wikitext scan expands finite dynamic template heads" {
 
 test "wikitext scan separates unresolved invokes from dynamic template targets" {
     const a = std.testing.allocator;
+    var registry_storage = try Registry.init(a, ns.english_test_fixture);
+    defer registry_storage.deinit();
+    const registry = &registry_storage;
     var refs: std.ArrayList(Ref) = .empty;
     defer {
         for (refs.items) |ref| a.free(ref.target);
         refs.deinit(a);
     }
-    const flags = try scanWikitextFlags(a, "{{#invoke:{{{module}}}|run}} {{foo{{{template}}}|x}}", &refs);
+    const flags = try scanWikitextFlags(a, registry, null, "{{#invoke:{{{module}}}|run}} {{foo{{{template}}}|x}}", &refs);
     try std.testing.expect(flags.dynamic_module_target);
     try std.testing.expect(flags.dynamic_template_target);
 
     refs.clearRetainingCapacity();
-    const template_only = try scanWikitextFlags(a, "{{foo{{{template}}}|x}}", &refs);
+    const template_only = try scanWikitextFlags(a, registry, null, "{{foo{{{template}}}|x}}", &refs);
     try std.testing.expect(!template_only.dynamic_module_target);
     try std.testing.expect(template_only.dynamic_template_target);
 
     refs.clearRetainingCapacity();
     const non_templates = try scanWikitextFlags(
         a,
+        registry,
+        null,
         "{{#if:{{{x}}}|yes|no}} {{Module:foo{{{x}}}}} {{Template:foo{{{x}}}}}",
         &refs,
     );

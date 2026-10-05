@@ -16,13 +16,14 @@ import tempfile
 import time
 
 VERSION = 1
+EXTRACTION_IDENTITY_VERSION = 2
 # Keep this equal to the extractor argv in bundle_build.zig. Changing the
 # extraction mode also changes the cache identity, even with the same binary.
 EXTRACTOR_ARGS = ("--page-index",)
 FILES = (
     "manifest.jsonl", "module-redirects.tsv", "page-index.tsv",
     "dump-streams.tsv", "page-title-index.bin", "lua-usage.tsv",
-    "template-source.bin", "template-source.idx", "compiler-inputs.ready",
+    "template-source.bin", "template-source.idx", "compiler-inputs.ready", "extraction-source.json",
 )
 TREE = "modules"
 MISS = 3
@@ -88,13 +89,33 @@ def tool_identity(executable):
     }
 
 
-def identity(executable, dump_sha256, index_sha256):
+def unicode_case_identity():
+    # Match the dynamically loaded backend used by namespace title casing.
+    # ldd alone omits dlopen libraries.
+    import ctypes
+    try: library = ctypes.CDLL("libunistring.so.5")
+    except OSError: library = ctypes.CDLL("libunistring.so")
+    try: normalization = ctypes.CDLL("libutf8proc.so.3")
+    except OSError: normalization = ctypes.CDLL("libutf8proc.so")
+    if not hasattr(normalization,"utf8proc_decompose"):raise ValueError("Missing NFC backend")
+    if not hasattr(library, "u8_totitle"):raise ValueError("Missing title-case backend")
+    paths = {Path(line.split(maxsplit=5)[5].strip()).resolve()
+             for line in Path("/proc/self/maps").read_text().splitlines()
+             if len(line.split(maxsplit=5)) == 6 and ("/libunistring.so" in line or "/libutf8proc.so" in line)}
+    if len(paths) != 2:raise ValueError("Ambiguous title-case backend identity")
+    return {"libraries":[{"path":str(path),"sha256":sha256(path)} for path in sorted(paths)]}
+
+
+def identity(executable, dump_sha256, index_sha256, namespace_sha256, transclusion_redirects_sha256=None):
     if not all(re.fullmatch(r"[0-9a-fA-F]{64}", value)
-               for value in (dump_sha256, index_sha256)):
+               for value in (dump_sha256, index_sha256, namespace_sha256)):
         raise ValueError("Invalid verified staged input digest")
-    return {"version": VERSION, "extractor_args": list(EXTRACTOR_ARGS),
+    return {"version": EXTRACTION_IDENTITY_VERSION, "extractor_args": list(EXTRACTOR_ARGS),
             "dump_sha256": dump_sha256.lower(),
             "index_sha256": index_sha256.lower(),
+            "namespace_registry_sha256": namespace_sha256.lower(),
+            "transclusion_redirects_sha256": transclusion_redirects_sha256,
+            "unicode_case": unicode_case_identity(),
             "tool": tool_identity(executable)}
 
 
@@ -657,7 +678,8 @@ def main(argv):
     if len(argv) != 7 or argv[1] not in ("probe", "publish"):
         raise SystemExit("usage: extraction_cache.py probe|publish CACHE_ROOT EXTRACTOR DUMP_SHA256 INDEX_SHA256 EXPANDER_ROOT")
     _, action, root, executable, dump_sha256, index_sha256, output = argv
-    expected = identity(Path(executable), dump_sha256, index_sha256)
+    redirects = Path(output) / "transclusion-redirects.tsv"
+    expected = identity(Path(executable), dump_sha256, index_sha256, sha256(Path(output) / "namespace-registry.tsv"), sha256(redirects) if redirects.exists() else None)
     if action == "probe":
         return probe(Path(root), expected, Path(output))
     return publish(Path(root), expected, Path(output))

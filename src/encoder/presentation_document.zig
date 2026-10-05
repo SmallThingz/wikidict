@@ -7,6 +7,7 @@ const types = blobs.presentation_types;
 const format = blobs.blob_format;
 const codec = blobs.presentation_codec;
 const A = std.mem.Allocator;
+const NamespaceRegistry = @import("namespace_registry").Registry;
 pub const Fallbacks = @import("presentation_fallback.zig").Report;
 
 fn requireCompiledText(text: []const u8) !void {
@@ -110,13 +111,14 @@ const Builder = struct {
         try self.flush(rendered[section_start..]);
     }
 };
-fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail) !Work {
+fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry) !Work {
     var renderer: compiler.Renderer = .{
         .a = a,
         .context = .{
             .title = title,
             .language = if (language.len == 0) "English" else language,
             .link_trail = link_trail,
+            .namespace_catalog = namespace_catalog,
         },
     };
     var builder: Builder = .{
@@ -135,7 +137,7 @@ fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, 
     };
 }
 
-fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, fallbacks: ?*Fallbacks) ![]const compiler.Span {
+fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, fallbacks: ?*Fallbacks) ![]const compiler.Span {
     const value = display orelse return &.{};
     if (value.source.len == 0) return &.{};
     var renderer: compiler.Renderer = .{
@@ -144,6 +146,7 @@ fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, li
             .title = value.page_title,
             .language = if (language.len == 0) "English" else language,
             .link_trail = link_trail,
+            .namespace_catalog = namespace_catalog,
         },
     };
     const spans = renderer.parseSpans(value.source, .{ .role = .headword }) catch |err| {
@@ -212,6 +215,7 @@ pub fn compileReportedAlloc(
         source,
         display_title,
         .{},
+        null,
         fallbacks,
     );
 }
@@ -225,17 +229,18 @@ pub fn compileReportedWithLinkTrailAlloc(
     source: []const u8,
     display_title: ?DisplayTitle,
     link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
     fallbacks: ?*Fallbacks,
 ) ![]u8 {
     _ = kind;
     _ = language_code;
-    const work = try workAlloc(a, title, language orelse "", source, link_trail);
+    const work = try workAlloc(a, title, language orelse "", source, link_trail, namespace_catalog);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;
         report.missing_template = report.missing_template or work.unresolved_templates != 0;
     } else if (work.rendered_templates != 0 or work.unresolved_templates != 0) return error.UncompiledTemplate;
-    const display_spans = try displayTitleSpansAlloc(a, display_title, language orelse "", link_trail, fallbacks);
+    const display_spans = try displayTitleSpansAlloc(a, display_title, language orelse "", link_trail, namespace_catalog, fallbacks);
     try validateSpans(a, display_spans, fallbacks);
     for (work.sections) |section| {
         try validateText(section.title, fallbacks);
@@ -279,7 +284,7 @@ test "builder sections borrow contiguous rendered block slices" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const work = try workAlloc(a, "page", "English", "preamble\n===First===\n# one\n===Second===\n===Third===\n# three\n", .{});
+    const work = try workAlloc(a, "page", "English", "preamble\n===First===\n# one\n===Second===\n===Third===\n# three\n", .{}, null);
     try std.testing.expectEqual(@as(usize, 4), work.sections.len);
     try std.testing.expectEqualStrings("English", work.sections[0].title);
     try std.testing.expectEqual(@as(usize, 1), work.sections[0].blocks.len);
@@ -325,6 +330,7 @@ test "edition link trail survives compiled presentation encoding" {
         source,
         null,
         trail,
+        null,
         null,
     );
     const parsed = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });

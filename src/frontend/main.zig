@@ -27,7 +27,7 @@ const usage =
     \\
     \\Common options
     \\  --language NAME    Language heading (DICT_LANGUAGE, otherwise English)
-    \\  --kind KIND        language, thesaurus, citations, reconstruction, rhymes, sign-gloss
+    \\  --kind KIND        language, thesaurus, citations, reconstruction, rhymes, sign-gloss, supplemental
     \\  --root PATH        Dataset root (DICT_ROOT, otherwise data/wiktionary-blobs)
     \\  --format FORMAT    text, json
     \\  --limit N          Words per page, 1..1000 (default: 20)

@@ -1,4 +1,5 @@
 const std = @import("std");
+const Registry = @import("namespace_registry").Registry;
 const lua = @import("parser/root.zig");
 const usage = @import("usage.zig");
 const static_encode = @import("direct/static_literal_encode.zig");
@@ -16,6 +17,7 @@ pub const Row = struct {
 pub const Slot = struct {
     io: std.Io,
     root: []const u8,
+    registry: *const Registry,
     arena: std.heap.ArenaAllocator,
     thread: ?std.Thread = null,
     wake: std.Io.Event = .unset,
@@ -38,7 +40,7 @@ pub const Slot = struct {
         if (try file.readPositionalAll(self.io, source, 0) != source.len) return error.Truncated;
         self.chunk = try lua.parse(a, source);
         if (static_encode.rootLiteral(self.chunk.?.body) == null)
-            self.dynamic = try usage.collectModuleLoadsDetailed(a, self.chunk.?.body, &self.requires, &self.load_data);
+            self.dynamic = try usage.collectModuleLoadsDetailed(a, self.registry, self.chunk.?.body, &self.requires, &self.load_data);
     }
 
     fn run(self: *Slot) void {
@@ -85,11 +87,11 @@ pub const Slot = struct {
 
 pub const Pool = struct {
     slots: []Slot,
-    pub fn init(io: std.Io, root: []const u8, count: usize) !Pool {
+    pub fn init(io: std.Io, root: []const u8, registry: *const Registry, count: usize) !Pool {
         const a = std.heap.smp_allocator;
         const slots = try a.alloc(Slot, count);
         errdefer a.free(slots);
-        for (slots) |*slot| slot.* = .{ .io = io, .root = root, .arena = .init(a) };
+        for (slots) |*slot| slot.* = .{ .io = io, .root = root, .registry = registry, .arena = .init(a) };
         var spawned: usize = 0;
         errdefer {
             for (slots[0..spawned]) |*slot| {

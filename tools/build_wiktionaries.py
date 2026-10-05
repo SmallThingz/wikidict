@@ -32,7 +32,7 @@ SHARD_STATE_VERSION = 2
 AUXILIARY_SNAPSHOT_NAMES = (
     'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'file-metadata',
-    'transclusion-redirects',
+    'transclusion-redirects', 'namespace-registry', 'language-registry',
 )
 MAX_TOTAL_BUILD_WORKERS = 8
 MAX_PIPELINE_WORKERS = 4
@@ -180,8 +180,131 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
                     (edition is not None and record.get('wiki')!=edition) or
                     (date is not None and record.get('date')!=date)):
                 raise ValueError(f'Auxiliary snapshot differs from provenance: {path}')
+        if name=='namespace-registry':
+            with path.open(encoding='utf-8') as stream:header=[stream.readline().rstrip('\n') for _ in range(3)]
+            if header[0]!='# wikidict-namespace-registry-v1' or (edition is not None and header[1]!='# wiki\t'+edition) or (date is not None and header[2]!='# dump-date\t'+date):
+                raise ValueError('Namespace registry identifies a different edition or date')
         hashes[name]=sha
     return hashes
+
+
+
+SOURCE_FIELDS=('wiki','date','name','url','size','sha1')
+
+def selected_source(record, selected):
+    if not isinstance(record,dict):raise ValueError('Invalid captured source identity')
+    identity={key:record.get(key) for key in SOURCE_FIELDS}
+    matches=[item for item in selected if item.get('name')==identity['name']]
+    if len(matches)!=1 or {key:matches[0].get(key) for key in SOURCE_FIELDS}!=identity:
+        raise ValueError('Captured source differs from selected dump inventory')
+    return identity
+
+
+def validate_capture_artifacts(root, record, required=()):
+    artifacts=record.get('artifacts')
+    if not isinstance(artifacts,dict) or any(name not in artifacts for name in required):raise ValueError('Missing capture artifact inventory')
+    for name,digest in artifacts.items():
+        if not isinstance(name,str) or Path(name).name!=name or name in ('.','..'):raise ValueError('Unsafe capture artifact name')
+        path=root/name
+        if not path.is_file() or not path.resolve().is_relative_to(root) or sha256_file(path)!=digest:raise ValueError('Missing or changed capture artifact: '+name)
+
+
+def validate_captured_snapshot(name,path,capture,selected):
+    record=read_small_json(path.with_name(name+'.manifest.json'))
+    if name=='namespace-registry':
+        if record.get('source_dump_files')!=[capture['source_xml']]:raise ValueError('Namespace source differs from capture')
+        for key,artifact in [('raw_siteinfo_sha256','namespace-siteinfo.raw.json'),('dump_siteinfo_sha256','dump-siteinfo.xml')]:
+            if record.get(key)!=capture['artifacts'][artifact]:raise ValueError('Namespace capture hash mismatch')
+        if record.get('retrieved_utc')!=capture.get('retrieved_utc') or record.get('source_url')!=capture.get('siteinfo_source_url') or record.get('supplementary_api_scope')!=capture.get('siteinfo_temporal_scope'):raise ValueError('Namespace API observation mismatch')
+    elif name=='category-stats':
+        source=selected_source(dict(wiki=record.get('wiki'),date=record.get('date'),name=record.get('source'),url=record.get('source_url'),size=record.get('source_bytes'),sha1=record.get('source_sha1')),selected)
+        if not source['name'].endswith('-category.sql.gz'):raise ValueError('Invalid category statistics source')
+        if record.get('output')!=path.name or record.get('output_bytes')!=path.stat().st_size:raise ValueError('Category statistics output mismatch')
+    elif name=='category-tree':
+        sources=record.get('sources',{})
+        if set(sources)!=set(('page','linktarget','categorylinks')):raise ValueError('Invalid category tree source inventory')
+        for kind,source in sources.items():
+            source=selected_source(source,selected)
+            if not source['name'].endswith('-'+kind+'.sql.gz'):raise ValueError('Invalid category tree source table')
+        if record.get('dump_siteinfo_sha256')!=capture['artifacts']['dump-siteinfo.xml'] or record.get('output_bytes')!=path.stat().st_size:raise ValueError('Category tree capture mismatch')
+
+
+def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None):
+    """Resolve each edition independently; never reuse another edition's captures."""
+    captures=manifest.get('auxiliary_capture_roots',{})
+    if not isinstance(captures,dict):raise ValueError('Invalid auxiliary capture roots')
+    records=manifest.get('language_registries',[])
+    if not isinstance(records,list):raise ValueError('Invalid language registry inventory')
+    languages={}
+    for record in records:
+        if not isinstance(record,dict):raise ValueError('Invalid language registry record')
+        key=(record.get('wiki'),record.get('date'))
+        if key in languages:raise ValueError('Duplicate language registry identity')
+        languages[key]=record
+    result={}
+    for edition,date in groups:
+        snapshots={}
+        captured=captures.get(edition)
+        if captured is not None:
+            if not isinstance(captured,str) or Path(captured).is_absolute() or '..' in Path(captured).parts:raise ValueError('Unsafe auxiliary capture root')
+            root=(PROJECT/captured).resolve(strict=True)
+            record=read_small_json(root/'capture.complete.json',2*1024*1024)
+            if record.get('wiki')!=edition or record.get('date')!=date:raise ValueError('Auxiliary capture edition/date mismatch')
+            if not root.is_relative_to(PROJECT.resolve()):raise ValueError('Capture root escapes project')
+            selected=groups[(edition,date)]
+            if len({item['name'] for item in selected})!=len(selected):raise ValueError('Duplicate selected source')
+            source=selected_source(record.get('source_xml'),selected)
+            if '-pages-meta-current' not in source['name']:raise ValueError('Capture lacks full-namespace XML')
+            if record.get('namespace_mismatches')!=[]:raise ValueError('Capture namespace mismatch')
+            for source in record.get('page_table_files',[]):selected_source(source,selected)
+            validate_capture_artifacts(root,record,('dump-siteinfo.xml','namespace-siteinfo.raw.json','pagetable-dumpstatus.raw.json'))
+            capture=record
+            for marker in ('auxiliary-basic.complete.json','auxiliary-all.complete.json'):
+                if (root/marker).exists():validate_capture_artifacts(root,read_small_json(root/marker))
+            for name in AUXILIARY_SNAPSHOT_NAMES:
+                path=root/(name+'.tsv')
+                sidecar=root/(name+'.manifest.json')
+                present=[p.exists() or p.is_symlink() for p in (path,sidecar)]
+                if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
+                if all(present):snapshots[name]=path
+        elif (downloads/edition/date/'namespace-registry.tsv').is_file():
+            snapshots['namespace-registry']=downloads/edition/date/'namespace-registry.tsv'
+        snapshots.update(overrides or {})
+        if 'namespace-registry' not in snapshots:raise ValueError(f'Missing namespace registry for {edition}/{date}')
+        if 'language-registry' not in snapshots:
+            record=languages.get((edition,date))
+            if record is None or record.get('name')!='language-registry.tsv':raise ValueError(f'Missing pinned language registry for {edition}/{date}')
+            path=downloads/edition/date/record['name']
+            if not path.is_file() or path.stat().st_size!=record.get('size') or sha256_file(path)!=record.get('sha256'):
+                raise ValueError(f'Unverified language registry: {path}')
+            snapshots['language-registry']=path.resolve(strict=True)
+        language_record=languages.get((edition,date))
+        language=Path(snapshots['language-registry'])
+        if not language_record or language_record.get('name')!='language-registry.tsv' or language.stat().st_size!=language_record.get('size') or sha256_file(language)!=language_record.get('sha256'):raise ValueError('Language registry differs from pinned inventory')
+        if captured is not None:
+            for name,path in snapshots.items():
+                if name!='language-registry':validate_captured_snapshot(name,Path(path),capture,selected)
+        verified_auxiliary_hashes(snapshots,edition,date)
+        result[(edition,date)]={'auxiliary_snapshots':snapshots}
+        if captured is not None:
+            triple=[root/name for name in ('interwiki-map.tsv','interwiki-map.raw.json','interwiki-map.provenance.json')]
+            present=[p.exists() or p.is_symlink() for p in triple]
+            if any(present) and (not all(present) or not all(p.is_file() for p in triple)):raise ValueError('Uncommitted interwiki snapshot')
+        if captured is not None and (root/'interwiki-map.tsv').is_file():
+            path=root/'interwiki-map.tsv'
+            if not (root/'interwiki-map.provenance.json').is_file():raise ValueError('Uncommitted interwiki snapshot')
+            validate_interwiki_provenance(path,edition,sha256_file(path))
+            interwiki=read_small_json(root/'interwiki-map.provenance.json')
+            if interwiki.get('raw_sha256')!=capture['artifacts']['namespace-siteinfo.raw.json'] or interwiki.get('retrieved_utc')!=capture.get('retrieved_utc') or interwiki.get('source_url')!=capture.get('siteinfo_source_url') or interwiki.get('kind')!='current-siteinfo-interwikimap' or 'dump_date' not in interwiki:raise ValueError('Interwiki API observation mismatch')
+            if interwiki.get('tsv_bytes')!=path.stat().st_size or interwiki.get('raw_bytes')!=(root/'interwiki-map.raw.json').stat().st_size:raise ValueError('Interwiki artifact size mismatch')
+            result[(edition,date)]['interwiki_snapshot']=path
+    return result
+
+
+def pipeline_snapshot_args(registry, snapshots):
+    merged=dict(snapshots or {})
+    merged.setdefault('language-registry',registry)
+    return auxiliary_snapshot_args(merged)
 
 
 def pinned_auxiliary_snapshots(snapshots, hashes, destination):
@@ -212,6 +335,31 @@ def source_fingerprint():
             while chunk:=source.read(1024*1024): checksum.update(chunk)
         checksum.update(b'\0')
     return checksum.hexdigest()
+
+
+def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms):
+    executable=shutil.which(zig)
+    if executable is None:raise ValueError('Zig compiler executable is unavailable')
+    return dict(version=1, source=source_fingerprint(),
+                files=sorted([[i['wiki'],i['date'],i['name'],i['size'],i['sha1']] for i in items]),
+                zig_sha256=sha256_file(Path(executable)),
+                auxiliary_snapshot_sha256=auxiliary_hashes or {},
+                interwiki_map_sha256=interwiki_sha, expansion_timeout_ms=expansion_timeout_ms)
+
+
+def require_build_identity(recorded, expected):
+    if recorded!=expected:
+        raise ValueError('Build inputs or compiler changed; rebuild in a new output directory (existing output preserved)')
+
+
+def persist_build_identity(staging, identity):
+    if identity is None:return
+    if source_fingerprint()!=identity['source']:
+        raise ValueError('Compiler source changed during build; refusing publication')
+    path=staging/BUILD_IDENTITY_NAME
+    temporary=path.with_suffix('.part')
+    temporary.write_text(json.dumps(identity,sort_keys=True)+'\n')
+    os.replace(temporary,path)
 
 
 @contextmanager
@@ -731,12 +879,17 @@ def cached_shard_dump(items, downloads, workspace):
     return dump
 
 
-def expander_ready(root):
+def expander_ready(root, auxiliary_hashes=None, interwiki_sha=None):
     marker=root/'.incomplete'
     expander=root/'.bundle-expander'
     try: ready=marker.read_text()=='expander ready'
     except OSError: return False
-    return ready and not (expander/'.incomplete').exists() and (expander/'page-index.tsv').is_file() and (expander/'dict-bundle-expander').is_file()
+    if not (ready and not (expander/'.incomplete').exists() and (expander/'page-index.tsv').is_file() and (expander/'dict-bundle-expander').is_file() and (expander/'namespace-registry.tsv').is_file()):return False
+    try:
+        if interwiki_sha is not None and sha256_file(expander/'interwiki-map.tsv')!=interwiki_sha:return False
+        if interwiki_sha is None and (expander/'interwiki-map.tsv').exists():return False
+        return all(sha256_file(expander/(name+'.tsv'))==digest for name,digest in (auxiliary_hashes or {}).items())
+    except OSError:return False
 
 
 def run_checked(command):
@@ -770,7 +923,7 @@ def timed_run(command, edition, date, phase, **fields):
         run_checked(command)
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None):
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     edition,date=items[0]['wiki'],items[0]['date']
     workers=min(workers,MAX_PIPELINE_WORKERS)
@@ -778,14 +931,13 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if type(expansion_workers) is not int or not 1 <= expansion_workers <= MAX_PAGE_EXPANSION_WORKERS:
         raise ValueError('Invalid page expansion worker count')
     expander_build=workspace/'expander'
-    if not expander_ready(expander_build):
+    if not expander_ready(expander_build,auxiliary_hashes,interwiki_sha):
         if expander_build.exists(): shutil.rmtree(expander_build)
         staged=json.loads((workspace/'input/.complete.json').read_text())
         extraction_cache=workspace/'input'/'extraction-cache'
         timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(expander_build),
-                     '--language-registry-snapshot',str(registry),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
-                     *auxiliary_snapshot_args(auxiliary_snapshots),
+                     *pipeline_snapshot_args(registry,auxiliary_snapshots),
                      '--llvm-workers',str(workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
                      '--extraction-cache-root',str(extraction_cache),
@@ -932,6 +1084,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             raise ValueError('Auxiliary snapshot changed during build')
         (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
+    persist_build_identity(staging,build_identity)
     (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
@@ -986,6 +1139,8 @@ def validate_fallback_report(path):
                 if len(parts) in (2, 3) and parts[0] == 'expansion_error' and parts[-1] in ('Timeout', 'OutOfMemory'):
                     kind = 'timeout' if parts[-1] == 'Timeout' else 'out of memory'
                     raise ValueError(f'Operational expansion {kind} at {path}:{line_number}; rebuild this output')
+                if len(parts)==3 and parts[0]=='expansion_error' and parts[1]!='expand':
+                    raise ValueError(f'Infrastructure expansion failure at {path}:{line_number}; rebuild this output')
             key = (namespace, title)
             if key in seen:
                 raise ValueError(f'Duplicate fallback page at {path}:{line_number}: {namespace}:{title}')
@@ -993,6 +1148,7 @@ def validate_fallback_report(path):
             count += 1
     return count
 
+BUILD_IDENTITY_NAME = '.build-inputs.json'
 VERIFIED_MARKER = '.verified-blobs'
 INTERWIKI_SHA_NAME = '.interwiki-map.sha256'
 AUXILIARY_SHA_NAME = '.auxiliary-snapshots.sha256.json'
@@ -1006,12 +1162,85 @@ def require_current_staging_version(path, version):
     if version != DUMP_STAGING_VERSION:
         raise ValueError(f'Outdated dump staging at {path}; rebuild in a new output directory (existing output preserved)')
 
-def _publish_verified_staging(staging, target, edition, date, compression_workers=None, interwiki_sha=None, auxiliary_hashes=None):
+def publication_inventory(root):
+    """Pin verified data bytes so resume cannot bless missing or changed output."""
+    required={'languages.tsv','page-coverage.json','namespace-coverage.json','fallback-pages.jsonl'}
+    metadata=required|{'compile-plan.tsv','module-compile-plan.tsv',BUILD_IDENTITY_NAME,
+                       INTERWIKI_SHA_NAME,AUXILIARY_SHA_NAME,NOW_UNIX_NAME}
+    if root.is_symlink() or not root.is_dir():raise ValueError('Unsafe publication directory')
+    pending=[root];files=[]
+    while pending:
+        for path in pending.pop().iterdir():
+            name=path.relative_to(root).as_posix()
+            if path.is_symlink():raise ValueError('Unsafe publication artifact: '+name)
+            if path.is_dir():
+                # Reader-created seek indexes are disposable derived state.
+                if path==root/'.dict-cache':continue
+                if path.name=='.bundle-expander':raise ValueError('Transient compiler tree in publication')
+                pending.append(path)
+            else:files.append(path)
+    inventory={}
+    for path in sorted(files):
+        name=path.relative_to(root).as_posix()
+        if path.is_symlink():raise ValueError('Unsafe publication artifact: '+name)
+        if name in ('complete.json',VERIFIED_MARKER):continue
+        if not path.is_file() or (name not in metadata and not name.endswith('.wikblb.xz')):
+            raise ValueError('Unexpected publication artifact: '+name)
+        before=index_identity(path.stat())
+        digest=sha256_file(path)
+        if index_identity(path.stat())!=before:raise ValueError('Publication artifact changed while reading: '+name)
+        inventory[name]={'size':before['size'],'sha256':digest}
+    if not required.issubset(inventory):raise ValueError('Missing required publication report or language manifest')
+    return inventory
+
+def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None):
+    if type(expected_rows) is not int or expected_rows<0:raise ValueError('Missing expected namespace row count')
+    path=root/'namespace-coverage.json'
+    try:report=read_small_json(path,8*1024*1024)
+    except (OSError,ValueError,json.JSONDecodeError) as error:raise ValueError('Missing or invalid namespace coverage') from error
+    if not isinstance(report,dict) or report.get('version')!=1 or not isinstance(report.get('namespaces'),list):raise ValueError('Invalid namespace coverage')
+    expected_routes=None
+    if namespace_snapshot is not None:
+        expected_hash=sha256_file(Path(namespace_snapshot))
+        if report.get('registry_sha256')!=expected_hash:raise ValueError('Namespace coverage registry mismatch')
+        expected_routes={}
+        for line in Path(namespace_snapshot).read_text(encoding='utf-8').splitlines():
+            if not line or line.startswith('#'):continue
+            columns=line.split('\t')
+            if len(columns)<10:raise ValueError('Invalid namespace registry row')
+            ns=int(columns[0]);role=columns[8]
+            kind={'main':'language','compile_only':None,'supplemental':'supplemental','rhymes':'rhymes','thesaurus':'thesaurus','citations':'citations','sign_gloss':'sign_gloss','reconstruction':'reconstruction'}.get(role,'INVALID')
+            if ns in expected_routes or kind=='INVALID':raise ValueError('Invalid namespace registry routing')
+            expected_routes[ns]=(columns[1],kind)
+    counters=('input_rows','compile_only_rows','source_unavailable_rows','dispatched_rows','expanded_pages','fallback_pages','duplicate_rows')
+    totals={key:0 for key in counters};seen=set()
+    for row in report['namespaces']:
+        if not isinstance(row,dict):raise ValueError('Invalid namespace coverage row')
+        ns=row.get('id');name=row.get('name');kind=row.get('kind')
+        if type(ns) is not int or not 0<=ns<2**32 or ns in seen or not isinstance(name,str):raise ValueError('Invalid namespace coverage identity')
+        if kind not in (None,'language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental'):raise ValueError('Invalid namespace coverage routing')
+        if expected_routes is not None and expected_routes.get(ns)!=(name,kind):raise ValueError('Namespace coverage routing differs from registry')
+        seen.add(ns)
+        for key in counters:
+            value=row.get(key)
+            if type(value) is not int or not 0<=value<2**64:raise ValueError('Invalid namespace coverage counter')
+            totals[key]+=value
+        if row['input_rows']!=row['compile_only_rows']+row['source_unavailable_rows']+row['dispatched_rows'] or row['dispatched_rows']!=row['expanded_pages']+row['fallback_pages']+row['duplicate_rows']:raise ValueError('Incomplete namespace coverage')
+        if (kind is None and row['input_rows']!=row['compile_only_rows']) or (kind is not None and row['compile_only_rows']!=0):raise ValueError('Invalid namespace coverage disposition')
+        if (kind=='language')!=(ns==0) or (ns==0)!=(name==''):raise ValueError('Invalid main namespace coverage')
+    if totals['input_rows']!=expected_rows:raise ValueError('Namespace coverage does not match selected rows')
+    return totals
+
+
+def _publish_verified_staging(staging, target, edition, date, compression_workers=None, interwiki_sha=None, auxiliary_hashes=None, build_identity=None, namespace_snapshot=None):
     marker = staging / VERIFIED_MARKER
     if not marker.is_file():
         raise ValueError(f'Unverified staging directory: {staging}')
     if marker.read_text() != VERIFIED_CONTENT:
         require_current_staging_version(staging, None)
+    if build_identity is not None:
+        require_build_identity(read_small_json(staging/BUILD_IDENTITY_NAME) if (staging/BUILD_IDENTITY_NAME).is_file() else None,build_identity)
+        if source_fingerprint()!=build_identity['source']:raise ValueError('Compiler source changed during build; refusing publication')
     recorded=read_snapshot_sha(staging/INTERWIKI_SHA_NAME) if (staging/INTERWIKI_SHA_NAME).is_file() else None
     if recorded!=interwiki_sha:
         raise ValueError('Verified staging uses a different interwiki map snapshot')
@@ -1022,6 +1251,8 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     validate_now_unix(recorded_now)
     coverage=validate_page_coverage(staging,require_total=True)
     fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl')
+    namespace_totals=validate_namespace_coverage(staging,coverage['pages_seen'],namespace_snapshot)
+    if namespace_snapshot is not None and namespace_totals['fallback_pages']!=fallback_pages:raise ValueError('Namespace fallback totals differ from fallback report')
     for part in staging.rglob('*.xz.part'):
         part.unlink()
     raw = sorted(staging.rglob('*.wikblb'))
@@ -1042,30 +1273,42 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     compressed = sorted(staging.rglob('*.wikblb.xz'))
     if len(compressed) != len(logical) or list(staging.rglob('*.wikblb')) or list(staging.rglob('*.xz.part')):
         raise ValueError(f'Incomplete compressed publication: {staging}')
-    marker.unlink()
+    inventory=publication_inventory(staging)
     metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
         'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
         'fallback_report':'fallback-pages.jsonl', 'compression':'xz -6; 1 MiB blocks','blobs':len(compressed),
-        'input_pages':coverage['pages_seen'],'page_coverage_report':'page-coverage.json'}
+        'input_pages':coverage['pages_seen'],'page_coverage_report':'page-coverage.json',
+        'namespace_coverage_report':'namespace-coverage.json','namespace_coverage_totals':namespace_totals,
+        'publication_files':inventory}
+    if build_identity is not None:metadata['build_inputs']=build_identity
     if recorded_now is not None: metadata['now_unix']=recorded_now
     if interwiki_sha is not None: metadata['interwiki_map_sha256']=interwiki_sha
     if auxiliary_hashes: metadata['auxiliary_snapshot_sha256']=auxiliary_hashes
     (staging / 'complete.json').write_text(json.dumps(metadata)+'\n')
     os.rename(staging, target)
+    (target/VERIFIED_MARKER).unlink()
     print(f'Published: {target}', flush=True)
     return len(compressed),fallback_pages
 
 
-def publish_verified_staging(staging, target, edition, date, compression_workers=None, interwiki_sha=None, auxiliary_hashes=None):
+def publish_verified_staging(staging, target, edition, date, compression_workers=None, interwiki_sha=None, auxiliary_hashes=None, build_identity=None, namespace_snapshot=None):
     with build_phase(edition,date,'publish') as result:
-        blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes)
+        blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot)
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
 def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None):
     validate_now_unix(now_unix)
+    for item in items:validate_item(item)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     phase_edition,phase_date=phase_identity(items)
+    auxiliary_snapshots=dict(auxiliary_snapshots or {})
+    registry=Path(auxiliary_snapshots.get('language-registry',downloads/phase_edition/phase_date/'language-registry.tsv'))
+    namespace=Path(auxiliary_snapshots.get('namespace-registry',downloads/phase_edition/phase_date/'namespace-registry.tsv'))
+    if not registry.is_file():raise ValueError('Missing pinned language registry')
+    if not namespace.is_file():raise ValueError('Missing namespace registry')
+    auxiliary_snapshots.update({'language-registry':registry,'namespace-registry':namespace})
+    auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,phase_edition,phase_date)
     with build_phase(phase_edition,phase_date,'verify_downloads',files=len(items)) as result:
         verified_bytes=0
         for item in items:
@@ -1087,24 +1330,51 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     else:
         interwiki_sha=None
     auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,edition,date)
+    build_identity=build_input_identity(items,zig,auxiliary_hashes,interwiki_sha,expansion_timeout_ms)
     target = output / edition / date
     if (target / 'complete.json').exists():
         try:
-            metadata=json.loads((target/'complete.json').read_text())
+            metadata=read_small_json(target/'complete.json',8*1024*1024)
         except (OSError,json.JSONDecodeError):
             metadata={}
         if not isinstance(metadata,dict): metadata={}
         require_current_staging_version(target,metadata.get('dump_staging_version'))
+        if metadata.get('edition')!=edition or metadata.get('date')!=date:
+            raise ValueError('Existing output identifies a different edition or date')
         if now_unix is not None and metadata.get('now_unix')!=now_unix:
             raise ValueError('Existing output uses a different or unrecorded build time; choose a new output directory')
         if metadata.get('interwiki_map_sha256')!=interwiki_sha:
             raise ValueError('Existing output uses a different interwiki map snapshot; choose a new output directory')
         if metadata.get('auxiliary_snapshot_sha256',{})!=auxiliary_hashes:
             raise ValueError('Existing output uses different auxiliary snapshots; choose a new output directory')
+        require_build_identity(metadata.get('build_inputs'),build_identity)
+        coverage=validate_page_coverage(target,require_total=True)
+        if type(metadata.get('input_pages')) is not int or metadata['input_pages']!=coverage['pages_seen']:
+            raise ValueError('Existing output page total differs from coverage')
+        namespace_totals=validate_namespace_coverage(target,metadata['input_pages'],namespace)
+        fallback_pages=validate_fallback_report(target/'fallback-pages.jsonl')
+        if (type(metadata.get('fallback_pages')) is not int or metadata['fallback_pages']!=fallback_pages or
+                namespace_totals['fallback_pages']!=fallback_pages or
+                metadata.get('namespace_coverage_totals')!=namespace_totals):
+            raise ValueError('Existing output namespace or fallback totals differ from reports')
+        for field,name in (('page_coverage_report','page-coverage.json'),
+                           ('namespace_coverage_report','namespace-coverage.json'),
+                           ('fallback_report','fallback-pages.jsonl')):
+            if metadata.get(field)!=name:raise ValueError('Existing output identifies a different coverage report')
+        inventory=publication_inventory(target)
+        recorded=metadata.get('publication_files')
+        if (not isinstance(recorded,dict) or any(not isinstance(value,dict) or
+                type(value.get('size')) is not int for value in recorded.values()) or recorded!=inventory):
+            raise ValueError('Existing output publication inventory is missing or changed')
+        blobs=sum(name.endswith('.wikblb.xz') for name in inventory)
+        if (type(metadata.get('blobs')) is not int or metadata['blobs']!=blobs or
+                metadata.get('status')!=('built' if blobs else 'empty')):
+            raise ValueError('Existing output blob inventory differs from completion metadata')
         workspace=target.with_name(date+'.shards')
         if workspace.exists():
             if not workspace.is_dir() or workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
             shutil.rmtree(workspace)
+        (target/VERIFIED_MARKER).unlink(missing_ok=True)
         print(f'Already built: {target}', flush=True)
         return 'existing_output'
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1117,11 +1387,10 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             if now_unix is not None and recorded_now!=now_unix:
                 raise ValueError('Verified staging uses a different or unrecorded build time')
             print(f'Resuming verified publication: {staging}', flush=True)
-            publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes)
+            publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace)
             return 'resumed_publication'
         print(f'Retrying incomplete build: {staging}', flush=True)
         shutil.rmtree(staging)
-    registry = ensure_language_registry(downloads, output, edition, date)
     workers = min(compression_workers or default_build_threads(),MAX_PIPELINE_WORKERS)
     workspace=target.with_name(date+'.shards')
     compressed_bytes=sum(item['size'] for item in xml)
@@ -1132,7 +1401,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         dump=cached_shard_dump(xml,downloads,workspace)
         pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
         aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
     else:
         now_unix=now_unix if now_unix is not None else int(time.time())
         (PROJECT / '.tmp').mkdir(exist_ok=True)
@@ -1143,9 +1412,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             pinned=copy_verified_snapshot(interwiki_snapshot,scratch/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
             aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,scratch)
             timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
-                         '--language-registry-snapshot',str(registry),
-                         *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
-                         *auxiliary_snapshot_args(aux_pinned),
+                             *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
+                         *pipeline_snapshot_args(registry,aux_pinned),
                          '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                          '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args],edition,date,'dictionary_build')
             coverage=validate_page_coverage(staging,source_pages=source_metadata['source_pages'])
@@ -1161,15 +1429,16 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
                     raise ValueError('Auxiliary snapshot changed during build')
                 (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
             (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
+            persist_build_identity(staging,build_identity)
             (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
         finally:
             shutil.rmtree(scratch)
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
-    publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes)
+    publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace)
     if workspace.exists(): shutil.rmtree(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None):
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     pending=list(sorted(groups.items()))
@@ -1190,6 +1459,9 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 if now_unix is not None: options['now_unix']=now_unix
                 if interwiki_snapshot is not None: options['interwiki_snapshot']=interwiki_snapshot
                 if auxiliary_snapshots: options['auxiliary_snapshots']=auxiliary_snapshots
+                if edition_options is not None:
+                    if key not in edition_options:raise ValueError(f'Missing edition inputs: {key}')
+                    options.update(edition_options[key])
                 future=pool.submit(build,group,downloads,output,zig,threads,**options)
                 active[future]=key
             if not active:
@@ -1253,7 +1525,9 @@ def main():
         p.error('More than four expansion workers requires exactly one edition job')
     if not 1 <= a.jobs <= 16:p.error('Jobs must be 1 through 16')
     if a.jobs*admission_workers > budget:p.error(f'jobs × workers must not exceed safe host budget {budget}')
-    try: items=select_manifest_files(json.loads((a.downloads/'manifest.json').read_text()),a.wikis)
+    try:
+        manifest=json.loads((a.downloads/'manifest.json').read_text())
+        items=select_manifest_files(manifest,a.wikis)
     except ValueError as error: p.error(str(error))
     groups={}
     for item in items:
@@ -1273,7 +1547,10 @@ def main():
     if a.expansion_timeout_ms is not None: options['expansion_timeout_ms']=a.expansion_timeout_ms
     if a.now_unix is not None: options['now_unix']=a.now_unix
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
-    if auxiliary: options['auxiliary_snapshots']=auxiliary
+    try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary)
+    except (ValueError,OSError) as error:p.error(str(error))
+    if a.interwiki_map_snapshot:
+        for value in options['edition_options'].values():value['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
     failures=build_groups(groups,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads,a.jobs,
                           None if a.expansion_workers is None else expansion_workers,**options)
     if failures:raise SystemExit(f'{len(failures)} editions failed or were not started; no incomplete editions were published')

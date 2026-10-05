@@ -4,6 +4,7 @@ const encoder = @import("encoder");
 const format = encoder.blob_format;
 const catalog = encoder.blob_catalog;
 const presentation_codec = encoder.presentation_codec;
+const feature_kinds = [_]format.BlobKind{ .thesaurus, .citations, .reconstruction, .rhymes, .sign_gloss, .supplemental };
 
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
@@ -32,6 +33,7 @@ const Stats = struct {
     reconstruction_records: usize = 0,
     rhymes_records: usize = 0,
     sign_gloss_records: usize = 0,
+    supplemental_records: usize = 0,
 
     fn add(self: *Stats, kind: format.BlobKind, records: usize) void {
         switch (kind) {
@@ -41,6 +43,7 @@ const Stats = struct {
             .reconstruction => self.reconstruction_records += records,
             .rhymes => self.rhymes_records += records,
             .sign_gloss => self.sign_gloss_records += records,
+            .supplemental => self.supplemental_records += records,
         }
     }
 };
@@ -125,6 +128,28 @@ fn verifyLanguages(io: std.Io, allocator: std.mem.Allocator, root: []const u8, s
     }
 }
 
+fn verifyNamespaceRecords(io: std.Io, allocator: std.mem.Allocator, root: []const u8, stats: *const Stats) !void {
+    var coverage = encoder.namespace_coverage.Table.read(io, allocator, root) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer coverage.deinit(allocator);
+    // Fixed-kind pages emit one record each. Language pages can emit several.
+    inline for (feature_kinds) |kind| {
+        var expected: u64 = 0;
+        var rows = coverage.rows.valueIterator();
+        while (rows.next()) |row| {
+            if (row.kind != kind) continue;
+            expected = try std.math.add(u64, expected, try std.math.add(u64, row.expanded_pages, row.fallback_pages));
+        }
+        const actual = @field(stats.*, @tagName(kind) ++ "_records");
+        if (expected != actual) {
+            std.debug.print("namespace record coverage mismatch: kind={s} expected={d} actual={d}\n", .{ @tagName(kind), expected, actual });
+            return error.NamespaceCoverageRecordMismatch;
+        }
+    }
+}
+
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len != 2) {
@@ -137,16 +162,11 @@ pub fn main(init: std.process.Init) !void {
 
     var stats: Stats = .{};
     try verifyLanguages(init.io, allocator, root, &stats);
-    inline for (.{
-        format.BlobKind.thesaurus,
-        format.BlobKind.citations,
-        format.BlobKind.reconstruction,
-        format.BlobKind.rhymes,
-        format.BlobKind.sign_gloss,
-    }) |kind| try verifyOptionalFeature(init.io, allocator, root, kind, &stats);
+    inline for (feature_kinds) |kind| try verifyOptionalFeature(init.io, allocator, root, kind, &stats);
+    try verifyNamespaceRecords(init.io, allocator, root, &stats);
 
     std.debug.print(
-        "verified compiled blobs: language_blobs={d} language_records={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d}\n",
+        "verified compiled blobs: language_blobs={d} language_records={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} supplemental={d}\n",
         .{
             stats.language_blobs,
             stats.language_records,
@@ -155,6 +175,7 @@ pub fn main(init: std.process.Init) !void {
             stats.reconstruction_records,
             stats.rhymes_records,
             stats.sign_gloss_records,
+            stats.supplemental_records,
         },
     );
 }

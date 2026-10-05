@@ -6,9 +6,12 @@ const globals_abi = @import("lua_globals");
 const metadata = @import("lua_program_metadata");
 const static_decode = @import("lua_static_literal_decode");
 const global_shape_index = @import("global_shape_index.zig");
+const program_shapes_storage = @import("program_shapes.zig");
 
 pub const Context = rt.Context;
+pub const namespace_registry = rt.namespace_registry;
 pub const RequestAllocator = rt.RequestAllocator;
+pub const RequestPool = rt.RequestPool;
 pub const work_stats = rt.work_stats;
 pub const moduleTemplateAllocationFailed = rt.moduleTemplateAllocationFailed;
 
@@ -70,6 +73,7 @@ const SynthExport = struct {
 
 pub const Program = struct {
     allocator: std.mem.Allocator,
+    namespace_catalog: *rt.namespace_registry.Registry,
     mapped: Mapped,
     shape_generation: u64,
     module_count: u32,
@@ -94,6 +98,7 @@ pub const Program = struct {
     global_shape: rt.Shape,
     shapes: []rt.Shape,
     shape_keys: []rt.Value,
+    shape_string_keys: [][]const u8,
     shape_sorted_slots: []u32,
     shape_string_indices: []u32,
     frame_args_shape_id: ?u32,
@@ -112,6 +117,10 @@ pub const Program = struct {
         allocator: std.mem.Allocator,
         root: []const u8,
     ) !Program {
+        const namespace_catalog = try allocator.create(rt.namespace_registry.Registry);
+        errdefer allocator.destroy(namespace_catalog);
+        namespace_catalog.* = try rt.namespace_registry.Registry.load(io, allocator, root);
+        errdefer namespace_catalog.deinit();
         var mapped = try mapMetadata(io, allocator, root);
         errdefer mapped.deinit();
 
@@ -291,60 +300,11 @@ pub const Program = struct {
         const global_sorted_slots = try global_shape_index.build(allocator, global_keys);
         errdefer allocator.free(global_sorted_slots);
 
-        const program_shapes = try allocator.alloc(rt.Shape, shape_count);
-        errdefer allocator.free(program_shapes);
-        const shape_keys = try allocator.alloc(rt.Value, shape_field_total);
-        errdefer allocator.free(shape_keys);
-        const shape_sorted_slots = try allocator.alloc(u32, shape_field_total);
-        errdefer allocator.free(shape_sorted_slots);
-
-        var shape_offset: usize = 0;
-        var sorted_shape_offset: usize = 0;
-        for (program_shapes) |*shape| {
-            const field_count_u32 = try reader.readU32();
-            const field_count: usize = @intCast(field_count_u32);
-            if (field_count > shape_keys.len -| shape_offset)
-                return error.InvalidProgramMetadata;
-
-            const keys = shape_keys[shape_offset .. shape_offset + field_count];
-            for (keys) |*key| {
-                const tag = std.enums.fromInt(metadata.ShapeKeyTag, try reader.readU32()) orelse
-                    return error.InvalidProgramMetadata;
-                key.* = switch (tag) {
-                    .string => .{ .string = try reader.readString() },
-                    .number => .{ .number = @bitCast(try reader.readU64()) },
-                    .false_ => .{ .boolean = false },
-                    .true_ => .{ .boolean = true },
-                };
-            }
-            const string_count: usize = @intCast(try reader.readU32());
-            if (string_count > field_count or
-                string_count > shape_sorted_slots.len -| sorted_shape_offset)
-                return error.InvalidProgramMetadata;
-            const sorted_slots = shape_sorted_slots[sorted_shape_offset .. sorted_shape_offset + string_count];
-            var previous_string: ?[]const u8 = null;
-            for (sorted_slots) |*slot| {
-                slot.* = try reader.readU32();
-                if (slot.* >= field_count_u32 or keys[slot.*] != .string)
-                    return error.InvalidProgramMetadata;
-                const current = keys[slot.*].string;
-                if (previous_string) |previous|
-                    if (std.mem.order(u8, previous, current) != .lt)
-                        return error.InvalidProgramMetadata;
-                previous_string = current;
-            }
-            shape.* = .{
-                .field_keys = keys,
-                .sorted_string_slots = sorted_slots,
-                .field_count = field_count_u32,
-                .open = true,
-                .all_string_keys = string_count == field_count,
-            };
-            shape_offset += field_count;
-            sorted_shape_offset += string_count;
-        }
-        if (shape_offset != shape_field_total) return error.InvalidProgramMetadata;
-        try reader.finish();
+        const shape_storage = try program_shapes_storage.load(allocator, &reader, shape_count, shape_field_total);
+        errdefer shape_storage.deinit(allocator);
+        const program_shapes = shape_storage.shapes;
+        const shape_keys = shape_storage.boxed;
+        const shape_sorted_slots = shape_storage.sorted;
 
         const shape_string_indices = try rt.buildShapeStringIndices(allocator, program_shapes);
         errdefer allocator.free(shape_string_indices);
@@ -378,6 +338,7 @@ pub const Program = struct {
 
         return .{
             .allocator = allocator,
+            .namespace_catalog = namespace_catalog,
             .mapped = mapped,
             .shape_generation = takeProgramShapeGeneration(),
             .module_count = module_count,
@@ -400,7 +361,7 @@ pub const Program = struct {
             .global_keys = global_keys,
             .global_sorted_slots = global_sorted_slots,
             .global_shape = .{
-                .field_keys = global_keys,
+                .keys = .{ .boxed = global_keys },
                 .sorted_string_slots = global_sorted_slots,
                 .field_count = global_count,
                 .open = true,
@@ -408,6 +369,7 @@ pub const Program = struct {
             },
             .shapes = program_shapes,
             .shape_keys = shape_keys,
+            .shape_string_keys = shape_storage.strings,
             .shape_sorted_slots = shape_sorted_slots,
             .shape_string_indices = shape_string_indices,
             .frame_args_shape_id = frame_args_shape_id,
@@ -438,6 +400,7 @@ pub const Program = struct {
         self.allocator.free(self.shape_string_indices);
         self.allocator.free(self.shape_sorted_slots);
         self.allocator.free(self.shape_keys);
+        self.allocator.free(self.shape_string_keys);
         self.allocator.free(self.shapes);
         self.allocator.free(self.package_loaded_module_slots);
         self.allocator.free(self.package_loaded_slot_modules);
@@ -458,6 +421,8 @@ pub const Program = struct {
         self.allocator.free(self.module_lookup_names);
         self.allocator.free(self.module_names);
         self.mapped.deinit();
+        self.namespace_catalog.deinit();
+        self.allocator.destroy(self.namespace_catalog);
         self.* = undefined;
     }
 
@@ -481,18 +446,7 @@ pub const Program = struct {
 
     fn lookup(raw: ?*const anyopaque, raw_name: []const u8) ?u32 {
         const self: *const Program = @ptrCast(@alignCast(raw orelse return null));
-        if (self.lookupExact(raw_name)) |id| return id;
-        const colon = std.mem.indexOfScalar(u8, raw_name, ':') orelse return null;
-        const prefix_raw = raw_name[0..colon];
-        if (!std.ascii.eqlIgnoreCase(prefix_raw, "Module") and
-            !std.ascii.eqlIgnoreCase(prefix_raw, "MOD")) return null;
-        const suffix = raw_name[colon + 1 ..];
-        var buffer: [4096]u8 = undefined;
-        const prefix = "Module:";
-        if (prefix.len + suffix.len > buffer.len) return null;
-        @memcpy(buffer[0..prefix.len], prefix);
-        @memcpy(buffer[prefix.len .. prefix.len + suffix.len], suffix);
-        return self.lookupExact(buffer[0 .. prefix.len + suffix.len]);
+        return self.lookupExact(raw_name);
     }
 
     fn moduleName(raw: ?*const anyopaque, id: u32) ?[]const u8 {
@@ -578,6 +532,7 @@ pub const Program = struct {
         const roots: [*]const rt.FunctionFn = @ptrCast(
             @alignCast(dict_lua_program_module_roots()),
         );
+        ctx.namespace_catalog = self.namespace_catalog;
         ctx.ustring_pattern_cache = if (self.pattern_cache) |cache| @ptrCast(cache) else null;
         ctx.module_root_entries = roots[0..self.module_count];
         ctx.module_export_shape_ids = self.module_export_shape_ids;

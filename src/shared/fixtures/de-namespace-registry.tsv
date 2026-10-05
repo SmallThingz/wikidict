@@ -1,0 +1,38 @@
+# wikidict-namespace-registry-v1
+# wiki	dewiktionary
+# dump-date	20261001
+# content-language	de
+-2	Medium	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Spezial	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Diskussion	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Benutzer	User	first-letter	1	0	0		compile_only	standard_build_input	Benutzerin
+3	Benutzer Diskussion	User talk	first-letter	1	0	0		compile_only	discussion_namespace	BD	Benutzerin Diskussion
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionary Diskussion	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Datei	File	case-sensitive	0	0	0		compile_only	standard_build_input	Bild	Image
+7	Datei Diskussion	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Bild Diskussion	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki Diskussion	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Vorlage	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Vorlage Diskussion	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Hilfe	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Hilfe Diskussion	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Kategorie	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Kategorie Diskussion	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	Verzeichnis	Verzeichnis	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Verzeichnis Diskussion	Verzeichnis Diskussion	case-sensitive	1	0	0		compile_only	discussion_namespace
+104	Thesaurus	Thesaurus	case-sensitive	1	0	0		thesaurus	verified_edition_feature	WikiSaurus
+105	Thesaurus Diskussion	Thesaurus Diskussion	case-sensitive	1	0	0		compile_only	discussion_namespace	WikiSaurus Diskussion
+106	Reim	Reim	case-sensitive	1	0	0		rhymes	verified_edition_feature
+107	Reim Diskussion	Reim Diskussion	case-sensitive	1	0	0		compile_only	discussion_namespace
+108	Flexion	Flexion	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+109	Flexion Diskussion	Flexion Diskussion	case-sensitive	1	0	0		compile_only	discussion_namespace
+110	Rekonstruktion	Rekonstruktion	case-sensitive	1	0	0		reconstruction	verified_edition_feature
+111	Rekonstruktion Diskussion	Rekonstruktion Diskussion	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Modul Diskussion	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Veranstaltung	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Veranstaltung Diskussion	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

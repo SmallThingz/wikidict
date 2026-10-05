@@ -83,9 +83,9 @@ def build(args):
                 count += 1
             dest.flush()
             os.fsync(dest.fileno())
-        if count == 0:
-            raise ValueError("Empty category SQL dump")
         provenance = {
+            "generator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "parser_sha256": hashlib.sha256(Path(__file__).with_name("category_tree_snapshot.py").read_bytes()).hexdigest(),
             "wiki": args.wiki,
             "date": args.date,
             "source": source.name,

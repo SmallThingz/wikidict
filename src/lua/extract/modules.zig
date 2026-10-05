@@ -1,5 +1,7 @@
 const std = @import("std");
+const namespace_registry = @import("namespace_registry");
 const xml_decode = @import("xml_decode");
+const usage_closure = @import("usage_closure.zig");
 const lua_usage = @import("lua_usage");
 const wikimedia_dump = @import("wikimedia_dump");
 
@@ -8,7 +10,8 @@ const Capture = wikimedia_dump.PageView;
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
     fn deinit(self: *Mapped) void {
-        std.posix.munmap(self.bytes);
+        if (self.bytes.len != 0) std.posix.munmap(self.bytes);
+        self.bytes = &.{};
     }
 };
 
@@ -282,6 +285,149 @@ fn writeManifestRow(
         page_id,
     });
 }
+
+const FileIdentity = struct {
+    device_major: u32,
+    device_minor: u32,
+    inode: u64,
+    size: u64,
+    mtime_ns: i128,
+    ctime_ns: i128,
+};
+fn pathIdentity(io: std.Io, path: []const u8) !FileIdentity {
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const linux = std.os.linux;
+    var stat: linux.Statx = undefined;
+    if (linux.statx(file.handle, "", linux.AT.EMPTY_PATH, linux.STATX.BASIC_STATS, &stat) != 0 or !stat.mask.INO or !stat.mask.SIZE or !stat.mask.MTIME or !stat.mask.CTIME or !stat.mask.TYPE or (stat.mode & linux.S.IFMT) != linux.S.IFREG) return error.SourceStatFailed;
+    return .{ .device_major = stat.dev_major, .device_minor = stat.dev_minor, .inode = stat.ino, .size = stat.size, .mtime_ns = @as(i128, stat.mtime.sec) * std.time.ns_per_s + stat.mtime.nsec, .ctime_ns = @as(i128, stat.ctime.sec) * std.time.ns_per_s + stat.ctime.nsec };
+}
+fn snapshotHash(io: std.Io, a: std.mem.Allocator, root: []const u8, name: []const u8, optional: bool) !?[32]u8 {
+    const path = try std.fs.path.join(a, &.{ root, name });
+    defer a.free(path);
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(16 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => if (optional) return null else return err,
+        else => return err,
+    };
+    defer a.free(bytes);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &hash, .{});
+    return hash;
+}
+fn sourceReceipt(io: std.Io, a: std.mem.Allocator, input: []const u8, root: []const u8, registry: *const namespace_registry.Registry, expected_source: ?FileIdentity) ![]const u8 {
+    var identities: [3]?FileIdentity = .{ null, null, null };
+    const names = [_][]const u8{ "page-index.tsv", wikimedia_dump.page_title_index_filename, "dump-streams.tsv" };
+    for (names, 0..) |name, i| {
+        const path = try std.fs.path.join(a, &.{ root, name });
+        defer a.free(path);
+        identities[i] = pathIdentity(io, path) catch |err| switch (err) {
+            error.FileNotFound => if (i == 2) null else return err,
+            else => return err,
+        };
+        if (identities[i]) |*identity| identity.ctime_ns = 0;
+    }
+    const source = try pathIdentity(io, input);
+    if (expected_source) |expected| if (!std.meta.eql(expected, source)) return error.ExtractionSourceChanged;
+    const namespace = try snapshotHash(io, a, root, "namespace-registry.tsv", false);
+    if (!std.mem.eql(u8, &namespace.?, &registry.source_sha256)) return error.ExtractionSourceChanged;
+    return std.json.Stringify.valueAlloc(a, .{ .version = 2, .source = source, .indexes = identities, .namespace_sha256 = namespace, .redirects_sha256 = try snapshotHash(io, a, root, "transclusion-redirects.tsv", true) }, .{});
+}
+fn rebuildUsage(io: std.Io, a: std.mem.Allocator, input: []const u8, root: []const u8, registry: *const namespace_registry.Registry) !void {
+    const receipt_path = try std.fs.path.join(a, &.{ root, "extraction-source.json" });
+    const recorded = try std.Io.Dir.cwd().readFileAlloc(io, receipt_path, a, .limited(16384));
+    const before = try sourceReceipt(io, a, input, root, registry, null);
+    if (!std.mem.eql(u8, recorded, before)) return error.ExtractionSourceChanged;
+    const rows_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    var rows = try mmapPath(rows_path);
+    defer rows.deinit();
+    const index_path = try std.fs.path.join(a, &.{ root, wikimedia_dump.page_title_index_filename });
+    var index_bytes = try mmapPath(index_path);
+    defer index_bytes.deinit();
+    const index = try wikimedia_dump.PageTitleIndex.init(index_bytes.bytes);
+    const kind = wikimedia_dump.pageIndexKind(rows.bytes);
+    if (index.page_index_size != rows.bytes.len or index.kind != kind) return error.InvalidPageTitleIndex;
+    const streams_path = try std.fs.path.join(a, &.{ root, "dump-streams.tsv" });
+    var reader = try wikimedia_dump.SourceReader.open(io, std.heap.smp_allocator, std.heap.smp_allocator, input, kind, if (kind == .raw_xml) null else streams_path);
+    var reader_open = true;
+    defer if (reader_open) reader.deinit();
+    const usage_path = try std.fs.path.join(a, &.{ root, "lua-usage.tsv" });
+    var atomic = try std.Io.Dir.cwd().createFileAtomic(io, usage_path, .{ .replace = true });
+    defer atomic.deinit(io);
+    var buffer: [256 * 1024]u8 = undefined;
+    var output = atomic.file.writer(io, &buffer);
+    var hashed = output.interface.hashed(std.crypto.hash.sha2.Sha256.init(.{}), &.{});
+    const writer = &hashed.writer;
+    try writer.writeAll("# dict-lua-usage-v1\n");
+    var templates: UsageCountMap = .empty;
+    defer templates.deinit(a);
+    var modules: UsageCountMap = .empty;
+    defer modules.deinit(a);
+    var dynamic = false;
+    var scratch = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer scratch.deinit();
+    var lines = std.mem.splitScalar(u8, rows.bytes, '\n');
+    var count: usize = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        defer _ = scratch.reset(.retain_capacity);
+        const page = try wikimedia_dump.parsePageIndexLine(kind, line);
+        count += 1;
+        const spec = registry.byId(std.math.cast(i32, page.ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace;
+        if (registry.ofTitle(page.title).id != spec.id) return error.NamespaceTitleMismatch;
+        if (spec.role == .compile_only or page.redirect != null or !page.has_source or !std.mem.eql(u8, page.content_model, "wikitext")) continue;
+        const raw = try reader.readAlloc(scratch.allocator(), page.source);
+        const source = if (page.source_needs_decode) try xml_decode.decodeSinglePassAlloc(scratch.allocator(), raw) else raw;
+        var refs: std.ArrayList(lua_usage.Ref) = .empty;
+        const flags = try lua_usage.scanWikitextFlags(scratch.allocator(), registry, page.title, source, &refs);
+        dynamic = dynamic or flags.dynamic_module_target or flags.dynamic_template_target;
+        var seen_templates: std.StringHashMapUnmanaged(void) = .empty;
+        var seen_modules: std.StringHashMapUnmanaged(void) = .empty;
+        for (refs.items) |ref| {
+            const seen = if (ref.kind == .template) &seen_templates else &seen_modules;
+            if (seen.contains(ref.target)) continue;
+            try seen.put(scratch.allocator(), ref.target, {});
+            try incrementUsageCount(a, if (ref.kind == .template) &templates else &modules, ref.target);
+        }
+    }
+    if (count != index.row_count) return error.InvalidPageTitleIndex;
+    reader.deinit();
+    reader_open = false;
+    rows.deinit();
+    index_bytes.deinit();
+    _ = scratch.reset(.free_all);
+    const closure = try usage_closure.complete(io, std.heap.smp_allocator, registry, input, root, &templates, writer);
+    try writeUsageCounts(a, writer, 'R', &templates);
+    try writeUsageCounts(a, writer, 'P', &modules);
+    if (dynamic or closure.retain_all_modules) try writeDynamicUsage(writer, "module", null);
+    try writer.flush();
+    try output.interface.flush();
+    try atomic.file.sync(io);
+    const after = try sourceReceipt(io, a, input, root, registry, null);
+    if (!std.mem.eql(u8, before, after)) return error.ExtractionSourceChanged;
+    var previous = try std.Io.Dir.cwd().openFile(io, usage_path, .{});
+    defer previous.close(io);
+    var old_buffer: [64 * 1024]u8 = undefined;
+    var old_reader = previous.reader(io, &old_buffer);
+    var hash_buffer: [64 * 1024]u8 = undefined;
+    var old_hash: std.Io.Writer.Hashing(std.crypto.hash.sha2.Sha256) = .init(&hash_buffer);
+    _ = try old_reader.interface.streamRemaining(&old_hash.writer);
+    try old_hash.writer.flush();
+    var old_digest: [32]u8 = undefined;
+    var new_digest: [32]u8 = undefined;
+    old_hash.hasher.final(&old_digest);
+    hashed.hasher.final(&new_digest);
+    if (std.mem.eql(u8, &old_digest, &new_digest)) return;
+    const worker = try std.fs.path.join(a, &.{ root, "dict-bundle-expander" });
+    if (std.Io.Dir.cwd().access(io, worker, .{})) |_| {
+        const marker = try std.fs.path.join(a, &.{ root, ".incomplete" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "usage changed; native rebuild required\n" });
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+    try atomic.replace(io);
+}
+
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3 or args.len > 4) return error.Usage;
@@ -291,6 +437,39 @@ pub fn main(init: std.process.Init) !void {
     if (args.len == 4 and !emit_page_index and !usage_only) return error.Usage;
     const input_path = args[1];
     const output_root = args[2];
+    const lock_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, ".compiler-inputs.lock" });
+    // A cache generation is immutable; only a linked working root may be rebuilt.
+    const cache_marker = try std.fs.path.join(init.arena.allocator(), &.{ output_root, ".complete.json" });
+    if (std.Io.Dir.cwd().access(init.io, cache_marker, .{})) |_| return error.ImmutableExtractionCache else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+    if (usage_only) {
+        const receipt = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "extraction-source.json" });
+        try std.Io.Dir.cwd().access(init.io, receipt, .{});
+    }
+    var inputs_lock = if (usage_only) try std.Io.Dir.cwd().openFile(init.io, lock_path, .{ .lock = .exclusive, .lock_nonblocking = true, .follow_symlinks = false }) else try std.Io.Dir.cwd().createFile(init.io, lock_path, .{ .truncate = false, .lock = .exclusive });
+    defer inputs_lock.close(init.io);
+    const original_source = try pathIdentity(init.io, input_path);
+    const original_redirects = try snapshotHash(init.io, init.arena.allocator(), output_root, "transclusion-redirects.tsv", true);
+    var registry = try namespace_registry.Registry.load(init.io, std.heap.smp_allocator, output_root);
+    defer registry.deinit();
+    if (usage_only) {
+        const incomplete = try std.fs.path.join(init.arena.allocator(), &.{ output_root, ".incomplete" });
+        if (std.Io.Dir.cwd().access(init.io, incomplete, .{})) |_| return error.IncompleteNativeBuild else |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        }
+        const ready = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "compiler-inputs.ready" });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, ready, init.arena.allocator(), .limited(32));
+        if (!std.mem.eql(u8, bytes, "complete\n")) return error.IncompleteExtraction;
+        return rebuildUsage(init.io, init.arena.allocator(), input_path, output_root, &registry);
+    }
+    const old_ready = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "compiler-inputs.ready" });
+    std.Io.Dir.cwd().deleteFile(init.io, old_ready) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
     const compressed = std.mem.endsWith(u8, input_path, ".bz2") or std.mem.endsWith(u8, input_path, ".xml.zst");
     const zstd = std.mem.endsWith(u8, input_path, ".xml.zst");
     const multistream_index_path: ?[]const u8 = if (compressed)
@@ -328,7 +507,7 @@ pub fn main(init: std.process.Init) !void {
         if (zstd) try writer.writeAll(wikimedia_dump.page_index_v3_header ++ "\n") else try writer.writeAll(wikimedia_dump.page_index_v2_header ++ "\n");
     };
 
-    var usage_file: ?std.Io.File = if (emit_page_index or usage_only)
+    var usage_file: ?std.Io.File = if (emit_page_index)
         try std.Io.Dir.cwd().createFile(init.io, usage_path, .{ .truncate = true })
     else
         null;
@@ -358,7 +537,8 @@ pub fn main(init: std.process.Init) !void {
     const mw = &manifest_writer.interface;
 
     var input = try InputPages.open(init.io, std.heap.smp_allocator, input_path, multistream_index_path);
-    defer input.deinit();
+    var input_open = true;
+    defer if (input_open) input.deinit();
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     var pages: usize = 0;
@@ -370,14 +550,14 @@ pub fn main(init: std.process.Init) !void {
         const page = capture.raw;
         pages += 1;
         const looks_like_module = std.mem.indexOf(u8, page, "<ns>828</ns>") != null;
-        if (!emit_page_index and !usage_only and !looks_like_module) continue;
+        if (!emit_page_index and !looks_like_module) continue;
 
         var decoded_title: ?[]const u8 = null;
         var decoded_redirect: ?[]const u8 = null;
         var indexed_page_id: ?u64 = null;
         var indexed_revision_id: ?u64 = null;
 
-        if (pw != null or usage_only) {
+        if (pw != null) {
             const ns_raw = capture.ns_raw orelse {
                 _ = arena.reset(.retain_capacity);
                 continue;
@@ -426,63 +606,37 @@ pub fn main(init: std.process.Init) !void {
             indexed_page_id = page_id;
             indexed_revision_id = revision_id;
 
-            if (uw) |usage_out| if (parsed_ns == 10 and redirect != null)
-                try writeUsageEdge(usage_out, 'T', title, redirect.?);
-
-            if (uw) |usage_out| if (redirect == null and std.mem.eql(u8, content_model, "wikitext") and
-                std.mem.indexOf(u8, text_raw, "{{") != null)
+            const namespace_spec = registry.byId(std.math.cast(i32, parsed_ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace;
+            if (registry.ofTitle(title).id != namespace_spec.id) return error.NamespaceTitleMismatch;
+            if (uw != null and namespace_spec.role != .compile_only and redirect == null and
+                std.mem.eql(u8, content_model, "wikitext") and
+                (std.mem.indexOfScalar(u8, text_raw, '{') != null or std.mem.indexOfScalar(u8, text_raw, '&') != null))
             {
                 const usage_source = if (std.mem.indexOfScalar(u8, text_raw, '&') != null)
                     try xml_decode.decodeSinglePassAlloc(arena.allocator(), text_raw)
                 else
                     text_raw;
                 var refs: std.ArrayList(lua_usage.Ref) = .empty;
-                const scan_flags = if (parsed_ns == 10)
-                    try lua_usage.scanTemplateWikitextFlags(arena.allocator(), usage_source, &refs)
-                else if (parsed_ns != 828)
-                    try lua_usage.scanWikitextFlags(arena.allocator(), usage_source, &refs)
-                else
-                    lua_usage.ScanFlags{};
-                if (parsed_ns == 10) {
-                    if (scan_flags.dynamic_module_target)
-                        try writeDynamicUsage(usage_out, "module", title);
-                    if (scan_flags.dynamic_template_target)
-                        try writeDynamicUsage(usage_out, "template", title);
-                    var seen_templates: std.StringHashMapUnmanaged(void) = .empty;
-                    var seen_modules: std.StringHashMapUnmanaged(void) = .empty;
-                    for (refs.items) |ref| switch (ref.kind) {
-                        .template => {
-                            if (seen_templates.contains(ref.target)) continue;
-                            try seen_templates.put(arena.allocator(), ref.target, {});
-                            try writeUsageEdge(usage_out, 'T', title, ref.target);
-                        },
-                        .module => {
-                            if (seen_modules.contains(ref.target)) continue;
-                            try seen_modules.put(arena.allocator(), ref.target, {});
-                            try writeUsageEdge(usage_out, 'I', title, ref.target);
-                        },
-                    };
-                } else if (parsed_ns != 828) {
-                    dynamic_root_module = dynamic_root_module or scan_flags.dynamic_module_target;
-                    dynamic_root_template = dynamic_root_template or scan_flags.dynamic_template_target;
-                    var seen_templates: std.StringHashMapUnmanaged(void) = .empty;
-                    var seen_modules: std.StringHashMapUnmanaged(void) = .empty;
-                    for (refs.items) |ref| switch (ref.kind) {
-                        .template => {
-                            if (seen_templates.contains(ref.target)) continue;
-                            try seen_templates.put(arena.allocator(), ref.target, {});
-                            try incrementUsageCount(init.arena.allocator(), &root_template_usage, ref.target);
-                        },
-                        .module => {
-                            if (seen_modules.contains(ref.target)) continue;
-                            try seen_modules.put(arena.allocator(), ref.target, {});
-                            try incrementUsageCount(init.arena.allocator(), &root_module_usage, ref.target);
-                        },
-                    };
-                }
-            };
+                const scan_flags = try lua_usage.scanWikitextFlags(arena.allocator(), &registry, title, usage_source, &refs);
+                dynamic_root_module = dynamic_root_module or scan_flags.dynamic_module_target;
+                dynamic_root_template = dynamic_root_template or scan_flags.dynamic_template_target;
+                var seen_templates: std.StringHashMapUnmanaged(void) = .empty;
+                var seen_modules: std.StringHashMapUnmanaged(void) = .empty;
+                for (refs.items) |ref| switch (ref.kind) {
+                    .template => {
+                        if (seen_templates.contains(ref.target)) continue;
+                        try seen_templates.put(arena.allocator(), ref.target, {});
+                        try incrementUsageCount(init.arena.allocator(), &root_template_usage, ref.target);
+                    },
+                    .module => {
+                        if (seen_modules.contains(ref.target)) continue;
+                        try seen_modules.put(arena.allocator(), ref.target, {});
+                        try incrementUsageCount(init.arena.allocator(), &root_module_usage, ref.target);
+                    },
+                };
+            }
 
-            if (usage_only or parsed_ns != 828) {
+            if (parsed_ns != 828) {
                 _ = arena.reset(.retain_capacity);
                 continue;
             }
@@ -562,25 +716,36 @@ pub fn main(init: std.process.Init) !void {
             return error.IncompleteMultistreamScan;
         }
     }
-    if (uw) |usage_out| {
-        try writeUsageCounts(init.arena.allocator(), usage_out, 'R', &root_template_usage);
-        try writeUsageCounts(init.arena.allocator(), usage_out, 'P', &root_module_usage);
-        if (dynamic_root_module) try writeDynamicUsage(usage_out, "module", null);
-        if (dynamic_root_template) try writeDynamicUsage(usage_out, "template", null);
-        try usage_out.flush();
-    }
+    input.deinit();
+    input_open = false;
     try mw.flush();
     try rw.flush();
     if (pw) |page_writer| try page_writer.flush();
     if (template_source_writer) |*template_writer| try template_writer.finish(page_index_path);
-    // Publish only after every compiler input is complete. Title-index sorting
-    // is independent of Lua parsing/analysis and may continue concurrently.
     if (emit_page_index) {
+        try wikimedia_dump.buildPageTitleIndex(init.io, std.heap.smp_allocator, page_index_path, title_index_path);
+        if (uw) |usage_out| {
+            const closure = try usage_closure.complete(init.io, std.heap.smp_allocator, &registry, input_path, output_root, &root_template_usage, usage_out);
+            dynamic_root_module = dynamic_root_module or closure.retain_all_modules;
+            std.debug.print("USAGE_CLOSURE visited={d} source_reads={d} retain_all={}\n", .{ closure.visited_pages, closure.source_reads, closure.retain_all_modules });
+        }
+    }
+    if (uw) |usage_out| {
+        try writeUsageCounts(init.arena.allocator(), usage_out, 'R', &root_template_usage);
+        try writeUsageCounts(init.arena.allocator(), usage_out, 'P', &root_module_usage);
+        if (dynamic_root_module or dynamic_root_template) try writeDynamicUsage(usage_out, "module", null);
+        try usage_out.flush();
+    }
+    // Reachability-sensitive compilation cannot start before closure completes.
+    if (emit_page_index) {
+        if (!std.meta.eql(original_source, try pathIdentity(init.io, input_path))) return error.ExtractionSourceChanged;
+        if (!std.meta.eql(original_redirects, try snapshotHash(init.io, init.arena.allocator(), output_root, "transclusion-redirects.tsv", true))) return error.ExtractionSourceChanged;
+        const receipt = try sourceReceipt(init.io, init.arena.allocator(), input_path, output_root, &registry, original_source);
+        const receipt_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "extraction-source.json" });
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = receipt_path, .data = receipt });
         const ready_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "compiler-inputs.ready" });
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = ready_path, .data = "complete\n" });
     }
-    if (emit_page_index)
-        try wikimedia_dump.buildPageTitleIndex(init.io, std.heap.smp_allocator, page_index_path, title_index_path);
     std.debug.print(
         "TOTAL pages={d} modules={d} redirects={d} source_bytes={d} root_templates={d} root_modules={d}\n",
         .{ pages, modules, redirects, source_bytes, root_template_usage.count(), root_module_usage.count() },

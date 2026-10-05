@@ -1240,7 +1240,7 @@ test "field-hit leaf reuses program shape metadata across fresh table instances"
     const keys = [_]rt.Value{.{ .string = "x" }};
     const sorted = [_]u32{0};
     const shapes = [_]rt.Shape{.{
-        .field_keys = &keys,
+        .keys = .{ .boxed = &keys },
         .sorted_string_slots = &sorted,
         .field_count = 1,
         .open = true,

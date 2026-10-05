@@ -261,7 +261,7 @@ pub const Expander = struct {
 
     fn hostPageContent(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) anyerror!?[]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        const canonical = try namespace_lib.canonicalizeTitle(a, title);
+        const canonical = try namespace_lib.canonicalizeTitle(a, self.runtime, title);
         if (std.mem.eql(u8, canonical, self.host.current_title)) if (self.current_source) |source| return source;
         return self.provider.get(self.provider.ctx, a, canonical);
     }
@@ -269,14 +269,14 @@ pub const Expander = struct {
     fn hostPageRedirect(raw: ?*anyopaque, title: []const u8) anyerror!?[]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.redirect_target orelse return null;
-        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, title);
+        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, title);
         return get(self.provider.ctx, canonical);
     }
 
     fn hostPageId(raw: ?*anyopaque, title: []const u8) anyerror!?u64 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.page_metadata orelse return null;
-        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, title);
+        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, title);
         const metadata = (try get(self.provider.ctx, canonical)) orelse return null;
         return metadata.page_id;
     }
@@ -284,7 +284,7 @@ pub const Expander = struct {
     fn hostPageContentModel(raw: ?*anyopaque, title: []const u8) anyerror!?[]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.page_metadata orelse return null;
-        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, title);
+        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, title);
         const metadata = (try get(self.provider.ctx, canonical)) orelse return null;
         return metadata.content_model;
     }
@@ -339,10 +339,10 @@ pub const Expander = struct {
 
     fn hostPageExists(raw: ?*anyopaque, title: []const u8) anyerror!bool {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, title);
+        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, title);
         if (std.mem.eql(u8, canonical, self.host.current_title) and self.current_source != null) return true;
         if (try self.provider.exists(self.provider.ctx, canonical)) return true;
-        if (namespace_lib.ofTitle(canonical).id == 828) {
+        if (namespace_lib.ofTitle(self.runtime, canonical).id == 828) {
             _ = self.runtime.resolveModule(canonical) catch return false;
             return true;
         }
@@ -430,30 +430,8 @@ pub const Expander = struct {
     }
 
     fn normalizeTransclusionName(self: *Expander, raw: []const u8, host_title: ?[]const u8) ![]const u8 {
-        const name = std.mem.trim(u8, raw, " \t\r\n");
-        if (name.len == 0) return error.MalformedWikitext;
-
-        if (name[0] == ':') {
-            const direct = std.mem.trim(u8, name[1..], " \t\r\n");
-            if (direct.len == 0) return error.MalformedWikitext;
-            return namespace_lib.canonicalizeTitle(self.runtime.allocator, direct);
-        }
-
-        if (name[0] == '/') if (host_title) |base_raw| {
-            const base = try namespace_lib.canonicalizeTitle(self.runtime.allocator, base_raw);
-            const ns = namespace_lib.ofTitle(base);
-            const spec = namespace_lib.byId(ns.id) orelse return error.InvalidNamespace;
-            if (spec.has_subpages)
-                return std.fmt.allocPrint(self.runtime.allocator, "{s}{s}", .{ base, name });
-        };
-
-        if (std.mem.indexOfScalar(u8, name, ':')) |colon| {
-            if (namespace_lib.byName(name[0..colon]) != null)
-                return namespace_lib.canonicalizeTitle(self.runtime.allocator, name);
-        }
-
-        const out = try std.fmt.allocPrint(self.runtime.allocator, "Template:{s}", .{name});
-        return namespace_lib.canonicalizeTitle(self.runtime.allocator, out);
+        const registry = self.runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+        return registry.normalizeTransclusion(self.runtime.allocator, raw, host_title);
     }
 
     const InterwikiTransclusion = union(enum) {
@@ -469,7 +447,7 @@ pub const Expander = struct {
         const colon = std.mem.indexOfScalar(u8, name, ':') orelse return .normal;
         if (colon == 0) return .normal;
         const prefix = std.mem.trim(u8, name[0..colon], " \t\r\n");
-        if (prefix.len == 0 or namespace_lib.byName(prefix) != null) return .normal;
+        if (prefix.len == 0 or namespace_lib.byName(self.runtime, prefix) != null) return .normal;
         const get = self.provider.interwiki_map orelse return .normal;
         const rows = try get(self.provider.ctx);
         for (rows) |row| {
@@ -722,13 +700,13 @@ pub const Expander = struct {
             const trimmed = std.mem.trim(u8, value, " \t\r\n");
             break :blk if (trimmed.len == 0) self.host.current_title else trimmed;
         } else self.host.current_title;
-        const canonical_with_fragment = try namespace_lib.canonicalizeTitle(self.runtime.allocator, requested);
+        const canonical_with_fragment = try namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, requested);
         const page = if (std.mem.indexOfScalar(u8, canonical_with_fragment, '#')) |hash|
             canonical_with_fragment[0..hash]
         else
             canonical_with_fragment;
-        const ns = namespace_lib.ofTitle(page);
-        const ns_spec = namespace_lib.byId(ns.id) orelse return error.InvalidNamespace;
+        const ns = namespace_lib.ofTitle(self.runtime, page);
+        const ns_spec = namespace_lib.byId(self.runtime, ns.id) orelse return error.InvalidNamespace;
         if (std.ascii.eqlIgnoreCase(base_name, "NAMESPACENUMBER")) return self.formatMagic("{d}", .{ns.id});
         const value: []const u8 = result: {
             if (std.ascii.eqlIgnoreCase(base_name, "PAGENAME")) break :result ns.text;
@@ -750,12 +728,12 @@ pub const Expander = struct {
                 else
                     ns.text;
 
-            const subject = namespace_lib.subjectSpec(ns.id) orelse break :result "";
+            const subject = namespace_lib.subjectSpec(self.runtime, ns.id) orelse break :result "";
             if (std.ascii.eqlIgnoreCase(base_name, "SUBJECTSPACE") or std.ascii.eqlIgnoreCase(base_name, "ARTICLESPACE"))
                 break :result subject.name;
             if (std.ascii.eqlIgnoreCase(base_name, "SUBJECTPAGENAME") or std.ascii.eqlIgnoreCase(base_name, "ARTICLEPAGENAME"))
                 break :result try self.namespacedPageAlloc(subject, ns.text);
-            const talk = namespace_lib.talkSpec(ns.id) orelse break :result "";
+            const talk = namespace_lib.talkSpec(self.runtime, ns.id) orelse break :result "";
             if (std.ascii.eqlIgnoreCase(base_name, "TALKSPACE")) break :result talk.name;
             if (std.ascii.eqlIgnoreCase(base_name, "TALKPAGENAME")) break :result try self.namespacedPageAlloc(talk, ns.text);
             unreachable;
@@ -781,7 +759,7 @@ pub const Expander = struct {
             const trimmed = std.mem.trim(u8, value, " \t\r\n");
             break :blk if (trimmed.len == 0) self.host.current_title else trimmed;
         } else self.host.current_title;
-        const canonical_with_fragment = try namespace_lib.canonicalizeTitle(self.runtime.allocator, requested);
+        const canonical_with_fragment = try namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, requested);
         const page = if (std.mem.indexOfScalar(u8, canonical_with_fragment, '#')) |hash|
             canonical_with_fragment[0..hash]
         else
@@ -1541,11 +1519,7 @@ pub const Expander = struct {
         else
             try self.expandWikitext(module_expr, params, host_title, depth + 1);
         const module_trimmed = std.mem.trim(u8, module_raw, " \t\r\n");
-        var module_buffer: [4096]u8 = undefined;
-        const module_name = if (module_trimmed.len >= 7 and std.ascii.eqlIgnoreCase(module_trimmed[0..7], "Module:"))
-            module_trimmed
-        else
-            std.fmt.bufPrint(&module_buffer, "Module:{s}", .{module_trimmed}) catch return error.ModuleNameTooLong;
+        const module_name = try self.runtime.namespace_catalog.?.normalizeTitle(self.runtime.allocator, module_trimmed, 828, .only_default);
         const function_symbol = if (args.len != 0) try self.callSymbol(args[0], .function) else null;
         const function_name = if (function_symbol) |symbol|
             symbol.text
@@ -1624,9 +1598,9 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "ns")) {
                 const raw_ns = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n");
                 const spec = if (std.fmt.parseInt(i32, raw_ns, 10)) |id|
-                    namespace_lib.byId(id)
+                    namespace_lib.byId(self.runtime, id)
                 else |_|
-                    namespace_lib.byName(raw_ns);
+                    namespace_lib.byName(self.runtime, raw_ns);
                 return (spec orelse return error.InvalidNamespace).name;
             }
             if (std.ascii.eqlIgnoreCase(name, "uc")) return try self.expandCaseParser(first, params, host_title, depth + 1, true, false);
@@ -1908,10 +1882,7 @@ pub const Expander = struct {
         const module_value = args.rawGet(.{ .number = 1 }) orelse return error.ModuleNameExpected;
         const module_raw = std.mem.trim(u8, try self.scalarText(module_value), " \t\r\n");
         if (module_raw.len == 0) return error.ModuleNameExpected;
-        const module_name = if (module_raw.len >= 7 and std.ascii.eqlIgnoreCase(module_raw[0..7], "Module:"))
-            module_raw
-        else
-            try std.fmt.allocPrint(self.runtime.allocator, "Module:{s}", .{module_raw});
+        const module_name = try self.runtime.namespace_catalog.?.normalizeTitle(self.runtime.allocator, module_raw, 828, .only_default);
         const function_name = if (args.rawGet(.{ .number = 2 })) |value|
             std.mem.trim(u8, try self.scalarText(value), " \t\r\n")
         else
@@ -2057,7 +2028,7 @@ pub const Expander = struct {
         }
 
         // CategoryTree tests the category page's existence, not its member count.
-        const category_title = try std.fmt.allocPrint(self.runtime.allocator, "Category:{s}", .{display});
+        const category_title = try self.runtime.namespace_catalog.?.normalizeTitle(self.runtime.allocator, display, 14, .literal);
         defer self.runtime.allocator.free(category_title);
         if (!try self.provider.exists(self.provider.ctx, category_title))
             return self.missingCategoryTree(display, mode, mode_arg != null or type_arg != null, hideprefix, showcount, namespaces, class_name);
@@ -2159,12 +2130,13 @@ pub const Expander = struct {
         // MediaWiki applies its SQL limit before placing subcategories ahead of pages.
         for ([_]bool{ true, false }) |categories| {
             for (members) |title| {
-                const is_category = std.mem.startsWith(u8, title, "Category:");
+                const member_namespace = namespace_lib.ofTitle(self.runtime, title);
+                const is_category = member_namespace.id == 14;
                 if (is_category != categories) continue;
                 var child_count: ?u32 = null;
                 if (is_category) {
                     if (self.provider.category_stats) |stats_get| {
-                        const child_key = try a.dupe(u8, title["Category:".len..]);
+                        const child_key = try a.dupe(u8, member_namespace.text);
                         defer a.free(child_key);
                         for (child_key) |*byte| if (byte.* == ' ') {
                             byte.* = '_';
@@ -2183,10 +2155,9 @@ pub const Expander = struct {
                 if (is_category) try out.appendSlice(a, "►");
                 try out.appendSlice(a, "</span> [[");
                 // Explicit leading colon prevents category/file membership syntax.
-                if (is_category or std.mem.startsWith(u8, title, "File:")) try out.append(a, ':');
+                if (is_category or member_namespace.id == 6) try out.append(a, ':');
                 try out.appendSlice(a, title);
                 if (is_category or std.ascii.eqlIgnoreCase(hideprefix, "always")) {
-                    const member_namespace = namespace_lib.ofTitle(title);
                     if (member_namespace.id != 0) {
                         try out.append(a, '|');
                         try out.appendSlice(a, member_namespace.text);

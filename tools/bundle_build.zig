@@ -9,6 +9,7 @@ const clang_program_mode = "-O1";
 const Options = struct {
     dump: []const u8,
     root: []const u8,
+    namespace_registry_snapshot: ?[]const u8 = null,
     commons_data_snapshot: ?[]const u8 = null,
     category_stats_snapshot: ?[]const u8 = null,
     interface_messages_snapshot: ?[]const u8 = null,
@@ -35,7 +36,11 @@ fn parseOptions(args: []const []const u8) !Options {
     var options: Options = .{ .dump = args[0], .root = args[1], .parse_workers = @min(4, std.Thread.getCpuCount() catch 1) };
     var index: usize = 2;
     while (index < args.len) : (index += 1) {
-        if (std.mem.eql(u8, args[index], "--commons-data-snapshot")) {
+        if (std.mem.eql(u8, args[index], "--namespace-registry-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.namespace_registry_snapshot != null) return error.Usage;
+            options.namespace_registry_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--commons-data-snapshot")) {
             index += 1;
             if (index >= args.len or options.commons_data_snapshot != null) return error.Usage;
             options.commons_data_snapshot = args[index];
@@ -664,12 +669,15 @@ fn compileLeafBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm
     const emit_obj = try std.fmt.allocPrint(a, "-femit-bin={s}", .{object});
     const emit_bc = try std.fmt.allocPrint(a, "-femit-llvm-bc={s}", .{partial});
     const root_mod = try std.fmt.allocPrint(a, "-Mroot={s}", .{leaf_root});
+    const namespace_mod = try std.fmt.allocPrint(a, "-Mnamespace_registry={s}", .{try sourcePath(a, "src/shared/namespace_registry.zig")});
+    const lower_mod = try std.fmt.allocPrint(a, "-Municode_lower={s}", .{try sourcePath(a, "src/frontend/unicode_lower.zig")});
     const runtime_mod = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{runtime_core});
     const fields_mod = try std.fmt.allocPrint(a, "-Mlua_static_fields={s}", .{static_fields});
     try stage(io, marker, "compile build-only Lua value helper bitcode", &.{
-        paths.zig,   "build-obj", "-OReleaseFast", "-mcpu=baseline", "-fllvm", "-fstrip", "-lc",
-        emit_obj,    emit_bc,     "--dep",         "zig_runtime",    root_mod, "--dep",   "lua_static_fields",
-        runtime_mod, fields_mod,
+        paths.zig, "build-obj",          "-OReleaseFast", "-mcpu=baseline", "-fllvm", "-fstrip",       "-lc",
+        emit_obj,  emit_bc,              "--dep",         "zig_runtime",    root_mod, "--dep",         "lua_static_fields",
+        "--dep",   "namespace_registry", runtime_mod,     fields_mod,       "--dep",  "unicode_lower", namespace_mod,
+        lower_mod,
     });
     try std.Io.Dir.cwd().rename(partial, .cwd(), output, io);
     return output;
@@ -733,6 +741,8 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     const output = try std.fs.path.join(a, &.{ llvm_dir, "worker.o" });
     const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{output});
     const root = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker_core});
+    const namespace_mod = try std.fmt.allocPrint(a, "-Mnamespace_registry={s}", .{try sourcePath(a, "src/shared/namespace_registry.zig")});
+    const lower_mod = try std.fmt.allocPrint(a, "-Municode_lower={s}", .{try sourcePath(a, "src/frontend/unicode_lower.zig")});
     const runtime_mod = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{zig_runtime});
     const program_mod = try std.fmt.allocPrint(a, "-Mlua_program={s}", .{lua_program});
     const program_metadata_mod = try std.fmt.allocPrint(a, "-Mlua_program_metadata={s}", .{lua_program_metadata});
@@ -752,24 +762,18 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-lc", emit });
     try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "shared_xml_decode", "--dep", "lua_wikitext_preprocess", "--dep", "wikimedia_dump", root });
     try argv.appendSlice(a, &.{
-        "--dep",                     "lua_static_fields",         runtime_mod,
-        "--dep",                     "zig_runtime",               "--dep",
-        "zig_stdlib",                "--dep",                     "zig_scribunto",
-        "--dep",                     "lua_globals",               "--dep",
-        "lua_program_metadata",      "--dep",                     "lua_static_literal_decode",
-        program_mod,                 "--dep",                     "zig_runtime",
-        "--dep",                     "lua_static_literal_decode", "--dep",
-        "lua_static_literal_format", llvm_abi_mod,                "--dep",
-        "zig_runtime",               "--dep",                     "lua_static_literal_format",
-        static_literal_decode_mod,   static_literal_format_mod,   "--dep",
-        "zig_runtime",               "--dep",                     "lua_globals",
-        stdlib_mod,                  "--dep",                     "zig_runtime",
-        "--dep",                     "zig_stdlib",                "--dep",
-        "lua_wikitext_preprocess",   "--dep",                     "lua_wikitext_expression",
-        "--dep",                     "shared_xml_decode",         scribunto_mod,
-        static_fields_mod,           globals_mod,                 program_metadata_mod,
-        preprocess_mod,              expression_mod,              xml_decode_mod,
-        wikimedia_dump_mod,
+        "--dep",                   "lua_static_fields",         "--dep",           "namespace_registry",        runtime_mod,
+        "--dep",                   "zig_runtime",               "--dep",           "zig_stdlib",                "--dep",
+        "zig_scribunto",           "--dep",                     "lua_globals",     "--dep",                     "lua_program_metadata",
+        "--dep",                   "lua_static_literal_decode", program_mod,       "--dep",                     "zig_runtime",
+        "--dep",                   "lua_static_literal_decode", "--dep",           "lua_static_literal_format", llvm_abi_mod,
+        "--dep",                   "zig_runtime",               "--dep",           "lua_static_literal_format", static_literal_decode_mod,
+        static_literal_format_mod, "--dep",                     "zig_runtime",     "--dep",                     "lua_globals",
+        stdlib_mod,                "--dep",                     "zig_runtime",     "--dep",                     "zig_stdlib",
+        "--dep",                   "lua_wikitext_preprocess",   "--dep",           "lua_wikitext_expression",   "--dep",
+        "shared_xml_decode",       scribunto_mod,               static_fields_mod, globals_mod,                 program_metadata_mod,
+        preprocess_mod,            expression_mod,              xml_decode_mod,    wikimedia_dump_mod,          "--dep",
+        "unicode_lower",           namespace_mod,               lower_mod,
     });
     try stage(io, marker, "compile optimized build-only Lua worker object", argv.items);
     return output;
@@ -956,7 +960,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -981,6 +985,7 @@ pub fn main(init: std.process.Init) !void {
     // worker and value-helper compilation jobs. Keep the incomplete marker so
     // the caller still has durable failed-build state.
     try std.Io.Dir.cwd().access(init.io, dump, .{});
+    try installSnapshot(init.io, a, options.namespace_registry_snapshot orelse return error.NamespaceRegistryRequired, expander_root, "namespace-registry.tsv");
     if (options.commons_data_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "commons-data.tsv");
     if (options.category_stats_snapshot) |snapshot|
@@ -1034,7 +1039,7 @@ pub fn main(init: std.process.Init) !void {
         try stage(init.io, marker, "parse/analyze Lua from verified extraction cache", &.{ paths.llvm, manifest, expander_root, llvm_dir, "--parse-workers", worker_text, "--value-leaf-bc", leaf_bc });
     } else {
         try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers, cpu_limit, &worker_job, &leaf_job);
-        // compiler-inputs.ready precedes title-index finalization. Publish
+        // compiler-inputs.ready follows indexed transclusion closure. Publish
         // only after the extractor has exited successfully.
         if (options.extraction_cache_root) |cache|
             _ = try extractionCacheCommand(init.io, a, "publish", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root);

@@ -13,6 +13,7 @@ pub const BlobKind = enum(u8) {
     reconstruction = 4,
     rhymes = 5,
     sign_gloss = 6,
+    supplemental = 7,
 };
 
 pub const RecordInput = struct {
@@ -170,6 +171,7 @@ fn decodeKind(bytes: []const u8) error{InvalidBlob}!BlobKind {
         @intFromEnum(BlobKind.reconstruction) => .reconstruction,
         @intFromEnum(BlobKind.rhymes) => .rhymes,
         @intFromEnum(BlobKind.sign_gloss) => .sign_gloss,
+        @intFromEnum(BlobKind.supplemental) => .supplemental,
         else => error.InvalidBlob,
     };
 }

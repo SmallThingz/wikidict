@@ -44,6 +44,7 @@ pub const ModuleFact = struct {
 };
 pub const ProgramFacts = struct {
     module_ids: ?*const ModuleIdMap = null,
+    namespace_registry: ?*const @import("namespace_registry").Registry = null,
     module_facts: ?[]const ModuleFact = null,
     shape_registry: ?*const shapes.Registry = null,
     method_candidates: []const MethodCandidate = &.{},
@@ -65,6 +66,11 @@ pub const ProgramFacts = struct {
     pub fn moduleId(self: ProgramFacts, a: A, raw: []const u8) anyerror!?u32 {
         const ids = self.module_ids orelse return null;
         if (ids.get(raw)) |id| return id;
+        if (self.namespace_registry) |registry| {
+            const normalized = (try registry.normalizeModuleLoader(a, raw)) orelse return null;
+            defer a.free(normalized);
+            return ids.get(normalized);
+        }
         const trimmed = std.mem.trim(u8, raw, " \t\r\n");
         if (!std.mem.eql(u8, raw, trimmed)) if (ids.get(trimmed)) |id| return id;
         if (std.mem.indexOfScalar(u8, trimmed, '_') == null) return null;

@@ -358,6 +358,10 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Module:IntegrationFormsData.json", .ns = 828, .id = 5, .body = "{\"cuts\":[1,2],\"nested\":{\"ok\":true}}", .model = "json" },
         .{ .title = "Module:IntegrationFormsAlias", .ns = 828, .id = 4, .body = "#REDIRECT [[Module:IntegrationFormsData]]", .redirect = "Module:IntegrationFormsData" },
     };
+    try writePages(io, a, path, &pages);
+}
+
+fn writePages(io: std.Io, a: std.mem.Allocator, path: []const u8, pages: []const Page) !void {
     var out: std.Io.Writer.Allocating = .init(a);
     defer out.deinit();
     const w = &out.writer;
@@ -430,22 +434,25 @@ fn deadlineProbe(io: std.Io, a: std.mem.Allocator, dir: []const u8) !void {
     try std.testing.expectError(error.Timeout, worker.expand(a, 0, "probe", "==English==\n"));
 }
 
-fn writeFailureExpander(h: *Harness, script: []const u8) !void {
-    try std.Io.Dir.cwd().writeFile(h.io, .{
-        .sub_path = script,
-        .data = "#!/bin/sh\n" ++
-            "dd bs=4096 count=1 of=/dev/null 2>/dev/null\n" ++
-            "printf '\\020\\000\\000\\000\\001\\001\\000\\000\\000\\001\\000\\000\\000\\001\\000\\000\\000xEd'\n",
-    });
+fn writeFailureExpander(h: *Harness, script: []const u8, stage: []const u8) !void {
+    var reply: std.Io.Writer.Allocating = .init(h.a);
+    defer reply.deinit();
+    try @import("bundle_protocol").writeError(&reply.writer, stage, "E", "d");
+    var text: std.Io.Writer.Allocating = .init(h.a);
+    defer text.deinit();
+    try text.writer.writeAll("#!/bin/sh\ndd bs=4096 count=1 of=/dev/null 2>/dev/null\nprintf '");
+    for (reply.written()) |byte| try text.writer.print("\\{o:0>3}", .{byte});
+    try text.writer.writeAll("'\n");
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = text.written() });
     _ = try h.run(&.{ "chmod", "755", script }, 0);
 }
 
 fn failureMetadataProbe(h: *Harness, dir: []const u8) !void {
     const script = try std.fs.path.join(h.a, &.{ dir, "failure-expander.sh" });
-    try writeFailureExpander(h, script);
+    try writeFailureExpander(h, script, "x");
     var worker = expander.Worker.init(h.io, dir, script, "missing-dump.xml");
     defer worker.deinit();
-    try std.testing.expectError(error.ExpansionFailed, worker.expand(h.a, 0, "probe", "==English==\n"));
+    try std.testing.expectError(error.BundleInfrastructureFailed, worker.expand(h.a, 0, "probe", "==English==\n"));
     const failure = worker.last_failure orelse return error.MissingFailureMetadata;
     try h.require(std.mem.eql(u8, failure.stage, "x"), "worker failure stage survives transport");
     try h.require(std.mem.eql(u8, failure.error_name, "E"), "worker failure error name survives transport");
@@ -579,6 +586,7 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
 fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
     const root = try std.fs.path.join(h.a, &.{ dir, "failure-root" });
     try std.Io.Dir.cwd().createDirPath(h.io, root);
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(h.a, &.{ root, "namespace-registry.tsv" }), .data = @import("namespace_registry").english_test_fixture });
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(h.a, &.{ root, "manifest.jsonl" }), .data = "" });
     try std.Io.Dir.cwd().writeFile(h.io, .{
         .sub_path = try std.fs.path.join(h.a, &.{ root, "language-registry.tsv" }),
@@ -589,7 +597,7 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
             "# iso-639-3\n",
     });
     const script = try std.fs.path.join(h.a, &.{ root, "dict-bundle-expander" });
-    try writeFailureExpander(h, script);
+    try writeFailureExpander(h, script, "expand");
 
     const dump = try std.fs.path.join(h.a, &.{ dir, "failure-page.txt" });
     const source_text = "==English==\n# source that must not become synthetic error text\n";
@@ -608,9 +616,16 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     const reasons = parsed.value.object.get("reasons") orelse return error.InvalidFallbackReport;
     try h.require(reasons == .array and reasons.array.items.len == 2, "operational fallback report contains generic and precise reasons");
     try h.require(std.mem.eql(u8, reasons.array.items[0].string, "expansion_error"), "operational fallback report names expansion category");
-    try h.require(std.mem.eql(u8, reasons.array.items[1].string, "expansion_error:x:E"), "operational fallback report preserves worker stage and error name");
+    try h.require(std.mem.eql(u8, reasons.array.items[1].string, "expansion_error:expand:E"), "operational fallback report preserves worker stage and error name");
     const text = try h.run(&.{ bin, "lookup", "failure-page", "--root", output, "--language", "English", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, text, "Script error") == null and std.mem.indexOf(u8, text, "source that must not become synthetic") == null, "operational fallback publishes no invented or original body text");
+
+    for ([_][]const u8{ "assets", "request", "install", "unknown" }) |stage| {
+        try writeFailureExpander(h, script, stage);
+        const failed_output = try std.fmt.allocPrint(h.a, "{s}/infrastructure-{s}", .{ dir, stage });
+        _ = try h.run(&.{ blob_builder, dump, failed_output, "--expander-root", root, "--workers", "1" }, 1);
+        try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ failed_output, "page-coverage.json" })), "infrastructure failures cannot publish coverage");
+    }
 
     // Real framed worker response, rather than a local allocator failure.
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = "#!/bin/sh\n" ++
@@ -642,6 +657,7 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
 fn compilerPipelineProbe(h: *Harness, compiler: []const u8, leaf_bc: []const u8, dir: []const u8) !void {
     const root = try std.fs.path.join(h.a, &.{ dir, "compiler-probe" });
     try std.Io.Dir.cwd().createDirPath(h.io, root);
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(h.a, &.{ root, "namespace-registry.tsv" }), .data = @import("namespace_registry").english_test_fixture });
     const manifest = try std.fs.path.join(h.a, &.{ root, "manifest.jsonl" });
     const usage_path = try std.fs.path.join(h.a, &.{ root, "lua-usage.tsv" });
     const unused = try std.fs.path.join(h.a, &.{ root, "unused.lua" });
@@ -679,10 +695,148 @@ fn compilerPipelineProbe(h: *Harness, compiler: []const u8, leaf_bc: []const u8,
     _ = try h.run(&.{ compiler, manifest, root, parallel, "--analysis-only", "--parse-workers", "4" }, 0);
 }
 
+fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const namespaces = @import("namespace_registry");
+    const german_root = try std.fs.path.join(h.a, &.{ dir, "german-dictionary" });
+    const german_xml = try std.fs.path.join(h.a, &.{ dir, "german.xml" });
+    const german_ns = try std.fs.path.join(h.a, &.{ dir, "german-namespaces.tsv" });
+    const german_languages = try std.fs.path.join(h.a, &.{ dir, "german-languages.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = german_ns, .data = namespaces.german_test_fixture });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = german_languages, .data = "# wikidict-language-registry-v2\n# content-language\tde\n# mediawiki\nde\tDeutsch\tde\tdeu\n# iso-639-3\n" });
+    try writePages(h.io, h.a, german_xml, &.{
+        .{ .title = "Wort", .ns = 0, .id = 1, .body = "==Deutsch==\n===Substantiv===\n# {{:Template:Probe}}\n" },
+        .{ .title = "Vorlage:Probe", .ns = 10, .id = 2, .body = "{{#in<!-- join -->voke:Probe|run}}" },
+        .{ .title = "Modul:Probe", .ns = 828, .id = 3, .body = "local export = {}; function export.run(frame) " ++
+            "assert(require('math') == math); local ns = mw.site.namespaces; " ++
+            "assert(ns.Template.name == 'Vorlage' and ns.Module.name == 'Modul'); " ++
+            "assert(ns.Rhymes == nil and ns[106].name == 'Reim'); " ++
+            "assert(mw.title.new('Module:Data').prefixedText == 'Modul:Data'); " ++
+            "local data = require('Module:Alias'); " ++
+            "assert(mw.loadData('Modul:Data').word == data.word); " ++
+            "package.loaded['Module:Alias'] = false; assert(require('Module:Alias') == false); " ++
+            "return data.word end; return export" },
+        .{ .title = "Modul:Data", .ns = 828, .id = 4, .body = "return {word='localized native module'}" },
+        .{ .title = "Modul:Alias", .ns = 828, .id = 5, .body = "#REDIRECT [[Module:Data]]", .redirect = "Module:Data" },
+        .{ .title = "Modul:math", .ns = 828, .id = 6, .body = "return {wrong_builtin=true}" },
+        .{ .title = "Flexion:gehen", .ns = 108, .id = 7, .body = "Supplemental German inflection." },
+    });
+    _ = try h.run(&.{ pipeline, german_xml, german_root, "--namespace-registry-snapshot", german_ns, "--language-registry-snapshot", german_languages, "--llvm-workers", "1", "--page-workers", "1", "--now-unix", "1791072000" }, 0);
+    _ = try h.run(&.{ verifier, german_root }, 0);
+    const word = try h.run(&.{ bin, "lookup", "Wort", "--root", german_root, "--language", "Deutsch", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, word, "localized native module") != null, "localized templates, invokes, module aliases and raw package overrides survive native compilation");
+    const inflection = try h.run(&.{ bin, "lookup", "Flexion:gehen", "--root", german_root, "--kind", "supplemental", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, inflection, "Supplemental German inflection") != null, "custom German subject namespaces are retained");
+    const french_root = try std.fs.path.join(h.a, &.{ dir, "french-dictionary" });
+    const french_xml = try std.fs.path.join(h.a, &.{ dir, "french.xml" });
+    const french_ns = try std.fs.path.join(h.a, &.{ dir, "french-namespaces.tsv" });
+    const french_languages = try std.fs.path.join(h.a, &.{ dir, "french-languages.tsv" });
+    const french_files = try std.fs.path.join(h.a, &.{ dir, "french-file-metadata.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = french_ns, .data = namespaces.french_test_fixture });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = french_languages, .data = "# wikidict-language-registry-v2\n# content-language\tfr\n# mediawiki\nfr\tfrançais\tfr\tfra\n# iso-639-3\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = french_files, .data = "Fichier:Example.svg\t1\t640\t480\nFichier:Missing.svg\t0\t0\t0\n" });
+    try writePages(h.io, h.a, french_xml, &.{
+        .{ .title = "mot", .ns = 0, .id = 11, .body = "==français==\n# Un mot. [[Catégorie:Exemple]]\n" ++
+            "# {{#invoke:MetadataProbe|run}}\n" ++
+            "# {{#ifexist:Média:Example.svg|existing-media-confirmed|wrong-existing-media}} / {{#ifexist:Media:Missing.svg|wrong-missing-media|missing-media-confirmed}}\n" },
+        .{ .title = "Thésaurus:mot", .ns = 106, .id = 12, .body = "French thesaurus content." },
+        .{ .title = "Conjugaison:aller", .ns = 116, .id = 13, .body = "French conjugation content." },
+        .{ .title = "Racine:aller", .ns = 118, .id = 14, .body = "French root content." },
+        .{ .title = "Module:MetadataProbe", .ns = 828, .id = 15, .body = "return {run=function() " ++
+            "assert(mw.title.new('Thésaurus:mot').isContentPage); " ++
+            "assert(mw.title.new('Annexe:missing').isContentPage); " ++
+            "assert(not mw.title.new('Discussion Thésaurus:mot').isContentPage); " ++
+            "assert(mw.title.new('Sujet:missing').contentModel == 'flow-board'); " ++
+            "for _, prefix in ipairs({'Fichier:', 'File:', 'Image:', 'Média:', 'Media:'}) do " ++
+            "local present = mw.title.new(prefix .. 'Example.svg'); " ++
+            "assert(present.file.exists and present.fileExists); " ++
+            "assert(present.file.width == 640 and present.file.height == 480); " ++
+            "local absent = mw.title.new(prefix .. 'Missing.svg'); " ++
+            "assert(not absent.file.exists and not absent.fileExists); " ++
+            "if prefix == 'Média:' or prefix == 'Media:' then assert(present.exists and not absent.exists) end; " ++
+            "end; return 'French native metadata verified' end}" },
+    });
+    _ = try h.run(&.{ pipeline, french_xml, french_root, "--namespace-registry-snapshot", french_ns, "--language-registry-snapshot", french_languages, "--file-metadata-snapshot", french_files, "--llvm-workers", "1", "--page-workers", "1", "--now-unix", "1791072000" }, 0);
+    _ = try h.run(&.{ verifier, french_root }, 0);
+    const thesaurus = try h.run(&.{ bin, "lookup", "mot", "--root", french_root, "--kind", "thesaurus", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, thesaurus, "French thesaurus content") != null, "French namespace106 routes to thesaurus rather than English rhymes");
+    for ([_][]const u8{ "Conjugaison:aller", "Racine:aller" }) |title| {
+        const text = try h.run(&.{ bin, "lookup", title, "--root", french_root, "--kind", "supplemental", "--details" }, 0);
+        try h.require(std.mem.indexOf(u8, text, "content") != null, "distinct supplemental namespace titles do not collide");
+    }
+    const french_word = try h.run(&.{ bin, "lookup", "mot", "--root", french_root, "--language", "français", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, french_word, "Catégorie:Exemple") == null, "localized category membership stays metadata rather than visible prose");
+    try h.require(std.mem.indexOf(u8, french_word, "French native metadata verified") != null, "localized content flags, default models and file metadata survive native compilation");
+    try h.require(std.mem.indexOf(u8, french_word, "existing-media-confirmed") != null and std.mem.indexOf(u8, french_word, "missing-media-confirmed") != null, "localized media existence uses the pinned file snapshot");
+
+    const supplemental_path = try std.fs.path.join(h.a, &.{ french_root, "supplemental.wikblb" });
+    const complete = try std.Io.Dir.cwd().readFileAlloc(h.io, supplemental_path, h.a, .limited(1024 * 1024));
+    const smaller = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ german_root, "supplemental.wikblb" }), h.a, .limited(1024 * 1024));
+    errdefer std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = supplemental_path, .data = complete }) catch {};
+    // The German blob is valid but has one record; French coverage requires two.
+    for ([_]?[]const u8{ null, smaller }) |replacement| {
+        if (replacement) |bytes| {
+            try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = supplemental_path, .data = bytes });
+        } else try std.Io.Dir.cwd().deleteFile(h.io, supplemental_path);
+        const rejected = try std.process.run(h.a, h.io, .{
+            .argv = &.{ verifier, french_root },
+            .stdout_limit = .limited(1024 * 1024),
+            .stderr_limit = .limited(1024 * 1024),
+            .timeout = (std.Io.Timeout{ .duration = .{ .raw = .fromSeconds(30), .clock = .awake } }).toDeadline(h.io),
+        });
+        try h.require(rejected.term == .exited and rejected.term.exited == 1 and std.mem.indexOf(u8, rejected.stderr, "NamespaceCoverageRecordMismatch") != null, "missing or incomplete feature blobs fail namespace record coverage");
+        h.checks += 1;
+    }
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = supplemental_path, .data = complete });
+    _ = try h.run(&.{ verifier, french_root }, 0);
+}
+
+fn usageRebuildProbe(h: *Harness, extractor: []const u8, dir: []const u8) !void {
+    const root = try std.fs.path.join(h.a, &.{ dir, "usage-rebuild" });
+    try std.Io.Dir.cwd().createDirPath(h.io, root);
+    const ns = try std.fs.path.join(h.a, &.{ root, "namespace-registry.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = ns, .data = @import("namespace_registry").english_test_fixture });
+    const dump = try std.fs.path.join(h.a, &.{ dir, "usage.xml" });
+    try writePages(h.io, h.a, dump, &.{
+        .{ .title = "word", .ns = 0, .id = 1, .body = "==English==\n# {<!--join-->{:User:Example}}" },
+        .{ .title = "User:Example", .ns = 2, .id = 2, .body = "{{Probe}}" },
+        .{ .title = "Template:Probe", .ns = 10, .id = 3, .body = "{{#invoke:Probe|run}}" },
+        .{ .title = "Module:Probe", .ns = 828, .id = 4, .body = "return {run=function() return 'ok' end}" },
+        .{ .title = "word", .ns = 0, .id = 5, .body = "==English==\n# {{Probe}}" },
+    });
+    _ = try h.run(&.{ extractor, dump, root, "--page-index" }, 0);
+    const names = [_][]const u8{ "manifest.jsonl", "module-redirects.tsv", "page-index.tsv", "page-title-index.bin", "template-source.bin", "template-source.idx", "modules/4.lua", "compiler-inputs.ready", "lua-usage.tsv", "extraction-source.json" };
+    var before: [names.len][]const u8 = undefined;
+    for (names, 0..) |name, i| before[i] = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, name }), h.a, .limited(8 * 1024 * 1024));
+    const worker = try std.fs.path.join(h.a, &.{ root, "dict-bundle-expander" });
+    const incomplete = try std.fs.path.join(h.a, &.{ root, ".incomplete" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = worker, .data = "synthetic worker witness" });
+    _ = try h.run(&.{ extractor, dump, root, "--usage-only" }, 0);
+    try h.require(!exists(h.io, incomplete), "identical usage preserves native readiness");
+    for (names, 0..) |name, i| {
+        const after = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, name }), h.a, .limited(8 * 1024 * 1024));
+        try h.require(std.mem.eql(u8, before[i], after), "usage-only preserves all extraction assets and exact usage");
+    }
+    const replacement = try std.fs.path.join(h.a, &.{ dir, "different-usage.xml" });
+    const raw = try std.Io.Dir.cwd().readFileAlloc(h.io, dump, h.a, .limited(8 * 1024 * 1024));
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = replacement, .data = raw });
+    _ = try h.run(&.{ extractor, replacement, root, "--usage-only" }, 1);
+    const usage = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, "lua-usage.tsv" }), h.a, .limited(8 * 1024 * 1024));
+    try h.require(std.mem.eql(u8, before[8], usage), "different source preserves old usage");
+    const lock = try std.Io.Dir.cwd().openFile(h.io, try std.fs.path.join(h.a, &.{ root, ".compiler-inputs.lock" }), .{ .lock = .shared });
+    _ = try h.run(&.{ extractor, dump, root, "--usage-only" }, 1);
+    lock.close(h.io);
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = incomplete, .data = "building" });
+    _ = try h.run(&.{ extractor, dump, root, "--usage-only" }, 1);
+    try std.Io.Dir.cwd().deleteFile(h.io, incomplete);
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(h.a, &.{ root, "lua-usage.tsv" }), .data = "# stale graph\n" });
+    _ = try h.run(&.{ extractor, dump, root, "--usage-only" }, 0);
+    try h.require(exists(h.io, incomplete), "changed usage invalidates linked native worker");
+}
+
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
-    if (argv.len != 8) return error.Usage;
+    if (argv.len != 9) return error.Usage;
     const bin = argv[1];
     const pipeline = argv[2];
     const verifier = argv[3];
@@ -692,7 +846,9 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDirPath(init.io, dir);
     var h: Harness = .{ .a = a, .io = init.io };
 
+    try usageRebuildProbe(&h, argv[8], dir);
     try compilerPipelineProbe(&h, argv[5], argv[7], dir);
+    try localizedEditionProbe(&h, pipeline, verifier, bin, dir);
     try deadlineProbe(init.io, a, dir);
     try failureMetadataProbe(&h, dir);
     try expansionFallbackProbe(&h, argv[6], verifier, bin, dir);
@@ -718,8 +874,10 @@ pub fn main(init: std.process.Init) !void {
             "en\tEnglish\ten\teng\n" ++
             "# iso-639-3\n",
     });
+    const namespace_registry = try std.fs.path.join(a, &.{ dir, "namespace-registry.tsv" });
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = namespace_registry, .data = @import("namespace_registry").english_test_fixture });
     const plain_root = try std.fs.path.join(a, &.{ dir, "plain-dictionary" });
-    _ = try h.run(&.{ pipeline, plain_dump, plain_root, "--language-registry-snapshot", language_registry }, 0);
+    _ = try h.run(&.{ pipeline, plain_dump, plain_root, "--namespace-registry-snapshot", namespace_registry, "--language-registry-snapshot", language_registry }, 0);
     _ = try h.run(&.{ verifier, plain_root }, 0);
 
     const existing_root = try std.fs.path.join(a, &.{ dir, "existing-dictionary" });
@@ -740,7 +898,7 @@ pub fn main(init: std.process.Init) !void {
         .data = "Integration_categories\tmain\tmouse\nIntegration_categories\tpages\tmouse\tTalk:Category discussion\tCategory:Nested category\n",
     });
     const root = try std.fs.path.join(a, &.{ dir, "dictionary" });
-    _ = try h.run(&.{ pipeline, dump, root, "--category-tree-snapshot", category_snapshot, "--language-registry-snapshot", language_registry, "--llvm-workers", "1", "--page-workers", "2" }, 0);
+    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespace_registry, "--category-tree-snapshot", category_snapshot, "--language-registry-snapshot", language_registry, "--llvm-workers", "1", "--page-workers", "2" }, 0);
     _ = try h.run(&.{ verifier, root }, 0);
     const language_manifest_path = try std.fs.path.join(a, &.{ root, "languages.tsv" });
     const language_manifest = try std.Io.Dir.cwd().readFileAlloc(init.io, language_manifest_path, a, .limited(4096));

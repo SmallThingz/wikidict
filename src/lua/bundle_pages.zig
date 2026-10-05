@@ -55,6 +55,7 @@ pub const Provider = struct {
     io: std.Io,
     a: A,
     root: []const u8,
+    namespace_catalog: *const lua_program.namespace_registry.Registry,
     // Keep only title -> page-index row references resident. The TSV mmap owns
     // all strings and full metadata is parsed lazily on lookup.
     corpus_pages: std.StringHashMapUnmanaged(u64) = .empty,
@@ -94,7 +95,6 @@ pub const Provider = struct {
     category_tree_storage: ?Mapped = null,
     category_tree_available: bool = false,
     file_metadata: std.StringHashMapUnmanaged(FileMetadata) = .empty,
-    file_metadata_storage: ?Mapped = null,
     file_metadata_available: bool = false,
     interwiki_rows: std.ArrayList(InterwikiRow) = .empty,
     interwiki_available: bool = false,
@@ -108,9 +108,9 @@ pub const Provider = struct {
     language_registry_storage: ?Mapped = null,
     language_registry_available: bool = false,
 
-    pub fn init(io: std.Io, a: A, root: []const u8, dump_path: []const u8) !Provider {
+    pub fn init(io: std.Io, a: A, root: []const u8, namespace_catalog: *const lua_program.namespace_registry.Registry, dump_path: []const u8) !Provider {
         const owned_root = try a.dupe(u8, root);
-        var self: Provider = .{ .io = io, .a = a, .root = owned_root };
+        var self: Provider = .{ .io = io, .a = a, .root = owned_root, .namespace_catalog = namespace_catalog };
         errdefer self.deinit();
         try self.loadCorpusPages(dump_path);
         try self.loadTransclusionRedirects();
@@ -143,6 +143,11 @@ pub const Provider = struct {
         while (cached.next()) |body| self.a.free(body.*);
         self.transclusion_body_cache.deinit(self.a);
         self.a.free(self.transclusion_seen);
+        var redirect_it = self.transclusion_redirects.iterator();
+        while (redirect_it.next()) |entry| {
+            self.a.free(entry.key_ptr.*);
+            self.a.free(entry.value_ptr.*);
+        }
         self.transclusion_redirects.deinit(self.a);
         if (self.transclusion_redirects_storage) |*mapped| mapped.deinit();
         self.external_data.deinit(self.a);
@@ -153,8 +158,9 @@ pub const Provider = struct {
         if (self.interface_messages_storage) |*mapped| mapped.deinit();
         self.category_tree_ranges.deinit(self.a);
         if (self.category_tree_storage) |*mapped| mapped.deinit();
+        var files = self.file_metadata.keyIterator();
+        while (files.next()) |title| self.a.free(title.*);
         self.file_metadata.deinit(self.a);
-        if (self.file_metadata_storage) |*mapped| mapped.deinit();
         for (self.interwiki_rows.items) |row| {
             self.a.free((row.prefix));
             self.a.free((row.url));
@@ -234,7 +240,14 @@ pub const Provider = struct {
         var mapped = (try self.mapOptional("transclusion-redirects.tsv")) orelse return;
         errdefer mapped.deinit();
         var entries: std.StringHashMapUnmanaged([]const u8) = .empty;
-        errdefer entries.deinit(self.a);
+        errdefer {
+            var it = entries.iterator();
+            while (it.next()) |entry| {
+                self.a.free(entry.key_ptr.*);
+                self.a.free(entry.value_ptr.*);
+            }
+            entries.deinit(self.a);
+        }
         const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
             return error.TransclusionRedirectSnapshotTooLarge;
         try entries.ensureTotalCapacity(self.a, capacity);
@@ -245,8 +258,10 @@ pub const Provider = struct {
             const tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidTransclusionRedirectSnapshot;
             if (tab == 0 or tab + 1 >= line.len or std.mem.indexOfScalarPos(u8, line, tab + 1, '\t') != null)
                 return error.InvalidTransclusionRedirectSnapshot;
-            const title = line[0..tab];
-            const target = line[tab + 1 ..];
+            const title = try self.namespace_catalog.normalizeTitle(self.a, line[0..tab], 0, .any);
+            errdefer self.a.free(title);
+            const target = try self.namespace_catalog.normalizeTitle(self.a, line[tab + 1 ..], 0, .any);
+            errdefer self.a.free(target);
             const result = try entries.getOrPut(self.a, title);
             if (result.found_existing) return error.DuplicateTransclusionRedirect;
             result.value_ptr.* = target;
@@ -255,13 +270,11 @@ pub const Provider = struct {
         self.transclusion_redirects_storage = mapped;
     }
 
-    fn transclusionRedirectTarget(self: *const Provider, raw_title: []const u8) ?[]const u8 {
-        if (raw_title.len > 4096) return null;
-        if (std.mem.indexOfScalar(u8, raw_title, '_') == null) return self.transclusion_redirects.get(raw_title);
-        var title_buffer: [4096]u8 = undefined;
-        @memcpy(title_buffer[0..raw_title.len], raw_title);
-        std.mem.replaceScalar(u8, title_buffer[0..raw_title.len], '_', ' ');
-        return self.transclusion_redirects.get(title_buffer[0..raw_title.len]);
+    fn transclusionRedirectTarget(self: *const Provider, raw_title: []const u8) !?[]const u8 {
+        if (raw_title.len > 4096) return error.InvalidPageTitle;
+        const title = try self.namespace_catalog.normalizeTitle(std.heap.smp_allocator, raw_title, 0, .any);
+        defer std.heap.smp_allocator.free(title);
+        return self.transclusion_redirects.get(title);
     }
 
     fn loadExternalData(self: *Provider) !void {
@@ -382,9 +395,13 @@ pub const Provider = struct {
 
     fn loadFileMetadata(self: *Provider) !void {
         var mapped = (try self.mapOptional("file-metadata.tsv")) orelse return;
-        errdefer mapped.deinit();
+        defer mapped.deinit();
         var entries: std.StringHashMapUnmanaged(FileMetadata) = .empty;
-        errdefer entries.deinit(self.a);
+        errdefer {
+            var titles = entries.keyIterator();
+            while (titles.next()) |title| self.a.free(title.*);
+            entries.deinit(self.a);
+        }
         const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
             return error.FileMetadataSnapshotTooLarge;
         try entries.ensureTotalCapacity(self.a, capacity);
@@ -405,12 +422,13 @@ pub const Provider = struct {
             else
                 return error.InvalidFileMetadataSnapshot;
             if (!exists_flag and (width != 0 or height != 0)) return error.InvalidFileMetadataSnapshot;
-            const result = try entries.getOrPut(self.a, title);
+            const canonical = try self.normalizeFileTitle(self.a, title);
+            errdefer self.a.free(canonical);
+            const result = try entries.getOrPut(self.a, canonical);
             if (result.found_existing) return error.DuplicateFileMetadata;
             result.value_ptr.* = .{ .exists = exists_flag, .width = width, .height = height };
         }
         self.file_metadata = entries;
-        self.file_metadata_storage = mapped;
         self.file_metadata_available = true;
     }
 
@@ -749,12 +767,8 @@ pub const Provider = struct {
 
     fn findPage(self: *Provider, raw_title: []const u8) !?CorpusPage {
         if (raw_title.len > 4096) return error.InvalidPageTitle;
-        var title_buffer: [4096]u8 = undefined;
-        const title: []const u8 = if (std.mem.indexOfScalar(u8, raw_title, '_') != null) blk: {
-            @memcpy(title_buffer[0..raw_title.len], raw_title);
-            std.mem.replaceScalar(u8, title_buffer[0..raw_title.len], '_', ' ');
-            break :blk title_buffer[0..raw_title.len];
-        } else raw_title;
+        const title = try self.namespace_catalog.normalizeTitle(std.heap.smp_allocator, raw_title, 0, .any);
+        defer std.heap.smp_allocator.free(title);
         const ref = (try self.corpusPageRef(title)) orelse return null;
         return try self.corpusPageFromRef(ref);
     }
@@ -769,7 +783,7 @@ pub const Provider = struct {
         var current = raw_title;
         var redirects: usize = 0;
         while (true) {
-            if (self.transclusionRedirectTarget(current)) |target| {
+            if (try self.transclusionRedirectTarget(current)) |target| {
                 redirects += 1;
                 if (redirects > 32) return error.PageRedirectLoop;
                 current = target;
@@ -843,7 +857,7 @@ pub const Provider = struct {
 
     fn redirectTarget(ctx: ?*anyopaque, title: []const u8) anyerror!?[]const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
-        if (self.transclusionRedirectTarget(title)) |target| return target;
+        if (try self.transclusionRedirectTarget(title)) |target| return target;
         const page = (try self.findPage(title)) orelse return null;
         return page.redirect;
     }
@@ -884,8 +898,19 @@ pub const Provider = struct {
         return members;
     }
 
-    fn fileMetadata(ctx: ?*anyopaque, title: []const u8) anyerror!FileMetadata {
+    fn normalizeFileTitle(self: *const Provider, a: A, raw_title: []const u8) ![]u8 {
+        const title = try self.namespace_catalog.normalizeTitle(a, raw_title, 0, .any);
+        const ns = self.namespace_catalog.ofTitle(title);
+        if (ns.id == 6) return title;
+        defer a.free(title);
+        if (ns.id != -2) return error.InvalidFileMetadataTitle;
+        return self.namespace_catalog.normalizeTitle(a, ns.text, 6, .literal);
+    }
+
+    fn fileMetadata(ctx: ?*anyopaque, raw_title: []const u8) anyerror!FileMetadata {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        const title = try self.normalizeFileTitle(std.heap.smp_allocator, raw_title);
+        defer std.heap.smp_allocator.free(title);
         return self.file_metadata.get(title) orelse {
             std.log.warn("file metadata missing: title={s}", .{title});
             return error.FileMetadataSnapshotMissing;
@@ -924,22 +949,13 @@ pub const Provider = struct {
 
     fn exists(ctx: ?*anyopaque, title: []const u8) anyerror!bool {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
-        if (self.transclusionRedirectTarget(title) != null) return true;
-        if (std.ascii.startsWithIgnoreCase(title, "Media:")) {
+        if (try self.transclusionRedirectTarget(title) != null) return true;
+        if (self.namespace_catalog.ofTitle(title).id == -2) {
             if (!self.file_metadata_available) {
-                std.log.warn("file metadata snapshot unavailable: title=File:{s}", .{title["Media:".len..]});
+                std.log.warn("file metadata snapshot unavailable: title={s}", .{title});
                 return error.FileMetadataSnapshotMissing;
             }
-            var file_title_buffer: [512]u8 = undefined;
-            const file_title = std.fmt.bufPrint(&file_title_buffer, "File:{s}", .{title["Media:".len..]}) catch {
-                std.log.warn("file metadata title exceeds limit: title=File:{s}", .{title["Media:".len..]});
-                return error.FileMetadataSnapshotMissing;
-            };
-            const metadata = self.file_metadata.get(file_title) orelse {
-                std.log.warn("file metadata missing: title={s}", .{file_title});
-                return error.FileMetadataSnapshotMissing;
-            };
-            return metadata.exists;
+            return (try fileMetadata(ctx, title)).exists;
         }
         return (try self.lookup(self.a, title, false)) != null;
     }
@@ -962,7 +978,7 @@ test "supplemental transclusion redirects resolve omitted namespace pages" {
     defer a.free(redirects_path);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = redirects_path, .data = "# title\ttarget\nUser:Example/helper\tTemplate:Target\n" });
 
-    var provider = try Provider.init(io, a, root, dump_path);
+    var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), dump_path);
     defer provider.deinit();
     try std.testing.expect(try Provider.exists(&provider, "User:Example/helper"));
     try std.testing.expectEqualStrings("Template:Target", (try Provider.redirectTarget(&provider, "User:Example/helper")).?);
@@ -990,7 +1006,7 @@ test "provider keeps the later duplicate page row as canonical" {
         "3\t3\tSame\t\t2\t22\t2024-01-02T00:00:00Z\tNew\twikitext\t0\t1\t0\n";
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = page_index_path, .data = page_index });
 
-    var provider = try Provider.init(io, a, root, dump_path);
+    var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), dump_path);
     defer provider.deinit();
     try std.testing.expect(!provider.isCanonicalPage("Same", 0));
     try std.testing.expect(provider.isCanonicalPage("Same", 1));
@@ -1024,7 +1040,7 @@ test "provider loads exact Wikibase sitelinks and fails closed on unknown pairs"
             "Q2\tenwiki\tExample\n",
     });
 
-    var provider = try Provider.init(io, a, root, "unused-dump.xml");
+    var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml");
     defer provider.deinit();
     const get = provider.api().wikibase_sitelink orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("Douglas Adams", (try get(&provider, "Q42", "enwiki")).?);
@@ -1052,7 +1068,7 @@ test "provider loads pinned Wikibase entity text and fails closed on unknown ent
             "Q2\tEarth\t\n",
     });
 
-    var provider = try Provider.init(io, a, root, "unused-dump.xml");
+    var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml");
     defer provider.deinit();
     const get = provider.api().wikibase_entity_text orelse return error.TestExpectedEqual;
     const q42 = try get(&provider, "Q42");
@@ -1084,7 +1100,7 @@ test "provider loads pinned category tree members and fails closed on unknown ca
             "Empty_category\tmain\n",
     });
 
-    var provider = try Provider.init(io, a, root, "unused-dump.xml");
+    var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml");
     defer provider.deinit();
     const get = provider.api().category_tree orelse return error.TestExpectedEqual;
     const members = try get(&provider, a, "English_terms_prefixed_with_un-", .main);
@@ -1123,7 +1139,7 @@ test "provider loads complete known-language registry" {
             "aiw\tAari\taiw\n",
     });
 
-    var provider = try Provider.init(io, a, root, "unused-dump.xml");
+    var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml");
     defer provider.deinit();
     const known = provider.api().language_known_tag orelse return error.TestExpectedEqual;
     try std.testing.expect(try known(&provider, "en"));
@@ -1148,7 +1164,7 @@ test "provider loads pinned file metadata and fails closed on unknown files" {
             "File:Missing.svg\t0\t0\t0\n",
     });
 
-    var provider = try Provider.init(io, a, root, "unused-dump.xml");
+    var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml");
     defer provider.deinit();
     const get = provider.api().file_metadata orelse return error.TestExpectedEqual;
     const existing = try get(&provider, "File:Example.svg");
@@ -1161,6 +1177,62 @@ test "provider loads pinned file metadata and fails closed on unknown files" {
     try std.testing.expect(try Provider.exists(&provider, "Media:Example.svg"));
     try std.testing.expect(!try Provider.exists(&provider, "Media:Missing.svg"));
     try std.testing.expectError(error.FileMetadataSnapshotMissing, Provider.exists(&provider, "Media:Unknown.svg"));
+}
+
+test "file metadata normalizes edition aliases and frees owned keys on failure" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const snapshot_path = try std.fs.path.join(a, &.{ root, "file-metadata.tsv" });
+    defer a.free(snapshot_path);
+    var registry = try lua_program.namespace_registry.Registry.init(a, lua_program.namespace_registry.french_test_fixture);
+    defer registry.deinit();
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = snapshot_path,
+        .data = "Image:Example.svg\t1\t640\t480\nFichier:Missing.svg\t0\t0\t0\n",
+    });
+    {
+        var provider = try Provider.init(io, a, root, &registry, "unused-dump.xml");
+        defer provider.deinit();
+        const get = provider.api().file_metadata orelse return error.TestExpectedEqual;
+        for ([_][]const u8{ "Fichier:Example.svg", "File:Example.svg", "Image:Example.svg", "Média:Example.svg", "Media:Example.svg" }) |title| {
+            const metadata = try get(&provider, title);
+            try std.testing.expect(metadata.exists);
+            try std.testing.expectEqual(@as(u32, 640), metadata.width);
+            try std.testing.expectEqual(@as(u32, 480), metadata.height);
+        }
+        try std.testing.expect(try Provider.exists(&provider, "Média:Example.svg"));
+        try std.testing.expect(try Provider.exists(&provider, "Media:Example.svg"));
+        try std.testing.expect(!try Provider.exists(&provider, "Média:Missing.svg"));
+        try std.testing.expect(!try Provider.exists(&provider, "Media:Missing.svg"));
+        try std.testing.expectError(error.FileMetadataSnapshotMissing, get(&provider, "Fichier:Unknown.svg"));
+        try std.testing.expectError(error.FileMetadataSnapshotMissing, Provider.exists(&provider, "Média:Unknown.svg"));
+    }
+    try std.testing.checkAllAllocationFailures(a, struct {
+        fn load(backing: A, directory: []const u8, catalog: *const lua_program.namespace_registry.Registry) !void {
+            var provider = try Provider.init(std.testing.io, backing, directory, catalog, "unused-dump.xml");
+            defer provider.deinit();
+            try std.testing.expect((try Provider.fileMetadata(&provider, "File:Example.svg")).exists);
+        }
+    }.load, .{ root, &registry });
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = snapshot_path,
+        .data = "Fichier:Example.svg\t1\t640\t480\nFile:Example.svg\t1\t640\t480\n",
+    });
+    try std.testing.expectError(error.DuplicateFileMetadata, Provider.init(io, a, root, &registry, "unused-dump.xml"));
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = snapshot_path,
+        .data = "Catégorie:Example.svg\t1\t640\t480\n",
+    });
+    try std.testing.expectError(error.InvalidFileMetadataTitle, Provider.init(io, a, root, &registry, "unused-dump.xml"));
+    try std.Io.Dir.cwd().deleteFile(io, snapshot_path);
+    var unavailable = try Provider.init(io, a, root, &registry, "unused-dump.xml");
+    defer unavailable.deinit();
+    try std.testing.expect(unavailable.api().file_metadata == null);
+    try std.testing.expectError(error.FileMetadataSnapshotMissing, Provider.exists(&unavailable, "Média:Example.svg"));
 }
 
 test "provider owns paths and separates raw content from redirect-following transclusion" {
@@ -1192,7 +1264,7 @@ test "provider owns paths and separates raw content from redirect-following tran
 
     const caller_root = try a.dupe(u8, root);
     defer a.free(caller_root);
-    var provider = try Provider.init(io, a, caller_root, dump_path);
+    var provider = try Provider.init(io, a, caller_root, try lua_program.namespace_registry.englishTestRegistry(), dump_path);
     defer provider.deinit();
     @memset(caller_root, 'x');
     var page_arena = std.heap.ArenaAllocator.init(a);
@@ -1268,7 +1340,7 @@ test "provider owns paths and separates raw content from redirect-following tran
 }
 
 test "decoded source cache evicts least recent entry at its entry bound" {
-    var provider: Provider = .{ .io = std.testing.io, .a = std.testing.allocator, .root = "" };
+    var provider: Provider = .{ .io = std.testing.io, .a = std.testing.allocator, .root = "", .namespace_catalog = try lua_program.namespace_registry.englishTestRegistry() };
     defer {
         var entries = provider.source_cache.valueIterator();
         while (entries.next()) |entry| std.heap.smp_allocator.free(entry.bytes);
@@ -1308,7 +1380,7 @@ test "decoded source cache evicts least recent entry at its entry bound" {
 }
 
 test "decoded source cache respects byte budget and maximum entry size" {
-    var provider: Provider = .{ .io = std.testing.io, .a = std.testing.allocator, .root = "", .source_cache_limit_bytes = 2 };
+    var provider: Provider = .{ .io = std.testing.io, .a = std.testing.allocator, .root = "", .namespace_catalog = try lua_program.namespace_registry.englishTestRegistry(), .source_cache_limit_bytes = 2 };
     defer {
         var entries = provider.source_cache.valueIterator();
         while (entries.next()) |entry| std.heap.smp_allocator.free(entry.bytes);

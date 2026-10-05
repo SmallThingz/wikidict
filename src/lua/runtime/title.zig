@@ -133,14 +133,16 @@ fn titleForSpec(runtime: *rt.Context, spec: namespace_lib.Spec, text: []const u8
     return std.fmt.allocPrint(runtime.allocator, "{s}:{s}", .{ spec.name, text });
 }
 
-fn defaultContentModel(title: []const u8) []const u8 {
-    const ns = namespaceOf(title);
+fn defaultContentModel(runtime: *rt.Context, title: []const u8) []const u8 {
+    const ns = namespaceOf(runtime, title);
     if (ns.id == 828) return "Scribunto";
     if (ns.id == 2 or ns.id == 8) {
         if (std.mem.endsWith(u8, ns.text, ".css")) return "css";
         if (std.mem.endsWith(u8, ns.text, ".js")) return "javascript";
         if (std.mem.endsWith(u8, ns.text, ".json")) return "json";
     }
+    if (namespaceSpecById(runtime, ns.id)) |spec|
+        if (spec.default_content_model.len != 0) return spec.default_content_model;
     return "wikitext";
 }
 
@@ -192,12 +194,12 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         try table.rawSetNativeField(.title_value, "content", value);
         return one(value);
     }
-    const ns = namespaceOf(prefixed.string);
+    const ns = namespaceOf(runtime, prefixed.string);
     if (std.mem.eql(u8, key, "file") or std.mem.eql(u8, key, "fileExists")) {
         const canonical_file_title = if (ns.id == 6)
             prefixed.string
         else if (ns.id == -2)
-            try std.fmt.allocPrint(runtime.allocator, "File:{s}", .{ns.text})
+            try titleForSpec(runtime, namespaceSpecById(runtime, 6) orelse return error.InvalidNamespace, ns.text)
         else
             return one(.nil);
         const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
@@ -216,7 +218,7 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
     if (std.mem.eql(u8, key, "exists")) {
         // Scribunto maps Media: title existence to file.exists, not page existence.
         if (ns.id == -2) {
-            const canonical_file_title = try std.fmt.allocPrint(runtime.allocator, "File:{s}", .{ns.text});
+            const canonical_file_title = try titleForSpec(runtime, namespaceSpecById(runtime, 6) orelse return error.InvalidNamespace, ns.text);
             const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
             const get = host.file_metadata orelse return error.NotImplemented;
             const metadata = try get(host.ctx, canonical_file_title);
@@ -228,22 +230,25 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         try table.rawSetNativeField(.title_value, "exists", .{ .boolean = exists });
         return one(.{ .boolean = exists });
     }
-    const subject = namespace_lib.subjectSpec(ns.id);
+    const subject = namespace_lib.subjectSpec(runtime, ns.id);
     const is_talk = subject != null and subject.?.id != ns.id;
     if (std.mem.eql(u8, key, "isTalkPage")) return one(.{ .boolean = is_talk });
-    if (std.mem.eql(u8, key, "isContentPage")) return one(.{ .boolean = ns.id == 0 });
+    if (std.mem.eql(u8, key, "isContentPage")) {
+        const spec = namespaceSpecById(runtime, ns.id) orelse return error.InvalidNamespace;
+        return one(.{ .boolean = spec.is_content });
+    }
     if (std.mem.eql(u8, key, "subjectPageTitle")) {
         const spec = subject orelse return one(.nil);
         const title = try titleForSpec(runtime, spec, ns.text);
         return one(try makeTitleValue(runtime, state, title));
     }
     if (std.mem.eql(u8, key, "talkPageTitle")) {
-        const spec = namespace_lib.talkSpec(ns.id) orelse return one(.nil);
+        const spec = namespace_lib.talkSpec(runtime, ns.id) orelse return one(.nil);
         const title = try titleForSpec(runtime, spec, ns.text);
         return one(try makeTitleValue(runtime, state, title));
     }
     if (std.mem.eql(u8, key, "basePageTitle") or std.mem.eql(u8, key, "rootPageTitle")) {
-        const spec = namespaceSpecById(ns.id) orelse return one(.nil);
+        const spec = namespaceSpecById(runtime, ns.id) orelse return one(.nil);
         const text = if (!spec.has_subpages)
             ns.text
         else if (std.mem.eql(u8, key, "basePageTitle"))
@@ -258,7 +263,7 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
             if (value.page_content_model) |get| try get(value.ctx, prefixed.string) else null
         else
             null;
-        return one(.{ .string = model orelse defaultContentModel(prefixed.string) });
+        return one(.{ .string = model orelse defaultContentModel(runtime, prefixed.string) });
     }
     if (std.mem.eql(u8, key, "id")) {
         const host = host_api.getForStablePageRead(runtime) orelse return one(.{ .number = 0 });
@@ -273,7 +278,7 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
             try table.rawSet(runtime.allocator, .{ .string = "redirectTarget" }, .{ .boolean = false });
             return one(.{ .boolean = false });
         };
-        const value = try makeTitleValue(runtime, state, try namespace_lib.canonicalizeTitle(runtime.allocator, target));
+        const value = try makeTitleValue(runtime, state, try namespace_lib.canonicalizeTitle(runtime.allocator, runtime, target));
         try table.rawSet(runtime.allocator, .{ .string = "redirectTarget" }, value);
         return one(value);
     }
@@ -309,7 +314,7 @@ fn ensureMetatable(runtime: *rt.Context, state: *State) !*rt.Table {
 fn pageExists(runtime: *rt.Context, title: []const u8) !bool {
     if (host_api.getForStablePageRead(runtime)) |host| if (host.page_exists) |exists|
         return exists(host.ctx, title);
-    if (namespaceOf(title).id == 828) {
+    if (namespaceOf(runtime, title).id == 828) {
         _ = runtime.resolveModule(title) catch return false;
         return true;
     }
@@ -322,11 +327,11 @@ const TitleCtx = struct {
     is_external: bool = false,
 };
 
-fn checkedNamespaceId(value: Value) !i32 {
+fn checkedNamespaceId(runtime: *rt.Context, value: Value) !i32 {
     const number = switch (value) {
         .number => |number| number,
         .string => |name| blk: {
-            if (namespaceSpecByName(name)) |spec| return spec.id;
+            if (namespaceSpecByName(runtime, name)) |spec| return spec.id;
             const parsed = std.fmt.parseFloat(f64, name) catch return error.InvalidNamespace;
             var buffer: [64]u8 = undefined;
             const canonical = std.fmt.bufPrint(&buffer, "{d}", .{parsed}) catch return error.InvalidNamespace;
@@ -340,14 +345,14 @@ fn checkedNamespaceId(value: Value) !i32 {
     if (rounded < @as(f64, @floatFromInt(std.math.minInt(i32))) or rounded > @as(f64, @floatFromInt(std.math.maxInt(i32))))
         return error.InvalidNamespace;
     const id: i32 = @intFromFloat(rounded);
-    return if (namespaceSpecById(id) != null) id else error.InvalidNamespace;
+    return if (namespaceSpecById(runtime, id) != null) id else error.InvalidNamespace;
 }
 
-fn inNamespaceCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+fn inNamespaceCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len < 2 or args[0] != .table) return error.TableExpected;
     const namespace = args[0].table.rawGet(.{ .string = "namespace" }) orelse return error.InvalidTitle;
     if (namespace != .number) return error.InvalidTitle;
-    const wanted = try checkedNamespaceId(args[1]);
+    const wanted = try checkedNamespaceId(runtime, args[1]);
     return one(.{ .boolean = namespace.number == @as(f64, @floatFromInt(wanted)) });
 }
 
@@ -375,9 +380,9 @@ fn subPageTitleCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     const ctx: *TitleCtx = @ptrCast(@alignCast(raw orelse return error.MissingTitleContext));
     if (ctx.is_external) return one(.nil);
     if (args.len < 2 or args[1] != .string) return one(.nil);
-    const ns = namespaceOf(ctx.title);
+    const ns = namespaceOf(runtime, ctx.title);
     const text = try std.fmt.allocPrint(runtime.allocator, "{s}/{s}", .{ ns.text, args[1].string });
-    const title = try titleForSpec(runtime, namespaceSpecById(ns.id) orelse return error.InvalidNamespace, text);
+    const title = try titleForSpec(runtime, namespaceSpecById(runtime, ns.id) orelse return error.InvalidNamespace, text);
     return one(try makeTitleValue(runtime, ctx.state, title));
 }
 
@@ -442,8 +447,8 @@ fn makeTitleValue(runtime: *rt.Context, state: *State, raw_title: []const u8) !V
     const base_title = if (hash) |pos| title[0..pos] else title;
     const fragment_raw = if (hash) |pos| title[pos + 1 ..] else "";
     const fragment = try normalizeFragment(runtime.allocator, fragment_raw);
-    const ns = namespaceOf(base_title);
-    const ns_spec = namespaceSpecById(ns.id) orelse return error.InvalidNamespace;
+    const ns = namespaceOf(runtime, base_title);
+    const ns_spec = namespaceSpecById(runtime, ns.id) orelse return error.InvalidNamespace;
     const slash = if (ns_spec.has_subpages) std.mem.lastIndexOfScalar(u8, ns.text, '/') else null;
     const first_slash = if (ns_spec.has_subpages) std.mem.indexOfScalar(u8, ns.text, '/') else null;
     try table.rawSetNativeField(.title_value, "text", .{ .string = ns.text });
@@ -470,8 +475,8 @@ fn makeExternalTitleValue(
     raw_body: []const u8,
 ) !?Value {
     const body = (try normalizeName(runtime.allocator, raw_body)) orelse return null;
-    const main_spec = namespaceSpecById(0).?;
-    if (!validTitleBody(main_spec, body)) return null;
+    const main_spec = namespaceSpecById(runtime, 0).?;
+    if (!validTitleBody(runtime, main_spec, body)) return null;
     const hash = std.mem.indexOfScalar(u8, body, '#');
     const base_body = if (hash) |pos| body[0..pos] else body;
     const fragment_raw = if (hash) |pos| body[pos + 1 ..] else "";
@@ -508,17 +513,17 @@ fn normalizedNewText(runtime: *rt.Context, state: *State, raw: []const u8) ![]co
     return result[0].string;
 }
 
-fn namespaceArgument(value: ?Value, required: bool) !namespace_lib.Spec {
-    const actual = value orelse return if (required) error.InvalidNamespace else namespaceSpecById(0).?;
-    if (actual == .nil) return if (required) error.InvalidNamespace else namespaceSpecById(0).?;
+fn namespaceArgument(runtime: *rt.Context, value: ?Value, required: bool) !namespace_lib.Spec {
+    const actual = value orelse return if (required) error.InvalidNamespace else namespaceSpecById(runtime, 0).?;
+    if (actual == .nil) return if (required) error.InvalidNamespace else namespaceSpecById(runtime, 0).?;
     const spec = switch (actual) {
         .number => |number| blk: {
             if (!std.math.isFinite(number) or number != @trunc(number) or
                 number < @as(f64, @floatFromInt(std.math.minInt(i32))) or number > @as(f64, @floatFromInt(std.math.maxInt(i32))))
                 break :blk null;
-            break :blk namespaceSpecById(@intFromFloat(number));
+            break :blk namespaceSpecById(runtime, @intFromFloat(number));
         },
-        .string => |name| namespaceSpecByName(name),
+        .string => |name| namespaceSpecByName(runtime, name),
         else => null,
     };
     return spec orelse error.InvalidNamespace;
@@ -554,13 +559,13 @@ fn hasNamedCharacterReference(text: []const u8) bool {
     return false;
 }
 
-fn validTitleBody(spec: namespace_lib.Spec, text_with_fragment: []const u8) bool {
+fn validTitleBody(runtime: *rt.Context, spec: namespace_lib.Spec, text_with_fragment: []const u8) bool {
     const hash = std.mem.indexOfScalar(u8, text_with_fragment, '#');
     const text = if (hash) |at| text_with_fragment[0..at] else text_with_fragment;
     if (text.len == 0) return spec.id == 0 and hash != null;
     if (text[0] == ':') return false;
     if (spec.id == 1) if (std.mem.indexOfScalar(u8, text, ':')) |colon|
-        if (colon != 0 and namespaceSpecByName(std.mem.trim(u8, text[0..colon], " ")) != null) return false;
+        if (colon != 0 and namespaceSpecByName(runtime, std.mem.trim(u8, text[0..colon], " ")) != null) return false;
     for (text) |c| if (c < 0x80 and !legalTitleAscii(c)) return false;
     if (hasPercentEscape(text) or hasNamedCharacterReference(text)) return false;
     if (std.mem.indexOf(u8, text, "~~~") != null) return false;
@@ -577,7 +582,7 @@ fn titleForNamespace(runtime: *rt.Context, state: *State, spec: namespace_lib.Sp
         try language_lib.firstCaseAlloc(state.case_mapper, runtime.allocator, text, true)
     else
         text;
-    if (!validTitleBody(spec, normalized)) return null;
+    if (!validTitleBody(runtime, spec, normalized)) return null;
     if (spec.id == 0) return normalized;
     return @as(?[]const u8, try std.fmt.allocPrint(runtime.allocator, "{s}:{s}", .{ spec.name, normalized }));
 }
@@ -611,7 +616,7 @@ fn externalInterwikiParts(
     const colon = std.mem.indexOfScalar(u8, text, ':') orelse return null;
     if (colon == 0) return null;
     const prefix = std.mem.trim(u8, text[0..colon], " ");
-    if (prefix.len == 0 or namespaceSpecByName(prefix) != null) return null;
+    if (prefix.len == 0 or namespaceSpecByName(runtime, prefix) != null) return null;
     if (try interwikiDisposition(runtime, prefix) != .external) return null;
     const body = std.mem.trimStart(u8, text[colon + 1 ..], " ");
     if (body.len == 0) return null;
@@ -623,18 +628,18 @@ fn titleWithNamespace(runtime: *rt.Context, state: *State, text_raw: []const u8,
     const source = if (decode_entities) try normalizedNewText(runtime, state, text_raw) else text_raw;
     var text = (try normalizeName(a, source)) orelse return null;
     if (text.len == 0) return null;
-    var default_spec = try namespaceArgument(namespace, force_namespace);
+    var default_spec = try namespaceArgument(runtime, namespace, force_namespace);
     if (force_namespace) return titleForNamespace(runtime, state, default_spec, text);
 
     if (text[0] == ':') {
-        default_spec = namespaceSpecById(0).?;
+        default_spec = namespaceSpecById(runtime, 0).?;
         text = std.mem.trimStart(u8, text[1..], " ");
         if (text.len == 0) return null;
     }
     if (std.mem.indexOfScalar(u8, text, ':')) |colon| if (colon != 0) {
         const prefix = std.mem.trim(u8, text[0..colon], " ");
         const body = std.mem.trimStart(u8, text[colon + 1 ..], " ");
-        if (namespaceSpecByName(prefix)) |explicit_spec|
+        if (namespaceSpecByName(runtime, prefix)) |explicit_spec|
             return titleForNamespace(runtime, state, explicit_spec, body);
         switch (try interwikiDisposition(runtime, prefix)) {
             .none => {},
@@ -678,7 +683,7 @@ fn batchLookupExistenceCall(raw: ?*anyopaque, runtime: *rt.Context, args: []cons
         const title = titles.rawGet(.{ .number = @floatFromInt(i + 1) }) orelse continue;
         if (title != .table) continue;
         const prefixed = title.table.rawGet(.{ .string = "prefixedText" }) orelse continue;
-        if (prefixed != .string or namespaceOf(prefixed.string).id == -2) continue;
+        if (prefixed != .string or namespaceOf(runtime, prefixed.string).id == -2) continue;
         _ = try runtime.getIndex(title, .{ .string = "exists" });
     }
     return one(args[0]);
@@ -1008,6 +1013,105 @@ test "AOT title subpage fields respect namespace settings" {
     try std.testing.expectError(error.AotCallFailed, runtime.getIndex(unknown_file_title[0], .{ .string = "file" }));
     try std.testing.expectEqualStrings("FileMetadataSnapshotMissing", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
+}
+
+test "edition title content flags and default models use namespace metadata" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var registry = try rt.namespace_registry.Registry.init(std.testing.allocator, rt.namespace_registry.french_test_fixture);
+    defer registry.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &registry;
+    const mw = try runtime.newNativeNamespace(.mw);
+    try installForTest(&runtime, mw);
+    const title_lib = mw.rawGet(.{ .string = "title" }).?;
+    for ([_][]const u8{ "mot", "Annexe:x", "Thésaurus:mot", "Reconstruction:x", "Rime:x", "Conjugaison:x", "Racine:x" }) |name| {
+        const made = try callField(&runtime, title_lib, "new", &.{.{ .string = name }});
+        defer rt.freeResults(made);
+        try std.testing.expect((try runtime.getIndex(made[0], .{ .string = "isContentPage" })).boolean);
+    }
+    for ([_][]const u8{ "Modèle:x", "Discussion Thésaurus:mot", "Discussion Annexe:x" }) |name| {
+        const made = try callField(&runtime, title_lib, "new", &.{.{ .string = name }});
+        defer rt.freeResults(made);
+        try std.testing.expect(!(try runtime.getIndex(made[0], .{ .string = "isContentPage" })).boolean);
+    }
+    const Probe = struct {
+        fn model(_: ?*anyopaque, title: []const u8) !?[]const u8 {
+            return if (std.mem.eql(u8, title, "Sujet:Known")) "json" else null;
+        }
+    };
+    var host = host_api.Host{ .page_content_model = Probe.model };
+    host_api.set(&runtime, &host);
+    const models = [_][2][]const u8{
+        .{ "Sujet:missing", "flow-board" },
+        .{ "Topic:missing", "flow-board" },
+        .{ "Sujet:Known", "json" },
+        .{ "Module:Missing", "Scribunto" },
+        .{ "Utilisateur:Example/common.css", "css" },
+        .{ "Utilisateur:Example/common.js", "javascript" },
+        .{ "MediaWiki:Example.json", "json" },
+        .{ "mot", "wikitext" },
+    };
+    for (models) |case| {
+        const made = try callField(&runtime, title_lib, "new", &.{.{ .string = case[0] }});
+        defer rt.freeResults(made);
+        try std.testing.expectEqualStrings(case[1], (try runtime.getIndex(made[0], .{ .string = "contentModel" })).string);
+    }
+}
+
+test "localized media and file title aliases share canonical file metadata" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var registry = try rt.namespace_registry.Registry.init(std.testing.allocator, rt.namespace_registry.french_test_fixture);
+    defer registry.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &registry;
+    const Probe = struct {
+        fn file(_: ?*anyopaque, title: []const u8) !host_api.FileMetadata {
+            if (std.mem.eql(u8, title, "Fichier:Example.svg")) return .{ .exists = true, .width = 640, .height = 480 };
+            if (std.mem.eql(u8, title, "Fichier:Missing.svg")) return .{ .exists = false };
+            return error.FileMetadataSnapshotMissing;
+        }
+    };
+    var host = host_api.Host{ .file_metadata = Probe.file };
+    host_api.set(&runtime, &host);
+    const mw = try runtime.newNativeNamespace(.mw);
+    try installForTest(&runtime, mw);
+    const title_lib = mw.rawGet(.{ .string = "title" }).?;
+    const names = [_][]const u8{ "Fichier:Example.svg", "File:Example.svg", "Image:Example.svg", "Média:Example.svg", "Media:Example.svg" };
+    for (names) |name| {
+        for ([_][]const u8{ "file", "fileExists" }) |field| {
+            const made = try callField(&runtime, title_lib, "new", &.{.{ .string = name }});
+            defer rt.freeResults(made);
+            const value = try runtime.getIndex(made[0], .{ .string = field });
+            if (value == .table) {
+                try std.testing.expect((try runtime.getIndex(value, .{ .string = "exists" })).boolean);
+                try std.testing.expectEqual(@as(f64, 640), (try runtime.getIndex(value, .{ .string = "width" })).number);
+                try std.testing.expectEqual(@as(f64, 480), (try runtime.getIndex(value, .{ .string = "height" })).number);
+            } else try std.testing.expect(value.boolean);
+        }
+    }
+    for ([_][]const u8{ "Média:Example.svg", "Media:Example.svg" }) |name| {
+        const made = try callField(&runtime, title_lib, "new", &.{.{ .string = name }});
+        defer rt.freeResults(made);
+        try std.testing.expect((try runtime.getIndex(made[0], .{ .string = "exists" })).boolean);
+    }
+    for ([_][]const u8{ "file", "fileExists", "exists" }) |field| {
+        const missing = try callField(&runtime, title_lib, "new", &.{.{ .string = "Média:Missing.svg" }});
+        defer rt.freeResults(missing);
+        const value = try runtime.getIndex(missing[0], .{ .string = field });
+        if (value == .table) {
+            try std.testing.expect(!(try runtime.getIndex(value, .{ .string = "exists" })).boolean);
+            try std.testing.expect((try runtime.getIndex(value, .{ .string = "width" })) == .nil);
+        } else try std.testing.expect(!value.boolean);
+        const unknown = try callField(&runtime, title_lib, "new", &.{.{ .string = "Média:Unknown.svg" }});
+        defer rt.freeResults(unknown);
+        try std.testing.expectError(error.AotCallFailed, runtime.getIndex(unknown[0], .{ .string = field }));
+        try std.testing.expectEqualStrings("FileMetadataSnapshotMissing", runtime.aotErrorName().?);
+        runtime.clearAotErrorName();
+    }
 }
 
 test "AOT title constructors and current title use the live host" {

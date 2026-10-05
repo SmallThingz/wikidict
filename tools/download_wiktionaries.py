@@ -94,27 +94,7 @@ def siteinfo(wiki, props, language=None):
     return result
 
 
-def interwiki_map_snapshot(wiki, output):
-    """Capture the current MediaWiki interwiki map with its retrieval provenance.
-
-    This API response is current at retrieval time, not part of a dated dump.
-    """
-    query = {"action": "query", "meta": "siteinfo", "siprop": "interwikimap",
-             "format": "json", "formatversion": "2"}
-    url = wiktionary_api(wiki) + "?" + urllib.parse.urlencode(query)
-    root = output / wiki
-    if root.exists() or root.is_symlink():
-        raise ValueError(f"Interwiki snapshot already exists: {root}")
-    temporary = output / ("." + wiki + ".interwiki-map.part")
-    if temporary.exists() or temporary.is_symlink():
-        raise ValueError(f"Incomplete interwiki snapshot already exists: {temporary}")
-    request = urllib.request.Request(url, headers={"User-Agent": AGENT})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        raw = response.read(2 * 1024 * 1024 + 1)
-    retrieved = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    if len(raw) > 2 * 1024 * 1024:
-        raise ValueError("Interwiki API response exceeds 2 MiB")
-    data = json.loads(raw)
+def render_interwiki_map(data):
     rows = data.get("query", {}).get("interwikimap") if isinstance(data, dict) else None
     if not isinstance(rows, list) or not rows or len(rows) > 10_000:
         raise ValueError("Missing or invalid interwiki map")
@@ -145,9 +125,32 @@ def interwiki_map_snapshot(wiki, output):
                                  "1" if row.get("protorel", False) else "0",
                                  "1" if row.get("trans", False) else "0",
                                  field(target))))
-    tsv = ("\n".join(lines) + "\n").encode("utf-8")
+    return ("\n".join(lines) + "\n").encode("utf-8"), len(rows)
+
+def interwiki_map_snapshot(wiki, output):
+    """Capture the current MediaWiki interwiki map with its retrieval provenance.
+
+    This API response is current at retrieval time, not part of a dated dump.
+    """
+    query = {"action": "query", "meta": "siteinfo", "siprop": "interwikimap",
+             "format": "json", "formatversion": "2"}
+    url = wiktionary_api(wiki) + "?" + urllib.parse.urlencode(query)
+    root = output / wiki
+    if root.exists() or root.is_symlink():
+        raise ValueError(f"Interwiki snapshot already exists: {root}")
+    temporary = output / ("." + wiki + ".interwiki-map.part")
+    if temporary.exists() or temporary.is_symlink():
+        raise ValueError(f"Incomplete interwiki snapshot already exists: {temporary}")
+    request = urllib.request.Request(url, headers={"User-Agent": AGENT})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        raw = response.read(2 * 1024 * 1024 + 1)
+    retrieved = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if len(raw) > 2 * 1024 * 1024:
+        raise ValueError("Interwiki API response exceeds 2 MiB")
+    data = json.loads(raw)
+    tsv, row_count = render_interwiki_map(data)
     provenance = {"wiki": wiki, "kind": "current-siteinfo-interwikimap",
-                  "retrieved_utc": retrieved, "source_url": url, "rows": len(rows),
+                  "retrieved_utc": retrieved, "source_url": url, "rows": row_count,
                   "raw_bytes": len(raw), "raw_sha256": hashlib.sha256(raw).hexdigest(),
                   "tsv_bytes": len(tsv), "tsv_sha256": hashlib.sha256(tsv).hexdigest(),
                   "dump_date": None,

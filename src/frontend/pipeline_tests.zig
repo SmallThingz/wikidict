@@ -21,7 +21,7 @@ fn payloadAlloc(a: std.mem.Allocator, kind: enc.blob_format.BlobKind, title: []c
 
 test "all six shipped blob kinds deserialize compiled presentation only" {
     const a = std.testing.allocator;
-    const kinds = [_]enc.blob_format.BlobKind{ .language, .thesaurus, .rhymes, .reconstruction, .citations, .sign_gloss };
+    const kinds = [_]enc.blob_format.BlobKind{ .language, .thesaurus, .rhymes, .reconstruction, .citations, .sign_gloss, .supplemental };
     inline for (kinds) |kind| {
         const title = if (kind == .language) "cat" else @tagName(kind);
         const payload = try payloadAlloc(a, kind, title);

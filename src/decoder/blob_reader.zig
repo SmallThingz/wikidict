@@ -20,6 +20,7 @@ pub const RecordView = union(format.BlobKind) {
     reconstruction: DataRecordView,
     rhymes: DataRecordView,
     sign_gloss: DataRecordView,
+    supplemental: DataRecordView,
 
     pub fn kind(self: RecordView) format.BlobKind {
         return std.meta.activeTag(self);
@@ -129,6 +130,7 @@ pub const BlobView = struct {
             .reconstruction => .{ .reconstruction = .{ .title = record.title, .payload = record.payload } },
             .rhymes => .{ .rhymes = .{ .title = record.title, .payload = record.payload } },
             .sign_gloss => .{ .sign_gloss = .{ .title = record.title, .payload = record.payload } },
+            .supplemental => .{ .supplemental = .{ .title = record.title, .payload = record.payload } },
         };
     }
 };
@@ -165,6 +167,7 @@ test "typed blob reader exposes compiled feature payloads without source facades
         format.BlobKind.reconstruction,
         format.BlobKind.rhymes,
         format.BlobKind.sign_gloss,
+        format.BlobKind.supplemental,
     }) |kind| {
         const payload = try encoder.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = "cat", .kind = kind } });
         defer a.free(payload);

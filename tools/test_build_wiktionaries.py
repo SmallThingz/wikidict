@@ -18,6 +18,29 @@ import build_wiktionaries as b
 import build_resource_limits as limits
 from compress_blobs import compress, compress_many, default_workers
 
+def write_namespace_fixture(folder, edition=None, date=None):
+    folder.mkdir(parents=True,exist_ok=True)
+    edition=edition or (folder.parent.name if folder.name.isdigit() else 'testwiktionary')
+    date=date or (folder.name if folder.name.isdigit() else '20260901')
+    namespace=folder/'namespace-registry.tsv'
+    namespace.write_text('# wikidict-namespace-registry-v1\n# wiki\t'+edition+'\n# dump-date\t'+date+'\n# content-language\ten\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tinput\n14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n')
+    language=folder/'language-registry.tsv'
+    if not language.exists():language.write_text('# content-language\ten\nen\tEnglish\n')
+    return {'namespace-registry':namespace,'language-registry':language}
+
+
+def write_test_manifest(root, manifest):
+    records=[]
+    for item in manifest.get('files',[]):
+        if not isinstance(item,dict) or not item.get('wiki') or not item.get('date'):continue
+        folder=root/item['wiki']/item['date']
+        snapshots=write_namespace_fixture(folder,item['wiki'],item['date'])
+        path=snapshots['language-registry']
+        records.append(dict(wiki=item['wiki'],date=item['date'],name=path.name,size=path.stat().st_size,sha256=b.sha256_file(path)))
+    manifest=dict(manifest,language_registries=list({(r['wiki'],r['date']):r for r in records}.values()))
+    (root/'manifest.json').write_text(json.dumps(manifest))
+
+
 def decode_staged_dump(dump):
     compressed=dump.read_bytes()
     offsets=[int(line.split(':',1)[0]) for line in bz2.decompress(
@@ -27,6 +50,15 @@ def decode_staged_dump(dump):
         assert zstd.get_frame_size(frame)==len(frame)
         assert zstd.get_frame_info(frame).decompressed_size<=64*1024*1024
     return b''.join(zstd.decompress(frame) for frame in frames)
+
+
+def write_namespace_coverage(root, count):
+    if not (root/'languages.tsv').exists():(root/'languages.tsv').write_text('heading\n')
+    rows=[] if count==0 else [dict(id=0,name='',kind='language',input_rows=count,compile_only_rows=0,source_unavailable_rows=0,dispatched_rows=count,expanded_pages=count,fallback_pages=0,duplicate_rows=0)]
+    candidates=list(b.PROJECT.glob('*wiktionary/[0-9]*/namespace-registry.tsv'))
+    record=dict(version=1,namespaces=rows)
+    if len(candidates)==1:record['registry_sha256']=b.sha256_file(candidates[0])
+    (root/'namespace-coverage.json').write_text(json.dumps(record))
 
 
 def write_coverage(root, command=None):
@@ -45,6 +77,7 @@ def write_coverage(root, command=None):
                         index_byte_offset=inspected['offsets'][shard_start],
                         page_index_identity=inspected['identity'])
             (shard/'page-coverage.json').write_text(json.dumps(record))
+            write_namespace_coverage(shard,record['pages_seen'])
         return
     start=limit=offset=0
     identity=dict(device_major=0,device_minor=0,inode=0,size=0,mtime_ns=0)
@@ -59,6 +92,57 @@ def write_coverage(root, command=None):
                 index_byte_offset=offset,page_index_identity=identity)
     if limit is None: record['expected_input_pages']=0
     (root/'page-coverage.json').write_text(json.dumps(record))
+    write_namespace_coverage(root,record['pages_seen'])
+
+
+class ProvenanceBindingTests(unittest.TestCase):
+    def test_source_identity_checks_every_selected_field(self):
+        item=dict(wiki='testwiktionary',date='20261001',name='testwiktionary-20261001-page.sql.gz',url='https://example.test/page.sql.gz',size=1,sha1='a'*40)
+        self.assertEqual(b.selected_source(item,[item]),item)
+        for field in b.SOURCE_FIELDS:
+            bad=dict(item);bad[field]=2 if field=='size' else 'changed'
+            with self.subTest(field=field),self.assertRaises(ValueError):b.selected_source(bad,[item])
+        with self.assertRaises(ValueError):b.selected_source(item,[item,item])
+
+    def test_capture_artifacts_are_complete_safe_and_hash_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);path=root/'site.json';path.write_text('{}')
+            record={'artifacts':{'site.json':b.sha256_file(path)}}
+            b.validate_capture_artifacts(root,record,('site.json',))
+            with self.assertRaises(ValueError):b.validate_capture_artifacts(root,record,('missing.json',))
+            path.write_text('{"changed":true}')
+            with self.assertRaises(ValueError):b.validate_capture_artifacts(root,record)
+            for name in ('../site.json','/site.json','.'):
+                with self.subTest(name=name),self.assertRaises(ValueError):b.validate_capture_artifacts(root,{'artifacts':{name:'x'}})
+
+    def test_build_identity_refuses_source_dump_and_deadline_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);tool=root/'zig';tool.write_bytes(b'tool')
+            item=dict(wiki='testwiktionary',date='20261001',name='dump',size=1,sha1='a')
+            with patch.object(b.shutil,'which',return_value=str(tool)),patch.object(b,'source_fingerprint',return_value='source'):
+                identity=b.build_input_identity([item],'zig',{'namespace-registry':'n'},'i',100)
+                b.persist_build_identity(root,identity)
+                b.require_build_identity(b.read_small_json(root/b.BUILD_IDENTITY_NAME),identity)
+                changed=b.build_input_identity([dict(item,sha1='b')],'zig',{'namespace-registry':'n'},'i',100)
+                with self.assertRaises(ValueError):b.require_build_identity(changed,identity)
+                changed=b.build_input_identity([item],'zig',{'namespace-registry':'n'},'i',101)
+                with self.assertRaises(ValueError):b.require_build_identity(changed,identity)
+            with patch.object(b,'source_fingerprint',return_value='changed'),self.assertRaises(ValueError):b.persist_build_identity(root,identity)
+            self.assertEqual(b.read_small_json(root/b.BUILD_IDENTITY_NAME),identity)
+
+    def test_expander_reuse_is_bound_to_interwiki_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);exp=root/'.bundle-expander';exp.mkdir()
+            (root/'.incomplete').write_text('expander ready')
+            for name in ('page-index.tsv','dict-bundle-expander','namespace-registry.tsv'):(exp/name).write_text('fixture')
+            self.assertTrue(b.expander_ready(root))
+            path=exp/'interwiki-map.tsv';path.write_text('map')
+            digest=b.sha256_file(path)
+            self.assertFalse(b.expander_ready(root))
+            self.assertTrue(b.expander_ready(root,interwiki_sha=digest))
+            path.write_text('changed')
+            self.assertFalse(b.expander_ready(root,interwiki_sha=digest))
+
 
 class BuildTest(unittest.TestCase):
     def test_main_routes_interwiki_and_dated_auxiliary_snapshot_flags(self):
@@ -68,7 +152,7 @@ class BuildTest(unittest.TestCase):
             item=dict(wiki='enwiktionary',date='20260901',name=name,
                       url='https://dumps.wikimedia.org/enwiktionary/20260901/'+name,
                       size=1,sha1='a'*40)
-            (root/'manifest.json').write_text(json.dumps({'files':[item]}))
+            write_test_manifest(root,{'files':[item]})
             interwiki=root/'interwiki-map.tsv';interwiki.write_text('en\t1\t1\t0\t0\tx\n')
             category=root/'category-stats.tsv';category.write_text('x\t1\t0\t0\n')
             argv=['build_wiktionaries.py','--downloads',str(root),'--output',str(root/'out'),
@@ -80,7 +164,7 @@ class BuildTest(unittest.TestCase):
                 b.main()
             self.assertEqual(groups.call_args.kwargs,{
                 'interwiki_snapshot':interwiki.resolve(),
-                'auxiliary_snapshots':{'category-stats':category.resolve()},
+                'edition_options':{('enwiktionary','20260901'):{'interwiki_snapshot':interwiki.resolve(),'auxiliary_snapshots':{'category-stats':category.resolve(),**{k:v.resolve() for k,v in write_namespace_fixture(root/'enwiktionary/20260901').items()}}}},
             })
 
     def test_watchdog_mode_is_explicit_locked_and_deadline_bounded(self):
@@ -109,7 +193,7 @@ class BuildTest(unittest.TestCase):
 
     def test_high_expansion_count_keeps_single_job_and_four_build_workers(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);(root/'manifest.json').write_text(json.dumps({'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]}))
+            root=Path(tmp);write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
             argv=['build_wiktionaries.py','--resource-mode=watchdog','--downloads',str(root),
                   '--output',str(root),'--threads','4','--expansion-workers','8']
             with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=5), \
@@ -126,7 +210,7 @@ class BuildTest(unittest.TestCase):
 
     def test_expansion_workers_within_four_charge_the_actual_job_budget(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);(root/'manifest.json').write_text(json.dumps({'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]}))
+            root=Path(tmp);write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
             argv=['build_wiktionaries.py','--downloads',str(root),'--output',str(root),
                   '--threads','1','--expansion-workers','4']
             with patch.object(sys,'argv',argv+['--jobs','2']), \
@@ -159,7 +243,7 @@ class BuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander';exp.mkdir(parents=True)
             (exp/'page-index.tsv').write_text('# index\n\np0\n')
-            (exp/'dict-bundle-expander').write_text('worker')
+            (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
             cache=workspace/'input';cache.mkdir();(cache/'.complete.json').write_text(json.dumps({
                 'source_pages':1,'dump_sha256':'a'*64,'index_sha256':'b'*64}))
             calls=[]
@@ -168,7 +252,7 @@ class BuildTest(unittest.TestCase):
                 if 'build-dictionary' in command:
                     exp.mkdir(parents=True,exist_ok=True)
                     (exp/'page-index.tsv').write_text('# index\n\np0\n')
-                    (exp/'dict-bundle-expander').write_text('worker')
+                    (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
                 if 'build-blobs' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir(exist_ok=True);write_coverage(dest,command)
                 if 'merge-blobs' in command:
@@ -261,7 +345,7 @@ class BuildTest(unittest.TestCase):
             root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander';exp.mkdir(parents=True)
             (workspace/'expander/.incomplete').write_text('expander ready')
             (exp/'page-index.tsv').write_text('# index\n\np0\n')
-            (exp/'dict-bundle-expander').write_text('worker')
+            (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
             cache=workspace/'input';cache.mkdir();(cache/'.complete.json').write_text(json.dumps({'source_pages':1}))
             shard=workspace/'shards/00000000';shard.mkdir(parents=True);(shard/'.verified').write_text('verified')
             calls=[]
@@ -302,7 +386,7 @@ class BuildTest(unittest.TestCase):
             exp.mkdir(parents=True)
             (workspace/'expander/.incomplete').write_text('expander ready')
             (exp/'page-index.tsv').write_text('p0\n')
-            (exp/'dict-bundle-expander').write_text('worker')
+            (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
             cache=workspace/'input';cache.mkdir()
             (cache/'.complete.json').write_text(json.dumps({'source_pages':1}))
             shard=workspace/'shards/00000000';shard.mkdir(parents=True)
@@ -336,7 +420,7 @@ class BuildTest(unittest.TestCase):
             exp.mkdir(parents=True)
             (workspace/'expander/.incomplete').write_text('expander ready')
             (exp/'page-index.tsv').write_text('p0\np1\np2\n')
-            (exp/'dict-bundle-expander').write_text('worker')
+            (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
             cache=workspace/'input';cache.mkdir()
             (cache/'.complete.json').write_text(json.dumps({'source_pages':3}))
             shards=workspace/'shards';shards.mkdir()
@@ -447,7 +531,7 @@ class BuildTest(unittest.TestCase):
 
     def test_seekable_dump_stages_compressed_members_without_decompressed_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             items=[]; members=[]
             for i,payload in enumerate((b'<mediawiki><page>a</page></mediawiki>',b'<mediawiki><page>b</page></mediawiki>')):
                 name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
@@ -463,7 +547,7 @@ class BuildTest(unittest.TestCase):
 
     def test_parallel_part_decode_preserves_input_order(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             items=[];parts=[]
             for i in range(4):
                 name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
@@ -498,7 +582,7 @@ class BuildTest(unittest.TestCase):
 
     def test_parallel_part_boundary_page_uses_serial_framer(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             parts=(b'<mediawiki><page>abc',b'def</page></mediawiki>')
             items=[]
             for i,raw in enumerate(parts):
@@ -512,7 +596,7 @@ class BuildTest(unittest.TestCase):
 
     def test_parallel_nine_part_submission_stays_within_ordered_window(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             items=[];parts=[]
             for i in range(9):
                 name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
@@ -551,7 +635,7 @@ class BuildTest(unittest.TestCase):
 
     def test_parallel_submit_failure_cancels_blocked_producer_and_removes_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             items=[]
             for i in range(2):
                 name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
@@ -577,7 +661,7 @@ class BuildTest(unittest.TestCase):
 
     def test_parallel_empty_parts_emit_one_known_size_frame(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             items=[]
             for i in range(2):
                 name=f'testwiktionary-20260901-pages-meta-current{i}.xml-p{i}p{i}.bz2'
@@ -590,7 +674,7 @@ class BuildTest(unittest.TestCase):
 
     def test_single_part_seekable_dump_preserves_xml(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2';data=bz2.compress(b'<mediawiki/>');source=folder/name;source.write_bytes(data)
             scratch=root/'scratch';scratch.mkdir()
             dump=b.stage_seekable_dump([dict(wiki='testwiktionary',date='20260901',name=name)],root,scratch)
@@ -599,7 +683,7 @@ class BuildTest(unittest.TestCase):
 
     def test_seekable_dump_bounds_members_and_preserves_all_xml_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             page=b'<page>'+bytes(range(256))*16384+b'</page>'
             xml=b'<mediawiki>'+page+page+b'</mediawiki>'
@@ -623,7 +707,7 @@ class BuildTest(unittest.TestCase):
 
     def test_seekable_dump_rejects_truncated_xml_page(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             (folder/name).write_bytes(bz2.compress(b'<mediawiki><page>unfinished'))
             scratch=root/'scratch';scratch.mkdir()
@@ -632,7 +716,7 @@ class BuildTest(unittest.TestCase):
 
     def test_seekable_repack_limits_four_jobs_and_writes_submission_order(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             pages=[b'<page>'+bytes([65+i])*1024+b'</page>' for i in range(5)]
             xml=b'<mediawiki>'+b''.join(pages)+b'</mediawiki>'
@@ -682,7 +766,7 @@ class BuildTest(unittest.TestCase):
 
     def test_seekable_repack_drains_before_oversized_member(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             sizes=[1024,1024,9*1024,1024]
             pages=[b'<page>'+bytes([65+i])*size+b'</page>' for i,size in enumerate(sizes)]
@@ -705,7 +789,7 @@ class BuildTest(unittest.TestCase):
 
     def test_seekable_repack_deferred_compression_error_removes_partial_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             xml=b'<mediawiki>'+b''.join(b'<page>'+bytes([65+i])*1024+b'</page>' for i in range(3))+b'</mediawiki>'
             (folder/name).write_bytes(bz2.compress(xml))
@@ -788,7 +872,7 @@ class BuildTest(unittest.TestCase):
 
     def test_source_and_registry_changes_keep_verified_dump_but_reset_native_state(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki><page>word</page></mediawiki>')
             (folder/name).write_bytes(data)
@@ -829,7 +913,7 @@ class BuildTest(unittest.TestCase):
 
     def test_cached_dump_requires_independent_nonnegative_integer_page_count(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki><page>word</page></mediawiki>');(folder/name).write_bytes(data)
             items=[dict(wiki='testwiktionary',date='20260901',name=name,size=len(data),sha1=hashlib.sha1(data).hexdigest())]
@@ -853,7 +937,7 @@ class BuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander';exp.mkdir(parents=True)
             (workspace/'expander/.incomplete').write_text('expander ready')
-            (exp/'dict-bundle-expander').write_text('worker')
+            (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
             (exp/'page-index.tsv').write_text('only-one-page\n')
             cache=workspace/'input';cache.mkdir();marker=cache/'.complete.json'
             for record in ({},{'source_pages':True},{'source_pages':-1},{'source_pages':2}):
@@ -865,7 +949,7 @@ class BuildTest(unittest.TestCase):
 
     def test_cached_shard_dump_reuses_only_exact_verified_state_and_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki><page>word</page></mediawiki>')
             (folder/name).write_bytes(data)
@@ -919,7 +1003,7 @@ class BuildTest(unittest.TestCase):
 
     def test_partial_cached_repack_cannot_be_reused(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki/>')
             (folder/name).write_bytes(data)
@@ -942,7 +1026,7 @@ class BuildTest(unittest.TestCase):
 
     def test_failed_shard_merge_reuses_verified_repack_on_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki><page>word</page></mediawiki>')
             (folder/name).write_bytes(data)
@@ -956,7 +1040,7 @@ class BuildTest(unittest.TestCase):
                     dest=Path(command[command.index('--')+2]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
                     (dest/'.incomplete').write_text('expander ready')
                     (exp/'page-index.tsv').write_text('0\n')
-                    (exp/'dict-bundle-expander').write_text('worker')
+                    (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
                 elif 'build-blobs' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True,exist_ok=True)
                     write_coverage(dest,command)
@@ -965,6 +1049,7 @@ class BuildTest(unittest.TestCase):
                     if len(merges)==1:raise subprocess.CalledProcessError(1,command)
                     dest=Path(command[command.index('--')+1]);dest.mkdir()
                     (dest/'fallback-pages.jsonl').write_text('')
+                    if 'merge-blobs' in command:write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in command[command.index('--')+2:]))
             real_stage=b.stage_seekable_dump
             with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_COMPRESSED_BYTES',1), \
                  patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'), \
@@ -983,7 +1068,7 @@ class BuildTest(unittest.TestCase):
 
     def test_large_edition_builds_verified_shards_then_merges(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             payload=b'<mediawiki><page></page><page></page></mediawiki>'
             data=bz2.compress(payload);(folder/name).write_bytes(data)
@@ -999,15 +1084,17 @@ class BuildTest(unittest.TestCase):
                     dest=Path(command[command.index('--')+2]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
                     (dest/'.incomplete').write_text('expander ready')
                     (exp/'page-index.tsv').write_text('0\n1\n')
-                    (exp/'dict-bundle-expander').write_text('worker')
+                    (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
                 elif step=='build-blobs':
                     dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True,exist_ok=True)
                     write_coverage(dest,command)
                     (dest/'fallback-pages.jsonl').write_text('')
+                    if 'merge-blobs' in command:write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in command[command.index('--')+2:]))
                     (dest/'languages.tsv').write_text('heading\n')
                 elif step=='merge-blobs':
                     dest=Path(command[command.index('--')+1]);dest.mkdir(parents=True)
                     (dest/'fallback-pages.jsonl').write_text('')
+                    if 'merge-blobs' in command:write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in command[command.index('--')+2:]))
                     (dest/'languages.tsv').write_text('heading\n')
                     (dest/'merged.wikblb').write_bytes(b'WIKBLB08merged')
             with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_THRESHOLD_COMPRESSED_BYTES',1),patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
@@ -1024,7 +1111,7 @@ class BuildTest(unittest.TestCase):
             self.assertIn('--category-stats-snapshot',expander_call)
             self.assertEqual((root/'output/testwiktionary/20260901/.interwiki-map.sha256').read_text().strip(),hashlib.sha256(interwiki.read_bytes()).hexdigest())
             self.assertEqual(json.loads((root/'output/testwiktionary/20260901/.auxiliary-snapshots.sha256.json').read_text()),
-                             {'category-stats':hashlib.sha256(category.read_bytes()).hexdigest()})
+                             {'category-stats':hashlib.sha256(category.read_bytes()).hexdigest(),**{name:b.sha256_file(folder/(name+'.tsv')) for name in ('namespace-registry','language-registry')}})
             for flag in ('--verified-dump-sha256','--verified-index-sha256'):
                 self.assertRegex(expander_call[expander_call.index(flag)+1],r'^[0-9a-f]{64}$')
             self.assertEqual(len(blob_calls),1)
@@ -1045,7 +1132,7 @@ class BuildTest(unittest.TestCase):
             root=Path(tmp)
             source=root/'input';source.mkdir()
             item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
-            (source/'manifest.json').write_text(json.dumps({'files':[item]}))
+            write_test_manifest(source,{'files':[item]})
             output=root/'output'
             with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(output),'--threads','2']),patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'load_average',return_value=0),patch.object(b,'build') as build:
                 b.main()
@@ -1058,11 +1145,14 @@ class BuildTest(unittest.TestCase):
             for wiki in ('aawiktionary','abwiktionary'):
                 name=f'{wiki}-20260901-pages-meta-current.xml.bz2'
                 items.append(dict(wiki=wiki,date='20260901',name=name,url=f'https://dumps.wikimedia.org/{wiki}/20260901/{name}',size=1,sha1='a'*40))
-            (source/'manifest.json').write_text(json.dumps({'files':items}))
+            write_test_manifest(source,{'files':items})
             rendezvous=threading.Barrier(2)
-            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'load_average',return_value=0),patch.object(b,'build',side_effect=lambda *args:rendezvous.wait(timeout=2)) as build:
+            with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--out',str(root/'output'),'--threads','2','--jobs','2']),patch.object(b.os,'cpu_count',return_value=32),patch.object(b,'load_average',return_value=0),patch.object(b,'build',side_effect=lambda *args,**kwargs:rendezvous.wait(timeout=2)) as build:
                 b.main()
             self.assertEqual(build.call_count,2)
+            received={call.args[0][0]['wiki']:call.kwargs['auxiliary_snapshots'] for call in build.call_args_list}
+            self.assertNotEqual(received['aawiktionary']['namespace-registry'],received['abwiktionary']['namespace-registry'])
+            for wiki,snapshots in received.items():self.assertIn('# wiki\t'+wiki,snapshots['namespace-registry'].read_text())
     def test_scheduler_rechecks_worker_budget_before_starting_next_edition(self):
         groups={
             ('aawiktionary','20260901'):[dict(wiki='aawiktionary')],
@@ -1127,7 +1217,7 @@ class BuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'input';source.mkdir()
             item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
-            (source/'manifest.json').write_text(json.dumps({'files':[item]}))
+            write_test_manifest(source,{'files':[item]})
             original=Path.read_text
             def read(path,*args,**kwargs):
                 if str(path)=='/proc/meminfo': return 'MemAvailable: 0 kB\n'
@@ -1152,7 +1242,7 @@ class BuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); source=root/'input'; source.mkdir()
             item=dict(wiki='testwiktionary',date='20260901',name='testwiktionary-20260901-pages-meta-current.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/testwiktionary-20260901-pages-meta-current.xml.bz2',size=1,sha1='a'*40)
-            (source/'manifest.json').write_text(json.dumps({'files':[item]}))
+            write_test_manifest(source,{'files':[item]})
             with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(source),'--threads','4','--jobs','2']),patch.object(b,'safe_worker_budget',return_value=6):
                 with self.assertRaises(SystemExit): b.main()
     def test_fallback_report_validation_rejects_malformed_and_duplicate_pages(self):
@@ -1170,9 +1260,9 @@ class BuildTest(unittest.TestCase):
                 b.validate_fallback_report(path)
     def test_build_verify_compress_publish(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
-            data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
+            data=bz2.compress(b'<mediawiki><page></page><page></page></mediawiki>');(folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
             registry=folder/'language-registry.tsv';registry.write_text('# content-language\ten\nen\tEnglish\n')
             interwiki=root/'interwiki-map.tsv';interwiki.write_text('en\t1\t1\t0\t0\thttps://en.example/$1\n')
@@ -1184,6 +1274,11 @@ class BuildTest(unittest.TestCase):
                 if 'build-dictionary' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir();(dest/'en.wikblb').write_bytes(b'WIKBLB08payload')
                     write_coverage(dest)
+                    coverage=json.loads((dest/'page-coverage.json').read_text());coverage.update(pages_seen=2,expected_input_pages=2)
+                    (dest/'page-coverage.json').write_text(json.dumps(coverage))
+                    write_namespace_coverage(dest,2)
+                    coverage=json.loads((dest/'namespace-coverage.json').read_text());coverage['namespaces'][0].update(expanded_pages=0,fallback_pages=2)
+                    (dest/'namespace-coverage.json').write_text(json.dumps(coverage))
                     (dest/'fallback-pages.jsonl').write_text(
                         json.dumps({'namespace':0,'title':'quoted"title','reasons':['literal_markup']})+'\n'+
                         json.dumps({'namespace':0,'title':'failed expansion','reasons':['expansion_error','expansion_error:ExpansionFailed']})+'\n')
@@ -1211,7 +1306,7 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(list((root/'.tmp').iterdir()),[])
     def test_verified_partial_compression_resumes_without_rebuilding(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
@@ -1220,7 +1315,8 @@ class BuildTest(unittest.TestCase):
             (staging/'fallback-pages.jsonl').write_text('')
             (staging/'languages.tsv').write_text('heading\n')
             (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
-            write_coverage(staging)
+            (staging/b.AUXILIARY_SHA_NAME).write_text(json.dumps({name:b.sha256_file(folder/(name+'.tsv')) for name in ('namespace-registry','language-registry')}))
+            with patch.object(b,'PROJECT',root):write_coverage(staging)
             first=staging/'first.wikblb';second=staging/'second.wikblb'
             first.write_bytes(b'WIKBLB08first');second.write_bytes(b'WIKBLB08second')
             compress(first,64*1024,1)
@@ -1229,6 +1325,7 @@ class BuildTest(unittest.TestCase):
                 if command[0]=='xz':return real_run(command,**kwargs)
                 raise AssertionError(f'unexpected rebuild command: {command}')
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
+                b.persist_build_identity(staging,b.build_input_identity([item],'zig',b.verified_auxiliary_hashes(write_namespace_fixture(folder)),None,None))
                 b.build([item],root,root/'output','zig',1)
             final=root/'output/testwiktionary/20260901'
             meta=json.loads((final/'complete.json').read_text())
@@ -1243,7 +1340,7 @@ class BuildTest(unittest.TestCase):
 
     def test_old_complete_output_is_preserved_and_requires_new_output_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
@@ -1257,7 +1354,7 @@ class BuildTest(unittest.TestCase):
 
     def test_old_verified_staging_is_preserved_and_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
@@ -1270,7 +1367,7 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(marker.read_text(),'verified\n')
     def test_empty_edition_retries_stale_build_and_is_published(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
             name='testwiktionary-20260901-pages-meta-current.xml.bz2'
             data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
@@ -1286,6 +1383,102 @@ class BuildTest(unittest.TestCase):
             final=root/'output/testwiktionary/20260901'
             self.assertEqual(json.loads((final/'complete.json').read_text())['status'],'empty')
             self.assertFalse((final/'old').exists())
+
+
+class PublicationResumeTests(unittest.TestCase):
+    def prepare(self, root, publish=True):
+        folder=root/'testwiktionary/20260901'
+        snapshots=write_namespace_fixture(folder)
+        name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+        data=bz2.compress(b'<mediawiki/>');(folder/name).write_bytes(data)
+        item=dict(wiki='testwiktionary',date='20260901',name=name,
+                  url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                  size=len(data),sha1=hashlib.sha1(data).hexdigest())
+        staging=root/'output/testwiktionary/20260901.building';staging.mkdir(parents=True)
+        target=staging.with_name('20260901')
+        write_coverage(staging)
+        (staging/'fallback-pages.jsonl').write_text('')
+        (staging/'supplemental.wikblb').write_bytes(b'WIKBLB08fixture')
+        (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+        hashes=b.verified_auxiliary_hashes(snapshots)
+        (staging/b.AUXILIARY_SHA_NAME).write_text(json.dumps(hashes))
+        identity=b.build_input_identity([item],'zig',hashes,None,None)
+        b.persist_build_identity(staging,identity)
+        if publish:
+            b._publish_verified_staging(staging,target,'testwiktionary','20260901',1,
+                auxiliary_hashes=hashes,build_identity=identity,namespace_snapshot=snapshots['namespace-registry'])
+        workspace=target.with_name('20260901.shards');workspace.mkdir()
+        (workspace/'sentinel').write_text('keep until publication is verified')
+        return item,target,workspace
+
+    def test_valid_published_resume_verifies_bytes_then_removes_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(b,'run_checked') as run:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace=self.prepare(root)
+                metadata=json.loads((target/'complete.json').read_text())
+                files=metadata['publication_files']
+                self.assertEqual(files['supplemental.wikblb.xz']['sha256'],b.sha256_file(target/'supplemental.wikblb.xz'))
+                self.assertIn('languages.tsv',files)
+                cache=target/'.dict-cache';cache.mkdir()
+                index=cache/'supplemental.wikblb.xz.idx';index.write_bytes(b'derived reader index')
+                self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'existing_output')
+                self.assertFalse(workspace.exists())
+                self.assertEqual(index.read_bytes(),b'derived reader index')
+                self.assertNotIn('.dict-cache/supplemental.wikblb.xz.idx',files)
+            run.assert_not_called()
+
+    def test_damaged_published_artifacts_preserve_workspace(self):
+        cases=[('missing',name) for name in ('supplemental.wikblb.xz','languages.tsv',
+                'page-coverage.json','namespace-coverage.json','fallback-pages.jsonl')]
+        cases += [('changed',name) for name in ('supplemental.wikblb.xz','languages.tsv')]
+        cases += [('extra','extra.wikblb.xz'),('symlink','languages.tsv')]
+        for action,name in cases:
+            with self.subTest(action=action,name=name),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                with patch.object(b,'PROJECT',root):
+                    item,target,workspace=self.prepare(root)
+                    path=target/name
+                    if action=='missing':path.unlink()
+                    elif action=='changed':
+                        data=bytearray(path.read_bytes());data[len(data)//2]^=1;path.write_bytes(data)
+                    elif action=='extra':path.write_bytes((target/'supplemental.wikblb.xz').read_bytes())
+                    else:
+                        other=root/'language-copy.tsv';other.write_bytes(path.read_bytes());path.unlink();path.symlink_to(other.resolve())
+                    with self.assertRaises(ValueError):b.build_locked([item],root,root/'output','zig',1)
+                    self.assertEqual((workspace/'sentinel').read_text(),'keep until publication is verified')
+                    self.assertTrue((target/'complete.json').is_file())
+
+    def test_inconsistent_completion_metadata_preserves_workspace(self):
+        cases={'edition':'otherwiktionary','date':'20261001','status':'empty','blobs':0,
+               'input_pages':1,'fallback_pages':1,'namespace_coverage_totals':{},
+               'page_coverage_report':'other.json','namespace_coverage_report':'other.json',
+               'fallback_report':'other.json','publication_files':None}
+        for field,value in cases.items():
+            with self.subTest(field=field),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                with patch.object(b,'PROJECT',root):
+                    item,target,workspace=self.prepare(root)
+                    path=target/'complete.json';metadata=json.loads(path.read_text());metadata[field]=value
+                    path.write_text(json.dumps(metadata))
+                    with self.assertRaises(ValueError):b.build_locked([item],root,root/'output','zig',1)
+                    self.assertTrue((workspace/'sentinel').is_file())
+
+    def test_interrupted_publication_keeps_verified_staging_resumable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace=self.prepare(root,publish=False)
+                with patch.object(b.os,'rename',side_effect=OSError('publication interrupted')):
+                    with self.assertRaisesRegex(OSError,'publication interrupted'):
+                        b.build_locked([item],root,root/'output','zig',1)
+                staging=target.with_name('20260901.building')
+                self.assertTrue((staging/b.VERIFIED_MARKER).is_file())
+                self.assertTrue((staging/'complete.json').is_file())
+                with patch.object(b,'run_checked') as run:
+                    self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'resumed_publication')
+                    run.assert_not_called()
+                self.assertFalse((target/b.VERIFIED_MARKER).exists())
 
 
 class ExpansionDeadlineTests(unittest.TestCase):
@@ -1352,7 +1545,7 @@ class ReproducibleBuildTimeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             item=dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)
-            (root/'manifest.json').write_text(json.dumps({'files':[item]}))
+            write_test_manifest(root,{'files':[item]})
             with patch.object(sys,'argv',['build_wiktionaries.py','--in',str(root),'--threads','1','--jobs','1','--now-unix','1791072000']),patch.object(b,'safe_worker_budget',return_value=4),patch.object(b,'build_groups',return_value=[]) as groups:
                 b.main()
             self.assertEqual(groups.call_args.kwargs['now_unix'],1791072000)

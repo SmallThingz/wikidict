@@ -21,6 +21,7 @@ pub const Spec = struct {
 const Alias = struct { key: []const u8, index: usize };
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
+    source_sha256: [32]u8,
     mapper: title_case.Mapper,
     wiki: []const u8,
     dump_date: []const u8,
@@ -98,7 +99,9 @@ pub const Registry = struct {
             }
         }
         names.items.len = count;
-        const result: Registry = .{ .arena = arena, .mapper = mapper, .wiki = wiki, .dump_date = date, .content_language = language, .entries = try entries.toOwnedSlice(a), .names = try names.toOwnedSlice(a) };
+        var source_sha256: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(raw, &source_sha256, .{});
+        const result: Registry = .{ .arena = arena, .source_sha256 = source_sha256, .mapper = mapper, .wiki = wiki, .dump_date = date, .content_language = language, .entries = try entries.toOwnedSlice(a), .names = try names.toOwnedSlice(a) };
         for ([_]i32{ 0, 10, 14 }) |id| if (result.byId(id) == null) return error.InvalidNamespaceRegistry;
         return result;
     }
@@ -369,3 +372,5 @@ test "Chinese module case policy applies only to the first codepoint" {
     defer a.free(main);
     try std.testing.expectEqualStrings("fooBar", main);
 }
+
+pub const german_test_fixture = @embedFile("fixtures/de-namespace-registry.tsv");
