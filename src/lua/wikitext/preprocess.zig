@@ -13,13 +13,6 @@ fn decodedTagEnd(text: []const u8, start: usize) ?usize {
     return p + 1;
 }
 
-fn decodedSelfClosing(text: []const u8, start: usize, end: usize) bool {
-    if (end <= start + 1) return false;
-    var i = end - 2;
-    while (i > start and std.ascii.isWhitespace(text[i])) : (i -= 1) {}
-    return text[i] == '/';
-}
-
 pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
@@ -36,57 +29,114 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
     return out.toOwnedSlice(a);
 }
 
-fn appendDecodedTranscludedRange(a: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8, begin: usize, end: usize) !void {
-    var pos = begin;
-    while (pos < end) {
-        const lt = std.mem.indexOfScalarPos(u8, text, pos, '<') orelse {
-            try out.appendSlice(a, text[pos..end]);
-            break;
-        };
-        if (lt >= end) {
-            try out.appendSlice(a, text[pos..end]);
-            break;
-        }
-        try out.appendSlice(a, text[pos..lt]);
-        if (findCiPos(text, lt, "<noinclude") == lt) {
-            const open_end = decodedTagEnd(text, lt) orelse return error.MalformedTransclusionTag;
-            if (open_end > end) return error.MalformedTransclusionTag;
-            if (decodedSelfClosing(text, lt, open_end)) {
-                pos = open_end;
-                continue;
-            }
-            const close = findCiPos(text, open_end, "</noinclude") orelse return error.MalformedTransclusionTag;
-            pos = decodedTagEnd(text, close) orelse return error.MalformedTransclusionTag;
-            continue;
-        }
-        if (findCiPos(text, lt, "</noinclude") == lt or
-            findCiPos(text, lt, "<includeonly") == lt or
-            findCiPos(text, lt, "</includeonly") == lt or
-            findCiPos(text, lt, "<onlyinclude") == lt or
-            findCiPos(text, lt, "</onlyinclude") == lt)
+const InclusionTag = struct {
+    name: []const u8,
+    mode: enum { delimiter, excluded, preserved },
+    close_cache_slot: usize = 0,
+};
+
+fn inclusionTagAt(text: []const u8, start: usize) ?InclusionTag {
+    const name_start = start + 1;
+    var end = name_start;
+    if (end < text.len and text[end] == '/') end += 1;
+    while (end < text.len and (std.ascii.isAlphanumeric(text[end]) or text[end] == '-')) : (end += 1) {}
+    if (end == name_start or end == text.len) return null;
+    if (!std.ascii.isWhitespace(text[end]) and text[end] != '>' and
+        !std.mem.startsWith(u8, text[end..], "/>")) return null;
+    const name = text[name_start..end];
+    if (std.ascii.eqlIgnoreCase(name, "includeonly") or std.ascii.eqlIgnoreCase(name, "/includeonly"))
+        return .{ .name = name, .mode = .delimiter };
+    if (std.ascii.eqlIgnoreCase(name, "noinclude"))
+        return .{ .name = name, .mode = .excluded };
+    if (opaqueParserTagIndex(name)) |index|
+        return .{ .name = name, .mode = .preserved, .close_cache_slot = index + 1 };
+    return null;
+}
+
+fn inclusionCloseEnd(text: []const u8, start: usize, name: []const u8) ?usize {
+    var pos = start;
+    while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |lt| {
+        const name_end = lt + 2 + name.len;
+        if (name_end <= text.len and text[lt + 1] == '/' and
+            std.ascii.eqlIgnoreCase(text[lt + 2 .. name_end], name))
         {
-            pos = decodedTagEnd(text, lt) orelse return error.MalformedTransclusionTag;
-            continue;
+            var end = name_end;
+            while (end < text.len and std.ascii.isWhitespace(text[end])) : (end += 1) {}
+            if (end < text.len and text[end] == '>') return end + 1;
         }
-        try out.append(a, '<');
         pos = lt + 1;
     }
+    return null;
 }
 
 pub fn transcludeDecodedAlloc(a: std.mem.Allocator, text: []const u8) ![]u8 {
-    const no_comments = try stripDecodedComments(a, text);
-    defer a.free(no_comments);
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
-    if (findCiPos(no_comments, 0, "<onlyinclude")) |_| {
-        var pos: usize = 0;
-        while (findCiPos(no_comments, pos, "<onlyinclude")) |open| {
-            const open_end = decodedTagEnd(no_comments, open) orelse break;
-            const close = findCiPos(no_comments, open_end, "</onlyinclude") orelse break;
-            try appendDecodedTranscludedRange(a, &out, no_comments, open_end, close);
-            pos = decodedTagEnd(no_comments, close) orelse no_comments.len;
+    // MediaWiki Preprocessor_Hash selects exact onlyinclude delimiters on the
+    // raw source, before recognizing comments or extension bodies.
+    const onlyinclude = std.mem.indexOf(u8, text, "<onlyinclude>") != null and
+        std.mem.indexOf(u8, text, "</onlyinclude>") != null;
+    var seeking_onlyinclude = onlyinclude;
+    var no_more_gt = false;
+    var no_more_close: [opaque_parser_tags.len + 1]bool = @splat(false);
+    var pos: usize = 0;
+    while (pos < text.len) {
+        if (seeking_onlyinclude) {
+            const open = std.mem.indexOfPos(u8, text, pos, "<onlyinclude>") orelse break;
+            pos = open + "<onlyinclude>".len;
+            seeking_onlyinclude = false;
         }
-    } else try appendDecodedTranscludedRange(a, &out, no_comments, 0, no_comments.len);
+        const lt = std.mem.indexOfScalarPos(u8, text, pos, '<') orelse {
+            try out.appendSlice(a, text[pos..]);
+            break;
+        };
+        try out.appendSlice(a, text[pos..lt]);
+        if (onlyinclude and std.mem.startsWith(u8, text[lt..], "</onlyinclude>")) {
+            pos = lt + "</onlyinclude>".len;
+            seeking_onlyinclude = true;
+            continue;
+        }
+        if (std.mem.startsWith(u8, text[lt..], "<!--")) {
+            const close = std.mem.indexOfPos(u8, text, lt + 4, "-->") orelse break;
+            pos = close + 3;
+            continue;
+        }
+        const tag = inclusionTagAt(text, lt) orelse {
+            try out.append(a, '<');
+            pos = lt + 1;
+            continue;
+        };
+        // The PHP preprocessor uses the first raw '>', even inside attributes.
+        const open_end = (if (no_more_gt) null else decodedTagEnd(text, lt)) orelse {
+            no_more_gt = true;
+            try out.append(a, '<');
+            pos = lt + 1;
+            continue;
+        };
+        if (tag.mode == .delimiter) {
+            pos = open_end;
+            continue;
+        }
+        if (text[open_end - 2] == '/') {
+            if (tag.mode == .preserved) try out.appendSlice(a, text[lt..open_end]);
+            pos = open_end;
+            continue;
+        }
+        // Elements end at the first closing tag, without nesting. Cache misses
+        // so repeated unclosed extension tags cannot cause quadratic scans.
+        const close_end = if (no_more_close[tag.close_cache_slot]) null else inclusionCloseEnd(text, open_end, tag.name);
+        if (close_end) |end| {
+            if (tag.mode == .preserved) try out.appendSlice(a, text[lt..end]);
+            pos = end;
+        } else {
+            no_more_close[tag.close_cache_slot] = true;
+            // The upstream missing-end whitelist uses the original spelling.
+            // A lowercase noinclude legitimately excludes through EOF.
+            if (std.mem.eql(u8, tag.name, "noinclude")) break;
+            try out.appendSlice(a, text[lt..open_end]);
+            pos = open_end;
+        }
+    }
     return out.toOwnedSlice(a);
 }
 
@@ -178,14 +228,21 @@ pub fn findParamEnd(s: []const u8, start: usize) ?usize {
     return construct.close;
 }
 
+const opaque_parser_tags = [_][]const u8{
+    "nowiki",  "pre",      "gallery",      "indicator",       "ref",             "references", "templatestyles",
+    "math",    "ce",       "chem",         "score",           "syntaxhighlight", "source",     "timeline",
+    "hiero",   "poem",     "categorytree", "charinsert",      "graph",           "mapframe",   "maplink",
+    "section", "inputbox", "imagemap",     "dynamicpagelist",
+};
+
+fn opaqueParserTagIndex(name: []const u8) ?usize {
+    inline for (opaque_parser_tags, 0..) |tag, i|
+        if (std.ascii.eqlIgnoreCase(name, tag)) return i;
+    return null;
+}
+
 fn isOpaqueParserTag(name: []const u8) bool {
-    inline for (&.{
-        "nowiki",  "pre",      "gallery",      "indicator",       "ref",             "references", "templatestyles",
-        "math",    "ce",       "chem",         "score",           "syntaxhighlight", "source",     "timeline",
-        "hiero",   "poem",     "categorytree", "charinsert",      "graph",           "mapframe",   "maplink",
-        "section", "inputbox", "imagemap",     "dynamicpagelist",
-    }) |tag| if (std.ascii.eqlIgnoreCase(name, tag)) return true;
-    return false;
+    return opaqueParserTagIndex(name) != null;
 }
 
 fn isLiteralParserTag(name: []const u8) bool {
@@ -429,4 +486,90 @@ test "decoded comments and transclusion tags share one preprocessing core" {
     const only = try transcludeDecodedAlloc(a, "A<onlyinclude>B</onlyinclude>C");
     defer a.free(only);
     try std.testing.expectEqualStrings("B", only);
+}
+
+test "unclosed corpus noinclude tails preserve transcluded content" {
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        // Exact 2026-10-01 bodies: af:Sjabloon:Sub and an:Plantilla:io/ms.
+        .{ .source = "<includeonly><sub>{{{1}}}</sub></includeonly><noinclude>", .expected = "<sub>{{{1}}}</sub>" },
+        .{ .source = "[[ido|Ido]] <noinclude>", .expected = "[[ido|Ido]] " },
+        .{ .source = "[[malayo|Malayo]]<noinclude>[[categoría:Plantillas de traducción|ms]]", .expected = "[[malayo|Malayo]]" },
+        .{ .source = "<!--old--><includeonly>category</includeonly><noinclude>docs</noinclude>\n{{betekenisse}}\n#meaning\n<noinclude>", .expected = "category\n{{betekenisse}}\n#meaning\n" },
+    };
+    for (cases) |case| {
+        const actual = try transcludeDecodedAlloc(std.testing.allocator, case.source);
+        defer std.testing.allocator.free(actual);
+        try std.testing.expectEqualStrings(case.expected, actual);
+    }
+}
+
+test "inclusion tag boundaries attributes first close and missing ends follow MediaWiki" {
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "A<noinclude>B", .expected = "A" },
+        .{ .source = "A<NOINCLUDE>B", .expected = "A<NOINCLUDE>B" },
+        .{ .source = "A<NOINCLUDE>B</noinclude>C", .expected = "AC" },
+        .{ .source = "A<noinclude>B</NOINCLUDE >C", .expected = "AC" },
+        .{ .source = "A<noinclude>B</noinclude/>C", .expected = "A" },
+        .{ .source = "A<noinclude>B</noinclude x>C", .expected = "A" },
+        .{ .source = "A</noinclude>B", .expected = "A</noinclude>B" },
+        .{ .source = "A<noinclude x=1>B</noinclude>C", .expected = "AC" },
+        .{ .source = "A<noinclude/>B", .expected = "AB" },
+        .{ .source = "A<NOINCLUDE />B", .expected = "AB" },
+        .{ .source = "A<noinclude / >B", .expected = "A" },
+        .{ .source = "A<noinclude/ >B", .expected = "A<noinclude/ >B" },
+        .{ .source = "A<noinclude>B<noinclude>C</noinclude>D</noinclude>E", .expected = "AD</noinclude>E" },
+        .{ .source = "A<includeonly x=1>B</includeonly x=2>C", .expected = "ABC" },
+        .{ .source = "A<includeonly x=\">\">B</includeonly>C", .expected = "A\">BC" },
+        .{ .source = "A<noincludeX>B</noincludeX>C", .expected = "A<noincludeX>B</noincludeX>C" },
+        .{ .source = "A< includeonly>B</ includeonly>C", .expected = "A< includeonly>B</ includeonly>C" },
+        .{ .source = "A<noinclude", .expected = "A<noinclude" },
+        .{ .source = "A<includeonly ", .expected = "A<includeonly " },
+        .{ .source = "A<noinclude <!--hidden", .expected = "A<noinclude " },
+    };
+    for (cases) |case| {
+        const actual = try transcludeDecodedAlloc(std.testing.allocator, case.source);
+        defer std.testing.allocator.free(actual);
+        try std.testing.expectEqualStrings(case.expected, actual);
+    }
+}
+
+test "onlyinclude uses exact raw delimiters and a flat selector" {
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "A<onlyinclude>B", .expected = "A<onlyinclude>B" },
+        .{ .source = "A<onlyinclude/>B", .expected = "A<onlyinclude/>B" },
+        .{ .source = "A<ONLYINCLUDE>B</ONLYINCLUDE>C", .expected = "A<ONLYINCLUDE>B</ONLYINCLUDE>C" },
+        .{ .source = "A<onlyinclude x=1>B</onlyinclude>C", .expected = "A<onlyinclude x=1>B</onlyinclude>C" },
+        .{ .source = "A<onlyinclude>B</onlyinclude >C", .expected = "A<onlyinclude>B</onlyinclude >C" },
+        .{ .source = "A</onlyinclude>B<onlyinclude>C", .expected = "C" },
+        .{ .source = "A<onlyinclude>B</onlyinclude>C<onlyinclude>D", .expected = "BD" },
+        .{ .source = "A<onlyinclude>B<onlyinclude>C</onlyinclude>D</onlyinclude>E", .expected = "B<onlyinclude>C" },
+        .{ .source = "A<!--<onlyinclude>B</onlyinclude>-->C", .expected = "B" },
+        .{ .source = "A<nowiki><onlyinclude>B</onlyinclude></nowiki>C", .expected = "B" },
+        .{ .source = "A<noinclude><onlyinclude>B</onlyinclude></noinclude>C", .expected = "B" },
+        .{ .source = "<onlyinclude>A<!--</onlyinclude>-->B", .expected = "AB" },
+        .{ .source = "<onlyinclude>A<noinclude></onlyinclude></noinclude>B", .expected = "AB" },
+        .{ .source = "<onlyinclude>A<nowiki></onlyinclude></nowiki>B", .expected = "A<nowiki></onlyinclude></nowiki>B" },
+    };
+    for (cases) |case| {
+        const actual = try transcludeDecodedAlloc(std.testing.allocator, case.source);
+        defer std.testing.allocator.free(actual);
+        try std.testing.expectEqualStrings(case.expected, actual);
+    }
+}
+
+test "transclusion preserves first opened literal regions" {
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "<nowiki>A<noinclude>B</noinclude>C<!--D--></nowiki>", .expected = "<nowiki>A<noinclude>B</noinclude>C<!--D--></nowiki>" },
+        .{ .source = "<ref><includeonly>A</includeonly></ref>", .expected = "<ref><includeonly>A</includeonly></ref>" },
+        .{ .source = "A<noinclude>B<!--</noinclude>-->C", .expected = "A-->C" },
+        .{ .source = "A<noinclude>B<nowiki></noinclude></nowiki>C", .expected = "A</nowiki>C" },
+        .{ .source = "<nowiki>A<noinclude>B", .expected = "<nowiki>A" },
+        .{ .source = "A<!--<noinclude>B--><includeonly>C</includeonly>", .expected = "AC" },
+        .{ .source = "<nowiki/><includeonly>A</includeonly>", .expected = "<nowiki/>A" },
+    };
+    for (cases) |case| {
+        const actual = try transcludeDecodedAlloc(std.testing.allocator, case.source);
+        defer std.testing.allocator.free(actual);
+        try std.testing.expectEqualStrings(case.expected, actual);
+    }
 }

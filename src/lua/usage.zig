@@ -195,10 +195,7 @@ pub fn scanWikitext(a: std.mem.Allocator, registry: *const Registry, host_title:
 }
 
 pub fn scanTemplateWikitextFlags(a: std.mem.Allocator, registry: *const Registry, host_title: ?[]const u8, source: []const u8, out: *std.ArrayList(Ref)) !ScanFlags {
-    const body = preprocess.transcludeDecodedAlloc(a, source) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        else => return .{ .dynamic_module_target = true, .dynamic_template_target = true },
-    };
+    const body = try preprocess.transcludeDecodedAlloc(a, source);
     defer a.free(body);
     var flags: ScanFlags = .{};
     try scanRange(a, registry, host_title, body, out, &flags, 0);
@@ -1250,15 +1247,35 @@ test "usage scanner follows every explicit transclusion namespace" {
     try std.testing.expectEqualStrings("Template:other", refs.items[4].target);
 }
 
-test "template usage profiling fails soft on malformed transclusion tags" {
+test "template usage profiling excludes unclosed noinclude tails without dynamic fallback" {
     const a = std.testing.allocator;
     var registry_storage = try Registry.init(a, ns.english_test_fixture);
     defer registry_storage.deinit();
     const registry = &registry_storage;
     var refs: std.ArrayList(Ref) = .empty;
-    defer refs.deinit(a);
-    try scanTemplateWikitext(a, registry, null, "A<noinclude>broken {{#invoke:Nope|x}}", &refs);
+    defer {
+        for (refs.items) |ref| a.free(ref.target);
+        refs.deinit(a);
+    }
+    const excluded_flags = try scanTemplateWikitextFlags(a, registry, null, "A<noinclude>documentation {{#invoke:Nope|x}}", &refs);
     try std.testing.expectEqual(@as(usize, 0), refs.items.len);
+    try std.testing.expect(!excluded_flags.dynamic_module_target);
+    try std.testing.expect(!excluded_flags.dynamic_template_target);
+
+    const flags = try scanTemplateWikitextFlags(
+        a,
+        registry,
+        null,
+        "{{Visible}}{{#invoke:Live|run}}<noinclude class=\"documentation\">{{#invoke:{{{module}}}|x}}{{{{{template}}}|x}}",
+        &refs,
+    );
+    try std.testing.expectEqual(@as(usize, 2), refs.items.len);
+    try std.testing.expectEqual(RefKind.template, refs.items[0].kind);
+    try std.testing.expectEqualStrings("Template:Visible", refs.items[0].target);
+    try std.testing.expectEqual(RefKind.module, refs.items[1].kind);
+    try std.testing.expectEqualStrings("Module:Live", refs.items[1].target);
+    try std.testing.expect(!flags.dynamic_module_target);
+    try std.testing.expect(!flags.dynamic_template_target);
 }
 
 test "static require scanner walks nested Lua functions" {

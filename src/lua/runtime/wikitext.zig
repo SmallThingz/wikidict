@@ -1676,6 +1676,22 @@ pub const Expander = struct {
         return false;
     }
 
+    fn emptyComputedTransclusion(self: *Expander, expanded_head: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        // Parser::braceSubstitution recovers the expanded title and argument
+        // nodes when no valid title exists. Protect only the literal braces so
+        // links and other markup in the expanded arguments retain their meaning.
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.runtime.allocator);
+        try out.appendSlice(self.runtime.allocator, "<nowiki>{{</nowiki>");
+        try out.appendSlice(self.runtime.allocator, expanded_head);
+        for (raw_args) |raw| {
+            try out.append(self.runtime.allocator, '|');
+            try out.appendSlice(self.runtime.allocator, try self.expandWikitext(raw, params, host_title, depth + 1));
+        }
+        try out.appendSlice(self.runtime.allocator, "<nowiki>}}</nowiki>");
+        return out.toOwnedSlice(self.runtime.allocator);
+    }
+
     fn expandConstruct(self: *Expander, content: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const lazy_base = self.lazy_template_args.items.len;
         defer self.lazy_template_args.items.len = lazy_base;
@@ -1703,7 +1719,10 @@ pub const Expander = struct {
             const args = try self.buildTemplateArgs(parts.items[1..], params, host_title, depth + 1);
             return self.expandTemplateBySymbol(symbol, args, host_title, depth + 1);
         }
-        const title = stripSubstPrefix(try self.expandWikitext(raw_head, params, host_title, depth + 1));
+        const expanded_head = try self.expandWikitext(raw_head, params, host_title, depth + 1);
+        const title = stripSubstPrefix(expanded_head);
+        if (title.len == 0)
+            return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth);
         if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
             if (try self.expandParserHead(title, parts.items[1..], params, host_title, depth)) |value| return value;
         }
@@ -2699,6 +2718,14 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("<nowiki>{{#urlencode:जलाना|PATH}}</nowiki>", inert_hash_urlencode);
     const inert_empty_template = try expander.expandFragment("Page", "{{|yue|洛陽}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{|yue|洛陽}}</nowiki>", inert_empty_template);
+    // Afrikaans Sjabloon:S computes this empty name when woordklank receives
+    // taal=nl but forwards its optional t parameter without a value.
+    const computed_empty_template = try expander.expandFragment("Page", "{{{{{1|}}}|no=1}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>|no=1<nowiki>}}</nowiki>", computed_empty_template);
+    const computed_empty_args = try expander.expandFragment("Page", "{{{{#if:|unused}}| [[Example]] |key={{#expr:2+3}}}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>| [[Example]] |key=5<nowiki>}}</nowiki>", computed_empty_args);
+    const computed_empty_no_args = try expander.expandFragment("Page", "{{{{{1|}}}}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki><nowiki>}}</nowiki>", computed_empty_no_args);
     const lazy_unused = try expander.expandFragment("Caller page", "{{Lazy|used={{PAGENAME}}|unused={{User:Definitely missing page}}}}", 1_670_803_200);
     try std.testing.expectEqualStrings("used=Caller page", lazy_unused);
     const lazy_forwarded = try expander.expandFragment("Caller page", "{{LazyForward|value|{{User:Definitely missing page}}}}", 1_670_803_200);
