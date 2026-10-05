@@ -31,7 +31,8 @@ SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 2
 AUXILIARY_SNAPSHOT_NAMES = (
     'commons-data', 'category-stats', 'interface-messages', 'category-tree',
-    'wikibase-sitelinks', 'wikibase-entity-text', 'file-metadata',
+    'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
+    'wikibase-entity-terms', 'language-fallbacks', 'file-metadata',
     'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words',
 )
 MAX_TOTAL_BUILD_WORKERS = 8
@@ -165,20 +166,83 @@ def validate_interwiki_provenance(snapshot, edition, expected_sha):
         raise ValueError('Interwiki map raw response differs from provenance')
 
 
+def auxiliary_capture_helper(name, path):
+    if name=='magic-words':
+        import prepare_magic_words
+        return prepare_magic_words
+    if name in ('wikibase-entities','wikibase-entity-terms'):
+        import prepare_wikibase_entities
+        return prepare_wikibase_entities
+    if name=='interface-messages':
+        manifest=path.with_name(name+'.manifest.json')
+        if not (manifest.exists() or manifest.is_symlink()):return None
+        record=read_small_json(manifest)
+        if not isinstance(record,dict):raise ValueError('Invalid interface-message provenance')
+        # Older explicit snapshots predate capture schemas. A present schema
+        # must pass the current helper, including unknown/unsupported schemas.
+        if 'schema' not in record:return None
+    elif name!='language-fallbacks':
+        return None
+    import prepare_language_messages
+    return prepare_language_messages
+
+
+def validated_auxiliary_capture(name, path, edition=None, date=None):
+    helper=auxiliary_capture_helper(name,path)
+    if helper is None:return None
+    record=helper.validate_snapshot(path,edition,date)
+    if name=='magic-words':
+        artifacts=dict(record['artifacts'])
+        artifacts['magic-words.manifest.json']=sha256_file(path.with_name('magic-words.manifest.json'))
+    else:
+        artifacts=helper.capture_artifacts(path,record)
+    if not isinstance(artifacts,dict) or name+'.manifest.json' not in artifacts or name+'.tsv' not in artifacts:
+        raise ValueError('Incomplete auxiliary capture inventory: '+name)
+    for filename,digest in artifacts.items():
+        if (not isinstance(filename,str) or Path(filename).name!=filename or filename in ('.','..') or
+                not isinstance(digest,str) or not re.fullmatch('[0-9a-f]{64}',digest)):
+            raise ValueError('Unsafe auxiliary capture inventory: '+name)
+    return record,artifacts
+
+
+def auxiliary_artifact_digest(artifacts):
+    return hashlib.sha256(json.dumps(artifacts,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
+def auxiliary_capture_identities(snapshots, edition=None, date=None):
+    manifests={};artifacts={}
+    for name,source in sorted((snapshots or {}).items()):
+        capture=validated_auxiliary_capture(name,Path(source),edition,date)
+        if capture is not None:
+            _,inventory=capture
+            manifests[name]=inventory[name+'.manifest.json']
+            artifacts[name]=auxiliary_artifact_digest(inventory)
+    return manifests,artifacts
+
+
+def require_auxiliary_capture_identity(snapshots, identity):
+    if identity is None:return
+    manifests,artifacts=auxiliary_capture_identities(snapshots)
+    if (manifests!=identity.get('auxiliary_capture_sha256',{}) or
+            artifacts!=identity.get('auxiliary_capture_artifact_sha256',{})):
+        raise ValueError('Auxiliary capture changed during build')
+
+
 def verified_auxiliary_hashes(snapshots, edition=None, date=None):
-    hashes={}
+    hashes={};namespace_inputs={}
     for name, source in sorted((snapshots or {}).items()):
         if name not in AUXILIARY_SNAPSHOT_NAMES:
             raise ValueError(f'Unknown auxiliary snapshot: {name}')
-        path=Path(source).resolve(strict=True)
+        path=Path(source)
+        capture=validated_auxiliary_capture(name,path,edition,date)
+        if capture is not None and name in ('language-fallbacks','interface-messages'):
+            namespace_inputs[name]=capture[0]['namespace_registry_sha256']
+        path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
         sha=sha256_file(path)
-        if name=='magic-words':
-            from prepare_magic_words import validate_snapshot
-            validate_snapshot(path,edition,date)
         manifest=path.with_name(name+'.manifest.json')
-        if manifest.is_file():
-            record=read_small_json(manifest)
+        if capture is not None or manifest.is_file():
+            record=capture[0] if capture is not None else read_small_json(manifest)
             if (not isinstance(record,dict) or
                     record.get('output_sha256',record.get('tsv_sha256'))!=sha or
                     ('tsv_sha256' in record and record['tsv_sha256']!=sha) or
@@ -190,6 +254,10 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
             if header[0]!='# wikidict-namespace-registry-v1' or (edition is not None and header[1]!='# wiki\t'+edition) or (date is not None and header[2]!='# dump-date\t'+date):
                 raise ValueError('Namespace registry identifies a different edition or date')
         hashes[name]=sha
+    if 'namespace-registry' in hashes:
+        for name,digest in namespace_inputs.items():
+            if digest!=hashes['namespace-registry']:
+                raise ValueError('Auxiliary capture uses a different namespace registry: '+name)
     return hashes
 
 
@@ -214,7 +282,20 @@ def validate_capture_artifacts(root, record, required=()):
         if not path.is_file() or not path.resolve().is_relative_to(root) or sha256_file(path)!=digest:raise ValueError('Missing or changed capture artifact: '+name)
 
 
-def validate_captured_snapshot(name,path,capture,selected):
+def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
+    if capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms','language-fallbacks','interface-messages'):
+        bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
+        if bound is not None:
+            _,inventory=bound
+            inputs=(('wikibase-namespace-siteinfo.raw.json','namespace-siteinfo.raw.json'),
+                    ('wikibase-namespace-capture.complete.json','capture.complete.json')) if name.startswith('wikibase-') else (
+                    ('language-messages.namespace-registry.tsv','namespace-registry.tsv'),)
+            for copied,original in inputs:
+                if inventory.get(copied)!=sha256_file(capture_root/original):
+                    raise ValueError('Auxiliary namespace source differs from selected capture: '+name)
+        return
+    if name not in ('namespace-registry','category-stats','category-tree'):
+        return
     record=read_small_json(path.with_name(name+'.manifest.json'))
     if name=='namespace-registry':
         if record.get('source_dump_files')!=[capture['source_xml']]:raise ValueError('Namespace source differs from capture')
@@ -232,6 +313,19 @@ def validate_captured_snapshot(name,path,capture,selected):
             source=selected_source(source,selected)
             if not source['name'].endswith('-'+kind+'.sql.gz'):raise ValueError('Invalid category tree source table')
         if record.get('dump_siteinfo_sha256')!=capture['artifacts']['dump-siteinfo.xml'] or record.get('output_bytes')!=path.stat().st_size:raise ValueError('Category tree capture mismatch')
+
+
+def discover_auxiliary_generation(root,directory,names,edition,date):
+    generation=root/directory
+    if not (generation.exists() or generation.is_symlink()):return {}
+    if generation.is_symlink() or not generation.is_dir():
+        raise ValueError('Unsafe auxiliary capture generation: '+str(generation))
+    snapshots={name:generation/(name+'.tsv') for name in names}
+    # The first name always requires a strict capture helper. It validates the
+    # whole pair before either output can replace a legacy flat snapshot.
+    helper=auxiliary_capture_helper(names[0],snapshots[names[0]])
+    for path in snapshots.values():helper.validate_snapshot(path,edition,date)
+    return snapshots
 
 
 def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None):
@@ -266,12 +360,18 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
             capture=record
             for marker in ('auxiliary-basic.complete.json','auxiliary-all.complete.json'):
                 if (root/marker).exists():validate_capture_artifacts(root,read_small_json(root/marker))
+            preferred=discover_auxiliary_generation(root,'wikibase-entities',
+                ('wikibase-entities','wikibase-entity-terms'),edition,date)
+            preferred.update(discover_auxiliary_generation(root,'language-messages',
+                ('language-fallbacks','interface-messages'),edition,date))
             for name in AUXILIARY_SNAPSHOT_NAMES:
+                if name in preferred:continue
                 path=root/(name+'.tsv')
                 sidecar=root/(name+'.manifest.json')
                 present=[p.exists() or p.is_symlink() for p in (path,sidecar)]
                 if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
                 if all(present):snapshots[name]=path
+            snapshots.update(preferred)
             from prepare_magic_words import selected_snapshot_root
             magic_root=selected_snapshot_root(root)
             if magic_root.exists() or magic_root.is_symlink():
@@ -296,7 +396,7 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
         if not language_record or language_record.get('name')!='language-registry.tsv' or language.stat().st_size!=language_record.get('size') or sha256_file(language)!=language_record.get('sha256'):raise ValueError('Language registry differs from pinned inventory')
         if captured is not None:
             for name,path in snapshots.items():
-                if name!='language-registry':validate_captured_snapshot(name,Path(path),capture,selected)
+                if name!='language-registry':validate_captured_snapshot(name,Path(path),capture,selected,root)
         verified_auxiliary_hashes(snapshots,edition,date)
         result[(edition,date)]={'auxiliary_snapshots':snapshots}
         if captured is not None:
@@ -320,22 +420,36 @@ def pipeline_snapshot_args(registry, snapshots):
     return auxiliary_snapshot_args(merged)
 
 
-def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=None):
-    pinned={}
+def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=None, capture_artifact_hashes=None):
+    pinned={};copies={};captures={}
+    def add_copy(source,filename,digest):
+        if filename in copies and copies[filename][1]!=digest:
+            raise ValueError('Conflicting auxiliary capture artifact: '+filename)
+        copies.setdefault(filename,(source,digest))
     for name,source in sorted((snapshots or {}).items()):
         source=Path(source)
-        pinned[name]=copy_verified_snapshot(source,destination/(name+'.tsv'),hashes[name])
-        if name=='magic-words':
-            # Keep the immutable API observation with the private TSV copy so
-            # revalidation after a long build still checks the captured source.
-            from prepare_magic_words import validate_snapshot
-            capture=validate_snapshot(source)
-            for filename in sorted((set(capture['artifacts'])|{'magic-words.manifest.json'})-{'magic-words.tsv'}):
-                path=source.with_name(filename)
-                expected=((capture_hashes or {}).get(name) if filename=='magic-words.manifest.json'
-                          else capture['artifacts'][filename])
-                copy_verified_snapshot(path,destination/path.name,expected or sha256_file(path))
-            validate_snapshot(pinned[name])
+        pinned[name]=destination/(name+'.tsv')
+        add_copy(source,name+'.tsv',hashes[name])
+        capture=validated_auxiliary_capture(name,source)
+        if capture is None:
+            if name in (capture_hashes or {}) or name in (capture_artifact_hashes or {}):
+                raise ValueError('Auxiliary capture disappeared before pinning: '+name)
+            continue
+        _,inventory=capture
+        if capture_hashes is not None and inventory[name+'.manifest.json']!=capture_hashes.get(name):
+            raise ValueError('Auxiliary capture changed before pinning: '+name)
+        if capture_artifact_hashes is not None and auxiliary_artifact_digest(inventory)!=capture_artifact_hashes.get(name):
+            raise ValueError('Auxiliary capture artifacts changed before pinning: '+name)
+        captures[name]=inventory
+        for filename,digest in inventory.items():add_copy(source.with_name(filename),filename,digest)
+    # Validate every source and detect conflicting paired captures before
+    # copying. Shared payloads are copied once and revalidated as a whole.
+    for filename,(source,digest) in sorted(copies.items()):
+        copy_verified_snapshot(source,destination/filename,digest)
+    for name,inventory in captures.items():
+        capture=validated_auxiliary_capture(name,pinned[name])
+        if capture is None or capture[1]!=inventory:
+            raise ValueError('Auxiliary capture changed while pinning: '+name)
     return pinned
 
 
@@ -372,9 +486,11 @@ def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_
                 zig_sha256=sha256_file(Path(executable)),
                 auxiliary_snapshot_sha256=auxiliary_hashes or {},
                 interwiki_map_sha256=interwiki_sha, expansion_timeout_ms=expansion_timeout_ms)
-    if auxiliary_snapshots and 'magic-words' in auxiliary_snapshots:
-        manifest=Path(auxiliary_snapshots['magic-words']).with_name('magic-words.manifest.json')
-        identity['auxiliary_capture_sha256']={'magic-words':sha256_file(manifest)}
+    manifests,artifacts=auxiliary_capture_identities(auxiliary_snapshots,
+        items[0]['wiki'] if items else None,items[0]['date'] if items else None)
+    if manifests:
+        identity['auxiliary_capture_sha256']=manifests
+        identity['auxiliary_capture_artifact_sha256']=artifacts
     return identity
 
 
@@ -816,6 +932,10 @@ def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxilia
         state['interwiki_map_sha256']=sha256_file(interwiki_snapshot)
     if auxiliary_snapshots:
         state['auxiliary_snapshot_sha256']=verified_auxiliary_hashes(auxiliary_snapshots,items[0]['wiki'],items[0]['date'])
+        manifests,artifacts=auxiliary_capture_identities(auxiliary_snapshots,items[0]['wiki'],items[0]['date'])
+        if manifests:
+            state['auxiliary_capture_sha256']=manifests
+            state['auxiliary_capture_artifact_sha256']=artifacts
     return state
 
 
@@ -1114,6 +1234,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         if verified_auxiliary_hashes(auxiliary_snapshots)!=auxiliary_hashes:
             raise ValueError('Auxiliary snapshot changed during build')
         (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
+    require_auxiliary_capture_identity(auxiliary_snapshots,build_identity)
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
     persist_build_identity(staging,build_identity)
     (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
@@ -1431,7 +1552,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         now_unix=prepare_shard_workspace(workspace,expected,now_unix)
         dump=cached_shard_dump(xml,downloads,workspace)
         pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
-        aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,build_identity.get('auxiliary_capture_sha256'))
+        aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
+            build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}))
         build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
     else:
         now_unix=now_unix if now_unix is not None else int(time.time())
@@ -1441,7 +1563,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             source_metadata={}
             dump = stage_seekable_dump(xml,downloads,scratch,source_metadata)
             pinned=copy_verified_snapshot(interwiki_snapshot,scratch/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
-            aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,scratch,build_identity.get('auxiliary_capture_sha256'))
+            aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,scratch,
+                build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}))
             timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
                          *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                          *pipeline_snapshot_args(registry,aux_pinned),
@@ -1459,6 +1582,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
                 if verified_auxiliary_hashes(aux_pinned)!=auxiliary_hashes:
                     raise ValueError('Auxiliary snapshot changed during build')
                 (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
+            require_auxiliary_capture_identity(aux_pinned,build_identity)
             (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
             persist_build_identity(staging,build_identity)
             (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)

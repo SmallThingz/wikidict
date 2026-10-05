@@ -1,5 +1,6 @@
 import bz2
 import concurrent.futures
+import contextlib
 from compression import zstd
 import hashlib
 import io
@@ -13,7 +14,9 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+import urllib.parse
 from unittest.mock import patch
+from types import SimpleNamespace
 import build_wiktionaries as b
 import build_resource_limits as limits
 from compress_blobs import compress, compress_many, default_workers
@@ -48,6 +51,40 @@ def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observa
             raw_sha256=magic.digest(raw),raw_bytes=len(raw))
     magic.capture_snapshot(folder,edition,date,fetcher=fetcher)
     return folder/'magic-words'/'magic-words.tsv'
+
+
+def write_wikibase_capture_fixture(folder, minute='01'):
+    from test_prepare_wikibase_entities import WikibaseCaptureTests
+    fixture=WikibaseCaptureTests()
+    fetcher=fixture.fetcher()
+    def fetch(url):
+        raw,receipt=fetcher(url)
+        receipt['retrieved_utc']='2026-10-05T09:'+minute+':01+00:00'
+        return raw,receipt
+    fixture.capture(folder,fetcher=fetch)
+    return {name:folder/'wikibase-entities'/(name+'.tsv')
+            for name in ('wikibase-entities','wikibase-entity-terms')}
+
+
+def write_language_messages_fixture(folder):
+    import prepare_language_messages as messages
+    namespace=write_namespace_fixture(folder,'arwiktionary','20261001')['namespace-registry']
+    namespace.write_text(namespace.read_text().replace('# content-language\ten\n','# content-language\tar\n'))
+    args=SimpleNamespace(wiki='arwiktionary',date='20261001',namespace_registry=namespace,
+        output=folder/'language-messages',languages=['ar'],messages=['parentheses'],delay=0,wall_seconds=30)
+    def transport(url,timeout):
+        params=urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        query={'general':{'wikiid':'arwiktionary','lang':'ar'}}
+        if params['meta']==['siteinfo|languageinfo']:
+            query['languageinfo']={code:{'code':code,'fallbacks':[]} for code in ('ar','en')}
+        elif params['meta']==['siteinfo|allmessages']:
+            query['allmessages']=[{'name':'parentheses','normalizedname':'parentheses','content':'($1)','default':'($1)'}]
+        else:
+            raise AssertionError('Unexpected fixture request')
+        return 200,{'content-type':'application/json'},json.dumps({'query':query}).encode()
+    with contextlib.redirect_stdout(io.StringIO()):
+        messages.capture(args,transport=transport)
+    return {name:args.output/(name+'.tsv') for name in ('language-fallbacks','interface-messages')}
 
 
 def write_test_manifest(root, manifest):
@@ -117,6 +154,112 @@ def write_coverage(root, command=None):
 
 
 class ProvenanceBindingTests(unittest.TestCase):
+    def test_paired_captures_pin_every_validated_artifact_once_without_network(self):
+        import prepare_language_messages as messages
+        import prepare_wikibase_entities as entities
+        for fixture,helper in ((write_wikibase_capture_fixture,entities),(write_language_messages_fixture,messages)):
+            with self.subTest(helper=helper.__name__),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);snapshots=fixture(root/'capture')
+                first=next(iter(snapshots.values()))
+                inventory=helper.capture_artifacts(first)
+                with patch.object(entities,'fetch_response',side_effect=AssertionError('unexpected network')), \
+                        patch.object(messages.evidence,'get_response',side_effect=AssertionError('unexpected network')):
+                    hashes=b.verified_auxiliary_hashes(snapshots,'arwiktionary','20261001')
+                    manifests,artifacts=b.auxiliary_capture_identities(snapshots)
+                    destination=root/'pinned'
+                    with patch.object(b,'copy_verified_snapshot',wraps=b.copy_verified_snapshot) as copy:
+                        pinned=b.pinned_auxiliary_snapshots(snapshots,hashes,destination,manifests,artifacts)
+                    self.assertEqual(copy.call_count,len(inventory))
+                    self.assertEqual(set(p.name for p in destination.iterdir()),set(inventory))
+                    self.assertEqual(hashes,b.verified_auxiliary_hashes(pinned,'arwiktionary','20261001'))
+                    for name,digest in inventory.items():self.assertEqual(b.sha256_file(destination/name),digest)
+                    raw=next(destination/name for name in inventory if name.endswith('.raw.json'))
+                    raw.chmod(0o644);raw.write_bytes(raw.read_bytes()+b' ')
+                    with self.assertRaises(ValueError):b.verified_auxiliary_hashes(pinned)
+
+    def test_capture_receipts_bind_build_shard_and_publication_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);first=write_wikibase_capture_fixture(root/'first')
+            other=write_wikibase_capture_fixture(root/'other',minute='02')
+            hashes=b.verified_auxiliary_hashes(first)
+            self.assertEqual(hashes,b.verified_auxiliary_hashes(other))
+            tool=root/'zig';tool.write_bytes(b'tool')
+            registry=root/'language.tsv';registry.write_text('ar\tالعربية\n')
+            item=dict(wiki='arwiktionary',date='20261001',name='dump',size=1,sha1='a')
+            with patch.object(b.shutil,'which',return_value=str(tool)),patch.object(b,'source_fingerprint',return_value='source'):
+                identity=b.build_input_identity([item],'zig',hashes,None,None,first)
+                changed=b.build_input_identity([item],'zig',hashes,None,None,other)
+                self.assertNotEqual(b.shard_state([item],registry,auxiliary_snapshots=first),
+                                    b.shard_state([item],registry,auxiliary_snapshots=other))
+            self.assertLess(len(json.dumps(identity)),64*1024)
+            for digest in identity['auxiliary_capture_artifact_sha256'].values():self.assertRegex(digest,r'^[0-9a-f]{64}$')
+            with self.assertRaisesRegex(ValueError,'Build inputs or compiler changed'):b.require_build_identity(identity,changed)
+            b.require_auxiliary_capture_identity(first,identity)
+            with self.assertRaisesRegex(ValueError,'capture changed during build'):b.require_auxiliary_capture_identity(other,identity)
+            with self.assertRaisesRegex(ValueError,'capture changed before pinning'):
+                b.pinned_auxiliary_snapshots(other,hashes,root/'rejected',identity['auxiliary_capture_sha256'],
+                    identity['auxiliary_capture_artifact_sha256'])
+            self.assertFalse((root/'rejected').exists())
+
+    def test_mixed_paired_capture_generations_reject_before_copying(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);first=write_wikibase_capture_fixture(root/'first')
+            other=write_wikibase_capture_fixture(root/'other',minute='02')
+            mixed={'wikibase-entities':first['wikibase-entities'],'wikibase-entity-terms':other['wikibase-entity-terms']}
+            with self.assertRaisesRegex(ValueError,'Conflicting auxiliary capture artifact'):
+                b.pinned_auxiliary_snapshots(mixed,b.verified_auxiliary_hashes(mixed),root/'rejected')
+            self.assertFalse((root/'rejected').exists())
+
+    def test_preferred_capture_generations_fail_closed_and_bind_outer_namespace(self):
+        for fixture,directory,names in (
+                (write_wikibase_capture_fixture,'wikibase-entities',('wikibase-entities','wikibase-entity-terms')),
+                (write_language_messages_fixture,'language-messages',('language-fallbacks','interface-messages'))):
+            with self.subTest(directory=directory),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);self.assertEqual(b.discover_auxiliary_generation(root,directory,names,'arwiktionary','20261001'),{})
+                outer=root/'capture';snapshots=fixture(outer)
+                self.assertEqual(b.discover_auxiliary_generation(outer,directory,names,'arwiktionary','20261001'),snapshots)
+                capture={'wiki':'arwiktionary','date':'20261001'}
+                for name,path in snapshots.items():b.validate_captured_snapshot(name,path,capture,[],outer)
+                original=outer/('capture.complete.json' if directory=='wikibase-entities' else 'namespace-registry.tsv')
+                if directory=='language-messages':
+                    b.verified_auxiliary_hashes({**snapshots,'namespace-registry':original})
+                original.write_bytes(original.read_bytes()+b' ')
+                with self.assertRaisesRegex(ValueError,'namespace source differs'):
+                    b.validate_captured_snapshot(names[0],snapshots[names[0]],capture,[],outer)
+                if directory=='language-messages':
+                    with self.assertRaisesRegex(ValueError,'different namespace registry'):
+                        b.verified_auxiliary_hashes({**snapshots,'namespace-registry':original})
+                manifest=snapshots[names[1]].with_name(names[1]+'.manifest.json')
+                manifest.unlink()
+                with self.assertRaises((ValueError,OSError)):
+                    b.discover_auxiliary_generation(outer,directory,names,'arwiktionary','20261001')
+                link=root/'linked';link.mkdir();(link/directory).symlink_to(outer/directory,target_is_directory=True)
+                with self.assertRaisesRegex(ValueError,'Unsafe auxiliary capture generation'):
+                    b.discover_auxiliary_generation(link,directory,names,'arwiktionary','20261001')
+
+    def test_legacy_interface_messages_remain_supported_and_schema_cannot_downgrade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);legacy=root/'interface-messages.tsv';legacy.write_text('en\tparentheses\t($1)\n')
+            expected={'interface-messages':b.sha256_file(legacy)}
+            self.assertEqual(b.verified_auxiliary_hashes({'interface-messages':legacy}),expected)
+            legacy_manifest=legacy.with_name('interface-messages.manifest.json')
+            record=dict(wiki='arwiktionary',date='20261001',output_sha256=expected['interface-messages'])
+            legacy_manifest.write_text(json.dumps(record))
+            self.assertEqual(b.verified_auxiliary_hashes({'interface-messages':legacy},'arwiktionary','20261001'),expected)
+            legacy_manifest.write_text(json.dumps(dict(record,schema='unsupported-capture-version')))
+            with self.assertRaises(ValueError):b.verified_auxiliary_hashes({'interface-messages':legacy})
+            snapshots=write_language_messages_fixture(root/'capture')
+            manifests,artifacts=b.auxiliary_capture_identities(snapshots)
+            first=snapshots['interface-messages'];sidecar=first.with_name('interface-messages.manifest.json')
+            modern=json.loads(sidecar.read_bytes());del modern['schema'];sidecar.chmod(0o644);sidecar.write_text(json.dumps(modern))
+            with self.assertRaises(ValueError):
+                b.discover_auxiliary_generation(root/'capture','language-messages',
+                    ('language-fallbacks','interface-messages'),'arwiktionary','20261001')
+            with self.assertRaisesRegex(ValueError,'capture disappeared before pinning'):
+                b.pinned_auxiliary_snapshots({'interface-messages':first},
+                    {'interface-messages':b.sha256_file(first)},root/'rejected',manifests,artifacts)
+            self.assertFalse((root/'rejected').exists())
+
     def test_source_identity_checks_every_selected_field(self):
         item=dict(wiki='testwiktionary',date='20261001',name='testwiktionary-20261001-page.sql.gz',url='https://example.test/page.sql.gz',size=1,sha1='a'*40)
         self.assertEqual(b.selected_source(item,[item]),item)
