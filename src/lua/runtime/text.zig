@@ -644,7 +644,8 @@ fn fixJsonTrailingCommas(a: std.mem.Allocator, source: []const u8) !?[]u8 {
 
 pub fn jsonDecodeValue(runtime: *rt.Context, source: []const u8, flags: u32) !Value {
     var fixed: ?[]u8 = null;
-    var parsed = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch {
+    var parsed = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch |err| {
+        if (err == error.OutOfMemory) return err;
         if ((flags & json_try_fixing) == 0) return error.InvalidJson;
         fixed = try fixJsonTrailingCommas(runtime.allocator, source) orelse return error.InvalidJson;
         return jsonDecodeFixed(runtime, fixed.?, flags);
@@ -660,9 +661,28 @@ fn textJsonDecodeCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value)
 }
 
 fn jsonDecodeFixed(runtime: *rt.Context, source: []const u8, flags: u32) !Value {
-    var parsed = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch return error.InvalidJson;
+    var parsed = std.json.parseFromSlice(std.json.Value, runtime.allocator, source, .{}) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return error.InvalidJson;
+    };
     defer parsed.deinit();
     return jsonToLua(runtime, parsed.value, (flags & json_preserve_keys) != 0);
+}
+
+test "JSON decoding preserves allocation failures before and after syntax repair" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const original = runtime.allocator;
+    defer runtime.allocator = original;
+    var failing = std.testing.FailingAllocator.init(original, .{ .fail_index = 0 });
+    runtime.allocator = failing.allocator();
+    try std.testing.expectError(error.OutOfMemory, jsonDecodeValue(&runtime, "{\"forms\":[{\"id\":\"L1-F1\"}]}", 0));
+    try std.testing.expectError(error.OutOfMemory, jsonDecodeValue(&runtime, "[1,]", json_try_fixing));
+    try std.testing.expectError(error.OutOfMemory, jsonDecodeFixed(&runtime, "[1]", json_try_fixing));
+    runtime.allocator = original;
+    try std.testing.expectError(error.InvalidJson, jsonDecodeValue(&runtime, "{", 0));
 }
 
 fn jsonArrayIndex(key: Value) ?usize {

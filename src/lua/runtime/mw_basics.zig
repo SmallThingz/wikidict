@@ -3,6 +3,7 @@ const rt = @import("zig_runtime");
 const namespace_lib = @import("namespaces.zig");
 const host_api = @import("host.zig");
 const text_lib = @import("text.zig");
+const wikibase_lib = @import("wikibase.zig");
 const Value = rt.Value;
 
 fn one(value: Value) ![]const Value {
@@ -319,13 +320,18 @@ fn messageTitleAlloc(a: std.mem.Allocator, key_raw: []const u8) ![]const u8 {
 }
 
 fn snapshotMessageSource(runtime: *rt.Context, host: *host_api.Host, language: []const u8, key: []const u8) !?[]const u8 {
-    const get = host.interface_message orelse return error.NotImplemented;
-    const resolved = (try get(host.ctx, runtime.allocator, language, key)) orelse return error.NotImplemented;
-    if (resolved.source) |source| {
-        if (std.mem.indexOf(u8, source, "{{") != null) return error.NotImplemented;
-        return source;
-    }
-    return null;
+    const normalized = try host_api.normalizeInterfaceMessageKeyAlloc(runtime.allocator, key);
+    defer runtime.allocator.free(normalized);
+    const get = host.interface_message orelse {
+        std.log.warn("interface message snapshot unavailable: language={s} key={s}", .{ language[0..@min(language.len, 128)], normalized[0..@min(normalized.len, 256)] });
+        return error.InterfaceMessageSnapshotMissing;
+    };
+    const resolved = (try get(host.ctx, runtime.allocator, language, normalized)) orelse {
+        std.log.warn("interface message missing: language={s} key={s}", .{ language[0..@min(language.len, 128)], normalized[0..@min(normalized.len, 256)] });
+        return error.InterfaceMessageSnapshotMissing;
+    };
+    // Scribunto plain() substitutes $N but preserves template/parser syntax.
+    return resolved.source;
 }
 
 fn messageSource(runtime: *rt.Context, ctx: *const MessageCtx) !?[]const u8 {
@@ -334,7 +340,13 @@ fn messageSource(runtime: *rt.Context, ctx: *const MessageCtx) !?[]const u8 {
         return source;
     }
     const key = ctx.key orelse return error.MissingMessageKey;
-    const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
+    const host = host_api.getForStablePageRead(runtime) orelse {
+        const normalized = try host_api.normalizeInterfaceMessageKeyAlloc(runtime.allocator, key);
+        defer runtime.allocator.free(normalized);
+        const language = ctx.language orelse if (runtime.namespace_catalog) |catalog| catalog.content_language else "<unavailable>";
+        std.log.warn("interface message host unavailable: language={s} key={s}", .{ language[0..@min(language.len, 128)], normalized[0..@min(normalized.len, 256)] });
+        return error.InterfaceMessageSnapshotMissing;
+    };
     if (ctx.language) |language|
         return snapshotMessageSource(runtime, host, language, key);
 
@@ -342,9 +354,8 @@ fn messageSource(runtime: *rt.Context, ctx: *const MessageCtx) !?[]const u8 {
         if (try get(host.ctx, runtime.allocator, try messageTitleAlloc(runtime.allocator, key))) |source|
             return source;
     }
-    if (host.interface_message != null)
-        return snapshotMessageSource(runtime, host, "en", key);
-    return null;
+    const catalog = runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+    return snapshotMessageSource(runtime, host, catalog.content_language, key);
 }
 
 fn messageParamString(runtime: *rt.Context, value: Value) ![]const u8 {
@@ -652,37 +663,12 @@ fn setMwNative(runtime: *rt.Context, mw: *rt.Table, comptime name: []const u8, c
 const wikibase_site_global_id = "enwiktionary";
 const wikibase_entity_url_prefix = "https://www.wikidata.org/wiki/Special:EntityPage/";
 
-fn validWikibaseNumericPart(digits: []const u8) bool {
-    if (digits.len == 0 or digits[0] == '0') return false;
-    const value = std.fmt.parseInt(u32, digits, 10) catch return false;
-    return value <= 2_147_483_647;
-}
-
 fn canonicalWikibaseEntityId(runtime: *rt.Context, raw: []const u8) !?[]const u8 {
-    if (raw.len < 2) return null;
-    if (raw[0] == 'L') {
-        if (std.mem.indexOfScalar(u8, raw, '-')) |dash| {
-            if (dash <= 1 or dash + 2 >= raw.len) return null;
-            if (raw[dash + 1] != 'F' and raw[dash + 1] != 'S') return null;
-            if (!std.ascii.isDigit(raw[1]) or raw[1] == '0') return null;
-            for (raw[1..dash]) |c| if (!std.ascii.isDigit(c)) return null;
-            const suffix = raw[dash + 2 ..];
-            if (suffix.len == 0 or suffix[0] == '0') return null;
-            for (suffix) |c| if (!std.ascii.isDigit(c)) return null;
-            return try runtime.allocator.dupe(u8, raw);
-        }
-    }
-    const prefix = std.ascii.toUpper(raw[0]);
-    if (prefix != 'Q' and prefix != 'P' and prefix != 'L') return null;
-    if (!validWikibaseNumericPart(raw[1..])) return null;
-    const out = try runtime.allocator.alloc(u8, raw.len);
-    out[0] = prefix;
-    @memcpy(out[1..], raw[1..]);
-    return out;
+    return wikibase_lib.canonicalEntityId(runtime, raw);
 }
 
-fn wikibaseGetGlobalSiteIdCall(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
-    return one(.{ .string = wikibase_site_global_id });
+fn wikibaseGetGlobalSiteIdCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return wikibase_lib.getGlobalSiteIdCall(raw, runtime, args);
 }
 
 fn wikibaseIsValidEntityIdCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -698,9 +684,12 @@ fn wikibaseGetEntityUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const 
 }
 
 fn wikibaseGetSitelinkCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (host_api.getForStablePageRead(runtime)) |host| {
+        if (host.wikibase_entity != null) return wikibase_lib.getSitelinkCall(null, runtime, args);
+    }
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     const global_site_id = if (args.len < 2 or args[1] == .nil)
-        wikibase_site_global_id
+        (runtime.namespace_catalog orelse return error.MissingNamespaceRegistry).wiki
     else if (args[1] == .string)
         args[1].string
     else
@@ -741,11 +730,17 @@ fn wikibaseEntityText(runtime: *rt.Context, args: []const Value) !?host_api.Wiki
 }
 
 fn wikibaseGetLabelCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (host_api.getForStablePageRead(runtime)) |host| {
+        if (host.wikibase_entity != null) return wikibase_lib.getLabelCall(null, runtime, args);
+    }
     const entity = (try wikibaseEntityText(runtime, args)) orelse return one(.nil);
     return one(if (entity.label) |label| .{ .string = label } else .nil);
 }
 
 fn wikibaseGetDescriptionCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (host_api.getForStablePageRead(runtime)) |host| {
+        if (host.wikibase_entity != null) return wikibase_lib.getDescriptionCall(null, runtime, args);
+    }
     const entity = (try wikibaseEntityText(runtime, args)) orelse return one(.nil);
     return one(if (entity.description) |description| .{ .string = description } else .nil);
 }
@@ -780,16 +775,16 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
 
     const wikibase = try runtime.newNativeNamespace(.wikibase);
     inline for (.{
-        "getEntity",
         "getEntityIdForTitle",
         "getEntityIdForCurrentPage",
         "getBestStatements",
-        "getLabelWithLang",
-        "getLabelByLang",
-        "getAllStatements",
         "formatValue",
         "entityExists",
     }) |name| try setNative(runtime, wikibase, name, notImplementedCall);
+    try setNative(runtime, wikibase, "getEntity", wikibase_lib.getEntityCall);
+    try setNative(runtime, wikibase, "getAllStatements", wikibase_lib.getAllStatementsCall);
+    try setNative(runtime, wikibase, "getLabelWithLang", wikibase_lib.getLabelWithLangCall);
+    try setNative(runtime, wikibase, "getLabelByLang", wikibase_lib.getLabelByLangCall);
     try setNative(runtime, wikibase, "getDescription", wikibaseGetDescriptionCall);
     try setNative(runtime, wikibase, "getLabel", wikibaseGetLabelCall);
     try setNative(runtime, wikibase, "getSitelink", wikibaseGetSitelinkCall);
@@ -1097,7 +1092,9 @@ const MessageProbe = struct {
     }
 
     fn interfaceMessage(_: ?*anyopaque, _: std.mem.Allocator, language: []const u8, key: []const u8) !?host_api.InterfaceMessage {
-        if (std.mem.eql(u8, language, "en") and std.mem.eql(u8, key, "Word-separator"))
+        if (std.mem.eql(u8, language, "en") and std.mem.eql(u8, key, "missing_key"))
+            return .{ .source = null };
+        if (std.mem.eql(u8, language, "en") and std.mem.eql(u8, key, "word-separator"))
             return .{ .source = " " };
         if (std.mem.eql(u8, language, "fr") and std.mem.eql(u8, key, "parentheses"))
             return .{ .source = "[$1]" };
@@ -1114,7 +1111,8 @@ test "AOT mw message reads dump-backed interface messages" {
     defer arena.deinit();
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
-    var host = host_api.Host{ .page_content = MessageProbe.pageContent };
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    var host = host_api.Host{ .page_content = MessageProbe.pageContent, .interface_message = MessageProbe.interfaceMessage };
     host_api.set(&runtime, &host);
     const mw = try runtime.newNativeNamespace(.mw);
     try install(&runtime, mw);

@@ -61,7 +61,7 @@ pub fn civilFromUnix(timestamp: i64) Civil {
 
 fn unixFromCivil(civil: Civil) !i64 {
     if (civil.month < 1 or civil.month > 12 or civil.day < 1) return error.InvalidDate;
-    const month: std.time.epoch.Month = @enumFromInt(civil.month);
+    const month: std.time.epoch.Month = @fromBackingInt(@intCast(civil.month));
     if (civil.year < 1 or civil.year > std.math.maxInt(std.time.epoch.Year)) return error.InvalidDate;
     const days_in_month = std.time.epoch.getDaysInMonth(@intCast(civil.year), month);
     if (civil.day > days_in_month or civil.hour > 23 or civil.minute > 59 or civil.second > 59)
@@ -366,7 +366,7 @@ fn parseMonthRelative(runtime: *const rt.Context, raw: []const u8) !?i64 {
         const month: u8 = @intCast(@mod(shifted, 12) + 1);
         if (year < 1 or year > std.math.maxInt(std.time.epoch.Year)) return error.InvalidDate;
         const day: u8 = if (anchor.last)
-            std.time.epoch.getDaysInMonth(@intCast(year), @enumFromInt(month))
+            std.time.epoch.getDaysInMonth(@intCast(year), @fromBackingInt(@intCast(month)))
         else
             1;
         return try unixFromCivil(.{ .year = year, .month = month, .day = day });
@@ -469,7 +469,7 @@ fn dayOfYear(c: Civil) u16 {
     var out: u16 = c.day;
     var month: u8 = 1;
     while (month < c.month) : (month += 1)
-        out += std.time.epoch.getDaysInMonth(@intCast(c.year), @enumFromInt(month));
+        out += std.time.epoch.getDaysInMonth(@intCast(c.year), @fromBackingInt(@intCast(month)));
     return out;
 }
 
@@ -671,10 +671,9 @@ fn languageIsRtl(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) !
     _ = try requireEnglishLocale(ctx_raw);
     return one(runtime.allocator, .{ .boolean = false });
 }
-fn languageGetFallbacks(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
-    _ = try requireEnglishLocale(ctx_raw);
-    const a = runtime.allocator;
-    return one(a, .{ .table = try runtime.newTable() });
+fn languageGetFallbacks(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const ctx = try languageContext(ctx_raw);
+    return fallbackLanguages(runtime, ctx.code, if (args.len > 1) args[1] else .nil);
 }
 
 fn languageGetArrow(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -805,7 +804,8 @@ fn languageNew(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]c
 fn getContentLanguage(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const a = runtime.allocator;
     const factory: *LanguageFactoryCtx = @ptrCast(@alignCast(raw orelse return error.MissingLanguageFactory));
-    return one(a, .{ .table = try makeLanguage(runtime, factory.case_mapper, "en") });
+    const catalog = runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+    return one(a, .{ .table = try makeLanguage(runtime, factory.case_mapper, catalog.content_language) });
 }
 
 fn isKnownLanguageTag(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -823,11 +823,40 @@ fn fetchLanguageName(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) 
     if (std.mem.eql(u8, args[0].string, "en")) return one(a, .{ .string = "English" });
     return error.NotImplemented;
 }
-fn getFallbacksFor(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn fallbackLanguages(runtime: *rt.Context, code: []const u8, mode: Value) ![]const Value {
     const a = runtime.allocator;
+    const strict = if (mode == .nil) false else blk: {
+        if (mode != .string) return error.InvalidLanguageFallbackMode;
+        if (std.mem.eql(u8, mode.string, "FALLBACK_MESSAGES")) break :blk false;
+        if (std.mem.eql(u8, mode.string, "FALLBACK_STRICT")) break :blk true;
+        return error.InvalidLanguageFallbackMode;
+    };
+    const table = try runtime.newTable();
+    // MediaWiki returns an empty chain for English and invalid built-in codes.
+    if (std.mem.eql(u8, code, "en") or code.len < 2) return one(a, .{ .table = table });
+    for (code) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-')
+        return one(a, .{ .table = table });
+    const host = host_api.getForStablePageRead(runtime) orelse {
+        std.log.warn("language fallback snapshot unavailable: language={s}", .{code[0..@min(code.len, 128)]});
+        return error.LanguageFallbackSnapshotMissing;
+    };
+    const get = host.language_fallbacks orelse {
+        std.log.warn("language fallback snapshot unavailable: language={s}", .{code[0..@min(code.len, 128)]});
+        return error.LanguageFallbackSnapshotMissing;
+    };
+    const captured = try get(host.ctx, code);
+    // The API records STRICT. MediaWiki's MESSAGES mode adds a terminal English
+    // fallback, without sorting, recursively expanding, or deduplicating the list.
+    for (captured, 1..) |fallback, index|
+        try table.rawSet(a, .{ .number = @floatFromInt(index) }, .{ .string = fallback });
+    if (!strict and (captured.len == 0 or !std.mem.eql(u8, captured[captured.len - 1], "en")))
+        try table.rawSet(a, .{ .number = @floatFromInt(captured.len + 1) }, .{ .string = "en" });
+    return one(a, .{ .table = table });
+}
+
+fn getFallbacksFor(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    if (!std.mem.eql(u8, args[0].string, "en")) return error.NotImplemented;
-    return one(a, .{ .table = try runtime.newTable() });
+    return fallbackLanguages(runtime, args[0].string, if (args.len > 1) args[1] else .nil);
 }
 
 pub fn install(runtime: *rt.Context, mw: *rt.Table, case_mapper: *ustring_lib.Normalizer) !void {
@@ -837,6 +866,8 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table, case_mapper: *ustring_lib.No
     try setNative(runtime, language, "new", factory, languageNew);
     try setNative(runtime, language, "getContentLanguage", factory, getContentLanguage);
     try setNative(runtime, language, "getFallbacksFor", null, getFallbacksFor);
+    try language.rawSet(runtime.allocator, .{ .string = "FALLBACK_MESSAGES" }, .{ .string = "FALLBACK_MESSAGES" });
+    try language.rawSet(runtime.allocator, .{ .string = "FALLBACK_STRICT" }, .{ .string = "FALLBACK_STRICT" });
     try setNative(runtime, language, "isKnownLanguageTag", null, isKnownLanguageTag);
     try setNative(runtime, language, "fetchLanguageName", null, fetchLanguageName);
     try mw.rawSet(runtime.allocator, .{ .string = "language" }, .{ .table = language });
@@ -973,8 +1004,10 @@ fn callField(runtime: *rt.Context, object: Value, name: []const u8, args: []cons
 test "AOT language objects expose MediaWiki helpers" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
+    const registry = try rt.namespace_registry.englishTestRegistry();
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
+    runtime.namespace_catalog = registry;
     var host = host_api.Host{ .now_unix = 1_670_803_200 };
     host_api.set(&runtime, &host);
     const month_cases = [_]struct { raw: []const u8, expected: []const u8 }{

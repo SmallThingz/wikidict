@@ -56,9 +56,13 @@ pub const Provider = struct {
     pub const ExternalData = host_api.ExternalData;
     pub const CategoryStats = host_api.CategoryStats;
     pub const InterfaceMessage = host_api.InterfaceMessage;
+    pub const normalizeInterfaceMessageKeyAlloc = host_api.normalizeInterfaceMessageKeyAlloc;
     pub const FileMetadata = host_api.FileMetadata;
     pub const InterwikiRow = host_api.InterwikiRow;
     pub const WikibaseEntityText = host_api.WikibaseEntityText;
+    pub const WikibaseEntity = host_api.WikibaseEntity;
+    pub const WikibaseTerm = host_api.WikibaseTerm;
+    pub const WikibaseEntityTerms = host_api.WikibaseEntityTerms;
     pub const SymbolKind = CallSymbolKind;
     pub const Symbol = CallSymbol;
     pub const PageMetadata = struct {
@@ -90,6 +94,9 @@ pub const Provider = struct {
     stable_interwiki_map: bool = false,
     wikibase_sitelink: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror!?[]const u8 = null,
     wikibase_entity_text: ?*const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityText = null,
+    wikibase_entity: ?host_api.WikibaseEntityFn = null,
+    wikibase_entity_terms: ?host_api.WikibaseEntityTermsFn = null,
+    language_fallbacks: ?host_api.LanguageFallbacksFn = null,
     language_known_tag: ?*const fn (?*anyopaque, []const u8) anyerror!bool = null,
     // When present, the edition snapshot is authoritative, including nonmatches.
     resolve_title_magic: ?*const fn (?*anyopaque, []const u8, rt.namespace_registry.magic_words.Form) anyerror!?[]const u8 = null,
@@ -160,6 +167,9 @@ pub const Expander = struct {
         self.host.stable_site_interwiki_map = self.provider.stable_interwiki_map;
         self.host.wikibase_sitelink = hostWikibaseSitelink;
         self.host.wikibase_entity_text = hostWikibaseEntityText;
+        self.host.wikibase_entity = if (self.provider.wikibase_entity != null) hostWikibaseEntity else null;
+        self.host.wikibase_entity_terms = if (self.provider.wikibase_entity_terms != null) hostWikibaseEntityTerms else null;
+        self.host.language_fallbacks = if (self.provider.language_fallbacks != null) hostLanguageFallbacks else null;
         self.host.language_known_tag = hostLanguageKnownTag;
         host_api.set(self.runtime, &self.host);
     }
@@ -338,6 +348,21 @@ pub const Expander = struct {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.language_known_tag orelse return error.NotImplemented;
         return get(self.provider.ctx, code);
+    }
+
+    fn hostWikibaseEntity(raw: ?*anyopaque, entity_id: []const u8) anyerror!host_api.WikibaseEntity {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        return (self.provider.wikibase_entity orelse return error.NotImplemented)(self.provider.ctx, entity_id);
+    }
+
+    fn hostWikibaseEntityTerms(raw: ?*anyopaque, entity_id: []const u8) anyerror!host_api.WikibaseEntityTerms {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        return (self.provider.wikibase_entity_terms orelse return error.NotImplemented)(self.provider.ctx, entity_id);
+    }
+
+    fn hostLanguageFallbacks(raw: ?*anyopaque, code: []const u8) anyerror![]const []const u8 {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        return (self.provider.language_fallbacks orelse return error.NotImplemented)(self.provider.ctx, code);
     }
 
     fn hostPageExists(raw: ?*anyopaque, title: []const u8) anyerror!bool {

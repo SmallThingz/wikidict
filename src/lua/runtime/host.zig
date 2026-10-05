@@ -33,6 +33,16 @@ pub const InterfaceMessage = struct {
     source: ?[]const u8,
 };
 pub const InterfaceMessageFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, []const u8) anyerror!?InterfaceMessage;
+pub fn normalizeInterfaceMessageKeyAlloc(a: std.mem.Allocator, raw: []const u8) ![]u8 {
+    if (raw.len == 0 or !std.unicode.utf8ValidateSlice(raw)) return error.InvalidInterfaceMessageKey;
+    if (raw[0] >= 128) return error.UnsupportedInterfaceMessageKey;
+    const key = try a.dupe(u8, raw);
+    errdefer a.free(key);
+    std.mem.replaceScalar(u8, key, ' ', '_');
+    key[0] = std.ascii.toLower(key[0]);
+    for (key) |c| if (c == '\t' or c == '\r' or c == '\n') return error.InvalidInterfaceMessageKey;
+    return key;
+}
 pub const FileMetadata = struct {
     exists: bool,
     width: u32 = 0,
@@ -55,6 +65,15 @@ pub const WikibaseEntityText = struct {
     description: ?[]const u8,
 };
 pub const WikibaseEntityTextFn = *const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityText;
+pub const WikibaseEntity = struct {
+    // Null is a captured missing entity; an uncaptured ID is an error.
+    source: ?[]const u8,
+};
+pub const WikibaseEntityFn = *const fn (?*anyopaque, []const u8) anyerror!WikibaseEntity;
+pub const WikibaseTerm = struct { value: []const u8, language: []const u8, source_language: ?[]const u8 = null };
+pub const WikibaseEntityTerms = struct { label: ?WikibaseTerm, description: ?WikibaseTerm };
+pub const WikibaseEntityTermsFn = *const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityTerms;
+pub const LanguageFallbacksFn = *const fn (?*anyopaque, []const u8) anyerror![]const []const u8;
 pub const LanguageKnownTagFn = *const fn (?*anyopaque, []const u8) anyerror!bool;
 
 pub const Host = struct {
@@ -85,6 +104,9 @@ pub const Host = struct {
     stable_site_interwiki_map: bool = false,
     wikibase_sitelink: ?WikibaseSitelinkFn = null,
     wikibase_entity_text: ?WikibaseEntityTextFn = null,
+    wikibase_entity: ?WikibaseEntityFn = null,
+    wikibase_entity_terms: ?WikibaseEntityTermsFn = null,
+    language_fallbacks: ?LanguageFallbacksFn = null,
     language_known_tag: ?LanguageKnownTagFn = null,
 };
 

@@ -12,10 +12,104 @@ const InterfaceMessage = lua_program.WikitextProvider.InterfaceMessage;
 const FileMetadata = lua_program.WikitextProvider.FileMetadata;
 const InterwikiRow = lua_program.WikitextProvider.InterwikiRow;
 const WikibaseEntityText = lua_program.WikitextProvider.WikibaseEntityText;
+const WikibaseEntity = lua_program.WikitextProvider.WikibaseEntity;
+const WikibaseTerm = lua_program.WikitextProvider.WikibaseTerm;
+const WikibaseEntityTerms = lua_program.WikitextProvider.WikibaseEntityTerms;
 const TransclusionBody = lua_program.WikitextProvider.TransclusionBody;
 const CategoryTreeScope = lua_program.WikitextProvider.CategoryTreeScope;
 
 const InterfaceMessageEntry = struct { source_raw: ?[]const u8 };
+const StructuredEntityRow = struct { requested_id: []const u8, canonical_id: []const u8, source: ?[]const u8 };
+
+fn expectSnapshotHeader(lines: *std.mem.SplitIterator(u8, .scalar), prefix: []const u8, expected: []const u8) !void {
+    const line = lines.next() orelse return error.InvalidSnapshotIdentity;
+    if (!std.mem.startsWith(u8, line, prefix) or !std.mem.eql(u8, line[prefix.len..], expected)) return error.InvalidSnapshotIdentity;
+}
+
+fn validLanguageCode(code: []const u8) bool {
+    if (code.len == 0) return false;
+    for (code) |c| if (!std.ascii.isAlphanumeric(c) and c != '-') return false;
+    return true;
+}
+
+fn validEntityDigits(digits: []const u8) bool {
+    if (digits.len == 0 or digits[0] == '0') return false;
+    for (digits) |c| if (!std.ascii.isDigit(c)) return false;
+    return true;
+}
+
+fn validEntityId(id: []const u8) bool {
+    if (id.len < 2) return false;
+    if (id[0] != 'Q' and id[0] != 'P' and id[0] != 'L') return false;
+    if (std.mem.indexOfScalar(u8, id, '-')) |dash| {
+        return id[0] == 'L' and dash + 2 < id.len and validEntityDigits(id[1..dash]) and
+            (id[dash + 1] == 'F' or id[dash + 1] == 'S') and validEntityDigits(id[dash + 2 ..]);
+    }
+    return validEntityDigits(id[1..]);
+}
+
+fn structuredEntityRow(line: []const u8) !StructuredEntityRow {
+    var fields = std.mem.splitScalar(u8, line, '\t');
+    const id = fields.next() orelse return error.InvalidWikibaseEntitySnapshot;
+    const state = fields.next() orelse return error.InvalidWikibaseEntitySnapshot;
+    const canonical = fields.next() orelse return error.InvalidWikibaseEntitySnapshot;
+    const source = fields.next() orelse return error.InvalidWikibaseEntitySnapshot;
+    if (fields.next() != null or !validEntityId(id) or source.len > 16 * 1024 * 1024) return error.InvalidWikibaseEntitySnapshot;
+    if (std.mem.eql(u8, state, "M")) {
+        if (canonical.len != 0 or source.len != 0) return error.InvalidWikibaseEntitySnapshot;
+        return .{ .requested_id = id, .canonical_id = canonical, .source = null };
+    }
+    if (!std.mem.eql(u8, state, "E") or !validEntityId(canonical) or source.len == 0) return error.InvalidWikibaseEntitySnapshot;
+    return .{ .requested_id = id, .canonical_id = canonical, .source = source };
+}
+
+fn validateEntityPayload(value: std.json.Value, canonical: []const u8) !void {
+    if (value != .object) return error.InvalidWikibaseEntitySnapshot;
+    const id = value.object.get("id") orelse return error.InvalidWikibaseEntitySnapshot;
+    const version = value.object.get("schemaVersion") orelse return error.InvalidWikibaseEntitySnapshot;
+    const kind = value.object.get("type") orelse return error.InvalidWikibaseEntitySnapshot;
+    if (id != .string or !std.mem.eql(u8, id.string, canonical) or version != .integer or version.integer != 2 or kind != .string) return error.InvalidWikibaseEntitySnapshot;
+    const expected_kind: []const u8 = if (std.mem.indexOfScalar(u8, canonical, '-')) |dash|
+        (if (canonical[dash + 1] == 'F') "form" else "sense")
+    else switch (canonical[0]) {
+        'Q' => "item",
+        'P' => "property",
+        else => "lexeme",
+    };
+    if (!std.mem.eql(u8, kind.string, expected_kind)) return error.InvalidWikibaseEntitySnapshot;
+    inline for (.{ "claims", "lemmas", "labels", "descriptions", "sitelinks", "representations", "glosses" }) |name| {
+        if (value.object.get(name)) |field| if (field != .object) return error.InvalidWikibaseEntitySnapshot;
+    }
+    inline for (.{ "forms", "senses", "grammaticalFeatures" }) |name| {
+        if (value.object.get(name)) |field| if (field != .array) return error.InvalidWikibaseEntitySnapshot;
+    }
+    if (value.object.get("claims")) |claims| {
+        var properties = claims.object.iterator();
+        while (properties.next()) |entry| {
+            if (entry.value_ptr.* != .array) return error.InvalidWikibaseEntitySnapshot;
+            for (entry.value_ptr.array.items) |statement| if (statement != .object) return error.InvalidWikibaseEntitySnapshot;
+        }
+    }
+}
+
+fn capturedTerm(a: A, value: std.json.Value) !?WikibaseTerm {
+    if (value == .null) return null;
+    if (value != .object or value.object.count() < 2 or value.object.count() > 3) return error.InvalidWikibaseEntityTermSnapshot;
+    const text = value.object.get("value") orelse return error.InvalidWikibaseEntityTermSnapshot;
+    const language = value.object.get("language") orelse return error.InvalidWikibaseEntityTermSnapshot;
+    const source_language = value.object.get("source-language");
+    if (text != .string or language != .string or !validLanguageCode(language.string)) return error.InvalidWikibaseEntityTermSnapshot;
+    if (value.object.count() == 3 and source_language == null) return error.InvalidWikibaseEntityTermSnapshot;
+    if (source_language) |source| if (source != .string or !validLanguageCode(source.string)) return error.InvalidWikibaseEntityTermSnapshot;
+    return .{ .value = try a.dupe(u8, text.string), .language = try a.dupe(u8, language.string), .source_language = if (source_language) |source| try a.dupe(u8, source.string) else null };
+}
+
+fn messageLookupKey(a: A, language: []const u8, raw: []const u8) ![]u8 {
+    if (!validLanguageCode(language)) return error.InvalidInterfaceMessageKey;
+    const key = try lua_program.WikitextProvider.normalizeInterfaceMessageKeyAlloc(a, raw);
+    defer a.free(key);
+    return std.fmt.allocPrint(a, "{s}\t{s}", .{ language, key });
+}
 const CorpusPage = struct { title: []const u8, source: wikimedia_dump.PageSource, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
 fn packCorpusPageRef(line_offset: usize, ordinal: usize) !u64 {
     return wikimedia_dump.packPageRowRef(line_offset, ordinal);
@@ -105,6 +199,13 @@ pub const Provider = struct {
     wikibase_entity_text: std.StringHashMapUnmanaged(WikibaseEntityText) = .empty,
     wikibase_entity_text_storage: ?Mapped = null,
     wikibase_entity_text_available: bool = false,
+    wikibase_entities: std.StringHashMapUnmanaged(StructuredEntityRow) = .empty,
+    wikibase_entities_storage: ?Mapped = null,
+    wikibase_entity_terms: std.StringHashMapUnmanaged(WikibaseEntityTerms) = .empty,
+    wikibase_entity_terms_storage: ?Mapped = null,
+    wikibase_entity_terms_arena: ?std.heap.ArenaAllocator = null,
+    language_fallbacks: std.StringHashMapUnmanaged([]const []const u8) = .empty,
+    language_fallbacks_storage: ?Mapped = null,
     language_registry: std.StringHashMapUnmanaged([]const u8) = .empty,
     language_registry_storage: ?Mapped = null,
     language_registry_available: bool = false,
@@ -124,6 +225,9 @@ pub const Provider = struct {
         try self.loadInterwikiMap();
         try self.loadWikibaseSitelinks();
         try self.loadWikibaseEntityText();
+        try self.loadWikibaseEntities();
+        try self.loadWikibaseEntityTerms();
+        try self.loadLanguageFallbacks();
         try self.loadLanguageRegistry();
         try self.loadTitleMagicWords();
         return self;
@@ -157,6 +261,8 @@ pub const Provider = struct {
         if (self.external_data_storage) |*mapped| mapped.deinit();
         self.category_stats.deinit(self.a);
         if (self.category_stats_storage) |*mapped| mapped.deinit();
+        var message_keys = self.interface_messages.keyIterator();
+        while (message_keys.next()) |key| self.a.free(key.*);
         self.interface_messages.deinit(self.a);
         if (self.interface_messages_storage) |*mapped| mapped.deinit();
         self.category_tree_ranges.deinit(self.a);
@@ -175,6 +281,15 @@ pub const Provider = struct {
         if (self.wikibase_sitelinks_storage) |*mapped| mapped.deinit();
         self.wikibase_entity_text.deinit(self.a);
         if (self.wikibase_entity_text_storage) |*mapped| mapped.deinit();
+        self.wikibase_entities.deinit(self.a);
+        if (self.wikibase_entities_storage) |*mapped| mapped.deinit();
+        self.wikibase_entity_terms.deinit(self.a);
+        if (self.wikibase_entity_terms_storage) |*mapped| mapped.deinit();
+        if (self.wikibase_entity_terms_arena) |*arena| arena.deinit();
+        var fallback_lists = self.language_fallbacks.valueIterator();
+        while (fallback_lists.next()) |list| self.a.free(list.*);
+        self.language_fallbacks.deinit(self.a);
+        if (self.language_fallbacks_storage) |*mapped| mapped.deinit();
         self.language_registry.deinit(self.a);
         if (self.language_registry_storage) |*mapped| mapped.deinit();
         if (self.title_magic_words) |*registry| registry.deinit();
@@ -203,6 +318,9 @@ pub const Provider = struct {
             .resolve_parser_function = if (self.title_magic_words != null and self.title_magic_words.?.expanded_functions) resolveParserFunction else null,
             .wikibase_sitelink = if (self.wikibase_sitelinks_available) wikibaseSitelink else null,
             .wikibase_entity_text = if (self.wikibase_entity_text_available) wikibaseEntityText else null,
+            .wikibase_entity = if (self.wikibase_entities_storage != null) wikibaseEntity else null,
+            .wikibase_entity_terms = if (self.wikibase_entity_terms_storage != null) wikibaseEntityTerms else null,
+            .language_fallbacks = if (self.language_fallbacks_storage != null) languageFallbacks else null,
             .language_known_tag = if (self.language_registry_available) languageKnownTag else null,
         };
     }
@@ -340,17 +458,28 @@ pub const Provider = struct {
         var mapped = (try self.mapOptional("interface-messages.tsv")) orelse return;
         errdefer mapped.deinit();
         var entries: std.StringHashMapUnmanaged(InterfaceMessageEntry) = .empty;
-        errdefer entries.deinit(self.a);
+        errdefer {
+            var keys = entries.keyIterator();
+            while (keys.next()) |key| self.a.free(key.*);
+            entries.deinit(self.a);
+        }
         const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse return error.InterfaceMessageSnapshotTooLarge;
         try entries.ensureTotalCapacity(self.a, capacity);
 
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        if (std.mem.eql(u8, lines.peek() orelse "", "# wikidict-interface-messages-v1")) {
+            _ = lines.next();
+            try expectSnapshotHeader(&lines, "# wiki\t", self.namespace_catalog.wiki);
+            try expectSnapshotHeader(&lines, "# dump-date\t", self.namespace_catalog.dump_date);
+            try expectSnapshotHeader(&lines, "# content-language\t", self.namespace_catalog.content_language);
+        }
         while (lines.next()) |line| {
             if (line.len == 0 or line[0] == '#') continue;
             const first_tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidInterfaceMessageSnapshot;
             const second_tab = std.mem.indexOfScalarPos(u8, line, first_tab + 1, '\t') orelse return error.InvalidInterfaceMessageSnapshot;
             if (first_tab == 0 or second_tab == first_tab + 1) return error.InvalidInterfaceMessageSnapshot;
-            const lookup_key = line[0..second_tab];
+            const lookup_key = try messageLookupKey(self.a, line[0..first_tab], line[first_tab + 1 .. second_tab]);
+            errdefer self.a.free(lookup_key);
             const encoded = line[second_tab + 1 ..];
             const entry: InterfaceMessageEntry = if (std.mem.eql(u8, encoded, "M"))
                 .{ .source_raw = null }
@@ -535,6 +664,109 @@ pub const Provider = struct {
         self.wikibase_entity_text = entries;
         self.wikibase_entity_text_storage = mapped;
         self.wikibase_entity_text_available = true;
+    }
+
+    fn structuredHeaders(self: *const Provider, lines: *std.mem.SplitIterator(u8, .scalar), terms: bool) !void {
+        try expectSnapshotHeader(lines, "", if (terms) "# wikidict-wikibase-entity-terms-v1" else "# wikidict-wikibase-entities-v1");
+        try expectSnapshotHeader(lines, "# wiki=", self.namespace_catalog.wiki);
+        try expectSnapshotHeader(lines, "# date=", self.namespace_catalog.dump_date);
+        try expectSnapshotHeader(lines, "# content-language=", self.namespace_catalog.content_language);
+        try expectSnapshotHeader(lines, "# repository=", "https://www.wikidata.org");
+        try expectSnapshotHeader(lines, "# profile=", if (terms) "resolved-default-terms-v1" else "complete-entities-v1");
+    }
+
+    fn loadWikibaseEntities(self: *Provider) !void {
+        var mapped = (try self.mapOptional("wikibase-entities.tsv")) orelse return;
+        errdefer mapped.deinit();
+        if (!std.unicode.utf8ValidateSlice(mapped.bytes)) return error.InvalidWikibaseEntitySnapshot;
+        var entries: std.StringHashMapUnmanaged(StructuredEntityRow) = .empty;
+        errdefer entries.deinit(self.a);
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        try self.structuredHeaders(&lines, false);
+        while (lines.next()) |line| {
+            if (line.len == 0 and lines.peek() == null) break;
+            const row = try structuredEntityRow(line);
+            if (row.source) |source| {
+                var parsed = try std.json.parseFromSlice(std.json.Value, self.a, source, .{});
+                defer parsed.deinit();
+                try validateEntityPayload(parsed.value, row.canonical_id);
+            }
+            const entry = try entries.getOrPut(self.a, row.requested_id);
+            if (entry.found_existing) return error.DuplicateWikibaseEntity;
+            entry.value_ptr.* = row;
+        }
+        self.wikibase_entities = entries;
+        self.wikibase_entities_storage = mapped;
+    }
+
+    fn loadWikibaseEntityTerms(self: *Provider) !void {
+        var mapped = (try self.mapOptional("wikibase-entity-terms.tsv")) orelse return;
+        errdefer mapped.deinit();
+        if (self.wikibase_entities_storage == null or !std.unicode.utf8ValidateSlice(mapped.bytes)) return error.InvalidWikibaseEntityTermSnapshot;
+        var entries: std.StringHashMapUnmanaged(WikibaseEntityTerms) = .empty;
+        errdefer entries.deinit(self.a);
+        var arena = std.heap.ArenaAllocator.init(self.a);
+        errdefer arena.deinit();
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        try self.structuredHeaders(&lines, true);
+        while (lines.next()) |line| {
+            if (line.len == 0 and lines.peek() == null) break;
+            const row = try structuredEntityRow(line);
+            const entity = self.wikibase_entities.get(row.requested_id) orelse return error.InvalidWikibaseEntityTermSnapshot;
+            if ((row.source == null) != (entity.source == null) or !std.mem.eql(u8, row.canonical_id, entity.canonical_id)) return error.InvalidWikibaseEntityTermSnapshot;
+            var value: WikibaseEntityTerms = .{ .label = null, .description = null };
+            if (row.source) |source| {
+                var parsed = try std.json.parseFromSlice(std.json.Value, self.a, source, .{});
+                defer parsed.deinit();
+                if (parsed.value != .object or parsed.value.object.count() != 2) return error.InvalidWikibaseEntityTermSnapshot;
+                value.label = try capturedTerm(arena.allocator(), parsed.value.object.get("label") orelse return error.InvalidWikibaseEntityTermSnapshot);
+                value.description = try capturedTerm(arena.allocator(), parsed.value.object.get("description") orelse return error.InvalidWikibaseEntityTermSnapshot);
+            }
+            const entry = try entries.getOrPut(self.a, row.requested_id);
+            if (entry.found_existing) return error.DuplicateWikibaseEntityTerm;
+            entry.value_ptr.* = value;
+        }
+        self.wikibase_entity_terms = entries;
+        self.wikibase_entity_terms_storage = mapped;
+        self.wikibase_entity_terms_arena = arena;
+    }
+
+    fn loadLanguageFallbacks(self: *Provider) !void {
+        var mapped = (try self.mapOptional("language-fallbacks.tsv")) orelse return;
+        errdefer mapped.deinit();
+        if (!std.unicode.utf8ValidateSlice(mapped.bytes)) return error.InvalidLanguageFallbackSnapshot;
+        var entries: std.StringHashMapUnmanaged([]const []const u8) = .empty;
+        errdefer {
+            var values = entries.valueIterator();
+            while (values.next()) |list| self.a.free(list.*);
+            entries.deinit(self.a);
+        }
+        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        try expectSnapshotHeader(&lines, "", "# wikidict-language-fallbacks-v1");
+        try expectSnapshotHeader(&lines, "# wiki\t", self.namespace_catalog.wiki);
+        try expectSnapshotHeader(&lines, "# dump-date\t", self.namespace_catalog.dump_date);
+        try expectSnapshotHeader(&lines, "# content-language\t", self.namespace_catalog.content_language);
+        try expectSnapshotHeader(&lines, "# mode\t", "strict");
+        while (lines.next()) |line| {
+            if (line.len == 0 and lines.peek() == null) break;
+            const tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidLanguageFallbackSnapshot;
+            const code = line[0..tab];
+            if (!validLanguageCode(code)) return error.InvalidLanguageFallbackSnapshot;
+            const raw = line[tab + 1 ..];
+            const list = try self.a.alloc([]const u8, if (raw.len == 0) 0 else std.mem.count(u8, raw, "\t") + 1);
+            errdefer self.a.free(list);
+            var fields = std.mem.splitScalar(u8, raw, '\t');
+            for (list, 0..) |*fallback, index| {
+                fallback.* = fields.next().?;
+                if (!validLanguageCode(fallback.*) or std.mem.eql(u8, code, fallback.*)) return error.InvalidLanguageFallbackSnapshot;
+                for (list[0..index]) |previous| if (std.mem.eql(u8, previous, fallback.*)) return error.InvalidLanguageFallbackSnapshot;
+            }
+            const entry = try entries.getOrPut(self.a, code);
+            if (entry.found_existing) return error.DuplicateLanguageFallback;
+            entry.value_ptr.* = list;
+        }
+        self.language_fallbacks = entries;
+        self.language_fallbacks_storage = mapped;
     }
 
     fn loadLanguageRegistry(self: *Provider) !void {
@@ -898,9 +1130,13 @@ pub const Provider = struct {
 
     fn interfaceMessage(ctx: ?*anyopaque, a: A, language: []const u8, key: []const u8) anyerror!?InterfaceMessage {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
-        const lookup_key = try std.fmt.allocPrint(a, "{s}\t{s}", .{ language, key });
+        const lookup_key = try messageLookupKey(a, language, key);
         defer a.free(lookup_key);
-        const entry = self.interface_messages.get(lookup_key) orelse return null;
+        const entry = self.interface_messages.get(lookup_key) orelse {
+            const normalized = lookup_key[language.len + 1 ..];
+            lua_program.work_stats.logLine("interface message missing: language={s} key={s}\n", .{ language[0..@min(language.len, 128)], normalized[0..@min(normalized.len, 256)] });
+            return error.InterfaceMessageSnapshotMissing;
+        };
         return .{ .source = if (entry.source_raw) |raw| try unescapeFieldAlloc(a, raw) else null };
     }
 
@@ -953,6 +1189,25 @@ pub const Provider = struct {
     fn wikibaseEntityText(ctx: ?*anyopaque, entity_id: []const u8) anyerror!WikibaseEntityText {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return self.wikibase_entity_text.get(entity_id) orelse error.WikibaseEntityTextSnapshotMissing;
+    }
+
+    fn wikibaseEntity(ctx: ?*anyopaque, entity_id: []const u8) anyerror!WikibaseEntity {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        const entry = self.wikibase_entities.get(entity_id) orelse return error.WikibaseEntitySnapshotMissing;
+        return .{ .source = entry.source };
+    }
+
+    fn wikibaseEntityTerms(ctx: ?*anyopaque, entity_id: []const u8) anyerror!WikibaseEntityTerms {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.wikibase_entity_terms.get(entity_id) orelse error.WikibaseEntityTermSnapshotMissing;
+    }
+
+    fn languageFallbacks(ctx: ?*anyopaque, code: []const u8) anyerror![]const []const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return self.language_fallbacks.get(code) orelse {
+            lua_program.work_stats.logLine("language fallback missing: language={s}\n", .{code[0..@min(code.len, 128)]});
+            return error.LanguageFallbackSnapshotMissing;
+        };
     }
 
     fn languageKnownTag(ctx: ?*anyopaque, code: []const u8) anyerror!bool {
@@ -1087,6 +1342,101 @@ test "provider keeps the later duplicate page row as canonical" {
     try std.testing.expectEqual(@as(u64, 2), metadata.page_id);
     try std.testing.expectEqual(@as(u64, 22), metadata.revision_id);
     try std.testing.expectEqualStrings("2024-01-02T00:00:00Z", metadata.revision_timestamp);
+}
+
+const entity_test_headers = "# wikidict-wikibase-entities-v1\n# wiki=enwiktionary\n# date=20261001\n# content-language=en\n# repository=https://www.wikidata.org\n# profile=complete-entities-v1\n";
+const terms_test_headers = "# wikidict-wikibase-entity-terms-v1\n# wiki=enwiktionary\n# date=20261001\n# content-language=en\n# repository=https://www.wikidata.org\n# profile=resolved-default-terms-v1\n";
+const fallback_test_headers = "# wikidict-language-fallbacks-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n# mode\tstrict\n";
+const message_test_headers = "# wikidict-interface-messages-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n";
+
+test "provider structured entities preserve redirects missing records resolved terms and strict fallbacks" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entities.tsv", .data = entity_test_headers ++
+        "L1\tE\tL1\t{\"id\":\"L1\",\"type\":\"lexeme\",\"schemaVersion\":2,\"lemmas\":{\"en\":{\"language\":\"en\",\"value\":\"word\"}}}\n" ++
+        "L2\tE\tL1\t{\"id\":\"L1\",\"type\":\"lexeme\",\"schemaVersion\":2}\n" ++
+        "Q1\tE\tQ1\t{\"id\":\"Q1\",\"type\":\"item\",\"schemaVersion\":2}\nL9\tM\t\t\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entity-terms.tsv", .data = terms_test_headers ++
+        "Q1\tE\tQ1\t{\"label\":{\"value\":\"caf\\u00e9\",\"language\":\"fr\",\"source-language\":\"fr\"},\"description\":null}\nL9\tM\t\t\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "language-fallbacks.tsv", .data = fallback_test_headers ++ "en\t\nfr\tde\ten\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "interface-messages.tsv", .data = message_test_headers ++ "en\tComma-separator\tV\t, \\t\n" ++ "en\tmissing\tM\n" });
+    {
+        var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml");
+        defer provider.deinit();
+        const api = provider.api();
+        const get = api.wikibase_entity.?;
+        try std.testing.expect(std.mem.indexOf(u8, (try get(&provider, "L2")).source.?, "\"id\":\"L1\"") != null);
+        try std.testing.expect((try get(&provider, "L9")).source == null);
+        try std.testing.expectError(error.WikibaseEntitySnapshotMissing, get(&provider, "L404"));
+        const term = (try api.wikibase_entity_terms.?(&provider, "Q1")).label.?;
+        try std.testing.expectEqualStrings("café", term.value);
+        try std.testing.expectEqualStrings("fr", term.language);
+        try std.testing.expectEqualStrings("fr", term.source_language.?);
+        try std.testing.expect((try api.wikibase_entity_terms.?(&provider, "L9")).label == null);
+        try std.testing.expectError(error.WikibaseEntityTermSnapshotMissing, api.wikibase_entity_terms.?(&provider, "L1"));
+        try std.testing.expectEqual(@as(usize, 0), (try api.language_fallbacks.?(&provider, "en")).len);
+        const fallbacks = try api.language_fallbacks.?(&provider, "fr");
+        try std.testing.expectEqual(@as(usize, 2), fallbacks.len);
+        try std.testing.expectEqualStrings("de", fallbacks[0]);
+        try std.testing.expectEqualStrings("en", fallbacks[1]);
+        try std.testing.expectError(error.LanguageFallbackSnapshotMissing, api.language_fallbacks.?(&provider, "ar"));
+        const message = (try api.interface_message.?(&provider, a, "en", "Comma-separator")).?;
+        defer a.free(message.source.?);
+        try std.testing.expectEqualStrings(", \t", message.source.?);
+        try std.testing.expect((try api.interface_message.?(&provider, a, "en", "Missing")).?.source == null);
+        try std.testing.expectError(error.InterfaceMessageSnapshotMissing, api.interface_message.?(&provider, a, "en", "Unknown"));
+    }
+    try std.testing.checkAllAllocationFailures(a, struct {
+        fn load(backing: A, directory: []const u8) !void {
+            // JSON arenas can grow in place depending on the backing heap's
+            // layout. Disable resizing so the exhaustive allocation sweep has
+            // the same allocation points in its baseline and failing runs.
+            var no_resize = std.testing.FailingAllocator.init(backing, .{ .resize_fail_index = 0 });
+            var provider = try Provider.init(std.testing.io, no_resize.allocator(), directory, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml");
+            defer provider.deinit();
+        }
+    }.load, .{root});
+}
+
+test "structured entity provider rejects inconsistent identity duplicate rows and payloads" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const cases = .{
+        .{ entity_test_headers ++ "Q1\tE\tQ1\t{\"id\":\"Q2\",\"type\":\"item\",\"schemaVersion\":2}\n", error.InvalidWikibaseEntitySnapshot },
+        .{ entity_test_headers ++ "Q1\tM\tQ1\t\n", error.InvalidWikibaseEntitySnapshot },
+        .{ entity_test_headers ++ "Q1\tM\t\t\nQ1\tM\t\t\n", error.DuplicateWikibaseEntity },
+        .{ "# wikidict-wikibase-entities-v1\n# wiki=arwiktionary\n", error.InvalidSnapshotIdentity },
+    };
+    inline for (cases) |case| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entities.tsv", .data = case[0] });
+        try std.testing.expectError(case[1], Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml"));
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entities.tsv", .data = entity_test_headers ++ "Q1\tM\t\t\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entity-terms.tsv", .data = terms_test_headers ++ "Q1\tE\tQ1\t{\"label\":null,\"description\":null}\n" });
+    try std.testing.expectError(error.InvalidWikibaseEntityTermSnapshot, Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml"));
+}
+
+test "provider message key normalization preserves suffix case and rejects duplicate aliases" {
+    const a = std.testing.allocator;
+    const normalized = try messageLookupKey(a, "ar", "A mixedCase");
+    defer a.free(normalized);
+    try std.testing.expectEqualStrings("ar\ta_mixedCase", normalized);
+    try std.testing.expectError(error.UnsupportedInterfaceMessageKey, messageLookupKey(a, "ar", "أ"));
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try tmp.dir.writeFile(io, .{ .sub_path = "interface-messages.tsv", .data = message_test_headers ++ "ar\tAnd\tV\tو\nar\tand\tV\tو\n" });
+    try std.testing.expectError(error.DuplicateInterfaceMessage, Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml"));
 }
 
 test "provider loads exact Wikibase sitelinks and fails closed on unknown pairs" {
