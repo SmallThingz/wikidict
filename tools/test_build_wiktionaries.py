@@ -169,6 +169,125 @@ def write_coverage(root, command=None):
     write_namespace_coverage(root,record['pages_seen'])
 
 
+class AffinityAdmissionTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def envelope(self,cpus=(0,2,4,6),address_space=limits.MAX_BUILD_MEMORY,nice=15):
+        with patch.dict(os.environ,{},clear=True), \
+             patch.object(limits,'inside_watchdog',return_value=True), \
+             patch.object(b.resource,'getrlimit',return_value=(address_space,address_space)), \
+             patch.object(b.os,'sched_getaffinity',return_value=set(cpus)), \
+             patch.object(b.os,'getpriority',return_value=nice):
+            yield
+
+    def test_affinity_budget_ignores_global_load_and_owned_worker_credit(self):
+        with self.envelope(),patch.object(b.os,'cpu_count',return_value=8),patch.object(b,'load_average',return_value=1000) as load:
+            self.assertEqual(0,b.safe_worker_budget())
+            load.reset_mock()
+            self.assertEqual(4,b.safe_worker_budget(cpu_admission='affinity'))
+            self.assertEqual(4,b.safe_worker_budget(1000,cpu_admission='affinity'))
+            load.assert_not_called()
+        for cpus,memory,expected in [((0,2),limits.MAX_BUILD_MEMORY,2),((0,2,4,6),4*1024**3,2),((0,),128*1024**2,0)]:
+            with self.subTest(cpus=cpus,memory=memory),self.envelope(cpus,memory):
+                self.assertEqual(expected,b.safe_worker_budget(cpu_admission='affinity'))
+
+    def test_affinity_rejects_unverified_child_and_forged_partial_environment(self):
+        with patch.dict(os.environ,{},clear=True),patch.object(limits,'_verified_watchdog_pid',None):
+            with self.assertRaisesRegex(limits.ContainmentUnavailable,'verified watchdog child'):
+                b.safe_worker_budget(cpu_admission='affinity')
+        with patch.dict(os.environ,{limits.WATCHDOG_TOKEN:'a'*32},clear=True),patch.object(limits,'_verified_watchdog_pid',None):
+            with self.assertRaisesRegex(limits.ContainmentUnavailable,'Incomplete watchdog child proof'):
+                b.safe_worker_budget(cpu_admission='affinity')
+
+    def test_affinity_requires_finite_actual_address_space_and_narrow_allowed_affinity(self):
+        for soft,hard in [(b.resource.RLIM_INFINITY,b.resource.RLIM_INFINITY),(0,limits.MAX_BUILD_MEMORY),
+                          (limits.MAX_BUILD_MEMORY,limits.MAX_BUILD_MEMORY+1),(limits.MAX_BUILD_MEMORY,1024**3)]:
+            with self.subTest(limits=(soft,hard)),self.envelope(),patch.object(b.resource,'getrlimit',return_value=(soft,hard)):
+                with self.assertRaisesRegex(limits.ContainmentUnavailable,'finite watchdog address-space'):
+                    b.safe_worker_budget(cpu_admission='affinity')
+        for cpus in [(),tuple(range(5))]:
+            with self.subTest(cpus=cpus),self.envelope(cpus):
+                with self.assertRaisesRegex(ValueError,'one through four allowed CPUs'):
+                    b.safe_worker_budget(cpu_admission='affinity')
+        with self.envelope(nice=0),self.assertRaisesRegex(limits.ContainmentUnavailable,'nice priority'):
+            b.safe_worker_budget(cpu_admission='affinity')
+
+    def test_affinity_retains_lower_child_cgroup_cap_and_fails_closed(self):
+        with self.envelope(),patch.dict(os.environ,{limits.CHILD_CGROUP:'/private/build'}):
+            for cap,expected in [(4*1024**3,2),(128*1024**2,0),(None,0),(0,0),(True,0)]:
+                with self.subTest(cap=cap),patch.object(limits,'child_memory_limit_bytes',return_value=cap):
+                    self.assertEqual(expected,b.safe_worker_budget(cpu_admission='affinity'))
+            with patch.object(limits,'child_memory_limit_bytes',side_effect=OSError('unreadable')):
+                self.assertEqual(0,b.safe_worker_budget(cpu_admission='affinity'))
+
+    def test_affinity_cli_rejects_wide_or_cgroup_requests_before_supervision(self):
+        variants=[[],['--resource-mode=watchdog','--jobs=2'],['--resource-mode=watchdog','--threads=5'],
+                  ['--resource-mode=watchdog','--expansion-workers=8']]
+        for args in variants:
+            with self.subTest(args=args),patch.object(sys,'argv',['build_wiktionaries.py','--cpu-admission=affinity',*args]), \
+                 patch.object(limits,'supervise_watchdog') as watchdog,patch.object(limits,'supervise') as cgroup, \
+                 patch.object(b,'main') as main:
+                with self.assertRaises(SystemExit):b.cli()
+                watchdog.assert_not_called();cgroup.assert_not_called();main.assert_not_called()
+
+    def test_affinity_cli_keeps_existing_watchdog_lock_deadline_and_disk_envelope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            def supervised(**kwargs):
+                self.assertEqual({'wall_seconds':123,'disk_paths':(root/'.tmp',root/'data/dictionaries')},kwargs)
+                with self.assertRaises(limits.ContainmentUnavailable):
+                    b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
+                return 0
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--cpu-admission=affinity',
+                  '--threads=4','--jobs=1','--expansion-workers=4','--build-timeout-seconds=123']
+            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
+                 patch.object(limits,'inside_watchdog',return_value=False), \
+                 patch.object(limits,'supervise_watchdog',side_effect=supervised) as watchdog,patch.object(b,'main') as main:
+                with self.assertRaises(SystemExit) as result:b.cli()
+                self.assertEqual(0,result.exception.code)
+                watchdog.assert_called_once();main.assert_not_called()
+
+    def test_affinity_main_resolves_defaults_without_host_load_and_forwards_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',
+                url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--cpu-admission=affinity','--downloads',str(root),'--output',str(root/'out')]
+            with self.envelope(),patch.object(sys,'argv',argv), \
+                 patch.object(b,'load_average',side_effect=AssertionError('affinity admission must not consult global load')), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual((4,1,None),groups.call_args.args[4:])
+            self.assertEqual('affinity',groups.call_args.kwargs['cpu_admission'])
+            self.assertIn('edition_options',groups.call_args.kwargs)
+            self.assertEqual(limits.WATCHDOG_WALL_SECONDS,groups.call_args.kwargs['admission_wait_seconds'])
+
+    def test_affinity_group_admission_builds_serially_without_global_load_wait(self):
+        groups={(wiki,'20261001'):[dict(wiki=wiki)] for wiki in ('aawiktionary','abwiktionary')}
+        started=[]
+        def fake_build(group,*args,**kwargs):
+            started.append(group[0]['wiki'])
+            self.assertEqual(4,args[-1])
+            self.assertEqual(4,kwargs['expansion_workers'])
+        with self.envelope(),patch.object(b,'load_average',side_effect=AssertionError('unexpected global load')), \
+             patch.object(b,'build',side_effect=fake_build),patch.object(b.time,'sleep',side_effect=AssertionError('unexpected admission wait')):
+            self.assertEqual([],b.build_groups(groups,Path('.'),Path('.'),'zig',4,1,4,cpu_admission='affinity'))
+        self.assertEqual(['aawiktionary','abwiktionary'],started)
+
+    def test_affinity_group_rejects_job_and_effective_edition_worker_overrides(self):
+        key=('aawiktionary','20261001');groups={key:[dict(wiki=key[0])]}
+        for threads,jobs,expansion in [(4,2,4),(5,1,4),(4,1,5)]:
+            with self.subTest(threads=threads,jobs=jobs,expansion=expansion),self.envelope(),patch.object(b,'build') as build:
+                with self.assertRaises(ValueError):
+                    b.build_groups(groups,Path('.'),Path('.'),'zig',threads,jobs,expansion,cpu_admission='affinity')
+                build.assert_not_called()
+        for cpus,override in [((0,2,4,6),5),((0,),2)]:
+            with self.subTest(cpus=cpus,override=override),self.envelope(cpus),patch.object(b,'build') as build:
+                with self.assertRaises(ValueError):
+                    b.build_groups(groups,Path('.'),Path('.'),'zig',1,1,1,cpu_admission='affinity',
+                        edition_options={key:{'expansion_workers':override}})
+                build.assert_not_called()
+
+
 class ProvenanceBindingTests(unittest.TestCase):
     def test_commons_pin_isolates_inventory_from_other_captures_and_staged_input(self):
         import prepare_commons_data as commons

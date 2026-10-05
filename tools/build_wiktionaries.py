@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import resource
 from pathlib import Path
 import shutil
 import subprocess
@@ -73,7 +74,52 @@ def load_average():
     try:return max(0.0,os.getloadavg()[0])
     except OSError:return None
 
-def safe_worker_budget(owned_workers=0):
+def affinity_worker_capacity(cpu_count, address_space_bytes):
+    """Memory heuristic for a planned/actual affinity; not an aggregate PSS cap."""
+    from build_resource_limits import MAX_BUILD_MEMORY, SUPERVISOR_CHILD_RESERVE
+    if type(cpu_count) is not int or not 1 <= cpu_count <= MAX_PIPELINE_WORKERS:
+        raise ValueError('Affinity admission requires one through four allowed CPUs')
+    if type(address_space_bytes) is not int or not 0 < address_space_bytes <= MAX_BUILD_MEMORY:
+        raise ValueError('Affinity admission requires a finite address-space bound of at most 8 GiB')
+    memory_workers=max(0,address_space_bytes-SUPERVISOR_CHILD_RESERVE)//MEMORY_PER_BUILD_WORKER
+    return min(cpu_count,memory_workers)
+
+
+def affinity_worker_budget():
+    from build_resource_limits import (ContainmentUnavailable, inside_watchdog, MAX_BUILD_MEMORY,
+                                       CHILD_CGROUP, child_memory_limit_bytes)
+    if not inside_watchdog():
+        raise ContainmentUnavailable('Affinity admission requires a verified watchdog child')
+    soft,hard=resource.getrlimit(resource.RLIMIT_AS)
+    if (soft==resource.RLIM_INFINITY or hard==resource.RLIM_INFINITY or
+            not 0 < soft <= hard <= MAX_BUILD_MEMORY):
+        raise ContainmentUnavailable('Affinity admission requires finite watchdog address-space limits of at most 8 GiB')
+    if os.getpriority(os.PRIO_PROCESS,0)<15:
+        raise ContainmentUnavailable('Affinity admission requires watchdog nice priority of at least 15')
+    address_space_budget=soft
+    if CHILD_CGROUP in os.environ:
+        try:group_limit=child_memory_limit_bytes()
+        except (OSError,ValueError):return 0
+        if type(group_limit) is not int or group_limit<=0:return 0
+        address_space_budget=min(address_space_budget,group_limit)
+    return affinity_worker_capacity(len(os.sched_getaffinity(0)),address_space_budget)
+
+
+def validate_affinity_workers(threads,jobs,expansion_workers=None):
+    expansion_workers=threads if expansion_workers is None else expansion_workers
+    if type(jobs) is not int or jobs!=1:
+        raise ValueError('Affinity admission requires exactly one edition job')
+    if any(type(n) is not int or not 1 <= n <= MAX_PIPELINE_WORKERS for n in (threads,expansion_workers)):
+        raise ValueError('Affinity admission requires one through four compiler and expansion workers')
+    budget=affinity_worker_budget()
+    if max(threads,expansion_workers)>budget:
+        raise ValueError(f'Affinity workers exceed allowed affinity/address-space budget {budget}')
+    return budget
+
+
+def safe_worker_budget(owned_workers=0, *, cpu_admission='load'):
+    if cpu_admission=='affinity':return affinity_worker_budget()
+    if cpu_admission!='load':raise ValueError('Unknown CPU admission policy')
     cpu=max(1,os.cpu_count() or 1)
     load=load_average()
     if load is None:
@@ -1634,12 +1680,14 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     if workspace.exists(): shutil.rmtree(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load'):
     from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     if type(admission_wait_seconds) is not int or not 1 <= admission_wait_seconds <= MAX_WATCHDOG_WALL_SECONDS:
         raise ValueError('Resource admission wait must be a positive finite number of seconds, up to seven days')
+    if cpu_admission not in ('load','affinity'):raise ValueError('Unknown CPU admission policy')
+    if cpu_admission=='affinity':validate_affinity_workers(threads,jobs,expansion_workers)
     pending=list(sorted(groups.items()))
     failures=[]
     admission_workers=threads if expansion_workers is None or expansion_workers>MAX_PIPELINE_WORKERS else max(threads,expansion_workers)
@@ -1650,7 +1698,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
         while pending or active:
             while pending and len(active)<jobs:
                 active_workers=len(active)*admission_workers
-                live_budget=safe_worker_budget(active_workers)
+                live_budget=safe_worker_budget(active_workers) if cpu_admission=='load' else safe_worker_budget(cpu_admission='affinity')
                 if live_budget < active_workers+admission_workers:
                     break
                 if admission_deadline is not None and time.monotonic() >= admission_deadline:
@@ -1665,6 +1713,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 if edition_options is not None:
                     if key not in edition_options:raise ValueError(f'Missing edition inputs: {key}')
                     options.update(edition_options[key])
+                if cpu_admission=='affinity':validate_affinity_workers(threads,jobs,options.get('expansion_workers'))
                 future=pool.submit(build,group,downloads,output,zig,threads,**options)
                 active[future]=key
                 admission_deadline=None
@@ -1703,7 +1752,9 @@ def main():
     p.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup',
                    help='Resource supervisor: strict cgroup (default), or explicit best-effort 8 GiB process-tree watchdog with a two-hour deadline')
     p.add_argument('--build-timeout-seconds',type=int,help='Explicit watchdog build deadline, up to seven days; default two hours')
-    p.add_argument('--threads',type=int,default=default_build_threads(),help='Workers per edition (up to 4 within CPU load and fixed 8 GiB aggregate cap)')
+    p.add_argument('--cpu-admission',choices=('load','affinity'),default='load',
+                   help='CPU admission: load headroom (default), or fixed affinity sharing within a verified watchdog and one edition job')
+    p.add_argument('--threads',type=int,help='Workers per edition (up to 4 within CPU load and fixed 8 GiB aggregate cap)')
     p.add_argument('--jobs',type=int,help='Concurrent editions (up to two within CPU load and capped aggregate worker budget)')
     p.add_argument('--expansion-workers',type=int,help='Workers per sharded page expansion; default follows --threads, opt-in 5-8 requires watchdog and one edition job')
     p.add_argument('--expansion-timeout-ms',type=int,help='Explicit per-page wall deadline, 1 through 3600000 ms; default 60000. Timeouts fail the build rather than publish empty pages.')
@@ -1723,19 +1774,30 @@ def main():
         from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
         if a.resource_mode!='watchdog' or not 0<a.build_timeout_seconds<=MAX_WATCHDOG_WALL_SECONDS:
             p.error('Explicit build deadline requires watchdog mode and must be 1 through '+str(MAX_WATCHDOG_WALL_SECONDS)+' seconds')
-    budget=safe_worker_budget()
-    if budget < 1:p.error('No worker budget within CPU load and the verified build memory cap (at most 8 GiB)')
+    if a.cpu_admission=='affinity' and a.resource_mode!='watchdog':
+        p.error('Affinity admission requires explicit watchdog mode')
+    if a.threads is None and a.cpu_admission=='load':a.threads=default_build_threads()
+    try:budget=safe_worker_budget() if a.cpu_admission=='load' else safe_worker_budget(cpu_admission='affinity')
+    except ValueError as error:p.error(str(error))
+    if a.threads is None:
+        a.threads=max(1,min(MAX_PIPELINE_WORKERS,budget))
+    if budget < 1:p.error('No worker budget within the selected CPU admission policy and build memory limit (at most 8 GiB)')
     worker_limit=min(budget,MAX_PIPELINE_WORKERS)
     if not 1 <= a.threads <= worker_limit:p.error(f'Threads must be 1 through {worker_limit} on this host')
     expansion_workers=a.threads if a.expansion_workers is None else a.expansion_workers
     if not 1 <= expansion_workers <= MAX_PAGE_EXPANSION_WORKERS:
         p.error(f'Expansion workers must be 1 through {MAX_PAGE_EXPANSION_WORKERS}')
+    if a.cpu_admission=='affinity' and expansion_workers>MAX_PIPELINE_WORKERS:
+        p.error('Affinity admission allows at most four expansion workers')
     if expansion_workers>MAX_PIPELINE_WORKERS:
         if a.resource_mode!='watchdog':p.error('More than four expansion workers requires explicit watchdog mode')
         if expansion_workers>len(os.sched_getaffinity(0)):
             p.error('Expansion workers exceed the watchdog CPU affinity')
     admission_workers=a.threads if expansion_workers>MAX_PIPELINE_WORKERS else max(a.threads,expansion_workers)
-    if a.jobs is None:a.jobs=1 if expansion_workers>MAX_PIPELINE_WORKERS else min(2,max(1,budget//admission_workers))
+    if a.jobs is None:a.jobs=1 if a.cpu_admission=='affinity' or expansion_workers>MAX_PIPELINE_WORKERS else min(2,max(1,budget//admission_workers))
+    if a.cpu_admission=='affinity':
+        try:validate_affinity_workers(a.threads,a.jobs,expansion_workers)
+        except ValueError as error:p.error(str(error))
     if expansion_workers>MAX_PIPELINE_WORKERS and a.jobs!=1:
         p.error('More than four expansion workers requires exactly one edition job')
     if not 1 <= a.jobs <= 16:p.error('Jobs must be 1 through 16')
@@ -1759,6 +1821,7 @@ def main():
         p.error('Auxiliary snapshots require exactly one edition')
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     options={}
+    if a.cpu_admission!='load':options['cpu_admission']=a.cpu_admission
     if a.resource_mode=='watchdog':
         from build_resource_limits import WATCHDOG_WALL_SECONDS
         # The outer watchdog still enforces its original global wall deadline,
@@ -1779,11 +1842,19 @@ def cli():
     try:
         route=argparse.ArgumentParser(add_help=False)
         route.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup')
+        route.add_argument('--cpu-admission',choices=('load','affinity'),default='load')
+        route.add_argument('--threads',type=int)
+        route.add_argument('--jobs',type=int)
         route.add_argument('--expansion-workers',type=int)
         route.add_argument('--build-timeout-seconds',type=int)
         route.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries')
         routing=route.parse_known_args()[0]
         mode=routing.resource_mode
+        if routing.cpu_admission=='affinity':
+            if mode!='watchdog':raise ContainmentUnavailable('Affinity admission requires explicit watchdog mode')
+            if routing.jobs not in (None,1):raise ContainmentUnavailable('Affinity admission requires exactly one edition job')
+            if any(n is not None and not 1 <= n <= MAX_PIPELINE_WORKERS for n in (routing.threads,routing.expansion_workers)):
+                raise ContainmentUnavailable('Affinity admission allows one through four compiler and expansion workers')
         if routing.build_timeout_seconds is not None:
             from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
             if mode!='watchdog' or not 0<routing.build_timeout_seconds<=MAX_WATCHDOG_WALL_SECONDS:
