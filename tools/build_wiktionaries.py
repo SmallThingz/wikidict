@@ -935,7 +935,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         if expander_build.exists(): shutil.rmtree(expander_build)
         staged=json.loads((workspace/'input/.complete.json').read_text())
         extraction_cache=workspace/'input'/'extraction-cache'
-        timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(expander_build),
+        timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(expander_build),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
                      *pipeline_snapshot_args(registry,auxiliary_snapshots),
                      '--llvm-workers',str(workers),
@@ -978,7 +978,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             break
         # A verifier failure can be a transient resource/tool failure. Preserve
         # the existing shard and stop; only invalid coverage permits deletion.
-        timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+        timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
                   edition,date,'resume_shard_verify',start_page=start,pages=limit)
         require_index_identity(index_path,index)
         marker=shard/'.verified'
@@ -992,7 +992,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if missing_starts and all(not (shards_root/f'{start:08d}').exists() for start in missing_starts):
         first=missing_starts[0]
         require_index_identity(index_path,index)
-        timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shards_root),
+        timed_run([zig,'build','-j1','-Doptimize=fast','build-blobs','--',str(dump),str(shards_root),
                    '--expander-root',str(expander),'--start-page',str(first),
                    '--limit-pages',str(indexed_pages-first),
                    '--index-byte-offset',str(index['offsets'][first]),
@@ -1004,7 +1004,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             shard=shards_root/f'{start:08d}'
             limit=min(SHARD_PAGES,indexed_pages-start)
             validate_page_coverage(shard,start,limit,index,index['offsets'][start])
-            timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+            timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
                       edition,date,'shard_verify',start_page=start,pages=limit)
             (shard/'.verified').write_text('verified\n')
             require_index_identity(index_path,index)
@@ -1025,7 +1025,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     print(f'Rebuilding shard with invalid coverage {items[0]["wiki"]} start={start}',flush=True)
                     shutil.rmtree(shard)
                 else:
-                    timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+                    timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
                               edition,date,'resume_shard_verify',start_page=start,pages=limit)
                     require_index_identity(index_path,index)
                     if not marker.is_file(): marker.write_text('verified\n')
@@ -1034,7 +1034,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             for attempt in range(1,SHARD_RETRIES+1):
                 if shard.exists(): shutil.rmtree(shard)
                 try:
-                    timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-blobs','--',str(dump),str(shard),
+                    timed_run([zig,'build','-j1','-Doptimize=fast','build-blobs','--',str(dump),str(shard),
                                  '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
                                  '--index-byte-offset',str(offset),
                                  '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args],
@@ -1052,7 +1052,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     continue
                 # Preserve a completed shard if verification fails because of
                 # a transient tool/resource error. The next run revalidates it.
-                timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(shard)],
+                timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
                           edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
                 require_index_identity(index_path,index)
                 marker.write_text('verified\n')
@@ -1066,9 +1066,9 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                      for path,start in zip(shard_paths,range(0,indexed_pages,SHARD_PAGES)))
     if actual_pages!=indexed_pages: raise ValueError('Incomplete total shard page coverage')
     if staging.exists(): shutil.rmtree(staging)
-    timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]],
+    timed_run([zig,'build','-j1','-Doptimize=fast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]],
               edition,date,'merge',shards=len(shard_paths))
-    timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)],
+    timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(staging)],
               edition,date,'merged_verify',shards=len(shard_paths))
     coverage=dict(version=1,start_page=0,requested_limit=None,index_byte_offset=0,pages_seen=actual_pages,
                   expected_input_pages=indexed_pages,page_index_identity=index['identity'],page_index_sha256=index['sha256'],page_index_rows=indexed_pages)
@@ -1411,15 +1411,15 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             dump = stage_seekable_dump(xml,downloads,scratch,source_metadata)
             pinned=copy_verified_snapshot(interwiki_snapshot,scratch/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
             aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,scratch)
-            timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','build-dictionary','--',str(dump),str(staging),
-                             *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
+            timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
+                         *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                          *pipeline_snapshot_args(registry,aux_pinned),
                          '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                          '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args],edition,date,'dictionary_build')
             coverage=validate_page_coverage(staging,source_pages=source_metadata['source_pages'])
             coverage['expected_input_pages']=source_metadata['source_pages']
             (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
-            timed_run([zig,'build','-j1','-Doptimize=ReleaseFast','verify-blobs','--',str(staging)],
+            timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(staging)],
                       edition,date,'dictionary_verify')
             if interwiki_sha is not None:
                 if sha256_file(pinned)!=interwiki_sha: raise ValueError('Interwiki map snapshot changed during build')

@@ -1021,8 +1021,8 @@ test "discard calls propagate zero demand while preserving calls arguments and f
     try std.testing.expectEqual(@as(usize, 3), probe.effects);
     try std.testing.expectEqual(@as(usize, 1), probe.args_len);
 
-    const fixed = [_]rt.Value{.{ .number = 7 }} ** 8;
-    const tail = [_]rt.Value{.{ .number = 9 }} ** 2;
+    const fixed: [8]rt.Value = @splat(.{ .number = 7 });
+    const tail: [2]rt.Value = @splat(.{ .number = 9 });
     try std.testing.expectEqual(@as(u32, 0), dict_lua_call_discard_tail(&ctx, &callable, &fixed, fixed.len, &tail, tail.len));
     try std.testing.expectEqual(@as(usize, 2), probe.calls);
     try std.testing.expectEqual(@as(usize, 6), probe.effects);
@@ -1086,8 +1086,8 @@ test "tail return forwards actual arity and caller buffer" {
     try std.testing.expectEqual(@as(usize, 0), zero.values_len);
     try std.testing.expect(zero.values_ptr == null);
 
-    const many_fixed = [_]rt.Value{.{ .number = 3 }} ** 8;
-    const tail = [_]rt.Value{.{ .number = 4 }} ** 2;
+    const many_fixed = @as([8]rt.Value, @splat(.{ .number = 3 }));
+    const tail = @as([2]rt.Value, @splat(.{ .number = 4 }));
     out = .{ stale, stale };
     const merged = dict_lua_return_call_tail(&ctx, &buffered, &many_fixed, many_fixed.len, &tail, tail.len, &out, out.len);
     try std.testing.expectEqual(@as(u32, 0), merged.status);
@@ -1127,23 +1127,23 @@ test "static literal decoder materializes list named and keyed fields" {
 
     var bytes: std.ArrayList(u8) = .empty;
     defer bytes.deinit(std.testing.allocator);
-    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.ValueTag.table));
+    try bytes.append(std.testing.allocator, @backingInt(static_literal.ValueTag.table));
     try W.writeU32(&bytes, static_literal.no_shape);
     try W.writeU32(&bytes, 3);
     try W.writeU32(&bytes, 1);
 
-    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.FieldTag.list));
-    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.ValueTag.string));
+    try bytes.append(std.testing.allocator, @backingInt(static_literal.FieldTag.list));
+    try bytes.append(std.testing.allocator, @backingInt(static_literal.ValueTag.string));
     try W.string(&bytes, "one");
 
-    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.FieldTag.named));
+    try bytes.append(std.testing.allocator, @backingInt(static_literal.FieldTag.named));
     try W.string(&bytes, "flag");
-    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.ValueTag.true_));
+    try bytes.append(std.testing.allocator, @backingInt(static_literal.ValueTag.true_));
 
-    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.FieldTag.keyed));
-    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.ValueTag.number));
+    try bytes.append(std.testing.allocator, @backingInt(static_literal.FieldTag.keyed));
+    try bytes.append(std.testing.allocator, @backingInt(static_literal.ValueTag.number));
     try W.writeU64(&bytes, @bitCast(@as(f64, 2)));
-    try bytes.append(std.testing.allocator, @intFromEnum(static_literal.ValueTag.string));
+    try bytes.append(std.testing.allocator, @backingInt(static_literal.ValueTag.string));
     try W.string(&bytes, "two");
 
     var ctx = try rt.Context.init(std.testing.allocator, 1);

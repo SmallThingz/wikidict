@@ -151,7 +151,7 @@ test "pattern cache owns keys and codepoints and reuses equal content" {
     pattern[129] = ']';
     const first = cache.admit(&pattern).?;
     @memset(&pattern, 'x');
-    const key = "[" ++ ("q" ** 128) ++ "]";
+    const key = "[" ++ @as([128]u8, @splat('q')) ++ "]";
     var copied: [key.len]u8 = undefined;
     @memcpy(&copied, key);
     try std.testing.expect(cache.lookup(&copied).? == first);
@@ -176,7 +176,7 @@ test "pattern cache accounts unmerged storage and respects exact byte budget" {
     try std.testing.expectEqual(expected, entry.requested_bytes);
     try std.testing.expectEqual(cache.byte_limit, cache.requested_bytes);
     try std.testing.expect(entry.prepared.storage.len > entry.prepared.classes[0].ranges.len);
-    try std.testing.expect(cache.lookup("[" ++ ("q" ** 128) ++ "]").? == entry);
+    try std.testing.expect(cache.lookup("[" ++ @as([128]u8, @splat('q')) ++ "]").? == entry);
     pattern[1] = 'a';
     try std.testing.expect(cache.admit(&pattern) == null);
 }
@@ -210,7 +210,7 @@ test "failed cache admission releases every allocation and publishes nothing" {
         var cache = PatternCache.init(std.testing.io, failing.allocator());
         try std.testing.expect(cache.admit(&pattern) == null);
         try std.testing.expectEqual(@as(usize, 0), cache.entry_count);
-        try std.testing.expect(cache.lookup("[" ++ ("q" ** 128) ++ "]") == null);
+        try std.testing.expect(cache.lookup("[" ++ @as([128]u8, @splat('q')) ++ "]") == null);
         cache.deinit();
         try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
     }

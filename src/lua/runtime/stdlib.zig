@@ -970,7 +970,7 @@ fn debugTraceback(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_bu
 }
 
 const MathRandomState = struct {
-    state: [31]u32 = [_]u32{0} ** 31,
+    state: [31]u32 = @as([31]u32, @splat(0)),
     front: u8 = 3,
     rear: u8 = 0,
 
@@ -1682,7 +1682,7 @@ test "protected calls bound body results and restore outer error state" {
                 .wanted = if (capacity) |n| if (n <= 9) n -| 1 else null else null,
                 .argc = if (kind == 0) 1 else 0,
             };
-            var storage = [_]Value{.{ .string = "stale" }} ** 12;
+            var storage: [12]Value = @splat(.{ .string = "stale" });
             const buffer: ?[]Value = if (capacity) |n| storage[0..n] else null;
             ctx.last_error = .{ .number = 88 };
             ctx.last_error_present = true;

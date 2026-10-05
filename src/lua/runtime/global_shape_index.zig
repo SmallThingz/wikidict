@@ -47,7 +47,7 @@ test "global index keeps native ABI keys and high slots intact" {
     keys[abi.names.len + 2] = .{ .string = "A_global" };
     const slots = try build(std.testing.allocator, keys[0..]);
     defer std.testing.allocator.free(slots);
-    var seen = [_]bool{false} ** keys.len;
+    var seen = @as([keys.len]bool, @splat(false));
     for (slots, 0..) |slot, index| {
         try std.testing.expect(slot < keys.len and !seen[slot]);
         seen[slot] = true;

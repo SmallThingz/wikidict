@@ -762,7 +762,7 @@ test "AOT Unicode gsub supports table and callable replacements" {
 test "program pattern metadata outlives pages and abandoned Unicode iterators" {
     var cache = PatternCache.init(std.testing.io, std.testing.allocator);
     defer cache.deinit();
-    const key = "[" ++ ("q" ** 128) ++ "]";
+    const key = "[" ++ @as([128]u8, @splat('q')) ++ "]";
     for (0..2) |_| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
@@ -797,7 +797,7 @@ test "nested Unicode replacement matching cannot invalidate outer cache metadata
         fn call(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value, buffer: ?[]Value) ![]const Value {
             const self: *@This() = @ptrCast(@alignCast(raw.?));
             self.calls += 1;
-            const key = "[" ++ ("z" ** 128) ++ "]+";
+            const key = "[" ++ @as([128]u8, @splat('z')) ++ "]+";
             var one_slot: [1]Value = undefined;
             const nested = try runtime.callValueFixed(self.matcher, &.{ .{ .string = "zzzzzzzz" }, .{ .string = key } }, &one_slot);
             defer nested.deinit();
@@ -817,7 +817,7 @@ test "nested Unicode replacement matching cannot invalidate outer cache metadata
     var probe = Probe{ .matcher = ustring.rawGet(.{ .string = "match" }).? };
     const callback = try runtime.newNativeBuffered(&probe, Probe.call);
     const gsub = ustring.rawGet(.{ .string = "gsub" }).?;
-    const key = "[" ++ ("q" ** 128) ++ "]";
+    const key = "[" ++ @as([128]u8, @splat('q')) ++ "]";
     const result = try runtime.callValue(gsub, &.{ .{ .string = "qqqqqqqq" }, .{ .string = key }, callback });
     defer rt.freeResults(result);
     try std.testing.expectEqualStrings("XXXXXXXX", result[0].string);

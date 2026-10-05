@@ -1103,7 +1103,7 @@ class BuildTest(unittest.TestCase):
             blob_calls=[c for c in calls if 'build-blobs' in c]
             expander_call=next(c for c in calls if 'build-dictionary' in c)
             self.assertTrue(calls)
-            self.assertTrue(all(command[1:3]==['build','-j1'] for command in calls))
+            self.assertTrue(all(command[1:4]==['build','-j1','-Doptimize=fast'] for command in calls))
             self.assertIn('--extraction-cache-root',expander_call)
             self.assertIn('--verified-dump-sha256',expander_call)
             self.assertIn('--verified-index-sha256',expander_call)
@@ -1285,7 +1285,7 @@ class BuildTest(unittest.TestCase):
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
                 b.build([item],root,root/'output','zig',2,interwiki_snapshot=interwiki,now_unix=1791072000)
             self.assertIn('verify-blobs',calls[1]);self.assertTrue((root/'output/testwiktionary/20260901/complete.json').exists())
-            self.assertTrue(all(command[1:3]==['build','-j1'] for command in calls))
+            self.assertTrue(all(command[1:4]==['build','-j1','-Doptimize=fast'] for command in calls))
             self.assertEqual(calls[0][calls[0].index('--now-unix')+1],'1791072000')
             self.assertEqual(json.loads((root/'output/testwiktionary/20260901/complete.json').read_text())['now_unix'],1791072000)
             self.assertIn('--llvm-workers',calls[0])

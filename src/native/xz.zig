@@ -1,9 +1,7 @@
 //! Seekable XZ transport. The dictionary wire format remains uncompressed.
 //! XZ's own stream indexes locate independently decodable blocks after compression.
 const std = @import("std");
-const c = @cImport({
-    @cInclude("lzma.h");
-});
+const c = @import("lzma");
 const A = std.mem.Allocator;
 const decoder_memory_limit: u64 = 128 * 1024 * 1024;
 const Api = struct {

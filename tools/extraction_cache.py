@@ -31,7 +31,7 @@ MAX_MARKER_BYTES = 64 * 1024 * 1024
 OBJECT_VERSION = 4
 MAX_OBJECT_BYTES = 1024 * 1024 * 1024
 MAX_BATCHES = 100_000
-LEAF_PRODUCER_FLAGS = ("build-obj", "-OReleaseFast", "-mcpu=baseline", "-fllvm", "-fstrip", "-lc")
+LEAF_PRODUCER_FLAGS = ("build-obj", "-Ofast", "-mcpu=baseline", "-fllvm", "-fstrip", "-lc")
 LEAF_PRODUCER_SOURCES = ("src/lua/value_leaf_build.zig", "src/lua/runtime/value_leaf.zig")
 ABI_FILES = (
     "src/lua/abi/globals.zig",

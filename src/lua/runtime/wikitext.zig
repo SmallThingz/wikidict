@@ -1976,25 +1976,30 @@ pub const Expander = struct {
         if (first != .string) return error.StringExpected;
         const raw_category = std.mem.trim(u8, first.string, " \t\r\n");
         if (raw_category.len == 0) return "";
-        errdefer |err| if (err == error.UnsupportedCategoryTreeOptions) {
-            self.runtime.last_error = .{ .string = std.fmt.allocPrint(
-                self.runtime.allocator,
-                "Unsupported CategoryTree options for {s}: mode={s} type={s} depth={s} namespaces={s} hideprefix={s} hideroot={s} showcount={s} class={s} style={s}",
-                .{
-                    raw_category,
-                    categoryTreeArg(args, "mode") orelse "(default)",
-                    categoryTreeArg(args, "type") orelse "(default)",
-                    categoryTreeArg(args, "depth") orelse "(default)",
-                    categoryTreeArg(args, "namespaces") orelse "(default)",
-                    categoryTreeArg(args, "hideprefix") orelse "(default)",
-                    categoryTreeArg(args, "hideroot") orelse "(default)",
-                    categoryTreeArg(args, "showcount") orelse "(default)",
-                    categoryTreeArg(args, "class") orelse "(default)",
-                    categoryTreeArg(args, "style") orelse "(default)",
-                },
-            ) catch "Unsupported CategoryTree options" };
+        return self.expandCategoryTreeOptions(args, raw_category) catch |err| {
+            if (err == error.UnsupportedCategoryTreeOptions) {
+                self.runtime.last_error = .{ .string = std.fmt.allocPrint(
+                    self.runtime.allocator,
+                    "Unsupported CategoryTree options for {s}: mode={s} type={s} depth={s} namespaces={s} hideprefix={s} hideroot={s} showcount={s} class={s} style={s}",
+                    .{
+                        raw_category,
+                        categoryTreeArg(args, "mode") orelse "(default)",
+                        categoryTreeArg(args, "type") orelse "(default)",
+                        categoryTreeArg(args, "depth") orelse "(default)",
+                        categoryTreeArg(args, "namespaces") orelse "(default)",
+                        categoryTreeArg(args, "hideprefix") orelse "(default)",
+                        categoryTreeArg(args, "hideroot") orelse "(default)",
+                        categoryTreeArg(args, "showcount") orelse "(default)",
+                        categoryTreeArg(args, "class") orelse "(default)",
+                        categoryTreeArg(args, "style") orelse "(default)",
+                    },
+                ) catch "Unsupported CategoryTree options" };
+            }
+            return err;
         };
+    }
 
+    fn expandCategoryTreeOptions(self: *Expander, args: *rt.Table, raw_category: []const u8) ![]const u8 {
         const category = try self.runtime.allocator.dupe(u8, raw_category);
         for (category) |*byte| {
             if (byte.* == ' ') byte.* = '_';

@@ -16,7 +16,7 @@ pub const RequestPool = struct {
     outstanding: usize = 0,
     direct_outstanding: usize = 0,
 
-    const check = builtin.mode != .ReleaseFast and builtin.mode != .ReleaseSmall;
+    const check = builtin.mode != .fast and builtin.mode != .small;
     const alignment: std.mem.Alignment = .@"16";
     const Slab = struct { next: ?*Slab, prev: ?*Slab, raw_len: usize, last_used: u64 };
     const payload_offset = std.mem.alignForward(usize, @sizeOf(Slab), alignment.toByteUnits());

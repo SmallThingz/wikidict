@@ -6,7 +6,7 @@ pub const LocalBumpArena = @import("local_bump_arena.zig").LocalBumpArena;
 pub const work_stats = @import("work_stats.zig");
 const static_fields = @import("lua_static_fields");
 pub const NativeNamespace = static_fields.Namespace;
-const native_namespace_count = std.meta.fields(static_fields.Namespace).len;
+const native_namespace_count = @typeInfo(static_fields.Namespace).@"enum".field_names.len;
 
 // Promotion still mutates process-lived graphs incrementally. A failed
 // allocation can be caught by Lua pcall or an optional upward-promotion caller;
@@ -58,7 +58,7 @@ fn templateSingletonNamespace(namespace: static_fields.Namespace) bool {
 }
 
 comptime {
-    if (@intFromEnum(std.meta.Tag(Value).string) != static_fields.string_value_tag)
+    if (@backingInt(std.meta.Tag(Value).string) != static_fields.string_value_tag)
         @compileError("prehashed field ABI requires the runtime string Value tag");
 }
 
@@ -158,7 +158,7 @@ pub const Value = union(enum) {
 };
 pub const stable_error_name_capacity = 128;
 pub const StableErrorName = struct {
-    bytes: [stable_error_name_capacity]u8 = [_]u8{0} ** stable_error_name_capacity,
+    bytes: [stable_error_name_capacity]u8 = @as([stable_error_name_capacity]u8, @splat(0)),
     len: u16 = 0,
 
     pub fn clear(self: *StableErrorName) void {
@@ -406,7 +406,7 @@ fn numberValueHash(number: f64) u64 {
     const normalized: f64 = if (number == 0) 0 else number;
     const bits: u64 = @bitCast(normalized);
     var bytes: [9]u8 = undefined;
-    bytes[0] = @intFromEnum(std.meta.Tag(Value).number);
+    bytes[0] = @backingInt(std.meta.Tag(Value).number);
     @memcpy(bytes[1..], std.mem.asBytes(&bits));
     const a0 = (@as(u64, std.mem.readInt(u32, bytes[0..4], .little)) << 32) |
         std.mem.readInt(u32, bytes[4..8], .little);
@@ -449,7 +449,7 @@ const ValueContext = struct {
     pub fn hash(_: ValueContext, value: Value) u64 {
         if (value == .number) return numberValueHash(value.number);
         if (value == .string) return stringValueHash(value.string);
-        const tag: u8 = @intFromEnum(std.meta.activeTag(value));
+        const tag: u8 = @backingInt(std.meta.activeTag(value));
         var h = std.hash.Wyhash.init(0);
         h.update(&.{tag});
         switch (value) {
@@ -509,7 +509,7 @@ const GlobalTail = struct {
             };
             if (!occupied) continue;
             const owned = try allocator.create(GlobalPage);
-            owned.* = [_]Value{.nil} ** global_page_len;
+            owned.* = @as([global_page_len]Value, @splat(.nil));
             @memcpy(owned[0..source.len], source);
             page.* = owned;
         }
@@ -546,7 +546,7 @@ const GlobalTail = struct {
         if (self.pages[page_index] == null) {
             if (value == .nil) return;
             const page = try self.allocator.create(GlobalPage);
-            page.* = [_]Value{.nil} ** global_page_len;
+            page.* = @as([global_page_len]Value, @splat(.nil));
             self.pages[page_index] = page;
         }
         self.pages[page_index].?[slot % global_page_len] = value;
@@ -1737,7 +1737,7 @@ const ModuleState = struct {
     global_table: ?*Table = null,
 };
 const ModuleStatePage = struct {
-    initialized: [module_state_page_len / 64]u64 = [_]u64{0} ** (module_state_page_len / 64),
+    initialized: [module_state_page_len / 64]u64 = @as([(module_state_page_len / 64)]u64, @splat(0)),
     states: [module_state_page_len]ModuleState = undefined,
 
     fn get(self: *ModuleStatePage, index: usize) ?*ModuleState {
@@ -1804,9 +1804,9 @@ const FieldCacheStorage = if (@hasDecl(@import("root"), "build_value_leaf") and
     extern threadlocal var dict_lua_shape_site_cache: [field_cache_entries]ShapeSiteCache;
 } else struct {
     export threadlocal var dict_lua_field_cache: [field_cache_entries]FieldCache =
-        [_]FieldCache{.{}} ** field_cache_entries;
+        @as([field_cache_entries]FieldCache, @splat(.{}));
     export threadlocal var dict_lua_shape_site_cache: [field_cache_entries]ShapeSiteCache =
-        [_]ShapeSiteCache{.{}} ** field_cache_entries;
+        @as([field_cache_entries]ShapeSiteCache, @splat(.{}));
 };
 
 // Metadata-only cache: it holds no table or Value pointer. A matching immutable
@@ -1899,7 +1899,7 @@ fn inheritedSiteIndex(site_id: u64) usize {
     return @intCast((site_id *% 0x9e3779b97f4a7c15) >> 54);
 }
 threadlocal var inherited_site_cache: [inherited_site_entries]InheritedSiteCache =
-    [_]InheritedSiteCache{.{}} ** inherited_site_entries;
+    @as([inherited_site_entries]InheritedSiteCache, @splat(.{}));
 
 pub const Context = struct {
     namespace_catalog: ?*const namespace_registry.Registry = null,
@@ -1968,10 +1968,10 @@ pub const Context = struct {
     // Store the cloned target value, never a pointer into the source context.
     retain_invoke_cell_baselines: bool = false,
     invoke_cell_baselines: std.ArrayList(InvokeCellBaseline) = .empty,
-    template_native_namespaces: [native_namespace_count]?*Table = [_]?*Table{null} ** native_namespace_count,
+    template_native_namespaces: [native_namespace_count]?*Table = @splat(null),
     // Type metatables are context singletons too. Lua may capture private
     // methods such as a title's __lt, which has no public namespace alias.
-    template_native_metatables: [native_namespace_count]?*Table = [_]?*Table{null} ** native_namespace_count,
+    template_native_metatables: [native_namespace_count]?*Table = @splat(null),
     module_template_page_scope: bool = false,
     page_stable_host_effects: bool = false,
     eager_bootstrap: bool = false,
@@ -2071,7 +2071,7 @@ pub const Context = struct {
     }
 
     pub fn registerNativeMetatable(self: *Context, namespace: NativeNamespace, table: *Table) void {
-        self.template_native_metatables[@intFromEnum(namespace)] = table;
+        self.template_native_metatables[@backingInt(namespace)] = table;
         table.native_metatable_namespace = namespace;
         table.module_template_mutation_probe = null;
         table.module_template_probe_id = 0;
@@ -2079,7 +2079,7 @@ pub const Context = struct {
 
     fn nativeMetatableIndex(self: *const Context, table: *const Table) ?usize {
         const namespace = table.native_metatable_namespace orelse return null;
-        const index = @intFromEnum(namespace);
+        const index = @backingInt(namespace);
         return if (self.template_native_metatables[index] == table) index else null;
     }
 
@@ -2088,7 +2088,7 @@ pub const Context = struct {
         namespace: static_fields.Namespace,
     ) ?*Table {
         if (!templateSingletonNamespace(namespace)) return null;
-        if (self.template_native_namespaces[@intFromEnum(namespace)]) |table| return table;
+        if (self.template_native_namespaces[@backingInt(namespace)]) |table| return table;
         var pending: [96]*Table = undefined;
         var pending_len: usize = 0;
         var seen: [96]*Table = undefined;
@@ -2625,7 +2625,7 @@ pub const Context = struct {
         const page_index: usize = @as(usize, module_id) >> module_state_page_shift;
         if (self.module_state_pages[page_index] == null) {
             const page = try self.allocator.create(ModuleStatePage);
-            page.initialized = [_]u64{0} ** (module_state_page_len / 64);
+            page.initialized = @as([(module_state_page_len / 64)]u64, @splat(0));
             self.module_state_pages[page_index] = page;
         }
         return self.module_state_pages[page_index].?.ensure(@as(usize, module_id) & module_state_page_mask);
@@ -4433,7 +4433,7 @@ pub const Context = struct {
             @memset(table.slots, .nil);
         }
         if (templateSingletonNamespace(namespace))
-            self.template_native_namespaces[@intFromEnum(namespace)] = table;
+            self.template_native_namespaces[@backingInt(namespace)] = table;
         return table;
     }
 
@@ -4795,8 +4795,9 @@ pub const Context = struct {
     }
 
     pub fn concatValues(self: *Context, values: []const Value) anyerror!Value {
-        var scratch = std.heap.stackFallback(1024, std.heap.smp_allocator);
-        const allocator = scratch.get();
+        var scratch_buffer: [1024]u8 = undefined;
+        var scratch: std.heap.BufferFirstAllocator = .init(&scratch_buffer, std.heap.smp_allocator);
+        const allocator = scratch.allocator();
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(allocator);
         for (values) |value| switch (value) {
@@ -4881,7 +4882,7 @@ test "numeric value hashing preserves prior iteration order" {
         const value = Value{ .number = sample };
         const normalized: f64 = if (sample == 0) 0 else sample;
         const bits: u64 = @bitCast(normalized);
-        const tag: u8 = @intFromEnum(std.meta.activeTag(value));
+        const tag: u8 = @backingInt(std.meta.activeTag(value));
         var previous = std.hash.Wyhash.init(0);
         previous.update(&.{tag});
         previous.update(std.mem.asBytes(&bits));
@@ -4939,7 +4940,7 @@ test "string value hashing preserves prior iteration order" {
     for (lengths) |len| {
         const text = bytes[0..len];
         const value = Value{ .string = text };
-        const tag: u8 = @intFromEnum(std.meta.activeTag(value));
+        const tag: u8 = @backingInt(std.meta.activeTag(value));
         var previous = std.hash.Wyhash.init(0);
         previous.update(&.{tag});
         previous.update(text);
@@ -6920,7 +6921,7 @@ test "sparse module globals preserve root snapshots aliases and iteration" {
 }
 
 fn moduleGlobalAllocationCase(allocator: std.mem.Allocator, dense: bool) !void {
-    var keys = [_]Value{.nil} ** 257;
+    var keys = @as([257]Value, @splat(.nil));
     keys[256] = .{ .string = "_G" };
     const shape: Shape = .{ .keys = .{ .boxed = &keys }, .field_count = keys.len, .open = true };
     var ctx = try Context.initProgram(allocator, keys.len, 1);
@@ -6956,7 +6957,7 @@ test "module global density counts false and partial tail pages" {
 }
 
 test "cached root tail occupancy preserves first touch across root writes and deletion" {
-    var keys = [_]Value{.nil} ** 257;
+    var keys = @as([257]Value, @splat(.nil));
     keys[0] = .{ .string = "_G" };
     keys[64] = .{ .string = "early" };
     keys[128] = .{ .string = "later" };
@@ -7324,7 +7325,7 @@ test "prehashed field writes retain growth nil and newindex behavior" {
             try std.testing.expect(right.next() == null);
         }
     };
-    var long_name: [257]u8 = [_]u8{'x'} ** 257;
+    var long_name: [257]u8 = @as([257]u8, @splat('x'));
     long_name[256] = 'a';
     try ctx.setIndex(.{ .table = original }, .{ .string = &long_name }, .{ .number = 1 });
     try ctx.setHashedField(.{ .table = hashed }, &long_name, stringValueHash(&long_name), .{ .number = 1 });
@@ -8013,7 +8014,7 @@ test "program shape leaf ignores identity exhaustion but preserves semantic guar
     ctx.program_shapes = &shapes;
     ctx.program_shape_generation = 991;
     const cache = try arena.allocator().create([field_cache_entries]ShapeSiteCache);
-    cache.* = [_]ShapeSiteCache{.{}} ** field_cache_entries;
+    cache.* = @as([field_cache_entries]ShapeSiteCache, @splat(.{}));
     const site: u64 = 0x81234567;
     const entry = &cache[fieldCacheIndex(site)];
     entry.* = .{ .site_id = site, .program_generation = 991, .shape_id = 0, .slot = 0 };
@@ -8054,7 +8055,7 @@ test "program shape leaf ignores identity exhaustion but preserves semantic guar
     try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
     ctx.program_shape_generation = 991;
 
-    table.native_namespace = @enumFromInt(0);
+    table.native_namespace = @fromBackingInt(@intCast(0));
     try std.testing.expect(positiveProgramShapeHit(&ctx, &object, site, cache) == null);
     table.native_namespace = null;
     table.owns_slots = false;
@@ -8516,7 +8517,7 @@ test "cloned dependency graphs keep their original mutation owner through aliase
     const a = arena.allocator();
     var source = try Context.initProgram(a, 0, 2);
     defer source.deinit();
-    const roots = [_]FunctionFn{stabilize(Probe.root)} ** 2;
+    const roots: [2]FunctionFn = @splat(stabilize(Probe.root));
     source.module_root_entries = &roots;
     source.configureModuleRequirements(null, Probe.requirements);
     const nested = try source.newTable();
@@ -8562,7 +8563,7 @@ test "template override cycles retain each source module mutation owner" {
     const a = arena.allocator();
     var source = try Context.initProgram(a, 0, 2);
     defer source.deinit();
-    const roots = [_]FunctionFn{stabilize(Probe.root)} ** 2;
+    const roots: [2]FunctionFn = @splat(stabilize(Probe.root));
     source.module_root_entries = &roots;
     source.configureModuleRequirements(null, Probe.requirements);
     const dependency = try source.newTable();
@@ -8791,8 +8792,8 @@ test "canonical requires reuse resolved package slots without repeating name loo
     const a = arena.allocator();
     const fields = [_]Value{.{ .string = "Module:slot-probe" }};
     const sorted = [_]u32{0};
-    const shapes = [_]Shape{.{ .keys = .{ .boxed = &fields }, .field_count = 1, .sorted_string_slots = &sorted, .all_string_keys = true, .open = true }} ** 2;
-    const roots = [_]FunctionFn{stabilize(Probe.root)} ** 2;
+    const shapes: [2]Shape = @splat(.{ .keys = .{ .boxed = &fields }, .field_count = 1, .sorted_string_slots = &sorted, .all_string_keys = true, .open = true });
+    const roots: [2]FunctionFn = @splat(stabilize(Probe.root));
     const slots = [_]u32{ 0, std.math.maxInt(u32) };
     for (0..4) |mode| {
         Probe.lookups = 0;

@@ -11,8 +11,9 @@ fn category(cp: i32) callconv(.c) c_int {
 test "warm cached Unicode percent classes and malformed tails preserve callbacks and errors" {
     var cache = pattern.PatternCache.init(std.testing.io, std.testing.allocator);
     defer cache.deinit();
-    const literal = "[" ++ ("α" ** 70) ++ "βq]";
-    const percent = "[" ++ ("α" ** 70) ++ "%aq]";
+    const alpha: [70 * "α".len]u8 = std.simd.repeat(70 * "α".len, "α".*);
+    const literal = "[" ++ alpha ++ "βq]";
+    const percent = "[" ++ alpha ++ "%aq]";
     const keys = [_][]const u8{ literal ++ "+", percent ++ "+", literal ++ "[", literal ++ "*(", literal ++ "*%1" };
     for (keys) |key| {
         var warm = try pattern.Search.initWithCache(std.testing.allocator, "qqqqqqqq", key, &cache);

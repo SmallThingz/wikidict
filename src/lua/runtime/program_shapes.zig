@@ -117,14 +117,14 @@ fn writeShape(w: *std.Io.Writer, keys: []const rt.Value, sorted: []const u32) !v
     try metadata.writeU32(w, @intCast(keys.len));
     for (keys) |key| switch (key) {
         .string => |s| {
-            try metadata.writeU32(w, @intFromEnum(metadata.ShapeKeyTag.string));
+            try metadata.writeU32(w, @backingInt(metadata.ShapeKeyTag.string));
             try metadata.writeString(w, s);
         },
         .number => |n| {
-            try metadata.writeU32(w, @intFromEnum(metadata.ShapeKeyTag.number));
+            try metadata.writeU32(w, @backingInt(metadata.ShapeKeyTag.number));
             try metadata.writeU64(w, @bitCast(n));
         },
-        .boolean => |b| try metadata.writeU32(w, @intFromEnum(if (b) metadata.ShapeKeyTag.true_ else metadata.ShapeKeyTag.false_)),
+        .boolean => |b| try metadata.writeU32(w, @backingInt(if (b) metadata.ShapeKeyTag.true_ else metadata.ShapeKeyTag.false_)),
         else => unreachable,
     };
     try metadata.writeU32(w, @intCast(sorted.len));

@@ -13,12 +13,12 @@ pub const Report = struct {
     expansion_error: bool = false,
 
     pub fn merge(self: *Report, other: Report) void {
-        inline for (@typeInfo(Report).@"struct".fields) |field|
-            @field(self, field.name) = @field(self, field.name) or @field(other, field.name);
+        inline for (@typeInfo(Report).@"struct".field_names) |field|
+            @field(self, field) = @field(self, field) or @field(other, field);
     }
     pub fn any(self: Report) bool {
-        inline for (@typeInfo(Report).@"struct".fields) |field|
-            if (@field(self, field.name)) return true;
+        inline for (@typeInfo(Report).@"struct".field_names) |field|
+            if (@field(self, field)) return true;
         return false;
     }
 };

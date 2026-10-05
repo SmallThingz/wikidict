@@ -674,9 +674,9 @@ fn compileLeafBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm
     const runtime_mod = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{runtime_core});
     const fields_mod = try std.fmt.allocPrint(a, "-Mlua_static_fields={s}", .{static_fields});
     try stage(io, marker, "compile build-only Lua value helper bitcode", &.{
-        paths.zig, "build-obj",          "-OReleaseFast", "-mcpu=baseline", "-fllvm", "-fstrip",       "-lc",
-        emit_obj,  emit_bc,              "--dep",         "zig_runtime",    root_mod, "--dep",         "lua_static_fields",
-        "--dep",   "namespace_registry", runtime_mod,     fields_mod,       "--dep",  "unicode_lower", namespace_mod,
+        paths.zig, "build-obj",          "-Ofast",    "-mcpu=baseline", "-fllvm", "-fstrip",       "-lc",
+        emit_obj,  emit_bc,              "--dep",     "zig_runtime",    root_mod, "--dep",         "lua_static_fields",
+        "--dep",   "namespace_registry", runtime_mod, fields_mod,       "--dep",  "unicode_lower", namespace_mod,
         lower_mod,
     });
     try std.Io.Dir.cwd().rename(partial, .cwd(), output, io);
@@ -759,7 +759,7 @@ fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llv
     const wikimedia_dump_mod = try std.fmt.allocPrint(a, "-Mwikimedia_dump={s}", .{wikimedia_dump});
 
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-OReleaseFast", "-fllvm", "-lc", emit });
+    try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-Ofast", "-fllvm", "-lc", emit });
     try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "shared_xml_decode", "--dep", "lua_wikitext_preprocess", "--dep", "wikimedia_dump", root });
     try argv.appendSlice(a, &.{
         "--dep",                   "lua_static_fields",         "--dep",           "namespace_registry",        runtime_mod,

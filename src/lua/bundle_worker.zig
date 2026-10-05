@@ -227,7 +227,7 @@ pub fn run(io: std.Io, persistent: A) !void {
         }
     }
     try limit(.CORE, 0);
-    if (L.errno(L.prctl(@intFromEnum(L.PR.SET_PDEATHSIG), @intFromEnum(L.SIG.KILL), 0, 0, 0)) != .SUCCESS) return error.ParentDeathSignalFailed;
+    if (L.errno(L.prctl(@backingInt(L.PR.SET_PDEATHSIG), @backingInt(L.SIG.KILL), 0, 0, 0)) != .SUCCESS) return error.ParentDeathSignalFailed;
     if (L.getppid() == 1) return error.ParentExited;
     var engine: ?Engine = null;
     defer if (engine) |*value| value.deinit();

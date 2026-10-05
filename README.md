@@ -39,7 +39,7 @@ The Android and desktop applications live in separate repositories:
 
 ## Build
 
-Use the Zig toolchain configured for the repository.
+Use Zig 0.17.0.
 
 ```sh
 zig build
@@ -59,8 +59,8 @@ zig build test-storage
 Build just the reader or C ABI:
 
 ```sh
-zig build cli -Doptimize=ReleaseFast
-zig build ffi -Doptimize=ReleaseFast
+zig build cli -Doptimize=fast
+zig build ffi -Doptimize=fast
 ```
 
 The public header is installed as `zig-out/include/dict/dict.h`.
@@ -308,13 +308,13 @@ component of the dated XML/SQL dump.
 Verify a compiled directory:
 
 ```sh
-zig build -Doptimize=ReleaseFast verify-blobs -- data/wiktionary-blobs
+zig build -Doptimize=fast verify-blobs -- data/wiktionary-blobs
 ```
 
 Build the reader and query it directly:
 
 ```sh
-zig build cli -Doptimize=ReleaseFast
+zig build cli -Doptimize=fast
 
 zig-out/bin/dict lookup cat --root data/wiktionary-blobs
 zig-out/bin/dict search ca --root data/wiktionary-blobs

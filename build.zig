@@ -1,15 +1,13 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    b.graph.incremental = false;
-
     const target = b.standardTargetOptions(.{});
     const optimize = b.option(
-        std.builtin.OptimizeMode,
+        std.builtin.Optimize,
         "optimize",
         "Prioritize performance, safety, or binary size",
-    ) orelse .ReleaseSafe;
-    const test_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
+    ) orelse .safe;
+    const test_optimize: std.builtin.Optimize = .safe;
     const namespace_registry_mod = namespaceRegistryModule(b, target, optimize);
     const namespace_registry_test_mod = namespaceRegistryModule(b, target, test_optimize);
     const shared_xml_decode_mod = b.createModule(.{
@@ -55,9 +53,11 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     const storage_mod = b.createModule(.{ .root_source_file = b.path("src/native/storage.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
-    storage_mod.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+    const lzma = b.addTranslateC(.{ .root_source_file = b.path("src/native/lzma.h"), .target = target, .optimize = optimize });
+    lzma.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+    storage_mod.addImport("lzma", lzma.createModule());
     const storage_test = b.createModule(.{ .root_source_file = b.path("src/native/storage.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
-    storage_test.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+    storage_test.addImport("lzma", lzma.createModule());
     const encoder_mod = b.addModule("encoder", .{
         .root_source_file = b.path("src/encoder/root.zig"),
         .target = target,
@@ -131,13 +131,13 @@ pub fn build(b: *std.Build) void {
     blob_build_exe.root_module.link_libc = true;
     blob_build_exe.root_module.linkSystemLibrary("bz2", .{});
     blob_build_exe.root_module.linkSystemLibrary("zstd", .{});
-    addPublicRunStep(b, "build-blobs", "Encode blobs with an already compiled bundle expander", addRunArtifactCommand(b, blob_build_exe, &.{}, b.args), &.{});
+    addPublicRunStep(b, "build-blobs", "Encode blobs with an already compiled bundle expander", addRunArtifactCommand(b, blob_build_exe, &.{}), &.{});
     blob_build_exe.root_module.addImport("namespace_registry", namespace_registry_mod);
     const blob_merge_exe = addCliExecutable(b, "dict-blob-merge", b.path("tools/blob_merge.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
     });
     blob_merge_exe.root_module.link_libc = true;
-    addPublicRunStep(b, "merge-blobs", "Merge non-overlapping compiled blob shards", addRunArtifactCommand(b, blob_merge_exe, &.{}, b.args), &.{});
+    addPublicRunStep(b, "merge-blobs", "Merge non-overlapping compiled blob shards", addRunArtifactCommand(b, blob_merge_exe, &.{}), &.{});
     const blob_verify_exe = addCliExecutable(b, "dict-blob-verify", b.path("tools/blob_verify.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
     });
@@ -169,18 +169,18 @@ pub fn build(b: *std.Build) void {
         .use_llvm = true,
         .use_lld = true,
     });
-    addPublicRunStep(b, "extract-lua", "Extract Lua modules or rebuild Lua usage metadata", addRunArtifactCommand(b, module_extract_exe, &.{}, b.args), &.{});
-    addPublicRunStep(b, "index-pages", "Build the mmap page-title index from page-index.tsv", addRunArtifactCommand(b, page_title_index_exe, &.{}, b.args), &.{});
-    addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM bitcode", addRunArtifactCommand(b, llvm_exe, &.{}, b.args), &.{});
+    addPublicRunStep(b, "extract-lua", "Extract Lua modules or rebuild Lua usage metadata", addRunArtifactCommand(b, module_extract_exe, &.{}), &.{});
+    addPublicRunStep(b, "index-pages", "Build the mmap page-title index from page-index.tsv", addRunArtifactCommand(b, page_title_index_exe, &.{}), &.{});
+    addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM bitcode", addRunArtifactCommand(b, llvm_exe, &.{}), &.{});
     const pipeline_paths = b.addOptions();
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("llvm", llvm_exe.getEmittedBin());
     pipeline_paths.addOption([]const u8, "zig", b.graph.zig_exe);
     pipeline_paths.addOption([]const u8, "clang", "clang");
-    pipeline_paths.addOption([]const u8, "project_root", b.pathFromRoot("."));
+    pipeline_paths.addOptionPathUntracked("project_root", b.path("."));
     pipeline_paths.addOptionPath("blobs", blob_build_exe.getEmittedBin());
     const pipeline_exe = addCliExecutable(b, "dict-bundle-build", b.path("tools/bundle_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
-    addPublicRunStep(b, "build-dictionary", "Pre-expand templates/modules and emit data-only dictionary blobs", addRunArtifactCommand(b, pipeline_exe, &.{}, b.args), &.{});
+    addPublicRunStep(b, "build-dictionary", "Pre-expand templates/modules and emit data-only dictionary blobs", addRunArtifactCommand(b, pipeline_exe, &.{}), &.{});
     const blob_files_mod = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
     const blob_query_exe = addCliExecutable(b, "dict", b.path("src/frontend/main.zig"), target, optimize, &.{
@@ -227,13 +227,13 @@ pub fn build(b: *std.Build) void {
     ffi_step.dependOn(&ffi_install.step);
     ffi_step.dependOn(&ffi_header_install.step);
 
-    const module_extract_run = addRunArtifactCommand(b, module_extract_exe, &.{}, b.args);
+    const module_extract_run = addRunArtifactCommand(b, module_extract_exe, &.{});
     addPublicRunStep(b, "extract-modules", "Extract Scribunto modules directly from a Wiktionary multistream dump", module_extract_run, &.{});
 
-    const blob_verify_run = addRunArtifactCommand(b, blob_verify_exe, &.{}, b.args);
+    const blob_verify_run = addRunArtifactCommand(b, blob_verify_exe, &.{});
     addPublicRunStep(b, "verify-blobs", "Verify compiled blob framing and presentation records", blob_verify_run, &.{});
 
-    const blob_query_run = addRunArtifactCommand(b, blob_query_exe, &.{}, b.args);
+    const blob_query_run = addRunArtifactCommand(b, blob_query_exe, &.{});
     addPublicRunStep(b, "query-blobs", "Query per-language and feature Wiktionary blobs", blob_query_run, &.{});
     addPublicRunStep(b, "dict", "Run the dictionary frontend CLI", blob_query_run, &.{});
 
@@ -356,7 +356,10 @@ pub fn build(b: *std.Build) void {
     const value_leaf_test_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/value_leaf_build.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
+        // Match the stripped production leaf bitcode producer. Debug metadata
+        // is not part of the runtime ABI and can exceed its bounded input size.
+        .strip = true,
         .link_libc = true,
         .imports = &.{.{ .name = "zig_runtime", .module = zig_runtime_test_mod }},
     });
@@ -607,13 +610,14 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_provider_tests.step);
     b.step("test-bundle-pipeline", "Run bundle build scheduler and cache bitmap unit tests only").dependOn(&run_bundle_pipeline_tests_only.step);
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });
-    addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}, b.args), &.{});
+    addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}), &.{});
     const bundle_test_exe = addCliExecutable(b, "dict-bundle-integration-test", b.path("tools/bundle_integration_test.zig"), b.graph.host, test_optimize, &.{ .{ .name = "bundle_protocol", .module = bundle_protocol_mod_test }, .{ .name = "namespace_registry", .module = namespace_registry_test_mod } });
     const bundle_test_run = b.addRunArtifact(bundle_test_exe);
     bundle_test_run.addFileArg(blob_query_exe.getEmittedBin());
     bundle_test_run.addFileArg(pipeline_exe.getEmittedBin());
     bundle_test_run.addFileArg(blob_verify_exe.getEmittedBin());
-    bundle_test_run.addArg(b.pathFromRoot(".zig-cache"));
+    bundle_test_run.setCwd(b.path("."));
+    bundle_test_run.addArg(".zig-cache");
     bundle_test_run.addFileArg(llvm_exe.getEmittedBin());
     bundle_test_run.addFileArg(blob_build_exe.getEmittedBin());
     bundle_test_run.addFileArg(value_leaf_test_bc);
@@ -623,19 +627,21 @@ pub fn build(b: *std.Build) void {
     const reader_test_run = b.addRunArtifact(reader_test_exe);
     reader_test_run.addFileArg(blob_query_exe.getEmittedBin());
     reader_test_run.addFileArg(ffi_test_exe.getEmittedBin());
-    reader_test_run.addArg(b.pathFromRoot(".zig-cache"));
+    reader_test_run.setCwd(b.path("."));
+    reader_test_run.addArg(".zig-cache");
     b.step("test-reader", "Exercise precompiled data-only reading through CLI and C FFI").dependOn(&reader_test_run.step);
     const index_blobs_exe = addCliExecutable(b, "dict-index-blobs", b.path("tools/index_blobs.zig"), target, optimize, &.{.{ .name = "blob_storage", .module = storage_mod }});
     index_blobs_exe.root_module.link_libc = true;
     index_blobs_exe.use_llvm = true;
     index_blobs_exe.use_lld = true;
-    addPublicRunStep(b, "index-blobs", "Build or reuse external raw/XZ record indexes after compression", addRunArtifactCommand(b, index_blobs_exe, &.{}, b.args), &.{});
+    addPublicRunStep(b, "index-blobs", "Build or reuse external raw/XZ record indexes after compression", addRunArtifactCommand(b, index_blobs_exe, &.{}), &.{});
     const storage_exe = addCliExecutable(b, "dict-storage-integration-test", b.path("tools/storage_integration_test.zig"), target, test_optimize, &.{ .{ .name = "blob_encoder", .module = blob_encoder_mod_test }, .{ .name = "blob_storage", .module = storage_test } });
     storage_exe.root_module.link_libc = true;
     storage_exe.use_llvm = true;
     storage_exe.use_lld = true;
     const storage_run = b.addRunArtifact(storage_exe);
-    storage_run.addArg(b.pathFromRoot(".zig-cache"));
+    storage_run.setCwd(b.path("."));
+    storage_run.addArg(".zig-cache");
     const storage_unit = b.addTest(.{ .root_module = storage_test, .test_runner = .{ .path = test_runner, .mode = .simple } });
     storage_unit.root_module.link_libc = true;
     storage_unit.use_llvm = true;
@@ -652,7 +658,7 @@ fn addCliExecutable(
     name: []const u8,
     root_source: std.Build.LazyPath,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.builtin.Optimize,
     imports: []const std.Build.Module.Import,
 ) *std.Build.Step.Compile {
     return b.addExecutable(.{
@@ -670,26 +676,11 @@ fn addRunArtifactCommand(
     b: *std.Build,
     exe: *std.Build.Step.Compile,
     fixed_args: []const []const u8,
-    passthrough_args: ?[]const []const u8,
 ) *std.Build.Step.Run {
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.setCwd(b.path("."));
     for (fixed_args) |arg| run_cmd.addArg(arg);
-    if (passthrough_args) |args| run_cmd.addArgs(args);
-    return run_cmd;
-}
-
-fn addDirectToolRunCommand(
-    b: *std.Build,
-    binary_path: std.Build.LazyPath,
-    fixed_args: []const []const u8,
-    passthrough_args: ?[]const []const u8,
-) *std.Build.Step.Run {
-    const run_cmd = b.addSystemCommand(&.{"/usr/bin/env"});
-    run_cmd.setCwd(b.path("."));
-    run_cmd.addFileArg(binary_path);
-    for (fixed_args) |arg| run_cmd.addArg(arg);
-    if (passthrough_args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
     return run_cmd;
 }
 
@@ -701,21 +692,11 @@ fn addPublicRunStep(
     deps: []const *std.Build.Step,
 ) void {
     const step = b.step(name, description);
-    if (!passthroughArgsRequestHelp(b.args)) {
-        for (deps) |dep| step.dependOn(dep);
-    }
+    for (deps) |dep| step.dependOn(dep);
     step.dependOn(&run_cmd.step);
 }
 
-fn passthroughArgsRequestHelp(args: ?[]const []const u8) bool {
-    const actual = args orelse return false;
-    for (actual) |arg| {
-        if (std.mem.eql(u8, arg, "help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) return true;
-    }
-    return false;
-}
-
-fn namespaceRegistryModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+fn namespaceRegistryModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) *std.Build.Module {
     const unicode = b.createModule(.{ .root_source_file = b.path("src/frontend/unicode_lower.zig"), .target = target, .optimize = optimize });
     return b.createModule(.{ .root_source_file = b.path("src/shared/namespace_registry.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{.{ .name = "unicode_lower", .module = unicode }} });
 }

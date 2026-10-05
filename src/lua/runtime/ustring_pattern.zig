@@ -551,7 +551,7 @@ test "prepared Unicode membership agrees with raw literal parser" {
             try std.testing.expectEqual(matcher.bracketClass(cp, 0, 101), c.matches(cp));
     }
     // All reversed intervals produce an empty prepared set.
-    const reversed = [_]u21{'['} ++ ([_]u21{ 'z', '-', 'a' } ** 24) ++ [_]u21{']'};
+    const reversed = [_]u21{'['} ++ @as([72]u21, std.simd.repeat(72, [_]u21{ 'z', '-', 'a' })) ++ [_]u21{']'};
     const p = try classes.Prepared.init(std.testing.allocator, &reversed);
     defer p.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 0), p.classes[0].ranges.len);
@@ -559,7 +559,7 @@ test "prepared Unicode membership agrees with raw literal parser" {
 }
 
 test "prepared Unicode searches preserve rollback quantifiers and lazy errors" {
-    const body = "q" ** 72;
+    const body: [72]u8 = @splat('q');
     const cl = "[" ++ body ++ "α-ωa-c]";
     const neg = "[^" ++ body ++ "α-ωa-c]";
     const patterns = [_][]const u8{
@@ -574,7 +574,7 @@ test "prepared Unicode searches preserve rollback quantifiers and lazy errors" {
 }
 
 test "Unicode preparation is lazy optional and never retries failed allocation" {
-    const long = "[" ++ ("q" ** 72) ++ "]";
+    const long = "[" ++ @as([72]u8, @splat('q')) ++ "]";
     for (0..2) |fail_after| {
         var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
         var search = try Search.init(failing.allocator(), "qqqqqqqq", long);
@@ -614,7 +614,7 @@ test "percent-containing long classes preserve category callback sequence" {
             return if (calls % 2 == 0) 2 else 0;
         }
     };
-    const pat = "[" ++ ("q" ** 72) ++ "%a%g%a]+";
+    const pat = "[" ++ @as([72]u8, @splat('q')) ++ "%a%g%a]+";
     var a = try Search.init(std.testing.allocator, "gagq", pat);
     defer a.deinit();
     var b = try Search.init(std.testing.allocator, "gagq", pat);
@@ -633,12 +633,12 @@ test "percent-containing long classes preserve category callback sequence" {
 test "cached searches retain snapshot semantics after the original pattern is freed" {
     var cache = PatternCache.init(std.testing.io, std.testing.allocator);
     defer cache.deinit();
-    const key = "[" ++ ("q" ** 128) ++ "]";
+    const key = "[" ++ @as([128]u8, @splat('q')) ++ "]";
     const original = try std.testing.allocator.dupe(u8, key);
     var first = try Search.initWithCache(std.testing.allocator, "qqqqqqqq", original, &cache);
     defer first.deinit();
     std.testing.allocator.free(original);
-    const overwrite = try std.testing.allocator.dupe(u8, "x" ** 130);
+    const overwrite = try std.testing.allocator.dupe(u8, &@as([130]u8, @splat('x')));
     defer std.testing.allocator.free(overwrite);
     const m = (try first.find(testCategory, 1, true)).?;
     try std.testing.expectEqual(@as(usize, 1), m.end);
@@ -656,7 +656,7 @@ test "cached searches retain snapshot semantics after the original pattern is fr
 test "cache admission stays lazy and tiny misses do not prepare" {
     var cache = PatternCache.init(std.testing.io, std.testing.allocator);
     defer cache.deinit();
-    const key = "[" ++ ("q" ** 128) ++ "]";
+    const key = "[" ++ @as([128]u8, @splat('q')) ++ "]";
     {
         var unused = try Search.initWithCache(std.testing.allocator, "qqqqqqqq", key, &cache);
         defer unused.deinit();
@@ -684,7 +684,7 @@ test "cache admission stays lazy and tiny misses do not prepare" {
 }
 
 test "cache allocation failure preserves ordinary prepared search" {
-    const key = "[" ++ ("q" ** 128) ++ "]";
+    const key = "[" ++ @as([128]u8, @splat('q')) ++ "]";
     for (0..5) |failure| {
         var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = failure });
         var cache = PatternCache.init(std.testing.io, failing.allocator());
@@ -704,7 +704,7 @@ test "cache allocation failure preserves ordinary prepared search" {
 test "borrowed search survives cache saturation by nested searches" {
     var cache = PatternCache.init(std.testing.io, std.testing.allocator);
     defer cache.deinit();
-    const key = "[" ++ ("q" ** 128) ++ "]+";
+    const key = "[" ++ @as([128]u8, @splat('q')) ++ "]+";
     var outer = try Search.initWithCache(std.testing.allocator, "qqqqqqqq", key, &cache);
     defer outer.deinit();
     try std.testing.expectEqual(@as(usize, 8), (try outer.find(testCategory, 1, true)).?.end);
@@ -721,4 +721,6 @@ test "borrowed search survives cache saturation by nested searches" {
     try std.testing.expectEqual(@as(usize, 8), (try outer.findFrom(testCategory, 2, true)).?.end);
 }
 
-test { _ = @import("pattern_cache_tests.zig"); }
+test {
+    _ = @import("pattern_cache_tests.zig");
+}
