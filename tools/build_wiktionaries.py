@@ -1176,8 +1176,8 @@ def publication_inventory(root):
             name=path.relative_to(root).as_posix()
             if path.is_symlink():raise ValueError('Unsafe publication artifact: '+name)
             if path.is_dir():
-                # Reader-created seek indexes are disposable derived state.
-                if path==root/'.dict-cache':continue
+                # Reader indexes live beside root feature blobs or language blobs.
+                if name in ('.dict-cache','languages/.dict-cache'):continue
                 if path.name=='.bundle-expander':raise ValueError('Transient compiler tree in publication')
                 pending.append(path)
             else:files.append(path)

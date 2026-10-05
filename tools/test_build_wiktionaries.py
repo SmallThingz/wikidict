@@ -1464,13 +1464,36 @@ class PublicationResumeTests(unittest.TestCase):
                 files=metadata['publication_files']
                 self.assertEqual(files['supplemental.wikblb.xz']['sha256'],b.sha256_file(target/'supplemental.wikblb.xz'))
                 self.assertIn('languages.tsv',files)
-                cache=target/'.dict-cache';cache.mkdir()
-                index=cache/'supplemental.wikblb.xz.idx';index.write_bytes(b'derived reader index')
+                indexes=[]
+                for name in ('.dict-cache/supplemental.wikblb.xz.idx',
+                             'languages/.dict-cache/'+hashlib.sha256(b'English').hexdigest()+'.wikblb.xz.idx'):
+                    index=target/name;index.parent.mkdir(parents=True)
+                    index.write_bytes(b'derived reader index');indexes.append(index)
                 self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'existing_output')
                 self.assertFalse(workspace.exists())
-                self.assertEqual(index.read_bytes(),b'derived reader index')
-                self.assertNotIn('.dict-cache/supplemental.wikblb.xz.idx',files)
+                for index in indexes:
+                    self.assertEqual(index.read_bytes(),b'derived reader index')
+                    self.assertNotIn(index.relative_to(target).as_posix(),files)
+                self.assertEqual(b.publication_inventory(target),files)
             run.assert_not_called()
+
+    def test_published_resume_rejects_cache_symlinks_and_unexpected_artifacts(self):
+        cases=[('symlink',name) for name in ('.dict-cache','languages/.dict-cache')]
+        cases += [('file',name) for name in ('other/.dict-cache/reader.idx',
+                    'languages/other/.dict-cache/reader.idx','reader.py','languages/reader.so')]
+        for kind,name in cases:
+            with self.subTest(kind=kind,name=name),tempfile.TemporaryDirectory() as tmp, \
+                 patch.object(b,'run_checked') as run:
+                root=Path(tmp)
+                with patch.object(b,'PROJECT',root):
+                    item,target,workspace=self.prepare(root)
+                    path=target/name;path.parent.mkdir(parents=True,exist_ok=True)
+                    if kind=='symlink':
+                        cache=root/'outside-cache';cache.mkdir();path.symlink_to(cache.resolve(),target_is_directory=True)
+                    else:path.write_bytes(b'unexpected artifact')
+                    with self.assertRaises(ValueError):b.build_locked([item],root,root/'output','zig',1)
+                    self.assertTrue((workspace/'sentinel').is_file())
+                run.assert_not_called()
 
     def test_published_resume_rejects_changed_source_or_compiler_and_preserves_output(self):
         for changed in ('source','compiler'):
