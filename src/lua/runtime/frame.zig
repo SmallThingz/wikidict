@@ -240,11 +240,24 @@ pub fn makeFrame(runtime: *rt.Context, title: []const u8, args: []const FrameArg
 pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try mw.rawSetNativeField(.mw, "getCurrentFrame", try runtime.newNative(null, currentFrameCall));
 }
+
+fn validateInvokeExport(function_name: []const u8, value: Value) !void {
+    if (function_name.len == 0) return;
+    // Scribunto requires a function export, including when a table has __call.
+    // Keep these boundary failures distinct from errors inside a valid export.
+    switch (value) {
+        .nil => return error.InvokeFunctionMissing,
+        .callable => {},
+        else => return error.InvokeExportNotFunction,
+    }
+}
+
 fn invokeValue(runtime: *rt.Context, module: Value, function_name: []const u8, frame: Value) anyerror![]const Value {
     const callable = if (function_name.len == 0)
         module
     else
         try runtime.getIndex(module, .{ .string = function_name });
+    try validateInvokeExport(function_name, callable);
     return runtime.callValue(callable, &.{frame});
 }
 
@@ -253,6 +266,7 @@ fn invokeValueFixed(runtime: *rt.Context, module: Value, function_name: []const 
         module
     else
         try runtime.getIndex(module, .{ .string = function_name });
+    try validateInvokeExport(function_name, callable);
     return runtime.callValueFixed(callable, &.{frame}, result_buffer);
 }
 
@@ -283,6 +297,7 @@ pub fn invokeModuleId(runtime: *rt.Context, module_id: u32, module_name: []const
         try runtime.getProgramShapeField(module, known.shape_id, known.slot, function_name)
     else
         try runtime.getIndex(module, .{ .string = function_name });
+    try validateInvokeExport(function_name, callable);
     return runtime.callValue(callable, &.{frame});
 }
 
@@ -302,6 +317,7 @@ pub fn invokeModuleIdFixed(runtime: *rt.Context, module_id: u32, module_name: []
         try runtime.getProgramShapeField(module, known.shape_id, known.slot, function_name)
     else
         try runtime.getIndex(module, .{ .string = function_name });
+    try validateInvokeExport(function_name, callable);
     return runtime.callValueFixed(callable, &.{frame}, result_buffer);
 }
 
@@ -496,6 +512,12 @@ const InvokeProbe = struct {
         try module.rawSet(runtime.allocator, .{ .string = "empty" }, try runtime.makeFunction(3, rt.stabilizeBuffered(runEmpty), &.{}));
         try module.rawSet(runtime.allocator, .{ .string = "nil_return" }, try runtime.makeFunction(4, rt.stabilizeBuffered(runNil), &.{}));
         try module.rawSet(runtime.allocator, .{ .string = "error_nil" }, try runtime.makeFunction(5, rt.stabilizeBuffered(runErrorNil), &.{}));
+        try module.rawSet(runtime.allocator, .{ .string = "value" }, .{ .number = 17 });
+        const callable_table = try runtime.newTable();
+        const metatable = try runtime.newTable();
+        try metatable.rawSet(runtime.allocator, .{ .string = "__call" }, try runtime.makeFunctionKnown(1, run, &.{}));
+        callable_table.metatable = metatable;
+        try module.rawSet(runtime.allocator, .{ .string = "callable_table" }, .{ .table = callable_table });
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = module };
         return out;
@@ -573,6 +595,34 @@ test "AOT frame invoke binds current frame around numeric module call" {
     try std.testing.expectError(error.CallDepth, invokeFixed(&runtime, "Module:X", "buffered", frame, &slot));
     runtime.max_depth = old_limit;
     try std.testing.expect(runtime.depth == 0 and runtime.current_frame == null);
+}
+
+test "invoke validates named exports before every dispatch path" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 0, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(InvokeProbe.root), rt.stabilize(InvokeProbe.run) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, InvokeProbe.lookup, InvokeProbe.name);
+    const frame = try makeFrame(&runtime, "Module:X", &.{}, null);
+    var slot: [1]Value = undefined;
+    const cases = [_]struct { name: []const u8, failure: anyerror }{
+        .{ .name = "missing", .failure = error.InvokeFunctionMissing },
+        .{ .name = "value", .failure = error.InvokeExportNotFunction },
+        .{ .name = "callable_table", .failure = error.InvokeExportNotFunction },
+    };
+    for (cases) |case| {
+        try std.testing.expectError(case.failure, invoke(&runtime, "Module:X", case.name, frame));
+        try std.testing.expectError(case.failure, invokeFixed(&runtime, "Module:X", case.name, frame, &slot));
+        try std.testing.expectError(case.failure, invokeModuleId(&runtime, 0, "Module:X", case.name, frame));
+        try std.testing.expectError(case.failure, invokeModuleIdFixed(&runtime, 0, "Module:X", case.name, frame, &slot));
+        try std.testing.expect(runtime.current_frame == null and runtime.depth == 0);
+        try std.testing.expect(!runtime.last_error_present and runtime.aotErrorName() == null);
+    }
+    const valid = try invokeModuleIdFixed(&runtime, 0, "Module:X", "run", frame, &slot);
+    defer valid.deinit();
+    try std.testing.expect(valid.values.len == 1 and valid.values[0].boolean);
 }
 
 test "current frame access is page-sensitive for reusable module roots" {

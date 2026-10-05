@@ -5,6 +5,7 @@ const lua_program = @import("lua_program");
 const xml_decode = @import("shared_xml_decode");
 const preprocess = @import("lua_wikitext_preprocess");
 const wikimedia_dump = @import("wikimedia_dump");
+const magic_words = lua_program.namespace_registry.magic_words;
 const ExternalData = lua_program.WikitextProvider.ExternalData;
 const CategoryStats = lua_program.WikitextProvider.CategoryStats;
 const InterfaceMessage = lua_program.WikitextProvider.InterfaceMessage;
@@ -107,6 +108,7 @@ pub const Provider = struct {
     language_registry: std.StringHashMapUnmanaged([]const u8) = .empty,
     language_registry_storage: ?Mapped = null,
     language_registry_available: bool = false,
+    title_magic_words: ?magic_words.Registry = null,
 
     pub fn init(io: std.Io, a: A, root: []const u8, namespace_catalog: *const lua_program.namespace_registry.Registry, dump_path: []const u8) !Provider {
         const owned_root = try a.dupe(u8, root);
@@ -123,6 +125,7 @@ pub const Provider = struct {
         try self.loadWikibaseSitelinks();
         try self.loadWikibaseEntityText();
         try self.loadLanguageRegistry();
+        try self.loadTitleMagicWords();
         return self;
     }
 
@@ -174,6 +177,7 @@ pub const Provider = struct {
         if (self.wikibase_entity_text_storage) |*mapped| mapped.deinit();
         self.language_registry.deinit(self.a);
         if (self.language_registry_storage) |*mapped| mapped.deinit();
+        if (self.title_magic_words) |*registry| registry.deinit();
         self.a.free(self.root);
         self.root = "";
     }
@@ -195,6 +199,7 @@ pub const Provider = struct {
             .file_metadata = if (self.file_metadata_available) fileMetadata else null,
             .interwiki_map = if (self.interwiki_available) interwikiMap else null,
             .stable_interwiki_map = self.interwiki_available,
+            .resolve_title_magic = if (self.title_magic_words != null) resolveTitleMagic else null,
             .wikibase_sitelink = if (self.wikibase_sitelinks_available) wikibaseSitelink else null,
             .wikibase_entity_text = if (self.wikibase_entity_text_available) wikibaseEntityText else null,
             .language_known_tag = if (self.language_registry_available) languageKnownTag else null,
@@ -563,6 +568,18 @@ pub const Provider = struct {
         self.language_registry = entries;
         self.language_registry_storage = mapped;
         self.language_registry_available = true;
+    }
+
+    fn loadTitleMagicWords(self: *Provider) !void {
+        var mapped = (try self.mapOptional("magic-words.tsv")) orelse return;
+        defer mapped.deinit();
+        self.title_magic_words = try magic_words.Registry.init(
+            self.a,
+            mapped.bytes,
+            self.namespace_catalog.wiki,
+            self.namespace_catalog.dump_date,
+            self.namespace_catalog.content_language,
+        );
     }
 
     fn loadCorpusPages(self: *Provider, dump_path: []const u8) !void {
@@ -942,6 +959,11 @@ pub const Provider = struct {
         return self.language_registry.contains(code);
     }
 
+    fn resolveTitleMagic(ctx: ?*anyopaque, alias: []const u8, form: magic_words.Form) anyerror!?[]const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return (self.title_magic_words orelse return error.MissingMagicWordsSnapshot).resolve(alias, form);
+    }
+
     fn get(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?[]const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return self.lookup(a, title, true);
@@ -960,6 +982,35 @@ pub const Provider = struct {
         return (try self.lookup(self.a, title, false)) != null;
     }
 };
+
+test "title magic provider loads optional snapshots and enforces edition identity" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const namespaces = try lua_program.namespace_registry.englishTestRegistry();
+    {
+        var provider = try Provider.init(io, a, root, namespaces, "unused-dump.xml");
+        defer provider.deinit();
+        try std.testing.expect(provider.api().resolve_title_magic == null);
+    }
+    const snapshot = try std.fs.path.join(a, &.{ root, "magic-words.tsv" });
+    defer a.free(snapshot);
+    const bytes = try std.fmt.allocPrint(a, "{s}\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\npagename\t1\tPAGENAME\n", .{ magic_words.header, namespaces.wiki, namespaces.dump_date, namespaces.content_language });
+    defer a.free(bytes);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = snapshot, .data = bytes });
+    {
+        var provider = try Provider.init(io, a, root, namespaces, "unused-dump.xml");
+        defer provider.deinit();
+        const resolve = provider.api().resolve_title_magic orelse return error.TestExpectedEqual;
+        try std.testing.expectEqualStrings("pagename", (try resolve(&provider, "PAGENAME", .variable)).?);
+        try std.testing.expect(try resolve(&provider, "pagename", .variable) == null);
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = snapshot, .data = magic_words.header ++ "\n# wiki\totherwiktionary\n# dump-date\t20261001\n# content-language\ten\npagename\t1\tPAGENAME\n" });
+    try std.testing.expectError(error.MagicWordsIdentityMismatch, Provider.init(io, a, root, namespaces, "unused-dump.xml"));
+}
 
 test "supplemental transclusion redirects resolve omitted namespace pages" {
     const a = std.testing.allocator;

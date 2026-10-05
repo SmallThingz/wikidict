@@ -29,6 +29,24 @@ def write_namespace_fixture(folder, edition=None, date=None):
     return {'namespace-registry':namespace,'language-registry':language}
 
 
+def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observation='first', alias='اسم_الصفحة'):
+    import prepare_magic_words as magic
+    folder.mkdir(parents=True,exist_ok=True)
+    namespace=magic.document({'query':{'general':{'wikiid':edition,'lang':'ar'}}})
+    (folder/'namespace-siteinfo.raw.json').write_bytes(namespace)
+    (folder/'capture.complete.json').write_bytes(magic.document(dict(wiki=edition,date=date,
+        artifacts={'namespace-siteinfo.raw.json':magic.digest(namespace)})))
+    words=[{'name':name,'case-sensitive':True,'aliases':[name.upper()]+([alias] if name=='pagename' else [])}
+           for name in sorted(magic.SUPPORTED)]
+    raw=magic.document({'query':{'general':{'wikiid':edition,'lang':'ar','sitename':observation},'magicwords':words}})
+    def fetcher(url):
+        return raw,dict(source_url=url,response_url=url,status=200,
+            started_utc='2026-10-05T00:00:00+00:00',retrieved_utc='2026-10-05T00:00:01+00:00',
+            raw_sha256=magic.digest(raw),raw_bytes=len(raw))
+    magic.capture_snapshot(folder,edition,date,fetcher=fetcher)
+    return folder/'magic-words'/'magic-words.tsv'
+
+
 def write_test_manifest(root, manifest):
     records=[]
     for item in manifest.get('files',[]):
@@ -142,6 +160,58 @@ class ProvenanceBindingTests(unittest.TestCase):
             self.assertTrue(b.expander_ready(root,interwiki_sha=digest))
             path.write_text('changed')
             self.assertFalse(b.expander_ready(root,interwiki_sha=digest))
+
+    def test_title_magic_snapshot_identity_invalidates_resumed_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);tool=root/'zig';tool.write_bytes(b'tool')
+            item=dict(wiki='arwiktionary',date='20261001',name='dump',size=1,sha1='a')
+            with patch.object(b.shutil,'which',return_value=str(tool)),patch.object(b,'source_fingerprint',return_value='source'):
+                original=b.build_input_identity([item],'zig',{'magic-words':'first-capture'},None,None)
+                changed=b.build_input_identity([item],'zig',{'magic-words':'changed-aliases'},None,None)
+                with self.assertRaisesRegex(ValueError,'Build inputs or compiler changed'):
+                    b.require_build_identity(original,changed)
+
+    def test_title_magic_capture_is_pinned_and_raw_observation_is_bound(self):
+        import prepare_magic_words as magic
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);tool=root/'zig';tool.write_bytes(b'tool')
+            first=write_magic_fixture(root/'first')
+            other=write_magic_fixture(root/'other',observation='second')
+            snapshots={'magic-words':first}
+            hashes=b.verified_auxiliary_hashes(snapshots,'arwiktionary','20261001')
+            self.assertEqual(hashes,b.verified_auxiliary_hashes({'magic-words':other}))
+            item=dict(wiki='arwiktionary',date='20261001',name='dump',size=1,sha1='a')
+            with patch.object(b.shutil,'which',return_value=str(tool)),patch.object(b,'source_fingerprint',return_value='source'):
+                original=b.build_input_identity([item],'zig',hashes,None,None,snapshots)
+                changed=b.build_input_identity([item],'zig',hashes,None,None,{'magic-words':other})
+            with self.assertRaisesRegex(ValueError,'Build inputs or compiler changed'):
+                b.require_build_identity(original,changed)
+            destination=root/'pinned';destination.mkdir()
+            pinned=b.pinned_auxiliary_snapshots(snapshots,hashes,destination,original['auxiliary_capture_sha256'])
+            self.assertEqual(hashes,b.verified_auxiliary_hashes(pinned))
+            self.assertEqual(set(path.name for path in destination.iterdir()),magic.ARTIFACTS|{'magic-words.manifest.json'})
+            with self.assertRaises(ValueError):
+                b.pinned_auxiliary_snapshots({'magic-words':other},hashes,destination,original['auxiliary_capture_sha256'])
+            raw=destination/'magic-words.raw.json';raw.write_bytes(raw.read_bytes()+b' ')
+            with self.assertRaisesRegex(ValueError,'Changed magic-word capture artifact'):
+                b.verified_auxiliary_hashes(pinned)
+
+    def test_title_magic_alias_change_invalidates_shards_and_expander_reuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            first=write_magic_fixture(root/'first')
+            other=write_magic_fixture(root/'other',alias='اسم_آخر')
+            language=root/'language.tsv';language.write_text('ar\tالعربية\n')
+            item=dict(wiki='arwiktionary',date='20261001',name='dump',size=1,sha1='a')
+            snapshots={'magic-words':first};changed={'magic-words':other}
+            with patch.object(b,'source_fingerprint',return_value='source'):
+                self.assertNotEqual(b.shard_state([item],language,auxiliary_snapshots=snapshots),
+                                    b.shard_state([item],language,auxiliary_snapshots=changed))
+            exp=root/'.bundle-expander';exp.mkdir();(root/'.incomplete').write_text('expander ready')
+            for name in ('page-index.tsv','dict-bundle-expander','namespace-registry.tsv'):(exp/name).write_text('fixture')
+            (exp/'magic-words.tsv').write_bytes(first.read_bytes())
+            self.assertTrue(b.expander_ready(root,b.verified_auxiliary_hashes(snapshots)))
+            self.assertFalse(b.expander_ready(root,b.verified_auxiliary_hashes(changed)))
 
 
 class BuildTest(unittest.TestCase):

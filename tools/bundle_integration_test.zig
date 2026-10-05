@@ -17,6 +17,8 @@ const source =
     "# Captured fork: {{#invoke:IntegrationCapturedProbe|run}}\n" ++
     "# Repair recovery: {{repair-parent|x=term&lt;t:gloss&gt;}}\n" ++
     "# Graceful Lua error: {{#invoke:IntegrationForms|fail_probe}}\n" ++
+    "# Missing export recovery: {{#iferror:{{#invoke:IntegrationExports|absent}}|ERR|BAD}} / {{#iferror:{{#invoke:IntegrationExports|value}}|ERR|BAD}} / {{#iferror:{{#invoke:IntegrationExports|callable}}|ERR|BAD}}\n" ++
+    "# Preserved invoke boundary: A{{#invoke:IntegrationExports|absent}}B; next {{#invoke:IntegrationExports|ok}}\n" ++
     "# Formatting magic: {{formatnum:11000}} / {{formatnum:1,234.50|R}} / {{anchorencode:[[foo|A B]] <b>x</b>&nbsp;C}}\n" ++
     "# Title parts: {{#titleparts:A/B/C|1|2}} / {{#titleparts:A/B/C|-1}}\n" ++
     "# Escaped title: {{PAGENAMEE:Appendix:A B/é?x}} / {{FULLPAGENAMEE:Appendix:A B/é?x}}\n" ++
@@ -346,6 +348,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Template:Template:nested", .ns = 10, .id = 12, .body = "nested namespace retained" },
         .{ .title = "Template:nested", .ns = 10, .id = 13, .body = "ordinary namespace distinct" },
         .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = module_source },
+        .{ .title = "Module:IntegrationExports", .ns = 828, .id = 30, .body = "return {ok=function() return 'OK' end, value=17, callable=setmetatable({}, {__call=function() return 'BAD' end})}" },
         .{ .title = "Module:IntegrationSynth", .ns = 828, .id = 8, .body = "local answer = 42; local export = { kind = 'mixed', nested = { ok = true } }; local alias = export; alias.answer = answer; function alias.run(x) if type(x) == 'table' then return 'synth:' .. x.args[1] end; return 'synth:' .. x end; return export" },
         .{ .title = "Module:IntegrationPureData", .ns = 828, .id = 9, .body = "local root = {}; root.alpha = {1, 2}; root.beta = { ok = true }; local alias = root.beta; alias.extra = 'x'; return root" },
         .{ .title = "Module:IntegrationPureDataProbe", .ns = 828, .id = 14, .body = "local pure = require('Module:IntegrationPureData'); return { run = function() return pure.beta.extra end }" },
@@ -701,8 +704,17 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
     const german_xml = try std.fs.path.join(h.a, &.{ dir, "german.xml" });
     const german_ns = try std.fs.path.join(h.a, &.{ dir, "german-namespaces.tsv" });
     const german_languages = try std.fs.path.join(h.a, &.{ dir, "german-languages.tsv" });
+    const german_magic = try std.fs.path.join(h.a, &.{ dir, "german-magic-words.tsv" });
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = german_ns, .data = namespaces.german_test_fixture });
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = german_languages, .data = "# wikidict-language-registry-v2\n# content-language\tde\n# mediawiki\nde\tDeutsch\tde\tdeu\n# iso-639-3\n" });
+    // Collision precedence follows MediaWiki registration order, not TSV row order.
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = german_magic,
+        .data = "# wikidict-magic-words-v1\n# wiki\tdewiktionary\n# dump-date\t20261001\n# content-language\tde\n" ++
+            "pagename\t1\tSEITENNAME\npagename\t1\tPAGENAME\n" ++
+            "pagename\t1\tCOLLISION\nbasepagename\t1\tCOLLISION\n" ++
+            "basepagename\t1\tREVERSED_COLLISION\npagename\t1\tREVERSED_COLLISION\n",
+    });
     const redirect_probe_source =
         \\return {run=function()
         \\    local target = require('Modul:i18n')
@@ -735,7 +747,9 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
         \\end}
     ;
     try writePages(h.io, h.a, german_xml, &.{
-        .{ .title = "Wort", .ns = 0, .id = 1, .body = "==Deutsch==\n===Substantiv===\n# {{:Template:Probe}}\n" },
+        .{ .title = "Wort", .ns = 0, .id = 1, .body = "==Deutsch==\n===Substantiv===\n# {{:Template:Probe}}\n" ++
+            "# Local title magic: {{SEITENNAME}} / {{PAGENAME}} / {{SEITENNAME:Vorlage:Other}} / {{SEITENNAME:{{MagicTarget}}}}\n" ++
+            "# Template collisions: {{SEITENNAME|argument}} / {{PAGENAME|argument}} / {{Seitenname}} / {{FULLPAGENAME}}\n" },
         .{ .title = "Vorlage:Probe", .ns = 10, .id = 2, .body = "{{#in<!-- join -->voke:Probe|run}}" },
         .{ .title = "Modul:Probe", .ns = 828, .id = 3, .body = "local export = {}; function export.run(frame) " ++
             "assert(require('math') == math); local ns = mw.site.namespaces; " ++
@@ -749,7 +763,9 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
         .{ .title = "Modul:Data", .ns = 828, .id = 4, .body = "return {word='localized native module'}" },
         .{ .title = "Modul:Alias", .ns = 828, .id = 5, .body = "#REDIRECT [[Module:Data]]", .redirect = "Module:Data" },
         .{ .title = "Modul:math", .ns = 828, .id = 6, .body = "return {wrong_builtin=true}" },
-        .{ .title = "Flexion:gehen", .ns = 108, .id = 7, .body = "Supplemental German inflection." },
+        .{ .title = "Flexion:Parent/Child", .ns = 108, .id = 7, .body = "Supplemental German inflection.\n" ++
+            "Title collision: {{COLLISION}} / {{COLLISION:Vorlage:Parent/Child}}\n" ++
+            "Reversed collision: {{REVERSED_COLLISION}} / {{REVERSED_COLLISION:Vorlage:Parent/Child}}\n" },
         .{ .title = "Modul:RedirectProbe", .ns = 828, .id = 8, .body = redirect_probe_source },
         .{ .title = "Modul:i18n", .ns = 828, .id = 9, .body = "return {kind='target', wrapper_runs=0}" },
         .{ .title = "Modul:I18n", .ns = 828, .id = 10, .model = "Scribunto", .redirect = "Module:i18n", .body = "local name = ...; assert(name == 'Modul:I18n'); local target = require('Modul:i18n'); target.wrapper_runs = target.wrapper_runs + 1; return target" },
@@ -759,14 +775,23 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
         .{ .title = "Modul:CycleAlias", .ns = 828, .id = 14, .redirect = "Module:CycleWrapper", .body = "#REDIRECT [[Module:CycleWrapper]]" },
         .{ .title = "Modul:RedirectCycleA", .ns = 828, .id = 15, .redirect = "Module:RedirectCycleB", .body = "#REDIRECT [[Module:RedirectCycleB]]" },
         .{ .title = "Modul:RedirectCycleB", .ns = 828, .id = 16, .redirect = "Module:RedirectCycleA", .body = "#REDIRECT [[Module:RedirectCycleA]]" },
+        .{ .title = "Vorlage:SEITENNAME", .ns = 10, .id = 17, .body = "localized-template-{{{1|default}}}" },
+        .{ .title = "Vorlage:Seitenname", .ns = 10, .id = 18, .body = "case-sensitive-template" },
+        .{ .title = "Vorlage:FULLPAGENAME", .ns = 10, .id = 19, .body = "unsupported-alias-template" },
+        .{ .title = "Vorlage:MagicTarget", .ns = 10, .id = 20, .body = "Vorlage:Nested" },
+        .{ .title = "Vorlage:PAGENAME", .ns = 10, .id = 21, .body = "english-template-{{{1|default}}}" },
     });
-    _ = try h.run(&.{ pipeline, german_xml, german_root, "--namespace-registry-snapshot", german_ns, "--language-registry-snapshot", german_languages, "--llvm-workers", "1", "--page-workers", "1", "--now-unix", "1791072000" }, 0);
+    _ = try h.run(&.{ pipeline, german_xml, german_root, "--namespace-registry-snapshot", german_ns, "--language-registry-snapshot", german_languages, "--magic-words-snapshot", german_magic, "--llvm-workers", "1", "--page-workers", "1", "--now-unix", "1791072000" }, 0);
     _ = try h.run(&.{ verifier, german_root }, 0);
     const word = try h.run(&.{ bin, "lookup", "Wort", "--root", german_root, "--language", "Deutsch", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, word, "localized native module") != null, "localized templates, invokes, module aliases and raw package overrides survive native compilation");
     try h.require(std.mem.indexOf(u8, word, "case-sensitive wrapper lifecycle verified") != null, "compiled Scribunto redirect wrappers retain distinct identities, cached execution and independent package overrides");
-    const inflection = try h.run(&.{ bin, "lookup", "Flexion:gehen", "--root", german_root, "--kind", "supplemental", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, word, "Local title magic: Wort / Wort / Other / Nested") != null, "edition-local title magic resolves bare names and expanded colon parameters before native publication");
+    try h.require(std.mem.indexOf(u8, word, "Template collisions: localized-template-argument / english-template-argument / case-sensitive-template / unsupported-alias-template") != null, "title aliases respect pipe arguments, exact case and the authoritative edition snapshot");
+    const inflection = try h.run(&.{ bin, "lookup", "Flexion:Parent/Child", "--root", german_root, "--kind", "supplemental", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, inflection, "Supplemental German inflection") != null, "custom German subject namespaces are retained");
+    try h.require(std.mem.indexOf(u8, inflection, "Title collision: Parent/Child / Parent") != null, "bare and colon title collisions follow distinct MediaWiki registration orders");
+    try h.require(std.mem.indexOf(u8, inflection, "Reversed collision: Parent/Child / Parent") != null, "reversing case-sensitive alias rows preserves native collision precedence");
     const french_root = try std.fs.path.join(h.a, &.{ dir, "french-dictionary" });
     const french_xml = try std.fs.path.join(h.a, &.{ dir, "french.xml" });
     const french_ns = try std.fs.path.join(h.a, &.{ dir, "french-namespaces.tsv" });
@@ -778,6 +803,7 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
     try writePages(h.io, h.a, french_xml, &.{
         .{ .title = "mot", .ns = 0, .id = 11, .body = "==français==\n# Un mot. [[Catégorie:Exemple]]\n" ++
             "# {{#invoke:MetadataProbe|run}}\n" ++
+            "# Foreign title alias: {{SEITENNAME}}\n" ++
             "# {{#ifexist:Média:Example.svg|existing-media-confirmed|wrong-existing-media}} / {{#ifexist:Media:Missing.svg|wrong-missing-media|missing-media-confirmed}}\n" },
         .{ .title = "Thésaurus:mot", .ns = 106, .id = 12, .body = "French thesaurus content." },
         .{ .title = "Conjugaison:aller", .ns = 116, .id = 13, .body = "French conjugation content." },
@@ -795,6 +821,7 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
             "assert(not absent.file.exists and not absent.fileExists); " ++
             "if prefix == 'Média:' or prefix == 'Media:' then assert(present.exists and not absent.exists) end; " ++
             "end; return 'French native metadata verified' end}" },
+        .{ .title = "Modèle:SEITENNAME", .ns = 10, .id = 16, .body = "French ordinary template" },
     });
     _ = try h.run(&.{ pipeline, french_xml, french_root, "--namespace-registry-snapshot", french_ns, "--language-registry-snapshot", french_languages, "--file-metadata-snapshot", french_files, "--llvm-workers", "1", "--page-workers", "1", "--now-unix", "1791072000" }, 0);
     _ = try h.run(&.{ verifier, french_root }, 0);
@@ -807,6 +834,7 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
     const french_word = try h.run(&.{ bin, "lookup", "mot", "--root", french_root, "--language", "français", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, french_word, "Catégorie:Exemple") == null, "localized category membership stays metadata rather than visible prose");
     try h.require(std.mem.indexOf(u8, french_word, "French native metadata verified") != null, "localized content flags, default models and file metadata survive native compilation");
+    try h.require(std.mem.indexOf(u8, french_word, "Foreign title alias: French ordinary template") != null, "German title aliases do not become global magic words in a different edition");
     try h.require(std.mem.indexOf(u8, french_word, "existing-media-confirmed") != null and std.mem.indexOf(u8, french_word, "missing-media-confirmed") != null, "localized media existence uses the pinned file snapshot");
 
     const supplemental_path = try std.fs.path.join(h.a, &.{ french_root, "supplemental.wikblb" });
@@ -975,6 +1003,8 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "Captured fork: captured:forked") != null, "synthesized callable roots rebuild scalar capture cells in fresh invoke contexts");
     try h.require(std.mem.indexOf(u8, text, "Repair recovery: repaired invoke") != null, "invalid-title invoke retries entity-escaped inline modifiers once");
     try h.require(std.mem.indexOf(u8, text, "Graceful Lua error: Lua error in Module:IntegrationForms: fixture failure") != null, "unrepaired Scribunto failures compile as inert error text");
+    try h.require(std.mem.indexOf(u8, text, "Missing export recovery: ERR / ERR / ERR") != null, "missing and non-function Scribunto exports remain recoverable parser errors");
+    try h.require(std.mem.indexOf(u8, text, "Preserved invoke boundary: ALua error in Module:IntegrationExports:") != null and std.mem.indexOf(u8, text, "B; next OK") != null, "an uncaught missing export preserves surrounding text and a later valid invoke succeeds");
     try h.require(std.mem.indexOf(u8, text, "Formatting magic: 11,000 / 1234.50 / A_B_x_C") != null, "formatting magic is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Title parts: B / A/B") != null, "titleparts is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Escaped title: A_B/%C3%A9%3Fx / Appendix:A_B/%C3%A9%3Fx") != null, "escaped title magic is baked into data");

@@ -91,6 +91,8 @@ pub const Provider = struct {
     wikibase_sitelink: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror!?[]const u8 = null,
     wikibase_entity_text: ?*const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityText = null,
     language_known_tag: ?*const fn (?*anyopaque, []const u8) anyerror!bool = null,
+    // When present, the edition snapshot is authoritative, including nonmatches.
+    resolve_title_magic: ?*const fn (?*anyopaque, []const u8, rt.namespace_registry.magic_words.Form) anyerror!?[]const u8 = null,
     resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
     get_template_symbol: ?*const fn (?*anyopaque, std.mem.Allocator, usize) anyerror!?[]const u8 = null,
 };
@@ -686,6 +688,11 @@ pub const Expander = struct {
         return isEscapedTitleMagicName(raw);
     }
 
+    fn resolveTitleMagic(self: *Expander, raw: []const u8, form: rt.namespace_registry.magic_words.Form) !?[]const u8 {
+        if (self.provider.resolve_title_magic) |resolve| return resolve(self.provider.ctx, raw, form);
+        return if (isTitleMagicName(raw)) raw else null;
+    }
+
     fn namespacedPageAlloc(self: *Expander, spec: namespace_lib.Spec, text: []const u8) ![]const u8 {
         if (spec.id == 0) return text;
         return std.fmt.allocPrint(self.runtime.allocator, "{s}:{s}", .{ spec.name, text });
@@ -804,7 +811,6 @@ pub const Expander = struct {
 
     fn magicWord(self: *Expander, raw: []const u8) !?[]const u8 {
         const head = std.mem.trim(u8, raw, " \t\r\n");
-        if (try self.titleMagic(head, null)) |value| return value;
         if (try self.revisionMagic(head, null)) |value| return value;
         if (std.mem.eql(u8, head, "!")) return "|";
         if (std.mem.eql(u8, head, "!!")) return "||";
@@ -1318,6 +1324,16 @@ pub const Expander = struct {
         return out.toOwnedSlice(a);
     }
 
+    fn invokeExportErrorMarkup(self: *Expander, failure: anyerror, module_name: []const u8, function_name: []const u8) !?[]const u8 {
+        const detail = switch (failure) {
+            error.InvokeFunctionMissing => try std.fmt.allocPrint(self.runtime.allocator, "The function \"{s}\" does not exist.", .{function_name}),
+            error.InvokeExportNotFunction => try std.fmt.allocPrint(self.runtime.allocator, "\"{s}\" is not a function.", .{function_name}),
+            else => return null,
+        };
+        defer self.runtime.allocator.free(detail);
+        return try self.scribuntoErrorMarkup(module_name, detail);
+    }
+
     fn invokeWithRecovery(
         self: *Expander,
         module_id: ?u32,
@@ -1329,6 +1345,10 @@ pub const Expander = struct {
         parent_args: ?*rt.Table,
     ) anyerror!InvokeOutcome {
         const generated = self.invokeFresh(module_id, module_name, function_name, invoke_args, existing_parent, parent_title, parent_args) catch |err| {
+            if (try self.invokeExportErrorMarkup(err, module_name, function_name)) |markup| {
+                clearInvokeFailure(self.runtime);
+                return .{ .error_markup = markup };
+            }
             if (err != error.AotCallFailed) return err;
             const first_detail = try self.runtime.allocator.dupe(u8, invokeFailureDetail(self.runtime, err));
             clearInvokeFailure(self.runtime);
@@ -1343,6 +1363,10 @@ pub const Expander = struct {
                     var retry_parent_args = parent_args;
                     if (repaired_parent_args) |table| retry_parent_args = table;
                     const retried = self.invokeFresh(module_id, module_name, function_name, retry_invoke_args, existing_parent, parent_title, retry_parent_args) catch |retry_err| {
+                        if (try self.invokeExportErrorMarkup(retry_err, module_name, function_name)) |markup| {
+                            clearInvokeFailure(self.runtime);
+                            return .{ .error_markup = markup };
+                        }
                         if (retry_err != error.AotCallFailed) return retry_err;
                         const retry_detail = try self.runtime.allocator.dupe(u8, invokeFailureDetail(self.runtime, retry_err));
                         clearInvokeFailure(self.runtime);
@@ -1577,6 +1601,10 @@ pub const Expander = struct {
         host_title: []const u8,
         depth: usize,
     ) anyerror!?[]const u8 {
+        // Variables without a colon only take precedence over templates when
+        // no pipe arguments were supplied (Parser::braceSubstitution).
+        if (raw_args.len == 0) if (try self.resolveTitleMagic(head, .variable)) |name|
+            return (try self.titleMagic(name, null)) orelse unreachable;
         if (try self.magicWord(head)) |value| return value;
 
         if (preprocess.findTopDelimiter(head, ':')) |colon| {
@@ -1586,9 +1614,9 @@ pub const Expander = struct {
                 const page = try self.expandWikitext(first, params, host_title, depth + 1);
                 return (try self.revisionMagic(name, page)) orelse unreachable;
             }
-            if (isTitleMagicName(name)) {
+            if (try self.resolveTitleMagic(name, .parser_function)) |canonical| {
                 const page = try self.expandWikitext(first, params, host_title, depth + 1);
-                return (try self.titleMagic(name, page)) orelse unreachable;
+                return (try self.titleMagic(canonical, page)) orelse unreachable;
             }
             if (std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) {
                 const value = try self.expandWikitext(first, params, host_title, depth + 1);
@@ -2244,6 +2272,14 @@ pub const Expander = struct {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const first = args.rawGet(.{ .number = 1 });
         const second = args.rawGet(.{ .number = 2 });
+        if (try self.resolveTitleMagic(name, .parser_function)) |canonical| {
+            const page: ?[]const u8 = if (first) |value| switch (value) {
+                .nil => null,
+                .string => |text| text,
+                else => return error.StringExpected,
+            } else null;
+            return (try self.titleMagic(canonical, page)) orelse unreachable;
+        }
         if (isRevisionMagicName(name)) {
             const page: ?[]const u8 = if (first) |value| switch (value) {
                 .nil => null,
@@ -2417,6 +2453,7 @@ const TestModule = struct {
         try exports.rawSet(ctx.allocator, .{ .string = "nil_return" }, try ctx.makeFunction(10, rt.stabilizeBuffered(nilReturn), &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "number" }, try ctx.makeFunction(11, rt.stabilizeBuffered(numericReturn), &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "nested_owned" }, try ctx.makeFunctionKnown(12, nestedOwned, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "value" }, .{ .number = 17 });
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
         return out;
@@ -2936,6 +2973,48 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expect(std.mem.indexOf(u8, failed_invoke, "Lua error in Module:Test: NotCallable") != null);
     try std.testing.expect(runtime.aotErrorName() == null);
     try std.testing.expect(runtime.last_error == .nil);
+
+    const missing_export = try expander.expandFragment("Page", "A{{#invoke:Test|missing}}B{{#invoke:Test|run|x=OK}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("A<strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:Test: The function \"missing\" does not exist.</span></strong>BOK", missing_export);
+    const nonfunction_export = try symbolic_expander.expandFragment("Page", "A{{#invoke:@module|value}}B{{#invoke:@module|@function|x=OK}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("A<strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:Test: \"value\" is not a function.</span></strong>BOK", nonfunction_export);
+    const export_iferror = try symbolic_expander.expandFragment("Page", "{{#iferror:{{#invoke:@module|missing}}|MISSING|BAD}}|{{#iferror:{{#invoke:Test|value}}|NONFUNCTION|BAD}}|{{#iferror:{{#invoke:Test|run|x=OK}}|BAD|VALID}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("MISSING|NONFUNCTION|VALID", export_iferror);
+    const escaped_export = try expander.expandFragment("Page", "{{#invoke:Test|<b>&}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:Test: The function \"&lt;b&gt;&amp;\" does not exist.</span></strong>", escaped_export);
+    try std.testing.expect(runtime.current_frame == null and runtime.aotErrorName() == null and !runtime.last_error_present);
+}
+
+test "invoke export recovery preserves unrelated runtime and host errors" {
+    const Probe = struct {
+        fn install(_: *?*anyopaque, shared: ?*anyopaque, _: std.mem.Allocator, _: *rt.Context, _: u32, _: u32, _: u32) anyerror!void {
+            const failure: *const anyerror = @ptrCast(@alignCast(shared.?));
+            return failure.*;
+        }
+    };
+    for ([_]anyerror{ error.NotCallable, error.OutOfMemory, error.FileMetadataSnapshotMissing }) |expected_error| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+        defer runtime.deinit();
+        const functions = [_]rt.FunctionFn{rt.stabilize(TestModule.root)};
+        runtime.module_root_entries = &functions;
+        runtime.configureModules(null, TestModule.lookup, TestModule.name);
+        try rt.bindGlobalTable(&runtime, null, 0);
+        try stdlib.install(&runtime);
+        var failure = expected_error;
+        var expander = Expander{
+            .runtime = &runtime,
+            .env_slot = 0,
+            .string_slot = 18,
+            .mw_slot = 23,
+            .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+            .install_scribunto = Probe.install,
+            .scribunto_shared = &failure,
+        };
+        try std.testing.expectError(expected_error, expander.expandFragment("Page", "A{{#invoke:Test|run|x=OK}}B", 1_670_803_200));
+        try std.testing.expect(runtime.current_frame == null);
+    }
 }
 
 test "bundle title magic words resolve subject talk and parameterized namespaces" {
@@ -2958,6 +3037,74 @@ test "bundle title magic words resolve subject talk and parameterized namespaces
         1_670_803_200,
     );
     try std.testing.expectEqualStrings("A_B/%C3%A9%3Fx|Appendix:A_B/%C3%A9%3Fx|Appendix|A_B|A_B|%C3%A9%3Fx|Appendix|Appendix_talk|Appendix:A_B/%C3%A9%3Fx|Appendix_talk:A_B/%C3%A9%3Fx|Appendix|Appendix:A_B/%C3%A9%3Fx", escaped);
+}
+
+test "edition title magic prevents Arabic wrapper recursion without shadowing templates" {
+    const aliases = rt.namespace_registry.magic_words;
+    const Source = struct {
+        words: *const aliases.Registry,
+        wrapper_calls: usize = 0,
+
+        fn resolve(ctx: ?*anyopaque, name: []const u8, form: aliases.Form) anyerror!?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            return self.words.resolve(name, form);
+        }
+
+        fn get(ctx: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            if (std.mem.eql(u8, title, "قالب:مرجع:المحيط"))
+                return "[https://archive.org/details/Talab1.comar/page/{{#if:{{{1|{{{page|{{{صفحة|{{{الصفحة|}}}}}}}}}}}}|n{{{1|{{{page|{{{صفحة|{{{الصفحة|}}}}}}}}}}}}|}} \"{{اسم_الصفحة}}\"] في [[w:القاموس المحيط|القاموس المحيط]] تأليف [[w:الفيروزآبادي|الفيروزآبادي]]\n<noinclude>[[تصنيف:قوالب مراجع عربية|قاموس المحيط]]</noinclude>";
+            if (std.mem.eql(u8, title, "قالب:اسم الصفحة")) {
+                self.wrapper_calls += 1;
+                return "WRAPPER {{اسم_الصفحة}}";
+            }
+            if (std.mem.eql(u8, title, "قالب:pagename")) return "lowercase-template";
+            if (std.mem.eql(u8, title, "قالب:PAGENAME")) return "english-template";
+            if (std.mem.eql(u8, title, "Template:اسم الصفحة")) return "ordinary-template";
+            if (std.mem.eql(u8, title, "قالب:Loop")) return "{{Loop}}";
+            return null;
+        }
+
+        fn exists(_: ?*anyopaque, _: []const u8) !bool {
+            return true;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var arabic = try rt.namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tinput\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n");
+    defer arabic.deinit();
+    var arabic_words = try aliases.Registry.init(a, aliases.header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\npagename\t1\tPAGENAME\npagename\t1\tاسم_الصفحة\n", "arwiktionary", "20261001", "ar");
+    defer arabic_words.deinit();
+    var english_words = try aliases.Registry.init(a, aliases.header ++ "\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\npagename\t1\tPAGENAME\npagename\t1\tCOLLISION\nbasepagename\t1\tCOLLISION\n", "enwiktionary", "20261001", "en");
+    defer english_words.deinit();
+    var source: Source = .{ .words = &arabic_words };
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &arabic;
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = Source.get, .exists = Source.exists, .resolve_title_magic = Source.resolve } };
+    try std.testing.expectEqualStrings("تَرِزَ|آخر", try expander.expandFragment("تَرِزَ", "{{اسم_الصفحة}}|{{اسم_الصفحة:قالب:آخر}}", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), source.wrapper_calls);
+    const citation = try expander.expandFragment("تَرِزَ", "{{مرجع:المحيط}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, citation, "\"تَرِزَ\"") != null);
+    try std.testing.expectEqual(@as(usize, 0), source.wrapper_calls);
+    try std.testing.expectEqualStrings("WRAPPER Page|WRAPPER Page|lowercase-template|english-template", try expander.expandFragment("Page", "{{اسم_الصفحة|x}}|{{اسم الصفحة}}|{{pagename}}|{{PAGENAME|x}}", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 2), source.wrapper_calls);
+    const args = try runtime.newTable();
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = "قالب:آخر" });
+    try std.testing.expectEqualStrings("آخر", try Expander.hostFrameParserFunction(&expander, a, "اسم_الصفحة", args));
+    try std.testing.expectError(error.TemplateDepth, expander.expandFragment("Page", "{{Loop}}", 1_670_803_200));
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    source.words = &english_words;
+    try std.testing.expectEqualStrings("ordinary-template", try expander.expandFragment("Page", "{{اسم_الصفحة}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("Parent/Child|Parent", try expander.expandFragment("Template:Parent/Child", "{{COLLISION}}|{{COLLISION:Template:Parent/Child}}", 1_670_803_200));
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = "Template:Parent/Child" });
+    try std.testing.expectEqualStrings("Parent", try Expander.hostFrameParserFunction(&expander, a, "COLLISION", args));
 }
 
 test "bundle parser functions cover corpus time date sub and iferror forms" {

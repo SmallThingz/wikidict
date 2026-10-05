@@ -1,6 +1,7 @@
 //! Immutable, edition-local namespace facts. No English ID or alias guesses.
 //! All names are owned by the registry; callers own normalized title results.
 const std = @import("std");
+pub const magic_words = @import("magic_words.zig");
 const lower = @import("unicode_lower");
 const title_case = @import("title_case.zig");
 

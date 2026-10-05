@@ -18,6 +18,7 @@ const Options = struct {
     wikibase_sitelinks_snapshot: ?[]const u8 = null,
     wikibase_entity_text_snapshot: ?[]const u8 = null,
     language_registry_snapshot: ?[]const u8 = null,
+    magic_words_snapshot: ?[]const u8 = null,
     file_metadata_snapshot: ?[]const u8 = null,
     transclusion_redirects_snapshot: ?[]const u8 = null,
     llvm_workers: ?usize = null,
@@ -72,6 +73,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.language_registry_snapshot != null) return error.Usage;
             options.language_registry_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--magic-words-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.magic_words_snapshot != null) return error.Usage;
+            options.magic_words_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--file-metadata-snapshot")) {
             index += 1;
             if (index >= args.len or options.file_metadata_snapshot != null) return error.Usage;
@@ -948,6 +953,13 @@ test "expander-only option is strict" {
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expander-only", "--expander-only" }));
 }
 
+test "edition title magic snapshot option is strict" {
+    const options = try parseOptions(&.{ "dump.xml", "out", "--magic-words-snapshot", "aliases.tsv" });
+    try std.testing.expectEqualStrings("aliases.tsv", options.magic_words_snapshot.?);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--magic-words-snapshot" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--magic-words-snapshot", "aliases.tsv", "--magic-words-snapshot", "other.tsv" }));
+}
+
 test "page worker override accepts bounded positive integers only" {
     const options = try parseOptions(&.{ "dump.xml", "out", "--page-workers", "2" });
     try std.testing.expectEqual(@as(usize, 2), options.page_workers);
@@ -960,7 +972,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--language-registry-snapshot FILE] [--magic-words-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -1002,6 +1014,8 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "wikibase-entity-text.tsv");
     if (options.language_registry_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "language-registry.tsv");
+    if (options.magic_words_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "magic-words.tsv");
     if (options.file_metadata_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "file-metadata.tsv");
     if (options.transclusion_redirects_snapshot) |snapshot|

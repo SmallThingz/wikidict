@@ -32,7 +32,7 @@ SHARD_STATE_VERSION = 2
 AUXILIARY_SNAPSHOT_NAMES = (
     'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'file-metadata',
-    'transclusion-redirects', 'namespace-registry', 'language-registry',
+    'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words',
 )
 MAX_TOTAL_BUILD_WORKERS = 8
 MAX_PIPELINE_WORKERS = 4
@@ -173,6 +173,9 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
         path=Path(source).resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
         sha=sha256_file(path)
+        if name=='magic-words':
+            from prepare_magic_words import validate_snapshot
+            validate_snapshot(path,edition,date)
         manifest=path.with_name(name+'.manifest.json')
         if manifest.is_file():
             record=read_small_json(manifest)
@@ -269,6 +272,13 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 present=[p.exists() or p.is_symlink() for p in (path,sidecar)]
                 if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
                 if all(present):snapshots[name]=path
+            magic_root=root/'magic-words'
+            if magic_root.exists() or magic_root.is_symlink():
+                if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
+                path=magic_root/'magic-words.tsv'
+                from prepare_magic_words import validate_snapshot
+                validate_snapshot(path,edition,date)
+                snapshots['magic-words']=path
         elif (downloads/edition/date/'namespace-registry.tsv').is_file():
             snapshots['namespace-registry']=downloads/edition/date/'namespace-registry.tsv'
         snapshots.update(overrides or {})
@@ -309,9 +319,22 @@ def pipeline_snapshot_args(registry, snapshots):
     return auxiliary_snapshot_args(merged)
 
 
-def pinned_auxiliary_snapshots(snapshots, hashes, destination):
-    return {name:copy_verified_snapshot(Path(source),destination/(name+'.tsv'),hashes[name])
-            for name,source in sorted((snapshots or {}).items())}
+def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=None):
+    pinned={}
+    for name,source in sorted((snapshots or {}).items()):
+        source=Path(source)
+        pinned[name]=copy_verified_snapshot(source,destination/(name+'.tsv'),hashes[name])
+        if name=='magic-words':
+            # Keep the immutable API observation with the private TSV copy so
+            # revalidation after a long build still checks the captured source.
+            from prepare_magic_words import ARTIFACTS, validate_snapshot
+            validate_snapshot(source)
+            for filename in sorted((ARTIFACTS|{'magic-words.manifest.json'})-{'magic-words.tsv'}):
+                path=source.with_name(filename)
+                expected=(capture_hashes or {}).get(name) if filename=='magic-words.manifest.json' else None
+                copy_verified_snapshot(path,destination/path.name,expected or sha256_file(path))
+            validate_snapshot(pinned[name])
+    return pinned
 
 
 def auxiliary_snapshot_args(snapshots):
@@ -339,14 +362,18 @@ def source_fingerprint():
     return checksum.hexdigest()
 
 
-def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms):
+def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None):
     executable=shutil.which(zig)
     if executable is None:raise ValueError('Zig compiler executable is unavailable')
-    return dict(version=1, source=source_fingerprint(),
+    identity=dict(version=1, source=source_fingerprint(),
                 files=sorted([[i['wiki'],i['date'],i['name'],i['size'],i['sha1']] for i in items]),
                 zig_sha256=sha256_file(Path(executable)),
                 auxiliary_snapshot_sha256=auxiliary_hashes or {},
                 interwiki_map_sha256=interwiki_sha, expansion_timeout_ms=expansion_timeout_ms)
+    if auxiliary_snapshots and 'magic-words' in auxiliary_snapshots:
+        manifest=Path(auxiliary_snapshots['magic-words']).with_name('magic-words.manifest.json')
+        identity['auxiliary_capture_sha256']={'magic-words':sha256_file(manifest)}
+    return identity
 
 
 def require_build_identity(recorded, expected):
@@ -1332,7 +1359,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     else:
         interwiki_sha=None
     auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,edition,date)
-    build_identity=build_input_identity(items,zig,auxiliary_hashes,interwiki_sha,expansion_timeout_ms)
+    build_identity=build_input_identity(items,zig,auxiliary_hashes,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots)
     target = output / edition / date
     if (target / 'complete.json').exists():
         try:
@@ -1402,7 +1429,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         now_unix=prepare_shard_workspace(workspace,expected,now_unix)
         dump=cached_shard_dump(xml,downloads,workspace)
         pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
-        aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace)
+        aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,build_identity.get('auxiliary_capture_sha256'))
         build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
     else:
         now_unix=now_unix if now_unix is not None else int(time.time())
@@ -1412,7 +1439,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             source_metadata={}
             dump = stage_seekable_dump(xml,downloads,scratch,source_metadata)
             pinned=copy_verified_snapshot(interwiki_snapshot,scratch/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
-            aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,scratch)
+            aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,scratch,build_identity.get('auxiliary_capture_sha256'))
             timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
                          *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                          *pipeline_snapshot_args(registry,aux_pinned),
