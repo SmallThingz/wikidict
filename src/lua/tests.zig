@@ -8,6 +8,7 @@ test {
     _ = @import("direct/shapes.zig");
     _ = @import("usage.zig");
     _ = @import("direct/usage_profile.zig");
+    _ = @import("llvm_build_main.zig");
     _ = @import("program_metadata.zig");
     _ = @import("extract/modules.zig");
     _ = @import("wikitext/expression.zig");

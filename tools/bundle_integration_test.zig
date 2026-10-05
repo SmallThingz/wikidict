@@ -703,6 +703,37 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
     const german_languages = try std.fs.path.join(h.a, &.{ dir, "german-languages.tsv" });
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = german_ns, .data = namespaces.german_test_fixture });
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = german_languages, .data = "# wikidict-language-registry-v2\n# content-language\tde\n# mediawiki\nde\tDeutsch\tde\tdeu\n# iso-639-3\n" });
+    const redirect_probe_source =
+        \\return {run=function()
+        \\    local target = require('Modul:i18n')
+        \\    assert(target.wrapper_runs == 0 and package.loaded['Modul:I18n'] == nil)
+        \\    local wrapper = require('Modul:WrapperChain')
+        \\    assert(wrapper == target and target.wrapper_runs == 1)
+        \\    assert(package.loaded['Modul:WrapperChain'] == wrapper)
+        \\    assert(require('Modul:WrapperAlias') == wrapper)
+        \\    assert(require('Modul:I18n') == wrapper and target.wrapper_runs == 1)
+        \\    assert(require('Module:I18n') == wrapper and target.wrapper_runs == 1)
+        \\    assert(package.loaded['Modul:I18n'] == wrapper)
+        \\    assert(package.loaded['Modul:i18n'] == target)
+        \\    local upper_override = {kind='upper override'}
+        \\    package.loaded['Modul:I18n'] = upper_override
+        \\    assert(require('Modul:I18n') == upper_override)
+        \\    assert(require('Modul:i18n') == target)
+        \\    package.loaded['Modul:I18n'] = wrapper
+        \\    local lower_override = {kind='lower override'}
+        \\    package.loaded['Modul:i18n'] = lower_override
+        \\    assert(require('Modul:i18n') == lower_override)
+        \\    assert(require('Modul:I18n') == wrapper and target.wrapper_runs == 1)
+        \\    package.loaded['Modul:i18n'] = target
+        \\    local cycle = require('Modul:CycleAlias')
+        \\    assert(cycle.kind == 'compiled cycle' and cycle == require('Modul:CycleWrapper'))
+        \\    local ok = pcall(require, 'Modul:RedirectCycleA')
+        \\    assert(not ok)
+        \\    ok = pcall(require, 'Modul:RedirectCycleB')
+        \\    assert(not ok)
+        \\    return 'case-sensitive wrapper lifecycle verified'
+        \\end}
+    ;
     try writePages(h.io, h.a, german_xml, &.{
         .{ .title = "Wort", .ns = 0, .id = 1, .body = "==Deutsch==\n===Substantiv===\n# {{:Template:Probe}}\n" },
         .{ .title = "Vorlage:Probe", .ns = 10, .id = 2, .body = "{{#in<!-- join -->voke:Probe|run}}" },
@@ -714,16 +745,26 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
             "local data = require('Module:Alias'); " ++
             "assert(mw.loadData('Modul:Data').word == data.word); " ++
             "package.loaded['Module:Alias'] = false; assert(require('Module:Alias') == false); " ++
-            "return data.word end; return export" },
+            "return data.word .. '; ' .. require('Module:RedirectProbe').run() end; return export" },
         .{ .title = "Modul:Data", .ns = 828, .id = 4, .body = "return {word='localized native module'}" },
         .{ .title = "Modul:Alias", .ns = 828, .id = 5, .body = "#REDIRECT [[Module:Data]]", .redirect = "Module:Data" },
         .{ .title = "Modul:math", .ns = 828, .id = 6, .body = "return {wrong_builtin=true}" },
         .{ .title = "Flexion:gehen", .ns = 108, .id = 7, .body = "Supplemental German inflection." },
+        .{ .title = "Modul:RedirectProbe", .ns = 828, .id = 8, .body = redirect_probe_source },
+        .{ .title = "Modul:i18n", .ns = 828, .id = 9, .body = "return {kind='target', wrapper_runs=0}" },
+        .{ .title = "Modul:I18n", .ns = 828, .id = 10, .model = "Scribunto", .redirect = "Module:i18n", .body = "local name = ...; assert(name == 'Modul:I18n'); local target = require('Modul:i18n'); target.wrapper_runs = target.wrapper_runs + 1; return target" },
+        .{ .title = "Modul:WrapperAlias", .ns = 828, .id = 11, .redirect = "Module:I18n", .body = "#REDIRECT [[Module:I18n]]" },
+        .{ .title = "Modul:WrapperChain", .ns = 828, .id = 12, .redirect = "Module:WrapperAlias", .body = "#REDIRECT [[Module:WrapperAlias]]" },
+        .{ .title = "Modul:CycleWrapper", .ns = 828, .id = 13, .model = "Scribunto", .redirect = "Module:CycleAlias", .body = "return {kind='compiled cycle'}" },
+        .{ .title = "Modul:CycleAlias", .ns = 828, .id = 14, .redirect = "Module:CycleWrapper", .body = "#REDIRECT [[Module:CycleWrapper]]" },
+        .{ .title = "Modul:RedirectCycleA", .ns = 828, .id = 15, .redirect = "Module:RedirectCycleB", .body = "#REDIRECT [[Module:RedirectCycleB]]" },
+        .{ .title = "Modul:RedirectCycleB", .ns = 828, .id = 16, .redirect = "Module:RedirectCycleA", .body = "#REDIRECT [[Module:RedirectCycleA]]" },
     });
     _ = try h.run(&.{ pipeline, german_xml, german_root, "--namespace-registry-snapshot", german_ns, "--language-registry-snapshot", german_languages, "--llvm-workers", "1", "--page-workers", "1", "--now-unix", "1791072000" }, 0);
     _ = try h.run(&.{ verifier, german_root }, 0);
     const word = try h.run(&.{ bin, "lookup", "Wort", "--root", german_root, "--language", "Deutsch", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, word, "localized native module") != null, "localized templates, invokes, module aliases and raw package overrides survive native compilation");
+    try h.require(std.mem.indexOf(u8, word, "case-sensitive wrapper lifecycle verified") != null, "compiled Scribunto redirect wrappers retain distinct identities, cached execution and independent package overrides");
     const inflection = try h.run(&.{ bin, "lookup", "Flexion:gehen", "--root", german_root, "--kind", "supplemental", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, inflection, "Supplemental German inflection") != null, "custom German subject namespaces are retained");
     const french_root = try std.fs.path.join(h.a, &.{ dir, "french-dictionary" });

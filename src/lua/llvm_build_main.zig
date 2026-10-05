@@ -132,6 +132,12 @@ fn buildModuleIds(io: std.Io, a: A, registry: *const Registry, source_root: []co
         if (entry.found_existing and !std.mem.eql(u8, entry.value_ptr.*, target)) return error.DuplicateModuleRedirect;
         entry.value_ptr.* = target;
     }
+    // Scribunto redirects can still contain executable Lua wrappers. Their
+    // compiled identities take precedence over page redirect metadata, including
+    // when a true redirect targets such a wrapper. Remove these edges before
+    // resolving aliases so neither wrappers nor their require lifecycle is lost.
+    var compiled_names = ids.keyIterator();
+    while (compiled_names.next()) |name| _ = redirects.remove(name.*);
     var it = redirects.iterator();
     while (it.next()) |entry| {
         var current = entry.value_ptr.*;
@@ -150,6 +156,76 @@ fn buildModuleIds(io: std.Io, a: A, registry: *const Registry, source_root: []co
     }
     return ids;
 }
+
+test "module redirect identities preserve case-sensitive compiled wrappers and cycles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var registry = try Registry.init(a, @import("namespace_registry").german_test_fixture);
+    defer registry.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const path = try std.fs.path.join(a, &.{ root, "module-redirects.tsv" });
+    const records = [_]struct { title: []const u8 }{
+        .{ .title = "Modul:I18n" },
+        .{ .title = "Modul:i18n" },
+        .{ .title = "Modul:CycleWrapper" },
+    };
+    const rows = [_][]const u8{
+        "M\tModule:I18n\tModule:i18n\n",
+        "M\tModule:WrapperAlias\tModule:I18n\n",
+        "M\tModule:WrapperChain\tModule:WrapperAlias\n",
+        "M\tModule:TargetAlias\tModule:i18n\n",
+        "M\tModule:CycleWrapper\tModule:CycleAlias\n",
+        "M\tModule:CycleAlias\tModule:CycleWrapper\n",
+        "M\tModule:CycleA\tModule:CycleB\n",
+        "M\tModule:CycleB\tModule:CycleA\n",
+        "M\tModule:CycleEntry\tModule:CycleA\n",
+        "M\tModule:MissingAlias\tModule:Missing\n",
+    };
+    for ([_]bool{ false, true }) |reverse| {
+        var redirects: std.Io.Writer.Allocating = .init(a);
+        defer redirects.deinit();
+        for (0..rows.len) |i| try redirects.writer.writeAll(rows[if (reverse) rows.len - i - 1 else i]);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = redirects.written() });
+        var ids = try buildModuleIds(io, a, &registry, root, &records);
+        defer ids.deinit(a);
+        for ([_][]const u8{ "Modul:I18n", "Modul:WrapperAlias", "Modul:WrapperChain" }) |name|
+            try std.testing.expectEqual(@as(?u32, 0), ids.get(name));
+        for ([_][]const u8{ "Modul:i18n", "Modul:TargetAlias" }) |name|
+            try std.testing.expectEqual(@as(?u32, 1), ids.get(name));
+        for ([_][]const u8{ "Modul:CycleWrapper", "Modul:CycleAlias" }) |name|
+            try std.testing.expectEqual(@as(?u32, 2), ids.get(name));
+        for ([_][]const u8{ "Modul:CycleA", "Modul:CycleB", "Modul:CycleEntry", "Modul:MissingAlias" }) |name|
+            try std.testing.expect(ids.get(name) == null);
+    }
+}
+
+test "module redirect precedence does not hide conflicting inputs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var registry = try Registry.init(a, @import("namespace_registry").german_test_fixture);
+    defer registry.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const records = [_]struct { title: []const u8 }{
+        .{ .title = "Modul:I18n" },
+        .{ .title = "Module:I18n" },
+    };
+    try std.testing.expectError(error.DuplicateModuleIdentity, buildModuleIds(io, a, &registry, root, &records));
+    const path = try std.fs.path.join(a, &.{ root, "module-redirects.tsv" });
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = path,
+        .data = "M\tModule:I18n\tModule:i18n\nM\tModul:I18n\tModul:Other\n",
+    });
+    try std.testing.expectError(error.DuplicateModuleRedirect, buildModuleIds(io, a, &registry, root, records[0..1]));
+}
+
 fn resolveModuleEdges(
     a: A,
     named_edges: []const NamedModuleEdge,
@@ -407,6 +483,8 @@ fn planModuleTemplates(
 }
 
 test "module templates are reserved for executable roots" {
+    var registry = try Registry.init(std.testing.allocator, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
     const base = ModuleRecord{
         .title = "Module:X",
         .path = "modules/1.lua",
@@ -425,21 +503,21 @@ test "module templates are reserved for executable roots" {
     var executable = [_]ModuleRecord{base};
     try std.testing.expectEqual(
         @as(usize, 1),
-        try planModuleTemplates(std.testing.allocator, &executable, &ids, true),
+        try planModuleTemplates(std.testing.allocator, &registry, &executable, &ids, true),
     );
 
     var static_root = [_]ModuleRecord{base};
     static_root[0].static_root = true;
     try std.testing.expectEqual(
         @as(usize, 0),
-        try planModuleTemplates(std.testing.allocator, &static_root, &ids, true),
+        try planModuleTemplates(std.testing.allocator, &registry, &static_root, &ids, true),
     );
 
     var synth_root = [_]ModuleRecord{base};
     synth_root[0].synth_root = true;
     try std.testing.expectEqual(
         @as(usize, 0),
-        try planModuleTemplates(std.testing.allocator, &synth_root, &ids, true),
+        try planModuleTemplates(std.testing.allocator, &registry, &synth_root, &ids, true),
     );
 }
 
