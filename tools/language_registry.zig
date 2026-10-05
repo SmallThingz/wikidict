@@ -417,6 +417,90 @@ pub const Registry = struct {
         if (p != source.len) return error.InvalidLanguageRegistry;
     }
 
+    fn registeredLocalCode(self: *const Registry, value: []const u8) ?[]const u8 {
+        if (self.codes.contains(value)) return value;
+        // Only ISO aliases may canonicalize a table key; language labels may not.
+        if (value.len != 3) return null;
+        for (value) |ch| if (ch < 'a' or ch > 'z') return null;
+        const resolved = self.resolve(value) orelse return null;
+        return if (self.codes.contains(resolved.code)) resolved.code else null;
+    }
+
+    /// Import the literal register used by Module:sprǣcnaman, without executing
+    /// its functions or importing unregistered language-family codes.
+    pub fn addLocalNamesLua(self: *Registry, source: []const u8) !void {
+        const owned = self.arena.allocator();
+        const names = try localLiteralTable(owned, source, "names");
+        const aliases = try localLiteralTable(owned, source, "aliases");
+        var entries: std.ArrayList(LocalName) = .empty;
+        for (names) |row| {
+            if (!validCode(row.key) or row.value.len == 0 or
+                std.mem.indexOfAny(u8, row.value, "\x00\n\r\t") != null)
+                return error.InvalidLanguageRegistry;
+            const code_value = self.registeredLocalCode(row.key) orelse continue;
+            var duplicate = false;
+            for (entries.items) |entry| {
+                if (!std.mem.eql(u8, entry.key, code_value)) continue;
+                if (!std.mem.eql(u8, entry.value, row.value)) return error.ConflictingLanguageHeading;
+                duplicate = true;
+            }
+            if (!duplicate) try entries.append(owned, .{ .key = code_value, .value = row.value });
+        }
+        for (aliases, 0..) |row, index| {
+            if (row.key.len == 0 or std.mem.indexOfAny(u8, row.key, "\x00\n\r\t") != null or !validCode(row.value))
+                return error.InvalidLanguageRegistry;
+            const code_value = self.registeredLocalCode(row.value) orelse continue;
+            var imported = false;
+            for (entries.items) |entry| {
+                if (std.mem.eql(u8, entry.key, code_value)) imported = true;
+                if (std.mem.eql(u8, entry.value, row.key) and !std.mem.eql(u8, entry.key, code_value))
+                    return error.ConflictingLanguageHeading;
+            }
+            if (!imported) return error.InvalidLanguageRegistry;
+            for (aliases[0..index]) |previous| {
+                if (!std.mem.eql(u8, previous.key, row.key)) continue;
+                const previous_code = self.registeredLocalCode(previous.value) orelse return error.ConflictingLanguageHeading;
+                if (!std.mem.eql(u8, previous_code, code_value)) return error.ConflictingLanguageHeading;
+            }
+        }
+        for (entries.items) |entry| {
+            var ambiguous = false;
+            for (entries.items) |other| {
+                if (std.mem.eql(u8, other.value, entry.value) and !std.mem.eql(u8, other.key, entry.key))
+                    ambiguous = true;
+            }
+            if (ambiguous) {
+                const heading = try self.disambiguatedHeading(entry.value, entry.key);
+                try self.addStrongCanonical(heading, entry.key);
+            } else {
+                try self.addStrongCanonical(entry.value, entry.key);
+            }
+        }
+        for (entries.items) |entry| {
+            for (entries.items) |other| {
+                if (!std.mem.eql(u8, other.value, entry.value) or std.mem.eql(u8, other.key, entry.key)) continue;
+                if (self.codes.contains(entry.value)) return error.ConflictingLanguageHeading;
+                if (self.canonical_names.get(entry.value)) |existing|
+                    try self.rehomeExternalHeading(entry.value, existing);
+                _ = self.names.remove(entry.value);
+                _ = self.canonical_names.remove(entry.value);
+                _ = self.strong_names.remove(entry.value);
+                _ = self.trusted_names.remove(entry.value);
+                try self.ambiguous.put(owned, entry.value, {});
+            }
+        }
+        for (aliases) |row| {
+            const code_value = self.registeredLocalCode(row.value) orelse continue;
+            if (self.codes.contains(row.key) and !std.mem.eql(u8, row.key, code_value))
+                return error.ConflictingLanguageHeading;
+            if (self.canonical_names.get(row.key)) |existing| {
+                if (!std.mem.eql(u8, existing, code_value)) try self.rehomeExternalHeading(row.key, existing);
+            }
+            try self.reserveCanonical(row.key, code_value);
+            try self.trustStrong(row.key);
+        }
+    }
+
     pub fn fromLuaAlloc(a: std.mem.Allocator, source: []const u8) !Registry {
         var out = Registry.empty(a);
         errdefer out.deinit();
@@ -424,6 +508,102 @@ pub const Registry = struct {
         return out;
     }
 };
+
+const LocalName = struct { key: []const u8, value: []const u8 };
+
+fn identifier(source: []const u8, p: *usize) ![]const u8 {
+    skip(source, p);
+    const start = p.*;
+    if (start == source.len or !(std.ascii.isAlphabetic(source[start]) or source[start] == '_'))
+        return error.InvalidLanguageRegistry;
+    p.* += 1;
+    while (p.* < source.len and (std.ascii.isAlphanumeric(source[p.*]) or source[p.*] == '_')) : (p.* += 1) {}
+    return source[start..p.*];
+}
+
+fn skipQuoted(source: []const u8, p: *usize) !void {
+    const quote = source[p.*];
+    p.* += 1;
+    while (p.* < source.len) {
+        const ch = source[p.*];
+        p.* += 1;
+        if (ch == quote) return;
+        if (ch == '\\' and p.* < source.len) p.* += 1;
+    }
+    return error.InvalidLanguageRegistry;
+}
+
+fn localLiteralTable(a: std.mem.Allocator, source: []const u8, wanted: []const u8) ![]const LocalName {
+    var rows: std.ArrayList(LocalName) = .empty;
+    var found = false;
+    var p: usize = 0;
+    while (true) {
+        skip(source, &p);
+        if (p == source.len) break;
+        if (source[p] == '"' or source[p] == '\'') {
+            try skipQuoted(source, &p);
+            continue;
+        }
+        if (!(std.ascii.isAlphabetic(source[p]) or source[p] == '_')) {
+            // Long Lua strings must not expose apparent local declarations.
+            if (source[p] == '[') {
+                var end = p + 1;
+                while (end < source.len and source[end] == '=') : (end += 1) {}
+                if (end < source.len and source[end] == '[') {
+                    const equals = source[p + 1 .. end];
+                    var scan = end + 1;
+                    while (std.mem.indexOfScalarPos(u8, source, scan, ']')) |close| {
+                        const last = close + 1 + equals.len;
+                        if (last < source.len and source[last] == ']' and std.mem.eql(u8, source[close + 1 .. last], equals)) {
+                            p = last + 1;
+                            break;
+                        }
+                        scan = close + 1;
+                    } else return error.InvalidLanguageRegistry;
+                    continue;
+                }
+            }
+            p += 1;
+            continue;
+        }
+        const token = try identifier(source, &p);
+        if (!std.mem.eql(u8, token, "local")) continue;
+        const name = try identifier(source, &p);
+        if (!std.mem.eql(u8, name, wanted)) continue;
+        if (found) return error.InvalidLanguageRegistry;
+        found = true;
+        try expect(source, &p, '=');
+        try expect(source, &p, '{');
+        while (true) {
+            skip(source, &p);
+            if (p == source.len) return error.InvalidLanguageRegistry;
+            if (source[p] == '}') {
+                p += 1;
+                break;
+            }
+            const key = if (source[p] == '[') blk: {
+                p += 1;
+                const value = try string(a, source, &p);
+                try expect(source, &p, ']');
+                break :blk value;
+            } else try identifier(source, &p);
+            try expect(source, &p, '=');
+            const value = try string(a, source, &p);
+            for (rows.items) |row| {
+                if (std.mem.eql(u8, row.key, key) and !std.mem.eql(u8, row.value, value))
+                    return error.ConflictingLanguageHeading;
+            }
+            try rows.append(a, .{ .key = key, .value = value });
+            skip(source, &p);
+            if (p == source.len) return error.InvalidLanguageRegistry;
+            if (source[p] == ',' or source[p] == ';') {
+                p += 1;
+            } else if (source[p] != '}') return error.InvalidLanguageRegistry;
+        }
+    }
+    if (!found) return error.InvalidLanguageRegistry;
+    return rows.items;
+}
 
 fn validCode(code: []const u8) bool {
     if (code.len == 0) return false;
@@ -498,6 +678,61 @@ test "canonical registry permits Lua long comments with equals delimiters" {
     var r = try Registry.fromLuaAlloc(std.testing.allocator, "--[==[ header ]=] still comment ]==]\nreturn { [\"English\"] = \"en\" }\n--[=[\nlocal export = {}\nreturn export\n]=]");
     defer r.deinit();
     try std.testing.expectEqualStrings("en", r.code("English").?);
+}
+
+test "dump local literal names preserve aliases and ambiguous language labels" {
+    var r = Registry.empty(std.testing.allocator);
+    defer r.deinit();
+    try r.addTsv("ang\tÆnglisc\tang\nen\tEnglish\ten\nfr\tFrench\tfr\tfra\nfrk\tFrankish\tfrk\n");
+    try r.addLua("return { [\"English\"] = \"en\" }");
+    try r.addLocalNamesLua(
+        "--[=[ local names = { ang = \"Wrong\" } ]=]\n" ++
+            "local ignored = [==[ local names = {} ]==]\n" ++
+            "local names = { ang = \"Englisc\", en = \"Nīwenglisc\", fr = \"Frencisc\", " ++
+            "fra = \"Frencisc\", frk = \"Frencisc\", [\"gem-pro\"] = \"Ealdoric Germanisc\" }\n" ++
+            "local of_names = { ang = \"Englisce\" }\n" ++
+            "local aliases = { [\"Ænglisc\"] = \"ang\" }\n" ++
+            "local function get_name(code) return names[code] end\nreturn { get_name = get_name }",
+    );
+    try std.testing.expectEqualStrings("Englisc", r.resolve("ang").?.heading);
+    try std.testing.expectEqualStrings("ang", r.resolveStrong("Englisc").?.code);
+    try std.testing.expectEqualStrings("Englisc", r.resolveStrong("Ænglisc").?.heading);
+    try std.testing.expectEqualStrings("en", r.resolveStrong("Nīwenglisc").?.code);
+    try std.testing.expectEqualStrings("Nīwenglisc", r.resolve("English").?.heading);
+    try std.testing.expect(r.resolve("Frencisc") == null);
+    try std.testing.expect(r.resolveStrong("Frencisc") == null);
+    try std.testing.expectEqualStrings("Frencisc (fr)", r.resolve("fr").?.heading);
+    try std.testing.expectEqualStrings("fr", r.resolve("fra").?.code);
+    try std.testing.expectEqualStrings("Frencisc (frk)", r.resolve("frk").?.heading);
+    try std.testing.expect(r.resolve("gem-pro") == null);
+    try std.testing.expect(r.resolve("Ealdoric Germanisc") == null);
+    try std.testing.expect(r.resolve("Englisce") == null);
+}
+
+test "dump local names reject computed and conflicting table input" {
+    for ([_][]const u8{
+        "local names = { ang = make_name() } local aliases = {}",
+        "local names = { ang = \"Old\" .. \" English\" } local aliases = {}",
+        "local names = { ang = \"Old\" en = \"English\" } local aliases = {}",
+        "local names = {} local names = {} local aliases = {}",
+        "local names = {}",
+        "local names = {} local aliases = { [\"Old\"] = code }",
+    }) |source| {
+        var r = Registry.empty(std.testing.allocator);
+        defer r.deinit();
+        try r.addTsv("ang\tOld English\tang\nen\tEnglish\ten\n");
+        try std.testing.expectError(error.InvalidLanguageRegistry, r.addLocalNamesLua(source));
+    }
+    for ([_][]const u8{
+        "local names = { ang = \"Old\", ang = \"Other\" } local aliases = {}",
+        "local names = { ang = \"Old\", en = \"English\" } local aliases = { [\"Old\"] = \"en\" }",
+        "local names = { ang = \"Old\", en = \"English\" } local aliases = { [\"Alias\"] = \"ang\", [\"Alias\"] = \"en\" }",
+    }) |source| {
+        var r = Registry.empty(std.testing.allocator);
+        defer r.deinit();
+        try r.addTsv("ang\tOld English\tang\nen\tEnglish\ten\n");
+        try std.testing.expectError(error.ConflictingLanguageHeading, r.addLocalNamesLua(source));
+    }
 }
 
 test "dump canonical names override conflicting external headings" {

@@ -152,20 +152,25 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     defer a.free(manifest_path);
     var manifest = try mmapPath(io, manifest_path);
     defer manifest.deinit();
-    const title_marker = "\"title\":\"Module:languages/canonical names\"";
-    const marker = std.mem.indexOf(u8, manifest.bytes, title_marker) orelse return out;
-    const line_start = if (std.mem.lastIndexOfScalar(u8, manifest.bytes[0..marker], '\n')) |newline| newline + 1 else 0;
-    const line_end = std.mem.indexOfScalarPos(u8, manifest.bytes, marker, '\n') orelse manifest.bytes.len;
-    const line = manifest.bytes[line_start..line_end];
-    const page_prefix = "{\"page_id\":";
-    if (!std.mem.startsWith(u8, line, page_prefix)) return error.InvalidModuleManifest;
-    const comma = std.mem.indexOfScalarPos(u8, line, page_prefix.len, ',') orelse return error.InvalidModuleManifest;
-    const page_id = std.fmt.parseInt(u64, line[page_prefix.len..comma], 10) catch return error.InvalidModuleManifest;
-    const module_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ expander_root, page_id });
-    defer a.free(module_path);
-    const source = try std.Io.Dir.cwd().readFileAlloc(io, module_path, a, .limited(64 * 1024 * 1024));
-    defer a.free(source);
-    try out.addLua(source);
+    const modules = [_]struct { marker: []const u8, local_names: bool }{
+        .{ .marker = "\"title\":\"Module:languages/canonical names\"", .local_names = false },
+        .{ .marker = "\"title\":\"Module:sprǣcnaman\"", .local_names = true },
+    };
+    for (modules) |module| {
+        const marker = std.mem.indexOf(u8, manifest.bytes, module.marker) orelse continue;
+        const line_start = if (std.mem.lastIndexOfScalar(u8, manifest.bytes[0..marker], '\n')) |newline| newline + 1 else 0;
+        const line_end = std.mem.indexOfScalarPos(u8, manifest.bytes, marker, '\n') orelse manifest.bytes.len;
+        const line = manifest.bytes[line_start..line_end];
+        const page_prefix = "{\"page_id\":";
+        if (!std.mem.startsWith(u8, line, page_prefix)) return error.InvalidModuleManifest;
+        const comma = std.mem.indexOfScalarPos(u8, line, page_prefix.len, ',') orelse return error.InvalidModuleManifest;
+        const page_id = std.fmt.parseInt(u64, line[page_prefix.len..comma], 10) catch return error.InvalidModuleManifest;
+        const module_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ expander_root, page_id });
+        defer a.free(module_path);
+        const source = try std.Io.Dir.cwd().readFileAlloc(io, module_path, a, .limited(64 * 1024 * 1024));
+        defer a.free(source);
+        if (module.local_names) try out.addLocalNamesLua(source) else try out.addLua(source);
+    }
     return out;
 }
 
