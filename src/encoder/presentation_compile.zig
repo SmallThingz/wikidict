@@ -917,6 +917,7 @@ pub const Renderer = struct {
                 if (!safe) continue;
                 if (safe_classes.items.len != 0) try safe_classes.append(self.a, ' ');
                 try safe_classes.appendSlice(self.a, class);
+                if (std.mem.eql(u8, class, "scribunto-error")) self.fallbacks.rendered_lua_error = true;
                 if (std.mem.eql(u8, class, "headword-line") or std.mem.eql(u8, class, "headword")) s.role = .headword;
                 if (s.role != .headword and (std.mem.eql(u8, class, "label-content") or std.mem.eql(u8, class, "qualifier-content"))) s.role = .label;
                 if (std.mem.eql(u8, class, "IPA")) s.role = .pronunciation;
@@ -2128,6 +2129,48 @@ test "semantic HTML decodes class language and direction attributes before use" 
     try std.testing.expectEqualStrings("en", spans[0].language);
     try std.testing.expectEqualStrings("rtl", spans[0].direction);
     try std.testing.expectEqual(Role.pronunciation, spans[0].role);
+}
+
+test "rendered Scribunto error class reports retained visible Lua failures" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const message = "Lua error in Module:Fixture: intentional failure";
+    const spans = try r.parseSpans(
+        "before<strong class='error'><span class='fixture scribunto&#45;error another'>" ++ message ++ "</span></strong>after",
+        .{},
+    );
+    try std.testing.expect(r.fallbacks.rendered_lua_error);
+    try std.testing.expectEqualStrings("before" ++ message ++ "after", try flattened(a, spans));
+    var found = false;
+    for (spans) |span| {
+        if (!std.mem.eql(u8, span.text, message)) continue;
+        found = true;
+        try std.testing.expect(span.flags.bold);
+        try std.testing.expectEqualStrings("error fixture scribunto-error another", span.classes);
+    }
+    try std.testing.expect(found);
+}
+
+test "Scribunto error words in protected source and near-match classes do not report Lua failures" {
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "scribunto-error / Lua error in Module:Fixture: text", .visible = "scribunto-error / Lua error in Module:Fixture: text" },
+        .{ .source = "before<!--<span class='scribunto-error'>hidden</span>-->after", .visible = "beforeafter" },
+        .{ .source = "<nowiki><span class='scribunto-error'>literal</span></nowiki>", .visible = "<span class='scribunto-error'>literal</span>" },
+        .{ .source = "&lt;span class='scribunto-error'&gt;literal&lt;/span&gt;", .visible = "<span class='scribunto-error'>literal</span>" },
+        .{ .source = "<span class='scribunto-error-extra prefix-scribunto-error Scribunto-error'>near match</span>", .visible = "near match" },
+        .{ .source = "<span data-note='scribunto-error'>other attribute</span>", .visible = "other attribute" },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expect(!r.fallbacks.rendered_lua_error);
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+    }
 }
 
 test "malformed entities stay literal while invalid Unicode scalars become replacement characters" {

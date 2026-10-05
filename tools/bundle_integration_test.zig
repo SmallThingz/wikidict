@@ -845,6 +845,243 @@ fn unclassifiedLanguageProbe(h: *Harness, pipeline: []const u8, verifier: []cons
     _ = try verifyFixture(h, verifier, root, null);
 }
 
+fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const root = try std.fs.path.join(h.a, &.{ dir, "wikibase-dictionary" });
+    const dump = try std.fs.path.join(h.a, &.{ dir, "wikibase.xml" });
+    const namespaces = try std.fs.path.join(h.a, &.{ dir, "wikibase-namespaces.tsv" });
+    const languages = try std.fs.path.join(h.a, &.{ dir, "wikibase-languages.tsv" });
+    const entities = try std.fs.path.join(h.a, &.{ dir, "wikibase-entities.tsv" });
+    const terms = try std.fs.path.join(h.a, &.{ dir, "wikibase-entity-terms.tsv" });
+    const fallbacks = try std.fs.path.join(h.a, &.{ dir, "wikibase-language-fallbacks.tsv" });
+    const messages = try std.fs.path.join(h.a, &.{ dir, "wikibase-interface-messages.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = namespaces,
+        .data = "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+            "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+            "8\tميدياويكي\tMediaWiki\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tstandard_build_input\n" ++
+            "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+            "14\tتصنيف\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
+            "828\tوحدة\tModule\tcase-sensitive\t1\t0\t0\tScribunto\tcompile_only\tmodules\n",
+    });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = languages,
+        .data = "# wikidict-language-registry-v2\n# content-language\tar\n# mediawiki\nar\tالعربية\tar\tArabic\tara\n# iso-639-3\n",
+    });
+    const entity_identity = "# wiki=arwiktionary\n# date=20261001\n# content-language=ar\n# repository=https://www.wikidata.org\n";
+    const lexeme = "{\"id\":\"L100\",\"type\":\"lexeme\",\"schemaVersion\":2,\"language\":\"Q13955\",\"lexicalCategory\":\"Q24905\"," ++
+        "\"lemmas\":{\"ar\":{\"language\":\"ar\",\"value\":\"كَتَبَ\"}}," ++
+        "\"claims\":{\"P5920\":[{\"rank\":\"normal\",\"mainsnak\":{\"snaktype\":\"value\",\"property\":\"P5920\",\"datatype\":\"wikibase-lexeme\",\"datavalue\":{\"type\":\"wikibase-entityid\",\"value\":{\"entity-type\":\"lexeme\",\"id\":\"L101\"}}}}]," ++
+        "\"P5186\":[{\"rank\":\"normal\",\"mainsnak\":{\"snaktype\":\"value\",\"property\":\"P5186\",\"datatype\":\"wikibase-item\",\"datavalue\":{\"type\":\"wikibase-entityid\",\"value\":{\"entity-type\":\"item\",\"numeric-id\":400,\"id\":\"Q400\"}}}}]," ++
+        "\"P9295\":[{\"rank\":\"normal\",\"mainsnak\":{\"snaktype\":\"value\",\"property\":\"P9295\",\"datatype\":\"wikibase-item\",\"datavalue\":{\"type\":\"wikibase-entityid\",\"value\":{\"entity-type\":\"item\",\"numeric-id\":200,\"id\":\"Q200\"}}}," ++
+        "\"qualifiers\":{\"P1\":[{\"snaktype\":\"somevalue\",\"property\":\"P1\",\"datatype\":\"string\"}]},\"qualifiers-order\":[\"P1\"]," ++
+        "\"references\":[{\"hash\":\"fixture-reference\",\"snaks\":{\"P2\":[{\"snaktype\":\"novalue\",\"property\":\"P2\",\"datatype\":\"string\"}]},\"snaks-order\":[\"P2\"]}]}," ++
+        "{\"rank\":\"deprecated\",\"mainsnak\":{\"snaktype\":\"value\",\"property\":\"P9295\",\"datatype\":\"wikibase-item\",\"datavalue\":{\"type\":\"wikibase-entityid\",\"value\":{\"entity-type\":\"item\",\"numeric-id\":202,\"id\":\"Q202\"}}}}," ++
+        "{\"rank\":\"preferred\",\"mainsnak\":{\"snaktype\":\"value\",\"property\":\"P9295\",\"datatype\":\"wikibase-item\",\"datavalue\":{\"type\":\"wikibase-entityid\",\"value\":{\"entity-type\":\"item\",\"numeric-id\":201,\"id\":\"Q201\"}}}}]}," ++
+        "\"forms\":[{\"id\":\"L100-F1\",\"grammaticalFeatures\":[\"Q1350145\",\"Q2\"],\"representations\":{\"ar\":{\"language\":\"ar\",\"value\":\"كَاتِب\"}},\"claims\":{}}]," ++
+        "\"senses\":[{\"id\":\"L100-S1\",\"glosses\":{\"ar\":{\"language\":\"ar\",\"value\":\"دوّن\"}},\"claims\":{}}]}";
+    const root_lexeme = "{\"id\":\"L101\",\"type\":\"lexeme\",\"schemaVersion\":2,\"language\":\"Q13955\",\"lexicalCategory\":\"Q20136634\",\"lemmas\":{\"ar\":{\"language\":\"ar\",\"value\":\"كتب\"}},\"claims\":{}}";
+    const arabic_item = "{\"id\":\"Q200\",\"type\":\"item\",\"schemaVersion\":2," ++
+        "\"labels\":{\"ar\":{\"language\":\"ar\",\"value\":\"متعد\"},\"en\":{\"language\":\"en\",\"value\":\"transitive\"}}," ++
+        "\"descriptions\":{\"ar\":{\"language\":\"ar\",\"value\":\"وصف عربي\"}},\"aliases\":{\"ar\":[{\"language\":\"ar\",\"value\":\"اسم بديل\"}]}," ++
+        "\"sitelinks\":{\"arwiktionary\":{\"site\":\"arwiktionary\",\"title\":\"متعد\",\"badges\":[]},\"enwiktionary\":{\"site\":\"enwiktionary\",\"title\":\"transitive\",\"badges\":[]}},\"claims\":{}}";
+    const fallback_item = "{\"id\":\"Q201\",\"type\":\"item\",\"schemaVersion\":2,\"labels\":{\"en\":{\"language\":\"en\",\"value\":\"ambitransitive\"}},\"descriptions\":{\"en\":{\"language\":\"en\",\"value\":\"English description\"}},\"claims\":{}}";
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = entities,
+        .data = "# wikidict-wikibase-entities-v1\n" ++ entity_identity ++ "# profile=complete-entities-v1\n" ++
+            "L100\tE\tL100\t" ++ lexeme ++ "\nL101\tE\tL101\t" ++ root_lexeme ++
+            "\nL102\tE\tL100\t" ++ lexeme ++ "\nL404\tM\t\t\nQ200\tE\tQ200\t" ++ arabic_item ++
+            "\nQ201\tE\tQ201\t" ++ fallback_item ++
+            "\nQ202\tE\tQ202\t{\"id\":\"Q202\",\"type\":\"item\",\"schemaVersion\":2,\"labels\":{\"en\":{\"language\":\"en\",\"value\":\"deprecated fixture\"}},\"claims\":{}}\n",
+    });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = terms,
+        .data = "# wikidict-wikibase-entity-terms-v1\n" ++ entity_identity ++ "# profile=resolved-default-terms-v1\n" ++
+            "L100\tE\tL100\t{\"label\":null,\"description\":null}\n" ++
+            "L101\tE\tL101\t{\"label\":null,\"description\":null}\n" ++
+            "L102\tE\tL100\t{\"label\":null,\"description\":null}\nL404\tM\t\t\n" ++
+            "Q200\tE\tQ200\t{\"label\":{\"language\":\"ar\",\"value\":\"متعد\"},\"description\":{\"language\":\"ar\",\"value\":\"وصف عربي\"}}\n" ++
+            "Q201\tE\tQ201\t{\"label\":{\"language\":\"en\",\"value\":\"ambitransitive\",\"source-language\":\"en\"},\"description\":{\"language\":\"en\",\"value\":\"English description\"}}\n",
+    });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = fallbacks,
+        .data = "# wikidict-language-fallbacks-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n# mode\tstrict\n" ++
+            "ar\t\nen\t\nfr\tde\tit\n",
+    });
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = messages,
+        .data = "# wikidict-interface-messages-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+            "ar\tcomma-separator\tV\t، \nar\tand\tV\tو\nar\tword-separator\tV\t \n" ++
+            "ar\twikibase-client-data-bridge-bailout-suggestion-go-to-repo-button\tV\tعرض {{WBREPONAME}}\n" ++
+            "ar\tfixture-message\tV\tعربي $1 / $2\n" ++
+            "en\tfixture-message\tV\tEnglish $1 / $2\n" ++
+            "ar\tfixture-escaped\tV\tfirst\\nsecond\\tpart\\\\end\n" ++
+            "ar\tfixture-missing\tM\n",
+    });
+    const module =
+        \\local function fails(fn, fragment)
+        \\  local ok, err = pcall(fn)
+        \\  assert(not ok, 'expected explicit failure')
+        \\  if fragment then assert(string.find(tostring(err), fragment, 1, true), tostring(err)) end
+        \\end
+        \\return {run=function(frame)
+        \\  local entity = mw.wikibase.getEntity('L100')
+        \\  assert(entity.id == 'L100' and entity.schemaVersion == 2 and entity.type == 'lexeme')
+        \\  assert(entity.language == 'Q13955' and entity.lexicalCategory == 'Q24905')
+        \\  assert(entity.lemmas.ar.value == 'كَتَبَ' and entity.lemmas.ar.language == 'ar')
+        \\  assert(entity.forms[0] == nil and #entity.forms == 1)
+        \\  local form = entity.forms[1]
+        \\  assert(form.id == 'L100-F1' and form.grammaticalFeatures[1] == 'Q1350145' and form.grammaticalFeatures[2] == 'Q2')
+        \\  assert(form.representations.ar.value == 'كَاتِب' and next(form.claims) == nil)
+        \\  assert(entity.senses[1].id == 'L100-S1' and entity.senses[1].glosses.ar.value == 'دوّن')
+        \\  local root_id = entity.claims.P5920[1].mainsnak.datavalue.value.id
+        \\  assert(root_id == 'L101' and entity.claims.P5186[1].mainsnak.datavalue.value.id == 'Q400')
+        \\  local root = mw.wikibase.getEntity(root_id)
+        \\  local lemmas = root:getLemmas()
+        \\  assert(lemmas[0] == nil and #lemmas == 1 and lemmas[1][1] == 'كتب' and lemmas[1][2] == 'ar')
+        \\  lemmas[1][1] = 'changed pair'
+        \\  assert(root:getLemmas()[1][1] == 'كتب' and root.lemmas.ar.value == 'كتب')
+        \\  assert(mw.wikibase.getEntity('L102').id == 'L100')
+        \\  local statements = mw.wikibase.getAllStatements('L100', 'P9295')
+        \\  assert(statements[0] == nil and #statements == 3)
+        \\  assert(statements[1].rank == 'normal' and statements[2].rank == 'deprecated' and statements[3].rank == 'preferred')
+        \\  assert(statements[1].mainsnak.datavalue.value['numeric-id'] == 200)
+        \\  assert(statements[1].qualifiers.P1[1].snaktype == 'somevalue')
+        \\  assert(statements[1]['qualifiers-order'][1] == 'P1')
+        \\  assert(statements[1].references[1].hash == 'fixture-reference' and statements[1].references[1].snaks.P2[1].snaktype == 'novalue')
+        \\  fails(function() entity.claims.P9295 = {} end)
+        \\  fails(function() statements[1].qualifiers.P1 = {} end)
+        \\  fails(function() statements[1].references[1] = {} end)
+        \\  local labels = {}
+        \\  for _, statement in ipairs(statements) do
+        \\    if statement.rank ~= 'deprecated' then
+        \\      local label, language = mw.wikibase.getLabelWithLang(statement.mainsnak.datavalue.value.id)
+        \\      table.insert(labels, label .. ':' .. language)
+        \\    end
+        \\  end
+        \\  assert(table.concat(labels, ',') == 'متعد:ar,ambitransitive:en')
+        \\  entity.lemmas.ar.value = 'changed lemma'
+        \\  form.representations.ar.value = 'changed form'
+        \\  entity.claims.P9295[1].mainsnak.datavalue.value.id = 'Q999'
+        \\  assert(statements[1].mainsnak.datavalue.value.id == 'Q200')
+        \\  statements[1].mainsnak.datavalue.value.id = 'Q998'
+        \\  statements[2].rank = 'normal'
+        \\  local fresh = mw.wikibase.getEntity('L100')
+        \\  assert(fresh.lemmas.ar.value == 'كَتَبَ' and fresh.forms[1].representations.ar.value == 'كَاتِب')
+        \\  assert(fresh.claims.P9295[1].mainsnak.datavalue.value.id == 'Q200')
+        \\  local fresh_statements = mw.wikibase.getAllStatements('L100', 'P9295')
+        \\  assert(fresh_statements[1].mainsnak.datavalue.value.id == 'Q200' and fresh_statements[2].rank == 'deprecated')
+        \\  local absent_property = mw.wikibase.getAllStatements('L100', 'P999')
+        \\  assert(next(absent_property) == nil)
+        \\  absent_property[1] = 'local mutation'
+        \\  assert(next(mw.wikibase.getAllStatements('L100', 'P999')) == nil)
+        \\  local item = mw.wikibase.getEntity('Q200')
+        \\  fails(function() item.labels.ar = {} end)
+        \\  fails(function() item.descriptions.ar = {} end)
+        \\  fails(function() item.aliases.ar = {} end)
+        \\  fails(function() item.sitelinks.arwiktionary = {} end)
+        \\  assert(mw.wikibase.getGlobalSiteId() == 'arwiktionary')
+        \\  assert(mw.wikibase.getSitelink('Q200') == 'متعد')
+        \\  assert(mw.wikibase.getSitelink('Q200', 'enwiktionary') == 'transitive')
+        \\  assert(mw.wikibase.getSitelink('Q200', 'frwiktionary') == nil)
+        \\  item.labels.ar.value = 'changed label'
+        \\  item.sitelinks.arwiktionary.title = 'changed sitelink'
+        \\  assert(mw.wikibase.getLabelByLang('Q200', 'ar') == 'متعد' and mw.wikibase.getSitelink('Q200') == 'متعد')
+        \\  assert(mw.wikibase.getLabel('Q201') == 'ambitransitive')
+        \\  assert(mw.wikibase.getLabelByLang('Q201', 'ar') == nil and mw.wikibase.getLabelByLang('Q201', 'en') == 'ambitransitive')
+        \\  local fallback_item = mw.wikibase.getEntity('Q201')
+        \\  assert(fallback_item.labels.ar.value == 'ambitransitive' and fallback_item.labels.ar.language == 'en')
+        \\  assert(fallback_item.labels.ar['source-language'] == 'en' and fallback_item.descriptions.ar.value == 'English description')
+        \\  assert(mw.wikibase.getLabelByLang('Q201', 'ar') == nil)
+        \\  assert(mw.wikibase.getEntity('L404') == nil and next(mw.wikibase.getAllStatements('L404', 'P5920')) == nil)
+        \\  local no_label, no_language = mw.wikibase.getLabelWithLang('L404')
+        \\  assert(no_label == nil and no_language == nil)
+        \\  fails(function() mw.wikibase.getEntity('L999') end, 'Wikibase entity snapshot missing entity=L999')
+        \\  fails(function() mw.wikibase.getLabelWithLang('Q202') end, 'Wikibase entity-term snapshot missing entity=Q202')
+        \\  assert(mw.wikibase.getEntity('L100').lemmas.ar.value == 'كَتَبَ')
+        \\  local content = mw.language.getContentLanguage()
+        \\  assert(content:getCode() == 'ar')
+        \\  assert(#mw.language.getFallbacksFor('ar', mw.language.FALLBACK_STRICT) == 0)
+        \\  assert(#mw.language.getFallbacksFor('en') == 0)
+        \\  local chain = mw.language.getFallbacksFor('fr')
+        \\  assert(table.concat(chain, ',') == 'de,it,en')
+        \\  table.insert(chain, 1, 'fr')
+        \\  chain[2] = 'changed fallback'
+        \\  assert(table.concat(mw.language.getFallbacksFor('fr'), ',') == 'de,it,en')
+        \\  assert(table.concat(mw.language.new('fr'):getFallbackLanguages(mw.language.FALLBACK_STRICT), ',') == 'de,it')
+        \\  local object_chain = content:getFallbackLanguages()
+        \\  assert(#object_chain == 1 and object_chain[1] == 'en')
+        \\  table.insert(object_chain, 1, 'ar')
+        \\  assert(table.concat(content:getFallbackLanguages(), ',') == 'en')
+        \\  fails(function() mw.language.getFallbacksFor('es') end)
+        \\  local comma = mw.message.new('Comma-separator'):plain()
+        \\  local word_separator = mw.message.new('Word-separator')
+        \\  assert(comma == '، ' and mw.message.new('And'):plain() == 'و')
+        \\  assert(word_separator:plain() == ' ' and word_separator:exists() and not word_separator:isBlank())
+        \\  assert(mw.message.new('fixture-message', 'value', 7):plain() == 'عربي value / 7')
+        \\  assert(mw.message.new('fixture-message', 'value', 7):inLanguage('en'):plain() == 'English value / 7')
+        \\  assert(mw.message.new('fixture-escaped'):plain() == 'first\nsecond\tpart\\end')
+        \\  local missing_message = mw.message.new('fixture-missing')
+        \\  assert(not missing_message:exists() and missing_message:plain() == '⧼fixture-missing⧽')
+        \\  fails(function() mw.message.new('fixture-uncaptured'):plain() end)
+        \\  local edit = mw.message.new('Wikibase-client-data-bridge-bailout-suggestion-go-to-repo-button'):plain()
+        \\  assert(edit == 'عرض {{WBREPONAME}}')
+        \\  edit = string.gsub(edit, '{{WBREPONAME}}', 'ويكي بيانات')
+        \\  return '<table><caption>Captured Wikibase ' .. frame.args[1] .. '</caption><tr><td>' ..
+        \\    fresh.lemmas.ar.value .. comma .. root.lemmas.ar.value .. word_separator:plain() .. mw.message.new('And'):plain() ..
+        \\    word_separator:plain() .. fresh.forms[1].representations.ar.value .. '</td></tr><tr><td>' ..
+        \\    table.concat(labels, ',') .. '</td></tr><tr><td>' .. edit .. '</td></tr></table>'
+        \\end, raise=function() error('intentional fixture Lua failure') end}
+    ;
+    try writePages(h.io, h.a, dump, &.{
+        .{ .title = "entity-first", .ns = 0, .id = 1, .body = "==العربية==\n{{#invoke:EntityProbe|run|first}}\n# Suppressed error: {{#iferror:{{#invoke:EntityProbe|raise}}|recovered}}\n" },
+        .{ .title = "entity-second", .ns = 0, .id = 2, .body = "==العربية==\n{{#invoke:EntityProbe|run|second}}\n" },
+        .{ .title = "entity-visible-error", .ns = 0, .id = 3, .body = "==العربية==\n# Before visible error: {{#invoke:EntityProbe|raise}}; after visible error.\n" },
+        .{ .title = "وحدة:EntityProbe", .ns = 828, .id = 4, .body = module },
+    });
+    _ = try h.run(&.{
+        pipeline,                           dump,                            root,
+        "--namespace-registry-snapshot",    namespaces,                      "--language-registry-snapshot",
+        languages,                          "--wikibase-entities-snapshot",  entities,
+        "--wikibase-entity-terms-snapshot", terms,                           "--language-fallbacks-snapshot",
+        fallbacks,                          "--interface-messages-snapshot", messages,
+        "--llvm-workers",                   "1",                             "--page-workers",
+        "1",
+    }, 0);
+    _ = try verifyFixture(h, verifier, root, null);
+    const cases = [_]struct { title: []const u8, caption: []const u8 }{
+        .{ .title = "entity-first", .caption = "Captured Wikibase first" },
+        .{ .title = "entity-second", .caption = "Captured Wikibase second" },
+    };
+    for (cases) |case| {
+        const output = try h.run(&.{ bin, "lookup", case.title, "--root", root, "--language", "العربية", "--details" }, 0);
+        try h.require(std.mem.indexOf(u8, output, case.caption) != null, "structured Wikibase assertions execute on each page through the native worker");
+        try h.require(std.mem.indexOf(u8, output, "كَتَبَ، كتب و كَاتِب") != null, "full lexeme, root and form fields survive native compilation and presentation encoding");
+        try h.require(std.mem.indexOf(u8, output, "متعد:ar,ambitransitive:en") != null, "statement order and actual resolved-label languages survive publication");
+        try h.require(std.mem.indexOf(u8, output, "عرض ويكي بيانات") != null, "plain captured messages preserve placeholders until Lua replaces them");
+        try h.require(std.mem.indexOf(u8, output, "Lua error") == null and std.mem.indexOf(u8, output, "#invoke") == null, "snapshot API failures are caught explicitly and never replace the successful fixture");
+        if (std.mem.eql(u8, case.title, "entity-first"))
+            try h.require(std.mem.indexOf(u8, output, "Suppressed error: recovered") != null, "iferror suppresses a source-raised Scribunto failure before presentation compilation");
+    }
+    const visible_error = try h.run(&.{ bin, "lookup", "entity-visible-error", "--root", root, "--language", "العربية", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, visible_error, "Before visible error:") != null and
+        std.mem.indexOf(u8, visible_error, "intentional fixture Lua failure") != null and
+        std.mem.indexOf(u8, visible_error, "; after visible error.") != null, "a visible source-raised Lua error preserves the diagnostic text and surrounding definition");
+    const fallback_bytes = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, "fallback-pages.jsonl" }), h.a, .limited(4096));
+    var fallback_lines = std.mem.tokenizeScalar(u8, fallback_bytes, '\n');
+    var fallback_count: usize = 0;
+    while (fallback_lines.next()) |line| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, h.a, line, .{});
+        defer parsed.deinit();
+        const row = parsed.value.object;
+        try h.require(std.mem.eql(u8, row.get("title").?.string, "entity-visible-error"), "successful entity pages and suppressed errors remain clean");
+        const reasons = row.get("reasons").?.array.items;
+        try h.require(row.get("namespace").?.integer == 0 and reasons.len == 1 and
+            std.mem.eql(u8, reasons[0].string, "rendered_lua_error"), "a retained Scribunto error has an explicit build-time quality diagnostic");
+        fallback_count += 1;
+    }
+    try h.require(fallback_count == 1, "the visible Lua error is counted once in fallback accounting");
+}
+
 fn japaneseParserAliasProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
     const root = try std.fs.path.join(h.a, &.{ dir, "japanese-dictionary" });
     const dump = try std.fs.path.join(h.a, &.{ dir, "japanese.xml" });
@@ -1095,6 +1332,7 @@ pub fn main(init: std.process.Init) !void {
     try compilerPipelineProbe(&h, argv[5], argv[7], dir);
     try localizedEditionProbe(&h, pipeline, verifier, bin, dir);
     try unclassifiedLanguageProbe(&h, pipeline, verifier, bin, dir);
+    try structuredWikibaseProbe(&h, pipeline, verifier, bin, dir);
     try japaneseParserAliasProbe(&h, pipeline, verifier, bin, dir);
     try deadlineProbe(init.io, a, dir);
     try failureMetadataProbe(&h, dir);
@@ -1144,8 +1382,14 @@ pub fn main(init: std.process.Init) !void {
         .sub_path = category_snapshot,
         .data = "Integration_categories\tmain\tmouse\nIntegration_categories\tpages\tmouse\tTalk:Category discussion\tCategory:Nested category\n",
     });
+    const message_snapshot = try std.fs.path.join(a, &.{ dir, "interface-messages.tsv" });
+    try std.Io.Dir.cwd().writeFile(init.io, .{
+        .sub_path = message_snapshot,
+        .data = "# wikidict-interface-messages-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+            "en\tdefinitely-missing-message\tM\n",
+    });
     const root = try std.fs.path.join(a, &.{ dir, "dictionary" });
-    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespace_registry, "--category-tree-snapshot", category_snapshot, "--language-registry-snapshot", language_registry, "--llvm-workers", "1", "--page-workers", "2" }, 0);
+    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespace_registry, "--category-tree-snapshot", category_snapshot, "--interface-messages-snapshot", message_snapshot, "--language-registry-snapshot", language_registry, "--llvm-workers", "1", "--page-workers", "2" }, 0);
     _ = try h.run(&.{ verifier, root }, 0);
     const language_manifest_path = try std.fs.path.join(a, &.{ root, "languages.tsv" });
     const language_manifest = try std.Io.Dir.cwd().readFileAlloc(init.io, language_manifest_path, a, .limited(4096));
