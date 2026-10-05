@@ -87,8 +87,8 @@ fn expandFiniteDynamicTemplateHead(
     try preprocess.splitWikitextTop(a, head[2..end], '|', &parts);
     if (parts.items.len == 0) return false;
     const first = std.mem.trim(u8, parts.items[0], " \t\r\n");
-    const colon = preprocess.findTopDelimiter(first, ':') orelse return false;
-    const name = std.mem.trim(u8, first[0..colon], " \t\r\n");
+    const colon = preprocess.findTopParserColon(first) orelse return false;
+    const name = std.mem.trim(u8, first[0..colon.index], " \t\r\n");
 
     if (std.ascii.eqlIgnoreCase(name, "#if")) {
         if (parts.items.len < 2) return false;
@@ -132,16 +132,21 @@ fn expandFiniteDynamicTemplateHead(
 fn classifyHead(a: std.mem.Allocator, registry: *const Registry, host_title: ?[]const u8, head_raw: []const u8, out: *std.ArrayList(Ref), flags: *ScanFlags) !void {
     const head = stripSubst(std.mem.trim(u8, head_raw, " \t\r\n"));
     if (head.len == 0) return;
-    if (preprocess.findTopDelimiter(head, ':')) |colon| {
-        const name = std.mem.trim(u8, head[0..colon], " \t\r\n");
+    if (preprocess.findTopParserColon(head)) |colon| {
+        const name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
         if (std.ascii.eqlIgnoreCase(name, "#invoke")) {
-            if (try canonicalModule(a, registry, head[colon + 1 ..])) |target|
+            if (try canonicalModule(a, registry, head[colon.index + colon.len ..])) |target|
                 try out.append(a, .{ .kind = .module, .target = target })
             else
                 flags.dynamic_module_target = true;
             return;
         }
-        if (name.len != 0 and name[0] == '#') return;
+        if (name.len != 0 and name[0] == '#') {
+            // Extraction runs before edition aliases are installed. An unknown
+            // hash head can be a localized invoke; keep its module candidates.
+            if (!ns.magic_words.knownHashFunctionHead(name)) flags.dynamic_module_target = true;
+            return;
+        }
         // An unrecognized prefix can be a pinned current-wiki interwiki alias.
         // Until this scanner proves that mapping, do not prune its dependencies.
         if (name.len != 0 and registry.byName(name) == null) flags.dynamic_module_target = true;
@@ -1559,4 +1564,22 @@ test "wikitext scan separates unresolved invokes from dynamic template targets" 
     );
     try std.testing.expect(!non_templates.dynamic_module_target);
     try std.testing.expect(non_templates.dynamic_template_target);
+}
+
+test "localized hash heads conservatively retain modules before aliases are installed" {
+    const a = std.testing.allocator;
+    var registry = try Registry.init(a, ns.english_test_fixture);
+    defer registry.deinit();
+    var refs: std.ArrayList(Ref) = .empty;
+    defer {
+        for (refs.items) |ref| a.free(ref.target);
+        refs.deinit(a);
+    }
+    const localized = try scanTemplateWikitextFlags(a, &registry, "Template:Wrapper", "<includeonly>{{#استدعاء:OnlyLocalized|run}}</includeonly>", &refs);
+    try std.testing.expect(localized.dynamic_module_target);
+    try std.testing.expect(!localized.dynamic_template_target);
+    const known = try scanWikitextFlags(a, &registry, null, "{{#if：yes|ok|no}}{{#invoke：Known|run}}", &refs);
+    try std.testing.expect(!known.dynamic_module_target);
+    try std.testing.expectEqual(@as(usize, 1), refs.items.len);
+    try std.testing.expectEqualStrings("Module:Known", refs.items[0].target);
 }

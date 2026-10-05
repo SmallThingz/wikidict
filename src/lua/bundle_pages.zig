@@ -200,6 +200,7 @@ pub const Provider = struct {
             .interwiki_map = if (self.interwiki_available) interwikiMap else null,
             .stable_interwiki_map = self.interwiki_available,
             .resolve_title_magic = if (self.title_magic_words != null) resolveTitleMagic else null,
+            .resolve_parser_function = if (self.title_magic_words != null and self.title_magic_words.?.expanded_functions) resolveParserFunction else null,
             .wikibase_sitelink = if (self.wikibase_sitelinks_available) wikibaseSitelink else null,
             .wikibase_entity_text = if (self.wikibase_entity_text_available) wikibaseEntityText else null,
             .language_known_tag = if (self.language_registry_available) languageKnownTag else null,
@@ -964,6 +965,10 @@ pub const Provider = struct {
         return (self.title_magic_words orelse return error.MissingMagicWordsSnapshot).resolve(alias, form);
     }
 
+    fn resolveParserFunction(ctx: ?*anyopaque, alias: []const u8) anyerror!?[]const u8 {
+        return resolveTitleMagic(ctx, alias, .parser_function);
+    }
+
     fn get(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?[]const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return self.lookup(a, title, true);
@@ -1005,8 +1010,19 @@ test "title magic provider loads optional snapshots and enforces edition identit
         var provider = try Provider.init(io, a, root, namespaces, "unused-dump.xml");
         defer provider.deinit();
         const resolve = provider.api().resolve_title_magic orelse return error.TestExpectedEqual;
+        try std.testing.expect(provider.api().resolve_parser_function == null);
         try std.testing.expectEqualStrings("pagename", (try resolve(&provider, "PAGENAME", .variable)).?);
         try std.testing.expect(try resolve(&provider, "pagename", .variable) == null);
+    }
+    const expanded = try std.fmt.allocPrint(a, "{s}\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\npagename\t1\tPAGENAME\ninvoke\t0\tاستدعاء\n", .{ magic_words.parser_header, namespaces.wiki, namespaces.dump_date, namespaces.content_language });
+    defer a.free(expanded);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = snapshot, .data = expanded });
+    {
+        var provider = try Provider.init(io, a, root, namespaces, "unused-dump.xml");
+        defer provider.deinit();
+        const resolve = provider.api().resolve_parser_function orelse return error.TestExpectedEqual;
+        try std.testing.expectEqualStrings("#invoke", (try resolve(&provider, "#استدعاء")).?);
+        try std.testing.expect(try resolve(&provider, "#invoke") == null);
     }
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = snapshot, .data = magic_words.header ++ "\n# wiki\totherwiktionary\n# dump-date\t20261001\n# content-language\ten\npagename\t1\tPAGENAME\n" });
     try std.testing.expectError(error.MagicWordsIdentityMismatch, Provider.init(io, a, root, namespaces, "unused-dump.xml"));

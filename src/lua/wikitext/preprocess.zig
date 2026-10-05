@@ -358,6 +358,17 @@ fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
 }
 
 pub fn findTopDelimiter(s: []const u8, needle: u8) ?usize {
+    return findTopDelimiterImpl(s, needle, false);
+}
+
+pub const ParserColon = struct { index: usize, len: usize };
+
+pub fn findTopParserColon(s: []const u8) ?ParserColon {
+    const index = findTopDelimiterImpl(s, ':', true) orelse return null;
+    return .{ .index = index, .len = if (s[index] == ':') 1 else "：".len };
+}
+
+fn findTopDelimiterImpl(s: []const u8, needle: u8, fullwidth_colon: bool) ?usize {
     var braces: [128]usize = undefined;
     var brace_depth: usize = 0;
     var square: usize = 0;
@@ -402,7 +413,8 @@ pub fn findTopDelimiter(s: []const u8, needle: u8) ?usize {
             i += 2;
             continue;
         }
-        if (s[i] == needle and brace_depth == 0 and square == 0) return i;
+        if (brace_depth == 0 and square == 0 and
+            (s[i] == needle or (fullwidth_colon and std.mem.startsWith(u8, s[i..], "：")))) return i;
         i += 1;
     }
     return null;
@@ -419,6 +431,14 @@ pub fn splitWikitextTop(a: std.mem.Allocator, s: []const u8, delimiter: u8, out:
         pos = start;
     }
     try out.append(a, s[start..]);
+}
+
+test "parser colon recognizes ASCII and fullwidth outside nested constructs" {
+    try std.testing.expectEqual(ParserColon{ .index = 3, .len = 3 }, findTopParserColon("#if：yes").?);
+    try std.testing.expectEqual(ParserColon{ .index = 3, .len = 1 }, findTopParserColon("#if:yes").?);
+    const head = "{{name|inner：value}}：argument:tail";
+    try std.testing.expectEqual(ParserColon{ .index = "{{name|inner：value}}".len, .len = 3 }, findTopParserColon(head).?);
+    try std.testing.expect(findTopParserColon("[[a：b]]<nowiki>:</nowiki>") == null);
 }
 
 pub const ParameterSplit = struct { key: []const u8, default: ?[]const u8 };

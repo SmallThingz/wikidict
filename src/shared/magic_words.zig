@@ -1,8 +1,9 @@
-//! Edition-scoped title magic aliases captured from MediaWiki siteinfo.
+//! Edition-scoped magic aliases captured from MediaWiki siteinfo.
 const std = @import("std");
 const lower = @import("unicode_lower");
 
 pub const header = "# wikidict-magic-words-v1";
+pub const parser_header = "# wikidict-magic-words-v2";
 pub const max_bytes = 1024 * 1024;
 pub const Form = enum { variable, parser_function };
 
@@ -21,37 +22,73 @@ pub const title_ids = [_][]const u8{
     "talkpagenamee",
 };
 const function_ids = [_][]const u8{
-    "pagename",        "pagenamee",        "fullpagename", "fullpagenamee",
-    "subpagename",     "subpagenamee",     "rootpagename", "rootpagenamee",
-    "basepagename",    "basepagenamee",    "talkpagename", "talkpagenamee",
-    "subjectpagename", "subjectpagenamee", "namespace",    "namespacee",
-    "namespacenumber", "talkspace",        "talkspacee",   "subjectspace",
-    "subjectspacee",
+    "ns",              "urlencode",        "lcfirst",       "ucfirst",      "lc",              "uc",            "localurl",
+    "fullurl",         "fullurle",         "canonicalurl",  "formatnum",    "plural",          "padleft",       "padright",
+    "anchorencode",    "defaultsort",      "pagename",      "pagenamee",    "fullpagename",    "fullpagenamee", "subpagename",
+    "subpagenamee",    "rootpagename",     "rootpagenamee", "basepagename", "basepagenamee",   "talkpagename",  "talkpagenamee",
+    "subjectpagename", "subjectpagenamee", "namespace",     "namespacee",   "namespacenumber", "talkspace",     "talkspacee",
+    "subjectspace",    "subjectspacee",    "special",       "tag",          "formatdate",      "displaytitle",  "expr",
+    "if",              "ifeq",             "ifexpr",        "iferror",      "switch",          "ifexist",       "time",
+    "titleparts",      "len",              "sub",           "categorytree", "invoke",
 };
 
+pub const hash_function_ids = [_][]const u8{
+    "special", "tag",     "formatdate", "expr",       "if",  "ifeq", "ifexpr",       "iferror",
+    "switch",  "ifexist", "time",       "titleparts", "len", "sub",  "categorytree", "invoke",
+};
+
+fn hashFunction(id: []const u8) bool {
+    for (hash_function_ids) |candidate| if (std.mem.eql(u8, id, candidate)) return true;
+    return false;
+}
+
+pub fn knownHashFunctionHead(head: []const u8) bool {
+    if (head.len == 0 or head[0] != '#') return false;
+    for (hash_function_ids) |id| if (std.ascii.eqlIgnoreCase(head[1..], id)) return true;
+    return std.ascii.eqlIgnoreCase(head, "#dateformat");
+}
+
+fn functionHead(id: []const u8) []const u8 {
+    inline for (hash_function_ids) |candidate|
+        if (std.mem.eql(u8, id, candidate)) return "#" ++ candidate;
+    return id;
+}
+
 fn priority(id: []const u8, form: Form) usize {
-    const ids = if (form == .variable) &title_ids else &function_ids;
+    const ids: []const []const u8 = if (form == .variable) &title_ids else &function_ids;
     for (ids, 0..) |candidate, rank| if (std.mem.eql(u8, id, candidate)) return rank;
     unreachable;
 }
 
 const Winners = struct {
-    variable: []const u8,
-    parser_function: []const u8,
+    variable: ?[]const u8 = null,
+    parser_function: ?[]const u8 = null,
 
-    fn include(self: *Winners, id: []const u8) void {
-        if (priority(id, .variable) > priority(self.variable, .variable)) self.variable = id;
-        if (priority(id, .parser_function) > priority(self.parser_function, .parser_function)) self.parser_function = id;
+    fn include(self: *Winners, id: []const u8, form: Form) void {
+        const winner = if (form == .variable) &self.variable else &self.parser_function;
+        if (winner.* == null or priority(id, form) > priority(winner.*.?, form)) winner.* = id;
     }
 
-    fn select(self: Winners, form: Form) []const u8 {
-        return if (form == .variable) self.variable else self.parser_function;
+    fn select(self: Winners, form: Form) ?[]const u8 {
+        return if (form == .variable) self.variable else functionHead(self.parser_function orelse return null);
     }
 };
 
-fn canonicalId(raw: []const u8) ?[]const u8 {
+fn titleId(raw: []const u8) ?[]const u8 {
     for (title_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
     return null;
+}
+
+fn canonicalId(raw: []const u8, expanded: bool) ?[]const u8 {
+    if (titleId(raw)) |id| return id;
+    if (expanded) for (function_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
+    return null;
+}
+
+fn addAlias(a: std.mem.Allocator, map: *std.StringHashMapUnmanaged(Winners), key: []const u8, id: []const u8, form: Form) !void {
+    const entry = try map.getOrPut(a, key);
+    if (!entry.found_existing) entry.value_ptr.* = .{};
+    entry.value_ptr.include(id, form);
 }
 
 fn identityLine(lines: *std.mem.SplitIterator(u8, .scalar), prefix: []const u8, expected: []const u8) !void {
@@ -64,6 +101,7 @@ pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     sensitive: std.StringHashMapUnmanaged(Winners) = .empty,
     insensitive: std.StringHashMapUnmanaged(Winners) = .empty,
+    expanded_functions: bool = false,
 
     pub fn init(a: std.mem.Allocator, raw: []const u8, wiki: []const u8, date: []const u8, language: []const u8) !Registry {
         if (raw.len > max_bytes or !std.unicode.utf8ValidateSlice(raw)) return error.InvalidMagicWordsSnapshot;
@@ -71,8 +109,9 @@ pub const Registry = struct {
         errdefer arena.deinit();
         const owned = try arena.allocator().dupe(u8, raw);
         var lines = std.mem.splitScalar(u8, owned, '\n');
-        if (!std.mem.eql(u8, lines.next() orelse return error.InvalidMagicWordsSnapshot, header))
-            return error.InvalidMagicWordsSnapshot;
+        const first = lines.next() orelse return error.InvalidMagicWordsSnapshot;
+        const expanded = std.mem.eql(u8, first, parser_header);
+        if (!expanded and !std.mem.eql(u8, first, header)) return error.InvalidMagicWordsSnapshot;
         try identityLine(&lines, "# wiki\t", wiki);
         try identityLine(&lines, "# dump-date\t", date);
         try identityLine(&lines, "# content-language\t", language);
@@ -81,7 +120,7 @@ pub const Registry = struct {
         while (lines.next()) |line| {
             if (line.len == 0) continue;
             var fields = std.mem.splitScalar(u8, line, '\t');
-            const id = canonicalId(fields.next() orelse return error.InvalidMagicWordsSnapshot) orelse
+            const id = canonicalId(fields.next() orelse return error.InvalidMagicWordsSnapshot, expanded) orelse
                 return error.InvalidMagicWordsSnapshot;
             const flag = fields.next() orelse return error.InvalidMagicWordsSnapshot;
             const case_sensitive = if (std.mem.eql(u8, flag, "1")) true else if (std.mem.eql(u8, flag, "0")) false else return error.InvalidMagicWordsSnapshot;
@@ -89,16 +128,21 @@ pub const Registry = struct {
             if (fields.next() != null or alias.len == 0 or alias.len > 1024) return error.InvalidMagicWordsSnapshot;
             for (alias) |byte| if (byte < 32 or byte == 127) return error.InvalidMagicWordsSnapshot;
             const map = if (case_sensitive) &sensitive else &insensitive;
-            const key = if (case_sensitive) alias else try lower.lowerAlloc(arena.allocator(), alias);
-            const entry = try map.getOrPut(arena.allocator(), key);
-            if (entry.found_existing) {
-                entry.value_ptr.include(id);
-            } else {
-                entry.value_ptr.* = .{ .variable = id, .parser_function = id };
-            }
+            const a_owned = arena.allocator();
+            const key = if (case_sensitive) alias else try lower.lowerAlloc(a_owned, alias);
+            if (titleId(id) != null) try addAlias(a_owned, map, key, id, .variable);
+            // Parser::setFunctionHook adds a hash before removing one trailing
+            // colon. The source spelling is not title-normalized or deduplicated.
+            var function_alias = key;
+            if (expanded and std.mem.endsWith(u8, function_alias, ":"))
+                function_alias = function_alias[0 .. function_alias.len - 1]
+            else if (expanded and std.mem.endsWith(u8, function_alias, "："))
+                function_alias = function_alias[0 .. function_alias.len - "：".len];
+            if (hashFunction(id)) function_alias = try std.fmt.allocPrint(a_owned, "#{s}", .{function_alias});
+            try addAlias(a_owned, map, function_alias, id, .parser_function);
         }
         if (sensitive.count() + insensitive.count() == 0) return error.InvalidMagicWordsSnapshot;
-        return .{ .arena = arena, .sensitive = sensitive, .insensitive = insensitive };
+        return .{ .arena = arena, .sensitive = sensitive, .insensitive = insensitive, .expanded_functions = expanded };
     }
 
     pub fn deinit(self: *Registry) void {
@@ -108,7 +152,7 @@ pub const Registry = struct {
 
     pub fn resolve(self: *const Registry, raw: []const u8, form: Form) ?[]const u8 {
         if (raw.len > 1024) return null;
-        if (self.sensitive.get(raw)) |winners| return winners.select(form);
+        if (self.sensitive.get(raw)) |winners| if (winners.select(form)) |id| return id;
         if (self.insensitive.count() == 0) return null;
         var buffer: [4096]u8 = undefined;
         var writer: std.Io.Writer = .fixed(&buffer);
@@ -118,6 +162,40 @@ pub const Registry = struct {
 };
 
 const fixture = header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n";
+
+test "expanded parser aliases retain hash colon case and invocation domains" {
+    const raw = parser_header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "pagename\t1\tPAGENAME\ninvoke\t0\tاستدعاء\ninvoke\t0\tinvoke\nif\t0\tلو\n" ++
+        "ns\t0\tنط:\nns\t0\t空間：\nlen\t0\t#ziman\ndisplaytitle\t1\tDISPLAYTITLE\ndefaultsort\t1\tDEFAULTSORT:\n";
+    var registry = try Registry.init(std.testing.allocator, raw, "arwiktionary", "20261001", "ar");
+    defer registry.deinit();
+    try std.testing.expect(registry.expanded_functions);
+    try std.testing.expectEqualStrings("#invoke", registry.resolve("#استدعاء", .parser_function).?);
+    try std.testing.expectEqualStrings("#invoke", registry.resolve("#INVOKE", .parser_function).?);
+    try std.testing.expectEqualStrings("#if", registry.resolve("#لو", .parser_function).?);
+    try std.testing.expectEqualStrings("ns", registry.resolve("نط", .parser_function).?);
+    try std.testing.expectEqualStrings("ns", registry.resolve("空間", .parser_function).?);
+    try std.testing.expectEqualStrings("#len", registry.resolve("##ziman", .parser_function).?);
+    try std.testing.expectEqualStrings("defaultsort", registry.resolve("DEFAULTSORT", .parser_function).?);
+    try std.testing.expect(registry.resolve("#ziman", .parser_function) == null);
+    try std.testing.expect(registry.resolve("displaytitle", .parser_function) == null);
+    try std.testing.expect(registry.resolve("استدعاء", .parser_function) == null);
+    try std.testing.expect(registry.resolve("#استدعاء", .variable) == null);
+    try std.testing.expect(registry.resolve("نط", .variable) == null);
+    try std.testing.expectError(error.InvalidMagicWordsSnapshot, Registry.init(std.testing.allocator, fixture ++ "invoke\t0\tinvoke\n", "arwiktionary", "20261001", "ar"));
+}
+
+test "expanded functions share sensitive precedence with title functions" {
+    inline for ([_][]const u8{
+        "namespace\t1\t名前空間\nns\t0\t名前空間:\n",
+        "ns\t0\t名前空間:\nnamespace\t1\t名前空間\n",
+    }) |rows| {
+        var registry = try Registry.init(std.testing.allocator, parser_header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++ rows, "arwiktionary", "20261001", "ar");
+        defer registry.deinit();
+        try std.testing.expectEqualStrings("namespace", registry.resolve("名前空間", .parser_function).?);
+        try std.testing.expectEqualStrings("namespace", registry.resolve("名前空間", .variable).?);
+    }
+}
 
 test "title aliases preserve edition identity spelling case flags and Unicode" {
     var registry = try Registry.init(std.testing.allocator, fixture ++ "pagename\t1\tاسم_الصفحة\npagename\t1\tPAGENAME\nfullpagename\t0\tTÍTULO\nfullpagename\t0\ttítulo\n", "arwiktionary", "20261001", "ar");

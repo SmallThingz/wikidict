@@ -93,6 +93,7 @@ pub const Provider = struct {
     language_known_tag: ?*const fn (?*anyopaque, []const u8) anyerror!bool = null,
     // When present, the edition snapshot is authoritative, including nonmatches.
     resolve_title_magic: ?*const fn (?*anyopaque, []const u8, rt.namespace_registry.magic_words.Form) anyerror!?[]const u8 = null,
+    resolve_parser_function: ?*const fn (?*anyopaque, []const u8) anyerror!?[]const u8 = null,
     resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
     get_template_symbol: ?*const fn (?*anyopaque, std.mem.Allocator, usize) anyerror!?[]const u8 = null,
 };
@@ -691,6 +692,30 @@ pub const Expander = struct {
     fn resolveTitleMagic(self: *Expander, raw: []const u8, form: rt.namespace_registry.magic_words.Form) !?[]const u8 {
         if (self.provider.resolve_title_magic) |resolve| return resolve(self.provider.ctx, raw, form);
         return if (isTitleMagicName(raw)) raw else null;
+    }
+
+    fn resolveParserFunction(self: *Expander, raw: []const u8) !?[]const u8 {
+        if (self.provider.resolve_parser_function) |resolve| {
+            if (try resolve(self.provider.ctx, raw)) |canonical| return canonical;
+            // Retain the supported frame.callParserFunction("#tag:ref", args)
+            // spelling while applying the same captured alias to its head.
+            if (preprocess.findTopParserColon(raw)) |colon| {
+                if (try resolve(self.provider.ctx, raw[0..colon.index])) |canonical| {
+                    if (std.mem.eql(u8, canonical, "#tag"))
+                        return try std.fmt.allocPrint(self.runtime.allocator, "#tag:{s}", .{raw[colon.index + colon.len ..]});
+                }
+            }
+            // Revision variables are outside the captured function profile and
+            // retain their existing implementation until that family is added.
+            return if (isRevisionMagicName(raw)) raw else null;
+        }
+        return raw;
+    }
+
+    fn parserTitleMagic(self: *Expander, name: []const u8) !?[]const u8 {
+        if (self.provider.resolve_parser_function != null)
+            return if (isTitleMagicName(name)) name else null;
+        return self.resolveTitleMagic(name, .parser_function);
     }
 
     fn namespacedPageAlloc(self: *Expander, spec: namespace_lib.Spec, text: []const u8) ![]const u8 {
@@ -1607,14 +1632,15 @@ pub const Expander = struct {
             return (try self.titleMagic(name, null)) orelse unreachable;
         if (try self.magicWord(head)) |value| return value;
 
-        if (preprocess.findTopDelimiter(head, ':')) |colon| {
-            const name = std.mem.trim(u8, head[0..colon], " \t\r\n");
-            const first = head[colon + 1 ..];
+        if (preprocess.findTopParserColon(head)) |colon| {
+            const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
+            const name = (try self.resolveParserFunction(raw_name)) orelse return null;
+            const first = head[colon.index + colon.len ..];
             if (isRevisionMagicName(name)) {
                 const page = try self.expandWikitext(first, params, host_title, depth + 1);
                 return (try self.revisionMagic(name, page)) orelse unreachable;
             }
-            if (try self.resolveTitleMagic(name, .parser_function)) |canonical| {
+            if (try self.parserTitleMagic(name)) |canonical| {
                 const page = try self.expandWikitext(first, params, host_title, depth + 1);
                 return (try self.titleMagic(canonical, page)) orelse unreachable;
             }
@@ -2268,11 +2294,12 @@ pub const Expander = struct {
         return self.expandCategoryTree(args);
     }
 
-    fn hostFrameParserFunction(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, args: *rt.Table) anyerror![]const u8 {
+    fn hostFrameParserFunction(raw: ?*anyopaque, a: std.mem.Allocator, raw_name: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const name = (try self.resolveParserFunction(raw_name)) orelse return error.UnsupportedParserFunction;
         const first = args.rawGet(.{ .number = 1 });
         const second = args.rawGet(.{ .number = 2 });
-        if (try self.resolveTitleMagic(name, .parser_function)) |canonical| {
+        if (try self.parserTitleMagic(name)) |canonical| {
             const page: ?[]const u8 = if (first) |value| switch (value) {
                 .nil => null,
                 .string => |text| text,
@@ -3105,6 +3132,60 @@ test "edition title magic prevents Arabic wrapper recursion without shadowing te
     try std.testing.expectEqualStrings("Parent/Child|Parent", try expander.expandFragment("Template:Parent/Child", "{{COLLISION}}|{{COLLISION:Template:Parent/Child}}", 1_670_803_200));
     try args.rawSet(a, .{ .number = 1 }, .{ .string = "Template:Parent/Child" });
     try std.testing.expectEqualStrings("Parent", try Expander.hostFrameParserFunction(&expander, a, "COLLISION", args));
+}
+
+test "captured parser aliases expand lazy wrappers and native frame invokes" {
+    const aliases = rt.namespace_registry.magic_words;
+    const Source = struct {
+        words: *const aliases.Registry,
+        fn resolve(raw: ?*anyopaque, name: []const u8, form: aliases.Form) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            return self.words.resolve(name, form);
+        }
+        fn parser(raw: ?*anyopaque, name: []const u8) !?[]const u8 {
+            return resolve(raw, name, .parser_function);
+        }
+        fn get(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "Template:Alias"))
+                return "{{#لو:{{{1|}}}|{{#استدعاء:Test|run|x={{{1}}}}}|{{Loop}}}}";
+            return TestProvider.get(raw, a, title);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var words = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "pagename\t1\tPAGENAME\nnamespace\t1\t名前空間\nns\t0\t名前空間:\nns\t0\tنط：\n" ++
+        "if\t0\tلو\ninvoke\t0\tاستدعاء\ntag\t0\tوسم\ndisplaytitle\t1\tDISPLAYTITLE\n", "arwiktionary", "20261001", "ar");
+    defer words.deinit();
+    var source: Source = .{ .words = &words };
+    var runtime = try rt.Context.initProgram(a, 24, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TestModule.root), rt.stabilize(TestModule.run), rt.stabilize(TestModule.fail), rt.stabilize(TestModule.random), rt.stabilize(TestModule.stateful), rt.stabilize(TestModule.nested), rt.stabilize(TestModule.repair), rt.stabilize(TestModule.repairParent), rt.stabilizeBuffered(TestModule.multi), rt.stabilizeBuffered(TestModule.empty), rt.stabilizeBuffered(TestModule.nilReturn), rt.stabilizeBuffered(TestModule.numericReturn) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TestModule.lookup, TestModule.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{
+        .ctx = &source,
+        .get = Source.get,
+        .exists = TestProvider.exists,
+        .resolve_title_magic = Source.resolve,
+        .resolve_parser_function = Source.parser,
+    }, .install_scribunto = installTestInvoke };
+    try std.testing.expectEqualStrings("OK|Y|Template|Template", try expander.expandFragment("Page", "{{Alias|OK}}|{{#لو：yes|Y|{{Loop}}}}|{{نط：10}}|{{名前空間:Template:Child}}", 1_670_803_200));
+    const invoke_args = try runtime.newTable();
+    try invoke_args.rawSet(a, .{ .number = 1 }, .{ .string = "Test" });
+    try invoke_args.rawSet(a, .{ .number = 2 }, .{ .string = "run" });
+    try invoke_args.rawSet(a, .{ .string = "x" }, .{ .string = "FRAME" });
+    try std.testing.expectEqualStrings("FRAME", try Expander.hostFrameParserFunction(&expander, a, "#استدعاء", invoke_args));
+    try std.testing.expectError(error.UnsupportedParserFunction, Expander.hostFrameParserFunction(&expander, a, "displaytitle", invoke_args));
+    try std.testing.expectError(error.UnsupportedParserFunction, Expander.hostFrameParserFunction(&expander, a, "#invoke", invoke_args));
+    var english = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\nif\t0\tif\ninvoke\t0\tinvoke\n", "enwiktionary", "20261001", "en");
+    defer english.deinit();
+    source.words = &english;
+    try std.testing.expectEqualStrings("<nowiki>{{#لو:yes|Y|N}}</nowiki>", try expander.expandFragment("Page", "{{#لو:yes|Y|N}}", 1_670_803_200));
 }
 
 test "bundle parser functions cover corpus time date sub and iferror forms" {
