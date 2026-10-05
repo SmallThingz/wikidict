@@ -10,6 +10,20 @@ pub const Section = struct {
     source: []const u8,
 };
 
+/// A language declaration remains a boundary even when its label is unknown.
+/// Keep this separate from name resolution and from ordinary grammar headings.
+pub fn explicitLanguageDeclaration(raw: []const u8, content_language: []const u8) ?[]const u8 {
+    if (!std.mem.eql(u8, content_language, "ar")) return null;
+    const heading = std.mem.trim(u8, raw, " \t");
+    if (!std.mem.startsWith(u8, heading, "{{") or !std.mem.endsWith(u8, heading, "}}")) return null;
+    const body = heading[2 .. heading.len - 2];
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return null;
+    if (!std.mem.eql(u8, std.mem.trim(u8, body[0..pipe], " \t"), "اللغة")) return null;
+    const label = std.mem.trim(u8, body[pipe + 1 ..], " \t");
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "{}[]<>|=\r\n") != null) return null;
+    return label;
+}
+
 /// Some Wiktionaries put the lemma and a language template in the level-2
 /// heading instead of using the language name as the whole heading. Keep this
 /// classification build-only and derived from the unexpanded source so template
@@ -324,6 +338,14 @@ pub const CategoryIterator = struct {
         return boundary == '>' or boundary == '/' or std.ascii.isWhitespace(boundary);
     }
 };
+
+test "explicit Arabic language declarations do not depend on known labels" {
+    try std.testing.expectEqualStrings("دانماركية", explicitLanguageDeclaration("{{اللغة|دانماركية}}", "ar").?);
+    try std.testing.expectEqualStrings("كتالونية", explicitLanguageDeclaration(" {{ اللغة | كتالونية }} ", "ar").?);
+    try std.testing.expect(explicitLanguageDeclaration("{{اللغة|دانماركية}}", "en") == null);
+    inline for (.{ "دانماركية", "اسم", "{{اسم|دانماركية}}", "{{اللغة|}}", "{{اللغة|{{nested}}}}", "{{اللغة|دانماركية|extra}}", "{{اللغة|name=دانماركية}}", "prefix {{اللغة|دانماركية}}" }) |heading|
+        try std.testing.expect(explicitLanguageDeclaration(heading, "ar") == null);
+}
 
 test "language sections ignore preamble and nested fake headings" {
     const source = "{{also|cat}}\n==English==\n{{foo|\n==not French==\n}}\n===Noun===\n# cat\n==French==\r\n===Nom===\n# chat\n";

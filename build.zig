@@ -10,6 +10,16 @@ pub fn build(b: *std.Build) void {
     const test_optimize: std.builtin.Optimize = .safe;
     const namespace_registry_mod = namespaceRegistryModule(b, target, optimize);
     const namespace_registry_test_mod = namespaceRegistryModule(b, target, test_optimize);
+    const language_metadata_parser_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/parser/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const language_metadata_parser_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/parser/root.zig"),
+        .target = b.graph.host,
+        .optimize = test_optimize,
+    });
     const shared_xml_decode_mod = b.createModule(.{
         .root_source_file = b.path("src/shared/xml_decode.zig"),
         .target = target,
@@ -124,6 +134,7 @@ pub fn build(b: *std.Build) void {
     page_title_index_exe.root_module.linkSystemLibrary("zstd", .{});
     const blob_build_exe = addCliExecutable(b, "dict-blob-build", b.path("tools/blob_build.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
+        .{ .name = "lua_parser", .module = language_metadata_parser_mod },
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
         .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
         .{ .name = "bundle_protocol", .module = bundle_protocol_mod },
@@ -260,6 +271,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "encoder", .module = encoder_mod_test },
+                .{ .name = "lua_parser", .module = language_metadata_parser_test_mod },
                 .{ .name = "xml_decode", .module = shared_xml_decode_mod_test },
                 .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
                 .{ .name = "bundle_protocol", .module = bundle_protocol_mod_test },

@@ -133,7 +133,7 @@ fn pageIndexStart(bytes: []const u8, options: Options) !PageIndexStart {
     };
 }
 
-fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const u8) !language_registry.Registry {
+fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const u8, namespaces: *const namespace_registry.Registry) !language_registry.Registry {
     var out = language_registry.Registry.empty(a);
     errdefer out.deinit();
 
@@ -171,7 +171,130 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
         defer a.free(source);
         if (module.local_names) try out.addLocalNamesLua(source) else try out.addLua(source);
     }
+    if (std.mem.eql(u8, out.content_code orelse "", "ar")) {
+        try loadArabicLanguageModules(io, a, expander_root, namespaces, manifest.bytes, &out);
+        try loadArabicLanguageTemplates(io, a, expander_root, namespaces, &out);
+    }
     return out;
+}
+
+fn loadArabicLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, manifest: []const u8, registry: *language_registry.Registry) !void {
+    var rows = std.mem.splitScalar(u8, manifest, '\n');
+    while (rows.next()) |line| {
+        if (line.len == 0) continue;
+        const parsed = try std.json.parseFromSlice(struct { page_id: u64, title: []const u8, sha256: []const u8 = "" }, a, line, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        const title = namespaces.ofTitle(parsed.value.title);
+        if (title.id != 828) continue;
+        const kind: language_registry.LanguageDataKind = if (std.mem.eql(u8, title.text, "languages/data2"))
+            .canonical_assignments
+        else if (std.mem.eql(u8, title.text, "لغات/بيانات"))
+            .named_table
+        else
+            continue;
+        const path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ root, parsed.value.page_id });
+        defer a.free(path);
+        const source = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(2 * 1024 * 1024));
+        defer a.free(source);
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+        if (!std.mem.eql(u8, parsed.value.sha256, &std.fmt.bytesToHex(digest, .lower))) return error.LanguageSourceIdentityMismatch;
+        try registry.addLanguageDataLua(source, kind);
+    }
+}
+
+fn literalArabicLanguageTemplate(source: []const u8) ?[]const u8 {
+    // These dump-local, code-named templates have one literal language link.
+    // Require the complete form; documentation, calls, redirects, link labels,
+    // and additional content cannot accidentally become language evidence.
+    const raw = std.mem.trim(u8, source, " \t\r\n");
+    const prefix = "بال[[";
+    const suffix = "]]:<noinclude>[[تصنيف:قوالب لغات]]</noinclude>";
+    if (!std.mem.startsWith(u8, raw, prefix) or !std.mem.endsWith(u8, raw, suffix) or raw.len <= prefix.len + suffix.len) return null;
+    const label = raw[prefix.len .. raw.len - suffix.len];
+    if (std.mem.indexOfAny(u8, label, "[]{}|<>#:\x00\r\n\t") != null or !std.mem.eql(u8, label, std.mem.trim(u8, label, " "))) return null;
+    return label;
+}
+
+fn loadArabicLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: *language_registry.Registry) !void {
+    const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(path);
+    var index = mmapPath(io, path) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer index.deinit();
+    var templates = (try dump_source.TemplateSource.open(io, a, root, index.bytes)) orelse return;
+    defer templates.deinit();
+    const kind = dump_source.pageIndexKind(index.bytes);
+    var rows = std.mem.splitScalar(u8, index.bytes, '\n');
+    var ordinal: u64 = 0;
+    while (rows.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        const row = try dump_source.parsePageIndexLine(kind, line);
+        const this_ordinal = ordinal;
+        ordinal += 1;
+        if (row.ns != 10 or row.redirect != null or !row.has_source) continue;
+        const title = namespaces.ofTitle(row.title);
+        if (title.id != 10 or !registry.codes.contains(title.text)) continue;
+        const raw = (try templates.lookup(this_ordinal, row.page_id, row.revision_id)) orelse return error.MissingLanguageTemplateSource;
+        // Only the bounded literal forms above can be language-name evidence.
+        if (raw.len > 4096) continue;
+        const source = if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else null;
+        defer if (source) |bytes| a.free(bytes);
+        if (literalArabicLanguageTemplate(source orelse raw)) |label|
+            try registry.addLocalAlias(label, title.text);
+    }
+}
+
+fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*const namespace_registry.Registry) encoder.blob_builder.LanguageCodes {
+    return .{
+        .namespace_catalog = namespaces,
+        .ctx = registry,
+        .get_fn = struct {
+            fn get(raw: ?*const anyopaque, heading: []const u8) ?[]const u8 {
+                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
+                return value.code(heading);
+            }
+        }.get,
+        .resolve_fn = struct {
+            fn resolve(raw: ?*const anyopaque, value_text: []const u8) ?encoder.blob_builder.ResolvedLanguage {
+                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
+                const resolved = value.resolve(value_text) orelse return null;
+                return .{ .code = resolved.code, .heading = resolved.heading };
+            }
+        }.resolve,
+        .trusted_fn = struct {
+            fn trusted(raw: ?*const anyopaque, value_text: []const u8) ?encoder.blob_builder.ResolvedLanguage {
+                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
+                const resolved = value.resolveTrusted(value_text) orelse return null;
+                return .{ .code = resolved.code, .heading = resolved.heading };
+            }
+        }.trusted,
+        .strong_fn = struct {
+            fn strong(raw: ?*const anyopaque, value_text: []const u8) ?encoder.blob_builder.ResolvedLanguage {
+                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
+                const resolved = value.resolveStrong(value_text) orelse return null;
+                return .{ .code = resolved.code, .heading = resolved.heading };
+            }
+        }.strong,
+        .content_fn = struct {
+            fn content(raw: ?*const anyopaque) ?encoder.blob_builder.ResolvedLanguage {
+                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
+                const resolved = value.content() orelse return null;
+                return .{ .code = resolved.code, .heading = resolved.heading };
+            }
+        }.content,
+        .link_trail = .{
+            .ctx = registry,
+            .end_fn = struct {
+                fn end(raw: ?*const anyopaque, input: []const u8, start: usize) usize {
+                    const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return start));
+                    return value.linkTrailEnd(input, start);
+                }
+            }.end,
+        },
+    };
 }
 
 const ExpansionJob = struct {
@@ -685,55 +808,9 @@ pub fn main(init: std.process.Init) !void {
 
     var namespaces = try namespace_registry.Registry.load(init.io, a, options.expander_root);
     defer namespaces.deinit();
-    var registry = try loadLanguageRegistry(init.io, a, options.expander_root);
+    var registry = try loadLanguageRegistry(init.io, a, options.expander_root, &namespaces);
     defer registry.deinit();
-    const codes: encoder.blob_builder.LanguageCodes = .{
-        .namespace_catalog = &namespaces,
-        .ctx = &registry,
-        .get_fn = struct {
-            fn get(raw: ?*const anyopaque, heading: []const u8) ?[]const u8 {
-                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
-                return value.code(heading);
-            }
-        }.get,
-        .resolve_fn = struct {
-            fn resolve(raw: ?*const anyopaque, value_text: []const u8) ?encoder.blob_builder.ResolvedLanguage {
-                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
-                const resolved = value.resolve(value_text) orelse return null;
-                return .{ .code = resolved.code, .heading = resolved.heading };
-            }
-        }.resolve,
-        .trusted_fn = struct {
-            fn trusted(raw: ?*const anyopaque, value_text: []const u8) ?encoder.blob_builder.ResolvedLanguage {
-                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
-                const resolved = value.resolveTrusted(value_text) orelse return null;
-                return .{ .code = resolved.code, .heading = resolved.heading };
-            }
-        }.trusted,
-        .strong_fn = struct {
-            fn strong(raw: ?*const anyopaque, value_text: []const u8) ?encoder.blob_builder.ResolvedLanguage {
-                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
-                const resolved = value.resolveStrong(value_text) orelse return null;
-                return .{ .code = resolved.code, .heading = resolved.heading };
-            }
-        }.strong,
-        .content_fn = struct {
-            fn content(raw: ?*const anyopaque) ?encoder.blob_builder.ResolvedLanguage {
-                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
-                const resolved = value.content() orelse return null;
-                return .{ .code = resolved.code, .heading = resolved.heading };
-            }
-        }.content,
-        .link_trail = .{
-            .ctx = &registry,
-            .end_fn = struct {
-                fn end(raw: ?*const anyopaque, input: []const u8, start: usize) usize {
-                    const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return start));
-                    return value.linkTrailEnd(input, start);
-                }
-            }.end,
-        },
-    };
+    const codes = languageCodes(&registry, &namespaces);
 
     const worker_path = try std.fs.path.join(a, &.{ options.expander_root, "dict-bundle-expander" });
     defer a.free(worker_path);
@@ -812,6 +889,177 @@ pub fn main(init: std.process.Init) !void {
             stats.fallback_pages,
         },
     );
+}
+
+test "Arabic dump local literal language evidence reaches decoded records" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ root, "modules" }));
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
+        "828\tوحدة\tModule\tfirst-letter\t1\t0\t0\tScribunto\tcompile_only\tmodules\n");
+    defer namespaces.deinit();
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = "# content-language\tar\n# mediawiki\n" ++
+        "ar\tالعربية\npi\tالبالية\nban\tالبالينية\nur\tالأوردية\nda\tالدانمركية\nhu\tالهنغارية\n" });
+    const module_sources = [_][2][]const u8{
+        .{ "وحدة:languages/data2", "local m = {}; m['pi'] = { canonicalName = 'بالي' }; return m" },
+        .{ "Module:لغات/بيانات", "local data = {}; data.lang_table = { ['hu'] = { name = 'مجرية' }, ['ban'] = { name = 'بالية' }, ['pi'] = { name = 'بالية' }, ['ca-valencia'] = { name = 'بلنسية' } }; return data" },
+    };
+    var manifest: std.ArrayList(u8) = .empty;
+    for (module_sources, 1..) |module, page_id| {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(module[1], &digest, .{});
+        try manifest.appendSlice(a, try std.fmt.allocPrint(a, "{{\"page_id\":{d},\"title\":\"{s}\",\"sha256\":\"{s}\"}}\n", .{ page_id, module[0], std.fmt.bytesToHex(digest, .lower) }));
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ root, page_id }), .data = module[1] });
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = manifest.items });
+    const page_index = "0\t0\tentry\t\t10\t100\t2026-10-01T00:00:00Z\tA\twikitext\t0\t1\t0\n" ++
+        "0\t0\tقالب:ur\t\t20\t200\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t1\n" ++
+        "0\t0\tTemplate:da\t\t21\t210\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n" ++
+        "0\t0\tقالب:PI\t\t22\t220\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n" ++
+        "0\t0\tقالب:pi\t\t23\t230\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n";
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = page_index });
+    {
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer templates.deinit();
+        try templates.append(1, 20, 200, "بال[[أردية]]:&lt;noinclude&gt;[[تصنيف:قوالب لغات]]&lt;/noinclude&gt;");
+        try templates.append(2, 21, 210, "بال[[دانماركية]]:<noinclude>[[تصنيف:قوالب لغات]]</noinclude>");
+        try templates.append(3, 22, 220, "بال[[Wrong case]]:<noinclude>[[تصنيف:قوالب لغات]]</noinclude>");
+        try templates.append(4, 23, 230, "بال[[Pali local alias]]:<noinclude>[[تصنيف:قوالب لغات]]</noinclude>");
+        try templates.finish(index_path);
+    }
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces);
+    defer registry.deinit();
+    try std.testing.expect(registry.resolve("بالية") == null);
+    try std.testing.expect(registry.resolve("بلنسية") == null);
+    try std.testing.expect(registry.resolve("Wrong case") == null);
+    try std.testing.expectEqualStrings("pi", registry.resolveTrusted("Pali local alias").?.code);
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const expected = [_][4][]const u8{
+        .{ "pi", "البالية", "بالي", "Pali definition" },
+        .{ "hu", "الهنغارية", "مجرية", "Hungarian definition" },
+        .{ "ur", "الأوردية", "أردية", "Urdu definition" },
+        .{ "da", "الدانمركية", "دانماركية", "Danish definition" },
+    };
+    var expanded: std.ArrayList(u8) = .empty;
+    var raw: std.ArrayList(u8) = .empty;
+    for (expected) |language| {
+        try std.testing.expectEqualStrings(language[1], registry.resolveTrusted(language[2]).?.heading);
+        try expanded.appendSlice(a, try std.fmt.allocPrint(a, "== {s} ==\n# {s}\n", .{ language[2], language[3] }));
+        try raw.appendSlice(a, try std.fmt.allocPrint(a, "== {{{{اللغة|{s}}}}} ==\n# {s}\n", .{ language[2], language[3] }));
+    }
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "shared", expanded.items, raw.items, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    for (expected) |language| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(language[1], &filename) }));
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("shared")).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(language[0], decoded.entry.language_code);
+        for (expected) |other|
+            try std.testing.expectEqual(std.mem.eql(u8, language[0], other[0]), std.mem.indexOf(u8, record.payload, other[3]) != null);
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "1.lua" }), .data = "return {}" });
+    try std.testing.expectError(error.LanguageSourceIdentityMismatch, loadLanguageRegistry(io, a, root, &namespaces));
+}
+
+test "literal Arabic language template proof rejects executable or ambiguous text" {
+    try std.testing.expectEqualStrings("أردية", literalArabicLanguageTemplate("بال[[أردية]]:<noinclude>[[تصنيف:قوالب لغات]]</noinclude>\n").?);
+    for ([_][]const u8{
+        "بال[[{{اسم}}]]:<noinclude>[[تصنيف:قوالب لغات]]</noinclude>",
+        "بال[[أردية|Other]]:<noinclude>[[تصنيف:قوالب لغات]]</noinclude>",
+        "بال[[أردية]]: extra<noinclude>[[تصنيف:قوالب لغات]]</noinclude>",
+        "#REDIRECT [[قالب:ur]]",
+        "<noinclude>بال[[أردية]]:<noinclude>[[تصنيف:قوالب لغات]]</noinclude></noinclude>",
+    }) |source| try std.testing.expect(literalArabicLanguageTemplate(source) == null);
+}
+
+test "Arabic edition heading aliases preserve distinct decoded language records" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    // Pinned arwiktionary preferred names include the definite article, while
+    // قالب:اللغة echoes its indefinite argument in the page heading.
+    try registry.addTsv("# wikidict-language-registry-v2\n# content-language\tar\n# mediawiki\n" ++
+        "ar\tالعربية\tar\tArabic\tara\n" ++
+        "en\tالإنجليزية\tEnglish\ten\teng\n" ++
+        "fr\tالفرنسية\tFrançais\tfrançais\tfr\tFrench\tfra\tfre\n");
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const arabic_definition = "# مجموعة من الأوراق أو الصحف مجموعة مع بعضها البعض.\n";
+    const english_definition = "# An English definition.\n";
+    const french_definition = "# Une définition française.\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "كِتَاب", "== عربية[[تصنيف:عربية]] ==\n" ++ arabic_definition, "== {{اللغة|عربية}} ==\n" ++ arabic_definition, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "shared", "== عربية[[تصنيف:عربية]] ==\n" ++ arabic_definition ++
+        "== إنجليزية[[تصنيف:إنجليزية]] ==\n" ++ english_definition ++
+        "== فرنسية[[تصنيف:فرنسية]] ==\n" ++ french_definition, "== {{اللغة|عربية}} ==\n" ++ arabic_definition ++
+        "== {{اللغة|إنجليزية}} ==\n" ++ english_definition ++
+        "== {{اللغة|فرنسية}} ==\n" ++ french_definition, null);
+    // With no template-bearing raw source, the rendered heading still has to
+    // pass the trusted-name check instead of falling back to the edition's ar.
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "plain", "== إنجليزية ==\n" ++ english_definition, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 5), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+
+    const expected = [_][3][]const u8{
+        .{ "ar", "العربية", arabic_definition[2..] },
+        .{ "en", "الإنجليزية", english_definition[2..] },
+        .{ "fr", "الفرنسية", french_definition[2..] },
+    };
+    for (expected) |language| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(language[1], &filename) });
+        var mapped = try mmapPath(std.testing.io, path);
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(language[0], metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("shared")).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(language[0], decoded.entry.language_code);
+        for (expected) |definition| {
+            const content = std.mem.trim(u8, definition[2], "\n");
+            try std.testing.expectEqual(std.mem.eql(u8, language[0], definition[0]), std.mem.indexOf(u8, record.payload, content) != null);
+        }
+        try std.testing.expectEqual(std.mem.eql(u8, language[0], "ar"), (try index.find("كِتَاب")) != null);
+        try std.testing.expectEqual(std.mem.eql(u8, language[0], "en"), (try index.find("plain")) != null);
+    }
 }
 
 test "blob expansion timeout is explicit bounded and rejects duplicates" {

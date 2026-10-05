@@ -525,6 +525,11 @@ fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?Resol
     return resolveTemplateCandidates(codes, section.heading);
 }
 
+fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source.Section) bool {
+    const namespaces = codes.namespace_catalog orelse return false;
+    return language_source.explicitLanguageDeclaration(section.heading, namespaces.content_language) != null;
+}
+
 fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
     const heading = language_source.classificationSection(section);
     if (codes.resolve(std.mem.trim(u8, heading, " \t\r\n\'\""))) |resolved| return resolved;
@@ -662,6 +667,29 @@ fn processMain(
     }
     const raw_aligned = raw_sections.items.len != 0 and raw_sections.items.len == page_sections.items.len;
 
+    if (!raw_aligned) for (raw_sections.items) |section| {
+        if (!hasExplicitLanguageDeclaration(codes, section) or resolveSection(codes, section) != null) continue;
+        // An unresolved declaration cannot inherit an adjacent language. If
+        // expansion changed the boundaries, retain the whole page without
+        // guessing which rendered bytes belong to the unknown language.
+        fallbacks.unresolved_language_heading = true;
+        const payload = try presentation_document.compileReportedWithLinkTrailAlloc(
+            page_allocator,
+            title,
+            .language,
+            "Unclassified",
+            "",
+            source,
+            if (display_title) |value| .{ .source = value, .page_title = title } else null,
+            codes.link_trail,
+            codes.namespace_catalog,
+            fallbacks,
+        );
+        try spools.appendLanguage(page_allocator, "Unclassified", title, payload);
+        stats.language_records += 1;
+        return;
+    };
+
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
     defer {
         for (groups.items) |*group| group.source.deinit(page_allocator);
@@ -681,6 +709,13 @@ fn processMain(
             }
         };
         if (resolved == null) resolved = resolveSection(codes, section);
+
+        if (resolved == null and (hasExplicitLanguageDeclaration(codes, section) or
+            (raw_aligned and hasExplicitLanguageDeclaration(codes, raw_sections.items[index]))))
+        {
+            fallbacks.unresolved_language_heading = true;
+            resolved = .{ .code = "", .heading = "Unclassified" };
+        }
 
         if (resolved) |language| {
             const group_index = groupIndex(groups.items, language) orelse blk: {
@@ -1284,6 +1319,140 @@ test "unsectioned Amharic entries use unique explicit language categories" {
     const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
     try std.testing.expectEqualStrings("en", decoded.entry.language_code);
     try std.testing.expect(std.mem.indexOf(u8, record.payload, "door (noun)") != null);
+}
+
+test "explicit unresolved Arabic language sections retain unverified ownership" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const LocalLanguages = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{
+                .{ "كرواتية", "hr", "Hrvatski" },
+                .{ "أيسلندية", "is", "Íslenska" },
+                .{ "Íslenska", "is", "Íslenska" },
+                .{ "برتغالية", "pt", "Português" },
+                .{ "Português", "pt", "Português" },
+                .{ "لاتينية", "la", "Latyn" },
+                .{ "العربية", "ar", "العربية" },
+            }) |entry| if (std.mem.eql(u8, value, entry[0]))
+                return .{ .code = entry[1], .heading = entry[2] };
+            return TestLanguages.resolve(null, value);
+        }
+
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |language| language.code else null;
+        }
+
+        fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "ar", .heading = "العربية" };
+        }
+    };
+    const codes: LanguageCodes = .{
+        .namespace_catalog = &namespaces,
+        .get_fn = LocalLanguages.get,
+        .resolve_fn = LocalLanguages.resolve,
+        .trusted_fn = LocalLanguages.resolve,
+        .content_fn = LocalLanguages.content,
+    };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+
+    // The Danish/Catalan declarations and their neighboring languages follow
+    // the pinned Arabic Sin and sol pages; labels are deliberately unresolved.
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Sin", "==كرواتية[[تصنيف:كرواتية]]==\n# Croatian definition\n==دانماركية[[تصنيف:دانماركية]]==\n# لَهُ Danish definition\n==اسم==\n# Danish noun detail\n==أيسلندية[[تصنيف:أيسلندية]]==\n# Icelandic definition\n", "=={{اللغة|كرواتية}}==\n# Croatian definition\n=={{اللغة|دانماركية}}==\n# لَهُ Danish definition\n==اسم==\n# Danish noun detail\n=={{اللغة|أيسلندية}}==\n# Icelandic definition\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "sol", "==برتغالية[[تصنيف:برتغالية]]==\n# Portuguese definition\n==كتالونية[[تصنيف:كتالونية]]==\n# Catalan definition\n==لاتينية[[تصنيف:لاتينية]]==\n# Latin definition\n", "=={{اللغة|برتغالية}}==\n# Portuguese definition\n=={{اللغة|كتالونية}}==\n# Catalan definition\n=={{اللغة|لاتينية}}==\n# Latin definition\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unknown-first", "==Notes==\n# Introductory material\n==دانماركية==\n# Unknown first definition\n==English==\n# English later definition\n", "==Notes==\n# Introductory material\n=={{اللغة|دانماركية}}==\n# Unknown first definition\n=={{اللغة|English}}==\n# English later definition\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "only-unknown", "==دانماركية==\n# First unknown definition\n===اسم===\n# First unknown noun\n==كتالونية==\n# Second unknown definition\n", "=={{اللغة|دانماركية}}==\n# First unknown definition\n===اسم===\n# First unknown noun\n=={{اللغة|كتالونية}}==\n# Second unknown definition\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unaligned", "==English==\n# Known text before changed boundary\n# Unknown text after changed boundary\n", "=={{اللغة|English}}==\n# Known text before changed boundary\n=={{اللغة|دانماركية}}==\n# Unknown text after changed boundary\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "rendered-resolves", "==French==\n# Rendered language evidence\n", "=={{اللغة|Unlisted spelling}}==\n# Rendered language evidence\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "support", "==English==\n# English definition\n==Conjugation==\n# Ordinary support content\n", "=={{اللغة|English}}==\n# English definition\n==Conjugation==\n# Ordinary support content\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unaligned-known", "==English==\n# Known content across structural expansion\n", "=={{اللغة|English}}==\n# Known content\n==Conjugation==\n# Across structural expansion\n", null);
+
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 13), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 7), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 6), stats.fallback_pages);
+
+    const Expected = struct {
+        heading: []const u8,
+        code: []const u8,
+        title: []const u8,
+        contains: []const u8,
+        excludes: ?[]const u8 = null,
+        section_heading: ?[]const u8 = null,
+    };
+    const expected = [_]Expected{
+        .{ .heading = "Hrvatski", .code = "hr", .title = "Sin", .contains = "Croatian definition", .excludes = "Danish" },
+        .{ .heading = "Íslenska", .code = "is", .title = "Sin", .contains = "Icelandic definition", .excludes = "Danish" },
+        .{ .heading = "Unclassified", .code = "", .title = "Sin", .contains = "Danish noun detail", .excludes = "Croatian definition", .section_heading = "دانماركية" },
+        .{ .heading = "Português", .code = "pt", .title = "sol", .contains = "Portuguese definition", .excludes = "Catalan definition" },
+        .{ .heading = "Latyn", .code = "la", .title = "sol", .contains = "Latin definition", .excludes = "Catalan definition" },
+        .{ .heading = "Unclassified", .code = "", .title = "sol", .contains = "Catalan definition", .excludes = "Portuguese definition", .section_heading = "كتالونية" },
+        .{ .heading = "English", .code = "en", .title = "unknown-first", .contains = "English later definition", .excludes = "Unknown first definition" },
+        .{ .heading = "Unclassified", .code = "", .title = "unknown-first", .contains = "Unknown first definition", .excludes = "English later definition", .section_heading = "دانماركية" },
+        .{ .heading = "Unclassified", .code = "", .title = "only-unknown", .contains = "First unknown definition", .section_heading = "دانماركية" },
+        .{ .heading = "Unclassified", .code = "", .title = "only-unknown", .contains = "Second unknown definition", .section_heading = "كتالونية" },
+        .{ .heading = "Unclassified", .code = "", .title = "unaligned", .contains = "Known text before changed boundary" },
+        .{ .heading = "Unclassified", .code = "", .title = "unaligned", .contains = "Unknown text after changed boundary" },
+        .{ .heading = "French", .code = "fr", .title = "rendered-resolves", .contains = "Rendered language evidence" },
+        .{ .heading = "English", .code = "en", .title = "support", .contains = "Ordinary support content" },
+        .{ .heading = "English", .code = "en", .title = "unaligned-known", .contains = "Known content across structural expansion" },
+    };
+    for (expected) |item| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, item.heading));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(item.code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(item.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(item.code, decoded.entry.language_code);
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        try std.testing.expect(std.mem.indexOf(u8, json, item.contains) != null);
+        if (item.excludes) |excluded| try std.testing.expect(std.mem.indexOf(u8, json, excluded) == null);
+        if (item.section_heading) |heading| {
+            var found = false;
+            for (decoded.entry.sections) |section| found = found or std.mem.eql(u8, section.title, heading);
+            try std.testing.expect(found);
+        }
+        if (std.mem.eql(u8, item.heading, "Unclassified")) {
+            inline for (.{ "rendered-resolves", "support", "unaligned-known" }) |title|
+                try std.testing.expect((try index.find(title)) == null);
+        }
+        if (std.mem.eql(u8, item.heading, "English"))
+            try std.testing.expect((try index.find("unaligned")) == null);
+    }
+
+    const manifest = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, blob_catalog.manifest_filename }), a, .unlimited);
+    try std.testing.expect(std.mem.indexOf(u8, manifest, "العربية") == null);
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .unlimited);
+    var lines = std.mem.tokenizeScalar(u8, report, '\n');
+    var isolated_pages: usize = 0;
+    while (lines.next()) |line| {
+        const row = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        const title = row.value.object.get("title").?.string;
+        if (std.mem.eql(u8, title, "support")) continue;
+        var unresolved = false;
+        for (row.value.object.get("reasons").?.array.items) |reason| {
+            unresolved = unresolved or std.mem.eql(u8, reason.string, "unresolved_language_heading");
+            try std.testing.expect(!std.mem.eql(u8, reason.string, "missing_language_heading"));
+        }
+        try std.testing.expect(unresolved);
+        isolated_pages += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 5), isolated_pages);
 }
 
 test "language resolution rejects fake top-level headings and uses real fallback language" {
