@@ -750,6 +750,9 @@ fn makeCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]cons
 }
 fn currentCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
+    // The provider is immutable across pages, but the current title is not.
+    // A module root may capture this value only in its page-owned template.
+    rt.markPageTemplateEffect();
     const host = host_api.getForStablePageRead(runtime) orelse return error.MissingScribuntoHost;
     if (host.current_title.len == 0) return error.MissingCurrentTitle;
     return one(try makeTitleValue(runtime, state, host.current_title));
@@ -1111,6 +1114,91 @@ test "localized media and file title aliases share canonical file metadata" {
         try std.testing.expectError(error.AotCallFailed, runtime.getIndex(unknown[0], .{ .string = field }));
         try std.testing.expectEqualStrings("FileMetadataSnapshotMissing", runtime.aotErrorName().?);
         runtime.clearAotErrorName();
+    }
+}
+
+test "current title root captures stay page scoped with stable providers" {
+    const Probe = struct {
+        var root_calls = std.atomic.Value(u32).init(0);
+
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            return if (std.mem.eql(u8, raw_name, "Module:CurrentTitleCapture")) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:CurrentTitleCapture" else null;
+        }
+        fn installTitle(runtime: *rt.Context, host: *host_api.Host) !void {
+            host_api.set(runtime, host);
+            const mw = try runtime.newNativeNamespace(.mw);
+            try installForTest(runtime, mw);
+            try runtime.setGlobal(23, .{ .table = mw });
+        }
+        fn root(runtime: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            _ = root_calls.fetchAdd(1, .monotonic);
+            const title_lib = try runtime.getIndex(runtime.getGlobal(23), .{ .string = "title" });
+            const current = try callField(runtime, title_lib, "getCurrentTitle", &.{});
+            defer rt.freeResults(current);
+            const captured = try runtime.allocator.create(rt.Cell);
+            captured.* = .{ .value = try runtime.getIndex(current[0], .{ .string = "text" }) };
+            const exports = try runtime.newTable();
+            try exports.rawSet(runtime.allocator, .{ .string = "plural" }, try runtime.makeFunctionKnown(1, plural, &.{captured}));
+            return one(.{ .table = exports });
+        }
+        fn plural(runtime: *rt.Context, captures: rt.Captures, _: []const Value) ![]const Value {
+            return one(try runtime.concatValues(&.{ (try captures.cell(0)).value, .{ .string = "e" } }));
+        }
+    };
+    Probe.root_calls.store(0, .monotonic);
+    var worker_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer worker_arena.deinit();
+    var worker = try rt.Context.initProgram(worker_arena.allocator(), 24, 1);
+    defer worker.deinit();
+    const roots = [_]rt.FunctionFn{rt.stabilize(Probe.root)};
+    worker.module_root_entries = &roots;
+    worker.configureModules(null, Probe.lookup, Probe.name);
+    var worker_eligible = [_]bool{false};
+    var worker_rejected = [_]bool{false};
+    worker.module_template_eligible = &worker_eligible;
+    worker.module_template_rejected = &worker_rejected;
+    var worker_host = host_api.Host{ .stable_page_reads = true };
+    try Probe.installTitle(&worker, &worker_host);
+
+    const pages = [_]struct { title: []const u8, plural: []const u8 }{
+        .{ .title = "e", .plural = "ee" },
+        .{ .title = "gunsteling", .plural = "gunstelinge" },
+        .{ .title = "kriptogeld", .plural = "kriptogelde" },
+        .{ .title = "sponsdier", .plural = "sponsdiere" },
+    };
+    for (pages, 0..) |expected, page_index| {
+        var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer page_arena.deinit();
+        var page = try worker.forkProgram(page_arena.allocator());
+        defer page.deinit();
+        page.module_template_context = &worker;
+        var page_eligible = worker_eligible;
+        var page_rejected = worker_rejected;
+        page.module_template_eligible = &page_eligible;
+        page.module_template_rejected = &page_rejected;
+        var host = host_api.Host{ .current_title = expected.title, .stable_page_reads = true };
+        try Probe.installTitle(&page, &host);
+
+        // Separate invocation contexts must reuse this page's captured root.
+        for (0..2) |_| {
+            var invoke_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer invoke_arena.deinit();
+            var invocation = try page.forkProgram(invoke_arena.allocator());
+            defer invocation.deinit();
+            invocation.module_template_context = &page;
+            invocation.module_template_page_scope = true;
+            try Probe.installTitle(&invocation, &host);
+            const module = try invocation.requireByName("Module:CurrentTitleCapture");
+            const output = try callField(&invocation, module, "plural", &.{});
+            defer rt.freeResults(output);
+            try std.testing.expectEqualStrings(expected.plural, output[0].string);
+            try std.testing.expectEqual(@as(u32, @intCast(page_index + 1)), Probe.root_calls.load(.monotonic));
+            try std.testing.expect(page_eligible[0] and !page_rejected[0]);
+            try std.testing.expect(!worker_eligible[0] and !worker_rejected[0]);
+        }
     }
 }
 
