@@ -542,12 +542,6 @@ fn requireEnglishLocale(raw: ?*anyopaque) !*LanguageCtx {
     return ctx;
 }
 
-fn requireBaseCaseLocale(raw: ?*anyopaque) !*LanguageCtx {
-    const ctx = try languageContext(raw);
-    if (!std.mem.eql(u8, ctx.code, "en") and !std.mem.eql(u8, ctx.code, "it")) return error.NotImplemented;
-    return ctx;
-}
-
 fn languageGetCode(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const a = runtime.allocator;
     const ctx: *LanguageCtx = @ptrCast(@alignCast(ctx_raw.?));
@@ -600,6 +594,38 @@ pub fn firstCaseAlloc(case_mapper: *ustring_lib.Normalizer, a: std.mem.Allocator
     return out;
 }
 
+const FirstCaseClass = enum { base, az, tr, kaa };
+
+fn firstCaseClass(code: []const u8) FirstCaseClass {
+    // MediaWiki 1.47.0-wmf.22 LanguageFactory chooses the direct class, then
+    // the first existing class in its language fallback chain. These are the
+    // only classes overriding ucfirst/lcfirst; their full uc/lc stay base.
+    // https://gerrit.wikimedia.org/r/plugins/gitiles/mediawiki/core/+/534a011895bffbb001eef512fc313b8ad4bc939c/includes/Languages/
+    if (std.mem.eql(u8, code, "az")) return .az;
+    if (std.mem.eql(u8, code, "kaa")) return .kaa;
+    inline for (.{ "tr", "crh", "crh-cyrl", "crh-latn", "gag", "kiu", "lzz" }) |inherited|
+        if (std.mem.eql(u8, code, inherited)) return .tr;
+    return .base;
+}
+
+fn languageFirstCaseAlloc(ctx: *LanguageCtx, a: std.mem.Allocator, source: []const u8, upper: bool) ![]const u8 {
+    const class = firstCaseClass(ctx.code);
+    const replacement: ?struct { from: []const u8, to: []const u8 } = switch (class) {
+        .base => null,
+        .az => if (upper and std.mem.startsWith(u8, source, "i")) .{ .from = "i", .to = "İ" } else null,
+        .tr => if (upper)
+            (if (std.mem.startsWith(u8, source, "i")) .{ .from = "i", .to = "İ" } else if (std.mem.startsWith(u8, source, "ı")) .{ .from = "ı", .to = "I" } else null)
+        else
+            (if (std.mem.startsWith(u8, source, "I")) .{ .from = "I", .to = "ı" } else if (std.mem.startsWith(u8, source, "İ")) .{ .from = "İ", .to = "i" } else null),
+        .kaa => if (upper)
+            (if (std.mem.startsWith(u8, source, "ı")) .{ .from = "ı", .to = "Í" } else null)
+        else
+            (if (std.mem.startsWith(u8, source, "Í")) .{ .from = "Í", .to = "ı" } else null),
+    };
+    if (replacement) |pair| return try std.mem.concat(a, u8, &.{ pair.to, source[pair.from.len..] });
+    return firstCaseAlloc(ctx.case_mapper, a, source, upper);
+}
+
 fn mediaWikiCaseAlloc(
     case_mapper: *ustring_lib.Normalizer,
     a: std.mem.Allocator,
@@ -623,19 +649,19 @@ fn mediaWikiCaseAlloc(
 }
 
 fn languageUc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const ctx = try requireBaseCaseLocale(ctx_raw);
+    const ctx = try languageContext(ctx_raw);
     const a = runtime.allocator;
     return one(a, .{ .string = try mediaWikiCaseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), true) });
 }
 
 fn languageLc(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const ctx = try requireBaseCaseLocale(ctx_raw);
+    const ctx = try languageContext(ctx_raw);
     const a = runtime.allocator;
     return one(a, .{ .string = try mediaWikiCaseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), false) });
 }
 
 fn contentLanguageUpper(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const ctx = try requireEnglishLocale(ctx_raw);
+    const ctx: *LanguageFactoryCtx = @ptrCast(@alignCast(ctx_raw orelse return error.MissingLanguageFactory));
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     return one(runtime.allocator, .{
         .string = try mediaWikiCaseAlloc(ctx.case_mapper, runtime.allocator, args[0].string, true),
@@ -643,7 +669,7 @@ fn contentLanguageUpper(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []cons
 }
 
 fn contentLanguageLower(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const ctx = try requireEnglishLocale(ctx_raw);
+    const ctx: *LanguageFactoryCtx = @ptrCast(@alignCast(ctx_raw orelse return error.MissingLanguageFactory));
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     return one(runtime.allocator, .{
         .string = try mediaWikiCaseAlloc(ctx.case_mapper, runtime.allocator, args[0].string, false),
@@ -651,15 +677,15 @@ fn contentLanguageLower(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []cons
 }
 
 fn languageUcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const ctx = try requireBaseCaseLocale(ctx_raw);
+    const ctx = try languageContext(ctx_raw);
     const a = runtime.allocator;
-    return one(a, .{ .string = try firstCaseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), true) });
+    return one(a, .{ .string = try languageFirstCaseAlloc(ctx, a, try sourceMethodArg(args), true) });
 }
 
 fn languageLcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const ctx = try requireBaseCaseLocale(ctx_raw);
+    const ctx = try languageContext(ctx_raw);
     const a = runtime.allocator;
-    return one(a, .{ .string = try firstCaseAlloc(ctx.case_mapper, a, try sourceMethodArg(args), false) });
+    return one(a, .{ .string = try languageFirstCaseAlloc(ctx, a, try sourceMethodArg(args), false) });
 }
 
 fn languageGetDir(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
@@ -874,20 +900,19 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table, case_mapper: *ustring_lib.No
     try setNative(runtime, mw, "getContentLanguage", factory, getContentLanguage);
     try setNative(runtime, mw, "getLanguage", factory, languageNew);
 
-    // Scribunto replaces mw.ustring.upper/lower with the content-language
-    // methods after installing mw.language.
+    // Scribunto replaces mw.ustring.upper/lower with content-language uc/lc.
+    // Every MediaWiki language class inherits the same full-string methods;
+    // only ucfirst/lcfirst have language-specific overrides.
     if (mw.rawGet(.{ .string = "ustring" })) |ustring_value| if (ustring_value == .table) {
-        const content_ctx = try runtime.allocator.create(LanguageCtx);
-        content_ctx.* = .{ .code = "en", .case_mapper = case_mapper };
         try ustring_value.table.rawSetNativeField(
             .ustring,
             "upper",
-            try runtime.newNative(content_ctx, contentLanguageUpper),
+            try runtime.newNative(factory, contentLanguageUpper),
         );
         try ustring_value.table.rawSetNativeField(
             .ustring,
             "lower",
-            try runtime.newNative(content_ctx, contentLanguageLower),
+            try runtime.newNative(factory, contentLanguageLower),
         );
     };
 }
@@ -1109,9 +1134,94 @@ test "AOT language objects expose MediaWiki helpers" {
     defer rt.freeResults(french_code);
     try std.testing.expectEqualStrings("fr", french_code[0].string);
     const upper_fn = try runtime.getIndex(french[0], .{ .string = "uc" });
-    try std.testing.expectError(error.AotCallFailed, runtime.callValue(upper_fn, &.{ french[0], .{ .string = "abc" } }));
-    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
-    runtime.clearAotErrorName();
+    const french_upper = try runtime.callValue(upper_fn, &.{ french[0], .{ .string = "abc" } });
+    defer rt.freeResults(french_upper);
+    try std.testing.expectEqualStrings("ABC", french_upper[0].string);
+}
+
+test "AOT edition case uses base full strings and MediaWiki first character classes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var registry = try rt.namespace_registry.Registry.init(std.testing.allocator, rt.namespace_registry.english_test_fixture);
+    defer registry.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &registry;
+    const mw = try runtime.newTable();
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    const case_mapper = try ustring_lib.install(&runtime, ustring);
+    try mw.rawSet(runtime.allocator, .{ .string = "ustring" }, .{ .table = ustring });
+    try install(&runtime, mw, case_mapper);
+
+    // Both real regression paths select the edition language, including
+    // parser ucfirst/lcfirst, which call these same language object methods.
+    const cases = [_]struct { code: []const u8, method: []const u8, source: []const u8, expected: []const u8 }{
+        .{ .code = "af", .method = "ucfirst", .source = "koppelvlak", .expected = "Koppelvlak" },
+        .{ .code = "af", .method = "lcfirst", .source = "Selfstandig", .expected = "selfstandig" },
+        .{ .code = "af", .method = "ucfirst", .source = "selfstandige naamwoorde", .expected = "Selfstandige naamwoorde" },
+        .{ .code = "ang", .method = "ucfirst", .source = "wǽre", .expected = "Wǽre" },
+        .{ .code = "ang", .method = "lcfirst", .source = "DA", .expected = "dA" },
+        .{ .code = "ar", .method = "ucfirst", .source = "عربي", .expected = "عربي" },
+        .{ .code = "fr", .method = "ucfirst", .source = "éClair", .expected = "ÉClair" },
+        .{ .code = "af", .method = "ucfirst", .source = "ßETA", .expected = "ßETA" },
+        .{ .code = "ang", .method = "ucfirst", .source = "ǰfoo", .expected = "J̌foo" },
+        .{ .code = "az", .method = "ucfirst", .source = "istanbul", .expected = "İstanbul" },
+        .{ .code = "az", .method = "lcfirst", .source = "Istanbul", .expected = "istanbul" },
+        .{ .code = "tr", .method = "ucfirst", .source = "istanbul", .expected = "İstanbul" },
+        .{ .code = "tr", .method = "ucfirst", .source = "ıSTANBUL", .expected = "ISTANBUL" },
+        .{ .code = "tr", .method = "lcfirst", .source = "ISTANBUL", .expected = "ıSTANBUL" },
+        .{ .code = "tr", .method = "lcfirst", .source = "İstanbul", .expected = "istanbul" },
+        .{ .code = "kaa", .method = "ucfirst", .source = "ırmak", .expected = "Írmak" },
+        .{ .code = "kaa", .method = "lcfirst", .source = "Írmak", .expected = "ırmak" },
+        // Unknown codes fall back to base; do not infer classes by prefix.
+        .{ .code = "az-latn", .method = "ucfirst", .source = "istanbul", .expected = "Istanbul" },
+        .{ .code = "tr-unknown", .method = "lcfirst", .source = "Istanbul", .expected = "istanbul" },
+    };
+    for (cases) |case| {
+        registry.content_language = case.code;
+        const content = try callField(&runtime, .{ .table = mw }, "getContentLanguage", &.{});
+        defer rt.freeResults(content);
+        const code = try callField(&runtime, content[0], "getCode", &.{content[0]});
+        defer rt.freeResults(code);
+        try std.testing.expectEqualStrings(case.code, code[0].string);
+        const result = try callField(&runtime, content[0], case.method, &.{ content[0], .{ .string = case.source } });
+        defer rt.freeResults(result);
+        try std.testing.expectEqualStrings(case.expected, result[0].string);
+    }
+
+    for ([_][]const u8{ "af", "ang", "ar", "az", "kaa", "tr", "crh", "crh-cyrl", "crh-latn", "gag", "kiu", "lzz" }) |code| {
+        const language = try callField(&runtime, .{ .table = mw }, "getLanguage", &.{.{ .string = code }});
+        defer rt.freeResults(language);
+        // Full-string case is not Turkish locale case, even in LanguageTr.
+        const upper = try callField(&runtime, language[0], "uc", &.{ language[0], .{ .string = "iı straße" } });
+        defer rt.freeResults(upper);
+        try std.testing.expectEqualStrings("II STRASSE", upper[0].string);
+        const lower = try callField(&runtime, language[0], "lc", &.{ language[0], .{ .string = "Iİ ÉCLAIR" } });
+        defer rt.freeResults(lower);
+        try std.testing.expectEqualStrings("ii̇ éclair", lower[0].string);
+    }
+    for ([_][]const u8{ "tr", "crh", "crh-cyrl", "crh-latn", "gag", "kiu", "lzz" }) |code| {
+        const language = try callField(&runtime, .{ .table = mw }, "getLanguage", &.{.{ .string = code }});
+        defer rt.freeResults(language);
+        const first = try callField(&runtime, language[0], "ucfirst", &.{ language[0], .{ .string = "istanbul" } });
+        defer rt.freeResults(first);
+        try std.testing.expectEqualStrings("İstanbul", first[0].string);
+        const lower_first = try callField(&runtime, language[0], "lcfirst", &.{ language[0], .{ .string = "Istanbul" } });
+        defer rt.freeResults(lower_first);
+        try std.testing.expectEqualStrings("ıstanbul", lower_first[0].string);
+    }
+    // Ustring aliases share full-string base semantics, without a fabricated
+    // language context or a different first-character policy leaking into uc.
+    const upper = try callField(&runtime, .{ .table = ustring }, "upper", &.{.{ .string = "iı straße" }});
+    defer rt.freeResults(upper);
+    try std.testing.expectEqualStrings("II STRASSE", upper[0].string);
+    const lower = try callField(&runtime, .{ .table = ustring }, "lower", &.{.{ .string = "Iİ ÉCLAIR" }});
+    defer rt.freeResults(lower);
+    try std.testing.expectEqualStrings("ii̇ éclair", lower[0].string);
+    const broken = [_]u8{ 'a', 0xc9, 'B' };
+    const broken_upper = try callField(&runtime, .{ .table = ustring }, "upper", &.{.{ .string = &broken }});
+    defer rt.freeResults(broken_upper);
+    try std.testing.expectEqualSlices(u8, &.{ 'A', 0xc9, 'B' }, broken_upper[0].string);
 }
 
 const KnownLanguageTagProbe = struct {

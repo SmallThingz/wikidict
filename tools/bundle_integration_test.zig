@@ -1082,6 +1082,118 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
     try h.require(fallback_count == 1, "the visible Lua error is counted once in fallback accounting");
 }
 
+fn hasSemanticLink(value: std.json.Value, target: []const u8, label: []const u8) bool {
+    switch (value) {
+        .object => |object| {
+            if (object.get("target")) |destination| {
+                if (object.get("text")) |text| {
+                    if (destination == .string and text == .string and
+                        std.mem.eql(u8, destination.string, target) and std.mem.eql(u8, text.string, label)) return true;
+                }
+            }
+            for (object.values()) |child| {
+                if (hasSemanticLink(child, target, label)) return true;
+            }
+        },
+        .array => |array| for (array.items) |child| {
+            if (hasSemanticLink(child, target, label)) return true;
+        },
+        else => {},
+    }
+    return false;
+}
+
+fn contentLanguageCaseProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const case_module =
+        \\return {run=function(frame)
+        \\    local content = mw.getContentLanguage()
+        \\    assert(content:getCode() == frame.args[1])
+        \\    assert(content:uc('äbc') == 'ÄBC' and content:lc('ÄBC') == 'äbc')
+        \\    assert(content:ucfirst('wǽre') == 'Wǽre' and content:lcfirst('WǽRE') == 'wǽRE')
+        \\    assert(content:ucfirst('selfstandige naamwoorde') == 'Selfstandige naamwoorde')
+        \\    assert(mw.ustring.upper('äbc') == 'ÄBC' and mw.ustring.lower('ÄBC') == 'äbc')
+        \\    local af, ang = mw.language.new('af'), mw.language.new('ang')
+        \\    assert(af:ucfirst('selfstandige naamwoorde') == 'Selfstandige naamwoorde')
+        \\    assert(ang:lcfirst(ang:uc('da')) == 'dA' and ang:ucfirst('wǽre') == 'Wǽre')
+        \\    local tr = mw.language.new('tr')
+        \\    assert(tr:uc('istanbul') == 'ISTANBUL' and tr:lc('ISTANBUL') == 'istanbul')
+        \\    assert(tr:ucfirst('istanbul') == 'İstanbul' and tr:ucfirst('ısparta') == 'Isparta')
+        \\    assert(tr:lcfirst('Istanbul') == 'ıstanbul' and tr:lcfirst('İzmir') == 'izmir')
+        \\    local az = mw.language.new('az')
+        \\    assert(az:ucfirst('istanbul') == 'İstanbul' and az:lcfirst('Istanbul') == 'istanbul')
+        \\    local kaa = mw.language.new('kaa')
+        \\    assert(kaa:ucfirst('ıraq') == 'Íraq' and kaa:lcfirst('Íraq') == 'ıraq')
+        \\    assert(mw.language.new('crh'):ucfirst('istanbul') == 'İstanbul')
+        \\    assert(mw.language.new('az-latn'):ucfirst('istanbul') == 'Istanbul')
+        \\    return 'content language ' .. content:getCode() .. ' case methods verified'
+        \\end}
+    ;
+    const editions = [_]struct { code: []const u8, heading: []const u8, iso3: []const u8, template_ns: []const u8, title: []const u8 }{
+        .{ .code = "af", .heading = "Afrikaans", .iso3 = "afr", .template_ns = "Sjabloon", .title = "koppelvlak" },
+        .{ .code = "ang", .heading = "Englisc", .iso3 = "ang", .template_ns = "Bysen", .title = "fire" },
+    };
+    for (editions) |edition| {
+        const prefix = try std.fmt.allocPrint(h.a, "{s}-content-case", .{edition.code});
+        const root = try std.fs.path.join(h.a, &.{ dir, prefix });
+        const dump = try std.fmt.allocPrint(h.a, "{s}/{s}.xml", .{ dir, prefix });
+        const namespaces = try std.fmt.allocPrint(h.a, "{s}/{s}-namespaces.tsv", .{ dir, prefix });
+        const languages = try std.fmt.allocPrint(h.a, "{s}/{s}-languages.tsv", .{ dir, prefix });
+        try std.Io.Dir.cwd().writeFile(h.io, .{
+            .sub_path = namespaces,
+            .data = try std.fmt.allocPrint(h.a, "# wikidict-namespace-registry-v1\n# wiki\t{s}wiktionary\n# dump-date\t20261001\n# content-language\t{s}\n" ++
+                "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+                "10\t{s}\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+                "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
+                "828\tModule\tModule\tcase-sensitive\t1\t0\t0\tScribunto\tcompile_only\tmodules\n", .{ edition.code, edition.code, edition.template_ns }),
+        });
+        try std.Io.Dir.cwd().writeFile(h.io, .{
+            .sub_path = languages,
+            .data = try std.fmt.allocPrint(h.a, "# wikidict-language-registry-v2\n# content-language\t{s}\n# mediawiki\n{s}\t{s}\t{s}\t{s}\n# iso-639-3\n", .{
+                edition.code, edition.code, edition.heading, edition.code, edition.iso3,
+            }),
+        });
+        if (std.mem.eql(u8, edition.code, "af")) {
+            // Pinned koppelvlak -> Sjabloon:A, plus the paired first-case
+            // operations used by Sjabloon:H. Keep the nested PAGENAME call.
+            try writePages(h.io, h.a, dump, &.{
+                .{ .title = "koppelvlak", .ns = 0, .id = 1, .body = "==Afrikaans==\n# {{A|Koppelvlak}}\n# {{H|selfstandige naamwoord}}\n# {{#invoke:CaseProbe|run|af}}\n" },
+                .{ .title = "Sjabloon:A", .ns = 10, .id = 2, .body = "[[#Afrikaans (af)|{{ucfirst:{{PAGENAME}}}}]]" },
+                .{ .title = "Sjabloon:H", .ns = 10, .id = 3, .body = "<includeonly>[[{{lcfirst:{{{1|}}}}}|{{ucfirst:{{{1|}}}}}]]</includeonly>" },
+                .{ .title = "Module:CaseProbe", .ns = 828, .id = 4, .body = case_module },
+            });
+        } else {
+            // Reduce the pinned cardinal -> context/tag and wikipedia
+            // wrappers to their case expressions while preserving parameters.
+            try writePages(h.io, h.a, dump, &.{
+                .{ .title = "fire", .ns = 0, .id = 1, .body = "==Englisc==\n# Cardinal case: {{cardinal|lang=da}}\n# {{#invoke:CaseProbe|run|ang}}\n" },
+                .{ .title = "Bysen:cardinal", .ns = 10, .id = 2, .body = "{{context/tag|cardinal|lang={{{lang}}}}}" },
+                .{ .title = "Bysen:context/tag", .ns = 10, .id = 3, .body = "{{lcfirst:{{uc:{{{lang}}}}}}}" },
+                .{ .title = "Module:CaseProbe", .ns = 828, .id = 4, .body = case_module },
+                .{ .title = "wǽre", .ns = 0, .id = 5, .body = "==Englisc==\n# Wikipedia title: {{wikipedia}}\n" },
+                .{ .title = "Bysen:wikipedia", .ns = 10, .id = 6, .body = "{{{1|{{ucfirst:{{PAGENAME}}}}}}}" },
+            });
+        }
+        _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespaces, "--language-registry-snapshot", languages, "--llvm-workers", "1", "--page-workers", "1" }, 0);
+        _ = try verifyFixture(h, verifier, root, null);
+        const word = try h.run(&.{ bin, "lookup", edition.title, "--root", root, "--language", edition.heading, "--details" }, 0);
+        const witness = try std.fmt.allocPrint(h.a, "content language {s} case methods verified", .{edition.code});
+        try h.require(std.mem.indexOf(u8, word, witness) != null, "native content-language and language-object case methods use inherited base rules and explicit first-character overrides");
+        if (std.mem.eql(u8, edition.code, "af")) {
+            const exported = try h.run(&.{ bin, "export", edition.title, "--root", root, "--language", edition.heading }, 0);
+            var parsed = try std.json.parseFromSlice(std.json.Value, h.a, exported, .{});
+            defer parsed.deinit();
+            try h.require(hasSemanticLink(parsed.value, "#Afrikaans (af)", "Koppelvlak"), "Afrikaans A template preserves its fragment target and uppercases the nested current page name");
+            try h.require(hasSemanticLink(parsed.value, "selfstandige naamwoord", "Selfstandige naamwoord"), "Afrikaans H template compiles both lower-first targets and upper-first link labels");
+        } else {
+            try h.require(std.mem.indexOf(u8, word, "Cardinal case: dA") != null, "Old English cardinal wrappers expand nested full uppercase and first lowercase calls");
+            const wikipedia = try h.run(&.{ bin, "lookup", "wǽre", "--root", root, "--language", edition.heading, "--details" }, 0);
+            try h.require(std.mem.indexOf(u8, wikipedia, "Wikipedia title: Wǽre") != null, "Old English default parameters preserve the current page title through ucfirst");
+        }
+        const fallbacks = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, "fallback-pages.jsonl" }), h.a, .limited(4096));
+        try h.require(std.mem.trim(u8, fallbacks, " \t\r\n").len == 0, "Afrikaans and Old English case paths publish without expansion errors or visible Lua error fallbacks");
+    }
+}
+
 fn japaneseParserAliasProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
     const root = try std.fs.path.join(h.a, &.{ dir, "japanese-dictionary" });
     const dump = try std.fs.path.join(h.a, &.{ dir, "japanese.xml" });
@@ -1334,6 +1446,7 @@ pub fn main(init: std.process.Init) !void {
     try unclassifiedLanguageProbe(&h, pipeline, verifier, bin, dir);
     try structuredWikibaseProbe(&h, pipeline, verifier, bin, dir);
     try japaneseParserAliasProbe(&h, pipeline, verifier, bin, dir);
+    try contentLanguageCaseProbe(&h, pipeline, verifier, bin, dir);
     try deadlineProbe(init.io, a, dir);
     try failureMetadataProbe(&h, dir);
     try expansionFallbackProbe(&h, argv[6], verifier, bin, dir);
