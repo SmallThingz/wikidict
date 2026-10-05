@@ -120,9 +120,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    if (filter) |f| {
-        defer init.gpa.free(f);
-    }
+    defer if (filter) |f| init.gpa.free(f);
     try runAllTests(init.gpa, init.io, argv0, filter, jobs, seed);
 }
 
