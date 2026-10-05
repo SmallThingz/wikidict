@@ -373,16 +373,42 @@ fn messageParamString(runtime: *rt.Context, value: Value) ![]const u8 {
     };
 }
 
+fn checkedMessageParam(runtime: *rt.Context, value: Value) !Value {
+    return if (value == .table)
+        Value{ .string = try messageParamString(runtime, value) }
+    else switch (value) {
+        .string, .number => value,
+        else => return error.MessageParamExpected,
+    };
+}
+
 fn appendMessageParams(runtime: *rt.Context, ctx: *MessageCtx, values: []const Value) !void {
-    for (values) |value| {
-        const stored = if (value == .table)
-            Value{ .string = try messageParamString(runtime, value) }
-        else switch (value) {
-            .string, .number => value,
-            else => return error.MessageParamExpected,
-        };
-        try ctx.params.append(runtime.allocator, stored);
+    // Scribunto accepts either one sequence table or individual parameters.
+    // An object with __tostring remains a scalar parameter in either form.
+    if (values.len != 0 and values[0] == .table and
+        (if (runtime.metamethod(values[0], "__tostring")) |method| !method.truthy() else true))
+    {
+        if (values.len != 1) return error.MixedMessageParameterForms;
+        const params = values[0];
+        // Match table.maxn, not the sequence length: holes are invalid params.
+        var maximum: f64 = 0;
+        var entries = params.table.iterator();
+        while (entries.next()) |entry| {
+            if (entry.key_ptr.* == .number and entry.key_ptr.number > maximum)
+                maximum = entry.key_ptr.number;
+        }
+        var index: f64 = 1;
+        while (index <= maximum) : (index += 1) {
+            const key = Value{ .number = index };
+            const stored = try checkedMessageParam(runtime, try runtime.getIndex(params, key));
+            // checkParams writes scalarized objects back into the caller's array.
+            try runtime.setIndex(params, key, stored);
+            try ctx.params.append(runtime.allocator, stored);
+        }
+        return;
     }
+    for (values) |value|
+        try ctx.params.append(runtime.allocator, try checkedMessageParam(runtime, value));
 }
 
 fn substituteMessageParams(runtime: *rt.Context, source: []const u8, params: []const Value) ![]const u8 {
@@ -479,20 +505,95 @@ fn tableField(table: *rt.Table, name: []const u8) ?Value {
     return table.rawGet(.{ .string = name });
 }
 
-fn localizedEnglish(value: Value) !Value {
-    if (value != .table) return error.InvalidExternalDataSnapshot;
-    const english = tableField(value.table, "en") orelse return error.NotImplemented;
-    if (english != .string) return error.InvalidExternalDataSnapshot;
-    return english;
+// JsonConfig selects from ordered JSON before conversion to Lua hash tables.
+fn localizedJsonString(host: *host_api.Host, language: []const u8, value: std.json.Value) !std.json.Value {
+    if (value != .object) return error.InvalidExternalDataSnapshot;
+    if (value.object.get(language)) |selected| {
+        if (selected != .string) return error.InvalidExternalDataSnapshot;
+        return selected;
+    }
+    if (!std.mem.eql(u8, language, "en")) {
+        const get = host.language_fallbacks orelse {
+            std.log.warn("language fallback snapshot unavailable: language={s}", .{language[0..@min(language.len, 128)]});
+            return error.LanguageFallbackSnapshotMissing;
+        };
+        for (try get(host.ctx, language)) |fallback| {
+            if (value.object.get(fallback)) |selected| {
+                if (selected != .string) return error.InvalidExternalDataSnapshot;
+                return selected;
+            }
+        }
+    }
+    // The snapshot stores STRICT. MESSAGES appends English, and JsonConfig
+    // also explicitly checks English after that chain.
+    if (value.object.get("en")) |selected| {
+        if (selected != .string) return error.InvalidExternalDataSnapshot;
+        return selected;
+    }
+    if (value.object.count() == 0) return .{ .string = "" };
+    const first = value.object.values()[0];
+    if (first != .string) return error.InvalidExternalDataSnapshot;
+    // PHP reset($map) ?: '' also treats the string "0" as false.
+    return if (std.mem.eql(u8, first.string, "0")) .{ .string = "" } else first;
 }
 
-fn englishLicense(runtime: *rt.Context, code: []const u8) !Value {
-    if (!std.mem.eql(u8, code, "CC-BY-SA-4.0")) return error.NotImplemented;
-    const license = try runtime.newTable();
-    try license.rawSet(runtime.allocator, .{ .string = "code" }, .{ .string = "CC-BY-SA-4.0" });
-    try license.rawSet(runtime.allocator, .{ .string = "text" }, .{ .string = "Creative Commons Attribution-Share Alike 4.0" });
-    try license.rawSet(runtime.allocator, .{ .string = "url" }, .{ .string = "https://creativecommons.org/licenses/by-sa/4.0/deed.en" });
-    return .{ .table = license };
+fn localizedJsonLicense(runtime: *rt.Context, a: std.mem.Allocator, host: *host_api.Host, language: []const u8, code: []const u8) !std.json.Value {
+    var license: std.json.ObjectMap = .empty;
+    try license.put(a, "code", .{ .string = code });
+    inline for (.{ .{ "text", "name" }, .{ "url", "url" } }) |field| {
+        const key = try std.fmt.allocPrint(runtime.allocator, "jsonconfig-license-{s}-{s}", .{ field[1], code });
+        defer runtime.allocator.free(key);
+        const resolved = (try snapshotMessageSource(runtime, host, language, key)) orelse
+            try std.fmt.allocPrint(runtime.allocator, "⧼{s}⧽", .{key});
+        try license.put(a, field[0], .{ .string = resolved });
+    }
+    return .{ .object = license };
+}
+
+fn localizedTabularJson(runtime: *rt.Context, a: std.mem.Allocator, host: *host_api.Host, language: []const u8, raw: std.json.Value) !std.json.Value {
+    if (raw != .object) return error.InvalidExternalDataSnapshot;
+    var out: std.json.ObjectMap = .empty;
+    if (raw.object.get("description")) |description|
+        try out.put(a, "description", try localizedJsonString(host, language, description));
+    if (raw.object.get("license")) |license| {
+        if (license != .string) return error.InvalidExternalDataSnapshot;
+        try out.put(a, "license", try localizedJsonLicense(runtime, a, host, language, license.string));
+    }
+    inline for (.{ "sources", "mediawikiCategories" }) |key|
+        if (raw.object.get(key)) |value| try out.put(a, key, value);
+
+    const schema = raw.object.get("schema") orelse return error.InvalidExternalDataSnapshot;
+    if (schema != .object) return error.InvalidExternalDataSnapshot;
+    const fields = schema.object.get("fields") orelse return error.InvalidExternalDataSnapshot;
+    if (fields != .array) return error.InvalidExternalDataSnapshot;
+    var localized_columns: std.ArrayList(bool) = .empty;
+    var out_fields: std.array_list.Managed(std.json.Value) = .init(a);
+    for (fields.array.items) |field| {
+        if (field != .object) return error.InvalidExternalDataSnapshot;
+        const name = field.object.get("name") orelse return error.InvalidExternalDataSnapshot;
+        const kind = field.object.get("type") orelse return error.InvalidExternalDataSnapshot;
+        if (name != .string or kind != .string) return error.InvalidExternalDataSnapshot;
+        var out_field: std.json.ObjectMap = .empty;
+        try out_field.put(a, "name", name);
+        try out_field.put(a, "type", kind);
+        try out_field.put(a, "title", if (field.object.get("title")) |title| try localizedJsonString(host, language, title) else name);
+        try out_fields.append(.{ .object = out_field });
+        try localized_columns.append(a, std.mem.eql(u8, kind.string, "localized"));
+    }
+    var out_schema: std.json.ObjectMap = .empty;
+    try out_schema.put(a, "fields", .{ .array = out_fields });
+    try out.put(a, "schema", .{ .object = out_schema });
+    const data = raw.object.get("data") orelse std.json.Value{ .array = .init(a) };
+    if (data != .array) return error.InvalidExternalDataSnapshot;
+    for (data.array.items) |row| {
+        if (row != .array or row.array.items.len != localized_columns.items.len) return error.InvalidExternalDataSnapshot;
+        for (row.array.items, localized_columns.items) |*cell, localized| {
+            if (localized and cell.* != .null)
+                cell.* = try localizedJsonString(host, language, cell.*);
+        }
+    }
+    try out.put(a, "data", data);
+    return .{ .object = out };
 }
 
 fn reindexPreservedArray(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
@@ -532,94 +633,34 @@ fn reindexTabularRaw(runtime: *rt.Context, raw: *rt.Table) !void {
     try raw.rawSet(runtime.allocator, .{ .string = "data" }, .{ .table = data });
 }
 
-fn localizedTabular(runtime: *rt.Context, raw: *rt.Table) !Value {
-    const out = try runtime.newTable();
-    if (tableField(raw, "description")) |description|
-        try out.rawSet(runtime.allocator, .{ .string = "description" }, try localizedEnglish(description));
-    if (tableField(raw, "license")) |license| {
-        if (license != .string) return error.InvalidExternalDataSnapshot;
-        try out.rawSet(runtime.allocator, .{ .string = "license" }, try englishLicense(runtime, license.string));
-    }
-    if (tableField(raw, "sources")) |sources|
-        try out.rawSet(runtime.allocator, .{ .string = "sources" }, sources);
-    if (tableField(raw, "mediawikiCategories")) |categories|
-        try out.rawSet(runtime.allocator, .{ .string = "mediawikiCategories" }, categories);
-
-    const schema_value = tableField(raw, "schema") orelse return error.InvalidExternalDataSnapshot;
-    if (schema_value != .table) return error.InvalidExternalDataSnapshot;
-    const fields_value = tableField(schema_value.table, "fields") orelse return error.InvalidExternalDataSnapshot;
-    if (fields_value != .table) return error.InvalidExternalDataSnapshot;
-    const out_schema = try runtime.newTable();
-    const out_fields = try runtime.newTable();
-    var localized_columns: std.ArrayList(bool) = .empty;
-    defer localized_columns.deinit(runtime.allocator);
-
-    var field_index: usize = 1;
-    while (fields_value.table.rawGetNumber(@floatFromInt(field_index))) |field_value| : (field_index += 1) {
-        if (field_value != .table) return error.InvalidExternalDataSnapshot;
-        const name = tableField(field_value.table, "name") orelse return error.InvalidExternalDataSnapshot;
-        const field_type = tableField(field_value.table, "type") orelse return error.InvalidExternalDataSnapshot;
-        if (name != .string or field_type != .string) return error.InvalidExternalDataSnapshot;
-        const out_field = try runtime.newTable();
-        try out_field.rawSet(runtime.allocator, .{ .string = "name" }, name);
-        try out_field.rawSet(runtime.allocator, .{ .string = "type" }, field_type);
-        const title = if (tableField(field_value.table, "title")) |value| try localizedEnglish(value) else name;
-        try out_field.rawSet(runtime.allocator, .{ .string = "title" }, title);
-        try out_fields.rawSet(runtime.allocator, .{ .number = @floatFromInt(field_index) }, .{ .table = out_field });
-        try localized_columns.append(runtime.allocator, std.mem.eql(u8, field_type.string, "localized"));
-    }
-    try out_schema.rawSet(runtime.allocator, .{ .string = "fields" }, .{ .table = out_fields });
-    try out.rawSet(runtime.allocator, .{ .string = "schema" }, .{ .table = out_schema });
-
-    const data_value: Value = tableField(raw, "data") orelse .{ .table = try runtime.newTable() };
-    if (data_value != .table) return error.InvalidExternalDataSnapshot;
-    var has_localized = false;
-    for (localized_columns.items) |is_localized| has_localized = has_localized or is_localized;
-    if (!has_localized) {
-        try out.rawSet(runtime.allocator, .{ .string = "data" }, data_value);
-        return .{ .table = out };
-    }
-
-    const out_data = try runtime.newTable();
-    var row_index: usize = 1;
-    while (data_value.table.rawGetNumber(@floatFromInt(row_index))) |row_value| : (row_index += 1) {
-        if (row_value != .table) return error.InvalidExternalDataSnapshot;
-        const out_row = try runtime.newTable();
-        for (localized_columns.items, 0..) |is_localized, column_zero| {
-            const column: f64 = @floatFromInt(column_zero + 1);
-            const value = row_value.table.rawGetNumber(column) orelse .nil;
-            const converted = if (is_localized and value != .nil) try localizedEnglish(value) else value;
-            if (converted != .nil) try out_row.rawSet(runtime.allocator, .{ .number = column }, converted);
-        }
-        try out_data.rawSet(runtime.allocator, .{ .number = @floatFromInt(row_index) }, .{ .table = out_row });
-    }
-    try out.rawSet(runtime.allocator, .{ .string = "data" }, .{ .table = out_data });
-    return .{ .table = out };
-}
-
 fn externalDataGetCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    rt.work_stats.noteCommons(args[0].string, if (args.len >= 2 and args[1] == .string) args[1].string else "en");
-    const raw = if (args.len < 2 or args[1] == .nil)
-        false
-    else if (args[1] != .string)
-        return error.StringExpected
-    else if (std.mem.eql(u8, args[1].string, "_"))
-        true
-    else if (std.mem.eql(u8, args[1].string, "en"))
-        false
+    const language = if (args.len < 2 or args[1] == .nil)
+        (runtime.namespace_catalog orelse return error.NamespaceRegistryRequired).content_language
+    else if (args[1] == .string)
+        args[1].string
     else
-        return error.NotImplemented;
-
+        return error.StringExpected;
+    rt.work_stats.noteCommons(args[0].string, language);
+    const raw = std.mem.eql(u8, language, "_");
     if (!std.mem.endsWith(u8, args[0].string, ".tab")) return error.NotImplemented;
     const host = host_api.getForStablePageRead(runtime) orelse return error.NotImplemented;
     const get = host.external_data orelse return error.NotImplemented;
     const entry = (try get(host.ctx, args[0].string)) orelse return one(.{ .boolean = false });
     if (!std.mem.eql(u8, entry.content_model, "Tabular.JsonConfig")) return error.NotImplemented;
-    const decoded = text_lib.jsonDecodeValue(runtime, entry.source, text_lib.json_preserve_keys) catch return error.InvalidExternalDataSnapshot;
+    var parsed = std.json.parseFromSlice(std.json.Value, runtime.allocator, entry.source, .{}) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return error.InvalidExternalDataSnapshot;
+    };
+    defer parsed.deinit();
+    const selected = if (raw) parsed.value else try localizedTabularJson(runtime, parsed.arena.allocator(), host, language, parsed.value);
+    const decoded = text_lib.jsonToLua(runtime, selected, true) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return error.InvalidExternalDataSnapshot;
+    };
     if (decoded != .table) return error.InvalidExternalDataSnapshot;
     try reindexTabularRaw(runtime, decoded.table);
-    return one(if (raw) decoded else try localizedTabular(runtime, decoded.table));
+    return one(decoded);
 }
 
 fn interwikiMapCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -756,6 +797,22 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     const site = try runtime.newNativeNamespace(.site);
     const namespaces = try namespace_lib.makeTable(runtime);
     try site.rawSet(runtime.allocator, .{ .string = "namespaces" }, .{ .table = namespaces });
+    // Scribunto's filtered maps retain numeric IDs and the original objects.
+    // Only the complete namespace map supports lookup by name and alias.
+    inline for (.{
+        .{ "subjectNamespaces", "isSubject" },
+        .{ "talkNamespaces", "isTalk" },
+        .{ "contentNamespaces", "isContent" },
+    }) |selection| {
+        const filtered = try runtime.newNativeNamespace(.namespace_map);
+        var entries = namespaces.iterator();
+        while (entries.next()) |entry| {
+            const value = entry.value_ptr.*;
+            if (value.table.rawGet(.{ .string = selection[1] }).?.boolean)
+                try filtered.rawSet(runtime.allocator, entry.key_ptr.*, value);
+        }
+        try site.rawSet(runtime.allocator, .{ .string = selection[0] }, .{ .table = filtered });
+    }
     const stats = try runtime.newNativeNamespace(.site_stats);
     try setNative(runtime, stats, "pagesInCategory", pagesInCategoryCall);
     inline for (.{ "pagesInNamespace", "usersInGroup" }) |name|
@@ -777,12 +834,12 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     inline for (.{
         "getEntityIdForTitle",
         "getEntityIdForCurrentPage",
-        "getBestStatements",
         "formatValue",
         "entityExists",
     }) |name| try setNative(runtime, wikibase, name, notImplementedCall);
     try setNative(runtime, wikibase, "getEntity", wikibase_lib.getEntityCall);
     try setNative(runtime, wikibase, "getAllStatements", wikibase_lib.getAllStatementsCall);
+    try setNative(runtime, wikibase, "getBestStatements", wikibase_lib.getBestStatementsCall);
     try setNative(runtime, wikibase, "getLabelWithLang", wikibase_lib.getLabelWithLangCall);
     try setNative(runtime, wikibase, "getLabelByLang", wikibase_lib.getLabelByLangCall);
     try setNative(runtime, wikibase, "getDescription", wikibaseGetDescriptionCall);
@@ -951,6 +1008,40 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     try std.testing.expectEqualStrings("Project", project.rawGet(.{ .string = "canonicalName" }).?.string);
     const aliases = project.rawGet(.{ .string = "aliases" }).?.table;
     try std.testing.expectEqualStrings("WT", aliases.rawGet(.{ .number = 1 }).?.string);
+    const subjects = site.rawGet(.{ .string = "subjectNamespaces" }).?.table;
+    const talks = site.rawGet(.{ .string = "talkNamespaces" }).?.table;
+    const contents = site.rawGet(.{ .string = "contentNamespaces" }).?.table;
+    try std.testing.expect(subjects.rawGet(.{ .number = 0 }).?.table == namespaces.rawGet(.{ .number = 0 }).?.table);
+    try std.testing.expect(subjects.rawGet(.{ .number = -1 }).?.table == namespaces.rawGet(.{ .number = -1 }).?.table);
+    try std.testing.expect(subjects.rawGet(.{ .number = 1 }) == null);
+    try std.testing.expect(talks.rawGet(.{ .number = 1 }).?.table == namespaces.rawGet(.{ .number = 1 }).?.table);
+    try std.testing.expect(talks.rawGet(.{ .number = 0 }) == null);
+    try std.testing.expect(talks.rawGet(.{ .number = -1 }) == null);
+    try std.testing.expect(contents.rawGet(.{ .number = 0 }).?.table == namespaces.rawGet(.{ .number = 0 }).?.table);
+    try std.testing.expect((try runtime.getIndex(.{ .table = subjects }, .{ .string = "Template" })) == .nil);
+    inline for (.{
+        .{ "subjectNamespaces", "isSubject" },
+        .{ "talkNamespaces", "isTalk" },
+        .{ "contentNamespaces", "isContent" },
+    }) |selection| {
+        const filtered = site.rawGet(.{ .string = selection[0] }).?.table;
+        var expected_count: usize = 0;
+        var all_entries = namespaces.iterator();
+        while (all_entries.next()) |entry| {
+            if (entry.value_ptr.*.table.rawGet(.{ .string = selection[1] }).?.boolean)
+                expected_count += 1;
+        }
+        var actual_count: usize = 0;
+        var filtered_entries = filtered.iterator();
+        while (filtered_entries.next()) |entry| {
+            try std.testing.expect(entry.key_ptr.* == .number);
+            try std.testing.expect(entry.value_ptr.*.table == namespaces.rawGet(entry.key_ptr.*).?.table);
+            actual_count += 1;
+        }
+        try std.testing.expectEqual(expected_count, actual_count);
+    }
+    try subjects.rawGet(.{ .number = 10 }).?.table.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = "shared namespace" });
+    try std.testing.expectEqualStrings("shared namespace", template.rawGet(.{ .string = "name" }).?.string);
     const stats = site.rawGet(.{ .string = "stats" }).?.table;
     inline for (.{ "pagesInCategory", "pagesInNamespace", "usersInGroup" }) |name|
         try std.testing.expect(stats.rawGet(.{ .string = name }).? == .callable);
@@ -974,6 +1065,15 @@ const ExternalDataProbe = struct {
             return .{ .content_model = "Map.JsonConfig", .source = "{}" };
         return null;
     }
+
+    fn message(_: ?*anyopaque, _: std.mem.Allocator, language: []const u8, key: []const u8) !?host_api.InterfaceMessage {
+        if (!std.mem.eql(u8, language, "en")) return error.InterfaceMessageSnapshotMissing;
+        if (std.mem.eql(u8, key, "jsonconfig-license-name-CC-BY-SA-4.0"))
+            return .{ .source = "Creative Commons Attribution-Share Alike 4.0" };
+        if (std.mem.eql(u8, key, "jsonconfig-license-url-CC-BY-SA-4.0"))
+            return .{ .source = "https://creativecommons.org/licenses/by-sa/4.0/deed.en" };
+        return error.InterfaceMessageSnapshotMissing;
+    }
 };
 
 test "AOT mw ext data reads explicit tabular snapshot exactly and fails closed" {
@@ -981,7 +1081,7 @@ test "AOT mw ext data reads explicit tabular snapshot exactly and fails closed" 
     defer arena.deinit();
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
-    var host = host_api.Host{ .external_data = ExternalDataProbe.get };
+    var host = host_api.Host{ .external_data = ExternalDataProbe.get, .interface_message = ExternalDataProbe.message };
     host_api.set(&runtime, &host);
     const mw = try runtime.newNativeNamespace(.mw);
     try install(&runtime, mw);
@@ -1023,7 +1123,7 @@ test "AOT mw ext data reads explicit tabular snapshot exactly and fails closed" 
     defer rt.freeResults(missing);
     try std.testing.expect(missing[0] == .boolean and !missing[0].boolean);
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = ext_data }, "get", &.{ .{ .string = "Example.tab" }, .{ .string = "fr" } }));
-    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    try std.testing.expectEqualStrings("InterfaceMessageSnapshotMissing", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = ext_data }, "get", &.{.{ .string = "Other.map" }}));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
@@ -1167,6 +1267,68 @@ test "AOT mw message reads dump-backed interface messages" {
     try std.testing.expectEqualStrings("{{ns:Project}}:Main Page", parameterized_plain[0].string);
 }
 
+test "message constructors accept one parameter array and preserve scalar tostring objects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const a = runtime.allocator;
+    const Scalar = struct {
+        fn render(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+            return one(.{ .string = "object" });
+        }
+    };
+    const object = try runtime.newTable();
+    const mt = try runtime.newTable();
+    try mt.rawSet(a, .{ .string = "__tostring" }, try runtime.newNative(null, Scalar.render));
+    object.metatable = mt;
+    const false_mt = try runtime.newTable();
+    try false_mt.rawSet(a, .{ .string = "__tostring" }, .{ .boolean = false });
+    const params = try runtime.newTable();
+    params.metatable = false_mt;
+    try params.rawSet(a, .{ .number = 1 }, .{ .string = "word" });
+    try params.rawSet(a, .{ .number = 2 }, .{ .number = 17 });
+    try params.rawSet(a, .{ .number = 3 }, .{ .table = object });
+    try params.rawSet(a, .{ .number = 3.5 }, .{ .boolean = false });
+    try params.rawSet(a, .{ .number = -1 }, .{ .boolean = false });
+    try params.rawSet(a, .{ .string = "ignored" }, .{ .boolean = false });
+    const message = try messageNewRawCall(null, &runtime, &.{ .{ .string = "$1/$2/$3" }, .{ .table = params } });
+    defer rt.freeResults(message);
+    const plain = try callField(&runtime, message[0], "plain", &.{message[0]});
+    defer rt.freeResults(plain);
+    try std.testing.expectEqualStrings("word/17/object", plain[0].string);
+    try std.testing.expectEqualStrings("object", params.rawGetNumber(3).?.string);
+
+    const scalar = try messageNewRawCall(null, &runtime, &.{ .{ .string = "$1:$2" }, .{ .table = object }, .{ .string = "tail" } });
+    defer rt.freeResults(scalar);
+    const scalar_plain = try callField(&runtime, scalar[0], "plain", &.{scalar[0]});
+    defer rt.freeResults(scalar_plain);
+    try std.testing.expectEqualStrings("object:tail", scalar_plain[0].string);
+
+    const empty = try runtime.newTable();
+    empty.metatable = false_mt;
+    const no_params = try messageNewRawCall(null, &runtime, &.{ .{ .string = "$1" }, .{ .table = empty } });
+    defer rt.freeResults(no_params);
+    const no_params_plain = try callField(&runtime, no_params[0], "plain", &.{no_params[0]});
+    defer rt.freeResults(no_params_plain);
+    try std.testing.expectEqualStrings("$1", no_params_plain[0].string);
+}
+
+test "message parameter arrays reject holes nested arrays and mixed calling forms" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const params = try runtime.newTable();
+    try params.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "first" });
+    try params.rawSet(runtime.allocator, .{ .number = 3 }, .{ .string = "third" });
+    try std.testing.expectError(error.MessageParamExpected, messageNewRawCall(null, &runtime, &.{ .{ .string = "$1/$2/$3" }, .{ .table = params } }));
+    try std.testing.expectError(error.MixedMessageParameterForms, messageNewCall(null, &runtime, &.{ .{ .string = "key" }, .{ .table = params }, .{ .string = "extra" } }));
+    const nested = try runtime.newTable();
+    try nested.rawSet(runtime.allocator, .{ .number = 1 }, .{ .table = params });
+    try std.testing.expectError(error.MessageParamExpected, messageNewRawCall(null, &runtime, &.{ .{ .string = "$1" }, .{ .table = nested } }));
+}
+
 const InterwikiProbe = struct {
     const rows = [_]host_api.InterwikiRow{
         .{ .prefix = "local", .url = "//local.example/$1", .is_local = true, .is_current_wiki = true, .is_protocol_relative = true, .is_transcludable = true },
@@ -1293,4 +1455,125 @@ test "AOT mw wikibase label and description use pinned host state" {
     try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, "getDescription", &.{.{ .string = "Q2" }}));
     try std.testing.expectEqualStrings("LuaRaised", runtime.aotErrorName().?);
     try std.testing.expectEqualStrings("Wikibase entity-text snapshot missing entity=Q2", runtime.last_error.string);
+}
+
+const LocalizedExternalDataProbe = struct {
+    const source =
+        \\{"license":"CC0-1.0","description":{"en":"Identifier limits","uk":"Межі"},"schema":{"fields":[{"name":"id","type":"string","title":{"ar":"","en":"Identifier"}},{"name":"limit","type":"number"},{"name":"label","type":"localized","title":{"en":"Label"}}]},"data":[["PMID",42900000,{"fr":"first stored label","uk":"second stored label"}],["PMC",15000000,null]]}
+    ;
+
+    fn get(_: ?*anyopaque, title: []const u8) !?host_api.ExternalData {
+        if (std.mem.eql(u8, title, "Malformed.tab"))
+            return .{ .content_model = "Tabular.JsonConfig", .source = "{" };
+        if (std.mem.eql(u8, title, "Overflow.tab"))
+            return .{ .content_model = "Tabular.JsonConfig", .source = "{\"schema\":{\"fields\":[{\"name\":\"n\",\"type\":\"number\"}]},\"data\":[[1e9999]]}" };
+        return .{ .content_model = "Tabular.JsonConfig", .source = source };
+    }
+
+    fn fallbacks(_: ?*anyopaque, language: []const u8) ![]const []const u8 {
+        if (std.mem.eql(u8, language, "ar")) return &.{};
+        if (std.mem.eql(u8, language, "fr")) return &.{ "de", "uk" };
+        return error.LanguageFallbackSnapshotMissing;
+    }
+
+    fn message(_: ?*anyopaque, _: std.mem.Allocator, language: []const u8, key: []const u8) !?host_api.InterfaceMessage {
+        if (!std.mem.eql(u8, language, "ar")) return error.InterfaceMessageSnapshotMissing;
+        if (std.mem.eql(u8, key, "jsonconfig-license-name-CC0-1.0"))
+            return .{ .source = "المشاع الإبداعي صفر" };
+        if (std.mem.eql(u8, key, "jsonconfig-license-url-CC0-1.0"))
+            return .{ .source = "https://creativecommons.org/publicdomain/zero/1.0/" };
+        return error.InterfaceMessageSnapshotMissing;
+    }
+};
+
+test "AOT Commons localization uses target language captured license and fresh nested data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var registry = try rt.namespace_registry.Registry.init(std.testing.allocator, rt.namespace_registry.english_test_fixture);
+    defer registry.deinit();
+    registry.content_language = "ar";
+    runtime.namespace_catalog = &registry;
+    var host = host_api.Host{
+        .external_data = LocalizedExternalDataProbe.get,
+        .language_fallbacks = LocalizedExternalDataProbe.fallbacks,
+        .interface_message = LocalizedExternalDataProbe.message,
+    };
+    host_api.set(&runtime, &host);
+    const mw = try runtime.newNativeNamespace(.mw);
+    try install(&runtime, mw);
+    const api = mw.rawGet(.{ .string = "ext" }).?.table.rawGet(.{ .string = "data" }).?;
+    const first = try callField(&runtime, api, "get", &.{.{ .string = "Limits.tab" }});
+    defer rt.freeResults(first);
+    const result = first[0].table;
+    try std.testing.expectEqualStrings("Identifier limits", result.rawGet(.{ .string = "description" }).?.string);
+    const license = result.rawGet(.{ .string = "license" }).?.table;
+    try std.testing.expectEqualStrings("CC0-1.0", license.rawGet(.{ .string = "code" }).?.string);
+    try std.testing.expectEqualStrings("المشاع الإبداعي صفر", license.rawGet(.{ .string = "text" }).?.string);
+    try std.testing.expectEqualStrings("https://creativecommons.org/publicdomain/zero/1.0/", license.rawGet(.{ .string = "url" }).?.string);
+    const fields = result.rawGet(.{ .string = "schema" }).?.table.rawGet(.{ .string = "fields" }).?.table;
+    try std.testing.expect(fields.rawGetNumber(0) == null);
+    try std.testing.expectEqualStrings("", fields.rawGetNumber(1).?.table.rawGet(.{ .string = "title" }).?.string);
+    try std.testing.expectEqualStrings("limit", fields.rawGetNumber(2).?.table.rawGet(.{ .string = "title" }).?.string);
+    const rows = result.rawGet(.{ .string = "data" }).?.table;
+    try std.testing.expect(rows.rawGetNumber(0) == null);
+    try std.testing.expectEqual(@as(f64, 42900000), rows.rawGetNumber(1).?.table.rawGetNumber(2).?.number);
+    try std.testing.expectEqualStrings("first stored label", rows.rawGetNumber(1).?.table.rawGetNumber(3).?.string);
+    try std.testing.expect(rows.rawGetNumber(2).?.table.rawGetNumber(3) == null);
+    try rows.rawGetNumber(1).?.table.rawSet(runtime.allocator, .{ .number = 2 }, .{ .number = 7 });
+    try license.rawSet(runtime.allocator, .{ .string = "text" }, .{ .string = "changed" });
+    const again = try callField(&runtime, api, "get", &.{ .{ .string = "Limits.tab" }, .nil });
+    defer rt.freeResults(again);
+    try std.testing.expectEqual(@as(f64, 42900000), again[0].table.rawGet(.{ .string = "data" }).?.table.rawGetNumber(1).?.table.rawGetNumber(2).?.number);
+    try std.testing.expectEqualStrings("المشاع الإبداعي صفر", again[0].table.rawGet(.{ .string = "license" }).?.table.rawGet(.{ .string = "text" }).?.string);
+
+    host.interface_message = null;
+    host.language_fallbacks = null;
+    const raw = try callField(&runtime, api, "get", &.{ .{ .string = "Limits.tab" }, .{ .string = "_" } });
+    defer rt.freeResults(raw);
+    try std.testing.expectEqualStrings("CC0-1.0", raw[0].table.rawGet(.{ .string = "license" }).?.string);
+    try std.testing.expect(raw[0].table.rawGet(.{ .string = "description" }).? == .table);
+    host.language_fallbacks = LocalizedExternalDataProbe.fallbacks;
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, externalDataGetCall(null, &runtime, &.{.{ .string = "Limits.tab" }}));
+}
+
+test "Commons localized strings preserve fallback order exact empty values and first JSON member" {
+    var host = host_api.Host{ .language_fallbacks = LocalizedExternalDataProbe.fallbacks };
+    const cases = .{
+        .{ "ar", "{\"en\":\"fallback\",\"ar\":\"\"}", "" },
+        .{ "fr", "{\"en\":\"English\",\"uk\":\"second\",\"de\":\"first\"}", "first" },
+        .{ "ar", "{\"en\":\"English\",\"fr\":\"French\"}", "English" },
+        .{ "ar", "{\"uk\":\"first\",\"de\":\"second\"}", "first" },
+        .{ "ar", "{\"uk\":\"0\",\"de\":\"second\"}", "" },
+        .{ "ar", "{\"ar\":\"0\"}", "0" },
+        .{ "en", "{}", "" },
+    };
+    inline for (cases) |case| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, case[1], .{});
+        defer parsed.deinit();
+        const result = try localizedJsonString(&host, case[0], parsed.value);
+        try std.testing.expectEqualStrings(case[2], result.string);
+    }
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, "{\"en\":\"fallback\"}", .{});
+    defer parsed.deinit();
+    host.language_fallbacks = null;
+    try std.testing.expectError(error.LanguageFallbackSnapshotMissing, localizedJsonString(&host, "ar", parsed.value));
+}
+
+test "Commons JSON allocation failure remains recoverable OutOfMemory" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .external_data = LocalizedExternalDataProbe.get };
+    host_api.set(&runtime, &host);
+    const original = runtime.allocator;
+    defer runtime.allocator = original;
+    var failing = std.testing.FailingAllocator.init(original, .{ .fail_index = 0 });
+    runtime.allocator = failing.allocator();
+    try std.testing.expectError(error.OutOfMemory, externalDataGetCall(null, &runtime, &.{ .{ .string = "Limits.tab" }, .{ .string = "_" } }));
+    runtime.allocator = original;
+    try std.testing.expectError(error.InvalidExternalDataSnapshot, externalDataGetCall(null, &runtime, &.{ .{ .string = "Malformed.tab" }, .{ .string = "_" } }));
+    try std.testing.expectError(error.InvalidExternalDataSnapshot, externalDataGetCall(null, &runtime, &.{ .{ .string = "Overflow.tab" }, .{ .string = "_" } }));
 }

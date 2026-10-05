@@ -83,7 +83,7 @@ const names = [_][]const u8{
 };
 
 const table_names = names[0..6];
-const string_names = names[6..19];
+const string_names = &[_][]const u8{ "len", "sub", "lower", "upper", "reverse", "rep", "char", "byte", "find", "match", "gmatch", "gsub", "format", "gfind" };
 const math_names = [_][]const u8{ "abs", "ceil", "floor", "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "atan", "deg", "rad", "min", "max", "pow", "fmod", "mod", "modf", "pi", "huge", "random", "randomseed" };
 const debug_names = [_][]const u8{ "traceback", "getmetatable", "getinfo" };
 const mw_names = [_][]const u8{
@@ -115,7 +115,7 @@ const language_value_names = [_][]const u8{
 };
 const html_node_names = [_][]const u8{ "tag", "done", "allDone", "wikitext", "node", "css", "cssText", "addClass", "attr", "getAttr", "newline" };
 const hash_names = [_][]const u8{"hashValue"};
-const site_names = [_][]const u8{ "namespaces", "stats", "interwikiMap" };
+const site_names = [_][]const u8{ "namespaces", "stats", "interwikiMap", "subjectNamespaces", "talkNamespaces", "contentNamespaces" };
 const site_stats_names = [_][]const u8{ "pagesInCategory", "pagesInNamespace", "usersInGroup" };
 const ext_names = [_][]const u8{"data"};
 const ext_data_names = [_][]const u8{"get"};
@@ -349,7 +349,10 @@ pub fn fieldNamespace(namespace: Namespace, field_name: []const u8) ?Namespace {
             null,
         .site => if (std.mem.eql(u8, field_name, "stats"))
             .site_stats
-        else if (std.mem.eql(u8, field_name, "namespaces"))
+        else if (std.mem.eql(u8, field_name, "namespaces") or
+            std.mem.eql(u8, field_name, "subjectNamespaces") or
+            std.mem.eql(u8, field_name, "talkNamespaces") or
+            std.mem.eql(u8, field_name, "contentNamespaces"))
             .namespace_map
         else
             null,

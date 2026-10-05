@@ -2171,6 +2171,21 @@ const FnEmitter = struct {
         return .{ .ptr = ptr, .len = len, .owned = false };
     }
 
+    fn legacyArgTable(self: *FnEmitter) anyerror!ValueRef {
+        const extra = try self.varargs();
+        const table_value = try self.valueSlot();
+        try self.check(try llvm.call(self.builder, self.rt().new_table, &.{ self.ctx(), table_value }));
+        try self.check(try llvm.call(self.builder, self.rt().table_append_many, &.{
+            self.ctx(), table_value, extra.ptr, extra.len,
+        }));
+        const count = try self.box(.{ .number = try llvm.uitofp(self.builder, extra.len, self.ty().double) });
+        const key = try self.stringRef("n");
+        try self.check(try llvm.call(self.builder, self.rt().set_field, &.{
+            self.ctx(), table_value, key.ptr, try self.cI64(key.len), try self.cI64(static_fields.hashStringKey("n")), count,
+        }));
+        return .{ .table = .{ .ptr = table_value, .shape = null } };
+    }
+
     const PreparedCall = struct {
         callee: ValueRef,
         fixed: V,
@@ -4623,6 +4638,18 @@ const FnEmitter = struct {
                 .{ .native_boxed = .{ .ptr = value, .native_namespace = .frame } }
             else
                 .{ .boxed = value };
+            try self.initBinding(binding, initial);
+        }
+        if (self.info.legacy_arg) {
+            const binding = try self.bindName("arg");
+            const usage = self.info.bindings[binding];
+            // Preserve the lexical binding even when ... suppresses the table.
+            // An unobserved local needs no allocation.
+            const initial: ValueRef = if (self.info.uses_vararg or
+                !(usage.value_used or usage.called or usage.captured))
+                .nil
+            else
+                try self.legacyArgTable();
             try self.initBinding(binding, initial);
         }
     }

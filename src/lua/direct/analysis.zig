@@ -101,6 +101,10 @@ pub const FunctionInfo = struct {
     parent_id: ?u32 = null,
     params: []const []const u8,
     is_vararg: bool,
+    // Lua 5.1 binds a local arg in ordinary vararg functions. A same-function
+    // vararg expression leaves it nil instead of creating its table.
+    legacy_arg: bool = false,
+    uses_vararg: bool = false,
     body: lua.Block,
     span: lua.Span,
     bindings: []Binding,
@@ -829,7 +833,8 @@ const Analyzer = struct {
                 try self.expr(v.lhs);
                 try self.expr(v.rhs);
             },
-            .nil_lit, .bool_lit, .number, .string, .vararg => {},
+            .vararg => self.info.uses_vararg = true,
+            .nil_lit, .bool_lit, .number, .string => {},
         }
     }
 
@@ -1012,6 +1017,7 @@ fn analyzeFunction(
         .parent_id = if (parent) |owner| owner.info.id else null,
         .params = params,
         .is_vararg = is_vararg,
+        .legacy_arg = is_vararg and parent != null,
         .body = body,
         .span = span,
         .bindings = &.{},
@@ -1028,6 +1034,7 @@ fn analyzeFunction(
     };
     defer analyzer.deinit();
     for (params) |name| _ = try analyzer.bind(name);
+    if (info.legacy_arg) _ = try analyzer.bind("arg");
     try analyzer.block(body);
     for (analyzer.bindings.items) |binding| if (binding.function_span) |target_span| {
         for (module.functions.items) |target| {
@@ -1113,10 +1120,10 @@ fn applyMetatableParameterShapes(module: *Module) void {
                 }
             }
             const info = target orelse continue;
-            if (info.bindings.len != 0 and info.bindings[0].static_table_span == null)
+            if (info.params.len != 0 and info.bindings[0].static_table_span == null)
                 info.bindings[0].static_table_span = observation.object_span;
             if (binaryMetamethod(field.field_name) and
-                info.bindings.len > 1 and
+                info.params.len > 1 and
                 info.bindings[1].static_table_span == null)
                 info.bindings[1].static_table_span = observation.object_span;
         }

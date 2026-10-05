@@ -1231,6 +1231,8 @@ pub fn install(runtime: *rt.Context) !void {
     try setNativeBuffered(runtime, string, "find", stringFind);
     try setNativeBuffered(runtime, string, "match", stringMatch);
     try setNativeBuffered(runtime, string, "gmatch", stringGmatch);
+    // Lua 5.1's compatibility name is the same callable, including its identity.
+    try string.rawSet(runtime.allocator, .{ .string = "gfind" }, string.rawGet(.{ .string = "gmatch" }).?);
     try setNativeBuffered(runtime, string, "gsub", stringGsub);
     try setNativeBuffered(runtime, string, "format", stringFormat);
     try runtime.setGlobal(global_abi.id("string"), .{ .table = string });
@@ -2233,6 +2235,27 @@ test "byte pattern calls validate captures beyond fixed result demand" {
     const discarded = try ctx.callValueFixed(iterator, &.{}, &ignored);
     discarded.deinit();
     try std.testing.expectEqualStrings("b", (try ctx.callValueFirst(iterator, &.{})).string);
+}
+
+test "legacy string gfind shares gmatch identity and independent iterators" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
+    try install(&ctx);
+    const string = ctx.getGlobal(global_abi.id("string")).table;
+    const gfind = string.rawGet(.{ .string = "gfind" }).?;
+    const gmatch = string.rawGet(.{ .string = "gmatch" }).?;
+    try std.testing.expect(rt.rawEqual(gfind, gmatch));
+    try std.testing.expectEqual(@as(usize, 0), string.map.count());
+    const first = try ctx.callValueFirst(gfind, &.{ .{ .string = "ab" }, .{ .string = "." } });
+    const second = try ctx.callValueFirst(gmatch, &.{ .{ .string = "cd" }, .{ .string = "." } });
+    try std.testing.expectEqualStrings("a", (try ctx.callValueFirst(first, &.{})).string);
+    try std.testing.expectEqualStrings("c", (try ctx.callValueFirst(second, &.{})).string);
+    try std.testing.expectEqualStrings("b", (try ctx.callValueFirst(first, &.{})).string);
+    try std.testing.expect((try ctx.callValueFirst(first, &.{})) == .nil);
+    try std.testing.expectEqualStrings("d", (try ctx.callValueFirst(second, &.{})).string);
 }
 
 test "buffered stdlib returns clip fixed calls and preserve full dynamic results" {

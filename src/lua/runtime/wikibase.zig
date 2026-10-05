@@ -91,7 +91,7 @@ fn snapshotFailure(runtime: *rt.Context, id: []const u8, comptime kind: []const 
     return error.LuaRaised;
 }
 
-fn readEntity(runtime: *rt.Context, id: []const u8) !?*rt.Table {
+fn readEntity(runtime: *rt.Context, id: []const u8) anyerror!?*rt.Table {
     const host = host_api.getForStablePageRead(runtime) orelse {
         logSnapshotFailure(id, "entity", "unavailable");
         return error.MissingScribuntoHost;
@@ -101,7 +101,11 @@ fn readEntity(runtime: *rt.Context, id: []const u8) !?*rt.Table {
         return error.NotImplemented;
     };
     const entry = get(host.ctx, id) catch |err| {
-        if (err == error.WikibaseEntitySnapshotMissing) try snapshotFailure(runtime, id, "entity");
+        if (err == error.WikibaseEntitySnapshotMissing) {
+            if (id[0] == 'L') if (std.mem.indexOfScalar(u8, id, '-')) |dash|
+                return readCapturedSubentity(runtime, id, dash);
+            try snapshotFailure(runtime, id, "entity");
+        }
         return err;
     };
     const source = entry.source orelse return null;
@@ -116,6 +120,28 @@ fn readEntity(runtime: *rt.Context, id: []const u8) !?*rt.Table {
     if (version != .number or version.number < 2) return error.InvalidWikibaseEntitySnapshot;
     _ = (try stringField(decoded.table, "id")) orelse return error.InvalidWikibaseEntitySnapshot;
     return decoded.table;
+}
+
+fn readCapturedSubentity(runtime: *rt.Context, id: []const u8, dash: usize) anyerror!?*rt.Table {
+    // A full captured Lexeme is authoritative for its embedded Forms/Senses.
+    // Missing parent evidence still fails through readEntity; only explicit
+    // parent absence or an absent child within a captured parent returns nil.
+    const parent = (try readEntity(runtime, id[0..dash])) orelse return null;
+    const parent_id = (try stringField(parent, "id")) orelse return error.InvalidWikibaseEntitySnapshot;
+    const canonical = try std.fmt.allocPrint(runtime.allocator, "{s}{s}", .{ parent_id, id[dash..] });
+    const is_form = id[dash + 1] == 'F';
+    const children = (try tableField(parent, if (is_form) "forms" else "senses")) orelse return null;
+    var it = children.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.* != .table) return error.InvalidWikibaseEntitySnapshot;
+        const child = entry.value_ptr.table;
+        const child_id = (try stringField(child, "id")) orelse return error.InvalidWikibaseEntitySnapshot;
+        if (!std.mem.eql(u8, child_id, canonical)) continue;
+        try child.rawSet(runtime.allocator, .{ .string = "schemaVersion" }, .{ .number = 2 });
+        try child.rawSet(runtime.allocator, .{ .string = "type" }, .{ .string = if (is_form) "form" else "sense" });
+        return child;
+    }
+    return null;
 }
 
 fn protectStatement(statement: *rt.Table) !void {
@@ -193,19 +219,183 @@ fn overlayEntityTerms(runtime: *rt.Context, id: []const u8, entity: *rt.Table, k
     try overlayTerm(runtime, entity, "descriptions", language, terms.description);
 }
 
+fn entityReceiver(args: []const Value) !*rt.Table {
+    if (args.len == 0 or args[0] != .table) return error.TableExpected;
+    return args[0].table;
+}
+
+fn getIdMethodCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    return one(field(try entityReceiver(args), "id") orelse .nil);
+}
+
+fn getLanguageMethodCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    return one(field(try entityReceiver(args), "language") orelse .nil);
+}
+
+fn getLexicalCategoryMethodCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    return one(field(try entityReceiver(args), "lexicalCategory") orelse .nil);
+}
+
+fn getGrammaticalFeaturesMethodCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+    // Wikibase returns this exact table, unlike the fresh list from getForms.
+    return one(field(try entityReceiver(args), "grammaticalFeatures") orelse .nil);
+}
+
+fn termPairs(runtime: *rt.Context, entity: *rt.Table, key: []const u8) !*rt.Table {
+    const terms = (try tableField(entity, key)) orelse return error.InvalidWikibaseEntitySnapshot;
+    const result = try runtime.newTable();
+    var it = terms.iterator();
+    var index: usize = 1;
+    while (it.next()) |entry| {
+        if (entry.value_ptr.* != .table) return error.InvalidWikibaseEntitySnapshot;
+        const term = entry.value_ptr.table;
+        const value = (try stringField(term, "value")) orelse return error.InvalidWikibaseEntitySnapshot;
+        const language = (try stringField(term, "language")) orelse return error.InvalidWikibaseEntitySnapshot;
+        const pair = try runtime.newTable();
+        try pair.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = value });
+        try pair.rawSet(runtime.allocator, .{ .number = 2 }, .{ .string = language });
+        try result.rawSet(runtime.allocator, .{ .number = @floatFromInt(index) }, .{ .table = pair });
+        index += 1;
+    }
+    return result;
+}
+
+fn singleTerm(runtime: *rt.Context, args: []const Value, key: []const u8) ![]const Value {
+    const entity = try entityReceiver(args);
+    const language = if (args.len < 2 or args[1] == .nil)
+        (runtime.namespace_catalog orelse return error.MissingNamespaceRegistry).content_language
+    else if (args[1] == .string)
+        args[1].string
+    else
+        return error.StringExpected;
+    const terms = (try tableField(entity, key)) orelse return error.InvalidWikibaseEntitySnapshot;
+    const term = (try tableField(terms, language)) orelse return one(.nil);
+    return two(
+        field(term, "value") orelse .nil,
+        field(term, "language") orelse .nil,
+    );
+}
+
+fn getGlossesMethodCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return one(.{ .table = try termPairs(runtime, try entityReceiver(args), "glosses") });
+}
+
+fn getGlossMethodCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return singleTerm(runtime, args, "glosses");
+}
+
+fn getRepresentationsMethodCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return one(.{ .table = try termPairs(runtime, try entityReceiver(args), "representations") });
+}
+
+fn getRepresentationMethodCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return singleTerm(runtime, args, "representations");
+}
+
+fn cloneEntityStatementValue(runtime: *rt.Context, value: Value, seen: *std.AutoHashMapUnmanaged(*rt.Table, *rt.Table)) anyerror!Value {
+    if (value != .table) return value;
+    if (seen.get(value.table)) |copy| return .{ .table = copy };
+    const copy = try runtime.newTable();
+    try seen.put(runtime.allocator, value.table, copy);
+    var it = value.table.iterator();
+    while (it.next()) |entry| {
+        const cloned = try cloneEntityStatementValue(runtime, entry.value_ptr.*, seen);
+        try copy.rawSet(runtime.allocator, entry.key_ptr.*, cloned);
+    }
+    copy.append_index = value.table.append_index;
+    if (value.table.metatable) |metatable|
+        copy.metatable = (try cloneEntityStatementValue(runtime, .{ .table = metatable }, seen)).table;
+    return .{ .table = copy };
+}
+
+fn getAllStatementsMethodCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const entity = try entityReceiver(args);
+    if (args.len < 2 or args[1] != .string) return error.StringExpected;
+    const claims = (try tableField(entity, "claims")) orelse return one(.{ .table = try runtime.newTable() });
+    const property = (try canonicalEntityId(runtime, args[1].string)) orelse return error.InvalidPropertyId;
+    if (property[0] != 'P') return error.InvalidPropertyId;
+    const statements = (try tableField(claims, property)) orelse return one(.{ .table = try runtime.newTable() });
+    // The object method reads this object's current fields, and deep-clones
+    // every statement on every call. It never fetches the entity again.
+    var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
+    defer seen.deinit(runtime.allocator);
+    const copy = (try cloneEntityStatementValue(runtime, .{ .table = statements }, &seen)).table;
+    try protectStatements(copy);
+    return one(.{ .table = copy });
+}
+
+fn getSitelinkMethodCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const entity = try entityReceiver(args);
+    const sitelinks = (try tableField(entity, "sitelinks")) orelse return one(.nil);
+    const site = if (args.len < 2 or args[1] == .nil)
+        (runtime.namespace_catalog orelse return error.MissingNamespaceRegistry).wiki
+    else if (args[1] == .string)
+        args[1].string
+    else
+        return error.StringExpected;
+    const sitelink = (try tableField(sitelinks, site)) orelse return one(.nil);
+    return one(field(sitelink, "title") orelse .nil);
+}
+
+fn entityChildren(runtime: *rt.Context, entity: *rt.Table, key: []const u8, kind: []const u8) !*rt.Table {
+    const result = try runtime.newTable();
+    // Empty top-level forms/senses are omitted by canonical capture. A
+    // captured entity with no such field therefore has an empty list.
+    const children = (try tableField(entity, key)) orelse return result;
+    var it = children.iterator();
+    var index: usize = 1;
+    while (it.next()) |entry| {
+        if (entry.value_ptr.* != .table) return error.InvalidWikibaseEntitySnapshot;
+        const child = entry.value_ptr.table;
+        _ = (try stringField(child, "id")) orelse return error.InvalidWikibaseEntitySnapshot;
+        try child.rawSet(runtime.allocator, .{ .string = "schemaVersion" }, .{ .number = 2 });
+        try installEntityMethods(runtime, child, kind);
+        // Preserve subentity identity across calls; only the list is new.
+        try result.rawSet(runtime.allocator, .{ .number = @floatFromInt(index) }, .{ .table = child });
+        index += 1;
+    }
+    return result;
+}
+
+fn getSensesMethodCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return one(.{ .table = try entityChildren(runtime, try entityReceiver(args), "senses", "sense") });
+}
+
+fn getFormsMethodCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    return one(.{ .table = try entityChildren(runtime, try entityReceiver(args), "forms", "form") });
+}
+
+fn installEntityMethods(runtime: *rt.Context, entity: *rt.Table, kind: []const u8) anyerror!void {
+    try protectEntity(entity);
+    const methods = try runtime.newTable();
+    try methods.rawSet(runtime.allocator, .{ .string = "getId" }, try runtime.newNative(null, getIdMethodCall));
+    try methods.rawSet(runtime.allocator, .{ .string = "getAllStatements" }, try runtime.newNative(null, getAllStatementsMethodCall));
+    try methods.rawSet(runtime.allocator, .{ .string = "getSitelink" }, try runtime.newNative(null, getSitelinkMethodCall));
+    if (std.mem.eql(u8, kind, "lexeme")) {
+        try methods.rawSet(runtime.allocator, .{ .string = "getLemmas" }, try runtime.newNative(null, getLemmasCall));
+        try methods.rawSet(runtime.allocator, .{ .string = "getLanguage" }, try runtime.newNative(null, getLanguageMethodCall));
+        try methods.rawSet(runtime.allocator, .{ .string = "getLexicalCategory" }, try runtime.newNative(null, getLexicalCategoryMethodCall));
+        try methods.rawSet(runtime.allocator, .{ .string = "getSenses" }, try runtime.newNative(null, getSensesMethodCall));
+        try methods.rawSet(runtime.allocator, .{ .string = "getForms" }, try runtime.newNative(null, getFormsMethodCall));
+    } else if (std.mem.eql(u8, kind, "sense")) {
+        try methods.rawSet(runtime.allocator, .{ .string = "getGlosses" }, try runtime.newNative(null, getGlossesMethodCall));
+        try methods.rawSet(runtime.allocator, .{ .string = "getGloss" }, try runtime.newNative(null, getGlossMethodCall));
+    } else if (std.mem.eql(u8, kind, "form")) {
+        try methods.rawSet(runtime.allocator, .{ .string = "getRepresentations" }, try runtime.newNative(null, getRepresentationsMethodCall));
+        try methods.rawSet(runtime.allocator, .{ .string = "getRepresentation" }, try runtime.newNative(null, getRepresentationMethodCall));
+        try methods.rawSet(runtime.allocator, .{ .string = "getGrammaticalFeatures" }, try runtime.newNative(null, getGrammaticalFeaturesMethodCall));
+    }
+    const metatable = try runtime.newTable();
+    try metatable.rawSet(runtime.allocator, .{ .string = "__index" }, .{ .table = methods });
+    entity.metatable = metatable;
+}
+
 pub fn getEntityCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const id = try entityId(runtime, args);
     const entity = (try readEntity(runtime, id)) orelse return one(.nil);
     const kind = (try stringField(entity, "type")) orelse return error.InvalidWikibaseEntitySnapshot;
     try overlayEntityTerms(runtime, id, entity, kind);
-    try protectEntity(entity);
-    if (std.mem.eql(u8, kind, "lexeme")) {
-        const methods = try runtime.newTable();
-        try methods.rawSet(runtime.allocator, .{ .string = "getLemmas" }, try runtime.newNative(null, getLemmasCall));
-        const metatable = try runtime.newTable();
-        try metatable.rawSet(runtime.allocator, .{ .string = "__index" }, .{ .table = methods });
-        entity.metatable = metatable;
-    }
+    try installEntityMethods(runtime, entity, kind);
     return one(.{ .table = entity });
 }
 
@@ -221,6 +411,36 @@ pub fn getAllStatementsCall(_: ?*anyopaque, runtime: *rt.Context, args: []const 
             return one(.{ .table = statements });
         };
     return one(.{ .table = try runtime.newTable() });
+}
+
+pub fn getBestStatementsCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    // getAllStatements provides a fresh graph and the established shallow
+    // qualifier/reference protections. Rank selection must not consult terms.
+    const all = try getAllStatementsCall(null, runtime, args);
+    defer rt.freeResults(all);
+    const statements = all[0].table;
+    const count = statements.rawLen();
+    var preferred = false;
+    for (0..count) |index| {
+        const statement = statements.rawGet(.{ .number = @floatFromInt(index + 1) }) orelse return error.InvalidWikibaseEntitySnapshot;
+        if (statement != .table) return error.InvalidWikibaseEntitySnapshot;
+        const rank = (try stringField(statement.table, "rank")) orelse return error.InvalidWikibaseEntitySnapshot;
+        if (std.mem.eql(u8, rank, "preferred")) {
+            preferred = true;
+        } else if (!std.mem.eql(u8, rank, "normal") and !std.mem.eql(u8, rank, "deprecated")) {
+            return error.InvalidWikibaseEntitySnapshot;
+        }
+    }
+    const result = try runtime.newTable();
+    var selected: usize = 0;
+    for (0..count) |index| {
+        const statement = statements.rawGet(.{ .number = @floatFromInt(index + 1) }).?;
+        const rank = (try stringField(statement.table, "rank")).?;
+        if (!std.mem.eql(u8, rank, if (preferred) "preferred" else "normal")) continue;
+        selected += 1;
+        try result.rawSet(runtime.allocator, .{ .number = @floatFromInt(selected) }, statement);
+    }
+    return one(.{ .table = result });
 }
 
 pub fn getLabelByLangCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -400,6 +620,71 @@ test "Wikibase all statements preserves every rank order and does not reuse prio
     }
 }
 
+test "Wikibase best statements select ranks in order and preserve fresh mutable results" {
+    const BestProbe = struct {
+        const source =
+            \\{"id":"Q1","type":"item","schemaVersion":2,"claims":{
+            \\"P1":[{"id":"n1","rank":"normal","mainsnak":{"snaktype":"value"}},
+            \\{"id":"p1","rank":"preferred","mainsnak":{"snaktype":"novalue"},"qualifiers":{"P2":[{"snaktype":"somevalue"}]},"references":[]},
+            \\{"id":"d1","rank":"deprecated","mainsnak":{"snaktype":"value"}},
+            \\{"id":"p2","rank":"preferred","mainsnak":{"snaktype":"somevalue"}},
+            \\{"id":"n2","rank":"normal","mainsnak":{"snaktype":"value"}}],
+            \\"P2":[{"id":"d1","rank":"deprecated"},{"id":"n1","rank":"normal"},{"id":"n2","rank":"normal"}],
+            \\"P3":[{"rank":"deprecated"}],"P4":[]}}
+        ;
+        fn entity(_: ?*anyopaque, id: []const u8) !host_api.WikibaseEntity {
+            if (std.mem.eql(u8, id, "Q1")) return .{ .source = source };
+            if (std.mem.eql(u8, id, "Q9")) return .{ .source = null };
+            if (std.mem.eql(u8, id, "Q7")) return error.AccessDenied;
+            if (std.mem.eql(u8, id, "Q6")) return error.OutOfMemory;
+            return error.WikibaseEntitySnapshotMissing;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    // Deliberately no entity-term provider: best statements need claims only.
+    var host = host_api.Host{ .wikibase_entity = BestProbe.entity };
+    host_api.set(&runtime, &host);
+    const first = try getBestStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } });
+    defer rt.freeResults(first);
+    try std.testing.expectEqual(@as(usize, 2), first[0].table.rawLen());
+    for ([_][]const u8{ "p1", "p2" }, 1..) |id, index| {
+        const statement = first[0].table.rawGet(.{ .number = @floatFromInt(index) }).?.table;
+        try std.testing.expectEqualStrings(id, (try stringField(statement, "id")).?);
+    }
+    const selected = first[0].table.rawGet(.{ .number = 1 }).?.table;
+    const qualifiers = (try tableField(selected, "qualifiers")).?;
+    const references = (try tableField(selected, "references")).?;
+    try std.testing.expect(qualifiers.read_only and references.read_only);
+    try (try tableField(qualifiers, "P2")).?.rawSet(runtime.allocator, .{ .number = 2 }, .{ .number = 7 });
+    try (try tableField(selected, "mainsnak")).?.rawSet(runtime.allocator, .{ .string = "snaktype" }, .{ .string = "changed" });
+    try first[0].table.rawSet(runtime.allocator, .{ .number = 1 }, .nil);
+    const fresh = try getBestStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } });
+    defer rt.freeResults(fresh);
+    const fresh_first = fresh[0].table.rawGet(.{ .number = 1 }).?.table;
+    try std.testing.expectEqualStrings("novalue", (try stringField((try tableField(fresh_first, "mainsnak")).?, "snaktype")).?);
+    try std.testing.expect((try tableField((try tableField(fresh_first, "qualifiers")).?, "P2")).?.rawGet(.{ .number = 2 }) == null);
+    const normal = try getBestStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P2" } });
+    defer rt.freeResults(normal);
+    try std.testing.expectEqual(@as(usize, 2), normal[0].table.rawLen());
+    for ([_][]const u8{ "n1", "n2" }, 1..) |id, index|
+        try std.testing.expectEqualStrings(id, (try stringField(normal[0].table.rawGet(.{ .number = @floatFromInt(index) }).?.table, "id")).?);
+    for ([_][]const u8{ "P3", "P4", "P9" }) |property| {
+        const empty = try getBestStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = property } });
+        defer rt.freeResults(empty);
+        try std.testing.expectEqual(@as(usize, 0), empty[0].table.rawLen());
+    }
+    const missing = try getBestStatementsCall(null, &runtime, &.{ .{ .string = "Q9" }, .{ .string = "P1" } });
+    defer rt.freeResults(missing);
+    try std.testing.expectEqual(@as(usize, 0), missing[0].table.rawLen());
+    try std.testing.expectError(error.LuaRaised, getBestStatementsCall(null, &runtime, &.{ .{ .string = "Q10" }, .{ .string = "P1" } }));
+    try std.testing.expectEqualStrings("Wikibase entity snapshot missing entity=Q10", runtime.last_error.string);
+    try std.testing.expectError(error.AccessDenied, getBestStatementsCall(null, &runtime, &.{ .{ .string = "Q7" }, .{ .string = "P1" } }));
+    try std.testing.expectError(error.OutOfMemory, getBestStatementsCall(null, &runtime, &.{ .{ .string = "Q6" }, .{ .string = "P1" } }));
+}
+
 test "Wikibase entity term overlays leave exact language lookups and sitelinks independent" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -512,4 +797,134 @@ test "Wikibase native entity decode preserves allocation failure and recovers on
     defer rt.freeResults(recovered);
     const forms = (try tableField(recovered[0].table, "forms")).?;
     try std.testing.expectEqualStrings("L1-F1", (try stringField(forms.rawGet(.{ .number = 1 }).?.table, "id")).?);
+}
+
+const EntityObjectProbe = struct {
+    const source =
+        \\{"id":"L2","type":"lexeme","schemaVersion":2,"language":"Q13955","lexicalCategory":"Q24905",
+        \\"lemmas":{"ar":{"language":"ar","value":"ثابت"}},
+        \\"forms":[{"id":"L2-F1","representations":{"ar":{"language":"ar","value":"ثَابَتَ"}},"grammaticalFeatures":["Q1","Q2"],"claims":{}}],
+        \\"senses":[{"id":"L2-S1","glosses":{"ar":{"language":"ar","value":"معنى"}},"claims":{"P1":[
+        \\{"rank":"normal","mainsnak":{"snaktype":"value","datavalue":{"value":"original"}},
+        \\"qualifiers":{"P2":[{"snaktype":"somevalue"}]},"references":[{"snaks":{"P3":[{"snaktype":"novalue"}]}}]}]}}]}
+    ;
+    const empty =
+        \\{"id":"L3","type":"lexeme","schemaVersion":2,"language":"Q13955","lexicalCategory":"Q24905","lemmas":{"ar":{"language":"ar","value":"ثابت"}}}
+    ;
+    fn entity(_: ?*anyopaque, id: []const u8) !host_api.WikibaseEntity {
+        if (std.mem.eql(u8, id, "L2")) return .{ .source = source };
+        if (std.mem.eql(u8, id, "L3")) return .{ .source = empty };
+        if (std.mem.eql(u8, id, "Q1")) return .{ .source = Probe.item };
+        if (std.mem.eql(u8, id, "Q9")) return .{ .source = null };
+        return error.WikibaseEntitySnapshotMissing;
+    }
+    fn method(runtime: *rt.Context, object: Value, name: []const u8, tail: []const Value) ![]const Value {
+        var args: [3]Value = undefined;
+        if (tail.len > 2) return error.TooManyArguments;
+        args[0] = object;
+        @memcpy(args[1 .. tail.len + 1], tail);
+        const callable = try runtime.getIndex(object, .{ .string = name });
+        return runtime.callValue(callable, args[0 .. tail.len + 1]);
+    }
+};
+
+test "Wikibase entity object methods preserve subentity identity and clone statement graphs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .wikibase_entity = EntityObjectProbe.entity, .wikibase_entity_terms = Probe.terms };
+    host_api.set(&runtime, &host);
+    const loaded = try getEntityCall(null, &runtime, &.{.{ .string = "L2" }});
+    defer rt.freeResults(loaded);
+    const entity = loaded[0];
+    const language = try EntityObjectProbe.method(&runtime, entity, "getLanguage", &.{});
+    defer rt.freeResults(language);
+    try std.testing.expectEqualStrings("Q13955", language[0].string);
+    const id = try EntityObjectProbe.method(&runtime, entity, "getId", &.{});
+    defer rt.freeResults(id);
+    try std.testing.expectEqualStrings("L2", id[0].string);
+    const category = try EntityObjectProbe.method(&runtime, entity, "getLexicalCategory", &.{});
+    defer rt.freeResults(category);
+    try std.testing.expectEqualStrings("Q24905", category[0].string);
+
+    const senses = try EntityObjectProbe.method(&runtime, entity, "getSenses", &.{});
+    defer rt.freeResults(senses);
+    const again = try EntityObjectProbe.method(&runtime, entity, "getSenses", &.{});
+    defer rt.freeResults(again);
+    try std.testing.expect(senses[0].table != again[0].table);
+    const sense = senses[0].table.rawGet(.{ .number = 1 }).?;
+    try std.testing.expect(sense.table == again[0].table.rawGet(.{ .number = 1 }).?.table);
+    try std.testing.expect(sense.table == (try tableField(entity.table, "senses")).?.rawGet(.{ .number = 1 }).?.table);
+    const gloss = try EntityObjectProbe.method(&runtime, sense, "getGloss", &.{.{ .string = "ar" }});
+    defer rt.freeResults(gloss);
+    try std.testing.expectEqual(@as(usize, 2), gloss.len);
+    try std.testing.expectEqualStrings("معنى", gloss[0].string);
+    try std.testing.expectEqualStrings("ar", gloss[1].string);
+    const absent = try EntityObjectProbe.method(&runtime, sense, "getGloss", &.{.{ .string = "en" }});
+    defer rt.freeResults(absent);
+    try std.testing.expect(absent.len == 1 and absent[0] == .nil);
+    const glosses = try EntityObjectProbe.method(&runtime, sense, "getGlosses", &.{});
+    defer rt.freeResults(glosses);
+    const gloss_pair = glosses[0].table.rawGet(.{ .number = 1 }).?.table;
+    try gloss_pair.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "only this pair" });
+    const fresh_gloss = try EntityObjectProbe.method(&runtime, sense, "getGloss", &.{.{ .string = "ar" }});
+    defer rt.freeResults(fresh_gloss);
+    try std.testing.expectEqualStrings("معنى", fresh_gloss[0].string);
+
+    const statements = try EntityObjectProbe.method(&runtime, sense, "getAllStatements", &.{.{ .string = "P1" }});
+    defer rt.freeResults(statements);
+    const statement = statements[0].table.rawGet(.{ .number = 1 }).?.table;
+    const value = (try tableField((try tableField(statement, "mainsnak")).?, "datavalue")).?;
+    try value.rawSet(runtime.allocator, .{ .string = "value" }, .{ .string = "changed" });
+    const references = (try tableField(statement, "references")).?;
+    try std.testing.expect(references.read_only);
+    const reference = references.rawGet(.{ .number = 1 }).?.table;
+    try reference.rawSet(runtime.allocator, .{ .string = "changed" }, .{ .boolean = true });
+    const next_statements = try EntityObjectProbe.method(&runtime, sense, "getAllStatements", &.{.{ .string = "P1" }});
+    defer rt.freeResults(next_statements);
+    const next_statement = next_statements[0].table.rawGet(.{ .number = 1 }).?.table;
+    try std.testing.expect(next_statement != statement);
+    try std.testing.expectEqualStrings("original", (try stringField((try tableField((try tableField(next_statement, "mainsnak")).?, "datavalue")).?, "value")).?);
+    try std.testing.expect((try tableField(next_statement, "references")).?.rawGet(.{ .number = 1 }).?.table.rawGet(.{ .string = "changed" }) == null);
+    // The method observes mutations to this entity, not a fresh provider read.
+    const raw_statement = (try tableField((try tableField(sense.table, "claims")).?, "P1")).?.rawGet(.{ .number = 1 }).?.table;
+    try (try tableField(raw_statement, "mainsnak")).?.rawSet(runtime.allocator, .{ .string = "snaktype" }, .{ .string = "somevalue" });
+    const changed_source = try EntityObjectProbe.method(&runtime, sense, "getAllStatements", &.{.{ .string = "P1" }});
+    defer rt.freeResults(changed_source);
+    try std.testing.expectEqualStrings("somevalue", (try stringField((try tableField(changed_source[0].table.rawGet(.{ .number = 1 }).?.table, "mainsnak")).?, "snaktype")).?);
+
+    const global_sense = try getEntityCall(null, &runtime, &.{.{ .string = "L2-S1" }});
+    defer rt.freeResults(global_sense);
+    try std.testing.expect(global_sense[0].table != sense.table);
+    const global_sense_id = try EntityObjectProbe.method(&runtime, global_sense[0], "getId", &.{});
+    defer rt.freeResults(global_sense_id);
+    try std.testing.expectEqualStrings("L2-S1", global_sense_id[0].string);
+    const global_statements = try getAllStatementsCall(null, &runtime, &.{ .{ .string = "L2-S1" }, .{ .string = "P1" } });
+    defer rt.freeResults(global_statements);
+    try std.testing.expectEqualStrings("value", (try stringField((try tableField(global_statements[0].table.rawGet(.{ .number = 1 }).?.table, "mainsnak")).?, "snaktype")).?);
+    const absent_child = try getEntityCall(null, &runtime, &.{.{ .string = "L3-S1" }});
+    defer rt.freeResults(absent_child);
+    try std.testing.expect(absent_child[0] == .nil);
+
+    const forms = try EntityObjectProbe.method(&runtime, entity, "getForms", &.{});
+    defer rt.freeResults(forms);
+    const form = forms[0].table.rawGet(.{ .number = 1 }).?;
+    const representation = try EntityObjectProbe.method(&runtime, form, "getRepresentation", &.{.{ .string = "ar" }});
+    defer rt.freeResults(representation);
+    try std.testing.expectEqualStrings("ثَابَتَ", representation[0].string);
+    try std.testing.expectEqualStrings("ar", representation[1].string);
+    const features = try EntityObjectProbe.method(&runtime, form, "getGrammaticalFeatures", &.{});
+    defer rt.freeResults(features);
+    try std.testing.expect(features[0].table == (try tableField(form.table, "grammaticalFeatures")).?);
+
+    const empty_entity = try getEntityCall(null, &runtime, &.{.{ .string = "L3" }});
+    defer rt.freeResults(empty_entity);
+    const no_senses = try EntityObjectProbe.method(&runtime, empty_entity[0], "getSenses", &.{});
+    defer rt.freeResults(no_senses);
+    try std.testing.expect(no_senses[0].table.rawGet(.{ .number = 1 }) == null);
+    const missing = try getEntityCall(null, &runtime, &.{.{ .string = "Q9" }});
+    defer rt.freeResults(missing);
+    try std.testing.expect(missing[0] == .nil);
+    try std.testing.expectError(error.LuaRaised, getEntityCall(null, &runtime, &.{.{ .string = "L999" }}));
 }

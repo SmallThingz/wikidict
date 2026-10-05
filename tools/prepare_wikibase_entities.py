@@ -45,6 +45,10 @@ def digest(raw):
 
 
 PRODUCER_SHA256 = digest(Path(__file__).read_bytes())
+# Exact successful replay identities, never parsed entities or mutable manifests.
+# Each reuse still reads and hashes every artifact before consulting this set.
+_VALIDATED_REPLAY_KEYS = set()
+_MAX_VALIDATED_REPLAY_KEYS = 32
 
 
 def document(value):
@@ -373,7 +377,8 @@ def validate_snapshot(path, wiki=None, date=None):
     root = path.parent if path.name.endswith('.tsv') else path
     if root.is_symlink() or not root.is_dir():
         raise ValueError('Unsafe entity capture root')
-    manifests = {name: parse_json(regular(root / (name + '.manifest.json'), MAX_PROOF_BYTES)) for name in NAMES}
+    manifest_bytes = {name: regular(root / (name + '.manifest.json'), MAX_PROOF_BYTES) for name in NAMES}
+    manifests = {name: parse_json(raw) for name, raw in manifest_bytes.items()}
     manifest = manifests[selected]
     if not isinstance(manifest, dict):
         raise ValueError('Invalid entity manifest')
@@ -396,6 +401,15 @@ def validate_snapshot(path, wiki=None, date=None):
         if not isinstance(expected, str) or digest(raw) != expected:
             raise ValueError('Changed entity capture artifact: ' + name)
         blobs[name] = raw
+    # The paired manifests bind all raw requests, responses, seed/dependency
+    # proofs, namespace evidence and both TSVs. Every bound byte was just read
+    # and SHA-256 checked above. An exact prior success can omit only the
+    # deterministic JSON replay and projection; changed bytes must replay.
+    replay_key = (PRODUCER_SHA256, tuple(digest(manifest_bytes[name]) for name in NAMES),
+                  MAX_ENTITIES, MAX_RESPONSE_BYTES, MAX_TOTAL_RAW_BYTES,
+                  MAX_OUTPUT_BYTES, MAX_PROOF_BYTES, MAX_ENTITY_BYTES)
+    if replay_key in _VALIDATED_REPLAY_KEYS:
+        return manifest
     content_language = namespace_input(blobs['wikibase-namespace-siteinfo.raw.json'],
         blobs['wikibase-namespace-capture.complete.json'], actual_wiki, actual_date)
     if manifest.get('content_language') != content_language:
@@ -423,6 +437,9 @@ def validate_snapshot(path, wiki=None, date=None):
                 or other.get('output_sha256') != digest(raw) or other.get('output_bytes') != len(raw)
                 or blobs[name + '.tsv'] != raw):
             raise ValueError('Entity projection differs from exact offline replay')
+    if len(_VALIDATED_REPLAY_KEYS) >= _MAX_VALIDATED_REPLAY_KEYS:
+        _VALIDATED_REPLAY_KEYS.clear()
+    _VALIDATED_REPLAY_KEYS.add(replay_key)
     return manifest
 
 

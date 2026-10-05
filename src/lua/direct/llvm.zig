@@ -135,6 +135,7 @@ extern fn LLVMBuildBr(B: BuilderRef, Dest: BasicBlockRef) ?ValueRef;
 extern fn LLVMBuildCondBr(B: BuilderRef, If: ValueRef, Then: BasicBlockRef, Else: BasicBlockRef) ?ValueRef;
 extern fn LLVMBuildRet(B: BuilderRef, V: ValueRef) ?ValueRef;
 extern fn LLVMBuildZExt(B: BuilderRef, Val: ValueRef, DestTy: TypeRef, Name: [*:0]const u8) ?ValueRef;
+extern fn LLVMBuildUIToFP(B: BuilderRef, Val: ValueRef, DestTy: TypeRef, Name: [*:0]const u8) ?ValueRef;
 extern fn LLVMBuildFAdd(B: BuilderRef, LHS: ValueRef, RHS: ValueRef, Name: [*:0]const u8) ?ValueRef;
 extern fn LLVMBuildFSub(B: BuilderRef, LHS: ValueRef, RHS: ValueRef, Name: [*:0]const u8) ?ValueRef;
 extern fn LLVMBuildFMul(B: BuilderRef, LHS: ValueRef, RHS: ValueRef, Name: [*:0]const u8) ?ValueRef;
@@ -476,6 +477,10 @@ pub fn ret(builder: BuilderRef, value: ValueRef) !void {
 
 pub fn zext(builder: BuilderRef, value: ValueRef, dest_ty: TypeRef) !ValueRef {
     return req(ValueRef, LLVMBuildZExt(builder, value, dest_ty, ""));
+}
+
+pub fn uitofp(builder: BuilderRef, value: ValueRef, dest_ty: TypeRef) !ValueRef {
+    return req(ValueRef, LLVMBuildUIToFP(builder, value, dest_ty, ""));
 }
 
 pub fn fadd(builder: BuilderRef, lhs: ValueRef, rhs: ValueRef) !ValueRef {

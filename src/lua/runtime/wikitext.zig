@@ -56,6 +56,9 @@ pub const Provider = struct {
     pub const ExternalData = host_api.ExternalData;
     pub const CategoryStats = host_api.CategoryStats;
     pub const InterfaceMessage = host_api.InterfaceMessage;
+    pub const LanguageNameRow = host_api.LanguageNameRow;
+    pub const LanguageNameScope = host_api.LanguageNameScope;
+    pub const LanguageDirection = host_api.LanguageDirection;
     pub const normalizeInterfaceMessageKeyAlloc = host_api.normalizeInterfaceMessageKeyAlloc;
     pub const FileMetadata = host_api.FileMetadata;
     pub const InterwikiRow = host_api.InterwikiRow;
@@ -97,6 +100,9 @@ pub const Provider = struct {
     wikibase_entity: ?host_api.WikibaseEntityFn = null,
     wikibase_entity_terms: ?host_api.WikibaseEntityTermsFn = null,
     language_fallbacks: ?host_api.LanguageFallbacksFn = null,
+    language_names: ?host_api.LanguageNamesFn = null,
+    language_name: ?host_api.LanguageNameFn = null,
+    language_direction: ?host_api.LanguageDirectionFn = null,
     language_known_tag: ?*const fn (?*anyopaque, []const u8) anyerror!bool = null,
     // When present, the edition snapshot is authoritative, including nonmatches.
     resolve_title_magic: ?*const fn (?*anyopaque, []const u8, rt.namespace_registry.magic_words.Form) anyerror!?[]const u8 = null,
@@ -170,6 +176,9 @@ pub const Expander = struct {
         self.host.wikibase_entity = if (self.provider.wikibase_entity != null) hostWikibaseEntity else null;
         self.host.wikibase_entity_terms = if (self.provider.wikibase_entity_terms != null) hostWikibaseEntityTerms else null;
         self.host.language_fallbacks = if (self.provider.language_fallbacks != null) hostLanguageFallbacks else null;
+        self.host.language_names = if (self.provider.language_names != null) hostLanguageNames else null;
+        self.host.language_name = if (self.provider.language_name != null) hostLanguageName else null;
+        self.host.language_direction = if (self.provider.language_direction != null) hostLanguageDirection else null;
         self.host.language_known_tag = hostLanguageKnownTag;
         host_api.set(self.runtime, &self.host);
     }
@@ -358,6 +367,19 @@ pub const Expander = struct {
     fn hostWikibaseEntityTerms(raw: ?*anyopaque, entity_id: []const u8) anyerror!host_api.WikibaseEntityTerms {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         return (self.provider.wikibase_entity_terms orelse return error.NotImplemented)(self.provider.ctx, entity_id);
+    }
+
+    fn hostLanguageNames(raw: ?*anyopaque, display: ?[]const u8, scope: host_api.LanguageNameScope) anyerror![]const host_api.LanguageNameRow {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        return (self.provider.language_names orelse return error.LanguageNameSnapshotMissing)(self.provider.ctx, display, scope);
+    }
+    fn hostLanguageName(raw: ?*anyopaque, code: []const u8, display: ?[]const u8) anyerror![]const u8 {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        return (self.provider.language_name orelse return error.LanguageNameSnapshotMissing)(self.provider.ctx, code, display);
+    }
+    fn hostLanguageDirection(raw: ?*anyopaque, code: []const u8) anyerror!host_api.LanguageDirection {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        return (self.provider.language_direction orelse return error.LanguageDirectionSnapshotMissing)(self.provider.ctx, code);
     }
 
     fn hostLanguageFallbacks(raw: ?*anyopaque, code: []const u8) anyerror![]const []const u8 {
@@ -1400,6 +1422,11 @@ pub const Expander = struct {
                 return .{ .error_markup = markup };
             }
             if (err != error.AotCallFailed) return err;
+            // Operational failures retain their typed name across the native
+            // AOT call envelope. Let the worker retire and retry the page.
+            // Lua error("OutOfMemory") instead carries the name LuaRaised.
+            if (self.runtime.aotErrorName()) |name|
+                if (std.mem.eql(u8, name, "OutOfMemory")) return error.OutOfMemory;
             const first_detail = try self.runtime.allocator.dupe(u8, invokeFailureDetail(self.runtime, err));
             clearInvokeFailure(self.runtime);
             if (isInvalidTitleInvokeFailure(first_detail)) {
@@ -1418,6 +1445,8 @@ pub const Expander = struct {
                             return .{ .error_markup = markup };
                         }
                         if (retry_err != error.AotCallFailed) return retry_err;
+                        if (self.runtime.aotErrorName()) |name|
+                            if (std.mem.eql(u8, name, "OutOfMemory")) return error.OutOfMemory;
                         const retry_detail = try self.runtime.allocator.dupe(u8, invokeFailureDetail(self.runtime, retry_err));
                         clearInvokeFailure(self.runtime);
                         return .{ .error_markup = try self.scribuntoErrorMarkup(module_name, retry_detail) };
@@ -2505,6 +2534,9 @@ const TestModule = struct {
         try exports.rawSet(ctx.allocator, .{ .string = "nil_return" }, try ctx.makeFunction(10, rt.stabilizeBuffered(nilReturn), &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "number" }, try ctx.makeFunction(11, rt.stabilizeBuffered(numericReturn), &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "nested_owned" }, try ctx.makeFunctionKnown(12, nestedOwned, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "oom" }, try ctx.makeFunctionKnown(13, oom, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "repair_oom" }, try ctx.makeFunctionKnown(14, repairOom, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "lua_oom" }, try ctx.makeFunctionKnown(15, luaOom, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "value" }, .{ .number = 17 });
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
@@ -2520,6 +2552,24 @@ const TestModule = struct {
     }
     fn fail(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         return error.NotCallable;
+    }
+    fn oom(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        return error.OutOfMemory;
+    }
+    fn repairOom(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+        if (args.len == 0 or args[0] != .table) return error.FrameExpected;
+        const frame_args = try ctx.getIndex(args[0], .{ .string = "args" });
+        const value = try ctx.getIndex(frame_args, .{ .string = "x" });
+        if (value != .string) return error.StringExpected;
+        if (std.mem.indexOf(u8, value.string, "&lt;") != null) {
+            ctx.setLuaError(.{ .string = "Invalid page title \"Reconstruction:Probe/term&lt;t:gloss&gt;\" encountered." });
+            return error.LuaRaised;
+        }
+        return error.OutOfMemory;
+    }
+    fn luaOom(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        ctx.setLuaError(.{ .string = "OutOfMemory" });
+        return error.LuaRaised;
     }
     fn random(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         const math = ctx.getGlobal(19); // Stable globals ABI: math.
@@ -3035,6 +3085,42 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     const escaped_export = try expander.expandFragment("Page", "{{#invoke:Test|<b>&}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:Test: The function \"&lt;b&gt;&amp;\" does not exist.</span></strong>", escaped_export);
     try std.testing.expect(runtime.current_frame == null and runtime.aotErrorName() == null and !runtime.last_error_present);
+}
+
+test "AOT invoke allocation failures propagate to the worker instead of rendering" {
+    for ([_][]const u8{
+        "A{{#invoke:Test|oom}}B",
+        "{{#iferror:{{#invoke:Test|oom}}|caught|success}}",
+        "A{{#invoke:Test|repair_oom|x=term&lt;t:gloss&gt;}}B",
+        "{{#invoke:Test|lua_oom}}",
+    }) |source| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+        defer runtime.deinit();
+        const functions = [_]rt.FunctionFn{rt.stabilize(TestModule.root)};
+        runtime.module_root_entries = &functions;
+        runtime.configureModules(null, TestModule.lookup, TestModule.name);
+        try rt.bindGlobalTable(&runtime, null, 0);
+        try stdlib.install(&runtime);
+        var expander = Expander{
+            .runtime = &runtime,
+            .env_slot = 0,
+            .string_slot = 18,
+            .mw_slot = 23,
+            .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+            .install_scribunto = installTestInvoke,
+        };
+        if (std.mem.indexOf(u8, source, "lua_oom") != null) {
+            const rendered = try expander.expandFragment("Page", source, 1_670_803_200);
+            try std.testing.expect(std.mem.indexOf(u8, rendered, "Lua error in Module:Test: OutOfMemory") != null);
+            try std.testing.expect(runtime.aotErrorName() == null);
+        } else {
+            try std.testing.expectError(error.OutOfMemory, expander.expandFragment("Page", source, 1_670_803_200));
+            try std.testing.expectEqualStrings("OutOfMemory", runtime.aotErrorName().?);
+        }
+        try std.testing.expect(runtime.current_frame == null);
+    }
 }
 
 test "invoke export recovery preserves unrelated runtime and host errors" {

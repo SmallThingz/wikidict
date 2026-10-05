@@ -689,9 +689,20 @@ fn languageLcfirst(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Val
 }
 
 fn languageGetDir(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
-    _ = try requireEnglishLocale(ctx_raw);
-    const a = runtime.allocator;
-    return one(a, .{ .string = "ltr" });
+    const ctx = try languageContext(ctx_raw);
+    const code = try std.ascii.allocLowerString(runtime.allocator, ctx.code);
+    if (std.mem.eql(u8, code, "en")) return one(runtime.allocator, .{ .string = "ltr" });
+    const host = host_api.getForStablePageRead(runtime);
+    const get = if (host) |value| value.language_direction else null;
+    const direction = if (get) |callback| callback(host.?.ctx, code) catch |err| {
+        if (err == error.LanguageDirectionSnapshotMissing)
+            std.log.warn("language direction snapshot missing: language={s}", .{code[0..@min(code.len, 128)]});
+        return err;
+    } else {
+        std.log.warn("language direction snapshot unavailable: language={s}", .{code[0..@min(code.len, 128)]});
+        return error.LanguageDirectionSnapshotMissing;
+    };
+    return one(runtime.allocator, .{ .string = @tagName(direction) });
 }
 fn languageIsRtl(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     _ = try requireEnglishLocale(ctx_raw);
@@ -793,10 +804,81 @@ fn languageFormatNum(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const V
     return one(a, .{ .string = try formatNumberAlloc(a, raw) });
 }
 fn languageParseFormattedNumber(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    _ = try requireEnglishLocale(ctx_raw);
+    const ctx = try languageContext(ctx_raw);
+    const arabic = std.ascii.eqlIgnoreCase(ctx.code, "ar");
+    if (!arabic and !std.ascii.eqlIgnoreCase(ctx.code, "en")) return error.NotImplemented;
     const a = runtime.allocator;
-    const raw = try sourceMethodArg(args);
-    return one(a, .{ .string = try parseFormattedNumberAlloc(a, raw) });
+    if (args.len < 2) return error.StringExpected;
+    // Scribunto accepts numeric values and returns nil for other nonstrings.
+    // An absent argument is distinct from an explicitly supplied nil.
+    const raw = switch (args[1]) {
+        .string => |value| value,
+        .number => |value| try rt.numberToString(a, value),
+        else => return one(a, .nil),
+    };
+    defer if (args[1] == .number) a.free(raw);
+    // Arabic support requires the exact captured database message. Keep the
+    // existing English path independent of an interface-message snapshot.
+    if (arabic and try isFormattedNumberNan(runtime, raw))
+        return one(a, .{ .number = std.math.nan(f64) });
+    const normalized = try normalizeFormattedNumberAlloc(a, raw, arabic);
+    defer a.free(normalized);
+    // mw.language.lua applies tonumber to the PHP-normalized string. This is
+    // essential for Quran's nonnumeric surah-name lookup to receive nil.
+    return one(a, if (rt.toNumber(.{ .string = normalized })) |number| .{ .number = number } else .nil);
+}
+
+fn isFormattedNumberNan(runtime: *rt.Context, raw: []const u8) !bool {
+    const host = host_api.getForStablePageRead(runtime) orelse {
+        rt.work_stats.logLine("interface message unavailable: language=ar key=formatnum-nan\n", .{});
+        return error.InterfaceMessageSnapshotMissing;
+    };
+    const get = host.interface_message orelse {
+        rt.work_stats.logLine("interface message unavailable: language=ar key=formatnum-nan\n", .{});
+        return error.InterfaceMessageSnapshotMissing;
+    };
+    const captured = (get(host.ctx, runtime.allocator, "ar", "formatnum-nan") catch |err| {
+        if (err == error.InterfaceMessageSnapshotMissing)
+            rt.work_stats.logLine("interface message missing: language=ar key=formatnum-nan\n", .{});
+        return err;
+    }) orelse {
+        rt.work_stats.logLine("interface message missing: language=ar key=formatnum-nan\n", .{});
+        return error.InterfaceMessageSnapshotMissing;
+    };
+    const source = captured.source orelse return error.UnsupportedFormattedNumberNanMessage;
+    // Core uses Message::text(), which evaluates template syntax. The pinned
+    // plain-message callback cannot represent an unevaluated template result.
+    if (std.mem.indexOf(u8, source, "{{") != null) return error.UnsupportedFormattedNumberNanMessage;
+    return std.mem.eql(u8, raw, source);
+}
+
+fn normalizeFormattedNumberAlloc(a: std.mem.Allocator, raw: []const u8, arabic: bool) ![]u8 {
+    // MediaWiki 1.47.0-wmf.22 Language::parseFormattedNumber and MessagesAr.php
+    // inverse transforms: U+0660..0669 digits, U+066B decimal, U+066C grouping.
+    // Infinity recognition is exact, before whitespace trimming by tonumber.
+    if (std.mem.eql(u8, raw, "∞")) return try a.dupe(u8, "INF");
+    if (std.mem.eql(u8, raw, "-∞") or std.mem.eql(u8, raw, "−∞")) return try a.dupe(u8, "-INF");
+    var normalized: std.ArrayList(u8) = .empty;
+    errdefer normalized.deinit(a);
+    var i: usize = 0;
+    while (i < raw.len) {
+        if (std.mem.startsWith(u8, raw[i..], "−")) {
+            try normalized.append(a, '-');
+            i += "−".len;
+        } else if (arabic and raw[i] == 0xD9 and i + 1 < raw.len and raw[i + 1] >= 0xA0 and raw[i + 1] <= 0xA9) {
+            try normalized.append(a, '0' + raw[i + 1] - 0xA0);
+            i += 2;
+        } else if (arabic and std.mem.startsWith(u8, raw[i..], "٫")) {
+            try normalized.append(a, '.');
+            i += "٫".len;
+        } else if (arabic and std.mem.startsWith(u8, raw[i..], "٬")) {
+            i += "٬".len;
+        } else {
+            if (raw[i] != ',') try normalized.append(a, raw[i]);
+            i += 1;
+        }
+    }
+    return try normalized.toOwnedSlice(a);
 }
 
 fn makeLanguage(runtime: *rt.Context, case_mapper: *ustring_lib.Normalizer, code: []const u8) !*rt.Table {
@@ -843,12 +925,61 @@ fn isKnownLanguageTag(_: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     return one(a, .{ .boolean = try get(host.ctx, args[0].string) });
 }
 
-fn fetchLanguageName(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const a = runtime.allocator;
-    if (args.len == 0 or args[0] != .string) return error.StringExpected;
-    if (std.mem.eql(u8, args[0].string, "en")) return one(a, .{ .string = "English" });
-    return error.NotImplemented;
+fn displayLanguage(runtime: *rt.Context, args: []const Value, index: usize) !?[]const u8 {
+    if (index >= args.len or args[index] == .nil) return null;
+    if (args[index] != .string) return error.StringExpected;
+    return try std.ascii.allocLowerString(runtime.allocator, args[index].string);
 }
+fn languageNameMissing(code: []const u8, display: ?[]const u8, scope: []const u8) void {
+    const shown = display orelse "<autonym>";
+    std.log.warn("language name snapshot missing: language={s} display={s} scope={s}", .{
+        code[0..@min(code.len, 128)], shown[0..@min(shown.len, 128)], scope,
+    });
+}
+fn fetchLanguageName(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const code = try std.ascii.allocLowerString(runtime.allocator, args[0].string);
+    const display = try displayLanguage(runtime, args, 1);
+    // Retain the previously supported English autonym without substituting it
+    // for a name requested in another display language.
+    if (display == null and std.mem.eql(u8, code, "en")) return one(runtime.allocator, .{ .string = "English" });
+    const host = host_api.getForStablePageRead(runtime);
+    const get = if (host) |value| value.language_name else null;
+    const name = if (get) |callback| callback(host.?.ctx, code, display) catch |err| {
+        if (err == error.LanguageNameSnapshotMissing) languageNameMissing(code, display, "single");
+        return err;
+    } else {
+        languageNameMissing(code, display, "single");
+        return error.LanguageNameSnapshotMissing;
+    };
+    return one(runtime.allocator, .{ .string = name });
+}
+fn fetchLanguageNames(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const display = try displayLanguage(runtime, args, 0);
+    const scope: host_api.LanguageNameScope = if (args.len < 2 or args[1] == .nil)
+        .mw
+    else if (args[1] != .string)
+        return error.StringExpected
+    else if (std.mem.eql(u8, args[1].string, "all"))
+        .all
+    else if (std.mem.eql(u8, args[1].string, "mwfile"))
+        .mwfile
+    else
+        .mw;
+    const host = host_api.getForStablePageRead(runtime);
+    const get = if (host) |value| value.language_names else null;
+    const rows = if (get) |callback| callback(host.?.ctx, display, scope) catch |err| {
+        if (err == error.LanguageNameSnapshotMissing) languageNameMissing("*", display, @tagName(scope));
+        return err;
+    } else {
+        languageNameMissing("*", display, @tagName(scope));
+        return error.LanguageNameSnapshotMissing;
+    };
+    const result = try runtime.newTable();
+    for (rows) |row| try result.rawSet(runtime.allocator, .{ .string = row.code }, .{ .string = row.name });
+    return one(runtime.allocator, .{ .table = result });
+}
+
 fn fallbackLanguages(runtime: *rt.Context, code: []const u8, mode: Value) ![]const Value {
     const a = runtime.allocator;
     const strict = if (mode == .nil) false else blk: {
@@ -896,6 +1027,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table, case_mapper: *ustring_lib.No
     try language.rawSet(runtime.allocator, .{ .string = "FALLBACK_STRICT" }, .{ .string = "FALLBACK_STRICT" });
     try setNative(runtime, language, "isKnownLanguageTag", null, isKnownLanguageTag);
     try setNative(runtime, language, "fetchLanguageName", null, fetchLanguageName);
+    try setNative(runtime, language, "fetchLanguageNames", null, fetchLanguageNames);
     try mw.rawSet(runtime.allocator, .{ .string = "language" }, .{ .table = language });
     try setNative(runtime, mw, "getContentLanguage", factory, getContentLanguage);
     try setNative(runtime, mw, "getLanguage", factory, languageNew);
@@ -1075,7 +1207,7 @@ test "AOT language objects expose MediaWiki helpers" {
     try std.testing.expectEqualStrings("−1,234", formatted_negative[0].string);
     const parsed = try callField(&runtime, language, "parseFormattedNumber", &.{ language, .{ .string = "−12,345.67" } });
     defer rt.freeResults(parsed);
-    try std.testing.expectEqualStrings("-12345.67", parsed[0].string);
+    try std.testing.expectEqual(@as(f64, -12345.67), parsed[0].number);
     const upper = try callField(&runtime, language, "uc", &.{ language, .{ .string = "straße ﬃ" } });
     defer rt.freeResults(upper);
     try std.testing.expectEqualStrings("STRASSE FFI", upper[0].string);
@@ -1249,4 +1381,205 @@ test "AOT language known tags use pinned host registry" {
     const unknown = try callField(&runtime, .{ .table = language_api }, "isKnownLanguageTag", &.{.{ .string = "zz-invalid" }});
     defer rt.freeResults(unknown);
     try std.testing.expect(!unknown[0].boolean);
+}
+
+const LanguageMetadataProbe = struct {
+    const all_rows = [_]host_api.LanguageNameRow{
+        .{ .code = "ar", .name = "العربية" },
+        .{ .code = "als", .name = "Alemannic" },
+    };
+    fn names(_: ?*anyopaque, display: ?[]const u8, scope: host_api.LanguageNameScope) ![]const host_api.LanguageNameRow {
+        if (display == null or !std.mem.eql(u8, display.?, "ar") or scope == .mwfile) return error.LanguageNameSnapshotMissing;
+        return if (scope == .all) &all_rows else all_rows[0..1];
+    }
+    fn name(_: ?*anyopaque, code: []const u8, display: ?[]const u8) ![]const u8 {
+        if (display == null or !std.mem.eql(u8, display.?, "ar")) return error.LanguageNameSnapshotMissing;
+        if (std.mem.eql(u8, code, "ar")) return "العربية";
+        if (std.mem.eql(u8, code, "als")) return "الألمانية السويسرية";
+        return "";
+    }
+    fn direction(_: ?*anyopaque, code: []const u8) !host_api.LanguageDirection {
+        if (std.mem.eql(u8, code, "ar")) return .rtl;
+        return error.LanguageDirectionSnapshotMissing;
+    }
+    fn denied(_: ?*anyopaque, _: []const u8, _: ?[]const u8) ![]const u8 {
+        return error.AccessDenied;
+    }
+    fn oom(_: ?*anyopaque, _: []const u8, _: ?[]const u8) ![]const u8 {
+        return error.OutOfMemory;
+    }
+};
+
+test "captured language names preserve raw table aliases single lookup and mutable result isolation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{
+        .language_names = LanguageMetadataProbe.names,
+        .language_name = LanguageMetadataProbe.name,
+        .language_direction = LanguageMetadataProbe.direction,
+    };
+    host_api.set(&runtime, &host);
+    const first = try fetchLanguageNames(null, &runtime, &.{ .{ .string = "AR" }, .{ .string = "all" } });
+    defer rt.freeResults(first);
+    try std.testing.expectEqualStrings("Alemannic", first[0].table.rawGet(.{ .string = "als" }).?.string);
+    try first[0].table.rawSet(runtime.allocator, .{ .string = "ar" }, .{ .string = "changed" });
+    const fresh = try fetchLanguageNames(null, &runtime, &.{ .{ .string = "ar" }, .{ .string = "all" } });
+    defer rt.freeResults(fresh);
+    try std.testing.expectEqualStrings("العربية", fresh[0].table.rawGet(.{ .string = "ar" }).?.string);
+    const singular = try fetchLanguageName(null, &runtime, &.{ .{ .string = "ALS" }, .{ .string = "ar" } });
+    defer rt.freeResults(singular);
+    try std.testing.expectEqualStrings("الألمانية السويسرية", singular[0].string);
+    const unknown = try fetchLanguageName(null, &runtime, &.{ .{ .string = "unknown" }, .{ .string = "ar" } });
+    defer rt.freeResults(unknown);
+    try std.testing.expectEqualStrings("", unknown[0].string);
+    const defaults = try fetchLanguageNames(null, &runtime, &.{ .{ .string = "ar" }, .{ .string = "ALL" } });
+    defer rt.freeResults(defaults);
+    try std.testing.expect(defaults[0].table.rawGet(.{ .string = "als" }) == null);
+    try std.testing.expectError(error.LanguageNameSnapshotMissing, fetchLanguageNames(null, &runtime, &.{ .{ .string = "ar" }, .{ .string = "mwfile" } }));
+    try std.testing.expectError(error.LanguageNameSnapshotMissing, fetchLanguageNames(null, &runtime, &.{}));
+    const legacy = try fetchLanguageName(null, &runtime, &.{.{ .string = "en" }});
+    defer rt.freeResults(legacy);
+    try std.testing.expectEqualStrings("English", legacy[0].string);
+    host.language_name = LanguageMetadataProbe.denied;
+    try std.testing.expectError(error.AccessDenied, fetchLanguageName(null, &runtime, &.{ .{ .string = "ar" }, .{ .string = "ar" } }));
+    host.language_name = LanguageMetadataProbe.oom;
+    try std.testing.expectError(error.OutOfMemory, fetchLanguageName(null, &runtime, &.{ .{ .string = "ar" }, .{ .string = "ar" } }));
+}
+
+test "language getDir uses captured direction and preserves English without inventing unknown direction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .language_direction = LanguageMetadataProbe.direction };
+    host_api.set(&runtime, &host);
+    const mw = try runtime.newTable();
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    const mapper = try ustring_lib.install(&runtime, ustring);
+    try install(&runtime, mw, mapper);
+    const api = mw.rawGet(.{ .string = "language" }).?;
+    host.language_names = LanguageMetadataProbe.names;
+    const installed_names = try callField(&runtime, api, "fetchLanguageNames", &.{ .{ .string = "ar" }, .{ .string = "all" } });
+    defer rt.freeResults(installed_names);
+    try std.testing.expectEqualStrings("العربية", installed_names[0].table.rawGet(.{ .string = "ar" }).?.string);
+    inline for (.{ .{ "ar", "rtl" }, .{ "en", "ltr" } }) |case| {
+        const lang = try callField(&runtime, api, "new", &.{.{ .string = case[0] }});
+        defer rt.freeResults(lang);
+        const direction = try callField(&runtime, lang[0], "getDir", &.{lang[0]});
+        defer rt.freeResults(direction);
+        try std.testing.expectEqualStrings(case[1], direction[0].string);
+    }
+    const unknown = try callField(&runtime, api, "new", &.{.{ .string = "zz-unknown" }});
+    defer rt.freeResults(unknown);
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, unknown[0], "getDir", &.{unknown[0]}));
+    try std.testing.expectEqualStrings("LanguageDirectionSnapshotMissing", runtime.aotErrorName().?);
+}
+
+const FormattedNumberMessageProbe = struct {
+    source: ?[]const u8 = "synthetic NaN label",
+    failure: ?anyerror = null,
+    absent: bool = false,
+    fn message(raw: ?*anyopaque, _: std.mem.Allocator, language: []const u8, key: []const u8) !?host_api.InterfaceMessage {
+        const self: *FormattedNumberMessageProbe = @ptrCast(@alignCast(raw.?));
+        if (!std.mem.eql(u8, language, "ar") or !std.mem.eql(u8, key, "formatnum-nan")) return error.UnexpectedMessageLookup;
+        if (self.failure) |err| return err;
+        if (self.absent) return null;
+        return .{ .source = self.source };
+    }
+};
+
+fn formattedNumberAllocationProbe(a: std.mem.Allocator) !void {
+    const normalized = try normalizeFormattedNumberAlloc(a, "−١٢٬٣٤٥٫٦٧", true);
+    defer a.free(normalized);
+    try std.testing.expectEqualStrings("-12345.67", normalized);
+}
+
+test "Arabic formatted-number normalization releases failed allocations" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, formattedNumberAllocationProbe, .{});
+}
+
+test "Arabic parseFormattedNumber returns numbers or nil for Quran surah names and exact digit separators" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var probe = FormattedNumberMessageProbe{};
+    var host = host_api.Host{ .ctx = &probe, .interface_message = FormattedNumberMessageProbe.message };
+    host_api.set(&runtime, &host);
+    const mw = try runtime.newTable();
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    const mapper = try ustring_lib.install(&runtime, ustring);
+    try install(&runtime, mw, mapper);
+    const api = mw.rawGet(.{ .string = "language" }).?;
+    const language = try callField(&runtime, api, "new", &.{.{ .string = "ar" }});
+    defer rt.freeResults(language);
+    const cases = [_]struct { input: []const u8, expected: ?f64 }{
+        .{ .input = "يونس", .expected = null },
+        .{ .input = "٢٤", .expected = 24 },
+        .{ .input = "−١٢٬٣٤٥٫٦٧", .expected = -12345.67 },
+        .{ .input = "1,٢٣٤٫5", .expected = 1234.5 },
+        .{ .input = "١e−٢", .expected = 0.01 },
+        .{ .input = " \t٢٤\r\n", .expected = 24 },
+        .{ .input = "1,,2", .expected = 12 },
+        .{ .input = "", .expected = null },
+        .{ .input = "1٫2٫3", .expected = null },
+        .{ .input = "۱۲", .expected = null }, // Persian digits are not the Arabic table.
+        .{ .input = " +∞", .expected = null },
+        .{ .input = " ∞ ", .expected = null },
+        .{ .input = "∞", .expected = std.math.inf(f64) },
+        .{ .input = "−∞", .expected = -std.math.inf(f64) },
+    };
+    for (cases) |case| {
+        const parsed = try callField(&runtime, language[0], "parseFormattedNumber", &.{ language[0], .{ .string = case.input } });
+        defer rt.freeResults(parsed);
+        if (case.expected) |number| {
+            try std.testing.expect(parsed[0] == .number);
+            try std.testing.expectEqual(number, parsed[0].number);
+        } else try std.testing.expect(parsed[0] == .nil);
+    }
+    const numeric = try callField(&runtime, language[0], "parseFormattedNumber", &.{ language[0], .{ .number = 24 } });
+    defer rt.freeResults(numeric);
+    try std.testing.expectEqual(@as(f64, 24), numeric[0].number);
+    for ([_]Value{ .nil, .{ .boolean = false }, .{ .table = try runtime.newTable() } }) |value| {
+        const parsed = try callField(&runtime, language[0], "parseFormattedNumber", &.{ language[0], value });
+        defer rt.freeResults(parsed);
+        try std.testing.expect(parsed[0] == .nil);
+    }
+    probe.source = "24"; // Exact message comparison precedes digit normalization.
+    const nan = try callField(&runtime, language[0], "parseFormattedNumber", &.{ language[0], .{ .string = "24" } });
+    defer rt.freeResults(nan);
+    try std.testing.expect(std.math.isNan(nan[0].number));
+}
+
+test "Arabic number parsing preserves missing message and provider errors while other locales remain unsupported" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var language = LanguageCtx{ .code = "ar", .case_mapper = undefined };
+    const args = [_]Value{ .nil, .{ .string = "يونس" } };
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, languageParseFormattedNumber(&language, &runtime, &args));
+    var probe = FormattedNumberMessageProbe{ .absent = true };
+    var host = host_api.Host{ .ctx = &probe, .interface_message = FormattedNumberMessageProbe.message };
+    host_api.set(&runtime, &host);
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, languageParseFormattedNumber(&language, &runtime, &args));
+    probe.absent = false;
+    probe.failure = error.AccessDenied;
+    try std.testing.expectError(error.AccessDenied, languageParseFormattedNumber(&language, &runtime, &args));
+    probe.failure = error.OutOfMemory;
+    try std.testing.expectError(error.OutOfMemory, languageParseFormattedNumber(&language, &runtime, &args));
+    probe.failure = null;
+    probe.source = null;
+    try std.testing.expectError(error.UnsupportedFormattedNumberNanMessage, languageParseFormattedNumber(&language, &runtime, &args));
+    probe.source = "{{dynamic message}}";
+    try std.testing.expectError(error.UnsupportedFormattedNumberNanMessage, languageParseFormattedNumber(&language, &runtime, &args));
+    language.code = "fa";
+    try std.testing.expectError(error.NotImplemented, languageParseFormattedNumber(&language, &runtime, &args));
+    language.code = "en";
+    const ordinary_english = try languageParseFormattedNumber(&language, &runtime, &.{ .nil, .{ .string = "−1,234.5" } });
+    defer rt.freeResults(ordinary_english);
+    try std.testing.expectEqual(@as(f64, -1234.5), ordinary_english[0].number);
+    try std.testing.expectError(error.StringExpected, languageParseFormattedNumber(&language, &runtime, &.{.nil}));
 }

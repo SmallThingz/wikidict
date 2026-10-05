@@ -32,7 +32,7 @@ SHARD_STATE_VERSION = 2
 AUXILIARY_SNAPSHOT_NAMES = (
     'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
-    'wikibase-entity-terms', 'language-fallbacks', 'file-metadata',
+    'wikibase-entity-terms', 'language-fallbacks', 'language-names', 'file-metadata',
     'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words',
 )
 MAX_TOTAL_BUILD_WORKERS = 8
@@ -167,6 +167,19 @@ def validate_interwiki_provenance(snapshot, edition, expected_sha):
 
 
 def auxiliary_capture_helper(name, path):
+    if name=='commons-data':
+        manifest=path.with_name(name+'.manifest.json')
+        if not (manifest.exists() or manifest.is_symlink()):return None
+        record=read_small_json(manifest)
+        if not isinstance(record,dict):raise ValueError('Invalid Commons-data provenance')
+        # Explicit capture schemas must pass replay, including unknown schemas.
+        # Only schema-less legacy snapshots use generic manifest validation.
+        if 'schema' not in record:return None
+        import prepare_commons_data
+        return prepare_commons_data
+    if name=='language-names':
+        import prepare_language_names
+        return prepare_language_names
     if name=='magic-words':
         import prepare_magic_words
         return prepare_magic_words
@@ -235,7 +248,7 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
             raise ValueError(f'Unknown auxiliary snapshot: {name}')
         path=Path(source)
         capture=validated_auxiliary_capture(name,path,edition,date)
-        if capture is not None and name in ('language-fallbacks','interface-messages'):
+        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names'):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
@@ -283,12 +296,14 @@ def validate_capture_artifacts(root, record, required=()):
 
 
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
-    if capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms','language-fallbacks','interface-messages'):
+    if capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms','language-fallbacks','interface-messages','commons-data','language-names'):
         bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
         if bound is not None:
             _,inventory=bound
             inputs=(('wikibase-namespace-siteinfo.raw.json','namespace-siteinfo.raw.json'),
                     ('wikibase-namespace-capture.complete.json','capture.complete.json')) if name.startswith('wikibase-') else (
+                    ('commons-namespace-registry.tsv','namespace-registry.tsv'),) if name=='commons-data' else (
+                    ('language-names.namespace-registry.tsv','namespace-registry.tsv'),) if name=='language-names' else (
                     ('language-messages.namespace-registry.tsv','namespace-registry.tsv'),)
             for copied,original in inputs:
                 if inventory.get(copied)!=sha256_file(capture_root/original):
@@ -364,6 +379,10 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 ('wikibase-entities','wikibase-entity-terms'),edition,date)
             preferred.update(discover_auxiliary_generation(root,'language-messages',
                 ('language-fallbacks','interface-messages'),edition,date))
+            preferred.update(discover_auxiliary_generation(root,'commons-data',
+                ('commons-data',),edition,date))
+            preferred.update(discover_auxiliary_generation(root,'language-names',
+                ('language-names',),edition,date))
             for name in AUXILIARY_SNAPSHOT_NAMES:
                 if name in preferred:continue
                 path=root/(name+'.tsv')
@@ -1429,7 +1448,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
         'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
-        'fallback_report':'fallback-pages.jsonl', 'compression':'xz -6; 1 MiB blocks','blobs':len(compressed),
+        'fallback_report':'fallback-pages.jsonl', 'compression':'xz -0; 1 MiB blocks','blobs':len(compressed),
         'input_pages':coverage['pages_seen'],'page_coverage_report':'page-coverage.json',
         'namespace_coverage_report':'namespace-coverage.json','namespace_coverage_totals':namespace_totals,
         'publication_files':inventory}

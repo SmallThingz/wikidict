@@ -275,5 +275,95 @@ class WikibaseCaptureTests(unittest.TestCase):
             entities.response_records(entities.document({'success': 1, 'entities': {'L1': full}}), ['L1'], 'full')
 
 
+
+    def test_verified_replay_reuses_exact_bytes_but_returns_fresh_manifests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            self.capture(root)
+            folder = root / entities.DIRECTORY
+            entities._VALIDATED_REPLAY_KEYS.clear()
+            with patch.object(entities, 'replay', wraps=entities.replay) as replay:
+                first = entities.validate_snapshot(folder / 'wikibase-entities.tsv', self.wiki, self.date)
+                original = copy.deepcopy(first)
+                first['artifacts'].clear()
+                first['content_language'] = 'caller mutation'
+                second = entities.validate_snapshot(folder / 'wikibase-entities.tsv', self.wiki, self.date)
+                other = entities.validate_snapshot(folder / 'wikibase-entity-terms.tsv', self.wiki, self.date)
+                self.assertEqual(second, original)
+                self.assertEqual(other['name'], 'wikibase-entity-terms')
+                self.assertEqual(replay.call_count, 1)
+
+    def test_verified_replay_still_reads_and_hashes_every_bound_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            self.capture(root)
+            folder = root / entities.DIRECTORY
+            manifest = entities.validate_snapshot(folder)
+            raw_path = folder / next(name for name in manifest['artifacts']
+                                     if name.endswith('.raw.json') and name.startswith('wikibase-request-'))
+            raw_path.chmod(0o644)
+            raw_path.write_bytes(raw_path.read_bytes() + b' ')
+            with self.assertRaisesRegex(ValueError, 'Changed entity capture artifact'):
+                entities.validate_snapshot(folder)
+
+    def test_rebound_raw_response_cannot_reuse_an_older_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            self.capture(root)
+            folder = root / entities.DIRECTORY
+            manifest = entities.validate_snapshot(folder)
+            row = next(row for row in manifest['requests'] if row['mode'] == 'full')
+            raw = json.loads((folder / row['response']).read_bytes())
+            raw['entities']['L1']['lemmas']['ar']['value'] = 'changed lemma'
+            changed = entities.document(raw)
+            self.rebind(folder, row['response'], changed)
+            request = json.loads((folder / row['request']).read_bytes())
+            request.update(raw_sha256=entities.digest(changed), raw_bytes=len(changed))
+            self.rebind(folder, row['request'], entities.document(request))
+            with patch.object(entities, 'replay', wraps=entities.replay) as replay:
+                with self.assertRaisesRegex(ValueError, 'Entity projection differs from exact offline replay'):
+                    entities.validate_snapshot(folder)
+                self.assertEqual(replay.call_count, 1)
+
+    def test_rebound_projection_and_paired_manifest_cannot_reuse_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            self.capture(root)
+            folder = root / entities.DIRECTORY
+            entities.validate_snapshot(folder)
+            name = 'wikibase-entity-terms.tsv'
+            self.rebind(folder, name, (folder / name).read_bytes() + b'forged\t{}\n')
+            with self.assertRaisesRegex(ValueError, 'Entity projection differs from exact offline replay'):
+                entities.validate_snapshot(folder / 'wikibase-entities.tsv')
+
+    def test_reused_capture_keeps_identity_and_symlink_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            self.capture(root)
+            folder = root / entities.DIRECTORY
+            manifest = entities.validate_snapshot(folder)
+            with self.assertRaisesRegex(ValueError, 'edition/date mismatch'):
+                entities.validate_snapshot(folder, 'enwiktionary', self.date)
+            raw_path = folder / next(name for name in manifest['artifacts']
+                                     if name.endswith('.raw.json') and name.startswith('wikibase-request-'))
+            copied = root / 'same-bytes.json'
+            copied.write_bytes(raw_path.read_bytes())
+            raw_path.chmod(0o644)
+            raw_path.unlink()
+            raw_path.symlink_to(copied.resolve())
+            with self.assertRaisesRegex(ValueError, 'Missing, unsafe or oversized'):
+                entities.validate_snapshot(folder)
+
+    def test_verified_replay_respects_changed_entity_bounds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            self.capture(root)
+            folder = root / entities.DIRECTORY
+            entities.validate_snapshot(folder)
+            for bound in ('MAX_ENTITIES', 'MAX_ENTITY_BYTES'):
+                with self.subTest(bound=bound), patch.object(entities, bound, 1):
+                    with self.assertRaises(ValueError):
+                        entities.validate_snapshot(folder)
+
 if __name__ == '__main__':
     unittest.main()

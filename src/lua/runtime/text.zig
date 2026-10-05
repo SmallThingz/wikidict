@@ -551,7 +551,7 @@ fn jsonObjectKey(runtime: *rt.Context, raw: []const u8) !Value {
     return .{ .number = @floatFromInt(integer) };
 }
 
-fn jsonToLua(runtime: *rt.Context, value: std.json.Value, preserve_keys: bool) !Value {
+pub fn jsonToLua(runtime: *rt.Context, value: std.json.Value, preserve_keys: bool) !Value {
     return switch (value) {
         .null => .nil,
         .bool => |v| .{ .boolean = v },

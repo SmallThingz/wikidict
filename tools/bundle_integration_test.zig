@@ -16,6 +16,7 @@ const source =
     "# Parser functions: {{#time:Y M d|2013-3-31 +8 days}} / {{#formatdate:2010-01-02|dmy}} / {{#sub:αβγ|-1}} / {{#iferror:{{#expr:bogus}}|ERR|OK}}\n" ++
     "# Synth fork: {{#invoke:IntegrationSynth|run|forked}}\n" ++
     "# Pure fork: {{#invoke:IntegrationPureDataProbe|run}}\n" ++
+    "# Legacy varargs: {{#invoke:IntegrationLegacyVarargs|run}}\n" ++
     "# Captured fork: {{#invoke:IntegrationCapturedProbe|run}}\n" ++
     "# Repair recovery: {{repair-parent|x=term&lt;t:gloss&gt;}}\n" ++
     "# Graceful Lua error: {{#invoke:IntegrationForms|fail_probe}}\n" ++
@@ -311,6 +312,88 @@ const module_source =
     \\        "<table><caption>Forms from native Lua</caption><tr><td>"..plural.."</td></tr></table>\n"
     \\end }
 ;
+const legacy_vararg_source =
+    \\local export = {}
+    \\_G.arg = 'module-global'
+    \\assert(arg == 'module-global')
+    \\local function pack(first, ...) return arg end
+    \\local function two_fixed(first, second, ...) return arg end
+    \\local function shadow_parameter(arg, ...) return arg end
+    \\local function capture(...)
+    \\    local function getter() return arg end
+    \\    return getter
+    \\end
+    \\local function shadow_local(...)
+    \\    local saved = arg
+    \\    local arg = 'body-local'
+    \\    return saved, arg
+    \\end
+    \\local function modern(...)
+    \\    local first = ...
+    \\    return arg, first
+    \\end
+    \\local function suppressed(...)
+    \\    if false then return ... end
+    \\    return arg
+    \\end
+    \\local function nested(...)
+    \\    local function inner(...) return ... end
+    \\    assert(inner('inner') == 'inner')
+    \\    return arg
+    \\end
+    \\local function factory(...)
+    \\    local function rebind(value) arg = value end
+    \\    local function get() return arg end
+    \\    return rebind, get
+    \\end
+    \\function export.run()
+    \\    local empty = pack()
+    \\    assert(type(empty) == 'table' and empty.n == 0 and next(empty) == 'n')
+    \\    assert(two_fixed('only-one').n == 0)
+    \\    local holes = pack('fixed', 'extra', nil, nil)
+    \\    assert(holes.n == 3 and holes[1] == 'extra' and holes[2] == nil and holes[3] == nil)
+    \\    assert(pack('fixed', 'extra') ~= pack('fixed', 'extra'))
+    \\    local shadowed = shadow_parameter('named-arg', 'extra')
+    \\    assert(shadowed.n == 1 and shadowed[1] == 'extra')
+    \\    local getter = capture('captured', nil)
+    \\    local captured = getter()
+    \\    assert(captured.n == 2 and captured[1] == 'captured' and getter() == captured)
+    \\    local saved, local_value = shadow_local('saved')
+    \\    assert(saved.n == 1 and saved[1] == 'saved' and local_value == 'body-local')
+    \\    local absent, first = modern('first', 'second')
+    \\    assert(absent == nil and first == 'first' and suppressed('extra') == nil)
+    \\    assert(nested('outer').n == 1 and nested('outer')[1] == 'outer')
+    \\    local rebind, get = factory('before')
+    \\    local initial = get()
+    \\    assert(initial.n == 1 and initial[1] == 'before')
+    \\    rebind('after')
+    \\    assert(get() == 'after' and initial[1] == 'before')
+    \\    local mt = {__index = function(...) return arg[1].stored .. arg[2] end}
+    \\    assert(setmetatable({stored='receiver:'}, mt).missing == 'receiver:missing')
+    \\    local mt_one = {__index = function(self, ...) return self.stored .. arg[1] end}
+    \\    assert(setmetatable({stored='one:'}, mt_one).missing == 'one:missing')
+    \\    local old_select, old_table = select, table
+    \\    select = function() error('mutable select must not implement arg') end
+    \\    table = {}
+    \\    local independent = pack('fixed', 'extra', nil)
+    \\    select, table = old_select, old_table
+    \\    assert(independent.n == 2 and independent[1] == 'extra')
+    \\    -- Pinned AF Skripnutsgoed.tag_text bold path: tag_attr has no ... expression.
+    \\    local function class_attr(classes)
+    \\        table.insert(classes, 1, 'Latn')
+    \\        return 'class="' .. table.concat(classes, ' ') .. '"'
+    \\    end
+    \\    local function tag_attr(...)
+    \\        return class_attr(arg) .. ' lang="eo"'
+    \\    end
+    \\    local rendered = '<b ' .. tag_attr() .. '>reĝo</b>'
+    \\    assert(rendered == '<b class="Latn" lang="eo">reĝo</b>')
+    \\    assert(_G.arg == 'module-global')
+    \\    return 'legacy varargs verified'
+    \\end
+    \\return export
+;
+
 const template_source =
     "<includeonly>{{#invoke:IntegrationForms|render_dictionary_fixture|{{{1}}}}}</includeonly>" ++
     "<noinclude>Documentation must not leak.</noinclude>";
@@ -351,6 +434,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Template:nested", .ns = 10, .id = 13, .body = "ordinary namespace distinct" },
         .{ .title = "Template:نط:10", .ns = 10, .id = 31, .body = "English ordinary namespace template" },
         .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = module_source },
+        .{ .title = "Module:IntegrationLegacyVarargs", .ns = 828, .id = 32, .body = legacy_vararg_source },
         .{ .title = "Module:IntegrationExports", .ns = 828, .id = 30, .body = "return {ok=function() return 'OK' end, value=17, callable=setmetatable({}, {__call=function() return 'BAD' end})}" },
         .{ .title = "Module:IntegrationSynth", .ns = 828, .id = 8, .body = "local answer = 42; local export = { kind = 'mixed', nested = { ok = true } }; local alias = export; alias.answer = answer; function alias.run(x) if type(x) == 'table' then return 'synth:' .. x.args[1] end; return 'synth:' .. x end; return export" },
         .{ .title = "Module:IntegrationPureData", .ns = 828, .id = 9, .body = "local root = {}; root.alpha = {1, 2}; root.beta = { ok = true }; local alias = root.beta; alias.extra = 'x'; return root" },
@@ -933,6 +1017,31 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
         \\  assert(form.id == 'L100-F1' and form.grammaticalFeatures[1] == 'Q1350145' and form.grammaticalFeatures[2] == 'Q2')
         \\  assert(form.representations.ar.value == 'كَاتِب' and next(form.claims) == nil)
         \\  assert(entity.senses[1].id == 'L100-S1' and entity.senses[1].glosses.ar.value == 'دوّن')
+        \\  assert(entity:getId() == 'L100' and entity:getLanguage() == 'Q13955' and entity:getLexicalCategory() == 'Q24905')
+        \\  local sense_getter = entity[frame.args[2] or 'getSenses']
+        \\  local senses1, senses2 = sense_getter(entity), entity:getSenses()
+        \\  assert(senses1 ~= senses2 and senses1[1] == senses2[1] and senses1[1] == entity.senses[1])
+        \\  local sense = senses1[1]
+        \\  assert(sense:getId() == 'L100-S1')
+        \\  local gloss, gloss_language = sense.getGloss(sense)
+        \\  assert(gloss == 'دوّن' and gloss_language == 'ar' and sense:getGloss('en') == nil)
+        \\  local glosses = sense:getGlosses()
+        \\  glosses[1][1] = 'changed pair'
+        \\  assert(sense:getGloss('ar') == 'دوّن')
+        \\  assert(next(sense:getAllStatements('P5831')) == nil)
+        \\  assert(mw.wikibase.getEntity('L100-S1'):getGloss() == 'دوّن')
+        \\  assert(next(mw.wikibase.getAllStatements('L100-S1', 'P5831')) == nil)
+        \\  assert(mw.wikibase.getEntity('L100-S999') == nil)
+        \\  fails(function() mw.wikibase.getEntity('L999-S1') end, 'Wikibase entity snapshot missing entity=L999')
+        \\  local forms1, forms2 = entity:getForms(), entity:getForms()
+        \\  assert(forms1 ~= forms2 and forms1[1] == forms2[1] and forms1[1] == entity.forms[1])
+        \\  assert(forms1[1]:getGrammaticalFeatures() == form.grammaticalFeatures)
+        \\  local representation, representation_language = forms1[1]:getRepresentation()
+        \\  assert(representation == 'كَاتِب' and representation_language == 'ar')
+        \\  local representations = forms1[1]:getRepresentations()
+        \\  representations[1][1] = 'changed representation pair'
+        \\  assert(form:getRepresentation('ar') == 'كَاتِب')
+        \\  assert(mw.wikibase.getEntity('L100-F1'):getRepresentation('ar') == 'كَاتِب')
         \\  local root_id = entity.claims.P5920[1].mainsnak.datavalue.value.id
         \\  assert(root_id == 'L101' and entity.claims.P5186[1].mainsnak.datavalue.value.id == 'Q400')
         \\  local root = mw.wikibase.getEntity(root_id)
@@ -941,6 +1050,14 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
         \\  lemmas[1][1] = 'changed pair'
         \\  assert(root:getLemmas()[1][1] == 'كتب' and root.lemmas.ar.value == 'كتب')
         \\  assert(mw.wikibase.getEntity('L102').id == 'L100')
+        \\  assert(root:getId() == 'L101' and #root:getSenses() == 0 and #root:getForms() == 0)
+        \\  local object_statements = entity:getAllStatements('P9295')
+        \\  object_statements[1].mainsnak.datavalue.value.id = 'Q997'
+        \\  object_statements[1].references[1].hash = 'changed local reference'
+        \\  local object_again = entity:getAllStatements('P9295')
+        \\  assert(object_again[1].mainsnak.datavalue.value.id == 'Q200')
+        \\  assert(object_again[1].references[1].hash == 'fixture-reference')
+        \\  fails(function() object_again[1].qualifiers.P1 = {} end)
         \\  local statements = mw.wikibase.getAllStatements('L100', 'P9295')
         \\  assert(statements[0] == nil and #statements == 3)
         \\  assert(statements[1].rank == 'normal' and statements[2].rank == 'deprecated' and statements[3].rank == 'preferred')
@@ -979,12 +1096,15 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
         \\  fails(function() item.descriptions.ar = {} end)
         \\  fails(function() item.aliases.ar = {} end)
         \\  fails(function() item.sitelinks.arwiktionary = {} end)
+        \\  assert(item:getId() == 'Q200' and item:getSitelink() == 'متعد' and item:getSitelink('enwiktionary') == 'transitive')
+        \\  assert(item:getSitelink('frwiktionary') == nil)
         \\  assert(mw.wikibase.getGlobalSiteId() == 'arwiktionary')
         \\  assert(mw.wikibase.getSitelink('Q200') == 'متعد')
         \\  assert(mw.wikibase.getSitelink('Q200', 'enwiktionary') == 'transitive')
         \\  assert(mw.wikibase.getSitelink('Q200', 'frwiktionary') == nil)
         \\  item.labels.ar.value = 'changed label'
         \\  item.sitelinks.arwiktionary.title = 'changed sitelink'
+        \\  assert(item:getSitelink() == 'changed sitelink')
         \\  assert(mw.wikibase.getLabelByLang('Q200', 'ar') == 'متعد' and mw.wikibase.getSitelink('Q200') == 'متعد')
         \\  assert(mw.wikibase.getLabel('Q201') == 'ambitransitive')
         \\  assert(mw.wikibase.getLabelByLang('Q201', 'ar') == nil and mw.wikibase.getLabelByLang('Q201', 'en') == 'ambitransitive')
@@ -1523,6 +1643,7 @@ pub fn main(init: std.process.Init) !void {
     const text = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--details" }, 0);
     try h.require(std.mem.indexOf(u8, text, "Talk:Category discussion") != null and std.mem.indexOf(u8, text, "Nested category") != null, "default CategoryTree pages mode compiles other namespaces and subcategory links");
     try h.require(std.mem.indexOf(u8, text, "plural mice") != null, "Lua result is baked into data");
+    try h.require(std.mem.indexOf(u8, text, "Legacy varargs: legacy varargs verified") != null, "Lua 5.1 legacy vararg tables preserve scope, counts, closures and native AF bold-link behavior");
     try h.require(std.mem.indexOf(u8, text, "user-space inflection mouse") != null, "User namespace transclusion and relative child expand before publication");
     try h.require(std.mem.indexOf(u8, text, "User:Absent") != null and std.mem.indexOf(u8, text, "Absent article") != null and std.mem.indexOf(u8, text, "Category:Absent") != null, "missing transclusions in every namespace compile to semantic links");
     try h.require(std.mem.indexOf(u8, text, "private documentation") == null, "User namespace noinclude remains excluded");

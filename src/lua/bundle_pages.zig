@@ -6,6 +6,7 @@ const xml_decode = @import("shared_xml_decode");
 const preprocess = @import("lua_wikitext_preprocess");
 const wikimedia_dump = @import("wikimedia_dump");
 const magic_words = lua_program.namespace_registry.magic_words;
+const language_names_lib = @import("language_names.zig");
 const ExternalData = lua_program.WikitextProvider.ExternalData;
 const CategoryStats = lua_program.WikitextProvider.CategoryStats;
 const InterfaceMessage = lua_program.WikitextProvider.InterfaceMessage;
@@ -206,6 +207,7 @@ pub const Provider = struct {
     wikibase_entity_terms_arena: ?std.heap.ArenaAllocator = null,
     language_fallbacks: std.StringHashMapUnmanaged([]const []const u8) = .empty,
     language_fallbacks_storage: ?Mapped = null,
+    language_names: ?language_names_lib.Registry = null,
     language_registry: std.StringHashMapUnmanaged([]const u8) = .empty,
     language_registry_storage: ?Mapped = null,
     language_registry_available: bool = false,
@@ -228,6 +230,7 @@ pub const Provider = struct {
         try self.loadWikibaseEntities();
         try self.loadWikibaseEntityTerms();
         try self.loadLanguageFallbacks();
+        try self.loadLanguageNames();
         try self.loadLanguageRegistry();
         try self.loadTitleMagicWords();
         return self;
@@ -290,6 +293,7 @@ pub const Provider = struct {
         while (fallback_lists.next()) |list| self.a.free(list.*);
         self.language_fallbacks.deinit(self.a);
         if (self.language_fallbacks_storage) |*mapped| mapped.deinit();
+        if (self.language_names) |*registry| registry.deinit();
         self.language_registry.deinit(self.a);
         if (self.language_registry_storage) |*mapped| mapped.deinit();
         if (self.title_magic_words) |*registry| registry.deinit();
@@ -321,6 +325,9 @@ pub const Provider = struct {
             .wikibase_entity = if (self.wikibase_entities_storage != null) wikibaseEntity else null,
             .wikibase_entity_terms = if (self.wikibase_entity_terms_storage != null) wikibaseEntityTerms else null,
             .language_fallbacks = if (self.language_fallbacks_storage != null) languageFallbacks else null,
+            .language_names = if (self.language_names != null) languageNames else null,
+            .language_name = if (self.language_names != null) languageName else null,
+            .language_direction = if (self.language_names != null) languageDirection else null,
             .language_known_tag = if (self.language_registry_available) languageKnownTag else null,
         };
     }
@@ -729,6 +736,12 @@ pub const Provider = struct {
         self.wikibase_entity_terms = entries;
         self.wikibase_entity_terms_storage = mapped;
         self.wikibase_entity_terms_arena = arena;
+    }
+
+    fn loadLanguageNames(self: *Provider) !void {
+        var mapped = (try self.mapOptional("language-names.tsv")) orelse return;
+        defer mapped.deinit();
+        self.language_names = try language_names_lib.Registry.init(self.a, mapped.bytes, self.namespace_catalog.wiki, self.namespace_catalog.dump_date, self.namespace_catalog.content_language);
     }
 
     fn loadLanguageFallbacks(self: *Provider) !void {
@@ -1200,6 +1213,19 @@ pub const Provider = struct {
     fn wikibaseEntityTerms(ctx: ?*anyopaque, entity_id: []const u8) anyerror!WikibaseEntityTerms {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return self.wikibase_entity_terms.get(entity_id) orelse error.WikibaseEntityTermSnapshotMissing;
+    }
+
+    fn languageNames(ctx: ?*anyopaque, display: ?[]const u8, scope: lua_program.WikitextProvider.LanguageNameScope) anyerror![]const lua_program.WikitextProvider.LanguageNameRow {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return (self.language_names orelse return error.LanguageNameSnapshotMissing).names(display, scope);
+    }
+    fn languageName(ctx: ?*anyopaque, code: []const u8, display: ?[]const u8) anyerror![]const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return (self.language_names orelse return error.LanguageNameSnapshotMissing).name(code, display);
+    }
+    fn languageDirection(ctx: ?*anyopaque, code: []const u8) anyerror!lua_program.WikitextProvider.LanguageDirection {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return (self.language_names orelse return error.LanguageDirectionSnapshotMissing).direction(code);
     }
 
     fn languageFallbacks(ctx: ?*anyopaque, code: []const u8) anyerror![]const []const u8 {
@@ -1834,4 +1860,38 @@ test "decoded source cache respects byte budget and maximum entry size" {
     provider.admitSource(page, too_large);
     try std.testing.expect(!provider.source_cache.contains(0));
     try std.testing.expectEqual(@as(usize, 2), provider.source_cache_bytes);
+}
+
+test "provider exposes captured language profiles with exact single aliases and explicit direction" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const catalog = try lua_program.namespace_registry.englishTestRegistry();
+    {
+        var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+        defer provider.deinit();
+        try std.testing.expect(provider.api().language_names == null);
+        try std.testing.expect(provider.api().language_name == null);
+        try std.testing.expect(provider.api().language_direction == null);
+    }
+    const path = try std.fs.path.join(a, &.{ root, "language-names.tsv" });
+    defer a.free(path);
+    const bytes = try std.fmt.allocPrint(a, "# wikidict-language-names-v1\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\n" ++
+        "C\tar\tall\t2\nN\tar\tall\tar\tالعربية\nN\tar\tall\tals\tAlemannic\n" ++
+        "C\tar\tsingle\t2\nN\tar\tsingle\tar\tالعربية\nN\tar\tsingle\tals\tالألمانية السويسرية\n" ++
+        "C\t-\tdir\t2\nD\tar\trtl\nD\ten\tltr\n", .{ catalog.wiki, catalog.dump_date, catalog.content_language });
+    defer a.free(bytes);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+    defer provider.deinit();
+    const api = provider.api();
+    try std.testing.expectEqualStrings("Alemannic", (try api.language_names.?(&provider, "ar", .all))[1].name);
+    try std.testing.expectEqualStrings("الألمانية السويسرية", try api.language_name.?(&provider, "als", "ar"));
+    try std.testing.expectEqualStrings("", try api.language_name.?(&provider, "unknown", "ar"));
+    try std.testing.expectEqual(lua_program.WikitextProvider.LanguageDirection.rtl, try api.language_direction.?(&provider, "ar"));
+    try std.testing.expectError(error.LanguageNameSnapshotMissing, api.language_names.?(&provider, "fr", .all));
+    try std.testing.expectError(error.LanguageDirectionSnapshotMissing, api.language_direction.?(&provider, "unknown"));
 }

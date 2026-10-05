@@ -2267,3 +2267,40 @@ test "structural callable table entries use bounded fixed pointer ABI" {
     defer std.testing.allocator.free(off_ir);
     try std.testing.expect(std.mem.indexOf(u8, off_ir, "lua_fixed_callable_") == null);
 }
+
+test "legacy vararg locals preserve lexical scope and emitted extra argument counts" {
+    const source =
+        \\local arg = 'outer'
+        \\local function legacy(named, ...)
+        \\    local function capture() return arg end
+        \\    local function modern(...) return ... end
+        \\    return capture, modern
+        \\end
+        \\local function mixed(...) if false then return ... end; return arg end
+        \\return legacy, mixed, arg
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    try std.testing.expect(!module.root.legacy_arg);
+    const legacy = module.functions.items[1];
+    const capture = module.functions.items[2];
+    const modern = module.functions.items[3];
+    const mixed = module.functions.items[4];
+    try std.testing.expect(legacy.legacy_arg and !legacy.uses_vararg);
+    try std.testing.expectEqual(@as(usize, 1), legacy.params.len);
+    try std.testing.expectEqualStrings("arg", legacy.bindings[1].name);
+    try std.testing.expect(legacy.bindings[1].captured);
+    try std.testing.expectEqual(@as(u32, 1), capture.upvalues[0].source.local);
+    try std.testing.expect(modern.legacy_arg and modern.uses_vararg);
+    try std.testing.expect(mixed.legacy_arg and mixed.uses_vararg);
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_table_append_many"));
+    try std.testing.expect(std.mem.indexOf(u8, ir, "uitofp i64") != null);
+}

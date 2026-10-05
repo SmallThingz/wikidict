@@ -38,7 +38,7 @@ class LargeXzWaveTests(unittest.TestCase):
 
         def invoke(argv, *, stdin, stdout, check):
             self.assertTrue(check)
-            self.assertEqual(argv[:3], ['xz', '-6', '--threads=2'])
+            self.assertEqual(argv[:3], ['xz', '-0', '--threads=2'])
             self.assertIn('--memlimit-compress=2147483648', argv)
             self.assertIn('--no-adjust', argv)
             self.assertIn('--stdout', argv)
@@ -54,7 +54,7 @@ class LargeXzWaveTests(unittest.TestCase):
                 time.sleep(0.02)
                 if path == fail:
                     raise subprocess.CalledProcessError(1, argv)
-                stdout.write(b'corrupt xz' if path == corrupt else lzma.compress(stdin.read(), preset=6))
+                stdout.write(b'corrupt xz' if path == corrupt else lzma.compress(stdin.read(), preset=0))
             finally:
                 with guard:
                     state['active'] -= 1

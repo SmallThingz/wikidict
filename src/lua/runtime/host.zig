@@ -74,6 +74,12 @@ pub const WikibaseTerm = struct { value: []const u8, language: []const u8, sourc
 pub const WikibaseEntityTerms = struct { label: ?WikibaseTerm, description: ?WikibaseTerm };
 pub const WikibaseEntityTermsFn = *const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityTerms;
 pub const LanguageFallbacksFn = *const fn (?*anyopaque, []const u8) anyerror![]const []const u8;
+pub const LanguageNameRow = struct { code: []const u8, name: []const u8 };
+pub const LanguageNameScope = enum { all, mw, mwfile };
+pub const LanguageDirection = enum { ltr, rtl };
+pub const LanguageNamesFn = *const fn (?*anyopaque, ?[]const u8, LanguageNameScope) anyerror![]const LanguageNameRow;
+pub const LanguageNameFn = *const fn (?*anyopaque, []const u8, ?[]const u8) anyerror![]const u8;
+pub const LanguageDirectionFn = *const fn (?*anyopaque, []const u8) anyerror!LanguageDirection;
 pub const LanguageKnownTagFn = *const fn (?*anyopaque, []const u8) anyerror!bool;
 
 pub const Host = struct {
@@ -107,6 +113,9 @@ pub const Host = struct {
     wikibase_entity: ?WikibaseEntityFn = null,
     wikibase_entity_terms: ?WikibaseEntityTermsFn = null,
     language_fallbacks: ?LanguageFallbacksFn = null,
+    language_names: ?LanguageNamesFn = null,
+    language_name: ?LanguageNameFn = null,
+    language_direction: ?LanguageDirectionFn = null,
     language_known_tag: ?LanguageKnownTagFn = null,
 };
 

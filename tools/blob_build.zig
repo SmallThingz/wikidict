@@ -178,6 +178,13 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     return out;
 }
 
+fn isArabicCanonicalLanguageModule(title: []const u8) bool {
+    if (std.mem.eql(u8, title, "languages/data2")) return true;
+    const prefix = "languages/data3/";
+    return title.len == prefix.len + 1 and std.mem.startsWith(u8, title, prefix) and
+        title[prefix.len] >= 'a' and title[prefix.len] <= 'z';
+}
+
 fn loadArabicLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, manifest: []const u8, registry: *language_registry.Registry) !void {
     var rows = std.mem.splitScalar(u8, manifest, '\n');
     while (rows.next()) |line| {
@@ -186,7 +193,7 @@ fn loadArabicLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const u8,
         defer parsed.deinit();
         const title = namespaces.ofTitle(parsed.value.title);
         if (title.id != 828) continue;
-        const kind: language_registry.LanguageDataKind = if (std.mem.eql(u8, title.text, "languages/data2"))
+        const kind: language_registry.LanguageDataKind = if (isArabicCanonicalLanguageModule(title.text))
             .canonical_assignments
         else if (std.mem.eql(u8, title.text, "لغات/بيانات"))
             .named_table
@@ -907,10 +914,15 @@ test "Arabic dump local literal language evidence reaches decoded records" {
         "828\tوحدة\tModule\tfirst-letter\t1\t0\t0\tScribunto\tcompile_only\tmodules\n");
     defer namespaces.deinit();
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = "# content-language\tar\n# mediawiki\n" ++
-        "ar\tالعربية\npi\tالبالية\nban\tالبالينية\nur\tالأوردية\nda\tالدانمركية\nhu\tالهنغارية\n" });
+        "ar\tالعربية\npi\tالبالية\nban\tالبالينية\nur\tالأوردية\nda\tالدانمركية\nhu\tالهنغارية\nmnw\tMon\n" });
     const module_sources = [_][2][]const u8{
         .{ "وحدة:languages/data2", "local m = {}; m['pi'] = { canonicalName = 'بالي' }; return m" },
         .{ "Module:لغات/بيانات", "local data = {}; data.lang_table = { ['hu'] = { name = 'مجرية' }, ['ban'] = { name = 'بالية' }, ['pi'] = { name = 'بالية' }, ['ca-valencia'] = { name = 'بلنسية' } }; return data" },
+        .{ "وحدة:languages/data3/m", "local m = {}; m['mnw'] = { canonicalName = 'مون', otherNames = {'Unselected Mon alias'} }; return m" },
+        .{ "قالب:languages/data3/m", "local m = {}; m['mnw'] = { canonicalName = 'Wrong namespace' }; return m" },
+        .{ "وحدة:languages/data3/M", "local m = {}; m['mnw'] = { canonicalName = 'Wrong shard case' }; return m" },
+        .{ "وحدة:languages/data3/mm", "local m = {}; m['mnw'] = { canonicalName = 'Long shard' }; return m" },
+        .{ "وحدة:languages/data3/m/doc", "local m = {}; m['mnw'] = { canonicalName = 'Shard documentation' }; return m" },
     };
     var manifest: std.ArrayList(u8) = .empty;
     for (module_sources, 1..) |module, page_id| {
@@ -941,6 +953,8 @@ test "Arabic dump local literal language evidence reaches decoded records" {
     try std.testing.expect(registry.resolve("بالية") == null);
     try std.testing.expect(registry.resolve("بلنسية") == null);
     try std.testing.expect(registry.resolve("Wrong case") == null);
+    for ([_][]const u8{ "Unselected Mon alias", "Wrong namespace", "Wrong shard case", "Long shard", "Shard documentation" }) |label|
+        try std.testing.expect(registry.resolveTrusted(label) == null);
     try std.testing.expectEqualStrings("pi", registry.resolveTrusted("Pali local alias").?.code);
     const codes = languageCodes(&registry, &namespaces);
     const output = try std.fs.path.join(a, &.{ root, "blobs" });
@@ -952,6 +966,7 @@ test "Arabic dump local literal language evidence reaches decoded records" {
         .{ "hu", "الهنغارية", "مجرية", "Hungarian definition" },
         .{ "ur", "الأوردية", "أردية", "Urdu definition" },
         .{ "da", "الدانمركية", "دانماركية", "Danish definition" },
+        .{ "mnw", "Mon", "مون", "Mon definition" },
     };
     var expanded: std.ArrayList(u8) = .empty;
     var raw: std.ArrayList(u8) = .empty;
@@ -961,9 +976,10 @@ test "Arabic dump local literal language evidence reaches decoded records" {
         try raw.appendSlice(a, try std.fmt.allocPrint(a, "== {{{{اللغة|{s}}}}} ==\n# {s}\n", .{ language[2], language[3] }));
     }
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "shared", expanded.items, raw.items, null);
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "mon-plain", "== مون ==\n# Plain Mon definition\n", null);
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 4), stats.language_blobs);
-    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 5), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 6), stats.language_records);
     try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
     for (expected) |language| {
         var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
@@ -978,9 +994,64 @@ test "Arabic dump local literal language evidence reaches decoded records" {
         try std.testing.expectEqualStrings(language[0], decoded.entry.language_code);
         for (expected) |other|
             try std.testing.expectEqual(std.mem.eql(u8, language[0], other[0]), std.mem.indexOf(u8, record.payload, other[3]) != null);
+        const plain = try index.find("mon-plain");
+        try std.testing.expectEqual(std.mem.eql(u8, language[0], "mnw"), plain != null);
+        if (plain) |mon| {
+            const mon_decoded = try encoder.presentation_codec.decodeAlloc(a, mon.payload, mon.title, .language, metadata);
+            try std.testing.expectEqualStrings("mnw", mon_decoded.entry.language_code);
+            try std.testing.expect(std.mem.indexOf(u8, mon.payload, "Plain Mon definition") != null);
+        }
     }
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "1.lua" }), .data = "return {}" });
     try std.testing.expectError(error.LanguageSourceIdentityMismatch, loadLanguageRegistry(io, a, root, &namespaces));
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "1.lua" }), .data = module_sources[0][1] });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "3.lua" }), .data = "return {}" });
+    try std.testing.expectError(error.LanguageSourceIdentityMismatch, loadLanguageRegistry(io, a, root, &namespaces));
+}
+
+test "Arabic canonical source admission accepts only bounded data shards" {
+    try std.testing.expect(isArabicCanonicalLanguageModule("languages/data2"));
+    for ("abcdefghijklmnopqrstuvwxyz") |letter| {
+        var title = "languages/data3/a".*;
+        title[title.len - 1] = letter;
+        try std.testing.expect(isArabicCanonicalLanguageModule(&title));
+    }
+    for ([_][]const u8{ "languages/data3", "languages/data3/", "languages/data3/M", "languages/data3/mm", "languages/data3/m/doc", "languages/data3/1", "languages/data3/م", "languages/data3/m ", "Languages/data3/m", "other/languages/data3/m", "languages/data2/doc" }) |title|
+        try std.testing.expect(!isArabicCanonicalLanguageModule(title));
+}
+
+test "Arabic data3 loader rejects later mutation before trusting a canonical label" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ root, "modules" }));
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
+        "828\tوحدة\tModule\tfirst-letter\t1\t0\t0\tScribunto\tcompile_only\tmodules\n");
+    defer namespaces.deinit();
+    for ([_][]const u8{
+        "m['mnw'].canonicalName=make_name()",
+        "m[key]={canonicalName='Dynamic key'}",
+        "local alias=m; alias['mnw']={canonicalName='Changed'}",
+    }) |later| {
+        var registry = language_registry.Registry.empty(a);
+        defer registry.deinit();
+        try registry.addTsv("# content-language\tar\nar\tالعربية\nmnw\tMon\n");
+        const source = try std.fmt.allocPrint(a, "local m={{}}; m['mnw']={{canonicalName='مون'}}; {s}; return m", .{later});
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+        const manifest = try std.fmt.allocPrint(a, "{{\"page_id\":161772,\"title\":\"وحدة:languages/data3/m\",\"sha256\":\"{s}\"}}\n", .{std.fmt.bytesToHex(digest, .lower)});
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "161772.lua" }), .data = source });
+        try loadArabicLanguageModules(io, a, root, &namespaces, manifest, &registry);
+        try std.testing.expect(registry.resolveTrusted("مون") == null);
+        try std.testing.expectEqualStrings("mnw", registry.resolveTrusted("Mon").?.code);
+    }
 }
 
 test "literal Arabic language template proof rejects executable or ambiguous text" {

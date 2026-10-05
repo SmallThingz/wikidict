@@ -26,6 +26,17 @@ MAX_MANIFEST = 64 * 1024
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_URL = 7 * 1024
 MAX_REQUESTS = 128
+MAX_MESSAGE_KEYS = 16
+# This exact v1 collector is accepted only for its original <=10-key profile.
+# Request parsing, response validation, dependency hashes, and TSV replay are
+# unchanged. Existing captures keep all original bytes and timestamps.
+LEGACY_GENERATOR_SHA256 = '1bf7a2422be12c9c8bc2c4822149481fabf8c418f1149223a4be9a6ae83b4489'
+# This second exact collector widened only the bounded message selection.
+# Both prior collectors retain their original scope and must replay fully.
+PRE_CACHE_GENERATOR_SHA256 = 'ac8a3c9060334642557297d47960d93c69516db596871a8c8e68b4c19c24dad1'
+_VALIDATED_REPLAY_KEYS = set()
+_MAX_VALIDATED_REPLAY_KEYS = 256
+
 MAX_FALLBACK_ROWS = 20000
 REPO = Path(__file__).resolve().parent.parent
 
@@ -241,7 +252,7 @@ def capture(args, transport=None, sleep=time.sleep):
     languages = sorted(set(args.languages or [content_language]))
     keys = sorted(set(args.messages))
     if (not 1 <= len(languages) <= 50 or any(not language_code(x) for x in languages)
-            or not 1 <= len(keys) <= 10 or len({normalize_key(k) for k in keys}) != len(keys)):
+            or not 1 <= len(keys) <= MAX_MESSAGE_KEYS or len({normalize_key(k) for k in keys}) != len(keys)):
         raise ValueError('Invalid, duplicate-normalized, or excessive requested language/message inventory')
     identity = producer()
     root = args.output
@@ -339,7 +350,13 @@ def verify(root, require_complete=True):
     per_output = {'kind', 'rows', 'output_bytes', 'output_sha256', 'retrieved_utc'}
     if {k: v for k, v in manifest.items() if k not in per_output} != {k: v for k, v in other.items() if k not in per_output}:
         raise ValueError('Paired language/message manifests differ')
-    if any(manifest.get(k) != v for k, v in producer().items()):
+    identity = producer()
+    legacy_limit = {LEGACY_GENERATOR_SHA256: 10, PRE_CACHE_GENERATOR_SHA256: 16}.get(
+        manifest.get('generator_sha256'), 0)
+    legacy = (isinstance(manifest.get('keys'), list)
+              and 1 <= len(manifest['keys']) <= legacy_limit)
+    if (manifest.get('dependency_sha256') != identity['dependency_sha256']
+            or manifest.get('generator_sha256') != identity['generator_sha256'] and not legacy):
         raise ValueError('Capture requires its original collector and dependencies')
     if (manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('dump_date') is not None
             or manifest.get('fallback_mode') != 'strict' or manifest.get('message_mode') != 'plain-with-database'
@@ -348,6 +365,15 @@ def verify(root, require_complete=True):
     inventory = owned_payload(root)
     if inventory != manifest.get('artifacts'):
         raise ValueError('Capture artifact inventory/hash mismatch')
+    # owned_payload has just read and hashed every raw/proof/TSV artifact.
+    # Keep per-call completion, identity, dependencies and integrity checks;
+    # exact previously successful bytes can omit deterministic API replay.
+    replay_key = (tuple(sorted(hashes.items())), identity['generator_sha256'],
+                  tuple(sorted(identity['dependency_sha256'].items())), require_complete,
+                  MAX_MANIFEST, MAX_RESPONSE, MAX_URL, MAX_REQUESTS,
+                  MAX_MESSAGE_KEYS, MAX_FALLBACK_ROWS)
+    if replay_key in _VALIDATED_REPLAY_KEYS:
+        return manifests
     config = evidence.decode(evidence.small(root / (PREFIX + 'requested.json'), MAX_MANIFEST))
     if (not isinstance(config, dict) or set(config) != {'wiki', 'date', 'content_language', 'languages',
             'keys', 'namespace_registry_sha256', 'fallback_scope'}
@@ -362,7 +388,7 @@ def verify(root, require_complete=True):
     languages, keys = manifest['languages'], manifest['keys']
     if (not isinstance(languages, list) or not 1 <= len(languages) <= 50
             or len(set(languages)) != len(languages) or any(not language_code(x) for x in languages)
-            or not isinstance(keys, list) or not 1 <= len(keys) <= 10
+            or not isinstance(keys, list) or not 1 <= len(keys) <= MAX_MESSAGE_KEYS
             or len({normalize_key(k) for k in keys}) != len(keys)):
         raise ValueError('Invalid captured language/message selection')
     fallbacks, messages, observed_languages, seen = {}, {}, set(), set()
@@ -422,6 +448,9 @@ def verify(root, require_complete=True):
                 or record.get('output_sha256') != evidence.digest(expected)
                 or record.get('rows') != (len(fallbacks) if kind == 'language-fallbacks' else len(messages))):
             raise ValueError('Rendered TSV differs from complete API evidence')
+    if len(_VALIDATED_REPLAY_KEYS) >= _MAX_VALIDATED_REPLAY_KEYS:
+        _VALIDATED_REPLAY_KEYS.clear()
+    _VALIDATED_REPLAY_KEYS.add(replay_key)
     return manifests
 
 

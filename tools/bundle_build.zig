@@ -21,6 +21,7 @@ const Options = struct {
     wikibase_entity_terms_snapshot: ?[]const u8 = null,
     language_registry_snapshot: ?[]const u8 = null,
     language_fallbacks_snapshot: ?[]const u8 = null,
+    language_names_snapshot: ?[]const u8 = null,
     magic_words_snapshot: ?[]const u8 = null,
     file_metadata_snapshot: ?[]const u8 = null,
     transclusion_redirects_snapshot: ?[]const u8 = null,
@@ -84,6 +85,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.language_registry_snapshot != null) return error.Usage;
             options.language_registry_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--language-names-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.language_names_snapshot != null) return error.Usage;
+            options.language_names_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--language-fallbacks-snapshot")) {
             index += 1;
             if (index >= args.len or options.language_fallbacks_snapshot != null) return error.Usage;
@@ -980,6 +985,7 @@ test "structured Wikibase and language fallback snapshot options are strict" {
         .{ "--wikibase-entities-snapshot", "wikibase_entities_snapshot" },
         .{ "--wikibase-entity-terms-snapshot", "wikibase_entity_terms_snapshot" },
         .{ "--language-fallbacks-snapshot", "language_fallbacks_snapshot" },
+        .{ "--language-names-snapshot", "language_names_snapshot" },
     };
     inline for (cases) |case| {
         const options = try parseOptions(&.{ "dump.xml", "out", case[0], "snapshot.tsv" });
@@ -1001,7 +1007,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--magic-words-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--magic-words-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -1049,6 +1055,8 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "language-registry.tsv");
     if (options.language_fallbacks_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "language-fallbacks.tsv");
+    if (options.language_names_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "language-names.tsv");
     if (options.magic_words_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "magic-words.tsv");
     if (options.file_metadata_snapshot) |snapshot|
