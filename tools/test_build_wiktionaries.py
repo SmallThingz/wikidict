@@ -1159,12 +1159,56 @@ class BuildTest(unittest.TestCase):
             ('abwiktionary','20260901'):[dict(wiki='abwiktionary')],
         }
         started=[]
-        budgets=iter((2,0,0))
-        def fake_build(group,*args):started.append(group[0]['wiki'])
-        with patch.object(b,'safe_worker_budget',side_effect=lambda _owned=0:next(budgets,0)),patch.object(b,'build',side_effect=fake_build):
+        clock=[0]
+        def budget(_owned=0):return 0 if started and clock[0]<10 else 2
+        def fake_build(group,*args):
+            self.assertGreaterEqual(budget(),2)
+            started.append(group[0]['wiki'])
+        with patch.object(b,'safe_worker_budget',side_effect=budget), \
+             patch.object(b,'build',side_effect=fake_build), \
+             patch.object(b.time,'monotonic',side_effect=lambda:clock[0]), \
+             patch.object(b.time,'sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)) as sleep:
             failures=b.build_groups(groups,Path('.'),Path('.'),'zig',2,1)
+        self.assertEqual(started,['aawiktionary','abwiktionary'])
+        self.assertEqual(failures,[])
+        self.assertEqual([call.args[0] for call in sleep.call_args_list],[5,5])
+
+    def test_scheduler_preserves_failed_edition_while_waiting_for_later_jobs(self):
+        groups={(wiki,'20260901'):[dict(wiki=wiki)] for wiki in
+                ('aawiktionary','abwiktionary','acwiktionary')}
+        started=[];clock=[0]
+        def budget(_owned=0):return 3 if started and clock[0]<10 else 4
+        def fake_build(group,*args):
+            self.assertGreaterEqual(budget(),4)
+            started.append(group[0]['wiki'])
+            if group[0]['wiki']=='aawiktionary':raise ValueError('edition failed')
+        with patch.object(b,'safe_worker_budget',side_effect=budget), \
+             patch.object(b,'build',side_effect=fake_build), \
+             patch.object(b.time,'monotonic',side_effect=lambda:clock[0]), \
+             patch.object(b.time,'sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)):
+            failures=b.build_groups(groups,Path('.'),Path('.'),'zig',4,1)
+        self.assertEqual(started,['aawiktionary','abwiktionary','acwiktionary'])
+        self.assertEqual(failures,[('aawiktionary','20260901')])
+
+    def test_scheduler_does_not_admit_jobs_after_resource_wait_expires(self):
+        groups={(wiki,'20260901'):[dict(wiki=wiki)] for wiki in
+                ('aawiktionary','abwiktionary','acwiktionary')}
+        started=[];clock=[0]
+        def budget(_owned=0):return 3 if started and clock[0]<7 else 4
+        def fake_build(group,*args):started.append(group[0]['wiki'])
+        with patch.object(b,'safe_worker_budget',side_effect=budget), \
+             patch.object(b,'build',side_effect=fake_build), \
+             patch.object(b.time,'monotonic',side_effect=lambda:clock[0]), \
+             patch.object(b.time,'sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)) as sleep:
+            failures=b.build_groups(groups,Path('.'),Path('.'),'zig',4,1,admission_wait_seconds=7)
         self.assertEqual(started,['aawiktionary'])
-        self.assertEqual(failures,[('abwiktionary','20260901')])
+        self.assertEqual(failures,[('abwiktionary','20260901'),('acwiktionary','20260901')])
+        self.assertEqual([call.args[0] for call in sleep.call_args_list],[5,2])
+
+    def test_scheduler_requires_a_finite_resource_admission_wait(self):
+        for seconds in (0,-1,True,float('inf'),float('nan'),limits.MAX_WATCHDOG_WALL_SECONDS+1):
+            with self.subTest(seconds=seconds),self.assertRaisesRegex(ValueError,'Resource admission wait'):
+                b.build_groups({},Path('.'),Path('.'),'zig',1,1,admission_wait_seconds=seconds)
 
     def test_running_edition_is_not_removed_by_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1428,6 +1472,29 @@ class PublicationResumeTests(unittest.TestCase):
                 self.assertNotIn('.dict-cache/supplemental.wikblb.xz.idx',files)
             run.assert_not_called()
 
+    def test_published_resume_rejects_changed_source_or_compiler_and_preserves_output(self):
+        for changed in ('source','compiler'):
+            with self.subTest(changed=changed),tempfile.TemporaryDirectory() as tmp, \
+                 patch.object(b,'run_checked') as run:
+                root=Path(tmp)
+                with patch.object(b,'PROJECT',root):
+                    item,target,workspace=self.prepare(root)
+                    marker=(target/'complete.json').read_bytes()
+                    inventory=b.publication_inventory(target)
+                    zig='zig'
+                    if changed=='source':
+                        source=root/'src/runtime.zig';source.parent.mkdir()
+                        source.write_text('changed compiler runtime')
+                    else:
+                        compiler=root/'changed-zig';compiler.write_bytes(b'changed Zig compiler')
+                        compiler.chmod(0o700);zig=str(compiler)
+                    with self.assertRaisesRegex(ValueError,'Build inputs or compiler changed'):
+                        b.build_locked([item],root,root/'output',zig,1)
+                    self.assertEqual((target/'complete.json').read_bytes(),marker)
+                    self.assertEqual(b.publication_inventory(target),inventory)
+                    self.assertTrue((workspace/'sentinel').is_file())
+                run.assert_not_called()
+
     def test_damaged_published_artifacts_preserve_workspace(self):
         cases=[('missing',name) for name in ('supplemental.wikblb.xz','languages.tsv',
                 'page-coverage.json','namespace-coverage.json','fallback-pages.jsonl')]
@@ -1551,6 +1618,19 @@ class ReproducibleBuildTimeTest(unittest.TestCase):
             self.assertEqual(groups.call_args.kwargs['now_unix'],1791072000)
 
 class LongBuildDeadlineTest(unittest.TestCase):
+    def test_watchdog_admission_wait_uses_the_configured_global_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
+            for seconds in (None,14400):
+                argv=['build_wiktionaries.py','--resource-mode=watchdog','--downloads',str(root),'--threads','1','--jobs','1']
+                if seconds is not None:argv+=['--build-timeout-seconds',str(seconds)]
+                with self.subTest(seconds=seconds),patch.object(sys,'argv',argv), \
+                     patch.object(b,'safe_worker_budget',return_value=4), \
+                     patch.object(b,'build_groups',return_value=[]) as groups:
+                    b.main()
+                self.assertEqual(groups.call_args.kwargs['admission_wait_seconds'],seconds or limits.WATCHDOG_WALL_SECONDS)
+
     def test_explicit_long_deadline_keeps_watchdog_and_default_memory_envelope(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(b,'PROJECT',Path(tmp)),patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog','--build-timeout-seconds','14400']),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:

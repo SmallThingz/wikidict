@@ -42,6 +42,8 @@ MAX_PAGE_INDEX_LINE_BYTES = 1024 * 1024
 MAX_PAGE_COVERAGE_BYTES = 64 * 1024
 MEMORY_PER_BUILD_WORKER = 1536 * 1024 * 1024
 CPU_UTILIZATION_TARGET = 0.75
+RESOURCE_ADMISSION_WAIT_SECONDS = 10 * 60
+RESOURCE_ADMISSION_POLL_SECONDS = 5
 
 def expansion_deadline_args(value):
     if value is None:
@@ -1438,12 +1440,17 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     if workspace.exists(): shutil.rmtree(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS):
+    from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
+    if type(admission_wait_seconds) is not int or not 1 <= admission_wait_seconds <= MAX_WATCHDOG_WALL_SECONDS:
+        raise ValueError('Resource admission wait must be a positive finite number of seconds, up to seven days')
     pending=list(sorted(groups.items()))
     failures=[]
     admission_workers=threads if expansion_workers is None or expansion_workers>MAX_PIPELINE_WORKERS else max(threads,expansion_workers)
+    admission_deadline=None
+    admission_report_at=0
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
         active={}
         while pending or active:
@@ -1451,6 +1458,8 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 active_workers=len(active)*admission_workers
                 live_budget=safe_worker_budget(active_workers)
                 if live_budget < active_workers+admission_workers:
+                    break
+                if admission_deadline is not None and time.monotonic() >= admission_deadline:
                     break
                 key,group=pending.pop(0)
                 options={}
@@ -1464,11 +1473,23 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                     options.update(edition_options[key])
                 future=pool.submit(build,group,downloads,output,zig,threads,**options)
                 active[future]=key
+                admission_deadline=None
+                admission_report_at=0
             if not active:
                 if pending:
-                    live_budget=safe_worker_budget(0)
-                    print(f'STOPPED before {pending[0][0][0]}: resource pressure allows {live_budget} workers, need {admission_workers}',flush=True)
-                    failures.extend(key for key,_ in pending)
+                    now=time.monotonic()
+                    if admission_deadline is None:
+                        admission_deadline=now+admission_wait_seconds
+                    remaining=admission_deadline-now
+                    if remaining <= 0:
+                        print(f'STOPPED before {pending[0][0][0]}: resource admission deadline expired after {admission_wait_seconds} seconds; budget {live_budget}, need {admission_workers}',flush=True)
+                        failures.extend(key for key,_ in pending)
+                        break
+                    if now >= admission_report_at:
+                        print(f'WAITING before {pending[0][0][0]}: resource pressure allows {live_budget} workers, need {admission_workers}; admission deadline in {remaining:.0f} seconds',flush=True)
+                        admission_report_at=now+30
+                    time.sleep(min(RESOURCE_ADMISSION_POLL_SECONDS,remaining))
+                    continue
                 break
             done,_=concurrent.futures.wait(active,timeout=1,return_when=concurrent.futures.FIRST_COMPLETED)
             if not done:continue
@@ -1544,6 +1565,11 @@ def main():
         p.error('Auxiliary snapshots require exactly one edition')
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     options={}
+    if a.resource_mode=='watchdog':
+        from build_resource_limits import WATCHDOG_WALL_SECONDS
+        # The outer watchdog still enforces its original global wall deadline,
+        # including time already spent building or waiting for worker admission.
+        options['admission_wait_seconds']=a.build_timeout_seconds or WATCHDOG_WALL_SECONDS
     if a.expansion_timeout_ms is not None: options['expansion_timeout_ms']=a.expansion_timeout_ms
     if a.now_unix is not None: options['now_unix']=a.now_unix
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
