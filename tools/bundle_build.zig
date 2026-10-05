@@ -10,6 +10,7 @@ const Options = struct {
     dump: []const u8,
     root: []const u8,
     namespace_registry_snapshot: ?[]const u8 = null,
+    site_info_snapshot: ?[]const u8 = null,
     commons_data_snapshot: ?[]const u8 = null,
     category_stats_snapshot: ?[]const u8 = null,
     interface_messages_snapshot: ?[]const u8 = null,
@@ -45,6 +46,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.namespace_registry_snapshot != null) return error.Usage;
             options.namespace_registry_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--site-info-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.site_info_snapshot != null) return error.Usage;
+            options.site_info_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--commons-data-snapshot")) {
             index += 1;
             if (index >= args.len or options.commons_data_snapshot != null) return error.Usage;
@@ -204,12 +209,12 @@ const Extraction = struct {
     }
 };
 
-fn boundedParseWorkers(requested: usize, cpu_limit: usize, worker_running: bool, extractor_running: bool) usize {
-    const reserved = @as(usize, @intFromBool(worker_running)) + @as(usize, @intFromBool(extractor_running));
+fn boundedParseWorkers(requested: usize, cpu_limit: usize, extractor_running: bool) usize {
+    const reserved = @as(usize, @intFromBool(extractor_running));
     return @min(requested, @max(@as(usize, 1), cpu_limit -| reserved));
 }
 
-fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump: []const u8, root: []const u8, llvm_dir: []const u8, workers: usize, cpu_limit: usize, worker_job: *const WorkerObjectJob, leaf_job: *LeafBitcodeJob) !void {
+fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump: []const u8, root: []const u8, llvm_dir: []const u8, workers: usize, cpu_limit: usize, leaf_bc: []const u8) !void {
     const ready = try std.fs.path.join(a, &.{ root, "compiler-inputs.ready" });
     const manifest = try std.fs.path.join(a, &.{ root, "manifest.jsonl" });
     // A failed prior build can leave a readiness marker in a reused output
@@ -240,10 +245,9 @@ fn extractAndCompile(io: std.Io, a: std.mem.Allocator, marker: []const u8, dump:
         }
         try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     }
-    // The producer ran beside extraction and the runtime worker. Join before
-    // the compiler opens its bitcode; the final path is atomically published.
-    const leaf_bc = try leaf_job.finish();
-    const parse_workers = boundedParseWorkers(workers, cpu_limit, !worker_job.done.load(.acquire), !extraction.done.load(.acquire));
+    // The leaf bitcode was copied from the same build graph as the worker
+    // before extraction started. Only the extractor can still occupy a slot.
+    const parse_workers = boundedParseWorkers(workers, cpu_limit, !extraction.done.load(.acquire));
     const worker_text = try std.fmt.allocPrint(a, "{d}", .{parse_workers});
     try stage(io, marker, "parse/analyze Lua while finalizing corpus index", &.{ paths.llvm, manifest, root, llvm_dir, "--parse-workers", worker_text, "--value-leaf-bc", leaf_bc });
     // The title index is required by expansion, even if LLVM emission finishes
@@ -295,10 +299,6 @@ fn objectCacheCommand(
     return error.PipelineStageFailed;
 }
 
-fn sourcePath(a: std.mem.Allocator, relative: []const u8) ![]u8 {
-    return std.fs.path.join(a, &.{ paths.project_root, relative });
-}
-
 fn fileSize(io: std.Io, path: []const u8) !u64 {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
@@ -317,11 +317,11 @@ fn installSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: [
     try std.Io.Dir.cwd().copyFile(source, .cwd(), destination, io, .{});
 }
 
-test "worker overlap reserves compile slots without reducing completed jobs" {
-    try std.testing.expectEqual(@as(usize, 4), boundedParseWorkers(4, 4, false, false));
-    try std.testing.expectEqual(@as(usize, 3), boundedParseWorkers(4, 4, true, false));
-    try std.testing.expectEqual(@as(usize, 2), boundedParseWorkers(4, 4, true, true));
-    try std.testing.expectEqual(@as(usize, 1), boundedParseWorkers(4, 1, true, true));
+test "extractor overlap reserves only its active compile slot" {
+    try std.testing.expectEqual(@as(usize, 4), boundedParseWorkers(4, 4, false));
+    try std.testing.expectEqual(@as(usize, 3), boundedParseWorkers(4, 4, true));
+    try std.testing.expectEqual(@as(usize, 2), boundedParseWorkers(2, 4, true));
+    try std.testing.expectEqual(@as(usize, 1), boundedParseWorkers(4, 1, true));
 }
 
 test "snapshot install resolves relative sources before linking" {
@@ -684,164 +684,40 @@ test "object cache hit bitmap is exact and includes the program object" {
     try std.testing.expectError(error.InvalidObjectCacheHits, validateObjectHits("", 100_002));
 }
 
-fn compileLeafBitcode(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) ![]const u8 {
-    const leaf_root = try sourcePath(a, "src/lua/value_leaf_build.zig");
-    const runtime_core = try sourcePath(a, "src/lua/runtime/core.zig");
-    const static_fields = try sourcePath(a, "src/lua/abi/static_fields.zig");
+fn installCachedLeafBitcode(io: std.Io, a: std.mem.Allocator, llvm_dir: []const u8) ![]const u8 {
     const output = try std.fs.path.join(a, &.{ llvm_dir, "value_leaf.bc" });
-    const partial = try std.fs.path.join(a, &.{ llvm_dir, "value_leaf.bc.part" });
-    const object = try std.fs.path.join(a, &.{ llvm_dir, "value_leaf.o" });
-    const emit_obj = try std.fmt.allocPrint(a, "-femit-bin={s}", .{object});
-    const emit_bc = try std.fmt.allocPrint(a, "-femit-llvm-bc={s}", .{partial});
-    const root_mod = try std.fmt.allocPrint(a, "-Mroot={s}", .{leaf_root});
-    const namespace_mod = try std.fmt.allocPrint(a, "-Mnamespace_registry={s}", .{try sourcePath(a, "src/shared/namespace_registry.zig")});
-    const lower_mod = try std.fmt.allocPrint(a, "-Municode_lower={s}", .{try sourcePath(a, "src/frontend/unicode_lower.zig")});
-    const runtime_mod = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{runtime_core});
-    const fields_mod = try std.fmt.allocPrint(a, "-Mlua_static_fields={s}", .{static_fields});
-    try stage(io, marker, "compile build-only Lua value helper bitcode", &.{
-        paths.zig, "build-obj",          "-Ofast",    "-mcpu=baseline", "-fllvm", "-fstrip",       "-lc",
-        emit_obj,  emit_bc,              "--dep",     "zig_runtime",    root_mod, "--dep",         "lua_static_fields",
-        "--dep",   "namespace_registry", runtime_mod, fields_mod,       "--dep",  "unicode_lower", namespace_mod,
-        lower_mod,
-    });
-    try std.Io.Dir.cwd().rename(partial, .cwd(), output, io);
+    // Keep the existing private path used by the frontend and object cache.
+    // No reader starts until this copy completes; the source is a generated
+    // build artifact paired with the runtime worker, never live Zig source.
+    try std.Io.Dir.cwd().copyFile(paths.value_leaf_bc, .cwd(), output, io, .{});
     return output;
 }
 
-// This private build-only object can overlap the runtime worker and extraction.
-// Lua emission starts only after the completed bitcode is atomically published.
-const LeafBitcodeJob = struct {
-    io: std.Io,
-    marker: []const u8,
-    llvm_dir: []const u8,
-    arena: std.heap.ArenaAllocator,
-    thread: ?std.Thread = null,
-    done: std.atomic.Value(bool) = .init(false),
-    result: ?[]const u8 = null,
-    failure: ?anyerror = null,
-
-    fn run(self: *LeafBitcodeJob) void {
-        defer self.done.store(true, .release);
-        self.result = compileLeafBitcode(self.io, self.arena.allocator(), self.marker, self.llvm_dir) catch |err| {
-            self.failure = err;
-            return;
-        };
-    }
-
-    fn start(self: *LeafBitcodeJob) !void {
-        self.thread = try std.Thread.spawn(.{}, run, .{self});
-    }
-
-    fn finish(self: *LeafBitcodeJob) ![]const u8 {
-        if (self.thread) |thread| {
-            thread.join();
-            self.thread = null;
-        }
-        if (self.failure) |err| return err;
-        return self.result orelse error.LeafBitcodeMissing;
-    }
-
-    fn deinit(self: *LeafBitcodeJob) void {
-        if (self.thread) |thread| thread.join();
-        self.arena.deinit();
-    }
-};
-
-fn compileWorkerObject(io: std.Io, a: std.mem.Allocator, marker: []const u8, llvm_dir: []const u8) ![]const u8 {
-    const worker_core = try sourcePath(a, "src/lua/bundle_worker.zig");
-    const zig_runtime = try sourcePath(a, "src/lua/runtime/core.zig");
-    const lua_program = try sourcePath(a, "src/lua/runtime/llvm_program.zig");
-    const lua_program_metadata = try sourcePath(a, "src/lua/program_metadata.zig");
-    const lua_llvm_abi = try sourcePath(a, "src/lua/runtime/llvm_abi.zig");
-    const lua_static_literal_decode = try sourcePath(a, "src/lua/runtime/static_literal_decode.zig");
-    const lua_static_literal_format = try sourcePath(a, "src/lua/runtime/static_literal_format.zig");
-    const zig_stdlib = try sourcePath(a, "src/lua/runtime/stdlib.zig");
-    const zig_scribunto = try sourcePath(a, "src/lua/runtime/scribunto.zig");
-    const lua_static_fields = try sourcePath(a, "src/lua/abi/static_fields.zig");
-    const lua_globals = try sourcePath(a, "src/lua/abi/globals.zig");
-    const preprocess = try sourcePath(a, "src/lua/wikitext/preprocess.zig");
-    const expression = try sourcePath(a, "src/lua/wikitext/expression.zig");
-    const shared_xml_decode = try sourcePath(a, "src/shared/xml_decode.zig");
-    const wikimedia_dump = try sourcePath(a, "src/shared/wikimedia_dump.zig");
-    const output = try std.fs.path.join(a, &.{ llvm_dir, "worker.o" });
-    const emit = try std.fmt.allocPrint(a, "-femit-bin={s}", .{output});
-    const root = try std.fmt.allocPrint(a, "-Mroot={s}", .{worker_core});
-    const namespace_mod = try std.fmt.allocPrint(a, "-Mnamespace_registry={s}", .{try sourcePath(a, "src/shared/namespace_registry.zig")});
-    const lower_mod = try std.fmt.allocPrint(a, "-Municode_lower={s}", .{try sourcePath(a, "src/frontend/unicode_lower.zig")});
-    const runtime_mod = try std.fmt.allocPrint(a, "-Mzig_runtime={s}", .{zig_runtime});
-    const program_mod = try std.fmt.allocPrint(a, "-Mlua_program={s}", .{lua_program});
-    const program_metadata_mod = try std.fmt.allocPrint(a, "-Mlua_program_metadata={s}", .{lua_program_metadata});
-    const llvm_abi_mod = try std.fmt.allocPrint(a, "-Mlua_llvm_abi={s}", .{lua_llvm_abi});
-    const static_literal_decode_mod = try std.fmt.allocPrint(a, "-Mlua_static_literal_decode={s}", .{lua_static_literal_decode});
-    const static_literal_format_mod = try std.fmt.allocPrint(a, "-Mlua_static_literal_format={s}", .{lua_static_literal_format});
-    const stdlib_mod = try std.fmt.allocPrint(a, "-Mzig_stdlib={s}", .{zig_stdlib});
-    const scribunto_mod = try std.fmt.allocPrint(a, "-Mzig_scribunto={s}", .{zig_scribunto});
-    const static_fields_mod = try std.fmt.allocPrint(a, "-Mlua_static_fields={s}", .{lua_static_fields});
-    const globals_mod = try std.fmt.allocPrint(a, "-Mlua_globals={s}", .{lua_globals});
-    const preprocess_mod = try std.fmt.allocPrint(a, "-Mlua_wikitext_preprocess={s}", .{preprocess});
-    const expression_mod = try std.fmt.allocPrint(a, "-Mlua_wikitext_expression={s}", .{expression});
-    const xml_decode_mod = try std.fmt.allocPrint(a, "-Mshared_xml_decode={s}", .{shared_xml_decode});
-    const wikimedia_dump_mod = try std.fmt.allocPrint(a, "-Mwikimedia_dump={s}", .{wikimedia_dump});
-
-    var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(a, &.{ paths.zig, "build-obj", "-Ofast", "-fllvm", "-lc", emit });
-    try argv.appendSlice(a, &.{ "--dep", "lua_program", "--dep", "lua_llvm_abi", "--dep", "shared_xml_decode", "--dep", "lua_wikitext_preprocess", "--dep", "wikimedia_dump", root });
-    try argv.appendSlice(a, &.{
-        "--dep",                   "lua_static_fields",         "--dep",           "namespace_registry",        runtime_mod,
-        "--dep",                   "zig_runtime",               "--dep",           "zig_stdlib",                "--dep",
-        "zig_scribunto",           "--dep",                     "lua_globals",     "--dep",                     "lua_program_metadata",
-        "--dep",                   "lua_static_literal_decode", program_mod,       "--dep",                     "zig_runtime",
-        "--dep",                   "lua_static_literal_decode", "--dep",           "lua_static_literal_format", llvm_abi_mod,
-        "--dep",                   "zig_runtime",               "--dep",           "lua_static_literal_format", static_literal_decode_mod,
-        static_literal_format_mod, "--dep",                     "zig_runtime",     "--dep",                     "lua_globals",
-        stdlib_mod,                "--dep",                     "zig_runtime",     "--dep",                     "zig_stdlib",
-        "--dep",                   "lua_wikitext_preprocess",   "--dep",           "lua_wikitext_expression",   "--dep",
-        "shared_xml_decode",       scribunto_mod,               static_fields_mod, globals_mod,                 program_metadata_mod,
-        preprocess_mod,            expression_mod,              xml_decode_mod,    wikimedia_dump_mod,          "--dep",
-        "unicode_lower",           namespace_mod,               lower_mod,
-    });
-    try stage(io, marker, "compile optimized build-only Lua worker object", argv.items);
-    return output;
+fn validateCachedBuildInput(io: std.Io, path: []const u8, max_size: u64) !void {
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| {
+        std.debug.print("cached native build input unavailable: {s}\n", .{path});
+        return err;
+    };
+    defer file.close(io);
+    const stat = try file.stat(io);
+    if (stat.kind != .file or stat.size == 0 or stat.size > max_size)
+        return error.InvalidCachedNativeBuildInput;
 }
 
-// The Zig runtime worker object depends on repository sources only. It can
-// compile while extraction and Lua emission prepare the program objects.
-const WorkerObjectJob = struct {
-    io: std.Io,
-    marker: []const u8,
-    llvm_dir: []const u8,
-    arena: std.heap.ArenaAllocator,
-    thread: ?std.Thread = null,
-    done: std.atomic.Value(bool) = .init(false),
-    result: ?[]const u8 = null,
-    failure: ?anyerror = null,
-
-    fn run(self: *WorkerObjectJob) void {
-        defer self.done.store(true, .release);
-        self.result = compileWorkerObject(self.io, self.arena.allocator(), self.marker, self.llvm_dir) catch |err| {
-            self.failure = err;
-            return;
-        };
-    }
-
-    fn start(self: *WorkerObjectJob) !void {
-        self.thread = try std.Thread.spawn(.{}, run, .{self});
-    }
-
-    fn finish(self: *WorkerObjectJob) ![]const u8 {
-        if (self.thread) |thread| {
-            thread.join();
-            self.thread = null;
-        }
-        if (self.failure) |err| return err;
-        return self.result orelse error.WorkerObjectMissing;
-    }
-
-    fn deinit(self: *WorkerObjectJob) void {
-        if (self.thread) |thread| thread.join();
-        self.arena.deinit();
-    }
-};
+// The build graph already compiled and content-tracked this repository-only
+// object. Never silently rebuild from possibly different live sources when a
+// caller invokes an old cached pipeline whose artifact is no longer present.
+fn cachedWorkerObject(io: std.Io) ![]const u8 {
+    const file = std.Io.Dir.cwd().openFile(io, paths.worker_object, .{}) catch |err| {
+        std.debug.print("cached runtime worker object unavailable: {s}\n", .{paths.worker_object});
+        return err;
+    };
+    defer file.close(io);
+    const stat = try file.stat(io);
+    if (stat.kind != .file or stat.size == 0) return error.InvalidCachedWorkerObject;
+    std.debug.print("dictionary build: using Zig build runtime worker object {s}\n", .{paths.worker_object});
+    return paths.worker_object;
+}
 
 fn appendResponseArg(out: *std.ArrayList(u8), a: std.mem.Allocator, arg: []const u8) !void {
     try out.append(a, '"');
@@ -899,7 +775,7 @@ fn compileNativeWorker(
     );
     if (object_cache_root) |cache|
         _ = try objectCacheCommand(io, a, "publish-objects", cache, llvm_dir);
-    const main_c = try sourcePath(a, "src/lua/bundle_worker_main.c");
+    const main_c = paths.worker_main_c;
     const output = try std.fs.path.join(a, &.{ publish_root, "dict-bundle-expander" });
     try linkNativeWorker(io, a, marker, llvm_dir, main_c, worker, lua_objects.items, output);
 
@@ -986,6 +862,7 @@ test "structured Wikibase and language fallback snapshot options are strict" {
         .{ "--wikibase-entity-terms-snapshot", "wikibase_entity_terms_snapshot" },
         .{ "--language-fallbacks-snapshot", "language_fallbacks_snapshot" },
         .{ "--language-names-snapshot", "language_names_snapshot" },
+        .{ "--site-info-snapshot", "site_info_snapshot" },
     };
     inline for (cases) |case| {
         const options = try parseOptions(&.{ "dump.xml", "out", case[0], "snapshot.tsv" });
@@ -1007,7 +884,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--magic-words-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--magic-words-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -1019,6 +896,9 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("worker request exceeds safe host limit of {d}\n", .{cpu_limit});
         return error.ResourceLimit;
     }
+    const worker_object = try cachedWorkerObject(init.io);
+    try validateCachedBuildInput(init.io, paths.value_leaf_bc, 1024 * 1024);
+    try validateCachedBuildInput(init.io, paths.worker_main_c, std.math.maxInt(u64));
     if (std.fs.path.dirname(root)) |parent| if (parent.len != 0)
         try std.Io.Dir.cwd().createDirPath(init.io, parent);
     try std.Io.Dir.cwd().createDir(init.io, root, .default_dir);
@@ -1028,11 +908,12 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDir(init.io, expander_root, .default_dir);
     const expander_marker = try std.fs.path.join(a, &.{ expander_root, ".incomplete" });
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = expander_marker, .data = "building" });
-    // Fail missing/unreadable input before starting the expensive optimized
-    // worker and value-helper compilation jobs. Keep the incomplete marker so
-    // the caller still has durable failed-build state.
+    // Fail missing/unreadable input before starting extraction. Keep the
+    // incomplete marker so the caller still has durable failed-build state.
     try std.Io.Dir.cwd().access(init.io, dump, .{});
     try installSnapshot(init.io, a, options.namespace_registry_snapshot orelse return error.NamespaceRegistryRequired, expander_root, "namespace-registry.tsv");
+    if (options.site_info_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "namespace-siteinfo.raw.json");
     if (options.commons_data_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "commons-data.tsv");
     if (options.category_stats_snapshot) |snapshot|
@@ -1066,36 +947,18 @@ pub fn main(init: std.process.Init) !void {
 
     const llvm_dir = try std.fs.path.join(a, &.{ expander_root, "llvm" });
     try std.Io.Dir.cwd().createDirPath(init.io, llvm_dir);
-    const worker_marker = try std.fs.path.join(a, &.{ llvm_dir, "worker-object.stage" });
-    var worker_job: WorkerObjectJob = .{
-        .io = init.io,
-        .marker = worker_marker,
-        .llvm_dir = llvm_dir,
-        .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
-    };
-    defer worker_job.deinit();
-    try worker_job.start();
-    const leaf_marker = try std.fs.path.join(a, &.{ llvm_dir, "value-leaf.stage" });
-    var leaf_job: LeafBitcodeJob = .{
-        .io = init.io,
-        .marker = leaf_marker,
-        .llvm_dir = llvm_dir,
-        .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
-    };
-    defer leaf_job.deinit();
-    try leaf_job.start();
+    const leaf_bc = try installCachedLeafBitcode(init.io, a, llvm_dir);
     const cache_hit = if (options.extraction_cache_root) |cache|
         try extractionCacheCommand(init.io, a, "probe", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root)
     else
         false;
     if (cache_hit) {
         const manifest = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
-        const leaf_bc = try leaf_job.finish();
-        const parse_workers = boundedParseWorkers(options.parse_workers, cpu_limit, !worker_job.done.load(.acquire), false);
+        const parse_workers = boundedParseWorkers(options.parse_workers, cpu_limit, false);
         const worker_text = try std.fmt.allocPrint(a, "{d}", .{parse_workers});
         try stage(init.io, marker, "parse/analyze Lua from verified extraction cache", &.{ paths.llvm, manifest, expander_root, llvm_dir, "--parse-workers", worker_text, "--value-leaf-bc", leaf_bc });
     } else {
-        try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers, cpu_limit, &worker_job, &leaf_job);
+        try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers, cpu_limit, leaf_bc);
         // compiler-inputs.ready follows indexed transclusion closure. Publish
         // only after the extractor has exited successfully.
         if (options.extraction_cache_root) |cache|
@@ -1104,7 +967,6 @@ pub fn main(init: std.process.Init) !void {
 
     // The native worker is a transient bundle compiler. It never belongs in the
     // shipped dictionary; full builds consume it immediately and delete .bundle-expander/.
-    const worker_object = try worker_job.finish();
     try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir, llvm_workers, options.extraction_cache_root, worker_object);
     // Keep native build artifacts available if corpus expansion fails. The
     // entire transient tree is deleted together only after successful encoding.

@@ -31,8 +31,11 @@ MAX_MARKER_BYTES = 64 * 1024 * 1024
 OBJECT_VERSION = 4
 MAX_OBJECT_BYTES = 1024 * 1024 * 1024
 MAX_BATCHES = 100_000
-LEAF_PRODUCER_FLAGS = ("build-obj", "-Ofast", "-mcpu=baseline", "-fllvm", "-fstrip", "-lc")
-LEAF_PRODUCER_SOURCES = ("src/lua/value_leaf_build.zig", "src/lua/runtime/value_leaf.zig")
+# Semantic settings of the build-graph leaf producer, retained as a conservative
+# cache discriminator. These are not a recorded invocation of the live Zig tool.
+LEAF_CONTRACT_FLAGS = ("build-obj", "-Ofast", "-mcpu=baseline", "-fllvm", "-fstrip", "-lc")
+# Observed live files are not a transitive source manifest for cached bitcode.
+LIVE_LEAF_SOURCE_PATHS = ("src/lua/value_leaf_build.zig", "src/lua/runtime/value_leaf.zig")
 ABI_FILES = (
     "src/lua/abi/globals.zig",
     "src/lua/abi/static_fields.zig",
@@ -301,7 +304,8 @@ def clang_identity(command, flags=()):
     return result
 
 
-def zig_leaf_identity(command):
+def live_zig_observation(command):
+    """Observe the currently selected tool; do not identify a cached BC producer."""
     resolved = shutil.which(command)
     if resolved is None:
         raise ValueError(f"Zig executable unavailable: {command}")
@@ -315,19 +319,27 @@ def zig_leaf_identity(command):
     if not version or target is None:
         raise ValueError("Zig version/target unavailable")
     return {"tool_sha256": sha256(executable), "version": version,
-            "target": target.group(1), "flags": list(LEAF_PRODUCER_FLAGS)}
+            "target": target.group(1), "flags": list(LEAF_CONTRACT_FLAGS)}
 
 
 def value_leaf_identity(llvm_dir, project_root, zig):
+    """Bind exact consumed BC bytes plus conservative live source/tool observations.
+
+    The pipeline may be an older cached binary with paired worker/leaf artifacts.
+    Live repository files and the current Zig path need not have produced that
+    leaf. Zig's build graph binds the actual source closure; these observations
+    only cause additional cache misses and must not be reported as provenance.
+    """
     bitcode = llvm_dir / "value_leaf.bc"
     regular(bitcode)
     sources = []
-    for name in LEAF_PRODUCER_SOURCES:
+    for name in LIVE_LEAF_SOURCE_PATHS:
         path = project_root / name
         regular(path)
         sources.append([name, sha256(path)])
     return {"bitcode": [bitcode.stat().st_size, sha256(bitcode)],
-            "producer_sources": sources, "zig": zig_leaf_identity(zig)}
+            "live_source_observations": sources,
+            "live_zig_observation": live_zig_observation(zig)}
 
 
 def read_object_plan(llvm_dir):
@@ -388,10 +400,10 @@ def object_identity(llvm_dir, clang, project_root, flags, zig="zig"):
 
 
 def abi_provenance(project_root):
-    """Record runtime ABI source versions without changing Clang object identity.
+    """Observe current ABI source versions without claiming object-producer provenance.
 
-    Clang consumes emitted bitcode, not Zig runtime source. Fresh LLVM emission
-    and the worker's ABI checks remain responsible for compatibility.
+    Clang consumes emitted bitcode, not live Zig runtime source. The paired
+    build-graph worker/leaf and frontend artifacts establish compatibility.
     """
     result = []
     for name in ABI_FILES:
@@ -565,7 +577,9 @@ def probe_objects(root, clang, project_root, llvm_dir, flags, zig="zig"):
     # child starts. Keep restored hashes too: publication cannot certify an
     # accidentally modified hardlink as newly compiled output.
     write_private_marker(llvm_dir / ".object-identity.json", {
-        "identity": expected, "provenance": {"abi": abi_provenance(project_root)},
+        "identity": expected,
+        "provenance": {"abi": abi_provenance(project_root),
+                       "abi_scope": "live-source-observation"},
         "restored": restored,
     })
     for source, destination in sources:
@@ -621,6 +635,9 @@ def publish_objects(root, llvm_dir, clang, flags):
     provenance = snapshot.get("provenance")
     if not isinstance(provenance, dict) or not valid_abi_provenance(provenance.get("abi")):
         raise ValueError("Invalid object cache ABI provenance")
+    # Older private snapshots also observed live ABI files. Keep accepting
+    # their list shape while making that scope explicit on new publications.
+    provenance = dict(provenance, abi_scope="live-source-observation")
     if expected.get("clang") != clang_identity(clang, flags) or expected.get("flags") != flags:
         raise ValueError("Clang native target or compile flags changed during compilation")
     for filename, key in (("batch-plan.tsv", "batch_plan_sha256"),

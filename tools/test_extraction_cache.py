@@ -113,7 +113,7 @@ class ObjectCacheTest(unittest.TestCase):
             path = self.project / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(name)
-        for name in cache.LEAF_PRODUCER_SOURCES:
+        for name in cache.LIVE_LEAF_SOURCE_PATHS:
             path = self.project / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(name)
@@ -124,8 +124,8 @@ class ObjectCacheTest(unittest.TestCase):
         self.patched.start()
         self.addCleanup(self.patched.stop)
         self.zig_tool = {"tool_sha256": "e" * 64, "version": "zig fixture",
-                         "target": "x86_64-linux-gnu", "flags": list(cache.LEAF_PRODUCER_FLAGS)}
-        self.patched_zig = mock.patch.object(cache, "zig_leaf_identity", return_value=self.zig_tool)
+                         "target": "x86_64-linux-gnu", "flags": list(cache.LEAF_CONTRACT_FLAGS)}
+        self.patched_zig = mock.patch.object(cache, "live_zig_observation", return_value=self.zig_tool)
         self.patched_zig.start()
         self.addCleanup(self.patched_zig.stop)
 
@@ -240,11 +240,14 @@ class ObjectCacheTest(unittest.TestCase):
 
     def test_abi_source_only_change_is_provenance_and_still_hits(self):
         self.seed()
+        published = cache.read_marker(self.entry(self.names[0]) / ".complete.json")
+        self.assertEqual("live-source-observation", published["provenance"]["abi_scope"])
         (self.project / cache.ABI_FILES[0]).write_text("changed runtime ABI source")
         changed = self.llvm("changed")
         self.assert_hits(changed, "111")
         snapshot = cache.read_marker(changed / ".object-identity.json")
         self.assertEqual(cache.abi_provenance(self.project), snapshot["provenance"]["abi"])
+        self.assertEqual("live-source-observation", snapshot["provenance"]["abi_scope"])
         for _, identity in cache.object_entries(snapshot["identity"]):
             self.assertNotIn("abi", identity)
 
@@ -253,15 +256,51 @@ class ObjectCacheTest(unittest.TestCase):
         changed = self.llvm("leaf-bitcode")
         (changed / "value_leaf.bc").write_bytes(b"different leaf definitions")
         self.assert_hits(changed, "011")
-        source = self.project / cache.LEAF_PRODUCER_SOURCES[1]
+        source = self.project / cache.LIVE_LEAF_SOURCE_PATHS[1]
         source.write_text("changed helper source")
         self.assert_hits(self.llvm("leaf-source"), "011")
-        source.write_text(cache.LEAF_PRODUCER_SOURCES[1])
+        source.write_text(cache.LIVE_LEAF_SOURCE_PATHS[1])
         for label, value in (("version", "new Zig"), ("target", "aarch64-linux-gnu"),
                              ("flags", ["-O2"]), ("tool_sha256", "f" * 64)):
             with self.subTest(label=label), mock.patch.object(
-                    cache, "zig_leaf_identity", return_value=dict(self.zig_tool, **{label: value})):
+                    cache, "live_zig_observation", return_value=dict(self.zig_tool, **{label: value})):
                 self.assert_hits(self.llvm("leaf-" + label), "011")
+
+    def test_live_observations_do_not_claim_to_have_produced_cached_leaf(self):
+        output = self.llvm("paired-build-artifact")
+        before = cache.value_leaf_identity(output, self.project, "zig")
+        source = self.project / cache.LIVE_LEAF_SOURCE_PATHS[1]
+        source.write_text("new live source after cached pipeline was built")
+        with mock.patch.object(cache, "live_zig_observation",
+                               return_value=dict(self.zig_tool, version="new live Zig")):
+            after = cache.value_leaf_identity(output, self.project, "zig")
+        self.assertEqual(before["bitcode"], after["bitcode"])
+        self.assertEqual(set(after), {"bitcode", "live_source_observations", "live_zig_observation"})
+        self.assertNotEqual(before["live_source_observations"], after["live_source_observations"])
+        self.assertNotEqual(before["live_zig_observation"], after["live_zig_observation"])
+        self.assertEqual(cache.sha256(source),
+                         dict(after["live_source_observations"])[cache.LIVE_LEAF_SOURCE_PATHS[1]])
+
+    def test_legacy_leaf_labels_cannot_redeem_optimized_objects(self):
+        output = self.llvm("legacy")
+        snapshot = cache.object_identity(output, "clang", self.project, self.flags)
+        leaf = snapshot["value_leaf"]
+        snapshot["value_leaf"] = {
+            "bitcode": leaf["bitcode"],
+            "producer_sources": leaf["live_source_observations"],
+            "zig": leaf["live_zig_observation"],
+        }
+        for name, identity in cache.object_entries(snapshot):
+            entry = cache.object_cache_path(self.root, identity)
+            entry.mkdir(parents=True)
+            asset = entry / "object.o"
+            asset.write_bytes(name.encode())
+            (entry / ".complete.json").write_text(cache.json.dumps({
+                "identity": identity, "object": cache.record_object(asset),
+                "provenance": {"abi": cache.abi_provenance(self.project)},
+            }))
+        # O0/program consume no leaf; their exact existing content keys survive.
+        self.assert_hits(self.llvm("current"), "011")
 
     def test_compiler_target_features_and_common_flags_invalidate_every_object(self):
         self.seed()

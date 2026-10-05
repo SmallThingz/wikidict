@@ -938,6 +938,8 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
     const terms = try std.fs.path.join(h.a, &.{ dir, "wikibase-entity-terms.tsv" });
     const fallbacks = try std.fs.path.join(h.a, &.{ dir, "wikibase-language-fallbacks.tsv" });
     const messages = try std.fs.path.join(h.a, &.{ dir, "wikibase-interface-messages.tsv" });
+    const site_info = try std.fs.path.join(h.a, &.{ dir, "wikibase-siteinfo.raw.json" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = site_info, .data = "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\"}}}" });
     try std.Io.Dir.cwd().writeFile(h.io, .{
         .sub_path = namespaces,
         .data = "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
@@ -1007,7 +1009,13 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
         \\  assert(not ok, 'expected explicit failure')
         \\  if fragment then assert(string.find(tostring(err), fragment, 1, true), tostring(err)) end
         \\end
+        \\local site_configuration = mw.loadData('وحدة:SiteServerConfiguration')
+        \\assert(site_configuration.code == 'ar' and site_configuration.server == '//ar.wiktionary.org')
         \\return {run=function(frame)
+        \\  assert(mw.site.server == '//ar.wiktionary.org' and rawget(mw.site, 'server') == mw.site.server)
+        \\  local found_server = false
+        \\  for key, value in pairs(mw.site) do if key == 'server' then found_server = value == '//ar.wiktionary.org' end end
+        \\  assert(found_server)
         \\  local entity = mw.wikibase.getEntity('L100')
         \\  assert(entity.id == 'L100' and entity.schemaVersion == 2 and entity.type == 'lexeme')
         \\  assert(entity.language == 'Q13955' and entity.lexicalCategory == 'Q24905')
@@ -1157,6 +1165,12 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
         .{ .title = "entity-second", .ns = 0, .id = 2, .body = "==العربية==\n{{#invoke:EntityProbe|run|second}}\n" },
         .{ .title = "entity-visible-error", .ns = 0, .id = 3, .body = "==العربية==\n# Before visible error: {{#invoke:EntityProbe|raise}}; after visible error.\n" },
         .{ .title = "وحدة:EntityProbe", .ns = 828, .id = 4, .body = module },
+        // Exact unconditional CS1/Configuration rev1097951 lines1419-1422.
+        .{ .title = "وحدة:SiteServerConfiguration", .ns = 828, .id = 5, .body = "local lang_obj = mw.language.getContentLanguage()\n" ++
+            "local this_wiki_code = lang_obj:getCode();\n" ++
+            "if string.match (mw.site.server, 'wikidata') then\n" ++
+            "  this_wiki_code = mw.getCurrentFrame():callParserFunction('int', {'lang'});\n" ++
+            "end\nreturn {code=this_wiki_code, server=mw.site.server}" },
     });
     _ = try h.run(&.{
         pipeline,                           dump,                            root,
@@ -1164,8 +1178,8 @@ fn structuredWikibaseProbe(h: *Harness, pipeline: []const u8, verifier: []const 
         languages,                          "--wikibase-entities-snapshot",  entities,
         "--wikibase-entity-terms-snapshot", terms,                           "--language-fallbacks-snapshot",
         fallbacks,                          "--interface-messages-snapshot", messages,
-        "--llvm-workers",                   "1",                             "--page-workers",
-        "1",
+        "--site-info-snapshot",             site_info,                       "--llvm-workers",
+        "1",                                "--page-workers",                "1",
     }, 0);
     _ = try verifyFixture(h, verifier, root, null);
     const cases = [_]struct { title: []const u8, caption: []const u8 }{

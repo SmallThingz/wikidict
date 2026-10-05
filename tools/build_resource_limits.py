@@ -11,10 +11,13 @@ import json
 import math
 import resource
 import signal
+import stat
 import subprocess
 import sys
 import time
 import uuid
+
+from build_disk_limits import BUILD_DISK_RESERVE_BYTES
 
 CGROUP_ROOT = Path('/sys/fs/cgroup')
 SUPERVISOR_CHILD_RESERVE = 256 * 1024**2
@@ -436,6 +439,53 @@ def _monitor_usage(pid, start):
         raise ContainmentUnavailable(f'Cannot measure build monitor {pid}: {error}') from error
 
 
+
+class _DiskFloorReached(ContainmentUnavailable):
+    pass
+
+
+def _watchdog_disk_roots(paths):
+    """Resolve existing output ancestors once and sample each filesystem once."""
+    roots = {}
+    for value in paths:
+        path = Path(value).resolve()
+        while True:
+            try:
+                info = path.stat()
+                break
+            except FileNotFoundError:
+                if path == path.parent:
+                    raise ContainmentUnavailable(f'No existing disk monitor root for {value}')
+                path = path.parent
+        if not stat.S_ISDIR(info.st_mode):
+            raise ContainmentUnavailable(f'Disk monitor root is not a directory: {path}')
+        roots.setdefault(info.st_dev, {'path': str(path), 'device': info.st_dev})
+    if not roots:
+        raise ContainmentUnavailable('At least one disk monitor path is required')
+    return list(roots.values())
+
+
+def _check_watchdog_disk_floor(report):
+    """Best effort only: concurrent writers can consume space between samples."""
+    for record in report['disk_space']:
+        path = Path(record['path'])
+        try:
+            info = path.stat()
+            if info.st_dev != record['device'] or not stat.S_ISDIR(info.st_mode):
+                raise ContainmentUnavailable(f'Disk monitor filesystem changed: {path}')
+            usage = os.statvfs(path)
+            if usage.f_frsize <= 0:
+                raise ContainmentUnavailable(f'Invalid filesystem block size for {path}')
+            available = max(0, usage.f_bavail) * usage.f_frsize
+        except OSError as error:
+            raise ContainmentUnavailable(f'Cannot measure free disk space at {path}: {error}') from error
+        record['available_bytes'] = available
+        record['minimum_available_bytes'] = min(record.get('minimum_available_bytes', available), available)
+        if available < report['disk_floor_bytes']:
+            raise _DiskFloorReached(
+                f'Free disk space below build reserve at {path}: '
+                f'{available} bytes available, {report["disk_floor_bytes"]} bytes required')
+
 def _watchdog_cpu_set(max_cpus, available):
     if type(max_cpus) is not int or not 1 <= max_cpus <= 8:
         raise ContainmentUnavailable('Invalid watchdog CPU limit')
@@ -466,7 +516,8 @@ def _watchdog_cpu_set(max_cpus, available):
 
 def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WALL_SECONDS,
                        memory_limit_bytes=MAX_BUILD_MEMORY, max_tasks=MAX_BUILD_PIDS, max_cpus=4,
-                       address_space_limit_bytes=None):
+                       address_space_limit_bytes=None, disk_paths=None,
+                       disk_floor_bytes=BUILD_DISK_RESERVE_BYTES):
     """Opt-in sampled fallback. Its aggregate cap is best effort, not a cgroup."""
     if type(wall_seconds) not in (int, float) or not 0 < wall_seconds <= MAX_WATCHDOG_WALL_SECONDS:
         raise ContainmentUnavailable('Invalid watchdog wall limit')
@@ -475,6 +526,9 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
     address_space_limit_bytes = memory_limit_bytes if address_space_limit_bytes is None else address_space_limit_bytes
     if type(address_space_limit_bytes) is not int or not memory_limit_bytes <= address_space_limit_bytes <= MAX_BUILD_MEMORY:
         raise ContainmentUnavailable('Invalid finite watchdog address-space limit')
+    if type(disk_floor_bytes) is not int or disk_floor_bytes <= 0:
+        raise ContainmentUnavailable('Invalid watchdog disk reserve')
+    disk_roots = _watchdog_disk_roots((Path.cwd(),) if disk_paths is None else disk_paths)
     original_affinity = os.sched_getaffinity(0)
     cpus = _watchdog_cpu_set(max_cpus, original_affinity)
     report_path = Path('.tmp/build-watchdog-report.json') if report_path is None else Path(report_path)
@@ -497,10 +551,15 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
     report = {'mode': 'watchdog', 'aggregate_limit': 'sampled best effort, not kernel hard cap',
               'memory_limit_bytes': memory_limit_bytes, 'address_space_limit_bytes': address_space_limit_bytes, 'max_tasks': max_tasks,
               'cpus': cpus, 'max_cpus': max_cpus,
+              'disk_floor_bytes': disk_floor_bytes, 'disk_space': disk_roots,
+              'disk_sample_interval_seconds': WATCHDOG_POLL_SECONDS,
+              'disk_limit': 'sampled free-space reserve; expansion and concurrent writes are not bounded',
               'wall_seconds': wall_seconds, 'peak_pss_bytes': 0,
               'peak_rss_bytes': 0, 'peak_tasks': 0, 'termination_reason': 'starting'}
     reason = None
     try:
+        # Refuse before creating a child when the reserve is already spent.
+        _check_watchdog_disk_floor(report)
         # The supervisor and guardian share the build's selected CPU set.
         os.sched_setaffinity(0, cpus)
         if libc.prctl(37, ctypes.byref(was_subreaper), 0, 0, 0) != 0 or \
@@ -639,6 +698,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             report['peak_rss_bytes'] = max(report['peak_rss_bytes'], aggregate_rss)
             report['peak_tasks'] = max(report['peak_tasks'], aggregate_tasks)
             report['elapsed_seconds'] = elapsed
+            _check_watchdog_disk_floor(report)
             if aggregate_pss > memory_limit_bytes:
                 reason = 'sampled_pss_limit'
             elif aggregate_tasks > max_tasks:
@@ -661,7 +721,8 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             time.sleep(WATCHDOG_POLL_SECONDS)
     except (OSError, ValueError, subprocess.SubprocessError, KeyboardInterrupt,
             ContainmentUnavailable) as error:
-        reason = 'monitor_error' if not isinstance(error, KeyboardInterrupt) else 'interrupted'
+        reason = ('disk_free_floor' if isinstance(error, _DiskFloorReached) else
+                  'interrupted' if isinstance(error, KeyboardInterrupt) else 'monitor_error')
         report['error'] = str(error)
     finally:
         if old_int is not None:

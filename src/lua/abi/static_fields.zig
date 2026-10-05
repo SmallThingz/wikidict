@@ -115,7 +115,7 @@ const language_value_names = [_][]const u8{
 };
 const html_node_names = [_][]const u8{ "tag", "done", "allDone", "wikitext", "node", "css", "cssText", "addClass", "attr", "getAttr", "newline" };
 const hash_names = [_][]const u8{"hashValue"};
-const site_names = [_][]const u8{ "namespaces", "stats", "interwikiMap", "subjectNamespaces", "talkNamespaces", "contentNamespaces" };
+const site_names = [_][]const u8{ "namespaces", "stats", "interwikiMap", "subjectNamespaces", "talkNamespaces", "contentNamespaces", "server" };
 const site_stats_names = [_][]const u8{ "pagesInCategory", "pagesInNamespace", "usersInGroup" };
 const ext_names = [_][]const u8{"data"};
 const ext_data_names = [_][]const u8{"get"};

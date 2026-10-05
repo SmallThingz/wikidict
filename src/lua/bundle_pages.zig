@@ -7,6 +7,7 @@ const preprocess = @import("lua_wikitext_preprocess");
 const wikimedia_dump = @import("wikimedia_dump");
 const magic_words = lua_program.namespace_registry.magic_words;
 const language_names_lib = @import("language_names.zig");
+const site_info_lib = @import("site_info.zig");
 const ExternalData = lua_program.WikitextProvider.ExternalData;
 const CategoryStats = lua_program.WikitextProvider.CategoryStats;
 const InterfaceMessage = lua_program.WikitextProvider.InterfaceMessage;
@@ -181,6 +182,7 @@ pub const Provider = struct {
     external_data: std.StringHashMapUnmanaged(ExternalData) = .empty,
     external_data_storage: ?Mapped = null,
     external_data_available: bool = false,
+    site_info: ?site_info_lib.Snapshot = null,
     category_stats: std.StringHashMapUnmanaged(CategoryStats) = .empty,
     category_stats_storage: ?Mapped = null,
     category_stats_available: bool = false,
@@ -220,6 +222,7 @@ pub const Provider = struct {
         try self.loadCorpusPages(dump_path);
         try self.loadTransclusionRedirects();
         try self.loadExternalData();
+        try self.loadSiteInfo();
         try self.loadCategoryStats();
         try self.loadInterfaceMessages();
         try self.loadCategoryTree();
@@ -262,6 +265,7 @@ pub const Provider = struct {
         if (self.transclusion_redirects_storage) |*mapped| mapped.deinit();
         self.external_data.deinit(self.a);
         if (self.external_data_storage) |*mapped| mapped.deinit();
+        if (self.site_info) |*snapshot| snapshot.deinit();
         self.category_stats.deinit(self.a);
         if (self.category_stats_storage) |*mapped| mapped.deinit();
         var message_keys = self.interface_messages.keyIterator();
@@ -312,6 +316,7 @@ pub const Provider = struct {
             .stable_page_reads = true,
             .exists = exists,
             .external_data = if (self.external_data_available) externalData else null,
+            .site_server = if (self.site_info) |snapshot| snapshot.server else null,
             .category_stats = if (self.category_stats_available) categoryStats else null,
             .interface_message = if (self.interface_messages_available) interfaceMessage else null,
             .category_tree = if (self.category_tree_available) categoryTree else null,
@@ -330,6 +335,12 @@ pub const Provider = struct {
             .language_direction = if (self.language_names != null) languageDirection else null,
             .language_known_tag = if (self.language_registry_available) languageKnownTag else null,
         };
+    }
+
+    fn loadSiteInfo(self: *Provider) !void {
+        var mapped = (try self.mapOptional("namespace-siteinfo.raw.json")) orelse return;
+        defer mapped.deinit();
+        self.site_info = try site_info_lib.Snapshot.init(self.a, mapped.bytes, self.namespace_catalog.wiki, self.namespace_catalog.content_language);
     }
 
     fn mapOptional(self: *Provider, name: []const u8) !?Mapped {
@@ -1894,4 +1905,27 @@ test "provider exposes captured language profiles with exact single aliases and 
     try std.testing.expectEqual(lua_program.WikitextProvider.LanguageDirection.rtl, try api.language_direction.?(&provider, "ar"));
     try std.testing.expectError(error.LanguageNameSnapshotMissing, api.language_names.?(&provider, "fr", .all));
     try std.testing.expectError(error.LanguageDirectionSnapshotMissing, api.language_direction.?(&provider, "unknown"));
+}
+
+test "provider exposes exact site server and rejects a different captured edition" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const catalog = try lua_program.namespace_registry.englishTestRegistry();
+    {
+        var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+        defer provider.deinit();
+        try std.testing.expect(provider.api().site_server == null);
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = "{\"query\":{\"general\":{\"wikiid\":\"enwiktionary\",\"lang\":\"en\",\"server\":\"https://captured.example:8443\"}}}" });
+    {
+        var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+        defer provider.deinit();
+        try std.testing.expectEqualStrings("https://captured.example:8443", provider.api().site_server.?);
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\"}}}" });
+    try std.testing.expectError(error.SiteInfoIdentityMismatch, Provider.init(io, a, root, catalog, "unused-dump.xml"));
 }

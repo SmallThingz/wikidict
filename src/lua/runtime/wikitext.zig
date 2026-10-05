@@ -93,6 +93,7 @@ pub const Provider = struct {
     interface_message: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, []const u8) anyerror!?InterfaceMessage = null,
     file_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!FileMetadata = null,
     category_tree: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, CategoryTreeScope) anyerror![]const []const u8 = null,
+    site_server: ?[]const u8 = null,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
     stable_interwiki_map: bool = false,
     wikibase_sitelink: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror!?[]const u8 = null,
@@ -169,6 +170,7 @@ pub const Expander = struct {
         self.host.category_stats = hostCategoryStats;
         self.host.interface_message = if (self.provider.interface_message != null) hostInterfaceMessage else null;
         self.host.file_metadata = hostFileMetadata;
+        self.host.site_server = self.provider.site_server;
         self.host.site_interwiki_map = hostSiteInterwikiMap;
         self.host.stable_site_interwiki_map = self.provider.stable_interwiki_map;
         self.host.wikibase_sitelink = hostWikibaseSitelink;

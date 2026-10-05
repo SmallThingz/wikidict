@@ -184,6 +184,18 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "index-pages", "Build the mmap page-title index from page-index.tsv", addRunArtifactCommand(b, page_title_index_exe, &.{}), &.{});
     addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM bitcode", addRunArtifactCommand(b, llvm_exe, &.{}), &.{});
     const pipeline_paths = b.addOptions();
+    const worker_object = bundleWorkerObject(b);
+    pipeline_paths.addOptionPath("worker_object", worker_object.getEmittedBin());
+    const value_leaf_object = bundleValueLeafObject(b);
+    // Preserve the former build-obj producer's object+bitcode outputs. Only
+    // bitcode is consumed; the leaf object must never be linked into a worker.
+    _ = value_leaf_object.getEmittedBin();
+    pipeline_paths.addOptionPath("value_leaf_bc", value_leaf_object.getEmittedLlvmBc());
+    const native_inputs = b.addWriteFiles();
+    pipeline_paths.addOptionPath("worker_main_c", native_inputs.addCopyFile(
+        b.path("src/lua/bundle_worker_main.c"),
+        "bundle_worker_main.c",
+    ));
     pipeline_paths.addOptionPath("modules", module_extract_exe.getEmittedBin());
     pipeline_paths.addOptionPath("llvm", llvm_exe.getEmittedBin());
     pipeline_paths.addOption([]const u8, "zig", b.graph.zig_exe);
@@ -664,6 +676,101 @@ pub fn build(b: *std.Build) void {
     storage_run.step.dependOn(&storage_unit_run.step);
     b.step("test-storage", "Exercise after-compression indexes and selective real XZ block decoding").dependOn(&storage_run.step);
     if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&storage_run.step);
+}
+
+fn bundleValueLeafObject(b: *std.Build) *std.Build.Step.Compile {
+    // Match build-obj -Ofast -mcpu=baseline -fllvm -fstrip -lc. This graph is
+    // separate from the native-CPU worker graph so its imports also retain
+    // baseline CPU features and the build_value_leaf root's extern TLS mode.
+    const target = b.resolveTargetQuery(.{ .cpu_model = .baseline });
+    const namespace = namespaceRegistryModule(b, target, .fast);
+    const fields = b.createModule(.{
+        .root_source_file = b.path("src/lua/abi/static_fields.zig"),
+        .target = target,
+        .optimize = .fast,
+    });
+    const runtime = b.createModule(.{
+        .root_source_file = b.path("src/lua/runtime/core.zig"),
+        .target = target,
+        .optimize = .fast,
+        .imports = &.{
+            .{ .name = "lua_static_fields", .module = fields },
+            .{ .name = "namespace_registry", .module = namespace },
+        },
+    });
+    return b.addObject(.{
+        .name = "value_leaf_build",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/lua/value_leaf_build.zig"),
+            .target = target,
+            .optimize = .fast,
+            .strip = true,
+            .link_libc = true,
+            .imports = &.{.{ .name = "zig_runtime", .module = runtime }},
+        }),
+        .use_llvm = true,
+    });
+}
+
+// The worker contains repository runtime code only; generated Lua objects and
+// per-edition metadata join it at the existing native link step. Keep this
+// graph independent of caller target/optimization and of safe test modules.
+fn bundleWorkerObject(b: *std.Build) *std.Build.Step.Compile {
+    const namespace = namespaceRegistryModule(b, b.graph.host, .fast);
+    const fields = workerModule(b, "src/lua/abi/static_fields.zig");
+    const globals = workerModule(b, "src/lua/abi/globals.zig");
+    const metadata = workerModule(b, "src/lua/program_metadata.zig");
+    const static_format = workerModule(b, "src/lua/runtime/static_literal_format.zig");
+    const preprocess = workerModule(b, "src/lua/wikitext/preprocess.zig");
+    const expression = workerModule(b, "src/lua/wikitext/expression.zig");
+    const xml = workerModule(b, "src/shared/xml_decode.zig");
+    const dump = workerModule(b, "src/shared/wikimedia_dump.zig");
+    const runtime = workerModule(b, "src/lua/runtime/core.zig");
+    runtime.addImport("lua_static_fields", fields);
+    runtime.addImport("namespace_registry", namespace);
+    const static_decode = workerModule(b, "src/lua/runtime/static_literal_decode.zig");
+    static_decode.addImport("zig_runtime", runtime);
+    static_decode.addImport("lua_static_literal_format", static_format);
+    const stdlib = workerModule(b, "src/lua/runtime/stdlib.zig");
+    stdlib.addImport("zig_runtime", runtime);
+    stdlib.addImport("lua_globals", globals);
+    const scribunto = workerModule(b, "src/lua/runtime/scribunto.zig");
+    scribunto.addImport("zig_runtime", runtime);
+    scribunto.addImport("zig_stdlib", stdlib);
+    scribunto.addImport("lua_wikitext_preprocess", preprocess);
+    scribunto.addImport("lua_wikitext_expression", expression);
+    scribunto.addImport("shared_xml_decode", xml);
+    const program = workerModule(b, "src/lua/runtime/llvm_program.zig");
+    program.addImport("zig_runtime", runtime);
+    program.addImport("zig_stdlib", stdlib);
+    program.addImport("zig_scribunto", scribunto);
+    program.addImport("lua_globals", globals);
+    program.addImport("lua_program_metadata", metadata);
+    program.addImport("lua_static_literal_decode", static_decode);
+    const abi = workerModule(b, "src/lua/runtime/llvm_abi.zig");
+    abi.addImport("zig_runtime", runtime);
+    abi.addImport("lua_static_literal_decode", static_decode);
+    abi.addImport("lua_static_literal_format", static_format);
+    const root = workerModule(b, "src/lua/bundle_worker.zig");
+    root.link_libc = true;
+    root.addImport("lua_program", program);
+    root.addImport("lua_llvm_abi", abi);
+    root.addImport("shared_xml_decode", xml);
+    root.addImport("lua_wikitext_preprocess", preprocess);
+    root.addImport("wikimedia_dump", dump);
+    return b.addObject(.{
+        .name = "dict-bundle-runtime",
+        .root_module = root,
+        .use_llvm = true,
+    });
+}
+
+fn workerModule(b: *std.Build, path: []const u8) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path(path),
+        .target = b.graph.host,
+        .optimize = .fast,
+    });
 }
 
 fn addCliExecutable(

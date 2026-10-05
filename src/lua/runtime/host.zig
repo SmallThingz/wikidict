@@ -105,6 +105,8 @@ pub const Host = struct {
     category_stats: ?CategoryStatsFn = null,
     interface_message: ?InterfaceMessageFn = null,
     file_metadata: ?FileMetadataFn = null,
+    // Exact captured site constant; owned by the immutable bundle provider.
+    site_server: ?[]const u8 = null,
     site_interwiki_map: ?SiteInterwikiMapFn = null,
     // Only a native provider backed by one immutable snapshot may set this.
     stable_site_interwiki_map: bool = false,
@@ -118,6 +120,14 @@ pub const Host = struct {
     language_direction: ?LanguageDirectionFn = null,
     language_known_tag: ?LanguageKnownTagFn = null,
 };
+
+// Library installation copies immutable corpus metadata before Lua observes it.
+// Installation itself must not mark a loadData child as effectful: an unused
+// host API is not a dependency. Provider ownership lasts through all contexts.
+pub fn siteServerForInstall(runtime: *const rt.Context) ?[]const u8 {
+    const host: *const Host = @ptrCast(@alignCast(runtime.host orelse return null));
+    return host.site_server;
+}
 
 pub fn set(runtime: *rt.Context, host: ?*Host) void {
     runtime.setHost(if (host) |value| value else null);

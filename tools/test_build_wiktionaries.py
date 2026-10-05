@@ -111,6 +111,8 @@ def decode_staged_dump(dump):
 
 
 def write_namespace_coverage(root, count):
+    (root/'languages').mkdir(exist_ok=True)
+    if not (root/'fallback-pages.jsonl').exists():(root/'fallback-pages.jsonl').write_text('')
     if not (root/'languages.tsv').exists():(root/'languages.tsv').write_text('heading\n')
     rows=[] if count==0 else [dict(id=0,name='',kind='language',input_rows=count,compile_only_rows=0,source_unavailable_rows=0,dispatched_rows=count,expanded_pages=count,fallback_pages=0,duplicate_rows=0)]
     candidates=list(b.PROJECT.glob('*wiktionary/[0-9]*/namespace-registry.tsv'))
@@ -414,14 +416,14 @@ class BuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             def supervised(**kwargs):
-                self.assertEqual(kwargs,{'wall_seconds':7200})
+                self.assertEqual(kwargs,{'wall_seconds':7200,'disk_paths':(root/'.tmp',root/'data/dictionaries')})
                 with self.assertRaises(limits.ContainmentUnavailable):
                     b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
                 return 0
             with patch.object(b,'PROJECT',root),patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog']),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',side_effect=supervised) as watchdog,patch.object(limits,'supervise') as strict,patch.object(b,'main') as main:
                 with self.assertRaises(SystemExit) as result:b.cli()
                 self.assertEqual(result.exception.code,0)
-            watchdog.assert_called_once_with(wall_seconds=7200)
+            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',root/'data/dictionaries'))
             strict.assert_not_called();main.assert_not_called()
 
     def test_eight_expansion_workers_request_eight_cpu_watchdog(self):
@@ -432,7 +434,7 @@ class BuildTest(unittest.TestCase):
                  patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
                 with self.assertRaises(SystemExit) as result:b.cli()
                 self.assertEqual(result.exception.code,0)
-            watchdog.assert_called_once_with(wall_seconds=7200,max_cpus=8)
+            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(Path(tmp)/'.tmp',Path(tmp)/'data/dictionaries'),max_cpus=8)
 
     def test_high_expansion_count_keeps_single_job_and_four_build_workers(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -481,6 +483,35 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(failures,[])
         self.assertEqual(len(started),2)
         self.assertIn(4,[call.args[0] for call in budget.call_args_list])
+
+    def test_merge_disk_rejection_preserves_verified_shards_before_native_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander'
+            exp.mkdir(parents=True)
+            (workspace/'expander/.incomplete').write_text('expander ready')
+            (exp/'page-index.tsv').write_text('p0\n')
+            (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+            cache=workspace/'input';cache.mkdir()
+            (cache/'.complete.json').write_text(json.dumps({'source_pages':1}))
+            calls=[]
+            def run(command):
+                calls.append(command)
+                if 'build-blobs' in command:
+                    dest=Path(command[command.index('--')+2]);dest.mkdir(exist_ok=True)
+                    write_coverage(dest,command)
+                elif 'merge-blobs' in command:
+                    self.fail('Native merge must not start without admitted disk space')
+            with patch.object(b,'run_checked',side_effect=run), \
+                 patch('build_disk_limits.os.statvfs',return_value=SimpleNamespace(f_bavail=0,f_frsize=4096)):
+                with self.assertRaisesRegex(ValueError,'Insufficient merge disk space'):
+                    b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',1,
+                                    [{'wiki':'test','date':'20260901'}],123)
+            shard=workspace/'shards/00000000'
+            self.assertEqual((shard/'.verified').read_text(),'verified\n')
+            self.assertEqual(json.loads((shard/'page-coverage.json').read_text())['pages_seen'],1)
+            self.assertTrue((shard/'namespace-coverage.json').is_file())
+            self.assertFalse((root/'staging').exists())
+            self.assertFalse(any('merge-blobs' in command for command in calls))
 
     def test_sharded_expansion_workers_do_not_widen_compiler_workers(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1902,7 +1933,7 @@ class LongBuildDeadlineTest(unittest.TestCase):
             with patch.object(b,'PROJECT',Path(tmp)),patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog','--build-timeout-seconds','14400']),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
                 with self.assertRaises(SystemExit) as result:b.cli()
                 self.assertEqual(result.exception.code,0)
-            watchdog.assert_called_once_with(wall_seconds=14400)
+            watchdog.assert_called_once_with(wall_seconds=14400,disk_paths=(Path(tmp)/'.tmp',Path(tmp)/'data/dictionaries'))
     def test_long_deadlines_remain_explicit_finite_and_watchdog_only(self):
         for argv in [ ['--build-timeout-seconds','14400'], ['--resource-mode=watchdog','--build-timeout-seconds','0'], ['--resource-mode=watchdog','--build-timeout-seconds',str(limits.MAX_WATCHDOG_WALL_SECONDS+1)] ]:
             with self.subTest(argv=argv),patch.object(sys,'argv',['build_wiktionaries.py',*argv]),patch.object(limits,'supervise_watchdog') as run:

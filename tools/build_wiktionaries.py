@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 from compress_blobs import compress, compress_many, default_workers, verify_round_trip
+from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -30,7 +31,7 @@ SHARD_PAGES = 100_000
 SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 2
 AUXILIARY_SNAPSHOT_NAMES = (
-    'commons-data', 'category-stats', 'interface-messages', 'category-tree',
+    'site-info', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
     'wikibase-entity-terms', 'language-fallbacks', 'language-names', 'file-metadata',
     'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words',
@@ -166,9 +167,20 @@ def validate_interwiki_provenance(snapshot, edition, expected_sha):
         raise ValueError('Interwiki map raw response differs from provenance')
 
 
+def auxiliary_snapshot_filename(name):
+    return 'namespace-siteinfo.raw.json' if name=='site-info' else name+'.tsv'
+
+
+def auxiliary_manifest_filename(name):
+    return 'namespace-registry.manifest.json' if name=='site-info' else name+'.manifest.json'
+
+
 def auxiliary_capture_helper(name, path):
+    if name=='site-info':
+        import site_info_snapshot
+        return site_info_snapshot
     if name=='commons-data':
-        manifest=path.with_name(name+'.manifest.json')
+        manifest=path.with_name(auxiliary_manifest_filename(name))
         if not (manifest.exists() or manifest.is_symlink()):return None
         record=read_small_json(manifest)
         if not isinstance(record,dict):raise ValueError('Invalid Commons-data provenance')
@@ -187,7 +199,7 @@ def auxiliary_capture_helper(name, path):
         import prepare_wikibase_entities
         return prepare_wikibase_entities
     if name=='interface-messages':
-        manifest=path.with_name(name+'.manifest.json')
+        manifest=path.with_name(auxiliary_manifest_filename(name))
         if not (manifest.exists() or manifest.is_symlink()):return None
         record=read_small_json(manifest)
         if not isinstance(record,dict):raise ValueError('Invalid interface-message provenance')
@@ -209,7 +221,7 @@ def validated_auxiliary_capture(name, path, edition=None, date=None):
         artifacts['magic-words.manifest.json']=sha256_file(path.with_name('magic-words.manifest.json'))
     else:
         artifacts=helper.capture_artifacts(path,record)
-    if not isinstance(artifacts,dict) or name+'.manifest.json' not in artifacts or name+'.tsv' not in artifacts:
+    if not isinstance(artifacts,dict) or auxiliary_manifest_filename(name) not in artifacts or auxiliary_snapshot_filename(name) not in artifacts:
         raise ValueError('Incomplete auxiliary capture inventory: '+name)
     for filename,digest in artifacts.items():
         if (not isinstance(filename,str) or Path(filename).name!=filename or filename in ('.','..') or
@@ -228,7 +240,7 @@ def auxiliary_capture_identities(snapshots, edition=None, date=None):
         capture=validated_auxiliary_capture(name,Path(source),edition,date)
         if capture is not None:
             _,inventory=capture
-            manifests[name]=inventory[name+'.manifest.json']
+            manifests[name]=inventory[auxiliary_manifest_filename(name)]
             artifacts[name]=auxiliary_artifact_digest(inventory)
     return manifests,artifacts
 
@@ -248,12 +260,12 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
             raise ValueError(f'Unknown auxiliary snapshot: {name}')
         path=Path(source)
         capture=validated_auxiliary_capture(name,path,edition,date)
-        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names'):
+        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','site-info'):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
         sha=sha256_file(path)
-        manifest=path.with_name(name+'.manifest.json')
+        manifest=path.with_name(auxiliary_manifest_filename(name))
         if capture is not None or manifest.is_file():
             record=capture[0] if capture is not None else read_small_json(manifest)
             if (not isinstance(record,dict) or
@@ -296,6 +308,10 @@ def validate_capture_artifacts(root, record, required=()):
 
 
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
+    if name=='site-info':
+        bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
+        if capture_root is not None and bound[1]['capture.complete.json']!=sha256_file(capture_root/'capture.complete.json'):
+            raise ValueError('Siteinfo belongs to a different namespace capture')
     if capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms','language-fallbacks','interface-messages','commons-data','language-names'):
         bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
         if bound is not None:
@@ -309,10 +325,10 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
                 if inventory.get(copied)!=sha256_file(capture_root/original):
                     raise ValueError('Auxiliary namespace source differs from selected capture: '+name)
         return
-    if name not in ('namespace-registry','category-stats','category-tree'):
+    if name not in ('namespace-registry','site-info','category-stats','category-tree'):
         return
-    record=read_small_json(path.with_name(name+'.manifest.json'))
-    if name=='namespace-registry':
+    record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
+    if name in ('namespace-registry','site-info'):
         if record.get('source_dump_files')!=[capture['source_xml']]:raise ValueError('Namespace source differs from capture')
         for key,artifact in [('raw_siteinfo_sha256','namespace-siteinfo.raw.json'),('dump_siteinfo_sha256','dump-siteinfo.xml')]:
             if record.get(key)!=capture['artifacts'][artifact]:raise ValueError('Namespace capture hash mismatch')
@@ -335,7 +351,7 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
     if not (generation.exists() or generation.is_symlink()):return {}
     if generation.is_symlink() or not generation.is_dir():
         raise ValueError('Unsafe auxiliary capture generation: '+str(generation))
-    snapshots={name:generation/(name+'.tsv') for name in names}
+    snapshots={name:generation/(auxiliary_snapshot_filename(name)) for name in names}
     # The first name always requires a strict capture helper. It validates the
     # whole pair before either output can replace a legacy flat snapshot.
     helper=auxiliary_capture_helper(names[0],snapshots[names[0]])
@@ -385,8 +401,8 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 ('language-names',),edition,date))
             for name in AUXILIARY_SNAPSHOT_NAMES:
                 if name in preferred:continue
-                path=root/(name+'.tsv')
-                sidecar=root/(name+'.manifest.json')
+                path=root/(auxiliary_snapshot_filename(name))
+                sidecar=root/(auxiliary_manifest_filename(name))
                 present=[p.exists() or p.is_symlink() for p in (path,sidecar)]
                 if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
                 if all(present):snapshots[name]=path
@@ -447,15 +463,15 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         copies.setdefault(filename,(source,digest))
     for name,source in sorted((snapshots or {}).items()):
         source=Path(source)
-        pinned[name]=destination/(name+'.tsv')
-        add_copy(source,name+'.tsv',hashes[name])
+        pinned[name]=destination/(auxiliary_snapshot_filename(name))
+        add_copy(source,auxiliary_snapshot_filename(name),hashes[name])
         capture=validated_auxiliary_capture(name,source)
         if capture is None:
             if name in (capture_hashes or {}) or name in (capture_artifact_hashes or {}):
                 raise ValueError('Auxiliary capture disappeared before pinning: '+name)
             continue
         _,inventory=capture
-        if capture_hashes is not None and inventory[name+'.manifest.json']!=capture_hashes.get(name):
+        if capture_hashes is not None and inventory[auxiliary_manifest_filename(name)]!=capture_hashes.get(name):
             raise ValueError('Auxiliary capture changed before pinning: '+name)
         if capture_artifact_hashes is not None and auxiliary_artifact_digest(inventory)!=capture_artifact_hashes.get(name):
             raise ValueError('Auxiliary capture artifacts changed before pinning: '+name)
@@ -1058,7 +1074,7 @@ def expander_ready(root, auxiliary_hashes=None, interwiki_sha=None):
     try:
         if interwiki_sha is not None and sha256_file(expander/'interwiki-map.tsv')!=interwiki_sha:return False
         if interwiki_sha is None and (expander/'interwiki-map.tsv').exists():return False
-        return all(sha256_file(expander/(name+'.tsv'))==digest for name,digest in (auxiliary_hashes or {}).items())
+        return all(sha256_file(expander/(auxiliary_snapshot_filename(name)))==digest for name,digest in (auxiliary_hashes or {}).items())
     except OSError:return False
 
 
@@ -1235,13 +1251,20 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     actual_pages=sum(validate_page_coverage(path,start,min(SHARD_PAGES,indexed_pages-start),index,index['offsets'][start])['pages_seen']
                      for path,start in zip(shard_paths,range(0,indexed_pages,SHARD_PAGES)))
     if actual_pages!=indexed_pages: raise ValueError('Incomplete total shard page coverage')
+    coverage=dict(version=1,start_page=0,requested_limit=None,index_byte_offset=0,pages_seen=actual_pages,
+                  expected_input_pages=indexed_pages,page_index_identity=index['identity'],page_index_sha256=index['sha256'],page_index_rows=indexed_pages)
+    metadata_texts=[json.dumps(coverage,sort_keys=True)+'\n',json.dumps(now_unix)+'\n',VERIFIED_CONTENT]
+    if interwiki_snapshot is not None:metadata_texts.append(interwiki_sha+'\n')
+    if auxiliary_hashes:metadata_texts.append(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
+    if build_identity is not None:metadata_texts.append(json.dumps(build_identity,sort_keys=True)+'\n')
     if staging.exists(): shutil.rmtree(staging)
+    admission=require_merge_disk_space(shard_paths,staging,BUILD_DISK_RESERVE_BYTES,
+        metadata_paths=(expander_build/'compile-plan.tsv',),metadata_texts=metadata_texts)
+    phase_event(edition,date,'merge_disk_admission','admitted',**admission)
     timed_run([zig,'build','-j1','-Doptimize=fast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]],
               edition,date,'merge',shards=len(shard_paths))
     timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(staging)],
               edition,date,'merged_verify',shards=len(shard_paths))
-    coverage=dict(version=1,start_page=0,requested_limit=None,index_byte_offset=0,pages_seen=actual_pages,
-                  expected_input_pages=indexed_pages,page_index_identity=index['identity'],page_index_sha256=index['sha256'],page_index_rows=indexed_pages)
     (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
     plan=expander_build/'compile-plan.tsv'
     if plan.is_file(): shutil.copyfile(plan,staging/'compile-plan.tsv')
@@ -1691,7 +1714,7 @@ def main():
                    help='Current siteinfo interwiki-map.tsv; its SHA-256 is part of the shard identity')
     for name in AUXILIARY_SNAPSHOT_NAMES:
         p.add_argument('--'+name+'-snapshot',type=Path,
-                       help='Optional '+name+' TSV; its SHA-256 is part of the shard identity')
+                       help='Optional '+name+' snapshot; its SHA-256 is part of the shard identity')
     a=p.parse_args()
     try:
         expansion_deadline_args(a.expansion_timeout_ms)
@@ -1759,6 +1782,7 @@ def cli():
         route.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup')
         route.add_argument('--expansion-workers',type=int)
         route.add_argument('--build-timeout-seconds',type=int)
+        route.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries')
         routing=route.parse_known_args()[0]
         mode=routing.resource_mode
         if routing.build_timeout_seconds is not None:
@@ -1776,7 +1800,8 @@ def cli():
                     main()
                 else:
                     with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
-                        options={'wall_seconds':routing.build_timeout_seconds if routing.build_timeout_seconds is not None else 7200}
+                        options={'wall_seconds':routing.build_timeout_seconds if routing.build_timeout_seconds is not None else 7200,
+                                 'disk_paths':(PROJECT/'.tmp', routing.output)}
                         if routing.expansion_workers is not None and routing.expansion_workers>MAX_PIPELINE_WORKERS:
                             options['max_cpus']=8
                         raise SystemExit(supervise_watchdog(**options))

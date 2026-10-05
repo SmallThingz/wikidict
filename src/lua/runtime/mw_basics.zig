@@ -29,6 +29,13 @@ fn notImplementedCall(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const
     return error.NotImplemented;
 }
 
+fn siteIndexCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len < 2 or args[1] != .string or !std.mem.eql(u8, args[1].string, "server")) return one(.nil);
+    const host = host_api.getForStablePageRead(runtime) orelse return error.SiteInfoSnapshotMissing;
+    const server = host.site_server orelse return error.SiteInfoSnapshotMissing;
+    return one(.{ .string = server });
+}
+
 fn statsIndexCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
     if (args.len < 2 or args[1] != .string) return one(.nil);
     inline for (.{ "pages", "articles", "files", "edits", "users", "activeUsers", "admins" }) |name|
@@ -795,6 +802,17 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try setMwNative(runtime, mw, "isSubsting", falseCall);
 
     const site = try runtime.newNativeNamespace(.site);
+    // The production expander attaches its immutable provider before installing
+    // Scribunto. Store the constant in its native slot, including for rawget and
+    // pairs. A late-bound host and unavailable metadata use the index boundary.
+    const captured_server = host_api.siteServerForInstall(runtime);
+    if (captured_server) |server| {
+        try site.rawSetNativeField(.site, "server", .{ .string = server });
+    } else {
+        const site_mt = try runtime.newTable();
+        try site_mt.rawSet(runtime.allocator, .{ .string = "__index" }, try runtime.newNative(null, siteIndexCall));
+        site.metatable = site_mt;
+    }
     const namespaces = try namespace_lib.makeTable(runtime);
     try site.rawSet(runtime.allocator, .{ .string = "namespaces" }, .{ .table = namespaces });
     // Scribunto's filtered maps retain numeric IDs and the original objects.
@@ -1576,4 +1594,78 @@ test "Commons JSON allocation failure remains recoverable OutOfMemory" {
     runtime.allocator = original;
     try std.testing.expectError(error.InvalidExternalDataSnapshot, externalDataGetCall(null, &runtime, &.{ .{ .string = "Malformed.tab" }, .{ .string = "_" } }));
     try std.testing.expectError(error.InvalidExternalDataSnapshot, externalDataGetCall(null, &runtime, &.{ .{ .string = "Overflow.tab" }, .{ .string = "_" } }));
+}
+
+fn siteServerSlotForTest(site: *const rt.Table) !u32 {
+    for (0..site.slots.len) |index| {
+        const slot: u32 = @intCast(index);
+        const key = site.fieldKey(slot) orelse continue;
+        if (rt.rawEqual(key, .{ .string = "server" })) return slot;
+    }
+    return error.TestExpectedSiteServerSlot;
+}
+
+test "site server is an exact native data field with explicit unavailable metadata" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .site_server = "//ar.wiktionary.org", .stable_page_reads = true };
+    host_api.set(&runtime, &host);
+    const mw = try runtime.newNativeNamespace(.mw);
+    try install(&runtime, mw);
+    const site = mw.rawGet(.{ .string = "site" }).?;
+    const slot = try siteServerSlotForTest(site.table);
+    try std.testing.expectEqualStrings("//ar.wiktionary.org", (try runtime.getKnownNativeField(site, .site, slot, "server")).string);
+    try std.testing.expectEqualStrings("//ar.wiktionary.org", site.table.rawGet(.{ .string = "server" }).?.string);
+    var found = false;
+    var iterator = site.table.iterator();
+    while (iterator.next()) |entry| {
+        if (entry.key_ptr.* == .string and std.mem.eql(u8, entry.key_ptr.string, "server")) {
+            found = true;
+            try std.testing.expectEqualStrings("//ar.wiktionary.org", entry.value_ptr.string);
+        }
+    }
+    try std.testing.expect(found);
+    try runtime.setKnownNativeField(site, .site, slot, "server", .{ .string = "https://fixture.example" });
+    try std.testing.expectEqualStrings("https://fixture.example", (try runtime.getIndex(site, .{ .string = "server" })).string);
+    try std.testing.expect((try runtime.getIndex(site, .{ .string = "unknown" })) == .nil);
+    try runtime.setKnownNativeField(site, .site, slot, "server", .nil);
+    try std.testing.expect((try runtime.getIndex(site, .{ .string = "server" })) == .nil);
+    host_api.set(&runtime, null);
+    try std.testing.expectError(error.SiteInfoSnapshotMissing, siteIndexCall(null, &runtime, &.{ site, .{ .string = "server" } }));
+    host.site_server = null;
+    host_api.set(&runtime, &host);
+    try std.testing.expectError(error.SiteInfoSnapshotMissing, siteIndexCall(null, &runtime, &.{ site, .{ .string = "server" } }));
+}
+
+test "site server supports a host attached after Scribunto installation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const mw = try runtime.newNativeNamespace(.mw);
+    try install(&runtime, mw);
+    var host = host_api.Host{ .site_server = "//no.wiktionary.org", .stable_page_reads = true };
+    host_api.set(&runtime, &host);
+    const site = mw.rawGet(.{ .string = "site" }).?;
+    const slot = try siteServerSlotForTest(site.table);
+    try std.testing.expectEqualStrings("//no.wiktionary.org", (try runtime.getKnownNativeField(site, .site, slot, "server")).string);
+}
+
+test "installing site metadata does not make an unrelated loadData module impure" {
+    for ([_]bool{ false, true }) |with_capture| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var runtime = try rt.Context.init(arena.allocator(), 0);
+        defer runtime.deinit();
+        var host = host_api.Host{ .site_server = "//ar.wiktionary.org", .stable_page_reads = true };
+        if (with_capture) host_api.set(&runtime, &host);
+        var effect = false;
+        const previous = rt.beginLoadDataEffectProbe(&effect);
+        defer rt.endLoadDataEffectProbe(previous);
+        const mw = try runtime.newNativeNamespace(.mw);
+        try install(&runtime, mw);
+        try std.testing.expect(!effect);
+    }
 }
