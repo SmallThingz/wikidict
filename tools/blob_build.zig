@@ -448,7 +448,6 @@ const ExpansionPool = struct {
             }
             for (slots[0..spawned]) |*slot| slot.thread.?.join();
             for (slots) |*slot| slot.arena.deinit();
-            allocator.destroy(completion);
         }
         for (slots) |*slot| {
             slot.thread = try std.Thread.spawn(.{}, ExpansionSlot.threadMain, .{slot});
@@ -819,11 +818,6 @@ pub fn main(init: std.process.Init) !void {
     defer registry.deinit();
     const codes = languageCodes(&registry, &namespaces);
 
-    const worker_path = try std.fs.path.join(a, &.{ options.expander_root, "dict-bundle-expander" });
-    defer a.free(worker_path);
-    var pool = try ExpansionPool.init(init.io, a, options.expander_root, worker_path, args[1], options.workers, options.now_unix, options.expansion_timeout_ms orelse expansion_deadline.default_ms);
-    defer pool.deinit();
-
     const page_index_path = try std.fs.path.join(a, &.{ options.expander_root, "page-index.tsv" });
     defer a.free(page_index_path);
     var page_index = try mmapPath(init.io, page_index_path);
@@ -840,6 +834,14 @@ pub fn main(init: std.process.Init) !void {
         if (dump_source.isMultistream(page_index_kind)) stream_index_path else null,
     );
     defer dump.deinit();
+
+    // Jobs borrow their titles from page_index. Join every worker before
+    // releasing those mapped bytes, including fatal expansion-error unwinds
+    // while another worker is retrying a request after a remote OOM.
+    const worker_path = try std.fs.path.join(a, &.{ options.expander_root, "dict-bundle-expander" });
+    defer a.free(worker_path);
+    var pool = try ExpansionPool.init(init.io, a, options.expander_root, worker_path, args[1], options.workers, options.now_unix, options.expansion_timeout_ms orelse expansion_deadline.default_ms);
+    defer pool.deinit();
     if (options.shard_pages != null) {
         try runContinuous(init.io, a, args[2], options, codes, &namespaces, &pool, &dump, &page_index, page_index_kind, page_index_path);
         return;

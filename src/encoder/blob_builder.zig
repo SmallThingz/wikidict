@@ -594,6 +594,35 @@ fn unsectionedLanguage(codes: LanguageCodes, source: []const u8) ?ResolvedLangua
     return found;
 }
 
+// The pinned Bulgarian Noun/Verb/Adjective/Adverb templates have no language
+// heading. Their category uses the expanded language-name parameter. Resolve
+// only those exact edition-local wrappers through the trusted registry.
+fn unsectionedExpandedLanguage(codes: LanguageCodes, source: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "bg")) return null;
+    var categories: language_source.CategoryIterator = .{ .source = source };
+    var found: ?ResolvedLanguage = null;
+    while (categories.next()) |target| {
+        const title = namespaces.ofTitle(target);
+        if (title.id != 14) continue;
+        const name = std.mem.trim(u8, title.text, " \t\r\n");
+        const prefix = for ([_][]const u8{
+            "Съществителни имена (",
+            "Глаголи (",
+            "Прилагателни имена (",
+            "Наречия (",
+        }) |candidate| {
+            if (std.mem.startsWith(u8, name, candidate)) break candidate;
+        } else continue;
+        if (!std.mem.endsWith(u8, name, ")")) return null;
+        const label = std.mem.trim(u8, name[prefix.len .. name.len - 1], " \t\r\n");
+        const language = codes.resolveStrong(label) orelse codes.resolveTrusted(label) orelse return null;
+        if (found) |previous| if (!std.mem.eql(u8, previous.code, language.code)) return null;
+        found = language;
+    }
+    return found;
+}
+
 const PageLanguageGroup = struct {
     language: ResolvedLanguage,
     source: std.ArrayList(u8) = .empty,
@@ -665,7 +694,18 @@ fn processMain(
         var raw_it = languageSections(raw, &raw_markers);
         while (raw_it.next()) |section| try raw_sections.append(page_allocator, section);
     }
-    const raw_aligned = raw_sections.items.len != 0 and raw_sections.items.len == page_sections.items.len;
+    var raw_aligned = raw_sections.items.len != 0 and raw_sections.items.len == page_sections.items.len;
+    if (raw_aligned) for (raw_sections.items, page_sections.items) |raw_section, rendered_section| {
+        // A short template name can be both a POS marker and an ISO code.
+        // Equal section counts do not prove that its expansion is a language
+        // boundary: e.g. Aymara's -ay-/-adj- can line up with noun/adjective
+        // headings. Require rendered language evidence for hyphen markers;
+        // preserve the distinct equals-style language declaration convention.
+        if (raw_section.hyphen_marker and boundaryLanguage(codes, rendered_section) == null) {
+            raw_aligned = false;
+            break;
+        }
+    };
 
     if (!raw_aligned) for (raw_sections.items) |section| {
         if (!hasExplicitLanguageDeclaration(codes, section) or resolveSection(codes, section) != null) continue;
@@ -740,7 +780,10 @@ fn processMain(
     if (groups.items.len == 0) {
         // Only use page-wide attribution when no top-level section needs a
         // language decision. Conflicting/unknown headings remain reported.
-        const explicit = if (page_sections.items.len == 0) unsectionedLanguage(codes, raw_source orelse source) else null;
+        const explicit = if (page_sections.items.len == 0)
+            unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source)
+        else
+            null;
         if (explicit == null) fallbacks.missing_language_heading = true;
         const language = explicit orelse codes.content() orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
         const payload = try presentation_document.compileReportedWithLinkTrailAlloc(
@@ -1129,6 +1172,8 @@ const TestLanguages = struct {
             .{ "Catalán", "ca", "catalán" },
             .{ "adj", "adj", "Adioukrou" },
             .{ "Adioukrou", "adj", "Adioukrou" },
+            .{ "ay", "ay", "Aymar aru" },
+            .{ "Aymar aru", "ay", "Aymar aru" },
             .{ "Deutsch", "de", "Deutsch" },
             .{ "de", "de", "Deutsch" },
             .{ "Nederlands", "nl", "Nederlands" },
@@ -1268,6 +1313,57 @@ test "grammar markers cannot erase Afrikaans or Aragonese language attribution" 
     }
 }
 
+test "standalone POS markers cannot align by count with unrecognized rendered headings" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var codes = TestLanguages.codes();
+    codes.content_fn = struct {
+        fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "ay", .heading = "Aymar aru" };
+        }
+    }.content;
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+
+    // These pinned AY entries have noun and adjective definitions. The -ay-
+    // template emits a banner, while -noun- and -adj- emit level-two headings.
+    // The two raw language-code candidates therefore match the two rendered
+    // POS boundaries by count without sharing their meaning.
+    const cases = .{
+        .{ "wila", "Jaqina, uywana sirka chiqawa", "Janchi wilaru uñtata samiwa." },
+        .{ "chinchilla", "Wisk’acharu uñtata", "Qhana uqi samiwa." },
+    };
+    inline for (cases) |entry| {
+        const raw = try std.fmt.allocPrint(a, "{{{{-ay-}}}}\n{{{{-noun-}}}}\n# {s}\n{{{{-adj-}}}}\n# {s}\n", .{ entry[1], entry[2] });
+        const expanded = try std.fmt.allocPrint(a, "<div>'''[[Aymara aru|AYMARA ARU]]'''</div>\n==<div><big><big>[[suti|Suti]]</big></big></div>==\n# {s}\n==<big><big>[[mayjachiri|Mayjachiri]]</big></big>==\n# {s}\n", .{ entry[1], entry[2] });
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, entry[0], expanded, raw, null);
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 2), stats.fallback_pages);
+    const path = try languageBlobPathAlloc(a, root, "Aymar aru");
+    var mapped = try mmapPath(std.testing.io, path);
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("ay", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    inline for (cases) |entry| {
+        const record = (try index.find(entry[0])).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings("ay", decoded.entry.language_code);
+        try std.testing.expect(std.mem.indexOf(u8, record.payload, entry[1]) != null);
+        try std.testing.expect(std.mem.indexOf(u8, record.payload, entry[2]) != null);
+    }
+}
+
 test "preferred foreign names resolve while unconfirmed ISO names remain guarded" {
     const codes = TestLanguages.codes();
     try std.testing.expectEqualStrings("nl", resolveSection(codes, .{ .heading = "Nederlands", .source = "==Nederlands==\n# Dutch entry\n" }).?.code);
@@ -1319,6 +1415,93 @@ test "unsectioned Amharic entries use unique explicit language categories" {
     const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
     try std.testing.expectEqualStrings("en", decoded.entry.language_code);
     try std.testing.expect(std.mem.indexOf(u8, record.payload, "door (noun)") != null);
+}
+
+test "unsectioned Bulgarian POS categories retain English identity and their whole body" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tbgwiktionary\n# dump-date\t20261001\n# content-language\tbg\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tШаблон\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tКатегория\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const LocalLanguages = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "английски")) return .{ .code = "en", .heading = "английски" };
+            if (std.mem.eql(u8, value, "български")) return .{ .code = "bg", .heading = "български" };
+            return null;
+        }
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |language| language.code else null;
+        }
+        fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "bg", .heading = "български" };
+        }
+    };
+    const codes: LanguageCodes = .{
+        .namespace_catalog = &namespaces,
+        .get_fn = LocalLanguages.get,
+        .resolve_fn = LocalLanguages.resolve,
+        .trusted_fn = LocalLanguages.resolve,
+        .content_fn = LocalLanguages.content,
+    };
+    const category = "[[Категория:Съществителни имена (английски)]]";
+    try std.testing.expectEqualStrings("en", unsectionedExpandedLanguage(codes, category).?.code);
+    try std.testing.expectEqualStrings("en", unsectionedExpandedLanguage(codes, category ++ category).?.code);
+    inline for (.{ "Глаголи", "Прилагателни имена", "Наречия" }) |pos| {
+        try std.testing.expectEqualStrings("en", unsectionedExpandedLanguage(codes, "[[Категория:" ++ pos ++ " (английски)]]").?.code);
+        try std.testing.expectEqualStrings("en", unsectionedExpandedLanguage(codes, category ++ "[[Категория:" ++ pos ++ " (английски)]]").?.code);
+        try std.testing.expect(unsectionedExpandedLanguage(codes, category ++ "[[Категория:" ++ pos ++ " (български)]]") == null);
+    }
+    inline for (.{
+        "<!--" ++ category ++ "-->",
+        "<nowiki>" ++ category ++ "</nowiki>",
+        "[[:Категория:Съществителни имена (английски)]]",
+        "[[Категория:английски]]",
+        "[[Категория:Съществителни имена (unknown-language)]]",
+        category ++ "[[Категория:Съществителни имена (български)]]",
+        category ++ "[[Категория:Съществителни имена (unknown-language)]]",
+        category ++ "[[Категория:Съществителни имена (английски]]",
+    }) |source| try std.testing.expect(unsectionedExpandedLanguage(codes, source) == null);
+    var no_edition = codes;
+    no_edition.namespace_catalog = null;
+    try std.testing.expect(unsectionedExpandedLanguage(no_edition, category) == null);
+
+    // Minimal fixture of the pinned Noun expansion, with emitted etymology
+    // prose after the definition to guard whole-body preservation.
+    const definition = "Почесване по главата с дланта или с кокалчетата на ръцете.";
+    const tail = "A retained etymology paragraph.";
+    const raw = "{{Noun|ID=noogie|ЕЗИК=en|ЗНАЧЕНИЕ=\n# " ++ definition ++ "\n|ЕТИМОЛОГИЯ=" ++ tail ++ "}}";
+    const expanded = "<div>\n" ++ category ++ "\n=== Съществително име ===\n# " ++ definition ++ "\n==== Етимология ====\n" ++ tail ++ "\n</div>";
+    try std.testing.expect(unsectionedExpandedLanguage(codes, raw) == null);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "noogie", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    const path = try languageBlobPathAlloc(a, root, "английски");
+    var mapped = try mmapPath(std.testing.io, path);
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("en", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("noogie")).?;
+    try std.testing.expectEqualStrings("noogie", record.title);
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings("en", decoded.entry.language_code);
+    try std.testing.expect(std.mem.indexOf(u8, record.payload, definition) != null);
+    try std.testing.expect(std.mem.indexOf(u8, record.payload, "Съществително име") != null);
+    try std.testing.expect(std.mem.indexOf(u8, record.payload, "Етимология") != null);
+    try std.testing.expect(std.mem.indexOf(u8, record.payload, tail) != null);
 }
 
 test "explicit unresolved Arabic language sections retain unverified ownership" {

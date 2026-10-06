@@ -284,6 +284,7 @@ const Runtime = struct {
     value_number_unchecked: V,
     require_number: V,
     observe_package: V,
+    check_execution_budget: V,
     defer_require_module_id: V,
     defer_require_module_ref: V,
     module_value_sentinel: V,
@@ -377,6 +378,7 @@ const Runtime = struct {
             .value_number_unchecked = try declare(m, "dict_lua_value_number_unchecked", ty.double, &.{ty.ptr}),
             .require_number = try declare(m, "dict_lua_require_number", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr }),
             .observe_package = try declare(m, "dict_lua_observe_package", ty.i32, &.{ty.ptr}),
+            .check_execution_budget = try declare(m, "dict_lua_check_execution_budget", ty.i32, &.{ty.ptr}),
             .defer_require_module_id = try declare(m, "dict_lua_defer_require_module_id", ty.i8, &.{ ty.ptr, ty.i32, ty.ptr }),
             .defer_require_module_ref = try declare(m, "dict_lua_defer_require_module_ref", ty.ptr, &.{ ty.ptr, ty.i32, ty.ptr }),
             .module_value_sentinel = try declare(m, "dict_lua_module_value_sentinel", ty.ptr, &.{ ty.ptr, ty.i32, ty.ptr }),
@@ -4484,6 +4486,7 @@ const FnEmitter = struct {
         const end_block = try self.newBlock("while_end");
         try llvm.br(self.builder, cond_block);
         llvm.position(self.builder, cond_block);
+        try self.check(try llvm.call(self.builder, self.rt().check_execution_budget, &.{self.ctx()}));
         try llvm.condBr(self.builder, try self.truthy(try self.expr(s.cond)), body_block, end_block);
         llvm.position(self.builder, body_block);
         try self.breaks.append(self.a(), end_block);
@@ -4503,6 +4506,7 @@ const FnEmitter = struct {
 
         try llvm.br(self.builder, body_block);
         llvm.position(self.builder, body_block);
+        try self.check(try llvm.call(self.builder, self.rt().check_execution_budget, &.{self.ctx()}));
         try self.breaks.append(self.a(), end_block);
         const term = try self.block(s.body);
         _ = self.breaks.pop();
@@ -4534,6 +4538,7 @@ const FnEmitter = struct {
         const end_block = try self.newBlock("nfor_end");
         try llvm.br(self.builder, cond_block);
         llvm.position(self.builder, cond_block);
+        try self.check(try llvm.call(self.builder, self.rt().check_execution_budget, &.{self.ctx()}));
 
         const current = try llvm.load(self.builder, self.ty().double, current_slot, 8);
         const lim = try llvm.load(self.builder, self.ty().double, limit_slot, 8);
@@ -4585,6 +4590,7 @@ const FnEmitter = struct {
 
         try llvm.br(self.builder, call_block);
         llvm.position(self.builder, call_block);
+        try self.check(try llvm.call(self.builder, self.rt().check_execution_budget, &.{self.ctx()}));
         try self.copyValue(arg0, state);
         try self.copyValue(arg1, control);
         const status = try llvm.call(self.builder, self.rt().call_fixed, &.{
@@ -4609,6 +4615,7 @@ const FnEmitter = struct {
     }
 
     fn emitInitialization(self: *FnEmitter) anyerror!void {
+        try self.check(try llvm.call(self.builder, self.rt().check_execution_budget, &.{self.ctx()}));
         if (self.info.upvalues.len != 0) {
             const cells_slot = try self.ptrSlot();
             const status = try llvm.call(self.builder, self.rt().direct_capture_cells, &.{

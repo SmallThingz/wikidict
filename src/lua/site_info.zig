@@ -46,11 +46,25 @@ fn validServer(value: []const u8) bool {
     return true;
 }
 
+// Captured scalar contract: Scribunto SiteLibrary::loadStats at
+// b109cb6e5866c13871e308859ef78249b1bd3ea2. views is absent upstream.
+// Fixed order shared by the provider ABI: pages, articles, files, edits,
+// users, activeUsers, admins. A primitive array crosses independently built
+// Lua modules without importing files outside their module roots.
+pub const Statistics = [7]u53;
+
+fn counter(value: std.json.Value, name: []const u8) !u53 {
+    const raw = try field(value, name);
+    if (raw != .integer) return error.InvalidSiteInfoSnapshot;
+    return std.math.cast(u53, raw.integer) orelse error.InvalidSiteInfoSnapshot;
+}
+
 pub const Snapshot = struct {
     allocator: A,
     server: []const u8,
     script: ?[]const u8,
     article_path: ?[]const u8,
+    statistics: ?Statistics = null,
 
     fn urlPath(general: std.json.Value, name: []const u8, article: bool) !?[]const u8 {
         const value = general.object.get(name) orelse return null;
@@ -64,14 +78,28 @@ pub const Snapshot = struct {
         return path;
     }
 
-    pub fn init(a: A, bytes: []const u8, wiki: []const u8, language: []const u8) !Snapshot {
+    pub fn init(a: A, bytes: []const u8, wiki: []const u8, date: []const u8, language: []const u8) !Snapshot {
         if (bytes.len > max_bytes or !std.unicode.utf8ValidateSlice(bytes)) return error.InvalidSiteInfoSnapshot;
         var parsed = std.json.parseFromSlice(std.json.Value, a, bytes, .{ .duplicate_field_behavior = .@"error" }) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => return error.InvalidSiteInfoSnapshot,
         };
         defer parsed.deinit();
-        const general = try field(try field(parsed.value, "query"), "general");
+        const query = try field(parsed.value, "query");
+        const general = try field(query, "general");
+        var statistics: ?Statistics = null;
+        if (parsed.value.object.get("schema")) |schema| {
+            if (schema != .string or !std.mem.eql(u8, schema.string, "wikidict.site-info.v2") or
+                !std.mem.eql(u8, try string(parsed.value, "profile"), "general-and-seven-scribunto-statistics") or
+                !std.mem.eql(u8, try string(parsed.value, "temporal_scope"), "current-api-observation"))
+                return error.InvalidSiteInfoSnapshot;
+            if (!std.mem.eql(u8, try string(parsed.value, "wiki"), wiki) or
+                !std.mem.eql(u8, try string(parsed.value, "date"), date) or
+                !std.mem.eql(u8, try string(parsed.value, "content_language"), language))
+                return error.SiteInfoIdentityMismatch;
+            const counts = try field(query, "statistics");
+            statistics = .{ try counter(counts, "pages"), try counter(counts, "articles"), try counter(counts, "images"), try counter(counts, "edits"), try counter(counts, "users"), try counter(counts, "activeusers"), try counter(counts, "admins") };
+        }
         if (!std.mem.eql(u8, try string(general, "wikiid"), wiki) or !std.mem.eql(u8, try string(general, "lang"), language))
             return error.SiteInfoIdentityMismatch;
         const server = try string(general, "server");
@@ -82,7 +110,7 @@ pub const Snapshot = struct {
         errdefer a.free(owned_server);
         const owned_script = if (script) |value| try a.dupe(u8, value) else null;
         errdefer if (owned_script) |value| a.free(value);
-        return .{ .allocator = a, .server = owned_server, .script = owned_script, .article_path = if (article_path) |value| try a.dupe(u8, value) else null };
+        return .{ .allocator = a, .server = owned_server, .script = owned_script, .article_path = if (article_path) |value| try a.dupe(u8, value) else null, .statistics = statistics };
     }
 
     pub fn deinit(self: *Snapshot) void {
@@ -92,6 +120,7 @@ pub const Snapshot = struct {
         self.server = "";
         self.script = null;
         self.article_path = null;
+        self.statistics = null;
     }
 };
 
@@ -101,13 +130,13 @@ test "site info preserves exact captured server independently of JSON storage" {
     const a = std.testing.allocator;
     const input = try a.dupe(u8, test_raw);
     defer a.free(input);
-    var snapshot = try Snapshot.init(a, input, "arwiktionary", "ar");
+    var snapshot = try Snapshot.init(a, input, "arwiktionary", "20261001", "ar");
     defer snapshot.deinit();
     @memset(input, 'x');
     try std.testing.expectEqualStrings("//ar.wiktionary.org", snapshot.server);
     try std.testing.expectEqualStrings("/w/index.php", snapshot.script.?);
     try std.testing.expectEqualStrings("/wiki/$1", snapshot.article_path.?);
-    var norwegian = try Snapshot.init(a, "{\"query\":{\"general\":{\"wikiid\":\"nowiktionary\",\"lang\":\"nb\",\"server\":\"//no.wiktionary.org\"}}}", "nowiktionary", "nb");
+    var norwegian = try Snapshot.init(a, "{\"query\":{\"general\":{\"wikiid\":\"nowiktionary\",\"lang\":\"nb\",\"server\":\"//no.wiktionary.org\"}}}", "nowiktionary", "20261001", "nb");
     defer norwegian.deinit();
     try std.testing.expectEqualStrings("//no.wiktionary.org", norwegian.server);
 }
@@ -117,13 +146,13 @@ test "site info rejects absent duplicate invalid and cross-edition metadata" {
     for ([_][]const u8{
         "{}",                                                                                      "[]",                                                                                                            "{\"query\":null}",                                                                                  "{\"query\":{\"general\":{}}}",
         "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":null}}}", "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//a\",\"server\":\"//b\"}}}", "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//bad/path\"}}}", "\xff",
-    }) |raw| try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, raw, "arwiktionary", "ar"));
-    try std.testing.expectError(error.SiteInfoIdentityMismatch, Snapshot.init(a, test_raw, "enwiktionary", "ar"));
-    try std.testing.expectError(error.SiteInfoIdentityMismatch, Snapshot.init(a, test_raw, "arwiktionary", "en"));
+    }) |raw| try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, raw, "arwiktionary", "20261001", "ar"));
+    try std.testing.expectError(error.SiteInfoIdentityMismatch, Snapshot.init(a, test_raw, "enwiktionary", "20261001", "ar"));
+    try std.testing.expectError(error.SiteInfoIdentityMismatch, Snapshot.init(a, test_raw, "arwiktionary", "20261001", "en"));
     const oversized = try a.alloc(u8, max_bytes + 1);
     defer a.free(oversized);
     @memset(oversized, ' ');
-    try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, oversized, "arwiktionary", "ar"));
+    try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, oversized, "arwiktionary", "20261001", "ar"));
 }
 
 test "site info supported server authorities retain exact spelling" {
@@ -137,7 +166,7 @@ test "site info allocation failures preserve OutOfMemory and release parser stor
     try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
         fn load(a: A) !void {
             var no_resize = std.testing.FailingAllocator.init(a, .{ .resize_fail_index = 0 });
-            var snapshot = try Snapshot.init(no_resize.allocator(), test_raw, "arwiktionary", "ar");
+            var snapshot = try Snapshot.init(no_resize.allocator(), test_raw, "arwiktionary", "20261001", "ar");
             defer snapshot.deinit();
         }
     }.load, .{});
@@ -154,9 +183,39 @@ test "site info URL path configuration is captured or explicitly absent" {
     }) |extra| {
         const raw = try std.fmt.allocPrint(a, "{{\"query\":{{\"general\":{{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\",{s}}}}}}}", .{extra});
         defer a.free(raw);
-        try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, raw, "arwiktionary", "ar"));
+        try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, raw, "arwiktionary", "20261001", "ar"));
     }
-    var missing = try Snapshot.init(a, "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\"}}}", "arwiktionary", "ar");
+    var missing = try Snapshot.init(a, "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\"}}}", "arwiktionary", "20261001", "ar");
     defer missing.deinit();
     try std.testing.expect(missing.script == null and missing.article_path == null);
+}
+
+const test_stats_prefix =
+    "{\"schema\":\"wikidict.site-info.v2\",\"profile\":\"general-and-seven-scribunto-statistics\",\"temporal_scope\":\"current-api-observation\"," ++
+    "\"wiki\":\"bclwiktionary\",\"date\":\"20261001\",\"content_language\":\"bcl\",\"query\":{\"general\":{" ++
+    "\"wikiid\":\"bclwiktionary\",\"lang\":\"bcl\",\"server\":\"//bcl.wiktionary.org\"},\"statistics\":{" ++
+    "\"pages\":13332,\"articles\":8530,\"images\":0,\"edits\":60889,\"users\":1596,\"activeusers\":14,\"admins\":";
+
+test "versioned site info binds date and complete seven-counter current profile" {
+    const a = std.testing.allocator;
+    var snapshot = try Snapshot.init(a, test_stats_prefix ++ "2}}}", "bclwiktionary", "20261001", "bcl");
+    defer snapshot.deinit();
+    const statistics = snapshot.statistics.?;
+    try std.testing.expectEqual(@as(u53, 13332), statistics[0]);
+    try std.testing.expectEqual(@as(u53, 8530), statistics[1]);
+    try std.testing.expectEqual(@as(u53, 0), statistics[2]);
+    try std.testing.expectEqual(@as(u53, 60889), statistics[3]);
+    try std.testing.expectEqual(@as(u53, 1596), statistics[4]);
+    try std.testing.expectEqual(@as(u53, 14), statistics[5]);
+    try std.testing.expectEqual(@as(u53, 2), statistics[6]);
+    try std.testing.expectError(error.SiteInfoIdentityMismatch, Snapshot.init(a, test_stats_prefix ++ "2}}}", "bclwiktionary", "20261002", "bcl"));
+    for ([_][]const u8{ "null", "true", "-1", "1.5", "\"2\"", "9007199254740992" }) |bad| {
+        const raw = try std.mem.concat(a, u8, &.{ test_stats_prefix, bad, "}}}" });
+        defer a.free(raw);
+        try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, raw, "bclwiktionary", "20261001", "bcl"));
+    }
+    var legacy = try Snapshot.init(a, test_raw, "arwiktionary", "20261001", "ar");
+    defer legacy.deinit();
+    try std.testing.expect(legacy.statistics == null);
+    try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, "{\"schema\":\"unknown\",\"query\":{\"general\":{}}}", "arwiktionary", "20261001", "ar"));
 }

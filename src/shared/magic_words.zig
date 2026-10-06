@@ -27,9 +27,9 @@ const function_ids = [_][]const u8{
     "anchorencode",    "defaultsort",      "pagename",      "pagenamee",    "fullpagename",    "fullpagenamee", "subpagename",
     "subpagenamee",    "rootpagename",     "rootpagenamee", "basepagename", "basepagenamee",   "talkpagename",  "talkpagenamee",
     "subjectpagename", "subjectpagenamee", "namespace",     "namespacee",   "namespacenumber", "talkspace",     "talkspacee",
-    "subjectspace",    "subjectspacee",    "special",       "tag",          "formatdate",      "displaytitle",  "expr",
-    "if",              "ifeq",             "ifexpr",        "iferror",      "switch",          "ifexist",       "time",
-    "titleparts",      "len",              "sub",           "categorytree", "invoke",
+    "subjectspace",    "subjectspacee",    "int",           "special",      "tag",             "formatdate",    "displaytitle",
+    "expr",            "if",               "ifeq",          "ifexpr",       "iferror",         "switch",        "ifexist",
+    "time",            "titleparts",       "len",           "sub",          "categorytree",    "invoke",
 };
 
 pub const hash_function_ids = [_][]const u8{

@@ -36,10 +36,18 @@ fn siteIndexCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]c
     return one(.{ .string = server });
 }
 
-fn statsIndexCall(_: ?*anyopaque, _: *rt.Context, args: []const Value) ![]const Value {
+fn statsIndexCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (args.len < 2 or args[1] != .string) return one(.nil);
-    inline for (.{ "pages", "articles", "files", "edits", "users", "activeUsers", "admins" }) |name|
-        if (std.mem.eql(u8, args[1].string, name)) return error.NotImplemented;
+    inline for (.{ "pages", "articles", "files", "edits", "users", "activeUsers", "admins" }, 0..) |name, index| {
+        if (std.mem.eql(u8, args[1].string, name)) {
+            const statistics = if (host_api.getForStablePageRead(runtime)) |host| host.site_statistics else null;
+            if (statistics) |captured| return one(.{ .number = @floatFromInt(captured[index]) });
+            rt.work_stats.logLine("Site statistics snapshot missing field={s}\n", .{name});
+            runtime.last_error = .{ .string = try std.fmt.allocPrint(runtime.allocator, "Site statistics snapshot missing field={s}", .{name}) };
+            return error.LuaRaised;
+        }
+    }
+    // SiteLibrary::loadStats has no views field in the pinned upstream version.
     return one(.nil);
 }
 
@@ -445,6 +453,14 @@ fn substituteMessageParams(runtime: *rt.Context, source: []const u8, params: []c
     return out.toOwnedSlice(runtime.allocator);
 }
 
+// Extension renderers share the captured/local message lookup and substitution
+// contract with mw.message, rather than inventing English diagnostics.
+pub fn interfaceMessagePlain(runtime: *rt.Context, key: []const u8, params: []const Value) ![]const u8 {
+    const source = (try messageSource(runtime, &.{ .key = key })) orelse
+        return std.fmt.allocPrint(runtime.allocator, "⧼{s}⧽", .{key});
+    return substituteMessageParams(runtime, source, params);
+}
+
 fn messagePlainCall(raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) ![]const Value {
     const ctx: *MessageCtx = @ptrCast(@alignCast(raw orelse return error.MissingMessageContext));
     const source = (try messageSource(runtime, ctx)) orelse
@@ -731,6 +747,26 @@ fn wikibaseGetEntityUrlCall(_: ?*anyopaque, runtime: *rt.Context, args: []const 
     return one(.{ .string = url });
 }
 
+fn wikibaseSitelinkSnapshotFailure(runtime: *rt.Context, entity: []const u8, site: []const u8) !void {
+    rt.work_stats.logLine("Wikibase sitelink snapshot missing entity={s} site={s}\n", .{ entity, site });
+    runtime.last_error = .{ .string = try std.fmt.allocPrint(
+        runtime.allocator,
+        "Wikibase sitelink snapshot missing entity={s} site={s}",
+        .{ entity, site },
+    ) };
+    return error.LuaRaised;
+}
+
+fn wikibaseEntityTextSnapshotFailure(runtime: *rt.Context, entity: []const u8) !void {
+    rt.work_stats.logLine("Wikibase entity-text snapshot missing entity={s}\n", .{entity});
+    runtime.last_error = .{ .string = try std.fmt.allocPrint(
+        runtime.allocator,
+        "Wikibase entity-text snapshot missing entity={s}",
+        .{entity},
+    ) };
+    return error.LuaRaised;
+}
+
 fn wikibaseGetSitelinkCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     if (host_api.getForStablePageRead(runtime)) |host| {
         if (host.wikibase_entity != null) return wikibase_lib.getSitelinkCall(null, runtime, args);
@@ -744,16 +780,13 @@ fn wikibaseGetSitelinkCall(_: ?*anyopaque, runtime: *rt.Context, args: []const V
         return error.StringExpected;
     rt.work_stats.noteSitelink(args[0].string, global_site_id);
     const host = host_api.getForStablePageRead(runtime) orelse return error.MissingScribuntoHost;
-    const get = host.wikibase_sitelink orelse return error.NotImplemented;
+    const get = host.wikibase_sitelink orelse {
+        try wikibaseSitelinkSnapshotFailure(runtime, args[0].string, global_site_id);
+        unreachable;
+    };
     const title = get(host.ctx, args[0].string, global_site_id) catch |err| {
-        if (err == error.WikibaseSitelinkSnapshotMissing) {
-            runtime.last_error = .{ .string = try std.fmt.allocPrint(
-                runtime.allocator,
-                "Wikibase sitelink snapshot missing entity={s} site={s}",
-                .{ args[0].string, global_site_id },
-            ) };
-            return error.LuaRaised;
-        }
+        if (err == error.WikibaseSitelinkSnapshotMissing)
+            try wikibaseSitelinkSnapshotFailure(runtime, args[0].string, global_site_id);
         return err;
     };
     return one(if (title) |value| .{ .string = value } else .nil);
@@ -763,16 +796,13 @@ fn wikibaseEntityText(runtime: *rt.Context, args: []const Value) !?host_api.Wiki
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     const entity_id = (try canonicalWikibaseEntityId(runtime, args[0].string)) orelse return null;
     const host = host_api.getForStablePageRead(runtime) orelse return error.MissingScribuntoHost;
-    const get = host.wikibase_entity_text orelse return error.NotImplemented;
+    const get = host.wikibase_entity_text orelse {
+        try wikibaseEntityTextSnapshotFailure(runtime, entity_id);
+        unreachable;
+    };
     return get(host.ctx, entity_id) catch |err| {
-        if (err == error.WikibaseEntityTextSnapshotMissing) {
-            runtime.last_error = .{ .string = try std.fmt.allocPrint(
-                runtime.allocator,
-                "Wikibase entity-text snapshot missing entity={s}",
-                .{entity_id},
-            ) };
-            return error.LuaRaised;
-        }
+        if (err == error.WikibaseEntityTextSnapshotMissing)
+            try wikibaseEntityTextSnapshotFailure(runtime, entity_id);
         return err;
     };
 }
@@ -1067,7 +1097,8 @@ test "AOT mw basics expose logging, dumpObject and site namespaces" {
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
     try std.testing.expectError(error.AotCallFailed, runtime.getIndex(.{ .table = stats }, .{ .string = "pages" }));
-    try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
+    try std.testing.expectEqualStrings("LuaRaised", runtime.aotErrorName().?);
+    try std.testing.expectEqualStrings("Site statistics snapshot missing field=pages", runtime.last_error.string);
     runtime.clearAotErrorName();
 }
 
@@ -1668,4 +1699,38 @@ test "installing site metadata does not make an unrelated loadData module impure
         try install(&runtime, mw);
         try std.testing.expect(!effect);
     }
+}
+
+test "Wikibase absent legacy providers report exact snapshot keys" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const mw = try runtime.newNativeNamespace(.mw);
+    try install(&runtime, mw);
+    var host = host_api.Host{};
+    host_api.set(&runtime, &host);
+    const wikibase = mw.rawGet(.{ .string = "wikibase" }).?.table;
+
+    inline for (.{ "sitelink", "getSitelink" }) |name| {
+        runtime.clearAotErrorName();
+        try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, name, &.{
+            .{ .string = "Q34057" }, .{ .string = "enwiki" },
+        }));
+        try std.testing.expectEqualStrings("LuaRaised", runtime.aotErrorName().?);
+        try std.testing.expectEqualStrings("Wikibase sitelink snapshot missing entity=Q34057 site=enwiki", runtime.last_error.string);
+    }
+    inline for (.{ "getLabel", "getDescription" }) |name| {
+        runtime.clearAotErrorName();
+        try std.testing.expectError(error.AotCallFailed, callField(&runtime, .{ .table = wikibase }, name, &.{.{ .string = "Q34057" }}));
+        try std.testing.expectEqualStrings("LuaRaised", runtime.aotErrorName().?);
+        try std.testing.expectEqualStrings("Wikibase entity-text snapshot missing entity=Q34057", runtime.last_error.string);
+    }
+    // Provider absence does not become a cached negative or poison later reads.
+    host.wikibase_sitelink = WikibaseSitelinkProbe.get;
+    const captured = try callField(&runtime, .{ .table = wikibase }, "sitelink", &.{
+        .{ .string = "Q42" }, .{ .string = "enwiki" },
+    });
+    defer rt.freeResults(captured);
+    try std.testing.expectEqualStrings("Douglas Adams", captured[0].string);
 }

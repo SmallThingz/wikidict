@@ -301,6 +301,34 @@ pub fn invokeModuleId(runtime: *rt.Context, module_id: u32, module_name: []const
     return runtime.callValue(callable, &.{frame});
 }
 
+/// Scribunto's #invoke result conversion runs with the invocation frame alive.
+/// The function call itself has ended before tostring, matching callFunction.
+pub fn invokeText(runtime: *rt.Context, module_id: ?u32, module_name: []const u8, function_name: []const u8, frame: Value) anyerror![]const u8 {
+    if (frame != .table) return error.FrameExpected;
+    const saved = runtime.current_frame;
+    runtime.current_frame = frame.table;
+    defer runtime.current_frame = saved;
+    const results = blk: {
+        const invoke_host = try enterInvoke(runtime);
+        defer leaveInvoke(invoke_host);
+        const module = if (module_id) |id|
+            try runtime.requireModuleId(id, module_name)
+        else
+            try runtime.requireByName(module_name);
+        const callable = if (function_name.len == 0)
+            module
+        else if (module_id) |id| slot: {
+            if (runtime.moduleExportSlot(id, function_name)) |known|
+                break :slot try runtime.getProgramShapeField(module, known.shape_id, known.slot, function_name);
+            break :slot try runtime.getIndex(module, .{ .string = function_name });
+        } else try runtime.getIndex(module, .{ .string = function_name });
+        try validateInvokeExport(function_name, callable);
+        break :blk try runtime.callValue(callable, &.{frame});
+    };
+    defer rt.freeResults(results);
+    return stdlib.invokeResultsToString(runtime, results);
+}
+
 /// Invoke for callers that consume only the first result. Generated functions
 /// write into result_buffer; legacy functions may return an owned result slice.
 pub fn invokeModuleIdFixed(runtime: *rt.Context, module_id: u32, module_name: []const u8, function_name: []const u8, frame: Value, result_buffer: []Value) anyerror!rt.FixedCallResult {

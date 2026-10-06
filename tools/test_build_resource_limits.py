@@ -379,10 +379,12 @@ class ResourceLimitsTest(unittest.TestCase):
                 f'open({str(native_pid_path)!r}, "w").write(str(native.pid)); '
                 'time.sleep(5)'
             )
+            # Allow interpreter startup and recording the native descendant under load.
+            # Both five-second sleepers must still be stopped by the wall limit.
             with self.assertRaisesRegex(limits.ContainmentUnavailable, 'wall_limit'):
                 limits.supervise_watchdog(
                     argv=['-c', child_code],
-                    report_path=report_path, wall_seconds=0.4,
+                    report_path=report_path, wall_seconds=2,
                     memory_limit_bytes=64 * 1024**2, max_tasks=4)
             report = json.loads(report_path.read_text())
             self.assertEqual(report['termination_reason'], 'wall_limit')

@@ -696,10 +696,10 @@ fn languageGetDir(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value) 
     const get = if (host) |value| value.language_direction else null;
     const direction = if (get) |callback| callback(host.?.ctx, code) catch |err| {
         if (err == error.LanguageDirectionSnapshotMissing)
-            std.log.warn("language direction snapshot missing: language={s}", .{code[0..@min(code.len, 128)]});
+            rt.work_stats.logLine("warning: language direction snapshot missing: language={s}\n", .{code[0..@min(code.len, 128)]});
         return err;
     } else {
-        std.log.warn("language direction snapshot unavailable: language={s}", .{code[0..@min(code.len, 128)]});
+        rt.work_stats.logLine("warning: language direction snapshot unavailable: language={s}\n", .{code[0..@min(code.len, 128)]});
         return error.LanguageDirectionSnapshotMissing;
     };
     return one(runtime.allocator, .{ .string = @tagName(direction) });
@@ -932,7 +932,7 @@ fn displayLanguage(runtime: *rt.Context, args: []const Value, index: usize) !?[]
 }
 fn languageNameMissing(code: []const u8, display: ?[]const u8, scope: []const u8) void {
     const shown = display orelse "<autonym>";
-    std.log.warn("language name snapshot missing: language={s} display={s} scope={s}", .{
+    rt.work_stats.logLine("warning: language name snapshot missing: language={s} display={s} scope={s}\n", .{
         code[0..@min(code.len, 128)], shown[0..@min(shown.len, 128)], scope,
     });
 }
@@ -994,11 +994,11 @@ fn fallbackLanguages(runtime: *rt.Context, code: []const u8, mode: Value) ![]con
     for (code) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-')
         return one(a, .{ .table = table });
     const host = host_api.getForStablePageRead(runtime) orelse {
-        std.log.warn("language fallback snapshot unavailable: language={s}", .{code[0..@min(code.len, 128)]});
+        rt.work_stats.logLine("warning: language fallback snapshot unavailable: language={s}\n", .{code[0..@min(code.len, 128)]});
         return error.LanguageFallbackSnapshotMissing;
     };
     const get = host.language_fallbacks orelse {
-        std.log.warn("language fallback snapshot unavailable: language={s}", .{code[0..@min(code.len, 128)]});
+        rt.work_stats.logLine("warning: language fallback snapshot unavailable: language={s}\n", .{code[0..@min(code.len, 128)]});
         return error.LanguageFallbackSnapshotMissing;
     };
     const captured = try get(host.ctx, code);

@@ -422,6 +422,7 @@ pub const Renderer = struct {
     span_limit_marker: bool = false,
     block_limit_reached: bool = false,
     body_depth: usize = 0,
+    block_formatting: SpanFlags = .{},
     refs: std.ArrayList(Reference) = .empty,
     ref_defs: std.ArrayList(ReferenceDefinition) = .empty,
     default_group_reference_count: usize = 0,
@@ -444,6 +445,9 @@ pub const Renderer = struct {
     }
 
     pub fn mediaFile(self: *Renderer, raw: []const u8, caption: []const u8) Error!void {
+        return self.mediaFileKind(raw, caption, null);
+    }
+    fn mediaFileKind(self: *Renderer, raw: []const u8, caption: []const u8, authoritative_kind: ?media_types.Kind) Error!void {
         // Media is supplemental presentation. Pathological nesting or a page with
         // hundreds of assets must not make the entry itself unreadable.
         if (self.media_depth >= max_depth) {
@@ -454,7 +458,7 @@ pub const Renderer = struct {
         defer self.media_depth -= 1;
         const file = try self.a.dupe(u8, std.mem.trim(u8, raw, " \t\r\n"));
         std.mem.replaceScalar(u8, file, '_', ' ');
-        const kind = media_types.kind(file) orelse return;
+        const kind = authoritative_kind orelse media_types.kind(file) orelse return;
         for (self.media.items) |item| if (std.mem.eql(u8, item.file, file)) return;
         if (self.media.items.len >= 128) {
             self.fallbacks.render_limit = true;
@@ -481,7 +485,9 @@ pub const Renderer = struct {
             }
             return;
         }
-        try self.spans.append(self.a, .{ .kind = s.kind, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .flags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline }, .role = s.role });
+        const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
+        const inherited_flags: SpanFlags = @bitCast(@as(u8, @bitCast(flags)) | @as(u8, @bitCast(self.block_formatting)));
+        try self.spans.append(self.a, .{ .kind = s.kind, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .flags = inherited_flags, .role = s.role });
     }
     pub fn lineBreak(self: *Renderer, s: Style) Error!void {
         var style = s;
@@ -918,6 +924,7 @@ pub const Renderer = struct {
                 if (safe_classes.items.len != 0) try safe_classes.append(self.a, ' ');
                 try safe_classes.appendSlice(self.a, class);
                 if (std.mem.eql(u8, class, "scribunto-error")) self.fallbacks.rendered_lua_error = true;
+                if (std.mem.eql(u8, class, "ext-phonos-error")) self.fallbacks.rendered_extension_error = true;
                 if (std.mem.eql(u8, class, "headword-line") or std.mem.eql(u8, class, "headword")) s.role = .headword;
                 if (s.role != .headword and (std.mem.eql(u8, class, "label-content") or std.mem.eql(u8, class, "qualifier-content"))) s.role = .label;
                 if (std.mem.eql(u8, class, "IPA")) s.role = .pronunciation;
@@ -938,6 +945,11 @@ pub const Renderer = struct {
             if (std.ascii.eqlIgnoreCase(decoded_dir, "ltr")) s.direction = "ltr" else if (std.ascii.eqlIgnoreCase(decoded_dir, "rtl")) s.direction = "rtl" else if (std.ascii.eqlIgnoreCase(decoded_dir, "auto")) s.direction = "auto";
         }
         const content = input[tag.end..pair.inner_end];
+        // This attribute is emitted only after the runtime validates captured
+        // AUDIO metadata. Keep canonical file, caption and language independent.
+        if (tag.is("span")) if (tag.attr("data-phonos-audio")) |raw_file| {
+            try self.mediaFileKind(try self.entityText(raw_file), content, .audio);
+        };
         if (tag.is("li")) try self.text("• ", style);
         if (std.mem.indexOf(u8, content, "{|") != null) {
             try self.blocksInline(try self.renderBody(content), s);
@@ -1156,6 +1168,20 @@ pub const Renderer = struct {
         };
         try self.block(list, kind, value, "", "", 0);
     }
+    fn blockFormattingFlags(tag: syntax.Tag) ?SpanFlags {
+        // Attribute-bearing wrappers still need the ordinary inline HTML path,
+        // which retains their language, classes, direction and semantic role.
+        if (tag.closing or tag.self_closing or tag.attrs.len != 0) return null;
+        if (oneOf(tag.name, &.{ "b", "strong" })) return .{ .bold = true };
+        if (oneOf(tag.name, &.{ "i", "em", "cite", "var", "dfn" })) return .{ .italic = true };
+        if (oneOf(tag.name, &.{ "u", "ins" })) return .{ .underline = true };
+        if (oneOf(tag.name, &.{ "s", "del", "strike" })) return .{ .strike = true };
+        if (tag.is("sup")) return .{ .superscript = true };
+        if (tag.is("sub")) return .{ .subscript = true };
+        if (tag.is("small")) return .{ .small = true };
+        if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) return .{ .code = true };
+        return null;
+    }
     pub fn renderBody(self: *Renderer, input: []const u8) Error![]const Block {
         if (self.body_depth >= max_depth) {
             self.fallbacks.render_limit = true;
@@ -1178,6 +1204,39 @@ pub const Renderer = struct {
             const line = std.mem.trimEnd(u8, input[start..end], "\r");
             pos = if (end < input.len) end + 1 else end;
             const clean = trim(line);
+            // Expansion can introduce a block newline immediately inside a
+            // balanced formatting wrapper, e.g. <small>\n* notice</small>.
+            // Match across the whole body before line splitting discards that
+            // wrapper. Keep list/table structure and inherit its flags while
+            // rendering the enclosed blocks; never repair unmatched markup.
+            if (clean.ptr == line.ptr) if (syntax.tagAt(clean, 0)) |tag| {
+                if (blockFormattingFlags(tag)) |flags| {
+                    if (trim(clean[tag.end..]).len == 0) {
+                        const offset = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr);
+                        const rest = input[offset..];
+                        if (syntax.matchingTag(rest, tag)) |pair| {
+                            const closing_line_end = std.mem.indexOfScalarPos(u8, rest, pair.end, '\n') orelse rest.len;
+                            // A same-line suffix belongs to its existing inline
+                            // block and must not be split off by this path.
+                            if (trim(rest[pair.end..closing_line_end]).len == 0) {
+                                if (para) |p| {
+                                    try self.paragraph(&blocks, input[p..start]);
+                                    para = null;
+                                }
+                                const parent_formatting = self.block_formatting;
+                                self.block_formatting = @bitCast(@as(u8, @bitCast(parent_formatting)) | @as(u8, @bitCast(flags)));
+                                defer self.block_formatting = parent_formatting;
+                                try blocks.appendSlice(self.a, try self.renderBody(rest[tag.end..pair.inner_end]));
+                                pos = offset + closing_line_end;
+                                if (pos < input.len) pos += 1;
+                                @memset(&counts, 0);
+                                list_root = 0;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            };
             // TemplateStyles commonly precedes a NavFrame on the same line.
             // Consume this non-presentational extension before classifying the
             // following block, or its nested wiki table becomes inline text.
@@ -2749,4 +2808,119 @@ test "localized namespace aliases classify media and category membership" {
     try std.testing.expect(std.mem.indexOf(u8, text, "Un chat") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "Catégorie:Animaux"));
     try std.testing.expect(std.mem.indexOf(u8, text, "Fichier:Cat.jpg") == null);
+}
+
+test "Phonos presentation keeps canonical audio caption and language with explicit error flags" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("<span class=\"ext-phonos ext-phonos-PhonosButton\" lang=\"id\" data-phonos-audio=\"Actual audio.opus\"><span class=\"e-example\">Dengerin</span></span>", .{});
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    const media = renderer.media.items[0];
+    try std.testing.expectEqualStrings("Actual audio.opus", media.file);
+    try std.testing.expectEqualStrings("Dengerin", media.caption);
+    try std.testing.expectEqual(media_types.Kind.audio, media.kind);
+    try std.testing.expectEqualStrings("Dengerin", try plainText(a, spans));
+    try std.testing.expectEqualStrings("id", spans[0].language);
+    try std.testing.expect(!renderer.fallbacks.rendered_extension_error);
+    _ = try renderer.parseSpans("<span class=\"ext-phonos-error\" lang=\"id\" data-phonos-error=\"phonos-file-not-found\">Dengerin Unable to play audio</span>", .{});
+    try std.testing.expect(renderer.fallbacks.rendered_extension_error);
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+}
+
+test "Belarusian legacy layout tables retain all four sampled translation groups" {
+    // These are the expanded forms of the source-shaped runtime regression.
+    // Rowless inner layout tables remain flagged, but must preserve their lists.
+    const cases = [_]struct { left: []const u8, right: []const u8, terms: []const []const u8 }{
+        .{ .left = "", .right = "* ru: [[увы]], [[ах]]", .terms = &.{ "увы", "ах" } },
+        .{ .left = "", .right = "* ru: [[ОМОН]]", .terms = &.{"ОМОН"} },
+        .{ .left = "* af: [[Australië]]\n* da: [[Australien]]\n* en: [[Australia]]", .right = "", .terms = &.{ "Australië", "Australien", "Australia" } },
+        .{ .left = "* ca: [[Bielorússia]]\n* chr: [[ᏇᎳᎷᏒ]]\n* da: [[Hviderusland]]", .right = "", .terms = &.{ "Bielorússia", "ᏇᎳᎷᏒ", "Hviderusland" } },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const input = try std.fmt.allocPrint(a, "# Kept definition\n<div class=\"NavFrame\"><div class=\"NavContent\">\n" ++
+            "{{| border=\"0\" width=\"100%\"\n|-\n| valign=\"top\" width=\"48%\" |\n{{|\n{s}\n|}}\n" ++
+            "| width=\"1%\" |\n| valign=\"top\" width=\"48%\" |\n{{|\n{s}\n|}}\n|}}</div></div>\nAfter", .{ case.left, case.right });
+        const blocks = try r.renderBody(input);
+        try std.testing.expectEqualStrings("Kept definition", try flattened(a, blocks[0].spans));
+        try r.blocksInline(blocks, .{});
+        const all = try flattened(a, r.spans.items);
+        for (case.terms) |term| try std.testing.expect(std.mem.indexOf(u8, all, term) != null);
+        try std.testing.expect(std.mem.indexOf(u8, all, "After") != null);
+        var links: usize = 0;
+        for (r.spans.items) |span| for (case.terms) |term| {
+            if (std.mem.eql(u8, span.target, term)) links += 1;
+        };
+        try std.testing.expectEqual(case.terms.len, links);
+    }
+}
+
+test "balanced formatting wrapper preserves implicit block newline and list styling" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<small>\n* هذه الصفحة معتمدة على [[مرجع|كتاب]]\n* <b>notice</b></small>\nAfter");
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    for (blocks[0..2]) |block_value| {
+        try std.testing.expectEqual(Kind.list_item, block_value.kind);
+        try std.testing.expectEqualStrings("*", block_value.list_path);
+        try std.testing.expectEqual(@as(u8, 1), block_value.depth);
+        for (block_value.spans) |span| try std.testing.expect(span.flags.small);
+    }
+    try std.testing.expectEqualStrings("هذه الصفحة معتمدة على كتاب", try flattened(a, blocks[0].spans));
+    var linked = false;
+    for (blocks[0].spans) |span| if (span.kind == .link) {
+        linked = true;
+        try std.testing.expectEqualStrings("مرجع", span.target);
+        try std.testing.expectEqualStrings("كتاب", span.text);
+    };
+    try std.testing.expect(linked);
+    try std.testing.expectEqualStrings("notice", try flattened(a, blocks[1].spans));
+    try std.testing.expect(blocks[1].spans[0].flags.bold);
+    try std.testing.expectEqualStrings("After", try flattened(a, blocks[2].spans));
+    for (blocks[2].spans) |span| try std.testing.expect(!span.flags.small);
+    try std.testing.expect(!r.fallbacks.unclosed_formatting);
+}
+
+test "nested block formatting restores parent flags and keeps unclosed reports" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<small>\n<strong>\n# first\n# second</strong>\n\nEnd\n</small>\nAfter");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    for (blocks[0..2], 0..) |block_value, index| {
+        try std.testing.expectEqual(Kind.definition, block_value.kind);
+        try std.testing.expectEqualStrings(if (index == 0) "1" else "2", block_value.number);
+        for (block_value.spans) |span| {
+            try std.testing.expect(span.flags.small);
+            try std.testing.expect(span.flags.bold);
+        }
+    }
+    try std.testing.expectEqualStrings("End", try flattened(a, blocks[2].spans));
+    for (blocks[2].spans) |span| {
+        try std.testing.expect(span.flags.small);
+        try std.testing.expect(!span.flags.bold);
+    }
+    try std.testing.expectEqualStrings("After", try flattened(a, blocks[3].spans));
+    for (blocks[3].spans) |span| try std.testing.expect(!span.flags.small and !span.flags.bold);
+    try std.testing.expect(!r.fallbacks.unclosed_formatting);
+    var unmatched: Renderer = .{ .a = a, .context = .{} };
+    const unfinished = try unmatched.renderBody("<small>\n* notice");
+    try std.testing.expect(unmatched.fallbacks.unclosed_formatting);
+    try std.testing.expectEqual(@as(usize, 1), unfinished.len);
+    try std.testing.expectEqual(Kind.list_item, unfinished[0].kind);
+    try std.testing.expectEqualStrings("notice", try flattened(a, unfinished[0].spans));
+    var indented: Renderer = .{ .a = a, .context = .{} };
+    const preformatted = try indented.renderBody(" <small>\n* notice</small>");
+    try std.testing.expectEqual(@as(usize, 2), preformatted.len);
+    try std.testing.expectEqual(Kind.preformatted, preformatted[0].kind);
+    try std.testing.expect(indented.fallbacks.unclosed_formatting);
+    for (preformatted[1].spans) |span| try std.testing.expect(!span.flags.small);
 }

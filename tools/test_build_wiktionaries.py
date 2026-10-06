@@ -2211,3 +2211,82 @@ class PageCountRoutingTests(unittest.TestCase):
         for pages in (1,100_001):
             with self.subTest(pages=pages):
                 self._check_route(pages,attempts=2)
+
+
+class FileMetadataV2ReplayReuseTest(unittest.TestCase):
+    def setUp(self):
+        import test_prepare_file_metadata_v2 as fixture_module
+        self.fixture=fixture_module.CaptureReplayTest()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.manifest=self.fixture.capture()
+        self.path=self.fixture.args.output/'file-metadata.tsv'
+        self.helper=fixture_module.v2
+        b._FILE_METADATA_V2_REPLAYS.clear()
+        self.addCleanup(b._FILE_METADATA_V2_REPLAYS.clear)
+
+    def validate(self,path=None,edition='arwiktionary',date='20261001'):
+        return b.validated_auxiliary_capture('file-metadata',path or self.path,edition,date)
+
+    def test_exact_repeat_and_copied_capture_reuse_do_not_share_mutable_results(self):
+        import shutil
+        with patch.object(self.helper,'validate_snapshot',wraps=self.helper.validate_snapshot) as replay:
+            record,artifacts=self.validate()
+            expected=json.loads(json.dumps(record))
+            record['dependency_sha256'].clear();artifacts.clear()
+            self.assertEqual(self.validate()[0],expected)
+            copied=self.fixture.root/'copied';shutil.copytree(self.path.parent,copied)
+            self.assertEqual(self.validate(copied/self.path.name)[0],expected)
+            self.assertEqual(replay.call_count,1)
+
+    def test_cache_hit_preserves_edition_and_date_rejection(self):
+        self.validate()
+        for edition,date in [('enwiktionary','20261001'),('arwiktionary','20261002')]:
+            with self.subTest(edition=edition,date=date),self.assertRaisesRegex(ValueError,'edition/date'):
+                self.validate(edition=edition,date=date)
+
+    def test_same_size_same_mtime_mutations_of_all_evidence_classes_are_rejected(self):
+        self.validate()
+        names=['file-metadata.tsv',self.helper.NAMESPACE,self.helper.EVIDENCE,self.helper.COMPLETE,
+               next(self.path.parent.glob('*.raw.json')).name,
+               next(self.path.parent.glob('*.titles')).name]
+        for name in names:
+            with self.subTest(name=name):
+                path=self.path.with_name(name);original=path.read_bytes();stat=path.stat()
+                replacement=bytes([original[0]^1])+original[1:]
+                try:
+                    path.write_bytes(replacement);os.utime(path,ns=(stat.st_atime_ns,stat.st_mtime_ns))
+                    with self.assertRaises(ValueError):self.validate()
+                finally:path.write_bytes(original);os.utime(path,ns=(stat.st_atime_ns,stat.st_mtime_ns))
+                self.validate()
+
+    def test_rehashed_semantic_tamper_requires_replay_and_never_enters_cache(self):
+        self.validate()
+        raw=self.path.read_bytes().replace(b'\tAUDIO\t',b'\tVIDEO\t')
+        self.path.write_bytes(raw)
+        index=self.helper.decode(self.path.with_name(self.helper.EVIDENCE).read_bytes())
+        self.manifest.update(output_bytes=len(raw),output_sha256=self.helper.digest(raw))
+        self.fixture.rewrite_index_and_manifest(self.manifest,index)
+        with patch.object(self.helper,'validate_snapshot',wraps=self.helper.validate_snapshot) as replay:
+            for _ in range(2):
+                with self.assertRaisesRegex(ValueError,'TSV differs'):self.validate()
+            self.assertEqual(replay.call_count,2)
+
+    def test_missing_extra_and_symlink_artifacts_do_not_use_prior_success(self):
+        self.validate()
+        raw=next(self.path.parent.glob('*.raw.json'));saved=raw.read_bytes()
+        raw.unlink()
+        with self.assertRaises(ValueError):self.validate()
+        raw.write_bytes(saved)
+        extra=self.path.with_name('file-metadata.unrecorded.json');extra.write_text('{}')
+        with self.assertRaises(ValueError):self.validate()
+        extra.unlink()
+        target=self.fixture.root/'outside-raw.json';target.write_bytes(saved);raw.unlink();raw.symlink_to(target.resolve())
+        with self.assertRaises(ValueError):self.validate()
+
+    def test_producer_change_does_not_reuse_proof(self):
+        self.validate()
+        changed=self.helper.producer();changed['generator_sha256']='0'*64
+        with patch.object(self.helper,'producer',return_value=changed),patch.object(self.helper,'validate_snapshot',wraps=self.helper.validate_snapshot) as replay:
+            with self.assertRaisesRegex(ValueError,'collector or dependency'):self.validate()
+            self.assertEqual(replay.call_count,1)

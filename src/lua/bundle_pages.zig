@@ -314,8 +314,11 @@ pub const Provider = struct {
         if (self.interface_messages_storage) |*mapped| mapped.deinit();
         self.category_tree_ranges.deinit(self.a);
         if (self.category_tree_storage) |*mapped| mapped.deinit();
-        var files = self.file_metadata.keyIterator();
-        while (files.next()) |title| self.a.free(title.*);
+        var files = self.file_metadata.iterator();
+        while (files.next()) |entry| {
+            self.a.free(entry.key_ptr.*);
+            if (entry.value_ptr.canonical_title) |title| self.a.free(title);
+        }
         self.file_metadata.deinit(self.a);
         for (self.interwiki_rows.items) |row| {
             self.a.free((row.prefix));
@@ -367,6 +370,7 @@ pub const Provider = struct {
             .exists = exists,
             .external_data = if (self.external_data_available) externalData else null,
             .site_server = if (self.site_info) |snapshot| snapshot.server else null,
+            .site_statistics = if (self.site_info) |snapshot| snapshot.statistics else null,
             .site_script = if (self.site_info) |snapshot| snapshot.script else null,
             .site_article_path = if (self.site_info) |snapshot| snapshot.article_path else null,
             .category_stats = if (self.category_stats_available) categoryStats else null,
@@ -393,7 +397,7 @@ pub const Provider = struct {
     fn loadSiteInfo(self: *Provider) !void {
         var mapped = (try self.mapOptional("namespace-siteinfo.raw.json")) orelse return;
         defer mapped.deinit();
-        self.site_info = try site_info_lib.Snapshot.init(self.a, mapped.bytes, self.namespace_catalog.wiki, self.namespace_catalog.content_language);
+        self.site_info = try site_info_lib.Snapshot.init(self.a, mapped.bytes, self.namespace_catalog.wiki, self.namespace_catalog.dump_date, self.namespace_catalog.content_language);
     }
 
     fn mapOptional(self: *Provider, name: []const u8) !?Mapped {
@@ -604,14 +608,17 @@ pub const Provider = struct {
         defer mapped.deinit();
         var entries: std.StringHashMapUnmanaged(FileMetadata) = .empty;
         errdefer {
-            var titles = entries.keyIterator();
-            while (titles.next()) |title| self.a.free(title.*);
+            var it = entries.iterator();
+            while (it.next()) |entry| {
+                self.a.free(entry.key_ptr.*);
+                if (entry.value_ptr.canonical_title) |title| self.a.free(title);
+            }
             entries.deinit(self.a);
         }
         const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse
             return error.FileMetadataSnapshotTooLarge;
         try entries.ensureTotalCapacity(self.a, capacity);
-
+        const v2 = std.mem.startsWith(u8, mapped.bytes, "# wikidict-file-metadata-v2\n");
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
         while (lines.next()) |line| {
             if (line.len == 0 or line[0] == '#') continue;
@@ -620,7 +627,7 @@ pub const Provider = struct {
             const exists_raw = fields.next() orelse return error.InvalidFileMetadataSnapshot;
             const width = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidFileMetadataSnapshot, 10);
             const height = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidFileMetadataSnapshot, 10);
-            if (title.len == 0 or fields.next() != null) return error.InvalidFileMetadataSnapshot;
+            if (title.len == 0) return error.InvalidFileMetadataSnapshot;
             const exists_flag = if (std.mem.eql(u8, exists_raw, "1"))
                 true
             else if (std.mem.eql(u8, exists_raw, "0"))
@@ -628,11 +635,35 @@ pub const Provider = struct {
             else
                 return error.InvalidFileMetadataSnapshot;
             if (!exists_flag and (width != 0 or height != 0)) return error.InvalidFileMetadataSnapshot;
+            var media_type: ?FileMetadata.MediaType = null;
+            var canonical_title: ?[]const u8 = null;
+            errdefer if (canonical_title) |owned| self.a.free(owned);
+            if (v2) {
+                const media_raw = fields.next() orelse return error.InvalidFileMetadataSnapshot;
+                const canonical_raw = fields.next() orelse return error.InvalidFileMetadataSnapshot;
+                if (exists_flag) {
+                    media_type = std.meta.stringToEnum(FileMetadata.MediaType, media_raw) orelse
+                        return error.InvalidFileMetadataSnapshot;
+                    if (canonical_raw.len == 0 or std.mem.eql(u8, canonical_raw, "-"))
+                        return error.InvalidFileMetadataSnapshot;
+                    canonical_title = try self.normalizeFileTitle(self.a, canonical_raw);
+                    if (!std.mem.eql(u8, canonical_title.?, canonical_raw))
+                        return error.InvalidFileMetadataSnapshot;
+                } else if (!std.mem.eql(u8, media_raw, "-") or !std.mem.eql(u8, canonical_raw, "-"))
+                    return error.InvalidFileMetadataSnapshot;
+            }
+            if (fields.next() != null) return error.InvalidFileMetadataSnapshot;
             const canonical = try self.normalizeFileTitle(self.a, title);
             errdefer self.a.free(canonical);
             const result = try entries.getOrPut(self.a, canonical);
             if (result.found_existing) return error.DuplicateFileMetadata;
-            result.value_ptr.* = .{ .exists = exists_flag, .width = width, .height = height };
+            result.value_ptr.* = .{
+                .exists = exists_flag,
+                .width = width,
+                .height = height,
+                .media_type = media_type,
+                .canonical_title = canonical_title,
+            };
         }
         self.file_metadata = entries;
         self.file_metadata_available = true;
@@ -1250,7 +1281,7 @@ pub const Provider = struct {
         const title = try self.normalizeFileTitle(std.heap.smp_allocator, raw_title);
         defer std.heap.smp_allocator.free(title);
         return self.file_metadata.get(title) orelse {
-            std.log.warn("file metadata missing: title={s}", .{title});
+            lua_program.work_stats.logLine("warning: file metadata missing: title={s}\n", .{title});
             return error.FileMetadataSnapshotMissing;
         };
     }
@@ -1353,7 +1384,7 @@ pub const Provider = struct {
         if (try self.transclusionRedirectTarget(title) != null) return true;
         if (self.namespace_catalog.ofTitle(title).id == -2) {
             if (!self.file_metadata_available) {
-                std.log.warn("file metadata snapshot unavailable: title={s}", .{title});
+                lua_program.work_stats.logLine("warning: file metadata snapshot unavailable: title={s}\n", .{title});
                 return error.FileMetadataSnapshotMissing;
             }
             return (try fileMetadata(ctx, title)).exists;
@@ -2117,4 +2148,54 @@ test "provider exposes exact site server and rejects a different captured editio
     }
     try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = "{\"query\":{\"general\":{\"wikiid\":\"arwiktionary\",\"lang\":\"ar\",\"server\":\"//ar.wiktionary.org\"}}}" });
     try std.testing.expectError(error.SiteInfoIdentityMismatch, Provider.init(io, a, root, catalog, "unused-dump.xml"));
+}
+
+test "file metadata v2 owns canonical AUDIO identity and rejects malformed rows" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const path = try std.fs.path.join(a, &.{ root, "file-metadata.tsv" });
+    defer a.free(path);
+    const registry = try lua_program.namespace_registry.englishTestRegistry();
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = path,
+        .data = "# wikidict-file-metadata-v2\nFile:Alias.ogg\t1\t0\t0\tAUDIO\tFile:Actual.ogg\nFile:Gone.ogg\t0\t0\t0\t-\t-\n",
+    });
+    {
+        var provider = try Provider.init(io, a, root, registry, "unused-dump.xml");
+        defer provider.deinit();
+        const metadata = try Provider.fileMetadata(&provider, "File:Alias.ogg");
+        try std.testing.expectEqual(FileMetadata.MediaType.AUDIO, metadata.media_type.?);
+        try std.testing.expectEqualStrings("File:Actual.ogg", metadata.canonical_title.?);
+        const gone = try Provider.fileMetadata(&provider, "File:Gone.ogg");
+        try std.testing.expect(!gone.exists);
+        try std.testing.expect(gone.canonical_title == null and gone.media_type == null);
+    }
+    try std.testing.checkAllAllocationFailures(a, struct {
+        fn load(backing: A, directory: []const u8, catalog: *const lua_program.namespace_registry.Registry) !void {
+            var provider = try Provider.init(std.testing.io, backing, directory, catalog, "unused-dump.xml");
+            defer provider.deinit();
+            const metadata = try Provider.fileMetadata(&provider, "File:Alias.ogg");
+            try std.testing.expectEqualStrings("File:Actual.ogg", metadata.canonical_title.?);
+        }
+    }.load, .{ root, registry });
+    for ([_][]const u8{
+        "File:Alias.ogg\t1\t0\t0\tAUDIO\tFile:Actual.ogg\n", // Undeclared v2.
+        "# wikidict-file-metadata-v2\nFile:Alias.ogg\t1\t0\t0\n",
+        "# wikidict-file-metadata-v2\nFile:Alias.ogg\t1\t0\t0\taudio\tFile:Actual.ogg\n",
+        "# wikidict-file-metadata-v2\nFile:Gone.ogg\t0\t0\t0\tAUDIO\tFile:Gone.ogg\n",
+        "# wikidict-file-metadata-v2\nFile:Alias.ogg\t1\t0\t0\tAUDIO\t-\n",
+        "# wikidict-file-metadata-v2\nFile:Alias.ogg\t1\t0\t0\tAUDIO\tImage:Actual.ogg\n",
+    }) |bad| {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bad });
+        try std.testing.expectError(error.InvalidFileMetadataSnapshot, Provider.init(io, a, root, registry, "unused-dump.xml"));
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "File:Old.ogg\t1\t0\t0\n" });
+    var legacy = try Provider.init(io, a, root, registry, "unused-dump.xml");
+    defer legacy.deinit();
+    const old = try Provider.fileMetadata(&legacy, "File:Old.ogg");
+    try std.testing.expect(old.exists and old.media_type == null and old.canonical_title == null);
 }

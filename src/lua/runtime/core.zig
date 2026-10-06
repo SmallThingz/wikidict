@@ -4,6 +4,7 @@ pub const namespace_registry = @import("namespace_registry");
 pub const RequestAllocator = @import("request_allocator.zig").RequestAllocator;
 pub const LocalBumpArena = @import("local_bump_arena.zig").LocalBumpArena;
 pub const work_stats = @import("work_stats.zig");
+pub const execution_budget = @import("execution_budget.zig");
 const static_fields = @import("lua_static_fields");
 pub const NativeNamespace = static_fields.Namespace;
 const native_namespace_count = @typeInfo(static_fields.Namespace).@"enum".field_names.len;
@@ -176,6 +177,14 @@ pub const StableErrorName = struct {
     }
 };
 
+pub fn checkExecutionBudget(ctx: *Context) !void {
+    execution_budget.check() catch |err| {
+        ctx.clearLuaError();
+        ctx.setAotErrorName(@errorName(err));
+        return err;
+    };
+}
+
 pub fn stabilize(comptime function: DirectFunctionFn) FunctionFn {
     return struct {
         fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize, result_ptr: ?[*]Value, result_len: usize) callconv(.c) FunctionResult {
@@ -216,6 +225,7 @@ pub fn stabilizeBuffered(comptime function: BufferedDirectFunctionFn) FunctionFn
 pub fn stabilizeNative(comptime function: anytype) FunctionFn {
     return struct {
         fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize, result_ptr: ?[*]Value, result_len: usize) callconv(.c) FunctionResult {
+            checkExecutionBudget(ctx) catch return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
             _ = result_ptr;
             _ = result_len;
             const host = switch (captures.*) {
@@ -242,6 +252,7 @@ pub fn stabilizeNative(comptime function: anytype) FunctionFn {
 pub fn stabilizeNativeBuffered(comptime function: anytype) FunctionFn {
     return struct {
         fn call(ctx: *Context, captures: *const Captures, args_ptr: [*]const Value, args_len: usize, result_ptr: ?[*]Value, result_len: usize) callconv(.c) FunctionResult {
+            checkExecutionBudget(ctx) catch return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
             const result_buffer: ?[]Value = if (result_ptr) |ptr| ptr[0..result_len] else null;
             const host = switch (captures.*) {
                 .native => |value| value,
@@ -561,6 +572,11 @@ pub const Table = struct {
     owns_slots: bool = true,
     choices: []ChoiceCell = &.{},
     map: Map = .empty,
+    // Lua next() accepts a previously present key after its value is cleared.
+    // Declared shape slots are not necessarily initialized: keep that distinction.
+    slot_history: u64 = 0,
+    slot_history_tail: []u64 = &.{},
+    map_deletions_since_prune: u32 = 0,
     metatable: ?*Table = null,
     append_index: u32 = 1,
     read_only: bool = false,
@@ -659,9 +675,49 @@ pub const Table = struct {
 
     pub fn deinit(self: *Table, allocator: std.mem.Allocator) void {
         self.map.deinit(allocator);
+        if (self.slot_history_tail.len != 0) allocator.free(self.slot_history_tail);
         if (self.numeric_mirror.len != 0) allocator.free(self.numeric_mirror);
         if (self.owns_slots and self.slots.len != 0) allocator.free(self.slots);
         if (self.choices.len != 0) allocator.free(self.choices);
+    }
+
+    fn initSlotHistory(self: *Table, allocator: std.mem.Allocator) !void {
+        if (self.shape == null and self.native_namespace == null) return;
+        const count = self.slotCount();
+        if (count > 64) {
+            self.slot_history_tail = try allocator.alloc(u64, (count - 1) / 64);
+            @memset(self.slot_history_tail, 0);
+        }
+    }
+
+    fn noteSlotPresence(self: *Table, slot: u32) void {
+        if (self.shape == null and self.native_namespace == null) return;
+        const mask = @as(u64, 1) << @as(u6, @intCast(slot % 64));
+        if (slot < 64) self.slot_history |= mask else self.slot_history_tail[slot / 64 - 1] |= mask;
+    }
+
+    fn slotWasPresent(self: *const Table, slot: u32) bool {
+        const word = if (slot < 64) self.slot_history else self.slot_history_tail[slot / 64 - 1];
+        return word & (@as(u64, 1) << @as(u6, @intCast(slot % 64))) != 0;
+    }
+
+    fn liveValue(value: ?Value) ?Value {
+        return if (value) |v| if (v == .nil) null else v else null;
+    }
+
+    fn pruneDeletedMapKeys(self: *Table) void {
+        // HashMap's next insertion grows when available is zero. Amortize a
+        // full scan across enough prior deletions; one remove/replace on a
+        // nearly full large map must not cause an O(capacity) scan each time.
+        if (self.map.available != 0 or
+            self.map_deletions_since_prune < @max(1, self.map.capacity() / 8)) return;
+        var entries = self.map.iterator();
+        while (entries.next()) |entry| if (entry.value_ptr.* == .nil) {
+            const key = entry.key_ptr.*;
+            _ = self.map.removeContext(key, .{});
+        };
+        self.map_deletions_since_prune = 0;
+        self.markMapStructuralMutation();
     }
 
     fn genericArrayIndex(self: *const Table, number: f64) ?u32 {
@@ -848,11 +904,16 @@ pub const Table = struct {
         try self.markMutated();
         if (self.shape == null or self.shape.?.keys == .boxed)
             if (self.fieldKey(slot)) |key| self.markIdentityKeyWrite(key, value);
+        // Native construction can fill slots directly before exposing the
+        // table. Remember an existing value before clearing that slot too.
+        if (value == .nil) if (self.slotPtr(slot)) |previous| if (previous.* != .nil) self.noteSlotPresence(slot);
         if (slot >= self.slots.len) {
             try self.global_tail.?.set(slot - self.slots.len, value);
+            if (value != .nil) self.noteSlotPresence(slot);
             return;
         }
         self.slots[slot] = value;
+        if (value != .nil) self.noteSlotPresence(slot);
     }
 
     pub fn rawSetNativeField(self: *Table, comptime namespace: static_fields.Namespace, comptime name: []const u8, value: Value) !void {
@@ -875,9 +936,10 @@ pub const Table = struct {
         try self.markMutated();
         self.markIdentityKeyWrite(key, value);
         if (value == .nil) {
-            if (rawEqual(self.choices[choice].key, key)) self.choices[choice] = .{};
+            if (rawEqual(self.choices[choice].key, key)) self.choices[choice].value = .nil;
             return;
         }
+        if (!rawEqual(self.choices[choice].key, key)) self.markMapStructuralMutation();
         self.choices[choice] = .{ .key = key, .value = value };
     }
     pub fn rawGet(self: *const Table, key: Value) ?Value {
@@ -892,7 +954,7 @@ pub const Table = struct {
         for (self.choices) |cell| {
             if (cell.value != .nil and rawEqual(cell.key, key)) return cell.value;
         }
-        return self.map.getContext(key, .{});
+        return liveValue(self.map.getContext(key, .{}));
     }
 
     pub fn rawGetHashedString(self: *const Table, name: []const u8, key_hash: u64) ?Value {
@@ -901,7 +963,7 @@ pub const Table = struct {
         for (self.choices) |cell| {
             if (cell.value != .nil and rawEqual(cell.key, key)) return cell.value;
         }
-        return self.map.getAdapted(name, StringLookupContext{ .key_hash = key_hash });
+        return liveValue(self.map.getAdapted(name, StringLookupContext{ .key_hash = key_hash }));
     }
 
     // A positive own field can be cached, but the live Value is always read.
@@ -939,13 +1001,13 @@ pub const Table = struct {
             return if (value == .nil) null else value;
         };
         if (self.shape == null and self.choices.len == 0)
-            return if (self.has_hashed_number) self.map.getAdapted(number, NumberLookupContext{}) else null;
+            return if (self.has_hashed_number) liveValue(self.map.getAdapted(number, NumberLookupContext{})) else null;
         const key = Value{ .number = number };
         if (self.slotForKey(key)) |slot| if (self.rawGetSlot(slot)) |value| return value;
         for (self.choices) |cell| {
             if (cell.value != .nil and cell.key == .number and cell.key.number == number) return cell.value;
         }
-        return if (self.has_hashed_number) self.map.getAdapted(number, NumberLookupContext{}) else null;
+        return if (self.has_hashed_number) liveValue(self.map.getAdapted(number, NumberLookupContext{})) else null;
     }
 
     pub fn rawSet(self: *Table, allocator: std.mem.Allocator, key: Value, value: Value) !void {
@@ -971,10 +1033,27 @@ pub const Table = struct {
                 return self.rawSetChoice(@intCast(choice), key, value);
         }
         if (value == .nil) {
-            if (self.map.removeContext(key, .{})) self.markMapStructuralMutation();
+            if (self.map.getPtrContext(key, .{})) |present| {
+                if (present.* != .nil) {
+                    self.map_deletions_since_prune +|= 1;
+                    self.markMapStructuralMutation();
+                }
+                present.* = .nil;
+            }
             self.noteNumericMapWrite(key, value);
             return;
         }
+        if (self.map.getPtrContext(key, .{})) |present| {
+            if (present.* == .nil) self.markMapStructuralMutation();
+            present.* = value;
+            self.maybeBuildNumericMirror(allocator, key, value);
+            self.noteNumericMapWrite(key, value);
+            if (key == .number) self.has_hashed_number = true;
+            return;
+        }
+        // Insertion of a new field during next traversal is unspecified by Lua.
+        // Reclaim dead identities here, bounding retention to the current map.
+        self.pruneDeletedMapKeys();
         const old_count = self.map.count();
         const old_capacity = self.map.capacity();
         try self.map.putContext(allocator, key, value, .{});
@@ -986,8 +1065,8 @@ pub const Table = struct {
     }
 
     // Constant string writes use the caller's compiled hash. This follows the
-    // same shape, choice, and map order as rawSet, including growth before an
-    // existing map key is overwritten when the map is at its load limit.
+    // same shape, choice, and map order as rawSet. Existing map writes never
+    // rehash: changing a present value during traversal is permitted by Lua.
     pub fn rawSetHashedString(self: *Table, allocator: std.mem.Allocator, name: []const u8, key_hash: u64, value: Value) !void {
         if (self.read_only) return error.ReadOnlyTable;
         const key = Value{ .string = name };
@@ -999,9 +1078,21 @@ pub const Table = struct {
         }
         const lookup = StringLookupContext{ .key_hash = key_hash };
         if (value == .nil) {
-            if (self.map.removeAdapted(name, lookup)) self.markMapStructuralMutation();
+            if (self.map.getPtrAdapted(name, lookup)) |present| {
+                if (present.* != .nil) {
+                    self.map_deletions_since_prune +|= 1;
+                    self.markMapStructuralMutation();
+                }
+                present.* = .nil;
+            }
             return;
         }
+        if (self.map.getPtrAdapted(name, lookup)) |present| {
+            if (present.* == .nil) self.markMapStructuralMutation();
+            present.* = value;
+            return;
+        }
+        self.pruneDeletedMapKeys();
         const old_count = self.map.count();
         const old_capacity = self.map.capacity();
         const result = try self.map.getOrPutContextAdapted(allocator, name, lookup, ValueContext{});
@@ -1037,6 +1128,33 @@ pub const Table = struct {
             return true;
         }
 
+        pub fn seekAfter(self: *Iterator, key: Value) bool {
+            // Prefer a live override to an older shape/choice tombstone.
+            while (self.next()) |entry| if (rawEqual(entry.key_ptr.*, key)) return true;
+            self.* = self.table.iterator();
+            const table = self.table;
+            const slot = if (key == .number and table.shape == null and table.native_namespace == null)
+                table.arraySlotForNumber(key.number)
+            else
+                table.slotForKey(key);
+            if (slot) |index| {
+                const array = (table.shape == null and table.native_namespace == null) or
+                    (table.shape != null and table.shape.?.keys == .dense_array);
+                if (index < table.slotCount() and (array or table.slotWasPresent(index))) {
+                    self.slot = index + 1;
+                    return true;
+                }
+            }
+            self.slot = @intCast(table.slotCount());
+            for (table.choices, 0..) |cell, index| if (cell.key != .nil and rawEqual(cell.key, key)) {
+                self.choice = @intCast(index + 1);
+                return true;
+            };
+            self.choice = @intCast(table.choices.len);
+            while (self.hash.next()) |entry| if (rawEqual(entry.key_ptr.*, key)) return true;
+            return false;
+        }
+
         pub fn next(self: *Iterator) ?Entry {
             while (self.slot < self.table.slotCount()) {
                 const index = self.slot;
@@ -1056,7 +1174,9 @@ pub const Table = struct {
                 if (cell.value == .nil) continue;
                 return .{ .key_ptr = &cell.key, .value_ptr = &cell.value };
             }
-            if (self.hash.next()) |entry| return .{ .key_ptr = entry.key_ptr, .value_ptr = entry.value_ptr };
+            while (self.hash.next()) |entry| {
+                if (entry.value_ptr.* != .nil) return .{ .key_ptr = entry.key_ptr, .value_ptr = entry.value_ptr };
+            }
             return null;
         }
     };
@@ -1187,6 +1307,7 @@ pub const NextIterationHint = struct {
     table: *Table,
     key: Value,
     position: Table.Iterator.Position,
+    structural_epoch: u64,
 };
 
 threadlocal var load_data_effect_probe: ?*bool = null;
@@ -1251,6 +1372,8 @@ pub const InvokeRollbackJournal = struct {
         var saved = table.*;
         saved.map = try table.map.clone(self.allocator);
         errdefer saved.map.deinit(self.allocator);
+        saved.slot_history_tail = try self.allocator.dupe(u64, table.slot_history_tail);
+        errdefer self.allocator.free(saved.slot_history_tail);
         if (table.owns_slots and table.slots.len != 0)
             saved.slots = try self.allocator.dupe(Value, table.slots);
         errdefer if (table.owns_slots and saved.slots.len != 0) self.allocator.free(saved.slots);
@@ -1300,6 +1423,7 @@ pub const InvokeRollbackJournal = struct {
             }
             ctx.assignFieldCacheIdentity(table);
             snapshot.saved.map = .empty;
+            snapshot.saved.slot_history_tail = &.{};
             snapshot.saved.numeric_mirror = &.{};
             if (snapshot.saved.owns_slots) snapshot.saved.slots = &.{};
             snapshot.saved.choices = &.{};
@@ -2288,13 +2412,16 @@ pub const Context = struct {
 
     pub fn setGlobal(self: *Context, slot: u32, value: Value) !void {
         if (self.global_table) |table| try noteInvokeTableMutation(table);
+        if (value == .nil and self.getGlobal(slot) != .nil) if (self.global_table) |table| table.noteSlotPresence(slot);
         if (slot < self.globals.len) {
             self.globals[slot] = value;
+            if (value != .nil) if (self.global_table) |table| table.noteSlotPresence(slot);
             if (self.globals.ptr == self.root_globals.ptr) self.root_tail_cache_valid.* = false;
             return;
         }
         const tail = self.global_tail orelse return error.BadGlobalSlot;
         try tail.set(slot - self.globals.len, value);
+        if (value != .nil) if (self.global_table) |table| table.noteSlotPresence(slot);
     }
 
     fn retainInvokeCellBaseline(self: *Context, cell: *Cell) !void {
@@ -2689,6 +2816,9 @@ pub const Context = struct {
                     .module_template_probe_id = module_template_probe_owner_id,
                     .invoke_rollback_owner_nonce = self.field_cache_nonce,
                 };
+                owned.slot_history = root_table.slot_history;
+                owned.slot_history_tail = try self.allocator.dupe(u64, root_table.slot_history_tail);
+                errdefer self.allocator.free(owned.slot_history_tail);
                 if (self.global_env_slot) |slot| {
                     if (slot < globals.len) {
                         globals[slot] = .{ .table = owned };
@@ -3133,6 +3263,9 @@ pub const Context = struct {
                 .invoke_rollback_owner_nonce = self.target.field_cache_nonce,
                 .module_template_mutation_probe = marker,
             };
+            table.slot_history = source_table.slot_history;
+            table.slot_history_tail = try self.target.allocator.dupe(u64, source_table.slot_history_tail);
+            table.map_deletions_since_prune = source_table.map_deletions_since_prune;
             self.target.assignFieldCacheIdentity(table);
             try self.tables.put(self.mapAllocator(), source_table, table);
 
@@ -3198,8 +3331,11 @@ pub const Context = struct {
             defer self.target.restoreGlobals(target_previous);
 
             if (self.source.global_table) |source_global|
-                if (self.target.global_table) |target_global|
+                if (self.target.global_table) |target_global| {
                     try self.tables.put(self.mapAllocator(), source_global, target_global);
+                    target_global.slot_history = source_global.slot_history;
+                    @memcpy(target_global.slot_history_tail, source_global.slot_history_tail);
+                };
 
             for (self.source.globals, 0..) |value, slot|
                 try self.cloneGlobalDelta(slot, value);
@@ -3434,6 +3570,11 @@ pub const Context = struct {
             if (source.moduleStateConst(module_id)) |state|
                 if (state.value) |value| return value;
         if (source == self) return source.loadModule(module_id, requested);
+        // A missing dependency is not a reusable graph. Evaluating it in the
+        // worker template would observe no page host or invocation frame.
+        // Reject that cache candidate; the ordinary loader retries in self.
+        if (self.host != null and source.host == null)
+            return error.UnsupportedModuleTemplate;
 
         const saved_error = source.last_error;
         const saved_error_present = source.last_error_present;
@@ -3458,6 +3599,17 @@ pub const Context = struct {
         if (module_id >= self.module_template_eligible.len or
             !self.module_template_eligible[module_id])
             return null;
+        const source_materialized = if (source.moduleStateConst(module_id)) |state|
+            state.value != null
+        else
+            false;
+        if (!source_materialized and self.host != null and source.host == null) {
+            // Cold cache admission must execute in the live page context.
+            // Keep rejection clear so the existing effect/graph checks can
+            // still promote a pure result after ordinary root evaluation.
+            self.module_template_eligible[module_id] = false;
+            return null;
+        }
         if (source.moduleStateConst(module_id) == null) {
             _ = self.loadTemplateSource(source, module_id, requested) catch |err| switch (err) {
                 error.UnsupportedModuleTemplate => {
@@ -3977,21 +4129,26 @@ pub const Context = struct {
         _ = try self.loadModule(module_id, null);
     }
 
+    fn missingModule(raw_name: []const u8) error{ModuleNotFound} {
+        work_stats.logLine("module lookup missing: name={s}\n", .{raw_name});
+        return error.ModuleNotFound;
+    }
+
     pub fn resolveModule(self: *const Context, raw_name: []const u8) !u32 {
-        const lookup = self.module_lookup orelse return error.ModuleNotFound;
+        const lookup = self.module_lookup orelse return missingModule(raw_name);
         if (lookup(self.module_lookup_ctx, raw_name)) |id| return id;
         if (self.namespace_catalog) |registry| {
-            const name = (try registry.normalizeModuleLoader(self.allocator, raw_name)) orelse return error.ModuleNotFound;
+            const name = (try registry.normalizeModuleLoader(self.allocator, raw_name)) orelse return missingModule(raw_name);
             defer self.allocator.free(name);
-            return lookup(self.module_lookup_ctx, name) orelse error.ModuleNotFound;
+            return lookup(self.module_lookup_ctx, name) orelse missingModule(raw_name);
         }
         const trimmed = std.mem.trim(u8, raw_name, " \t\r\n");
         if (std.mem.indexOfScalar(u8, trimmed, '_') == null)
-            return lookup(self.module_lookup_ctx, trimmed) orelse error.ModuleNotFound;
+            return lookup(self.module_lookup_ctx, trimmed) orelse missingModule(raw_name);
         const normalized = try self.allocator.dupe(u8, trimmed);
         defer self.allocator.free(normalized);
         std.mem.replaceScalar(u8, normalized, '_', ' ');
-        return lookup(self.module_lookup_ctx, normalized) orelse error.ModuleNotFound;
+        return lookup(self.module_lookup_ctx, normalized) orelse missingModule(raw_name);
     }
 
     pub fn requireModuleId(self: *Context, module_id: u32, raw_name: []const u8) anyerror!Value {
@@ -4176,6 +4333,7 @@ pub const Context = struct {
             table.choices = try self.allocator.alloc(ChoiceCell, shape.choice_count);
             @memset(table.choices, .{});
         }
+        try table.initSlotHistory(self.allocator);
         return table;
     }
 
@@ -4250,6 +4408,7 @@ pub const Context = struct {
                 .invoke_rollback_owner_nonce = self.field_cache_nonce,
                 .invoke_rollback_allocation_id = currentInvokeRollbackId(),
             };
+            try owned.initSlotHistory(self.allocator);
             self.assignFieldCacheIdentity(owned);
             self.package_loaded_tail = tail;
             break :blk owned;
@@ -4432,6 +4591,7 @@ pub const Context = struct {
             table.slots = try self.allocator.alloc(Value, count);
             @memset(table.slots, .nil);
         }
+        try table.initSlotHistory(self.allocator);
         if (templateSingletonNamespace(namespace))
             self.template_native_namespaces[@backingInt(namespace)] = table;
         return table;
@@ -4537,14 +4697,7 @@ pub const Context = struct {
             if (!inheritedCacheable(mt))
                 return self.getHashedFieldAfterOwnMiss(.{ .table = current }, current, name, key_hash);
             var index_miss: Table.OwnMissWitness = .{};
-            const index_value = mt.ownHashedStringValuePtr("__index", index_hash, &index_miss) orelse {
-                // A map cell set to nil through an iterator is still returned
-                // by rawGetHashedString; leave that unusual case to the
-                // original dispatcher rather than changing its behavior.
-                if (index_miss.map_value != null)
-                    return self.getHashedFieldAfterOwnMiss(.{ .table = current }, current, name, key_hash);
-                return .nil;
-            };
+            const index_value = mt.ownHashedStringValuePtr("__index", index_hash, &index_miss) orelse return .nil;
             if (index_value.* != .table)
                 return self.getHashedFieldAfterOwnMiss(.{ .table = current }, current, name, key_hash);
             const parent = index_value.table;
@@ -4580,9 +4733,9 @@ pub const Context = struct {
                 inherited_site_cache[inheritedSiteIndex(site_id)] = candidate;
                 return value.*;
             }
-            // Recursive getHashedField returns an iterator-written nil map
-            // cell as the own result, without following the parent metatable.
-            if (parent_miss.map_value != null) return .nil;
+            // A retained nil cell is absent. Keep its address as a witness so
+            // later revival invalidates this inherited path even without an
+            // epoch change, and continue through the parent's metatable.
             current = parent;
             witness = parent_miss;
         }
@@ -4689,7 +4842,7 @@ pub const Context = struct {
     // Compiled field names carry their hash. With no metatable, a write can
     // enter rawSetHashedString immediately. For a metatable, an existing own
     // field still wins over __newindex; a map overwrite uses its first probe
-    // only when putContext would not grow and change iteration/cache epochs.
+    // without rehashing present keys or changing their traversal position.
     pub fn setHashedField(self: *Context, object: Value, name: []const u8, key_hash: u64, value: Value) anyerror!void {
         if (object != .table) return error.IndexType;
         const table = object.table;
@@ -4711,9 +4864,9 @@ pub const Context = struct {
             }
         }
         const existing = table.map.getPtrAdapted(name, StringLookupContext{ .key_hash = key_hash });
-        if (existing != null) {
+        if (existing != null and existing.?.* != .nil) {
             if (shaped_slot != null) return table.rawSetHashedString(self.allocator, name, key_hash, value);
-            if (value != .nil and table.map.available > 0) {
+            if (value != .nil) {
                 if (table.read_only) return error.ReadOnlyTable;
                 try table.markMutated();
                 existing.?.* = value;
@@ -4874,6 +5027,107 @@ const ModuleRuntimeProbe = struct {
         return &.{};
     }
 };
+
+test "deleted table keys remain absent and bounded while next can recover identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    const object_key: Value = .{ .table = try ctx.newTable() };
+    const keys = [_]Value{ .{ .string = "gone" }, .{ .number = -7 }, object_key };
+    for (keys) |key| try table.rawSet(ctx.allocator, key, .{ .boolean = true });
+    for (keys) |key| try table.rawSet(ctx.allocator, key, .nil);
+    for (keys) |key| {
+        try std.testing.expect(table.rawGet(key) == null);
+        var it = table.iterator();
+        try std.testing.expect(it.seekAfter(key));
+        try std.testing.expect(it.next() == null);
+    }
+    try std.testing.expect(table.rawGetHashedString("gone", stringValueHash("gone")) == null);
+    try std.testing.expect(table.rawGetNumber(-7) == null);
+    var empty = table.iterator();
+    try std.testing.expect(empty.next() == null);
+    try std.testing.expectEqual(@as(usize, 0), table.rawLen());
+    // New insertions can invalidate traversal identities, but do not retain an
+    // unbounded history of all keys ever inserted during a long-lived page.
+    for (0..256) |i| {
+        const key: Value = .{ .number = -100 - @as(f64, @floatFromInt(i)) };
+        try table.rawSet(ctx.allocator, key, .{ .number = 1 });
+        try table.rawSet(ctx.allocator, key, .nil);
+        try std.testing.expect(table.map.count() <= 6 and table.map.capacity() <= 8);
+    }
+    var invalid = table.iterator();
+    try std.testing.expect(!invalid.seekAfter(.{ .string = "never inserted" }));
+}
+
+test "shape deletion history survives template clone and rollback without inventing fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source = try Context.init(a, 0);
+    defer source.deinit();
+    var target = try Context.init(a, 0);
+    defer target.deinit();
+    var keys: [70][]const u8 = undefined;
+    for (&keys, 0..) |*key, i| key.* = try std.fmt.allocPrint(a, "field-{d}", .{i});
+    const shape = Shape{ .keys = .{ .strings = &keys }, .field_count = keys.len, .choice_count = 1 };
+    const table = try source.newShapedTable(&shape);
+    // Native namespace construction can initialize storage directly.
+    table.slots[65] = .{ .number = 1 };
+    try table.rawSetSlot(65, .nil);
+    try table.rawSetChoice(0, .{ .string = "choice" }, .{ .number = 2 });
+    try table.rawSetChoice(0, .{ .string = "choice" }, .nil);
+    try table.rawSet(a, .{ .string = "map" }, .{ .number = 3 });
+    try table.rawSet(a, .{ .string = "map" }, .nil);
+    var clone = Context.ModuleTemplateClone{ .source = &source, .target = &target };
+    defer clone.deinit();
+    const copied = (try clone.cloneValue(.{ .table = table })).table;
+    try std.testing.expect(copied.slot_history_tail.ptr != table.slot_history_tail.ptr);
+    for ([_]*Table{ table, copied }) |object| {
+        for ([_][]const u8{ keys[65], "choice", "map" }) |name| {
+            var it = object.iterator();
+            try std.testing.expect(it.seekAfter(.{ .string = name }));
+            try std.testing.expect(it.next() == null);
+            try std.testing.expect(object.rawGet(.{ .string = name }) == null);
+        }
+        var never = object.iterator();
+        try std.testing.expect(!never.seekAfter(.{ .string = keys[66] }));
+    }
+    var journal = InvokeRollbackJournal.init(a, &target);
+    journal.begin();
+    try copied.rawSetSlot(66, .{ .number = 4 });
+    try copied.rawSetSlot(66, .nil);
+    journal.rollback(&target);
+    var restored = copied.iterator();
+    try std.testing.expect(!restored.seekAfter(.{ .string = keys[66] }));
+    try std.testing.expect(restored.seekAfter(.{ .string = keys[65] }));
+
+    // A live map override takes precedence over an older dead structural slot.
+    try copied.map.putContext(a, .{ .string = keys[65] }, .{ .number = 9 }, .{});
+    var actual = copied.iterator();
+    while (actual.next()) |entry| if (rawEqual(entry.key_ptr.*, .{ .string = keys[65] })) break;
+    var seek = copied.iterator();
+    try std.testing.expect(seek.seekAfter(.{ .string = keys[65] }));
+    try std.testing.expectEqualDeep(actual.position(), seek.position());
+}
+
+test "shape iteration history allocation failure releases table buffers" {
+    const Case = struct {
+        fn run(a: std.mem.Allocator) !void {
+            var ctx = try Context.init(a, 0);
+            defer ctx.deinit();
+            const keys: [70]Value = @splat(.{ .number = -1 });
+            const shape = Shape{ .keys = .{ .boxed = &keys }, .field_count = keys.len };
+            const table = try ctx.newShapedTable(&shape);
+            defer ctx.destroyTable(table);
+            try table.rawSetSlot(65, .{ .number = 7 });
+            try table.rawSetSlot(65, .nil);
+            try std.testing.expect(table.slotWasPresent(65));
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{});
+}
 
 test "numeric value hashing preserves prior iteration order" {
     const samples = [_]f64{ 0, -0.0, 1, -1, 64, 1.5 };
@@ -6438,6 +6692,14 @@ pub fn bindGlobalTable(ctx: *Context, shape: ?*const Shape, env_slot: u32) !void
         .owns_slots = false,
         .invoke_rollback_owner_nonce = ctx.field_cache_nonce,
     };
+    table.initSlotHistory(ctx.allocator) catch |err| {
+        ctx.allocator.destroy(table);
+        return err;
+    };
+    // Unlike fresh shaped/package tables, borrowed globals can already hold
+    // values. The separate initialization avoids scanning every empty sparse
+    // package slot merely to discover that it is nil.
+    for (ctx.globals, 0..) |value, slot| if (value != .nil) table.noteSlotPresence(@intCast(slot));
     ctx.global_table = table;
     ctx.root_global_table = table;
     table.root_tail_cache_valid = ctx.root_tail_cache_valid;
@@ -7338,9 +7600,12 @@ test "prehashed field writes retain growth nil and newindex behavior" {
     }
     try std.testing.expect(count != keys.len);
     try Compare.tables(original, hashed);
-    // An overwrite at the map load limit still follows putContext's growth.
+    // An overwrite at the map load limit retains storage and iteration order.
+    const capacity_before_overwrite = original.map.capacity();
     try ctx.setIndex(.{ .table = original }, .{ .string = &long_name }, .{ .number = 7 });
     try ctx.setHashedField(.{ .table = hashed }, &long_name, stringValueHash(&long_name), .{ .number = 7 });
+    try std.testing.expectEqual(capacity_before_overwrite, original.map.capacity());
+    try std.testing.expectEqual(capacity_before_overwrite, hashed.map.capacity());
     try Compare.tables(original, hashed);
     try ctx.setIndex(.{ .table = original }, .{ .string = &long_name }, .nil);
     try ctx.setHashedField(.{ .table = hashed }, &long_name, stringValueHash(&long_name), .nil);
@@ -7349,8 +7614,8 @@ test "prehashed field writes retain growth nil and newindex behavior" {
     try ctx.setHashedField(.{ .table = hashed }, &long_name, stringValueHash(&long_name), .{ .number = 9 });
     try Compare.tables(original, hashed);
 
-    // An iterator can expose a nil-valued map cell; it still counts as an
-    // existing own key for __newindex dispatch.
+    // Nil-valued retained map cells are absent to lookup and __newindex,
+    // even though next() can still resume from their key identity.
     var left = original.iterator();
     while (left.next()) |entry| if (entry.key_ptr.* == .string and std.mem.eql(u8, entry.key_ptr.string, long_name[0..])) {
         entry.value_ptr.* = .nil;
@@ -7375,8 +7640,10 @@ test "prehashed field writes retain growth nil and newindex behavior" {
     hashed.metatable = mt;
     try ctx.setIndex(.{ .table = original }, .{ .string = &long_name }, .{ .number = 13 });
     try ctx.setHashedField(.{ .table = hashed }, &long_name, stringValueHash(&long_name), .{ .number = 13 });
-    try std.testing.expect(original.metatable == mt and hashed.metatable == mt);
+    try std.testing.expect(original.metatable == null and hashed.metatable == null);
     try Compare.tables(original, hashed);
+    original.metatable = mt;
+    hashed.metatable = mt;
     const absent = "another-very-long-absent-field-name";
     try ctx.setIndex(.{ .table = original }, .{ .string = absent }, .{ .number = 20 });
     try ctx.setHashedField(.{ .table = hashed }, absent, stringValueHash(absent), .{ .number = 20 });
@@ -7758,6 +8025,20 @@ test "prehashed field-site cache preserves shaped slot and overflow field" {
     try table.rawSet(ctx.allocator, .{ .string = "overflow" }, .nil);
     try std.testing.expect(table.field_cache_epoch != old_epoch);
     try std.testing.expect((try ctx.getFieldAtSite(object, "overflow", overflow_hash, 42)) == .nil);
+    const deleted_epoch = table.field_cache_epoch;
+    try table.rawSet(ctx.allocator, .{ .string = "overflow" }, .{ .number = 4 });
+    try std.testing.expect(table.field_cache_epoch != deleted_epoch);
+    try std.testing.expectEqual(@as(f64, 4), (try ctx.getFieldAtSite(object, "overflow", overflow_hash, 42)).number);
+    const live_epoch = table.field_cache_epoch;
+    try table.rawSetHashedString(ctx.allocator, "overflow", overflow_hash, .{ .number = 5 });
+    try std.testing.expectEqual(live_epoch, table.field_cache_epoch);
+    try table.rawSetHashedString(ctx.allocator, "overflow", overflow_hash, .nil);
+    try std.testing.expect(table.field_cache_epoch != live_epoch);
+    try std.testing.expect((try ctx.getFieldAtSite(object, "overflow", overflow_hash, 42)) == .nil);
+    const hashed_deleted_epoch = table.field_cache_epoch;
+    try table.rawSetHashedString(ctx.allocator, "overflow", overflow_hash, .{ .number = 6 });
+    try std.testing.expect(table.field_cache_epoch != hashed_deleted_epoch);
+    try std.testing.expectEqual(@as(f64, 6), (try ctx.getFieldAtSite(object, "overflow", overflow_hash, 42)).number);
 }
 
 test "field site shares a positive program shape slot across fresh tables" {
@@ -7870,17 +8151,15 @@ test "bounded inherited site cache reads live three-link field and invalidates m
     try std.testing.expect((try ctx.getFieldAtSite(object, "method", hash, site)) == .nil);
     try std.testing.expectEqual(@as(usize, 2), deep_calls);
     try mt2.rawSet(ctx.allocator, .{ .string = "__index" }, .{ .table = class3 });
-    // A nil map cell can be revived by an iterator without a structural epoch bump.
+    // An already retained mutable location can change without an epoch bump.
+    // A nil cell must expose the inherited value, then revival must shadow it.
     try class1.rawSet(ctx.allocator, .{ .string = "method" }, .{ .number = 4 });
-    var erase = class1.iterator();
-    while (erase.next()) |entry| {
-        if (rawEqual(entry.key_ptr.*, .{ .string = "method" })) entry.value_ptr.* = .nil;
-    }
-    try std.testing.expect((try ctx.getFieldAtSite(object, "method", hash, site)) == .nil);
-    var revive = class1.iterator();
-    while (revive.next()) |entry| {
-        if (rawEqual(entry.key_ptr.*, .{ .string = "method" })) entry.value_ptr.* = .{ .number = 5 };
-    }
+    const mutable_method = class1.map.getPtrContext(.{ .string = "method" }, .{}).?;
+    const mutable_epoch = class1.field_cache_epoch;
+    mutable_method.* = .nil;
+    try std.testing.expectEqual(@as(f64, 2), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
+    mutable_method.* = .{ .number = 5 };
+    try std.testing.expectEqual(mutable_epoch, class1.field_cache_epoch);
     try std.testing.expectEqual(@as(f64, 5), (try ctx.getFieldAtSite(object, "method", hash, site)).number);
     // Restoring absence allows the same path to fill again.
     try class1.rawSet(ctx.allocator, .{ .string = "method" }, .nil);
@@ -8829,8 +9108,11 @@ test "canonical requires reuse resolved package slots without repeating name loo
         try std.testing.expectEqual(@as(f64, 81), (try ctx.requireModuleId(0, "Module:slot-probe")).number);
         loaded.choices[0].value = .nil;
         try loaded.map.putContext(a, fields[0], .nil, .{});
-        try std.testing.expect((try ctx.requireByName("Module:slot-probe")) == .nil);
-        try std.testing.expect((try ctx.requireModuleId(0, "Module:slot-probe")) == .nil);
+        // Retained nil cells are absent; the existing module state supplies
+        // its result rather than exposing an internal tombstone as a value.
+        try std.testing.expectEqual(@as(f64, 42), (try ctx.requireByName("Module:slot-probe")).number);
+        try std.testing.expectEqual(@as(f64, 42), (try ctx.requireModuleId(0, "Module:slot-probe")).number);
+        try std.testing.expectEqual(@as(u32, 1), Probe.roots);
         _ = loaded.map.removeContext(fields[0], .{});
         try loaded.rawSet(a, .{ .string = "arbitrary-loaded-key" }, .{ .boolean = false });
         const before = Probe.lookups;
@@ -9032,4 +9314,115 @@ test "worker pool participates in runtime ownership qualification" {
     page.deinit();
     pool.resetAndTrim();
     try std.testing.expect(pool.mapped_bytes <= pool.retained_limit);
+}
+
+test "cold template sources evaluate with the live host and retain only their invocation frame" {
+    const Probe = struct {
+        fn run(ctx: *Context, captures: Captures, _: []const Value) ![]const Value {
+            const host: *const u32 = @ptrCast(@alignCast(ctx.host orelse return error.MissingScribuntoHost));
+            const saved = (try captures.cell(0)).value;
+            const out = try std.heap.smp_allocator.alloc(Value, 2);
+            out[0] = saved;
+            out[1] = .{ .number = @floatFromInt(host.*) };
+            return out;
+        }
+        fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            if (ctx.host == null) return error.MissingScribuntoHost;
+            const frame = ctx.current_frame orelse return error.MissingFrameContext;
+            // Same admission contract as mw.getCurrentFrame(): the retained
+            // frame is valid here, but may not become a cross-invoke template.
+            markInvokeTemplateEffect();
+            const saved = try ctx.newCell(.{ .table = frame });
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = try ctx.makeFunctionKnown(1, run, &.{saved});
+            return out;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var worker = try Context.initProgram(arena.allocator(), 0, 1);
+    defer worker.deinit();
+    const roots = [_]FunctionFn{stabilize(Probe.root)};
+    worker.module_root_entries = &roots;
+    worker.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+    // Also exercise a warm state record with no materialized export.
+    _ = try worker.ensureModuleState(0);
+    for ([_]u32{ 17, 29 }) |page_number| {
+        var marker = page_number;
+        var eligible = [_]bool{true};
+        var rejected = [_]bool{false};
+        for (0..2) |_| {
+            var invocation = try worker.forkProgram(arena.allocator());
+            defer invocation.deinit();
+            invocation.module_template_context = &worker;
+            invocation.module_template_eligible = &eligible;
+            invocation.module_template_rejected = &rejected;
+            invocation.setHost(&marker);
+            const frame = try invocation.newTable();
+            invocation.current_frame = frame;
+            const retained = try invocation.requireByName("Module:TemplateProbe");
+            try std.testing.expect(retained == .callable);
+            // A saved frame remains itself even while another frame is current.
+            invocation.current_frame = try invocation.newTable();
+            for (0..2) |_| {
+                const result = try invocation.callValue(retained, &.{});
+                defer freeResults(result);
+                try std.testing.expect(result.len == 2 and result[0] == .table);
+                try std.testing.expect(result[0].table == frame);
+                try std.testing.expectEqual(@as(f64, @floatFromInt(page_number)), result[1].number);
+            }
+            try std.testing.expect(!eligible[0] and rejected[0]);
+            try std.testing.expect(worker.host == null and worker.current_frame == null);
+            try std.testing.expect(worker.moduleStateConst(0).?.value == null);
+        }
+    }
+}
+
+test "cold live-host admission still promotes pure roots and preserves loader failures" {
+    ModuleTemplateProbe.root_calls.store(0, .monotonic);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var worker = try Context.initProgram(arena.allocator(), 0, 1);
+    defer worker.deinit();
+    const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
+    worker.module_root_entries = &roots;
+    worker.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+    var eligible = [_]bool{true};
+    var rejected = [_]bool{false};
+    worker.module_template_eligible = &eligible;
+    worker.module_template_rejected = &rejected;
+    var marker: u32 = 1;
+    for (0..2) |_| {
+        var child = try worker.forkProgram(arena.allocator());
+        defer child.deinit();
+        child.module_template_context = &worker;
+        child.setHost(&marker);
+        const module = try child.requireByName("Module:TemplateProbe");
+        const result = try child.callValue(module.table.rawGet(.{ .string = "run" }).?, &.{});
+        defer freeResults(result);
+        try std.testing.expectEqual(@as(f64, 1), result[0].number);
+        try std.testing.expect(eligible[0] and !rejected[0]);
+    }
+    try std.testing.expectEqual(@as(u32, 1), ModuleTemplateProbe.root_calls.load(.monotonic));
+    const Failure = struct {
+        fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            return error.NotImplemented;
+        }
+    };
+    var failing_source = try Context.initProgram(arena.allocator(), 0, 1);
+    defer failing_source.deinit();
+    const failing_roots = [_]FunctionFn{stabilize(Failure.root)};
+    failing_source.module_root_entries = &failing_roots;
+    failing_source.configureModules(null, ModuleTemplateProbe.lookup, ModuleTemplateProbe.name);
+    var failing_eligible = [_]bool{true};
+    var failing_rejected = [_]bool{false};
+    var failing_child = try failing_source.forkProgram(arena.allocator());
+    defer failing_child.deinit();
+    failing_child.module_template_context = &failing_source;
+    failing_child.module_template_eligible = &failing_eligible;
+    failing_child.module_template_rejected = &failing_rejected;
+    failing_child.setHost(&marker);
+    try std.testing.expectError(error.AotCallFailed, failing_child.requireByName("Module:TemplateProbe"));
+    try std.testing.expectEqualStrings("NotImplemented", failing_child.aotErrorName() orelse "missing");
+    try std.testing.expect(failing_source.aotErrorName() == null);
 }

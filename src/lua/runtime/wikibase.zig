@@ -133,8 +133,8 @@ fn readEntity(runtime: *rt.Context, id: []const u8) anyerror!?*rt.Table {
         return error.MissingScribuntoHost;
     };
     const get = host.wikibase_entity orelse {
-        logSnapshotFailure(id, "entity", "unavailable");
-        return error.NotImplemented;
+        try snapshotFailure(runtime, id, "entity");
+        unreachable;
     };
     const entry = get(host.ctx, id) catch |err| {
         if (err == error.WikibaseEntitySnapshotMissing) {
@@ -234,8 +234,8 @@ fn readProjectedEntity(runtime: *rt.Context, id: []const u8) !?EntityProjection 
         return error.MissingScribuntoHost;
     };
     const get = host.wikibase_entity orelse {
-        logSnapshotFailure(id, "entity", "unavailable");
-        return error.NotImplemented;
+        try snapshotFailure(runtime, id, "entity");
+        unreachable;
     };
     const entry = get(host.ctx, id) catch |err| {
         if (err == error.WikibaseEntitySnapshotMissing) try snapshotFailure(runtime, id, "entity");
@@ -599,8 +599,8 @@ fn readTerms(runtime: *rt.Context, id: []const u8) !host_api.WikibaseEntityTerms
         return error.MissingScribuntoHost;
     };
     const get = host.wikibase_entity_terms orelse {
-        logSnapshotFailure(id, "entity-term", "unavailable");
-        return error.NotImplemented;
+        try snapshotFailure(runtime, id, "entity-term");
+        unreachable;
     };
     return get(host.ctx, id) catch |err| {
         if (err == error.WikibaseEntityTermSnapshotMissing) try snapshotFailure(runtime, id, "entity-term");
@@ -873,7 +873,8 @@ test "Wikibase entity term overlays leave exact language lookups and sitelinks i
     const site = try getGlobalSiteIdCall(null, &runtime, &.{});
     defer rt.freeResults(site);
     try std.testing.expectEqualStrings("enwiktionary", site[0].string);
-    try std.testing.expectError(error.NotImplemented, getEntityCall(null, &runtime, &.{.{ .string = "Q1" }}));
+    try std.testing.expectError(error.LuaRaised, getEntityCall(null, &runtime, &.{.{ .string = "Q1" }}));
+    try std.testing.expectEqualStrings("Wikibase entity-term snapshot missing entity=Q1", runtime.last_error.string);
 }
 
 test "Wikibase captured absence unknown inputs and provider failures stay distinct" {
@@ -907,8 +908,12 @@ test "Wikibase captured absence unknown inputs and provider failures stay distin
     try std.testing.expectError(error.MissingScribuntoHost, getLabelCall(null, &runtime, &.{.{ .string = "Q1" }}));
     host = .{};
     host_api.set(&runtime, &host);
-    try std.testing.expectError(error.NotImplemented, getEntityCall(null, &runtime, &.{.{ .string = "L1" }}));
-    try std.testing.expectError(error.NotImplemented, getLabelCall(null, &runtime, &.{.{ .string = "Q1" }}));
+    try std.testing.expectError(error.LuaRaised, getEntityCall(null, &runtime, &.{.{ .string = "L1" }}));
+    try std.testing.expectEqualStrings("Wikibase entity snapshot missing entity=L1", runtime.last_error.string);
+    try std.testing.expectError(error.LuaRaised, getLabelCall(null, &runtime, &.{.{ .string = "Q1" }}));
+    try std.testing.expectEqualStrings("Wikibase entity-term snapshot missing entity=Q1", runtime.last_error.string);
+    try std.testing.expectError(error.LuaRaised, getSitelinkCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "enwiki" } }));
+    try std.testing.expectEqualStrings("Wikibase entity snapshot missing entity=Q1", runtime.last_error.string);
 }
 
 test "Wikibase current page distinguishes captured links absence coverage and host errors" {

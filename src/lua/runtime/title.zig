@@ -559,7 +559,7 @@ fn hasNamedCharacterReference(text: []const u8) bool {
     return false;
 }
 
-fn validTitleBody(runtime: *rt.Context, spec: namespace_lib.Spec, text_with_fragment: []const u8) bool {
+pub fn validTitleBody(runtime: *rt.Context, spec: namespace_lib.Spec, text_with_fragment: []const u8) bool {
     const hash = std.mem.indexOfScalar(u8, text_with_fragment, '#');
     const text = if (hash) |at| text_with_fragment[0..at] else text_with_fragment;
     if (text.len == 0) return spec.id == 0 and hash != null;

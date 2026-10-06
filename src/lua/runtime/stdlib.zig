@@ -225,6 +225,41 @@ fn baseToString(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_bu
     };
     return bufferedOne(result_buffer, .{ .string = s });
 }
+// Scribunto converts invocation results using the original builtins, not a
+// module's mutable globals. Keep their native error and execution-budget envelope.
+fn invokeResultString(runtime: *rt.Context, value: Value) ![]const u8 {
+    var buffer: [1]Value = undefined;
+    const out = try runtime.callEntryBuffered(rt.stabilizeNativeBuffered(baseToString), .{ .native = null }, &.{value}, &buffer);
+    return out[0].string;
+}
+
+pub fn invokeResultsToString(runtime: *rt.Context, values: []const Value) ![]const u8 {
+    var length = values.len;
+    while (length != 0 and values[length - 1] == .nil) length -= 1;
+    if (length == 0) return "";
+    if (length == 1) return invokeResultString(runtime, values[0]);
+    for (values[0..length]) |value| if (value == .nil) {
+        // mw.executeModule constructs a Lua table, converts via ipairs, then
+        // table.concat uses that table's ordinary length. A hole is not a rule
+        // to silently discard later nonnil values.
+        const results = try runtime.newTable();
+        defer runtime.destroyTable(results);
+        for (values) |item| try results.append(runtime.allocator, item);
+        for (values[0..length], 0..) |item, index| {
+            if (item == .nil) break;
+            try results.rawSet(runtime.allocator, .{ .number = @floatFromInt(index + 1) }, .{ .string = try invokeResultString(runtime, item) });
+        }
+        var buffer: [1]Value = undefined;
+        const out = try runtime.callEntryBuffered(rt.stabilizeNativeBuffered(tableConcat), .{ .native = null }, &.{.{ .table = results }}, &buffer);
+        return out[0].string;
+    };
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(runtime.allocator);
+    for (values[0..length]) |value|
+        try out.appendSlice(runtime.allocator, try invokeResultString(runtime, value));
+    return out.toOwnedSlice(runtime.allocator);
+}
+
 fn explicitBaseDigit(c: u8) ?u8 {
     return if (c >= '0' and c <= '9')
         c - '0'
@@ -316,16 +351,10 @@ fn baseNext(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer
     var found = key == .nil;
     if (!found) {
         if (ctx.next_iteration_hint) |hint| {
-            if (hint.table == t and rt.rawEqual(hint.key, key) and it.restorePosition(hint.position)) found = true;
+            if (hint.table == t and t.field_cache_epoch != std.math.maxInt(u64) and hint.structural_epoch == t.field_cache_epoch and
+                rt.rawEqual(hint.key, key) and it.restorePosition(hint.position)) found = true;
         }
-        if (!found) {
-            while (it.next()) |entry| {
-                if (rt.rawEqual(entry.key_ptr.*, key)) {
-                    found = true;
-                    break;
-                }
-            }
-        }
+        if (!found) found = it.seekAfter(key);
     }
     if (!found) {
         ctx.next_iteration_hint = null;
@@ -336,7 +365,7 @@ fn baseNext(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer
         return bufferedOne(result_buffer, .nil);
     };
     const next_key = entry.key_ptr.*;
-    ctx.next_iteration_hint = .{ .table = t, .key = next_key, .position = it.position() };
+    ctx.next_iteration_hint = .{ .table = t, .key = next_key, .position = it.position(), .structural_epoch = t.field_cache_epoch };
     return bufferedTwo(result_buffer, next_key, entry.value_ptr.*);
 }
 fn iteratorTripleFromCall(runtime: *rt.Context, callable: Value, object: Value, result_buffer: ?[]Value) ![]const Value {
@@ -430,6 +459,7 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffe
     ctx.clearAotErrorName();
     var scratch: [8]Value = undefined;
     const result = protectedBodyCall(ctx, args[0], args[1..], result_buffer, &scratch) catch |err| {
+        if (rt.execution_budget.fatalError()) |failure| return failure;
         // A protected error can expose allocator pressure (including OOM) as
         // Lua data. Such a result cannot be shared between page evaluations.
         rt.markLoadDataOnlyEffect();
@@ -445,6 +475,41 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffe
     rt.storeReturn(out, 0, .{ .boolean = true });
     rt.copyReturnTail(out, 1, result.values);
     return out;
+}
+
+test "CPU quota bypasses pcall and xpcall without invoking an error handler" {
+    const Probe = struct {
+        var now: u64 = 0;
+        var handler_called = false;
+        fn clock() error{LuaCpuClockUnavailable}!u64 {
+            return now;
+        }
+        fn exhaust(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+            now = 20;
+            for (0..rt.execution_budget.sample_period) |_| try rt.execution_budget.check();
+            return error.ExpectedCpuLimit;
+        }
+        fn handler(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+            handler_called = true;
+            return &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    const callable = try ctx.newNative(null, Probe.exhaust);
+    const handler = try ctx.newNative(null, Probe.handler);
+    inline for (.{ basePcall, baseXpcall }) |protected| {
+        Probe.now = 0;
+        Probe.handler_called = false;
+        var budget: rt.execution_budget.Budget = .{ .limit_ns = 10, .clock = Probe.clock };
+        var scope = try budget.enter();
+        var result: [2]Value = undefined;
+        try std.testing.expectError(error.LuaCpuLimit, protected(null, &ctx, &.{ callable, handler }, &result));
+        try std.testing.expect(!Probe.handler_called);
+        try std.testing.expectError(error.LuaCpuLimit, scope.finish());
+    }
 }
 
 fn baseXpcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
@@ -463,11 +528,13 @@ fn baseXpcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buff
     ctx.clearAotErrorName();
     var scratch: [8]Value = undefined;
     const result = protectedBodyCall(ctx, args[0], &.{}, result_buffer, &scratch) catch |err| {
+        if (rt.execution_budget.fatalError()) |failure| return failure;
         rt.markLoadDataOnlyEffect();
         const original_error = try protectedErrorValue(ctx, err);
         ctx.clearLuaError();
         ctx.clearAotErrorName();
         const handled = ctx.callValueFirst(handler, &.{original_error}) catch {
+            if (rt.execution_budget.fatalError()) |failure| return failure;
             rt.markLoadDataOnlyEffect();
             const out = try bufferedTwo(result_buffer, .{ .boolean = false }, .{ .string = "error in error handling" });
             return out;
@@ -1282,6 +1349,8 @@ fn cloneTemplateNamespace(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
     const out = try runtime.newNativeNamespace(namespace);
     if (out.slots.len != source.slots.len) return error.TemplateNamespaceLayoutMismatch;
     @memcpy(out.slots, source.slots);
+    out.slot_history = source.slot_history;
+    @memcpy(out.slot_history_tail, source.slot_history_tail);
     out.append_index = source.append_index;
     return out;
 }
@@ -2042,6 +2111,90 @@ test "AOT next resumes sequential table iteration and falls back after interleav
     try std.testing.expectEqualStrings("InvalidNextKey", ctx.aotErrorName().?);
 }
 
+test "next retains deleted identities across nested traversals for every table storage" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_][]const u8{ "alpha", "beta", "never-written" };
+    const shape = rt.Shape{ .keys = .{ .strings = &keys }, .field_count = keys.len, .choice_count = 1 };
+    const array_shape = rt.Shape{ .keys = .dense_array, .field_count = 4 };
+    const tables = [_]*rt.Table{ try ctx.newTable(), try ctx.newShapedTable(&shape), try ctx.newShapedTable(&array_shape), try ctx.newArrayTable(4) };
+    const other = try ctx.newTable();
+    try other.rawSet(ctx.allocator, .{ .string = "nested" }, .{ .boolean = true });
+    var buffer: [2]Value = undefined;
+    for (tables, 0..) |table, kind| {
+        if (kind < 2) {
+            try table.rawSet(ctx.allocator, .{ .string = "alpha" }, .{ .number = 1 });
+            try table.rawSet(ctx.allocator, .{ .string = "beta" }, .{ .number = 2 });
+            if (kind == 1)
+                try table.rawSetChoice(0, .{ .string = "choice" }, .{ .number = 3 })
+            else
+                try table.rawSet(ctx.allocator, .{ .number = -7 }, .{ .number = 3 });
+        } else {
+            for (1..4) |n| try table.rawSet(ctx.allocator, .{ .number = @floatFromInt(n) }, .{ .number = @floatFromInt(n) });
+        }
+        var key: Value = .nil;
+        var count: usize = 0;
+        while (true) {
+            const pair = try baseNext(null, &ctx, &.{ .{ .table = table }, key }, &buffer);
+            if (pair[0] == .nil) break;
+            key = pair[0];
+            count += 1;
+            try std.testing.expect(count <= 3);
+            try table.rawSet(ctx.allocator, key, .nil);
+            try std.testing.expect(table.rawGet(key) == null);
+            _ = try baseNext(null, &ctx, &.{ .{ .table = other }, .nil }, &buffer);
+            // A nested traversal of this same table must not consume the outer
+            // deleted-key identity either (including an empty nested traversal).
+            _ = try baseNext(null, &ctx, &.{ .{ .table = table }, .nil }, &buffer);
+        }
+        try std.testing.expectEqual(@as(usize, 3), count);
+        ctx.next_iteration_hint = null;
+        const after_deleted = try baseNext(null, &ctx, &.{ .{ .table = table }, key }, &buffer);
+        try std.testing.expect(after_deleted[0] == .nil);
+        try std.testing.expectError(error.InvalidNextKey, baseNext(null, &ctx, &.{ .{ .table = table }, .{ .string = "never-written" } }, &buffer));
+        if (kind >= 2) {
+            const after_nil_array_slot = try baseNext(null, &ctx, &.{ .{ .table = table }, .{ .number = 4 } }, &buffer);
+            try std.testing.expect(after_nil_array_slot[0] == .nil);
+            try std.testing.expectError(error.InvalidNextKey, baseNext(null, &ctx, &.{ .{ .table = table }, .{ .number = 5 } }, &buffer));
+        }
+    }
+}
+
+test "next can update every present key at full hash capacity without rehashing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    try table.rawSet(ctx.allocator, .{ .string = "first" }, .{ .number = 1 });
+    var index: usize = 0;
+    while (table.map.available != 0) : (index += 1) {
+        const name = try std.fmt.allocPrint(ctx.allocator, "field-{d}", .{index});
+        try table.rawSet(ctx.allocator, .{ .string = name }, .{ .number = 1 });
+    }
+    const capacity = table.map.capacity();
+    const expected = table.map.count();
+    const seen = try ctx.newTable();
+    var storage: [2]Value = undefined;
+    var key: Value = .nil;
+    var count: usize = 0;
+    while (true) {
+        const pair = try baseNext(null, &ctx, &.{ .{ .table = table }, key }, &storage);
+        if (pair[0] == .nil) break;
+        key = pair[0];
+        try std.testing.expect(seen.rawGet(key) == null);
+        try seen.rawSet(ctx.allocator, key, .{ .boolean = true });
+        try table.rawSet(ctx.allocator, key, .{ .number = 2 });
+        try table.rawSetHashedString(ctx.allocator, key.string, rt.stringValueHash(key.string), .{ .number = 3 });
+        try std.testing.expectEqual(capacity, table.map.capacity());
+        count += 1;
+        _ = try baseNext(null, &ctx, &.{ .{ .table = seen }, .nil }, &storage);
+    }
+    try std.testing.expectEqual(@as(usize, expected), count);
+}
+
 test "stdlib template keeps page mutation isolated" {
     var template = try Template.init();
     defer template.deinit();
@@ -2797,4 +2950,20 @@ test "stdlib string metatable captures stay canonical across installed and templ
         try value.table.rawSet(a, .{ .string = "target only" }, .{ .boolean = true });
         try std.testing.expect(source.string_metatable.?.rawGet(.{ .string = "target only" }) == null);
     }
+}
+
+test "invoke result stringification uses native table concat boundaries for nil holes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    try std.testing.expectEqualStrings("afalse7", try invokeResultsToString(&runtime, &.{ .{ .string = "a" }, .{ .boolean = false }, .{ .number = 7 }, .nil }));
+    try std.testing.expectEqualStrings("", try invokeResultsToString(&runtime, &.{.nil}));
+    const object = try runtime.newTable();
+    const object_text = try invokeResultsToString(&runtime, &.{.{ .table = object }});
+    try std.testing.expect(std.mem.startsWith(u8, object_text, "table: 0x"));
+    // The constructor's last live slot selects a boundary beyond the hole.
+    // table.concat must reject that nil, rather than silently drop the tail.
+    try std.testing.expectError(error.AotCallFailed, invokeResultsToString(&runtime, &.{ .{ .string = "first" }, .nil, .{ .string = "tail" } }));
+    try std.testing.expectEqualStrings("InvalidValue", runtime.aotErrorName().?);
 }

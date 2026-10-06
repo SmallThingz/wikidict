@@ -47,6 +47,11 @@ pub const FileMetadata = struct {
     exists: bool,
     width: u32 = 0,
     height: u32 = 0,
+    // Unknown for legacy v1 rows; never infer audio eligibility from an extension.
+    media_type: ?MediaType = null,
+    // Borrowed from the immutable provider and valid for its lifetime.
+    canonical_title: ?[]const u8 = null,
+    pub const MediaType = enum { UNKNOWN, BITMAP, DRAWING, AUDIO, VIDEO, MULTIMEDIA, OFFICE, TEXT, EXECUTABLE, ARCHIVE, @"3D" };
 };
 pub const FileMetadataFn = *const fn (?*anyopaque, []const u8) anyerror!FileMetadata;
 
@@ -115,6 +120,8 @@ pub const Host = struct {
     file_metadata: ?FileMetadataFn = null,
     // Exact captured site constant; owned by the immutable bundle provider.
     site_server: ?[]const u8 = null,
+    // pages, articles, files, edits, users, activeUsers, admins; exact Lua integers.
+    site_statistics: ?[7]u53 = null,
     site_script: ?[]const u8 = null,
     site_article_path: ?[]const u8 = null,
     site_interwiki_map: ?SiteInterwikiMapFn = null,

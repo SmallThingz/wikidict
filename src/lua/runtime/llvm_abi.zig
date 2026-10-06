@@ -39,6 +39,11 @@ fn fail(ctx: *rt.Context, err: anyerror) u32 {
     return 1;
 }
 
+export fn dict_lua_check_execution_budget(ctx: *rt.Context) callconv(.c) u32 {
+    rt.checkExecutionBudget(ctx) catch return 1;
+    return 0;
+}
+
 export fn dict_lua_decode_static_literal(
     ctx: *rt.Context,
     ptr: [*]const u8,

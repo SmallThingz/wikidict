@@ -17,6 +17,8 @@ const source =
     "# Synth fork: {{#invoke:IntegrationSynth|run|forked}}\n" ++
     "# Pure fork: {{#invoke:IntegrationPureDataProbe|run}}\n" ++
     "# Legacy varargs: {{#invoke:IntegrationLegacyVarargs|run}}\n" ++
+    "# Iterator mutation: {{#invoke:IntegrationForms|iterator_mutation_probe}}\n" ++
+    "# Invoke values: {{#invoke:IntegrationForms|object_result}} / {{#invoke:IntegrationForms|multiple_results}} / {{#iferror:{{#invoke:IntegrationForms|object_result_error}}|conversion caught|BAD}} / {{#iferror:{{#invoke:IntegrationForms|nil_hole_result}}|hole caught|BAD}}\n" ++
     "# Captured fork: {{#invoke:IntegrationCapturedProbe|run}}\n" ++
     "# Repair recovery: {{repair-parent|x=term&lt;t:gloss&gt;}}\n" ++
     "# Graceful Lua error: {{#invoke:IntegrationForms|fail_probe}}\n" ++
@@ -152,6 +154,89 @@ const module_source =
     \\local alias_name = 'Module:IntegrationFormsAlias'
     \\assert(require(alias_name).mouse == 'mice')
     \\return {
+    \\iterator_mutation_probe = function()
+    \\    local other = {outside = true, nested = true}
+    \\    local function delete_existing(t, expected, expected_count)
+    \\        local seen, count = {}, 0
+    \\        for k, v in pairs(t) do
+    \\            assert(expected[k] == v and not seen[k])
+    \\            seen[k], count = true, count + 1
+    \\            -- Both nested calls overwrite iterator hints before current-key deletion.
+    \\            assert(next(other) ~= nil)
+    \\            local inner_count = 0
+    \\            for inner_key, inner_value in pairs(t) do
+    \\                assert(expected[inner_key] == inner_value)
+    \\                inner_count = inner_count + 1
+    \\            end
+    \\            assert(inner_count == expected_count - count + 1)
+    \\            t[k] = nil
+    \\        end
+    \\        assert(count == expected_count and next(t) == nil)
+    \\        for k in pairs(expected) do assert(seen[k]) end
+    \\        assert(not pcall(next, t, 'neverInserted'))
+    \\    end
+    \\    local fixed = {alpha = 1, beta = 2, gamma = 3, removed = 4}
+    \\    fixed.removed = nil
+    \\    delete_existing(fixed, {alpha = 1, beta = 2, gamma = 3}, 3)
+    \\    assert(fixed.alpha == nil and fixed.beta == nil and fixed.gamma == nil)
+    \\    local mapped, expected = {}, {}
+    \\    for i = 1, 37 do
+    \\        local key = 'map-' .. i
+    \\        mapped[key], expected[key] = i, i
+    \\    end
+    \\    delete_existing(mapped, expected, 37)
+    \\    local choices = {left = 1, right = 2}
+    \\    for i = 1, 2 do
+    \\        local key = i == 1 and 'left' or 'right'
+    \\        choices[key] = i + 10
+    \\    end
+    \\    delete_existing(choices, {left = 11, right = 12}, 2)
+    \\    -- Updating existing keys is separate from deletion; no new key is inserted.
+    \\    local overwrite, original, visited = {}, {}, {}
+    \\    for i = 1, 53 do
+    \\        local key = 'live-' .. i
+    \\        overwrite[key], original[key] = i, i
+    \\    end
+    \\    local count = 0
+    \\    for key, value in pairs(overwrite) do
+    \\        assert(original[key] == value and not visited[key])
+    \\        visited[key], count = true, count + 1
+    \\        assert(next(other) ~= nil)
+    \\        local inner_count = 0
+    \\        for inner_key in pairs(overwrite) do
+    \\            assert(original[inner_key] ~= nil)
+    \\            inner_count = inner_count + 1
+    \\        end
+    \\        assert(inner_count == 53)
+    \\        overwrite[key] = value + 1000
+    \\    end
+    \\    assert(count == 53)
+    \\    for key, value in pairs(original) do
+    \\        assert(visited[key] and overwrite[key] == value + 1000)
+    \\    end
+    \\    assert(not pcall(next, overwrite, 'neverInserted'))
+    \\    return 'iterator mutation verified'
+    \\end,
+    \\object_result = function(frame)
+    \\    local ret = mw.html.create('div')
+    \\    ret:cssText('column-width: 20ch; vertical-align: top;')
+    \\    ret:wikitext('[[Cerdanya|column object text]]')
+    \\    ret:allDone()
+    \\    return ret
+    \\end,
+    \\multiple_results = function(frame)
+    \\    local object = setmetatable({}, {__tostring = function()
+    \\        assert(mw.getCurrentFrame() == frame)
+    \\        return 'frame object'
+    \\    end})
+    \\    return 'many:', false, 12, object, nil
+    \\end,
+    \\nil_hole_result = function()
+    \\    return 'first', nil, 'tail'
+    \\end,
+    \\object_result_error = function()
+    \\    return setmetatable({}, {__tostring = function() error('object conversion failure') end})
+    \\end,
     \\frame_probe = function(frame) return frame.args.x end,
     \\repair_parent_probe = function(frame)
     \\    local x = frame:getParent().args.x
@@ -1353,6 +1438,116 @@ fn contentLanguageCaseProbe(h: *Harness, pipeline: []const u8, verifier: []const
     }
 }
 
+fn loadDataCacheProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const namespaces = try std.fs.path.join(h.a, &.{ dir, "load-data-namespaces.tsv" });
+    const languages = try std.fs.path.join(h.a, &.{ dir, "load-data-languages.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = namespaces, .data = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
+        "828\tModule\tModule\tcase-sensitive\t1\t0\t0\tScribunto\tcompile_only\tmodules\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = languages, .data = "# wikidict-language-registry-v2\n# content-language\ten\n# mediawiki\nen\tEnglish\ten\teng\n# iso-639-3\n" });
+    const probe =
+        \\local p = {}
+        \\function p.run()
+        \\    local title = mw.title.getCurrentTitle().text
+        \\    local a = mw.loadData('Module:headword/data')
+        \\    local b = mw.loadData('Module:headword/data')
+        \\    local expected = a.dynamic and title or 'STATIC'
+        \\    assert(a.pagename == expected and b.pagename == expected)
+        \\    assert(a.page.token == expected and b.page.token == expected)
+        \\    assert(a.encoded_pagename == 'encoded:' .. expected)
+        \\    assert(a.lemmas.nouns == true and b.lemmas.nouns == true)
+        \\    local g = mw.loadData('Module:glossary/data')
+        \\    local g2 = mw.loadData('Module:glossary/data')
+        \\    assert(g.title == title and g2.title == title)
+        \\    return 'data=' .. expected .. '; current=' .. title .. '; repeated loads preserved'
+        \\end
+        \\return p
+    ;
+    const static_data = "return {pagename='STATIC', encoded_pagename='encoded:STATIC', page={token='STATIC'}, lemmas={nouns=true}}";
+    const page_data = "local title=mw.title.getCurrentTitle().text; return {dynamic=true, pagename=title, encoded_pagename='encoded:'..title, page={token=title}, lemmas={nouns=true}}";
+    for ([_]bool{ false, true }) |dynamic| {
+        const name = if (dynamic) "load-data-page" else "load-data-static";
+        const dump = try std.fmt.allocPrint(h.a, "{s}/{s}.xml", .{ dir, name });
+        const root = try std.fmt.allocPrint(h.a, "{s}/{s}-dictionary", .{ dir, name });
+        // There is deliberately no Module:headword/page in either edition.
+        try writePages(h.io, h.a, dump, &.{
+            .{ .title = "Cache Alpha", .ns = 0, .id = 1, .body = "==English==\n# {{#invoke:LoadDataProbe|run}}\n" },
+            .{ .title = "Cache Beta", .ns = 0, .id = 2, .body = "==English==\n# {{#invoke:LoadDataProbe|run}}\n" },
+            .{ .title = "Cache Gamma", .ns = 0, .id = 3, .body = "==English==\n# {{#invoke:LoadDataProbe|run}}\n" },
+            .{ .title = "Module:LoadDataProbe", .ns = 828, .id = 4, .body = probe },
+            .{ .title = "Module:headword/data", .ns = 828, .id = 5, .body = if (dynamic) page_data else static_data },
+            .{ .title = "Module:glossary/data", .ns = 828, .id = 6, .body = "return {title=mw.title.getCurrentTitle().text}" },
+        });
+        _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespaces, "--language-registry-snapshot", languages, "--llvm-workers", "1", "--page-workers", "1" }, 0);
+        _ = try verifyFixture(h, verifier, root, null);
+        for ([_][]const u8{ "Cache Alpha", "Cache Beta", "Cache Gamma" }) |title| {
+            const word = try h.run(&.{ bin, "lookup", title, "--root", root, "--language", "English", "--details" }, 0);
+            const witness = try std.fmt.allocPrint(h.a, "data={s}; current={s}; repeated loads preserved", .{ if (dynamic) title else "STATIC", title });
+            try h.require(std.mem.indexOf(u8, word, witness) != null and std.mem.indexOf(u8, word, "Lua error") == null, "compiled cold and warm loadData uses actual module results without invented dependencies or stale page fields");
+        }
+        const fallbacks = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, "fallback-pages.jsonl" }), h.a, .limited(4096));
+        try h.require(std.mem.trim(u8, fallbacks, " \t\r\n").len == 0, "compiled static and page-sensitive data modules publish without fallback diagnostics");
+    }
+}
+
+fn scriptCpuBudgetProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const dump = try std.fs.path.join(h.a, &.{ dir, "script-cpu.xml" });
+    const root = try std.fs.path.join(h.a, &.{ dir, "script-cpu-dictionary" });
+    const namespaces = try std.fs.path.join(h.a, &.{ dir, "script-cpu-namespaces.tsv" });
+    const languages = try std.fs.path.join(h.a, &.{ dir, "script-cpu-languages.tsv" });
+    const messages = try std.fs.path.join(h.a, &.{ dir, "script-cpu-messages.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = namespaces, .data = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
+        "828\tModule\tModule\tcase-sensitive\t1\t0\t0\tScribunto\tcompile_only\tmodules\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = languages, .data = "# wikidict-language-registry-v2\n# content-language\ten\n# mediawiki\nen\tEnglish\ten\teng\n# iso-639-3\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = messages, .data = "# wikidict-interface-messages-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\nen\tscribunto-common-timeout\tV\tFIXTURE CPU LIMIT\n" });
+    const cpu_module =
+        \\local p = {}
+        \\function p.pure()
+        \\    xpcall(function()
+        \\        pcall(function() while true do end end)
+        \\    end, function() return "HANDLER RAN" end)
+        \\    return "CAUGHT LIMIT"
+        \\end
+        \\function p.syl()
+        \\    -- Exact non-progressing pattern/replacement from bnwiki Module:syl-translit rev325704.
+        \\    local word = "ꠤꠘꠣꠠꠝꠣꠇ"
+        \\    local c, v = "[ꠇ-ꠊꠌ-ꠢ]", "[ꠣ-ꠧꠀꠁꠃ-ꠅ]"
+        \\    local pat = "(" .. v .. c .. v .. c .. ")(" .. c .. "ঁ?" .. v .. ")"
+        \\    while mw.ustring.match(word, pat) do
+        \\        word = mw.ustring.gsub(word, pat, "%1%2")
+        \\    end
+        \\    return "BAD TERMINATION"
+        \\end
+        \\function p.finite()
+        \\    local n = 0
+        \\    for i = 1, 1000 do n = n + i end
+        \\    assert(n == 500500)
+        \\    return "FINITE CONTROL"
+        \\end
+        \\return p
+    ;
+    try writePages(h.io, h.a, dump, &.{
+        .{ .title = "cpu-pure", .ns = 0, .id = 1, .body = "==English==\n# A{{#invoke:CpuBudget|pure}}B\n# Exhausted page: {{#iferror:{{#invoke:CpuBudget|finite}}|LIMIT REMAINS|BAD RESET}}\n" },
+        .{ .title = "cpu-fresh", .ns = 0, .id = 2, .body = "==English==\n# {{#invoke:CpuBudget|finite}}\n" },
+        .{ .title = "cpu-syl", .ns = 0, .id = 3, .body = "==English==\n# Before {{#invoke:CpuBudget|syl}} after\n" },
+        .{ .title = "Module:CpuBudget", .ns = 828, .id = 4, .model = "Scribunto", .body = cpu_module },
+    });
+    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespaces, "--language-registry-snapshot", languages, "--interface-messages-snapshot", messages, "--llvm-workers", "1", "--page-workers", "1" }, 0);
+    _ = try verifyFixture(h, verifier, root, null);
+    const pure = try h.run(&.{ bin, "lookup", "cpu-pure", "--root", root, "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, pure, "ALua error in Module:CpuBudget: FIXTURE CPU LIMITB") != null and std.mem.indexOf(u8, pure, "LIMIT REMAINS") != null, "pure compiled loops stop at page CPU quota and preserve surrounding content");
+    try h.require(std.mem.indexOf(u8, pure, "CAUGHT LIMIT") == null and std.mem.indexOf(u8, pure, "HANDLER RAN") == null, "Lua pcall and xpcall cannot catch the CPU quota");
+    const fresh = try h.run(&.{ bin, "lookup", "cpu-fresh", "--root", root, "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, fresh, "FINITE CONTROL") != null and std.mem.indexOf(u8, fresh, "Lua error") == null, "the next page receives a fresh CPU budget");
+    const syl = try h.run(&.{ bin, "lookup", "cpu-syl", "--root", root, "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, syl, "Before Lua error in Module:CpuBudget: FIXTURE CPU LIMIT after") != null, "pinned Sylheti identity substitution loop becomes a visible Scribunto timeout");
+}
+
 fn japaneseParserAliasProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
     const root = try std.fs.path.join(h.a, &.{ dir, "japanese-dictionary" });
     const dump = try std.fs.path.join(h.a, &.{ dir, "japanese.xml" });
@@ -1606,6 +1801,8 @@ pub fn main(init: std.process.Init) !void {
     try structuredWikibaseProbe(&h, pipeline, verifier, bin, dir);
     try japaneseParserAliasProbe(&h, pipeline, verifier, bin, dir);
     try contentLanguageCaseProbe(&h, pipeline, verifier, bin, dir);
+    try loadDataCacheProbe(&h, pipeline, verifier, bin, dir);
+    try scriptCpuBudgetProbe(&h, pipeline, verifier, bin, dir);
     try deadlineProbe(init.io, a, dir);
     try failureMetadataProbe(&h, dir);
     try expansionFallbackProbe(&h, argv[6], verifier, bin, dir);
@@ -1683,6 +1880,8 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "Talk:Category discussion") != null and std.mem.indexOf(u8, text, "Nested category") != null, "default CategoryTree pages mode compiles other namespaces and subcategory links");
     try h.require(std.mem.indexOf(u8, text, "plural mice") != null, "Lua result is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Legacy varargs: legacy varargs verified") != null, "Lua 5.1 legacy vararg tables preserve scope, counts, closures and native AF bold-link behavior");
+    try h.require(std.mem.indexOf(u8, text, "Iterator mutation: iterator mutation verified") != null, "compiled pairs preserves existing-key deletion and overwrite across nested iteration and rejects unknown next keys");
+    try h.require(std.mem.indexOf(u8, text, "column object text") != null and std.mem.indexOf(u8, text, "many:false12frame object") != null and std.mem.indexOf(u8, text, "conversion caught") != null and std.mem.indexOf(u8, text, "hole caught") != null, "invoke results stringify HTML objects and every return with the active frame, preserving conversion error recovery");
     try h.require(std.mem.indexOf(u8, text, "user-space inflection mouse") != null, "User namespace transclusion and relative child expand before publication");
     try h.require(std.mem.indexOf(u8, text, "User:Absent") != null and std.mem.indexOf(u8, text, "Absent article") != null and std.mem.indexOf(u8, text, "Category:Absent") != null, "missing transclusions in every namespace compile to semantic links");
     try h.require(std.mem.indexOf(u8, text, "private documentation") == null, "User namespace noinclude remains excluded");

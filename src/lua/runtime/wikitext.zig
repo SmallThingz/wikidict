@@ -14,6 +14,8 @@ const dateformat_lib = @import("dateformat.zig");
 const uri_lib = @import("uri.zig");
 const ustring_lib = @import("ustring.zig");
 const text_lib = @import("text.zig");
+const title_lib = @import("title.zig");
+const message_lib = @import("mw_basics.zig");
 const stdlib = @import("zig_stdlib");
 const Value = rt.Value;
 
@@ -24,12 +26,25 @@ fn makeNowikiMarker(a: std.mem.Allocator, id: u32) ![]const u8 {
     return std.fmt.allocPrint(a, "{s}{X:0>8}{s}", .{ nowiki_marker_prefix, id, nowiki_marker_suffix });
 }
 
+// CoreParserFunctions::tagObj trims expanded #tag values, then removes
+// syntactic outer quotes. Nonempty mixed quote pairs are accepted upstream.
+// frame:extensionTag supplies literal API values and must not use this adapter.
+fn parserTagAttributeValue(raw: []const u8) []const u8 {
+    const value = std.mem.trim(u8, raw, " \t\n\r\x00\x0b");
+    if (value.len < 2) return value;
+    const first = value[0];
+    const last = value[value.len - 1];
+    const quoted = (first == '"' or first == '\'') and (last == '"' or last == '\'');
+    if (quoted and (value.len > 2 or first == last)) return value[1 .. value.len - 1];
+    return value;
+}
+
 fn canonicalExtensionTag(raw: []const u8) ?[]const u8 {
     inline for (&.{
         "nowiki",  "pre",      "gallery",      "indicator",       "ref",             "references", "templatestyles",
         "math",    "ce",       "chem",         "score",           "syntaxhighlight", "source",     "timeline",
         "hiero",   "poem",     "categorytree", "charinsert",      "graph",           "mapframe",   "maplink",
-        "section", "inputbox", "imagemap",     "dynamicpagelist",
+        "section", "inputbox", "imagemap",     "dynamicpagelist", "phonos",
     }) |name| if (std.ascii.eqlIgnoreCase(raw, name)) return name;
     return null;
 }
@@ -94,6 +109,8 @@ pub const Provider = struct {
     file_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!FileMetadata = null,
     category_tree: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, CategoryTreeScope) anyerror![]const []const u8 = null,
     site_server: ?[]const u8 = null,
+    // pages, articles, files, edits, users, activeUsers, admins; exact Lua integers.
+    site_statistics: ?[7]u53 = null,
     site_script: ?[]const u8 = null,
     site_article_path: ?[]const u8 = null,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
@@ -143,6 +160,7 @@ pub const Expander = struct {
     base_template_eligible: []bool = &.{},
     base_template_rejected: []bool = &.{},
     invoke_reuse: ?*InvokeReuseStats = null,
+    script_cpu_budget: rt.execution_budget.Budget = .{},
     host: host_api.Host = .{},
     current_source: ?[]const u8 = null,
     page_allocator: ?std.mem.Allocator = null,
@@ -175,12 +193,13 @@ pub const Expander = struct {
         self.host.interface_message = if (self.provider.interface_message != null) hostInterfaceMessage else null;
         self.host.file_metadata = hostFileMetadata;
         self.host.site_server = self.provider.site_server;
+        self.host.site_statistics = self.provider.site_statistics;
         self.host.site_script = self.provider.site_script;
         self.host.site_article_path = self.provider.site_article_path;
         self.host.site_interwiki_map = hostSiteInterwikiMap;
         self.host.stable_site_interwiki_map = self.provider.stable_interwiki_map;
-        self.host.wikibase_sitelink = hostWikibaseSitelink;
-        self.host.wikibase_entity_text = hostWikibaseEntityText;
+        self.host.wikibase_sitelink = if (self.provider.wikibase_sitelink != null) hostWikibaseSitelink else null;
+        self.host.wikibase_entity_text = if (self.provider.wikibase_entity_text != null) hostWikibaseEntityText else null;
         self.host.wikibase_entity = if (self.provider.wikibase_entity != null) hostWikibaseEntity else null;
         self.host.wikibase_page_entity_id = if (self.provider.wikibase_page_entity_id != null) hostWikibasePageEntityId else null;
         self.host.wikibase_entity_terms = if (self.provider.wikibase_entity_terms != null) hostWikibaseEntityTerms else null;
@@ -193,6 +212,7 @@ pub const Expander = struct {
     }
 
     pub fn beginPage(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64) void {
+        self.script_cpu_budget.reset();
         self.releasePageModuleTemplates();
         self.host.current_title = title;
         self.host.now_unix = now_unix;
@@ -450,6 +470,15 @@ pub const Expander = struct {
         try self.page_line.appendSlice(a, text[start..]);
     }
 
+    // Parser::braceSubstitution (T2529) makes block-leading template,
+    // parser-function and variable results start a new line. Preprocessor_Hash
+    // determines lineStart from the source invocation, not previous output.
+    // Triple-brace parameter substitutions deliberately do not use this rule.
+    fn implicitBlockNewline(source: []const u8, open: usize, value: []const u8) bool {
+        if (value.len == 0 or (open != 0 and source[open - 1] == '\n')) return false;
+        return std.mem.indexOfScalar(u8, ":;#*", value[0]) != null or std.mem.startsWith(u8, value, "{|");
+    }
+
     fn expandPageWikitext(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8) anyerror![]const u8 {
         if (work_stats.current()) |work| {
             work.scan_calls +|= 1;
@@ -474,6 +503,10 @@ pub const Expander = struct {
                     break :blk value;
                 },
             };
+            if (construct.kind == .template and implicitBlockNewline(text, construct.open, expanded)) {
+                try self.observePageOutput("\n");
+                try out.append(self.runtime.allocator, '\n');
+            }
             try self.observePageOutput(expanded);
             try out.appendSlice(self.runtime.allocator, expanded);
         }
@@ -615,6 +648,8 @@ pub const Expander = struct {
                 },
                 .template => {
                     const expanded = try self.expandConstruct(text[construct.open + 2 .. construct.close], params, host_title, depth + 1);
+                    if (implicitBlockNewline(text, construct.open, expanded))
+                        try out.append(self.runtime.allocator, '\n');
                     try out.appendSlice(self.runtime.allocator, expanded);
                     pos = construct.close + 2;
                 },
@@ -1444,6 +1479,7 @@ pub const Expander = struct {
         parent_args: ?*rt.Table,
     ) anyerror!InvokeOutcome {
         const generated = self.invokeFresh(module_id, module_name, function_name, invoke_args, existing_parent, parent_title, parent_args) catch |err| {
+            if (err == error.LuaCpuLimit) return .{ .error_markup = try self.scriptTimeoutMarkup(module_name) };
             if (try self.invokeExportErrorMarkup(err, module_name, function_name)) |markup| {
                 clearInvokeFailure(self.runtime);
                 return .{ .error_markup = markup };
@@ -1452,8 +1488,10 @@ pub const Expander = struct {
             // Operational failures retain their typed name across the native
             // AOT call envelope. Let the worker retire and retry the page.
             // Lua error("OutOfMemory") instead carries the name LuaRaised.
-            if (self.runtime.aotErrorName()) |name|
+            if (self.runtime.aotErrorName()) |name| {
                 if (std.mem.eql(u8, name, "OutOfMemory")) return error.OutOfMemory;
+                if (std.mem.eql(u8, name, "LuaCpuClockUnavailable")) return error.LuaCpuClockUnavailable;
+            }
             const first_detail = try self.runtime.allocator.dupe(u8, invokeFailureDetail(self.runtime, err));
             clearInvokeFailure(self.runtime);
             if (isInvalidTitleInvokeFailure(first_detail)) {
@@ -1467,13 +1505,16 @@ pub const Expander = struct {
                     var retry_parent_args = parent_args;
                     if (repaired_parent_args) |table| retry_parent_args = table;
                     const retried = self.invokeFresh(module_id, module_name, function_name, retry_invoke_args, existing_parent, parent_title, retry_parent_args) catch |retry_err| {
+                        if (retry_err == error.LuaCpuLimit) return .{ .error_markup = try self.scriptTimeoutMarkup(module_name) };
                         if (try self.invokeExportErrorMarkup(retry_err, module_name, function_name)) |markup| {
                             clearInvokeFailure(self.runtime);
                             return .{ .error_markup = markup };
                         }
                         if (retry_err != error.AotCallFailed) return retry_err;
-                        if (self.runtime.aotErrorName()) |name|
+                        if (self.runtime.aotErrorName()) |name| {
                             if (std.mem.eql(u8, name, "OutOfMemory")) return error.OutOfMemory;
+                            if (std.mem.eql(u8, name, "LuaCpuClockUnavailable")) return error.LuaCpuClockUnavailable;
+                        }
                         const retry_detail = try self.runtime.allocator.dupe(u8, invokeFailureDetail(self.runtime, retry_err));
                         clearInvokeFailure(self.runtime);
                         return .{ .error_markup = try self.scribuntoErrorMarkup(module_name, retry_detail) };
@@ -1486,6 +1527,15 @@ pub const Expander = struct {
         return .{ .generated = generated };
     }
 
+    fn scriptTimeoutMarkup(self: *Expander, module_name: []const u8) ![]const u8 {
+        clearInvokeFailure(self.runtime);
+        const lookup = self.provider.interface_message orelse return error.InterfaceMessageSnapshotMissing;
+        const language = self.runtime.namespace_catalog.?.content_language;
+        const message = (try lookup(self.provider.ctx, self.runtime.allocator, language, "scribunto-common-timeout")) orelse return error.InterfaceMessageSnapshotMissing;
+        const source = message.source orelse return error.InterfaceMessageSnapshotMissing;
+        return self.scribuntoErrorMarkup(module_name, source);
+    }
+
     fn invokeFresh(
         self: *Expander,
         module_id: ?u32,
@@ -1496,6 +1546,7 @@ pub const Expander = struct {
         parent_title: ?[]const u8,
         parent_args: ?*rt.Table,
     ) anyerror![]const u8 {
+        try self.script_cpu_budget.checkState();
         if (work_stats.current()) |work| work.invoke_attempts +|= 1;
         var function_probe: invoke_reuse_stats.FunctionProbe = undefined;
         if (self.invoke_reuse) |stats| stats.beginFunction(&function_probe, module_id, module_name, function_name);
@@ -1623,19 +1674,22 @@ pub const Expander = struct {
         const frame = try frame_lib.makeFrameFromTable(child, module_name, copied_invoke_args, parent);
         if (self.invoke_reuse != null) host_api.beginInvokeHostProbe(&host_probe);
         defer if (self.invoke_reuse != null) host_api.endInvokeHostProbe(&host_probe);
-        var result_buffer: [1]Value = undefined;
-        const result = if (module_id) |id|
-            frame_lib.invokeModuleIdFixed(child, id, module_name, function_name, frame, &result_buffer) catch |err| {
-                try outer_runtime.adoptFailure(child);
-                return err;
-            }
-        else
-            frame_lib.invokeFixed(child, module_name, function_name, frame, &result_buffer) catch |err| {
-                try outer_runtime.adoptFailure(child);
-                return err;
+        var cpu_scope = try self.script_cpu_budget.enter();
+        const text = frame_lib.invokeText(child, module_id, module_name, function_name, frame) catch |err| {
+            var quota_error: ?anyerror = null;
+            cpu_scope.finish() catch |failure| {
+                quota_error = failure;
             };
-        defer result.deinit();
-        const text = if (result.values.len == 0) "" else try self.valueToWikitext(result.values[0]);
+            try outer_runtime.adoptFailure(child);
+            // Resource exhaustion remains operational even if it coincides
+            // with the script timer. Only the distinct quota gets markup.
+            const failure_name = child.aotErrorName() orelse @errorName(err);
+            if (err == error.OutOfMemory or std.mem.eql(u8, failure_name, "OutOfMemory")) return error.OutOfMemory;
+            if (err == error.Timeout or std.mem.eql(u8, failure_name, "Timeout")) return error.Timeout;
+            if (quota_error) |failure| return failure;
+            return err;
+        };
+        try cpu_scope.finish();
         const owned = try page_a.dupe(u8, text);
         completed = true;
         return owned;
@@ -1659,6 +1713,9 @@ pub const Expander = struct {
             "main";
 
         const runtime = self.runtime;
+        // Lua frame arguments are eager here, before the new Lua CPU scope.
+        // A surrounding unpaused Lua callback must still charge this work;
+        // do not pause generic template parameter expansion.
         const invoke_args = try self.buildExpandedArgs(if (args.len > 0) args[1..] else &.{}, params, host_title, depth + 1);
         try self.materializeLazyTemplateArgs(params);
         _ = runtime;
@@ -1691,12 +1748,36 @@ pub const Expander = struct {
                 const eq = preprocess.findTopDelimiter(raw, '=') orelse continue;
                 const key = std.mem.trim(u8, try self.expandWikitext(raw[0..eq], params, host_title, depth + 1), " \t\r\n");
                 if (key.len == 0) continue;
-                const value = try self.expandWikitext(raw[eq + 1 ..], params, host_title, depth + 1);
+                const expanded = try self.expandWikitext(raw[eq + 1 ..], params, host_title, depth + 1);
+                const value = parserTagAttributeValue(expanded);
                 try table.rawSet(self.runtime.allocator, .{ .string = key }, .{ .string = value });
             }
             attrs = table;
         }
         return self.serializeExtension(canonical, content, attrs);
+    }
+
+    fn expandIntParser(
+        self: *Expander,
+        head: []const u8,
+        first: []const u8,
+        raw_args: []const []const u8,
+        params: *rt.Table,
+        host_title: []const u8,
+        depth: usize,
+    ) anyerror![]const u8 {
+        // CoreParserFunctions::intFunction uses plain() with expanded, trimmed
+        // parameters; noparse=false then expands the message in a child frame.
+        const key = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n\x00\x0b");
+        if (key.len == 0) return self.emptyComputedTransclusion(head, raw_args, params, host_title, depth);
+        const values = try self.runtime.allocator.alloc(Value, raw_args.len);
+        defer self.runtime.allocator.free(values);
+        for (raw_args, values) |raw, *value| {
+            value.* = .{ .string = std.mem.trim(u8, try self.expandWikitext(raw, params, host_title, depth + 1), " \t\r\n\x00\x0b") };
+        }
+        const plain = try message_lib.interfaceMessagePlain(self.runtime, key, values);
+        const child_args = try self.buildTemplateArgs(raw_args, params, host_title, depth + 1);
+        return self.expandWikitext(plain, child_args, host_title, depth + 1);
     }
 
     fn expandParserHead(
@@ -1730,6 +1811,7 @@ pub const Expander = struct {
                 return try self.recordDisplayTitle(value);
             }
             if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT")) return "";
+            if (std.ascii.eqlIgnoreCase(name, "int")) return try self.expandIntParser(head, first, raw_args, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "ns")) {
                 const raw_ns = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n");
                 const spec = if (std.fmt.parseInt(i32, raw_ns, 10)) |id|
@@ -1892,7 +1974,98 @@ pub const Expander = struct {
         };
     }
 
+    fn phonosAttr(self: *Expander, attrs: ?*rt.Table, key: []const u8) ![]const u8 {
+        const table = attrs orelse return "";
+        return self.scalarText(table.rawGet(.{ .string = key }) orelse return "");
+    }
+
+    // MediaWiki Phonos renders an error button whose detailed diagnostic is a
+    // client-side popup. The dictionary retains its real localized accessible
+    // error label, source label, error class and exact diagnostic key/file.
+    // It does not fabricate upload-navigation URLs or English error prose.
+    fn phonosError(self: *Expander, label: []const u8, language: []const u8, key: []const u8, file: []const u8) ![]const u8 {
+        const a = self.runtime.allocator;
+        const aria = try message_lib.interfaceMessagePlain(self.runtime, "phonos-aria-error", &.{});
+        std.log.warn("phonos error: key={s} file={s}", .{ key, file[0..@min(file.len, 512)] });
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(a, "<span class=\"ext-phonos ext-phonos-error ");
+        try appendAttrEscaped(&out, a, key);
+        try out.appendSlice(a, "\" lang=\"");
+        try appendAttrEscaped(&out, a, language);
+        try out.appendSlice(a, "\" data-phonos-error=\"");
+        try appendAttrEscaped(&out, a, key);
+        try out.appendSlice(a, "\" data-phonos-file-argument=\"");
+        try appendAttrEscaped(&out, a, file);
+        try out.appendSlice(a, "\">");
+        try out.appendSlice(a, label);
+        if (label.len != 0) try out.appendSlice(a, " ");
+        try appendAttrEscaped(&out, a, aria);
+        try out.appendSlice(a, "</span>");
+        return out.toOwnedSlice(a);
+    }
+
+    fn renderPhonos(self: *Expander, content: ?Value, attrs: ?*rt.Table) ![]const u8 {
+        const a = self.runtime.allocator;
+        const registry = self.runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+        const language_arg = try self.phonosAttr(attrs, "lang");
+        const language = if (attrs != null and attrs.?.rawGet(.{ .string = "lang" }) != null)
+            language_arg
+        else
+            registry.content_language;
+        const file = try self.phonosAttr(attrs, "file");
+        const ipa = try self.phonosAttr(attrs, "ipa");
+        const wikibase = try self.phonosAttr(attrs, "wikibase");
+        // The label attribute is explicitly ignored upstream; inner content wins
+        // over IPA, while file takes priority over a Wikibase argument.
+        const inner = if (content) |value| try self.scalarText(value) else "";
+        const label = if (inner.len != 0 and !std.mem.eql(u8, inner, "0")) std.mem.trim(u8, inner, " \t\r\n") else ipa;
+        const has_file = file.len != 0 and !std.mem.eql(u8, file, "0");
+        const has_ipa = ipa.len != 0 and !std.mem.eql(u8, ipa, "0");
+        const has_wikibase = wikibase.len != 0 and !std.mem.eql(u8, wikibase, "0");
+        if (!has_ipa and !has_file and !has_wikibase)
+            return self.phonosError(label, language, "phonos-param-error", "");
+        if (ipa.len > 300) return self.phonosError(label, language, "phonos-ipa-too-long", file);
+        if (!has_file) {
+            if (has_wikibase) return error.PhonosWikibaseUnsupported;
+            return error.PhonosIpaGenerationUnsupported;
+        }
+        const file_spec = registry.byId(6) orelse return error.NamespaceRegistryRequired;
+        const validation_title = registry.normalizeTitle(a, file, 6, .literal) catch |err| switch (err) {
+            error.InvalidPageTitle => return self.phonosError(label, language, "phonos-invalid-title", file),
+            else => return err,
+        };
+        const title_body = registry.ofTitle(validation_title).text;
+        if (!title_lib.validTitleBody(self.runtime, file_spec, title_body))
+            return self.phonosError(label, language, "phonos-invalid-title", file);
+        // findFile accepts the edition's File aliases, whereas makeTitleSafe
+        // validates the supplied name in NS_FILE without stripping its prefix.
+        const title = try registry.normalizeTitle(a, file, 6, .only_default);
+        const get = self.provider.file_metadata orelse {
+            std.log.warn("file metadata snapshot unavailable: phonos file={s}", .{title});
+            return error.FileMetadataSnapshotMissing;
+        };
+        const metadata = try get(self.provider.ctx, title);
+        if (!metadata.exists) return self.phonosError(label, language, "phonos-file-not-found", file);
+        const media_type = metadata.media_type orelse return error.FileMetadataMediaTypeMissing;
+        if (media_type != .AUDIO) return self.phonosError(label, language, "phonos-file-not-audio", file);
+        const canonical = metadata.canonical_title orelse return error.FileMetadataCanonicalTitleMissing;
+        const canonical_spec = registry.ofTitle(canonical);
+        if (canonical_spec.id != 6 or !title_lib.validTitleBody(self.runtime, file_spec, canonical_spec.text))
+            return error.InvalidFileMetadataTitle;
+        const aria = try message_lib.interfaceMessagePlain(self.runtime, "phonos-player-aria-description", &.{});
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(a, "<span class=\"ext-phonos ext-phonos-PhonosButton\" lang=\"");
+        try appendAttrEscaped(&out, a, language);
+        try out.appendSlice(a, "\" data-phonos-audio=\"");
+        try appendAttrEscaped(&out, a, canonical_spec.text);
+        try out.appendSlice(a, "\">");
+        if (label.len != 0) try out.appendSlice(a, label) else try appendAttrEscaped(&out, a, aria);
+        try out.appendSlice(a, "</span>");
+        return out.toOwnedSlice(a);
+    }
+
     fn serializeExtension(self: *Expander, name: []const u8, content: ?Value, attrs: ?*rt.Table) ![]const u8 {
+        if (std.mem.eql(u8, name, "phonos")) return self.renderPhonos(content, attrs);
         const a = self.runtime.allocator;
         var out: std.ArrayList(u8) = .empty;
         try out.append(a, '<');
@@ -1999,7 +2172,8 @@ pub const Expander = struct {
         var it = args.iterator();
         while (it.next()) |entry| {
             if (entry.key_ptr.* != .string or entry.value_ptr.* == .nil) continue;
-            try attrs.rawSet(self.runtime.allocator, entry.key_ptr.*, entry.value_ptr.*);
+            const value = parserTagAttributeValue(try self.scalarText(entry.value_ptr.*));
+            try attrs.rawSet(self.runtime.allocator, entry.key_ptr.*, .{ .string = value });
             any = true;
         }
         var index = positional_start;
@@ -2008,7 +2182,7 @@ pub const Expander = struct {
             const eq = std.mem.indexOfScalar(u8, text, '=') orelse return error.UnsupportedExtensionAttributeArgument;
             const key = std.mem.trim(u8, text[0..eq], " \t\r\n");
             if (key.len == 0) return error.UnsupportedExtensionAttributeArgument;
-            const attr_value = std.mem.trim(u8, text[eq + 1 ..], " \t\r\n");
+            const attr_value = parserTagAttributeValue(text[eq + 1 ..]);
             try attrs.rawSet(self.runtime.allocator, .{ .string = key }, .{ .string = attr_value });
             any = true;
         }
@@ -2564,6 +2738,7 @@ const TestModule = struct {
         try exports.rawSet(ctx.allocator, .{ .string = "oom" }, try ctx.makeFunctionKnown(13, oom, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "repair_oom" }, try ctx.makeFunctionKnown(14, repairOom, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "lua_oom" }, try ctx.makeFunctionKnown(15, luaOom, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "object" }, try ctx.makeFunctionKnown(16, objectReturn, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "value" }, .{ .number = 17 });
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
@@ -2648,7 +2823,7 @@ const TestModule = struct {
         return out;
     }
     fn multi(_: *rt.Context, _: rt.Captures, _: []const Value, buffer: ?[]Value) ![]const Value {
-        if (buffer == null or buffer.?.len != 1) return error.ExpectedBoundedResult;
+        if (buffer != null) return error.ExpectedUnboundedResult;
         const out = try rt.returnBuffer(buffer, 2);
         rt.storeReturn(out, 0, .{ .string = "first" });
         multi_tail_evaluations += 1;
@@ -2667,6 +2842,33 @@ const TestModule = struct {
         const out = try rt.returnBuffer(buffer, 1);
         rt.storeReturn(out, 0, .{ .number = 12 });
         return out;
+    }
+    fn objectReturn(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+        const object = try ctx.newTable();
+        const frame_args = try ctx.getIndex(args[0], .{ .string = "args" });
+        try object.rawSet(ctx.allocator, .{ .string = "frame" }, args[0]);
+        try object.rawSet(ctx.allocator, .{ .string = "mode" }, try ctx.getIndex(frame_args, .{ .string = "mode" }));
+        const mt = try ctx.newTable();
+        try mt.rawSet(ctx.allocator, .{ .string = "__tostring" }, try ctx.newNative(null, objectString));
+        object.metatable = mt;
+        return std.heap.smp_allocator.dupe(Value, &.{.{ .table = object }});
+    }
+    fn objectString(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+        const frame = args[0].table.rawGet(.{ .string = "frame" }).?;
+        if (ctx.current_frame != frame.table) return error.InvokeFrameNotActive;
+        if (host_api.getForInvokeBookkeeping(ctx).?.invoke_depth != 0) return error.InvokeDepthNotRestored;
+        const mode = args[0].table.rawGet(.{ .string = "mode" }) orelse .nil;
+        if (mode == .string) {
+            if (std.mem.eql(u8, mode.string, "oom")) return error.OutOfMemory;
+            if (std.mem.eql(u8, mode.string, "timeout")) return error.Timeout;
+            if (std.mem.eql(u8, mode.string, "fail")) {
+                ctx.setLuaError(.{ .string = "object conversion failure" });
+                return error.LuaRaised;
+            }
+            if (std.mem.eql(u8, mode.string, "invalid"))
+                return std.heap.smp_allocator.dupe(Value, &.{.{ .number = 7 }});
+        }
+        return std.heap.smp_allocator.dupe(Value, &.{.{ .string = "object text" }});
     }
     fn repairParent(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
         if (args.len == 0 or args[0] != .table) return error.FrameExpected;
@@ -3010,8 +3212,12 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     try std.testing.expectEqualStrings("Hi Bob Y|ABCD|space-template|space-template|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
     TestModule.multi_tail_evaluations = 0;
     const bounded_invoke = try expander.expandFragment("Page", "{{#invoke:Test|multi}}|{{#invoke:Test|empty}}|{{#invoke:Test|nil_return}}|{{#invoke:Test|number}}", 1_670_803_200);
-    try std.testing.expectEqualStrings("first|||12", bounded_invoke);
+    try std.testing.expectEqualStrings("firstsecond|||12", bounded_invoke);
     try std.testing.expectEqual(@as(usize, 1), TestModule.multi_tail_evaluations);
+    const object_invoke = try expander.expandFragment("Page", "{{#invoke:Test|object}}|{{#iferror:{{#invoke:Test|object|mode=fail}}|caught|wrong}}|{{#iferror:{{#invoke:Test|object|mode=invalid}}|invalid|wrong}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("object text|caught|invalid", object_invoke);
+    try std.testing.expectError(error.Timeout, expander.expandFragment("Page", "{{#invoke:Test|object|mode=timeout}}", 1_670_803_200));
+
     const random_top_level = try expander.expandFragment("Page", "{{#invoke:Test|random}}|{{#invoke:Test|random}}", 1_670_803_200);
     try std.testing.expectEqualStrings("9|9", random_top_level);
     const roots_before_isolated = TestModule.root_calls;
@@ -3120,6 +3326,7 @@ test "AOT invoke allocation failures propagate to the worker instead of renderin
         "{{#iferror:{{#invoke:Test|oom}}|caught|success}}",
         "A{{#invoke:Test|repair_oom|x=term&lt;t:gloss&gt;}}B",
         "{{#invoke:Test|lua_oom}}",
+        "{{#invoke:Test|object|mode=oom}}",
     }) |source| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
@@ -3575,6 +3782,38 @@ test "native AOT nowiki strip markers share page host state" {
     runtime.clearAotErrorName();
 }
 
+test "ordinary template arguments inside frame preprocess remain charged" {
+    const Source = struct {
+        var now: u64 = 0;
+        fn clock() error{LuaCpuClockUnavailable}!u64 {
+            return now;
+        }
+        fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "Template:Tick")) {
+                now += 5;
+                return "expanded";
+            }
+            return null;
+        }
+    };
+    Source.now = 0;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 0);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 0, .mw_slot = 0, .provider = .{ .get = Source.get, .get_transclusion = Source.get, .exists = TestProvider.exists } };
+    const caller = try runtime.newTable();
+    const args = try expander.buildTemplateArgs(&.{"{{Tick}}"}, caller, "Page", 0);
+    var budget: rt.execution_budget.Budget = .{ .limit_ns = 100, .clock = Source.clock };
+    var scope = try budget.enter();
+    const got = try Expander.hostFramePreprocess(&expander, a, "{{{1}}}", "Template:T", args);
+    try scope.finish();
+    try std.testing.expectEqualStrings("expanded", got);
+    try std.testing.expectEqual(@as(u64, 5), budget.used_ns);
+}
+
 test "named invoke and forwarded template values trim after expansion" {
     const Source = struct {
         fn get(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
@@ -3635,4 +3874,336 @@ test "argument post-expansion trim preserves unnamed values and last assignment 
             try caller.rawSet(a, .{ .number = 1 }, .{ .string = padded });
         }
     }
+}
+
+test "Phonos validates authoritative media and preserves label language and canonical file" {
+    const Source = struct {
+        fn file(_: ?*anyopaque, title: []const u8) !Provider.FileMetadata {
+            if (std.mem.eql(u8, title, "File:Alias.ogg"))
+                return .{ .exists = true, .media_type = .AUDIO, .canonical_title = "File:Actual audio.opus" };
+            if (std.mem.eql(u8, title, "File:Video.ogg"))
+                return .{ .exists = true, .media_type = .VIDEO, .canonical_title = title };
+            if (std.mem.eql(u8, title, "File:Absent.ogg")) return .{ .exists = false };
+            if (std.mem.eql(u8, title, "File:Legacy.ogg")) return .{ .exists = true };
+            return error.FileMetadataSnapshotMissing;
+        }
+        fn message(_: ?*anyopaque, _: std.mem.Allocator, language: []const u8, key: []const u8) !?Provider.InterfaceMessage {
+            try std.testing.expectEqualStrings("en", language);
+            if (std.mem.eql(u8, key, "phonos-player-aria-description")) return .{ .source = "Play captured audio" };
+            if (std.mem.eql(u8, key, "phonos-aria-error")) return .{ .source = "Captured unable to play audio" };
+            return null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .file_metadata = Source.file, .interface_message = Source.message },
+    };
+    const good = try expander.expandFragment("Entry", "{{#tag:phonos|<span class=\"e-example\">Dengerin</span>|file=Alias.ogg|lang=id|wikibase=Q1|label=IGNORED}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, good, "data-phonos-audio=\"Actual audio.opus\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, good, "lang=\"id\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, good, "<span class=\"e-example\">Dengerin</span>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, good, "IGNORED") == null);
+    const prefixed = try expander.expandFragment("Entry", "{{#tag:phonos|Prefix|file=Image:Alias.ogg}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, prefixed, "data-phonos-audio=\"Actual audio.opus\"") != null);
+    // The pinned CA audio templates use file="{{{1}}}" in #tag:phonos.
+    const quoted_file = try expander.expandFragment("Entry", "{{#tag:phonos|CA label|file= \"{{#if:yes|Alias.ogg}}\" }}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, quoted_file, "data-phonos-audio=\"Actual audio.opus\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, quoted_file, "CA label") != null);
+    const empty_label = try expander.expandFragment("Entry", "{{#tag:phonos||file=Alias.ogg}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, empty_label, "Play captured audio") != null);
+    try std.testing.expect(std.mem.indexOf(u8, empty_label, "lang=\"en\"") != null);
+    const invalid_cases = [_]struct { source: []const u8, key: []const u8 }{
+        .{ .source = "{{#tag:phonos|Keep|file=Video.ogg}}", .key = "phonos-file-not-audio" },
+        .{ .source = "{{#tag:phonos|Keep|file=Absent.ogg}}", .key = "phonos-file-not-found" },
+        .{ .source = "{{#tag:phonos|Keep|file=[invalid]}}", .key = "phonos-invalid-title" },
+        .{ .source = "{{#tag:phonos|Keep}}", .key = "phonos-param-error" },
+        .{ .source = "{{#tag:phonos|Keep|file=0|ipa=0|wikibase=0}}", .key = "phonos-param-error" },
+        .{ .source = "{{#tag:phonos|Keep|file=   }}", .key = "phonos-param-error" },
+    };
+    for (invalid_cases) |case| {
+        const result = try expander.expandFragment("Entry", case.source, 1_670_803_200);
+        try std.testing.expect(std.mem.indexOf(u8, result, case.key) != null);
+        try std.testing.expect(std.mem.indexOf(u8, result, "Keep Captured unable to play audio") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result, "data-phonos-audio=") == null);
+    }
+    try std.testing.expectError(error.FileMetadataSnapshotMissing, expander.expandFragment("Entry", "{{#tag:phonos|Keep|file=Unknown.ogg}}", 1_670_803_200));
+    try std.testing.expectError(error.FileMetadataMediaTypeMissing, expander.expandFragment("Entry", "{{#tag:phonos|Keep|file=Legacy.ogg}}", 1_670_803_200));
+    try std.testing.expectError(error.PhonosWikibaseUnsupported, expander.expandFragment("Entry", "{{#tag:phonos|Keep|wikibase=Q1}}", 1_670_803_200));
+    try std.testing.expectError(error.PhonosIpaGenerationUnsupported, expander.expandFragment("Entry", "{{#tag:phonos|Keep|ipa=a}}", 1_670_803_200));
+    const long_ipa = try std.fmt.allocPrint(arena.allocator(), "{{{{#tag:phonos|Keep|file=Alias.ogg|ipa={s}}}}}", .{@as([301]u8, @splat('a'))});
+    const too_long = try expander.expandFragment("Entry", long_ipa, 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, too_long, "phonos-ipa-too-long") != null);
+    const attrs = try runtime.newTable();
+    try attrs.rawSet(runtime.allocator, .{ .string = "file" }, .{ .string = "Alias.ogg" });
+    const frame = try Expander.hostFrameExtensionTag(&expander, runtime.allocator, "phonos", .{ .string = "Frame" }, attrs);
+    try std.testing.expect(std.mem.indexOf(u8, frame, "data-phonos-audio=\"Actual audio.opus\"") != null);
+}
+
+test "implicit block newlines retain Belarusian legacy translation terms" {
+    // Reduced from pinned table-top p2281/r8655, table-mid and table-bot
+    // p2283/r6011 plus legacy p14036/r57611. table-top/mid end in "{|":
+    // each following #if must start its nonempty list result on a new line.
+    const Source = struct {
+        fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "Template:Top"))
+                return "{| border=\"0\" width=\"100%\"\n|-\n| valign=\"top\" width=\"48%\" |\n{|";
+            if (std.mem.eql(u8, title, "Template:Mid"))
+                return "|}\n| width=\"1%\" |\n| valign=\"top\" width=\"48%\" |\n{|";
+            if (std.mem.eql(u8, title, "Template:Bot")) return "|}\n|}";
+            if (std.mem.eql(u8, title, "Template:T")) return "[[{{{2}}}]]";
+            if (std.mem.eql(u8, title, "Template:Legacy"))
+                return "<div class=\"NavFrame\"><div class=\"NavContent\">\n" ++
+                    "{{Top}}{{#if:{{{af|}}}|* af: {{{af}}}}}" ++
+                    "{{#if:{{{ca|}}}|* ca: {{{ca}}}}}" ++
+                    "{{#if:{{{chr|}}}|* chr: {{{chr}}}}}" ++
+                    "{{#if:{{{da|}}}|* da: {{{da}}}}}" ++
+                    "{{#if:{{{en|}}}|* en: {{{en}}}}}\n" ++
+                    "{{Mid}}{{#if:{{{ru|}}}|* ru: {{{ru}}}}}\n{{Bot}}</div></div>";
+            return null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = Source.get, .exists = TestProvider.exists },
+    };
+    const cases = [_]struct { title: []const u8, call: []const u8, expected: []const u8 }{
+        .{ .title = "aduh", .call = "{{Legacy|ru=[[увы]], [[ах]]}}", .expected = "{|\n* ru: [[увы]], [[ах]]" },
+        .{ .title = "АМАП", .call = "{{Legacy|ru=[[ОМОН]]}}", .expected = "{|\n* ru: [[ОМОН]]" },
+        .{ .title = "Аўстралія", .call = "{{Legacy|af={{T|af|Australië}}|da={{T|da|Australien}}|en={{T|en|Australia}}}}", .expected = "{|\n* af: [[Australië]]\n* da: [[Australien]]\n* en: [[Australia]]" },
+        .{ .title = "Беларусь", .call = "{{Legacy|ca={{T|ca|Bielorússia}}|chr={{T|chr|ᏇᎳᎷᏒ}}|da={{T|da|Hviderusland}}}}", .expected = "{|\n* ca: [[Bielorússia]]\n* chr: [[ᏇᎳᎷᏒ]]\n* da: [[Hviderusland]]" },
+    };
+    for (cases) |case| {
+        const expanded = try expander.expandFragment(case.title, case.call, 1_670_803_200);
+        try std.testing.expect(std.mem.indexOf(u8, expanded, case.expected) != null);
+        try std.testing.expect(std.mem.indexOf(u8, expanded, "{|*") == null);
+    }
+    // Source-line state is independent of whether the previous result is empty.
+    try std.testing.expectEqualStrings("x\n* item", try expander.expandFragment("Page", "x{{#if:1|* item}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("x\n* item", try expander.expandFragment("Page", "x\n{{#if:1|* item}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("\n* item", try expander.expandFragment("Page", "{{#if:1|* item}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("x* item", try expander.expandFragment("Page", "x{{{missing|* item}}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("x {| not a leading table", try expander.expandFragment("Page", "x{{{missing| {| not a leading table}}}", 1_670_803_200));
+    const table_result = try expander.expandFragment("Page", "x{{Top}}", 1_670_803_200);
+    try std.testing.expect(std.mem.startsWith(u8, table_result, "x\n{| border="));
+    try std.testing.expectEqualStrings("x\n; term", try expander.expandFragment("Page", "x{{#if:1|; term}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("x\n: detail", try expander.expandFragment("Page", "x{{#if:1|: detail}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("x\n# ordered", try expander.expandFragment("Page", "x{{#if:1|# ordered}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("xordinary", try expander.expandFragment("Page", "x{{#if:1|ordinary}}", 1_670_803_200));
+}
+
+test "tag parser attribute syntax is separate from literal frame extension attributes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+    };
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "{{#tag:ref|body|name=  \"n\"  }}", .expected = "<ref name=\"n\">body</ref>" },
+        .{ .source = "{{#tag:ref|body|name='n'}}", .expected = "<ref name=\"n\">body</ref>" },
+        .{ .source = "{{#tag:ref|body|name=\"n'}}", .expected = "<ref name=\"n\">body</ref>" },
+        .{ .source = "{{#tag:ref|body|name=\"\"}}", .expected = "<ref name=\"\">body</ref>" },
+        .{ .source = "{{#tag:ref|body|name=''}}", .expected = "<ref name=\"\">body</ref>" },
+        .{ .source = "{{#tag:ref|body|name=\"'}}", .expected = "<ref name=\"&quot;'\">body</ref>" },
+        .{ .source = "{{#tag:ref|body|name= \" n \" }}", .expected = "<ref name=\" n \">body</ref>" },
+        .{ .source = "{{#tag:ref|body|name=\"n}}", .expected = "<ref name=\"&quot;n\">body</ref>" },
+    };
+    for (cases) |case| try std.testing.expectEqualStrings(case.expected, try expander.expandFragment("Page", case.source, 1_670_803_200));
+    // PHP trim removes NUL/vertical-tab, not form-feed or nonbreaking space.
+    try std.testing.expectEqualStrings("n", parserTagAttributeValue("\x00\x0b\"n\"\x00\x0b"));
+    try std.testing.expectEqualStrings("\x0c\"n\"\x0c", parserTagAttributeValue("\x0c\"n\"\x0c"));
+    try std.testing.expectEqualStrings("\xc2\xa0\"n\"\xc2\xa0", parserTagAttributeValue("\xc2\xa0\"n\"\xc2\xa0"));
+
+    expander.beginPage("Page", "source", 1_670_803_200);
+    const named = try runtime.newTable();
+    try named.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "body" });
+    try named.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = " \"n\" " });
+    try std.testing.expectEqualStrings("<ref name=\"n\">body</ref>", try expander.frameParserTag(&expander, runtime.allocator, "#tag:ref", named));
+    const positional = try runtime.newTable();
+    try positional.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "ref" });
+    try positional.rawSet(runtime.allocator, .{ .number = 2 }, .{ .string = "body" });
+    try positional.rawSet(runtime.allocator, .{ .number = 3 }, .{ .string = "name='n'" });
+    try std.testing.expectEqualStrings("<ref name=\"n\">body</ref>", try expander.frameParserTag(&expander, runtime.allocator, "#tag", positional));
+
+    const literal = try runtime.newTable();
+    try literal.rawSet(runtime.allocator, .{ .string = "name" }, .{ .string = " \"n\" " });
+    try std.testing.expectEqualStrings("<ref name=\" &quot;n&quot; \">body</ref>", try Expander.hostFrameExtensionTag(&expander, runtime.allocator, "ref", .{ .string = "body" }, literal));
+}
+
+test "attached captured site statistics satisfy the pinned BCL random same seed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const mw = try runtime.newNativeNamespace(.mw);
+    try message_lib.install(&runtime, mw);
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 0,
+        .mw_slot = 0,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .stable_page_reads = true, .site_statistics = .{ 13332, 8530, 0, 60889, 1596, 14, 2 } },
+    };
+    expander.attach();
+    const site = mw.rawGet(.{ .string = "site" }).?.table;
+    const stats = site.rawGet(.{ .string = "stats" }).?;
+    // Module:random p539/r39971 line269: views-or-0 + these seven counters.
+    // The upstream SiteLibrary contract does not contain a views field.
+    try std.testing.expect((try runtime.getIndex(stats, .{ .string = "views" })) == .nil);
+    var seed: f64 = 0;
+    inline for (.{ "pages", "articles", "files", "edits", "users", "activeUsers", "admins" }) |name|
+        seed += (try runtime.getIndex(stats, .{ .string = name })).number;
+    try std.testing.expectEqual(@as(f64, 84363), seed);
+    try std.testing.expectEqual(@as(f64, 0), (try runtime.getIndex(stats, .{ .string = "files" })).number);
+    expander.provider.site_statistics = null;
+    expander.attach();
+    try std.testing.expectError(error.AotCallFailed, runtime.getIndex(stats, .{ .string = "pages" }));
+    try std.testing.expectEqualStrings("LuaRaised", runtime.aotErrorName().?);
+    try std.testing.expectEqualStrings("Site statistics snapshot missing field=pages", runtime.last_error.string);
+}
+
+test "expander attachment preserves absent legacy Wikibase providers and exact missing keys" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const mw = try runtime.newNativeNamespace(.mw);
+    try message_lib.install(&runtime, mw);
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 0,
+        .mw_slot = 0,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .stable_page_reads = true },
+    };
+    expander.attach();
+    try std.testing.expect(expander.host.wikibase_sitelink == null);
+    try std.testing.expect(expander.host.wikibase_entity_text == null);
+    const wikibase = mw.rawGet(.{ .string = "wikibase" }).?.table;
+    inline for (.{ "sitelink", "getSitelink" }) |name| {
+        runtime.clearAotErrorName();
+        const callable = try runtime.getIndex(.{ .table = wikibase }, .{ .string = name });
+        try std.testing.expectError(error.AotCallFailed, runtime.callValue(callable, &.{
+            .{ .string = "Q34057" }, .{ .string = "enwiki" },
+        }));
+        try std.testing.expectEqualStrings("LuaRaised", runtime.aotErrorName().?);
+        try std.testing.expectEqualStrings("Wikibase sitelink snapshot missing entity=Q34057 site=enwiki", runtime.last_error.string);
+    }
+    inline for (.{ "getLabel", "getDescription" }) |name| {
+        runtime.clearAotErrorName();
+        const callable = try runtime.getIndex(.{ .table = wikibase }, .{ .string = name });
+        try std.testing.expectError(error.AotCallFailed, runtime.callValue(callable, &.{.{ .string = "Q34057" }}));
+        try std.testing.expectEqualStrings("LuaRaised", runtime.aotErrorName().?);
+        try std.testing.expectEqualStrings("Wikibase entity-text snapshot missing entity=Q34057", runtime.last_error.string);
+    }
+
+    const Probe = struct {
+        fn sitelink(raw: ?*anyopaque, _: []const u8, _: []const u8) anyerror!?[]const u8 {
+            const fail: *bool = @ptrCast(@alignCast(raw.?));
+            if (fail.*) return error.OutOfMemory;
+            return null; // Explicit captured negative remains distinct from absent provider.
+        }
+        fn text(raw: ?*anyopaque, _: []const u8) anyerror!host_api.WikibaseEntityText {
+            const fail: *bool = @ptrCast(@alignCast(raw.?));
+            if (fail.*) return error.AccessDenied;
+            return .{ .label = "captured", .description = null };
+        }
+    };
+    var fail = false;
+    expander.provider.ctx = &fail;
+    expander.provider.wikibase_sitelink = Probe.sitelink;
+    expander.provider.wikibase_entity_text = Probe.text;
+    expander.attach();
+    const link = expander.host.wikibase_sitelink.?;
+    const text = expander.host.wikibase_entity_text.?;
+    try std.testing.expect((try link(expander.host.ctx, "Q34057", "enwiki")) == null);
+    try std.testing.expectEqualStrings("captured", (try text(expander.host.ctx, "Q34057")).label.?);
+    fail = true;
+    try std.testing.expectError(error.OutOfMemory, link(expander.host.ctx, "Q34057", "enwiki"));
+    try std.testing.expectError(error.AccessDenied, text(expander.host.ctx, "Q34057"));
+    expander.provider.wikibase_sitelink = null;
+    expander.provider.wikibase_entity_text = null;
+    expander.attach();
+    try std.testing.expect(expander.host.wikibase_sitelink == null and expander.host.wikibase_entity_text == null);
+}
+
+test "int parser uses captured aliases and messages with child-frame expansion" {
+    const aliases = rt.namespace_registry.magic_words;
+    const Source = struct {
+        words: *const aliases.Registry,
+        fn parser(raw: ?*anyopaque, name: []const u8) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            return self.words.resolve(name, .parser_function);
+        }
+        fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "MediaWiki:Local")) return "local $1";
+            return null;
+        }
+        fn exists(_: ?*anyopaque, _: []const u8) !bool {
+            return false;
+        }
+        fn message(_: ?*anyopaque, _: std.mem.Allocator, language: []const u8, key: []const u8) !?Provider.InterfaceMessage {
+            try std.testing.expectEqualStrings("bg", language);
+            if (std.mem.eql(u8, key, "lang")) return .{ .source = "bg" };
+            if (std.mem.eql(u8, key, "format")) return .{ .source = "$1/$2|{{{1|none}}}|{{{x|none}}}" };
+            if (std.mem.eql(u8, key, "nested")) return .{ .source = "{{#if:1|expanded|wrong}}" };
+            if (std.mem.eql(u8, key, "known-absent")) return .{ .source = null };
+            return null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var catalog = try rt.namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tbgwiktionary\n# dump-date\t20261001\n# content-language\tbg\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n" ++
+        "8\tMediaWiki\tMediaWiki\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n" ++
+        "10\tШаблон\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tinput\n" ++
+        "14\tКатегория\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n");
+    defer catalog.deinit();
+    var words = try aliases.Registry.init(a, aliases.parser_header ++
+        "\n# wiki\tbgwiktionary\n# dump-date\t20261001\n# content-language\tbg\n" ++
+        "int\t0\tINT:\nint\t0\tВЪТР:\nif\t0\tif\n", "bgwiktionary", "20261001", "bg");
+    defer words.deinit();
+    var source: Source = .{ .words = &words };
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &catalog;
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = Source.get, .exists = Source.exists, .resolve_parser_function = Source.parser, .interface_message = Source.message } };
+    try std.testing.expectEqualStrings("bg|bg", try expander.expandFragment("natuurlijks", "{{int:lang}}|{{вътр:lang}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("hi/x=there| hi |there", try expander.expandFragment("Page", "{{int:format| hi | x=there }}", 1_670_803_200));
+    try std.testing.expectEqualStrings("expanded", try expander.expandFragment("Page", "{{int:nested}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("local value", try expander.expandFragment("Page", "{{int:local|value}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("⧼known-absent⧽", try expander.expandFragment("Page", "{{int:known-absent}}", 1_670_803_200));
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, expander.expandFragment("Page", "{{int:uncaptured}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>int:<nowiki>}}</nowiki>", try expander.expandFragment("Page", "{{int:}}", 1_670_803_200));
 }

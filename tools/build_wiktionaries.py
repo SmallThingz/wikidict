@@ -215,15 +215,43 @@ def auxiliary_snapshot_filename(name):
     return 'namespace-siteinfo.raw.json' if name=='site-info' else name+'.tsv'
 
 
-def auxiliary_manifest_filename(name):
+def auxiliary_manifest_filename(name, path=None):
+    if name=='site-info' and path is not None:
+        modern=Path(path).with_name('site-info.manifest.json')
+        if modern.exists() or modern.is_symlink():return modern.name
     return 'namespace-registry.manifest.json' if name=='site-info' else name+'.manifest.json'
 
 
 def auxiliary_capture_helper(name, path):
+    if name=='file-metadata':
+        manifest=path.with_name(auxiliary_manifest_filename(name))
+        header=None
+        if path.is_file():
+            with path.open('rb') as stream:header=stream.readline(256).rstrip(b'\r\n')
+        if not (manifest.exists() or manifest.is_symlink()):
+            if header==b'# wikidict-file-metadata-v2':raise ValueError('File metadata v2 requires its capture manifest')
+            return None
+        record=read_small_json(manifest)
+        if not isinstance(record,dict):raise ValueError('Invalid file metadata provenance')
+        schema=record.get('schema')
+        if schema=='wikidict.file-metadata-capture.v2':
+            import prepare_file_metadata_v2
+            return prepare_file_metadata_v2
+        if schema not in (None,'wikidict.file-metadata-capture.v1') or header==b'# wikidict-file-metadata-v2':
+            raise ValueError('Unsupported file metadata capture schema/header')
+        # Preserve the established generic contract for v1 and schema-less data.
+        return None
     if name=='wikibase-page-links':
         import prepare_wikibase_page_links
         return prepare_wikibase_page_links
     if name=='site-info':
+        if auxiliary_manifest_filename(name,path)=='site-info.manifest.json':
+            import prepare_site_info
+            return prepare_site_info
+        # A v2 snapshot without its manifest cannot fall back to legacy capture.
+        raw=read_small_json(path,2*1024*1024)
+        if isinstance(raw,dict) and 'schema' in raw:
+            raise ValueError('Versioned site-info requires its capture manifest')
         import site_info_snapshot
         return site_info_snapshot
     if name=='commons-data':
@@ -237,11 +265,15 @@ def auxiliary_capture_helper(name, path):
         import prepare_commons_data
         return prepare_commons_data
     if name=='language-names':
+        record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
+        if isinstance(record,dict) and record.get('schema')=='wikidict.language-names-capture.v2':
+            import prepare_language_names_generic
+            return prepare_language_names_generic
         import prepare_language_names
         return prepare_language_names
     if name=='magic-words':
-        import prepare_magic_words
-        return prepare_magic_words
+        import prepare_magic_words_int
+        return prepare_magic_words_int
     if name in ('wikibase-entities','wikibase-entity-terms'):
         import prepare_wikibase_entities
         return prepare_wikibase_entities
@@ -259,23 +291,53 @@ def auxiliary_capture_helper(name, path):
     return prepare_language_messages
 
 
+# Only exact successful file-v2 replays are reusable. Every call still checks
+# the current producer and hashes the complete evidence inventory. Store JSON
+# and tuples so callers cannot mutate the cached proof through returned dicts.
+_FILE_METADATA_V2_REPLAYS={}
+
+
 def validated_auxiliary_capture(name, path, edition=None, date=None):
     helper=auxiliary_capture_helper(name,path)
     if helper is None:return None
-    record=helper.validate_snapshot(path,edition,date)
+    replay_key=None;previous=None
+    if name=='file-metadata' and helper.__name__=='prepare_file_metadata_v2':
+        path=Path(path)
+        if (path.name!='file-metadata.tsv' or path.is_symlink() or
+                path.parent.is_symlink() or not path.parent.is_dir()):
+            raise ValueError('Invalid file metadata snapshot path')
+        producer_key=json.dumps(helper.producer(),sort_keys=True,separators=(',',':'))
+        manifest_digest=hashlib.sha256(helper.small(path.with_name(helper.MANIFEST),helper.MAX_MANIFEST)).hexdigest()
+        replay_key=(producer_key,manifest_digest)
+        previous=_FILE_METADATA_V2_REPLAYS.get(replay_key)
+    if previous is None:
+        record=helper.validate_snapshot(path,edition,date)
+    else:
+        record=json.loads(previous[0])
+        if ((edition is not None and record['wiki']!=edition) or
+                (date is not None and record['date']!=date)):
+            raise ValueError('File metadata edition/date mismatch')
     if name=='magic-words':
         artifacts=dict(record['artifacts'])
         artifacts['magic-words.manifest.json']=sha256_file(path.with_name('magic-words.manifest.json'))
     else:
         artifacts=helper.capture_artifacts(path,record)
-    if not isinstance(artifacts,dict) or auxiliary_manifest_filename(name) not in artifacts or auxiliary_snapshot_filename(name) not in artifacts:
+    if not isinstance(artifacts,dict) or auxiliary_manifest_filename(name,path) not in artifacts or auxiliary_snapshot_filename(name) not in artifacts:
         raise ValueError('Incomplete auxiliary capture inventory: '+name)
     for filename,digest in artifacts.items():
         if (not isinstance(filename,str) or Path(filename).name!=filename or filename in ('.','..') or
                 not isinstance(digest,str) or not re.fullmatch('[0-9a-f]{64}',digest)):
             raise ValueError('Unsafe auxiliary capture inventory: '+name)
+    if replay_key is not None:
+        inventory=tuple(sorted(artifacts.items()))
+        if (artifacts[helper.MANIFEST]!=replay_key[1] or
+                json.dumps(helper.producer(),sort_keys=True,separators=(',',':'))!=replay_key[0] or
+                (previous is not None and inventory!=previous[1])):
+            raise ValueError('File metadata capture changed during validation')
+        if previous is None:
+            if len(_FILE_METADATA_V2_REPLAYS)>=32:_FILE_METADATA_V2_REPLAYS.clear()
+            _FILE_METADATA_V2_REPLAYS[replay_key]=(json.dumps(record,sort_keys=True,separators=(',',':')),inventory)
     return record,artifacts
-
 
 def auxiliary_artifact_digest(artifacts):
     return hashlib.sha256(json.dumps(artifacts,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -287,7 +349,7 @@ def auxiliary_capture_identities(snapshots, edition=None, date=None):
         capture=validated_auxiliary_capture(name,Path(source),edition,date)
         if capture is not None:
             _,inventory=capture
-            manifests[name]=inventory[auxiliary_manifest_filename(name)]
+            manifests[name]=inventory[auxiliary_manifest_filename(name,Path(source))]
             artifacts[name]=auxiliary_artifact_digest(inventory)
     return manifests,artifacts
 
@@ -307,12 +369,12 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
             raise ValueError(f'Unknown auxiliary snapshot: {name}')
         path=Path(source)
         capture=validated_auxiliary_capture(name,path,edition,date)
-        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','site-info','wikibase-page-links'):
+        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','site-info','wikibase-page-links','file-metadata'):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
         sha=sha256_file(path)
-        manifest=path.with_name(auxiliary_manifest_filename(name))
+        manifest=path.with_name(auxiliary_manifest_filename(name,path))
         if capture is not None or manifest.is_file():
             record=capture[0] if capture is not None else read_small_json(manifest)
             if (not isinstance(record,dict) or
@@ -363,9 +425,13 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
         return
     if name=='site-info':
         bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
+        if bound[0].get('schema')=='wikidict.site-info-capture.v2':
+            if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
+                raise ValueError('Site-info uses a different namespace capture')
+            return
         if capture_root is not None and bound[1]['capture.complete.json']!=sha256_file(capture_root/'capture.complete.json'):
             raise ValueError('Siteinfo belongs to a different namespace capture')
-    if capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms','language-fallbacks','interface-messages','commons-data','language-names'):
+    if capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms','language-fallbacks','interface-messages','commons-data','language-names','file-metadata'):
         bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
         if bound is not None:
             _,inventory=bound
@@ -373,6 +439,7 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
                     ('wikibase-namespace-capture.complete.json','capture.complete.json')) if name.startswith('wikibase-') else (
                     ('commons-namespace-registry.tsv','namespace-registry.tsv'),) if name=='commons-data' else (
                     ('language-names.namespace-registry.tsv','namespace-registry.tsv'),) if name=='language-names' else (
+                    ('file-metadata.namespace-registry.tsv','namespace-registry.tsv'),) if name=='file-metadata' else (
                     ('language-messages.namespace-registry.tsv','namespace-registry.tsv'),)
             for copied,original in inputs:
                 if inventory.get(copied)!=sha256_file(capture_root/original):
@@ -408,6 +475,8 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
     # The first name always requires a strict capture helper. It validates the
     # whole pair before either output can replace a legacy flat snapshot.
     helper=auxiliary_capture_helper(names[0],snapshots[names[0]])
+    if directory=='site-info' and helper.__name__!='prepare_site_info':
+        raise ValueError('Preferred site-info requires its versioned capture profile')
     for path in snapshots.values():helper.validate_snapshot(path,edition,date)
     return snapshots
 
@@ -454,6 +523,8 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 ('language-names',),edition,date))
             preferred.update(discover_auxiliary_generation(root,'wikibase-page-links',
                 ('wikibase-page-links',),edition,date))
+            preferred.update(discover_auxiliary_generation(root,'site-info',
+                ('site-info',),edition,date))
             for name in AUXILIARY_SNAPSHOT_NAMES:
                 if name in preferred:continue
                 path=root/(auxiliary_snapshot_filename(name))
@@ -462,12 +533,12 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
                 if all(present):snapshots[name]=path
             snapshots.update(preferred)
-            from prepare_magic_words import selected_snapshot_root
+            from prepare_magic_words_int import selected_snapshot_root
             magic_root=selected_snapshot_root(root)
             if magic_root.exists() or magic_root.is_symlink():
                 if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
                 path=magic_root/'magic-words.tsv'
-                from prepare_magic_words import validate_snapshot
+                from prepare_magic_words_int import validate_snapshot
                 validate_snapshot(path,edition,date)
                 snapshots['magic-words']=path
         elif (downloads/edition/date/'namespace-registry.tsv').is_file():
@@ -522,7 +593,9 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         source=Path(source)
         # Commons replay certifies the entire directory, including absence of
         # extra payloads. Keep its capture separate from other pins and input.
-        folder=destination/'commons-data' if name=='commons-data' else destination
+        folder=destination/'commons-data' if name=='commons-data' else (
+            destination/'site-info' if name=='site-info' and
+            auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
         if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
         pinned[name]=folder/(auxiliary_snapshot_filename(name))
         add_copy(source,folder,auxiliary_snapshot_filename(name),hashes[name])
@@ -532,7 +605,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                 raise ValueError('Auxiliary capture disappeared before pinning: '+name)
             continue
         _,inventory=capture
-        if capture_hashes is not None and inventory[auxiliary_manifest_filename(name)]!=capture_hashes.get(name):
+        if capture_hashes is not None and inventory[auxiliary_manifest_filename(name,source)]!=capture_hashes.get(name):
             raise ValueError('Auxiliary capture changed before pinning: '+name)
         if capture_artifact_hashes is not None and auxiliary_artifact_digest(inventory)!=capture_artifact_hashes.get(name):
             raise ValueError('Auxiliary capture artifacts changed before pinning: '+name)

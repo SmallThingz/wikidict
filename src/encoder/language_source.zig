@@ -8,6 +8,7 @@ const ParsedHeading = struct {
 pub const Section = struct {
     heading: []const u8,
     source: []const u8,
+    hyphen_marker: bool = false,
 };
 
 /// A language declaration remains a boundary even when its label is unknown.
@@ -95,6 +96,7 @@ pub const Iterator = struct {
     cursor: usize = 0,
     active_start: ?usize = null,
     active_heading: []const u8 = "",
+    active_hyphen_marker: bool = false,
     active_level: ?u8 = null,
     balance: Balance = .{},
     done: bool = false,
@@ -132,6 +134,11 @@ pub const Iterator = struct {
             if (!self.balance.isOpen()) {
                 const heading = parseHeading(line);
                 const marker = if (heading == null) self.languageMarker(line) else null;
+                const hyphen_marker = if (marker != null) blk: {
+                    const trimmed = std.mem.trim(u8, line, " \t\r");
+                    const body = std.mem.trim(u8, trimmed[2 .. trimmed.len - 2], " \t");
+                    break :blk body[0] == '-';
+                } else false;
                 const candidate_level: ?u8 = if (heading) |value|
                     if (value.level == 1 or value.level == 2) value.level else null
                 else if (marker != null) 2 else null;
@@ -143,13 +150,16 @@ pub const Iterator = struct {
                             const result: Section = .{
                                 .heading = self.active_heading,
                                 .source = self.source[start..line_start],
+                                .hyphen_marker = self.active_hyphen_marker,
                             };
                             self.active_start = line_start;
                             self.active_heading = title;
+                            self.active_hyphen_marker = hyphen_marker;
                             return result;
                         }
                         self.active_start = line_start;
                         self.active_heading = title;
+                        self.active_hyphen_marker = hyphen_marker;
                         continue;
                     }
                 }
@@ -160,7 +170,7 @@ pub const Iterator = struct {
         self.done = true;
         if (self.active_start) |start| {
             self.active_start = null;
-            return .{ .heading = self.active_heading, .source = self.source[start..] };
+            return .{ .heading = self.active_heading, .source = self.source[start..], .hyphen_marker = self.active_hyphen_marker };
         }
         return null;
     }
