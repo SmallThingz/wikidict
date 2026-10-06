@@ -1,4 +1,5 @@
 const std = @import("std");
+const shared_xml_decode = @import("shared_xml_decode");
 const LocalBumpArena = rt.LocalBumpArena;
 const work_stats = rt.work_stats;
 const rt = @import("zig_runtime");
@@ -437,7 +438,15 @@ pub const Expander = struct {
 
     fn hostPageExists(raw: ?*anyopaque, title: []const u8) anyerror!bool {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, title);
+        const canonical = namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, title) catch |err| switch (err) {
+            error.InvalidPageTitle => return false,
+            else => return err,
+        };
+        const parsed = namespace_lib.ofTitle(self.runtime, canonical);
+        const spec = namespace_lib.byId(self.runtime, parsed.id) orelse return error.NamespaceRegistryRequired;
+        // ParserFunctions checks Title::newFromText before any existence lookup.
+        // Invalid title bodies cannot require a captured page or file result.
+        if (!title_lib.validTitleBody(self.runtime, spec, parsed.text)) return false;
         if (std.mem.eql(u8, canonical, self.host.current_title) and self.current_source != null) return true;
         if (try self.provider.exists(self.provider.ctx, canonical)) return true;
         if (namespace_lib.ofTitle(self.runtime, canonical).id == 828) {
@@ -1126,7 +1135,12 @@ pub const Expander = struct {
     }
 
     fn expandIfExist(self: *Expander, raw_title: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
-        var title = std.mem.trim(u8, try self.expandWikitext(raw_title, params, host_title, depth + 1), " \t\r\n");
+        const expanded = try self.expandWikitext(raw_title, params, host_title, depth + 1);
+        const decoded = if (std.mem.indexOfScalar(u8, expanded, '&') != null)
+            try shared_xml_decode.decodeSinglePassAlloc(self.runtime.allocator, expanded)
+        else
+            expanded;
+        var title = std.mem.trim(u8, decoded, " \t\r\n");
         if (title.len != 0 and title[0] == ':') title = std.mem.trim(u8, title[1..], " \t\r\n");
         if (std.mem.indexOfScalar(u8, title, '#')) |hash| title = title[0..hash];
         const exists = title.len != 0 and try hostPageExists(self, title);
@@ -3067,6 +3081,126 @@ test "translations show page cache resets failures and avoids reentrant reuse" {
     try std.testing.expect(expander.hot_translation_runtime != expander.page_invoke_runtime);
     try std.testing.expect(expander.hot_translation_runtime.?.module_template_context == &runtime);
     try std.testing.expect(!expander.hot_translation_active and !expander.page_invoke_active);
+}
+
+test "ifexist rejects invalid title bodies before provider lookup" {
+    const Source = struct {
+        calls: usize = 0,
+        expected: []const u8 = "",
+        fail: bool = false,
+
+        fn exists(raw: ?*anyopaque, title: []const u8) !bool {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            try std.testing.expectEqualStrings(self.expected, title);
+            if (self.fail) return error.FileMetadataSnapshotMissing;
+            return true;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try rt.namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tbnwiktionary\n# dump-date\t20261001\n# content-language\tbn\n" ++
+        "-2\tমিডিয়া\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n" ++
+        "-1\tবিশেষ\tSpecial\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n" ++
+        "6\tচিত্র\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n" ++
+        "10\tটেমপ্লেট\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tবিষয়শ্রেণী\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer registry.deinit();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &registry;
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: Source = .{};
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .ctx = &source, .get = TestProvider.get, .exists = Source.exists },
+    };
+
+    var ascii: [256]u8 = undefined;
+    @memset(&ascii, 'a');
+    var unicode: [255]u8 = undefined;
+    for (0..85) |i| @memcpy(unicode[i * 3 ..][0..3], "অ");
+    var special: [513]u8 = undefined;
+    @memset(&special, 's');
+    const Case = struct { input: []const u8, expected: ?[]const u8 };
+    const cases = [_]Case{
+        .{ .input = try std.fmt.allocPrint(a, "Media:{s}", .{ascii[0..255]}), .expected = try std.fmt.allocPrint(a, "মিডিয়া:{s}", .{ascii[0..255]}) },
+        .{ .input = try std.fmt.allocPrint(a, "Media:{s}", .{&ascii}), .expected = null },
+        .{ .input = try std.fmt.allocPrint(a, "File:{s}", .{&unicode}), .expected = try std.fmt.allocPrint(a, "চিত্র:{s}", .{&unicode}) },
+        .{ .input = try std.fmt.allocPrint(a, "মিডিয়া:{s}a", .{&unicode}), .expected = null },
+        .{ .input = try std.fmt.allocPrint(a, "  :Media:__{s}__#ignored", .{ascii[0..255]}), .expected = try std.fmt.allocPrint(a, "মিডিয়া:{s}", .{ascii[0..255]}) },
+        .{ .input = try std.fmt.allocPrint(a, "Special:{s}", .{special[0..512]}), .expected = try std.fmt.allocPrint(a, "বিশেষ:{s}", .{special[0..512]}) },
+        .{ .input = try std.fmt.allocPrint(a, "Special:{s}", .{&special}), .expected = null },
+        .{ .input = "Media:Foo&amp;Bar.ogg", .expected = "মিডিয়া:Foo&Bar.ogg" },
+        .{ .input = "Media&#58;Foo.ogg", .expected = "মিডিয়া:Foo.ogg" },
+        .{ .input = "Media:Foo&amp;amp;Bar.ogg", .expected = null },
+        .{ .input = "Media:", .expected = null },
+        .{ .input = "Media:bad%20name.ogg", .expected = null },
+        .{ .input = "Media:bad/../name.ogg", .expected = null },
+        .{ .input = "Media:bad~~~name.ogg", .expected = null },
+    };
+    for (cases) |case| {
+        source.calls = 0;
+        source.expected = case.expected orelse "";
+        const text = try std.fmt.allocPrint(a, "{{{{#ifexist:{s}|yes|no}}}}", .{case.input});
+        const got = try expander.expandFragment("Entry", text, 1_670_803_200);
+        try std.testing.expectEqualStrings(if (case.expected != null) "yes" else "no", got);
+        try std.testing.expectEqual(@as(usize, if (case.expected != null) 1 else 0), source.calls);
+    }
+
+    // A valid boundary title must still request its provider and propagate an
+    // uncaptured file failure. Invalid syntax is not a missing-file waiver.
+    source.calls = 0;
+    source.expected = cases[0].expected.?;
+    source.fail = true;
+    const missing = try std.fmt.allocPrint(a, "{{{{#ifexist:{s}|yes|no}}}}", .{cases[0].input});
+    try std.testing.expectError(error.FileMetadataSnapshotMissing, expander.expandFragment("Entry", missing, 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 1), source.calls);
+}
+
+test "ifexist Bengali finite filename constructors reject overlong names without metadata" {
+    const Source = struct {
+        calls: usize = 0,
+
+        fn exists(raw: ?*anyopaque, _: []const u8) !bool {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            return error.FileMetadataSnapshotMissing;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: Source = .{};
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .ctx = &source, .get = TestProvider.get, .exists = Source.exists },
+    };
+    const page = "তিন নাড়ায় সুপারি সোনা, তিন নাড়ায় নারকেল টেনা, তিন নাড়ায় শ্রীফল বেল, তিন নাড়ায় গেরস্থ গেল";
+    const names = [_][]const u8{
+        "LL-Q9610 (ben)-Titodutta-" ++ page ++ ".wav",
+        "LL-Q9610 (ben)-Aishik Rehman-" ++ page ++ ".wav",
+        "bn-" ++ page ++ ".ogg",
+    };
+    for (names) |name| {
+        const text = try std.fmt.allocPrint(a, "{{{{#ifexist:Media:{s}|{{{{#ifexist:Media:Uncaptured.ogg|bad|bad}}}}|absent}}}}", .{name});
+        try std.testing.expectEqualStrings("absent", try expander.expandFragment(page, text, 1_670_803_200));
+    }
+    try std.testing.expectEqual(@as(usize, 0), source.calls);
 }
 
 test "native AOT wikitext expands templates parser functions and invoke" {
