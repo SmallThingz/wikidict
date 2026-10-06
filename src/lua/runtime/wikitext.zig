@@ -99,9 +99,12 @@ pub const Provider = struct {
     get: *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8,
     get_transclusion: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8 = null,
     get_transclusion_body: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?TransclusionBody = null,
-    redirect_target: ?*const fn (?*anyopaque, []const u8) anyerror!?[]const u8 = null,
+    redirect_target: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!?[]const u8 = null,
     page_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!?PageMetadata = null,
     stable_page_reads: bool = false,
+    // Dump providers own the full revision, even when this expansion contains
+    // only a redirect's remaining content. Generic source-only hosts opt out.
+    authoritative_page_source: bool = false,
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
     external_data: ?*const fn (?*anyopaque, []const u8) anyerror!?ExternalData = null,
     category_stats: ?*const fn (?*anyopaque, []const u8) anyerror!?CategoryStats = null,
@@ -313,7 +316,10 @@ pub const Expander = struct {
     fn hostPageContent(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) anyerror!?[]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const canonical = try namespace_lib.canonicalizeTitle(a, self.runtime, title);
-        if (std.mem.eql(u8, canonical, self.host.current_title)) if (self.current_source) |source| return source;
+        if (std.mem.eql(u8, canonical, self.host.current_title)) {
+            if (self.provider.authoritative_page_source) return self.provider.get(self.provider.ctx, a, canonical);
+            if (self.current_source) |source| return source;
+        }
         return self.provider.get(self.provider.ctx, a, canonical);
     }
 
@@ -321,7 +327,7 @@ pub const Expander = struct {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.redirect_target orelse return null;
         const canonical = try namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, title);
-        return get(self.provider.ctx, canonical);
+        return get(self.provider.ctx, self.runtime.allocator, canonical);
     }
 
     fn hostPageId(raw: ?*anyopaque, title: []const u8) anyerror!?u64 {

@@ -209,7 +209,7 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
     try w.writeAll("  / ");
     try terminalText(w, entry.language orelse @tagName(entry.kind));
     try w.writeByte('\n');
-    if (details and entry.preamble_spans.len != 0) {
+    if ((details or entry.kind == .alias) and entry.preamble_spans.len != 0) {
         try spansText(w, entry.preamble_spans, color);
         try w.writeByte('\n');
     }
@@ -339,6 +339,27 @@ test "human renderer consumes compiled spans only" {
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "A small feline.") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "{{") == null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "[[") == null);
+}
+
+test "compact terminal output retains the displayed alias destination" {
+    const spans = [_]model.Span{.{ .kind = .link, .text = "C", .target = "C#Noun" }};
+    var entry: model.Entry = .{
+        .title = "B",
+        .kind = .alias,
+        .preamble_spans = &spans,
+        .redirect = .{ .source_title = "A", .target_title = "B", .fragment = "Incoming", .followed = true },
+        .alias = .{ .xml_target = "C", .target_title = "C", .fragment = "Noun" },
+    };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryTextWithDetails(&out.writer, entry, false, false);
+    try std.testing.expectEqualStrings("B  / alias\nC\n", out.written());
+    entry.kind = .citations;
+    entry.redirect = null;
+    entry.alias = null;
+    out.clearRetainingCapacity();
+    try entryTextWithDetails(&out.writer, entry, false, false);
+    try std.testing.expectEqualStrings("B  / citations\n", out.written());
 }
 
 /// Terminal folds operate on compiled sections, never by reparsing source.

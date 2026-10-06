@@ -278,7 +278,15 @@ fn metaIndexCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
             try table.rawSet(runtime.allocator, .{ .string = "redirectTarget" }, .{ .boolean = false });
             return one(.{ .boolean = false });
         };
-        const value = try makeTitleValue(runtime, state, try namespace_lib.canonicalizeTitle(runtime.allocator, runtime, target));
+        // Redirect metadata already contains an authoritative stored fragment.
+        // Normalize only its title, never reinterpret the SQL fragment as input.
+        const hash = std.mem.indexOfScalar(u8, target, '#');
+        const base = if (hash) |at| target[0..at] else target;
+        const value = if (try externalInterwikiParts(runtime, state, base, true)) |external|
+            (try makeExternalTitleValue(runtime, state, external.prefix, external.body)) orelse return error.InvalidTitle
+        else
+            try makeTitleValue(runtime, state, try namespace_lib.canonicalizeTitle(runtime.allocator, runtime, base));
+        if (hash) |at| try value.table.rawSetNativeField(.title_value, "__fragment", .{ .string = try runtime.allocator.dupe(u8, target[at + 1 ..]) });
         try table.rawSet(runtime.allocator, .{ .string = "redirectTarget" }, value);
         return one(value);
     }
@@ -781,7 +789,7 @@ fn testPageExists(_: ?*anyopaque, title: []const u8) !bool {
 }
 
 fn testPageRedirect(_: ?*anyopaque, title: []const u8) !?[]const u8 {
-    return if (std.mem.eql(u8, title, "Template:Alias")) "Template:Foo/Sub" else null;
+    return if (std.mem.eql(u8, title, "Template:Alias")) "Template:Foo/Sub#e\u{301} &nsbp;" else null;
 }
 
 fn testPageId(_: ?*anyopaque, title: []const u8) !?u64 {
@@ -920,6 +928,7 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     const redirect_target = try runtime.getIndex(redirect_made[0], .{ .string = "redirectTarget" });
     try std.testing.expect(redirect_target == .table);
     try std.testing.expectEqualStrings("Template:Foo/Sub", (try runtime.getIndex(redirect_target, .{ .string = "prefixedText" })).string);
+    try std.testing.expectEqualStrings("e\u{301} &nsbp;", (try runtime.getIndex(redirect_target, .{ .string = "fragment" })).string);
     try std.testing.expect(!(try runtime.getIndex(title, .{ .string = "isRedirect" })).boolean);
     const not_redirect_target = try runtime.getIndex(title, .{ .string = "redirectTarget" });
     try std.testing.expect(not_redirect_target == .boolean and !not_redirect_target.boolean);

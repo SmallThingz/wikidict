@@ -16,6 +16,7 @@ pub fn featureBlobFilename(kind: format.BlobKind) ?[]const u8 {
         .rhymes => "rhymes.wikblb",
         .sign_gloss => "sign-gloss.wikblb",
         .supplemental => "supplemental.wikblb",
+        .alias => "aliases.wikblb",
     };
 }
 

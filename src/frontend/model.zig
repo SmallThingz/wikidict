@@ -57,17 +57,34 @@ pub fn fromRecord(allocator: A, record: dec.BlobRecordView) !DecodedEntry {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
+    const alias: ?enc.alias_codec.Record = if (record == .alias) enc.alias_codec.decode(payload(record)) catch return error.InvalidPresentation else null;
+    if (alias) |value| enc.alias_codec.validateKey(record.title(), value) catch return error.InvalidPresentation;
     const stored = codec.decodeAlloc(
         a,
-        payload(record),
-        record.title(),
+        if (alias) |value| value.presentation else payload(record),
+        if (alias) |value| value.source_title else record.title(),
         record.kind(),
         if (record == .language) record.language.metadata else null,
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidPresentation,
     };
-    return .{ .arena = arena, .entry = stored.entry };
+    var entry = stored.entry;
+    entry.redirect = record.redirect();
+    if (alias) |value| entry.alias = .{
+        .xml_target = value.xml_target,
+        .target_title = value.target_title,
+        .fragment = value.fragment,
+    };
+    if (entry.redirect == null) if (alias) |value| {
+        entry.redirect = .{
+            .source_title = value.source_title,
+            .target_title = value.target_title,
+            .fragment = value.fragment,
+            .followed = false,
+        };
+    };
+    return .{ .arena = arena, .entry = entry };
 }
 
 test "reader deserializes compiled presentation without wikitext parsing" {
@@ -88,4 +105,57 @@ test "reader deserializes compiled presentation without wikitext parsing" {
 
 test "reader rejects source-like payload instead of compiling it" {
     try std.testing.expectError(error.InvalidPresentation, fromRecord(std.testing.allocator, .{ .citations = .{ .title = "cat", .payload = "# [[cat]] {{template}}" } }));
+}
+
+test "alias model validates both envelope identity and nested compiled presentation" {
+    const a = std.testing.allocator;
+    const bytes = try codec.encodeAlloc(a, .{ .entry = .{ .title = "B", .kind = .alias } });
+    defer a.free(bytes);
+    var alias: enc.alias_codec.Record = .{
+        .source_namespace = 0,
+        .source_kind = .language,
+        .source_title = "B",
+        .source_key = "B",
+        .xml_target = "C",
+        .target_title = "C",
+        .target_namespace = 0,
+        .target_kind = .language,
+        .target_key = "C",
+        .fragment = "Next",
+        .presentation = bytes,
+    };
+    const envelope = try enc.alias_codec.encodeAlloc(a, alias);
+    defer a.free(envelope);
+    var doc = try fromRecord(a, .{ .alias = .{
+        .title = "1\tB",
+        .payload = envelope,
+        .redirect = .{ .source_title = "A", .target_title = "B", .fragment = "Incoming", .followed = true },
+    } });
+    defer doc.deinit();
+    try std.testing.expectEqualStrings("A", doc.entry.redirect.?.source_title);
+    try std.testing.expectEqualStrings("Incoming", doc.entry.redirect.?.fragment);
+    try std.testing.expectEqualStrings("C", doc.entry.alias.?.target_title);
+    try std.testing.expectEqualStrings("Next", doc.entry.alias.?.fragment);
+    try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tWrong", .payload = envelope } }));
+    try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tB", .payload = bytes } }));
+    alias.presentation = "#REDIRECT [[C]]";
+    const source_like = try enc.alias_codec.encodeAlloc(a, alias);
+    defer a.free(source_like);
+    try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tB", .payload = source_like } }));
+}
+
+test "transient redirect metadata does not alter ordinary DPR2 bytes" {
+    const a = std.testing.allocator;
+    var entry: Entry = .{ .title = "cat", .kind = .citations };
+    const ordinary = try codec.encodeAlloc(a, .{ .entry = entry });
+    defer a.free(ordinary);
+    entry.redirect = .{ .source_title = "Cat", .target_title = "cat", .fragment = "", .followed = true };
+    entry.alias = .{ .xml_target = "next", .target_title = "next", .fragment = "" };
+    const transient = try codec.encodeAlloc(a, .{ .entry = entry });
+    defer a.free(transient);
+    try std.testing.expectEqualSlices(u8, ordinary, transient);
+    var doc = try fromRecord(a, .{ .citations = .{ .title = "cat", .payload = transient } });
+    defer doc.deinit();
+    try std.testing.expect(doc.entry.redirect == null);
+    try std.testing.expect(doc.entry.alias == null);
 }

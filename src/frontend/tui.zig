@@ -146,7 +146,7 @@ const State = struct {
     fn switchDictionary(self: *State, heading: []const u8) !void {
         var next_db = try store.Store.open(self.io, self.a, self.db.root, .language, heading);
         errdefer next_db.deinit();
-        const label = try std.fmt.allocPrint(self.a, "{s} / language", .{heading});
+        const label = try next_db.labelAlloc(self.a);
         errdefer self.a.free(label);
         var next_reading = ReadingState.init(self.a);
         errdefer next_reading.deinit();
@@ -161,7 +161,7 @@ const State = struct {
         if (self.label_owned) self.a.free(self.label);
         self.label = label;
         self.label_owned = true;
-        self.theme = @enumFromInt(@intFromEnum(reading.data.theme));
+        self.theme = @fromBackingInt(@intCast(@backingInt(reading.data.theme)));
         self.details = reading.data.details;
         self.nav = .search;
         self.focus = .search;
@@ -327,7 +327,7 @@ const State = struct {
             return true;
         }
         if (event.key == .text and !event.pasted and !answering and self.focus != .search and event.len == 1 and event.bytes[0] >= '1' and event.bytes[0] <= '5') {
-            try self.navigate(@enumFromInt(event.bytes[0] - '1'));
+            try self.navigate(@fromBackingInt(@intCast(event.bytes[0] - '1')));
             return true;
         }
         if (self.nav == .library) {
@@ -361,7 +361,7 @@ const State = struct {
                                 .dark => .light,
                                 .light => .terminal,
                             };
-                            r.data.theme = @enumFromInt(@intFromEnum(self.theme));
+                            r.data.theme = @fromBackingInt(@intCast(@backingInt(self.theme)));
                         },
                         1 => {
                             self.details = !self.details;
@@ -608,7 +608,7 @@ const State = struct {
                             .light => .terminal,
                         };
                         if (self.reading) |r| {
-                            r.data.theme = @enumFromInt(@intFromEnum(self.theme));
+                            r.data.theme = @fromBackingInt(@intCast(@backingInt(self.theme)));
                             try r.save(self.io);
                         }
                     },
@@ -750,7 +750,7 @@ const State = struct {
     fn dock(self: State, w: *std.Io.Writer) !void {
         const labels = if (self.screen.cols < 72) [_][]const u8{ "1Save", "2Hist", "3Find", "4Lrn", "5Set", "L Lib" } else [_][]const u8{ "1 Saved", "2 History", "3 Search", "4 Learn", "5 Settings", "L Library" };
         const width = self.screen.cols / labels.len;
-        for (labels, 0..) |label, i| try self.put(w, self.screen.rows, i * width + 1, width, label, if (@intFromEnum(self.nav) == i) palette(self.theme, self.color).selected else palette(self.theme, self.color).muted);
+        for (labels, 0..) |label, i| try self.put(w, self.screen.rows, i * width + 1, width, label, if (@backingInt(self.nav) == i) palette(self.theme, self.color).selected else palette(self.theme, self.color).muted);
     }
     fn draw(self: *State) !void {
         const sz = self.screen;
@@ -905,7 +905,7 @@ pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8
     var state: State = .{ .reading = &reading, .a = a, .io = io, .db = db, .label = label, .theme = theme, .color = color, .details = initial_details };
     state.case_sensitive = case_sensitive;
     defer state.deinit();
-    if (theme == .terminal) state.theme = @enumFromInt(@intFromEnum(reading.data.theme));
+    if (theme == .terminal) state.theme = @fromBackingInt(@intCast(@backingInt(reading.data.theme)));
     state.details = initial_details or reading.data.details;
     @memcpy(state.query[0..query.len], query);
     state.len = query.len;
@@ -960,6 +960,56 @@ pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8
         };
     }
     try reading.save(io);
+}
+
+test "terminal neutral redirect selection has no invented library heading" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var aliases: [2]enc.blob_format.RecordInput = undefined;
+    for ([_][]const u8{ "A", "B" }, [_][]const u8{ "B", "Missing" }, 0..) |source, target, i| {
+        const presentation = try enc.presentation_codec.encodeAlloc(fixture, .{ .entry = .{
+            .title = source,
+            .kind = .alias,
+            .preamble_spans = &.{.{ .kind = .link, .text = target, .target = target }},
+        } });
+        aliases[i] = .{ .title = try enc.alias_codec.keyAlloc(fixture, .language, source), .payload = try enc.alias_codec.encodeAlloc(fixture, .{
+            .source_namespace = 0,
+            .source_kind = .language,
+            .source_title = source,
+            .source_key = source,
+            .xml_target = target,
+            .target_title = target,
+            .target_namespace = 0,
+            .target_kind = .language,
+            .target_key = target,
+            .fragment = "",
+            .presentation = presentation,
+        }) };
+    }
+    const bytes = try enc.blob_format.buildAlloc(fixture, .alias, "", &aliases);
+    const path = try store.pathAlloc(fixture, root, .alias, "");
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    const manifest = try std.fs.path.join(fixture, &.{ root, store.catalog.manifest_filename });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = manifest, .data = store.catalog.manifest_header ++ "\n" });
+    var db = try store.Store.open(std.testing.io, a, root, .language, "English");
+    defer db.deinit();
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .label = try db.labelAlloc(a), .label_owned = true, .theme = .terminal, .color = false };
+    defer state.deinit();
+    try std.testing.expectEqualStrings("Redirects", state.label);
+    try state.loadLibrary();
+    try std.testing.expectEqual(@as(usize, 0), state.library_names.items.len);
+    try state.insert("A");
+    try std.testing.expectEqual(@as(usize, 1), state.count());
+    try std.testing.expectEqualStrings("A", try db.titleAt(state.recordIndex(0)));
+    try state.prepare(80);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "Missing") != null);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "English") == null);
+    try std.testing.expect(db.heading() == null);
 }
 
 test "terminal query editing is bounded and UTF8-aware" {
@@ -1055,7 +1105,7 @@ test "terminal query editing is bounded and UTF8-aware" {
     try std.testing.expectEqual(Page.search, state.nav);
     try std.testing.expect(!state.help);
     _ = try state.key(.{ .key = .text, .bytes = .{ 't', 0, 0, 0 }, .len = 1 });
-    try std.testing.expectEqual(@intFromEnum(state.theme), @intFromEnum(reading.data.theme));
+    try std.testing.expectEqual(@backingInt(state.theme), @backingInt(reading.data.theme));
     try state.navigate(.settings);
     state.setting = 8;
     _ = try state.key(.{ .key = .right });

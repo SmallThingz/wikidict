@@ -266,6 +266,9 @@ def auxiliary_capture_helper(name, path):
         return prepare_commons_data
     if name=='language-names':
         record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
+        if isinstance(record,dict) and record.get('schema')=='wikidict.language-names-translate-capture.v1':
+            import prepare_language_names_translate
+            return prepare_language_names_translate
         if isinstance(record,dict) and record.get('schema')=='wikidict.language-names-capture.v2':
             import prepare_language_names_generic
             return prepare_language_names_generic
@@ -297,9 +300,75 @@ def auxiliary_capture_helper(name, path):
 _FILE_METADATA_V2_REPLAYS={}
 
 
+# Successful generic-name replays are process-local; every reuse still hashes
+# the complete capture inventory. A producer/runtime change requires a restart.
+_GENERIC_LANGUAGE_NAMES_REPLAYS={}
+_GENERIC_LANGUAGE_NAMES_RUNTIME=None
+
+
+def generic_language_names_runtime(helper):
+    def config_value(value):
+        if isinstance(value,frozenset):return sorted(value)
+        raise ValueError('Unsupported language names runtime configuration')
+    constants={name:value for name,value in vars(helper).items() if name.isupper()}
+    config=json.dumps(constants,sort_keys=True,separators=(',',':'),default=config_value)
+    functions=[]
+    for name,value in sorted(vars(helper).items()):
+        if callable(value) and getattr(value,'__module__',None)==helper.__name__:
+            function=getattr(value,'__wrapped__',value)
+            functions.append((name,value,getattr(function,'__code__',None),
+                              repr(getattr(function,'__defaults__',None)),
+                              repr(getattr(function,'__kwdefaults__',None))))
+    return (helper,helper.evidence,config,tuple(functions))
+
+
+def generic_language_names_capture(helper,path,edition,date):
+    global _GENERIC_LANGUAGE_NAMES_RUNTIME
+    path=Path(path)
+    if (path.name!='language-names.tsv' or path.is_symlink() or
+            path.parent.is_symlink() or not path.parent.is_dir()):
+        raise ValueError('Invalid language names snapshot path')
+    producer=json.dumps(helper.producer(),sort_keys=True,separators=(',',':'))
+    runtime=(producer,generic_language_names_runtime(helper))
+    if _GENERIC_LANGUAGE_NAMES_RUNTIME is not None and runtime!=_GENERIC_LANGUAGE_NAMES_RUNTIME:
+        raise ValueError('Language names producer/runtime changed; restart the builder')
+    manifest_path=path.with_name('language-names.manifest.json')
+    manifest_sha=hashlib.sha256(helper.evidence.small(manifest_path,helper.MAX_MANIFEST)).hexdigest()
+    key=(producer,manifest_sha)
+    previous=_GENERIC_LANGUAGE_NAMES_REPLAYS.get(key)
+    if previous is None:
+        record=helper.validate_snapshot(path,edition,date)
+        artifacts=helper.capture_artifacts(path,record)
+    else:
+        record=json.loads(previous[0])
+        if ((edition is not None and record['wiki']!=edition) or
+                (date is not None and record['date']!=date)):
+            raise ValueError('Language names edition/date mismatch')
+        payload=helper.payload(path.parent)
+        if payload!=record['artifacts']:
+            raise ValueError('Language names evidence inventory changed')
+        artifacts={name:item['sha256'] for name,item in payload.items()}
+        for name in (helper.COMPLETE,'language-names.manifest.json'):
+            artifacts[name]=hashlib.sha256(helper.evidence.small(path.with_name(name),helper.MAX_MANIFEST)).hexdigest()
+    inventory=tuple(sorted(artifacts.items()))
+    if (artifacts.get('language-names.manifest.json')!=manifest_sha or
+            runtime!=(json.dumps(helper.producer(),sort_keys=True,separators=(',',':')),
+                      generic_language_names_runtime(helper)) or
+            (previous is not None and inventory!=previous[1])):
+        raise ValueError('Language names capture or producer changed during validation')
+    if previous is None:
+        if len(_GENERIC_LANGUAGE_NAMES_REPLAYS)>=32:_GENERIC_LANGUAGE_NAMES_REPLAYS.clear()
+        _GENERIC_LANGUAGE_NAMES_REPLAYS[key]=(json.dumps(record,sort_keys=True,separators=(',',':')),inventory)
+        _GENERIC_LANGUAGE_NAMES_RUNTIME=runtime
+    # Never expose the mutable objects retained by the cache.
+    return json.loads(_GENERIC_LANGUAGE_NAMES_REPLAYS[key][0]),dict(inventory)
+
+
 def validated_auxiliary_capture(name, path, edition=None, date=None):
     helper=auxiliary_capture_helper(name,path)
     if helper is None:return None
+    if name=='language-names' and helper.__name__=='prepare_language_names_generic':
+        return generic_language_names_capture(helper,path,edition,date)
     replay_key=None;previous=None
     if name=='file-metadata' and helper.__name__=='prepare_file_metadata_v2':
         path=Path(path)
@@ -575,10 +644,11 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
     return result
 
 
-def pipeline_snapshot_args(registry, snapshots, page_links_snapshot=None):
+def pipeline_snapshot_args(registry, snapshots, page_links_snapshot=None, page_redirects_snapshot=None):
     merged=dict(snapshots or {})
     merged.setdefault('language-registry',registry)
     if page_links_snapshot is not None:merged['wikibase-page-links']=page_links_snapshot
+    if page_redirects_snapshot is not None:merged['page-redirects']=page_redirects_snapshot
     return auxiliary_snapshot_args(merged)
 
 
@@ -647,7 +717,7 @@ def source_fingerprint():
     return checksum.hexdigest()
 
 
-def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None):
+def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None, downloads=None):
     executable=shutil.which(zig)
     if executable is None:raise ValueError('Zig compiler executable is unavailable')
     identity=dict(version=1, source=source_fingerprint(),
@@ -660,6 +730,9 @@ def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_
     if manifests:
         identity['auxiliary_capture_sha256']=manifests
         identity['auxiliary_capture_artifact_sha256']=artifacts
+    from prepare_page_redirects import source_identity
+    redirects=source_identity(items, downloads if downloads is not None else PROJECT/'data/dumps') if items else None
+    if redirects is not None:identity['derived_page_redirects']=redirects
     return identity
 
 
@@ -1199,7 +1272,7 @@ def cached_shard_dump(items, downloads, workspace):
     return dump
 
 
-def expander_ready(root, auxiliary_hashes=None, interwiki_sha=None, page_links_sha=None):
+def expander_ready(root, auxiliary_hashes=None, interwiki_sha=None, page_links_sha=None, page_redirects_sha=None):
     marker=root/'.incomplete'
     expander=root/'.bundle-expander'
     try: ready=marker.read_text()=='expander ready'
@@ -1210,6 +1283,8 @@ def expander_ready(root, auxiliary_hashes=None, interwiki_sha=None, page_links_s
         if interwiki_sha is None and (expander/'interwiki-map.tsv').exists():return False
         if page_links_sha is not None and sha256_file(expander/'wikibase-page-links.tsv')!=page_links_sha:return False
         if page_links_sha is None and 'wikibase-page-links' not in (auxiliary_hashes or {}) and (expander/'wikibase-page-links.tsv').exists():return False
+        if page_redirects_sha is not None and sha256_file(expander/'page-redirects.tsv')!=page_redirects_sha:return False
+        if page_redirects_sha is None and (expander/'page-redirects.tsv').exists():return False
         return all(sha256_file(expander/(auxiliary_snapshot_filename(name)))==digest for name,digest in (auxiliary_hashes or {}).items()
                    if name!='wikibase-page-links' or page_links_sha is None)
     except OSError:return False
@@ -1246,7 +1321,7 @@ def timed_run(command, edition, date, phase, **fields):
         run_checked(command)
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None):
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     edition,date=items[0]['wiki'],items[0]['date']
     workers=min(workers,MAX_PIPELINE_WORKERS)
@@ -1255,13 +1330,14 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         raise ValueError('Invalid page expansion worker count')
     expander_build=workspace/'expander'
     page_links_sha=sha256_file(page_links_snapshot) if page_links_snapshot is not None else None
-    if not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha):
+    page_redirects_sha=sha256_file(page_redirects_snapshot) if page_redirects_snapshot is not None else None
+    if not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha):
         if expander_build.exists(): shutil.rmtree(expander_build)
         staged=json.loads((workspace/'input/.complete.json').read_text())
         extraction_cache=workspace/'input'/'extraction-cache'
         timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(expander_build),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
-                     *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot),
+                     *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
                      '--extraction-cache-root',str(extraction_cache),
@@ -1417,6 +1493,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     require_auxiliary_capture_identity(auxiliary_snapshots,build_identity)
     if page_links_snapshot is not None and sha256_file(page_links_snapshot)!=page_links_sha:
         raise ValueError('Derived page links changed during sharded build')
+    if page_redirects_snapshot is not None and sha256_file(page_redirects_snapshot)!=page_redirects_sha:
+        raise ValueError('Derived page redirects changed during sharded build')
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
     persist_build_identity(staging,build_identity)
     (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
@@ -1547,6 +1625,9 @@ def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None):
             if ns in expected_routes or kind=='INVALID':raise ValueError('Invalid namespace registry routing')
             expected_routes[ns]=(columns[1],kind)
     counters=('input_rows','compile_only_rows','source_unavailable_rows','dispatched_rows','expanded_pages','fallback_pages','duplicate_rows')
+    alias_fields=['alias_pages' in row for row in report['namespaces'] if isinstance(row,dict)]
+    if alias_fields and any(alias_fields)!=all(alias_fields):raise ValueError('Mixed alias coverage schema')
+    if alias_fields and all(alias_fields):counters+=('alias_pages',)
     totals={key:0 for key in counters};seen=set()
     for row in report['namespaces']:
         if not isinstance(row,dict):raise ValueError('Invalid namespace coverage row')
@@ -1560,6 +1641,7 @@ def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None):
             if type(value) is not int or not 0<=value<2**64:raise ValueError('Invalid namespace coverage counter')
             totals[key]+=value
         if row['input_rows']!=row['compile_only_rows']+row['source_unavailable_rows']+row['dispatched_rows'] or row['dispatched_rows']!=row['expanded_pages']+row['fallback_pages']+row['duplicate_rows']:raise ValueError('Incomplete namespace coverage')
+        if row.get('alias_pages',0)>row['expanded_pages']+row['fallback_pages'] or (kind is None and row.get('alias_pages',0)):raise ValueError('Invalid alias coverage subset')
         if (kind is None and row['input_rows']!=row['compile_only_rows']) or (kind is not None and row['compile_only_rows']!=0):raise ValueError('Invalid namespace coverage disposition')
         if (kind=='language')!=(ns==0) or (ns==0)!=(name==''):raise ValueError('Invalid main namespace coverage')
     if totals['input_rows']!=expected_rows:raise ValueError('Namespace coverage does not match selected rows')
@@ -1664,7 +1746,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     else:
         interwiki_sha=None
     auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,edition,date)
-    build_identity=build_input_identity(items,zig,auxiliary_hashes,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots)
+    build_identity=build_input_identity(items,zig,auxiliary_hashes,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads)
     target = output / edition / date
     if (target / 'complete.json').exists():
         try:
@@ -1742,15 +1824,20 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         page_links_snapshot=prepare_from_dumps(items,downloads,namespace,workspace,aux_pinned.get('wikibase-page-links'))
         page_links_sha=sha256_file(page_links_snapshot) if page_links_snapshot is not None else None
         result.update(provider_installed=page_links_snapshot is not None,sha256=page_links_sha)
+    from prepare_page_redirects import prepare_from_dumps as prepare_redirects
+    with build_phase(edition,date,'page_redirects') as result:
+        page_redirects_snapshot=prepare_redirects(items,downloads,workspace,build_identity.get('derived_page_redirects'))
+        page_redirects_sha=sha256_file(page_redirects_snapshot) if page_redirects_snapshot is not None else None
+        result.update(provider_installed=page_redirects_snapshot is not None,sha256=page_redirects_sha)
     # XML compression ratio does not bound the writer's whole-bucket sort.
     # Reuse the verified repack for either path, retaining it after failures.
     if source_pages>SHARD_PAGES:
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
     else:
         timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
-                     *pipeline_snapshot_args(registry,aux_pinned,page_links_snapshot),
+                     *pipeline_snapshot_args(registry,aux_pinned,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
                      '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args],edition,date,'dictionary_build')
         coverage=validate_page_coverage(staging,source_pages=source_pages)
@@ -1768,6 +1855,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         require_auxiliary_capture_identity(aux_pinned,build_identity)
         if page_links_snapshot is not None and sha256_file(page_links_snapshot)!=page_links_sha:
             raise ValueError('Derived page links changed during build')
+        if page_redirects_snapshot is not None and sha256_file(page_redirects_snapshot)!=page_redirects_sha:
+            raise ValueError('Derived page redirects changed during build')
         (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
         persist_build_identity(staging,build_identity)
         (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)

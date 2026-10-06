@@ -8,9 +8,9 @@ import stat
 BUILD_DISK_RESERVE_BYTES = 2 * 1024**3  # Policy margin, not an output-size bound.
 MAX_DISK_BYTES = (1 << 63) - 1
 _COUNTERS = ('input_rows', 'compile_only_rows', 'source_unavailable_rows',
-             'dispatched_rows', 'expanded_pages', 'fallback_pages', 'duplicate_rows')
+             'dispatched_rows', 'expanded_pages', 'fallback_pages', 'duplicate_rows', 'alias_pages')
 _FEATURES = {name + '.wikblb': kind for kind, name in enumerate(
-    ('thesaurus', 'citations', 'reconstruction', 'rhymes', 'sign-gloss', 'supplemental'), 2)}
+    ('thesaurus', 'citations', 'reconstruction', 'rhymes', 'sign-gloss', 'supplemental', 'aliases'), 2)}
 _KINDS = (None, 'language', 'thesaurus', 'citations', 'reconstruction',
           'rhymes', 'sign_gloss', 'supplemental')
 

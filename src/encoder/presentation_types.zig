@@ -77,6 +77,20 @@ pub const Reference = struct {
 };
 pub const MediaKind = enum { image, audio };
 pub const Media = struct { file: []const u8, kind: MediaKind, caption: []const u8 };
+/// Reader routing metadata. Ordinary DPR2 payloads do not encode this field.
+pub const Redirect = struct {
+    source_title: []const u8,
+    target_title: []const u8,
+    fragment: []const u8,
+    followed: bool,
+};
+/// Direct destination of the displayed redirect page, independent of the
+/// incoming redirect which selected it. DAL1 supplies this metadata.
+pub const AliasTarget = struct {
+    xml_target: []const u8,
+    target_title: []const u8,
+    fragment: []const u8,
+};
 pub const Entry = struct {
     organization: Layout = .{},
     title: []const u8,
@@ -88,6 +102,8 @@ pub const Entry = struct {
     preamble_spans: []const Span = &.{},
     references: []const Reference = &.{},
     media: []const Media = &.{},
+    redirect: ?Redirect = null,
+    alias: ?AliasTarget = null,
 };
 pub const Stored = struct { schema: []const u8 = schema, entry: Entry };
 

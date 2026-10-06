@@ -298,13 +298,15 @@ pub fn main(init: std.process.Init) !void {
     try manifest.interface.flush();
 
     var fixed_records: usize = 0;
-    inline for (.{ format.BlobKind.thesaurus, .citations, .reconstruction, .rhymes, .sign_gloss, .supplemental }) |kind| {
+    var alias_records: usize = 0;
+    inline for (.{ format.BlobKind.thesaurus, .citations, .reconstruction, .rhymes, .sign_gloss, .supplemental, .alias }) |kind| {
         const filename = catalog.featureBlobFilename(kind).?;
         for (roots, 0..) |root, i| input_paths[i] = try std.fs.path.join(a, &.{ root, filename });
         defer for (input_paths) |path| a.free(path);
         const output_path = try std.fs.path.join(a, &.{ output_root, filename });
         defer a.free(output_path);
-        fixed_records += try mergeOne(init.io, a, output_path, kind, input_paths);
+        const records = try mergeOne(init.io, a, output_path, kind, input_paths);
+        if (kind == .alias) alias_records += records else fixed_records += records;
     }
     try mergeFallbackReports(init.io, a, output_root, roots);
     var coverage: encoder.namespace_coverage.Table = .{};
@@ -315,7 +317,7 @@ pub fn main(init: std.process.Init) !void {
         try coverage.merge(a, &shard_coverage);
     }
     try coverage.write(init.io, a, output_root);
-    std.debug.print("merged shards={d} language_blobs={d} language_records={d} fixed_records={d}\n", .{ roots.len, headings.len, language_records, fixed_records });
+    std.debug.print("merged shards={d} language_blobs={d} language_records={d} fixed_records={d} alias_records={d}\n", .{ roots.len, headings.len, language_records, fixed_records, alias_records });
 }
 
 test "streamed merge keeps cross-source payload association and global title lifetime" {

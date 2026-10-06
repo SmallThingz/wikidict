@@ -21,6 +21,7 @@ const Options = struct {
     wikibase_entities_snapshot: ?[]const u8 = null,
     wikibase_entity_terms_snapshot: ?[]const u8 = null,
     wikibase_page_links_snapshot: ?[]const u8 = null,
+    page_redirects_snapshot: ?[]const u8 = null,
     language_registry_snapshot: ?[]const u8 = null,
     language_fallbacks_snapshot: ?[]const u8 = null,
     language_names_snapshot: ?[]const u8 = null,
@@ -83,6 +84,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.wikibase_entities_snapshot != null) return error.Usage;
             options.wikibase_entities_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--page-redirects-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.page_redirects_snapshot != null) return error.Usage;
+            options.page_redirects_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--wikibase-page-links-snapshot")) {
             index += 1;
             if (index >= args.len or options.wikibase_page_links_snapshot != null) return error.Usage;
@@ -866,6 +871,7 @@ test "structured Wikibase and language fallback snapshot options are strict" {
         .{ "--wikibase-entities-snapshot", "wikibase_entities_snapshot" },
         .{ "--wikibase-entity-terms-snapshot", "wikibase_entity_terms_snapshot" },
         .{ "--wikibase-page-links-snapshot", "wikibase_page_links_snapshot" },
+        .{ "--page-redirects-snapshot", "page_redirects_snapshot" },
         .{ "--language-fallbacks-snapshot", "language_fallbacks_snapshot" },
         .{ "--language-names-snapshot", "language_names_snapshot" },
         .{ "--site-info-snapshot", "site_info_snapshot" },
@@ -890,7 +896,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--magic-words-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--page-redirects-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--magic-words-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -938,6 +944,8 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "wikibase-entities.tsv");
     if (options.wikibase_page_links_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "wikibase-page-links.tsv");
+    if (options.page_redirects_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "page-redirects.tsv");
     if (options.wikibase_entity_terms_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "wikibase-entity-terms.tsv");
     if (options.language_registry_snapshot) |snapshot|

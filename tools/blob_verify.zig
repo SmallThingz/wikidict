@@ -18,6 +18,12 @@ const Stats = struct {
     rhymes_records: usize = 0,
     sign_gloss_records: usize = 0,
     supplemental_records: usize = 0,
+    alias_records: usize = 0,
+    alias_namespaces: std.AutoHashMapUnmanaged(u32, struct { kind: format.BlobKind, count: u64 }) = .empty,
+
+    fn deinit(self: *Stats, a: std.mem.Allocator) void {
+        self.alias_namespaces.deinit(a);
+    }
 
     fn add(self: *Stats, kind: format.BlobKind, records: usize) void {
         switch (kind) {
@@ -28,6 +34,7 @@ const Stats = struct {
             .rhymes => self.rhymes_records += records,
             .sign_gloss => self.sign_gloss_records += records,
             .supplemental => self.supplemental_records += records,
+            .alias => self.alias_records += records,
         }
     }
 };
@@ -38,11 +45,22 @@ fn verifyRecord(
     metadata: ?format.LanguageMetadata,
     reader: *file_reader.Reader,
     record: file_reader.Record,
+    stats: *Stats,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const payload = try reader.readPayloadAlloc(a, record);
+    if (kind == .alias) {
+        const alias = try encoder.alias_codec.decode(payload);
+        try encoder.alias_codec.validateKey(record.title, alias);
+        _ = try presentation_codec.decodeAlloc(a, alias.presentation, alias.source_title, .alias, null);
+        const slot = try stats.alias_namespaces.getOrPut(allocator, alias.source_namespace);
+        if (!slot.found_existing) slot.value_ptr.* = .{ .kind = alias.source_kind, .count = 0 };
+        if (slot.value_ptr.kind != alias.source_kind) return error.InvalidAlias;
+        slot.value_ptr.count = try std.math.add(u64, slot.value_ptr.count, 1);
+        return;
+    }
     _ = presentation_codec.decodeAlloc(a, payload, record.title, kind, metadata) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidPresentation,
@@ -73,7 +91,7 @@ fn verifyBlob(
 
     var count: usize = 0;
     while (try reader.next()) |record| {
-        try verifyRecord(allocator, expected_kind, metadata, &reader, record);
+        try verifyRecord(allocator, expected_kind, metadata, &reader, record, stats);
         count += 1;
     }
     stats.add(expected_kind, count);
@@ -131,17 +149,25 @@ fn verifyLanguages(io: std.Io, allocator: std.mem.Allocator, root: []const u8, s
 
 fn verifyNamespaceRecords(io: std.Io, allocator: std.mem.Allocator, root: []const u8, stats: *const Stats) !void {
     var coverage = encoder.namespace_coverage.Table.read(io, allocator, root) catch |err| switch (err) {
-        error.FileNotFound => return,
+        error.FileNotFound => if (stats.alias_records == 0) return else return error.NamespaceCoverageMissing,
         else => return err,
     };
     defer coverage.deinit(allocator);
+    var expected_aliases: u64 = 0;
+    var alias_rows = coverage.rows.valueIterator();
+    while (alias_rows.next()) |row| {
+        const actual = stats.alias_namespaces.get(row.id);
+        if (row.alias_pages != (if (actual) |v| v.count else 0) or (if (actual) |v| row.kind != v.kind else false)) return error.NamespaceCoverageAliasMismatch;
+        expected_aliases = try std.math.add(u64, expected_aliases, row.alias_pages);
+    }
+    if (expected_aliases != stats.alias_records) return error.NamespaceCoverageAliasMismatch;
     // Fixed-kind pages emit one record each. Language pages can emit several.
     inline for (feature_kinds) |kind| {
         var expected: u64 = 0;
         var rows = coverage.rows.valueIterator();
         while (rows.next()) |row| {
             if (row.kind != kind) continue;
-            expected = try std.math.add(u64, expected, try std.math.add(u64, row.expanded_pages, row.fallback_pages));
+            expected = try std.math.add(u64, expected, (try std.math.add(u64, row.expanded_pages, row.fallback_pages)) - row.alias_pages);
         }
         const actual = @field(stats.*, @tagName(kind) ++ "_records");
         if (expected != actual) {
@@ -162,12 +188,14 @@ pub fn main(init: std.process.Init) !void {
     try encoder.blob_files.requireComplete(init.io, allocator, root);
 
     var stats: Stats = .{};
+    defer stats.deinit(allocator);
     try verifyLanguages(init.io, allocator, root, &stats);
     inline for (feature_kinds) |kind| try verifyOptionalFeature(init.io, allocator, root, kind, &stats);
+    try verifyOptionalFeature(init.io, allocator, root, .alias, &stats);
     try verifyNamespaceRecords(init.io, allocator, root, &stats);
 
     std.debug.print(
-        "verified compiled blobs: language_blobs={d} language_records={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} supplemental={d}\n",
+        "verified compiled blobs: language_blobs={d} language_records={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} supplemental={d} alias_records={d}\n",
         .{
             stats.language_blobs,
             stats.language_records,
@@ -177,6 +205,7 @@ pub fn main(init: std.process.Init) !void {
             stats.rhymes_records,
             stats.sign_gloss_records,
             stats.supplemental_records,
+            stats.alias_records,
         },
     );
     std.debug.print("unverified language data: blobs={d} records={d}\n", .{ stats.unverified_blobs, stats.unverified_records });

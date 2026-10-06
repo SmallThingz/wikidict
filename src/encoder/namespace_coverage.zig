@@ -14,8 +14,9 @@ pub const Counts = struct {
     expanded_pages: u64 = 0,
     fallback_pages: u64 = 0,
     duplicate_rows: u64 = 0,
+    alias_pages: u64 = 0,
 };
-const counter_fields = .{ "input_rows", "compile_only_rows", "source_unavailable_rows", "dispatched_rows", "expanded_pages", "fallback_pages", "duplicate_rows" };
+const counter_fields = .{ "input_rows", "compile_only_rows", "source_unavailable_rows", "dispatched_rows", "expanded_pages", "fallback_pages", "duplicate_rows", "alias_pages" };
 pub const Outcome = enum { expanded, fallback, duplicate };
 pub const Report = struct { version: u32 = 1, registry_sha256: ?[]const u8 = null, namespaces: []const Counts };
 pub const Table = struct {
@@ -50,12 +51,21 @@ pub const Table = struct {
         };
         value.* = try std.math.add(u64, value.*, 1);
     }
+    pub fn alias(self: *Table, id: u32, outcome_value: Outcome) !void {
+        const row = self.rows.getPtr(id) orelse return error.NamespaceCoverageMissingInput;
+        if (row.kind == null) return error.NamespaceCoverageMismatch;
+        if (outcome_value == .duplicate) return error.NamespaceCoverageMismatch;
+        try self.outcome(id, outcome_value);
+        row.alias_pages = try std.math.add(u64, row.alias_pages, 1);
+    }
     pub fn validate(self: *const Table, expected: ?u64) !void {
         var total: u64 = 0;
         var it = self.rows.valueIterator();
         while (it.next()) |row| {
+            if (row.kind == .alias) return error.NamespaceCoverageMismatch;
             const selected = try std.math.add(u64, try std.math.add(u64, row.compile_only_rows, row.source_unavailable_rows), row.dispatched_rows);
             const completed = try std.math.add(u64, try std.math.add(u64, row.expanded_pages, row.fallback_pages), row.duplicate_rows);
+            if (row.alias_pages > try std.math.add(u64, row.expanded_pages, row.fallback_pages) or (row.kind == null and row.alias_pages != 0)) return error.NamespaceCoverageMismatch;
             if (selected != row.input_rows or completed != row.dispatched_rows) return error.NamespaceCoverageMismatch;
             if (row.kind == null and row.compile_only_rows != row.input_rows) return error.NamespaceCoverageMismatch;
             if (row.kind != null and row.compile_only_rows != 0) return error.NamespaceCoverageMismatch;
@@ -164,4 +174,18 @@ test "namespace coverage merge retains duplicate and fallback accounting" {
     try first.validate(2);
     try std.testing.expectEqual(@as(u64, 1), first.rows.get(0).?.fallback_pages);
     try std.testing.expectEqual(@as(u64, 1), first.rows.get(0).?.duplicate_rows);
+}
+
+test "compiled aliases remain a strict expanded subset and never compile-only" {
+    const a = std.testing.allocator;
+    var coverage: Table = .{};
+    defer coverage.deinit(a);
+    try coverage.input(a, 0, "", .language, true);
+    try coverage.alias(0, .expanded);
+    try coverage.input(a, 10, "Template", null, true);
+    try std.testing.expectError(error.NamespaceCoverageMismatch, coverage.alias(10, .expanded));
+    try coverage.validate(2);
+    try std.testing.expectEqual(@as(u64, 1), coverage.rows.get(0).?.alias_pages);
+    coverage.rows.getPtr(0).?.alias_pages = 2;
+    try std.testing.expectError(error.NamespaceCoverageMismatch, coverage.validate(2));
 }

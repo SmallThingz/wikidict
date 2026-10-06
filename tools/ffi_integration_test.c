@@ -27,15 +27,38 @@ static int lookup(dict_handle *handle, const char *word, const char *required) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2 || argc > 3) {
-        fprintf(stderr, "usage: ffi-integration ROOT [WORD]\n");
+    if (argc < 2 || argc > 4 || (argc == 4 && strcmp(argv[3], "--neutral") != 0)) {
+        fprintf(stderr, "usage: ffi-integration ROOT [WORD [--neutral]]\n");
         return 2;
     }
-    const char *word = argc == 3 ? argv[2] : "mouse";
+    const int neutral = argc == 4;
+    const char *word = argc >= 3 ? argv[2] : "mouse";
     dict_handle *handle = NULL;
     dict_status status = dict_open(argv[1], strlen(argv[1]), &handle);
     if (!require(status == DICT_OK && handle != NULL, "open")) return 1;
     if (!require(DICT_ABI_VERSION == 2u && dict_abi_version() == DICT_ABI_VERSION, "ABI version")) return 1;
+    if (neutral) {
+        int ok = require(dict_select(handle, NULL, 0, "language", 8) == DICT_OK, "neutral selection without language");
+        dict_buffer result = {0};
+        status = dict_lookup_json(handle, word, strlen(word), &result);
+        ok &= require(status == DICT_OK && contains(&result, "\"language\": null"), "neutral language null");
+        ok &= require(contains(&result, "\"title\": \"ChainB\"") && contains(&result, "\"source_title\": \"ChainA\""), "neutral one-hop provenance");
+        ok &= require(contains(&result, "\"target_title\": \"gainst\""), "displayed redirect next target");
+        dict_buffer_free(handle, &result);
+        status = dict_languages_json(handle, &result);
+        ok &= require(status == DICT_OK && contains(&result, "\"languages\": []"), "no fabricated language menu");
+        dict_buffer_free(handle, &result);
+        status = dict_search_json(handle, "Ch", 2, 10, 0, &result);
+        ok &= require(status == DICT_OK && contains(&result, "ChainA") && !contains(&result, "1\\t"), "human alias search titles");
+        dict_buffer_free(handle, &result);
+        ok &= require(dict_select(handle, NULL, 0, "alias", 5) == DICT_INVALID_ARGUMENT, "alias is internal");
+        ok &= lookup(handle, "Animus", "\"followed\": false");
+        dict_close(handle);
+        if (!ok) return 1;
+        puts("FFI_NEUTRAL_PASS: null language, one-hop redirects, no language menu fabrication");
+        return 0;
+    }
+    if (!require(dict_select(handle, NULL, 0, "language", 8) == DICT_INVALID_ARGUMENT, "ordinary empty language stays invalid")) return 1;
     status = dict_select(handle, "English", 7, "language", 8);
     if (!require(status == DICT_OK, "select English")) return 1;
 

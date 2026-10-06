@@ -22,6 +22,7 @@ pub const BuildStats = struct {
     supplemental_records: usize = 0,
     language_blobs: usize = 0,
     fallback_pages: usize = 0,
+    alias_records: usize = 0,
 };
 
 pub const ResolvedLanguage = struct {
@@ -177,6 +178,7 @@ const Spools = struct {
     rhymes: SpoolFile,
     sign_gloss: SpoolFile,
     supplemental: SpoolFile,
+    aliases: SpoolFile,
 
     fn init(io: std.Io, allocator: std.mem.Allocator, output_root: []const u8) !Spools {
         const spool_root = try std.fmt.allocPrint(allocator, "{s}/.spool", .{output_root});
@@ -216,6 +218,7 @@ const Spools = struct {
             .rhymes = try initFixed(io, allocator, spool_root, "rhymes"),
             .sign_gloss = try initFixed(io, allocator, spool_root, "sign-gloss"),
             .supplemental = try initFixed(io, allocator, spool_root, "supplemental"),
+            .aliases = try initFixed(io, allocator, spool_root, "aliases"),
         };
     }
 
@@ -227,6 +230,7 @@ const Spools = struct {
         self.rhymes.close(self.io);
         self.sign_gloss.close(self.io);
         self.supplemental.close(self.io);
+        self.aliases.close(self.io);
     }
 
     fn cleanup(self: *Spools) void {
@@ -234,7 +238,7 @@ const Spools = struct {
             std.Io.Dir.cwd().deleteFile(self.io, spool.path) catch {};
             spool.deinitPath(self.allocator);
         }
-        inline for (.{ &self.thesaurus, &self.citations, &self.reconstruction, &self.rhymes, &self.sign_gloss, &self.supplemental }) |spool| {
+        inline for (.{ &self.thesaurus, &self.citations, &self.reconstruction, &self.rhymes, &self.sign_gloss, &self.supplemental, &self.aliases }) |spool| {
             std.Io.Dir.cwd().deleteFile(self.io, spool.path) catch {};
             spool.deinitPath(self.allocator);
         }
@@ -270,6 +274,7 @@ fn recordLess(_: void, lhs: blob_format.RecordInput, rhs: blob_format.RecordInpu
 }
 
 fn sortAndValidate(records: []blob_format.RecordInput) !void {
+    if (records.len < 2) return;
     std.sort.pdq(blob_format.RecordInput, records, {}, recordLess);
     for (records[1..], records[0..records.len -| 1]) |current, previous| {
         if (std.mem.order(u8, previous.title, current.title) != .lt) return error.DuplicateRecord;
@@ -910,7 +915,7 @@ pub const Writer = struct {
         defer allocator.free(languages_dir);
         try std.Io.Dir.cwd().deleteTree(io, languages_dir);
         try std.Io.Dir.cwd().createDirPath(io, languages_dir);
-        inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "symbols", "templates", "redirects", "pages" }) |name| {
+        inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "symbols", "templates", "redirects", "pages", "aliases" }) |name| {
             const stale = try fixedBlobPathAlloc(allocator, output_root, name);
             defer allocator.free(stale);
             try deleteFileIfExists(io, stale);
@@ -944,6 +949,36 @@ pub const Writer = struct {
         self.spools.cleanup();
         self.allocator.free(self.output_root);
         self.* = undefined;
+    }
+
+    /// Compile one XML-classified direct redirect without executing an empty tail.
+    pub fn addAlias(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record) !void {
+        return self.addAliasExpanded(a, record, "", null, .{}, &.{});
+    }
+    pub fn addAliasExpanded(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8) !void {
+        if (self.finished) return error.WriterFinished;
+        var fallbacks = initial_fallbacks;
+        const destination = if (record.fragment.len == 0) record.target_title else try std.fmt.allocPrint(a, "{s}#{s}", .{ record.target_title, record.fragment });
+        const link: blobs.presentation_types.Span = .{ .kind = .link, .text = destination, .target = destination };
+        var entry: blobs.presentation_types.Entry = .{ .title = record.source_title, .kind = .alias, .preamble_spans = &.{link} };
+        if (tail.len != 0) {
+            const tail_payload = try presentation_document.compileReportedWithLinkTrailAlloc(a, record.source_title, .alias, null, "", tail, if (display_title) |value| .{ .source = value, .page_title = record.source_title } else null, self.language_codes.link_trail, self.language_codes.namespace_catalog, &fallbacks);
+            entry = (try blobs.presentation_codec.decodeAlloc(a, tail_payload, record.source_title, .alias, null)).entry;
+            const preamble = try a.alloc(blobs.presentation_types.Span, entry.preamble_spans.len + 2);
+            preamble[0] = link;
+            preamble[1] = .{ .kind = .line_break };
+            @memcpy(preamble[2..], entry.preamble_spans);
+            entry.preamble_spans = preamble;
+        }
+        var compiled = record;
+        compiled.presentation = try blobs.presentation_codec.encodeAlloc(a, .{ .entry = entry });
+        const payload = try blobs.alias_codec.encodeAlloc(a, compiled);
+        const key = try blobs.alias_codec.keyAlloc(a, record.source_kind, record.source_key);
+        try self.spools.aliases.append(self.io, a, "", key, payload);
+        self.stats.alias_records += 1;
+        if (record.source_namespace == 0) self.stats.main_pages += 1;
+        try self.reportFallback(a, .{ .id = record.source_namespace, .kind = record.source_kind }, record.source_title, fallbacks, extra_reasons);
+        try self.namespace_coverage.alias(record.source_namespace, if (fallbacks.any() or extra_reasons.len != 0) .fallback else .expanded);
     }
 
     pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, display_title: ?[]const u8) !void {
@@ -997,6 +1032,10 @@ pub const Writer = struct {
         } else {
             try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, self.language_codes.namespace_catalog, ns, title, source, display_title, &self.stats, &fallbacks);
         }
+        try self.reportFallback(page_allocator, ns, title, fallbacks, extra_reasons);
+    }
+
+    fn reportFallback(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8) !void {
         if (fallbacks.any() or extra_reasons.len != 0) {
             var reasons: std.ArrayList([]const u8) = .empty;
             defer reasons.deinit(page_allocator);
@@ -1064,6 +1103,24 @@ pub const Writer = struct {
         try finalizeFixedSpool(self.io, self.allocator, &self.spools.rhymes, self.output_root, "rhymes", .rhymes);
         try finalizeFixedSpool(self.io, self.allocator, &self.spools.sign_gloss, self.output_root, "sign-gloss", .sign_gloss);
         try finalizeFixedSpool(self.io, self.allocator, &self.spools.supplemental, self.output_root, "supplemental", .supplemental);
+        try finalizeFixedSpool(self.io, self.allocator, &self.spools.aliases, self.output_root, "aliases", .alias);
+        // Alias-only feature namespaces still have a selected compiled store.
+        inline for (.{ blob_format.BlobKind.thesaurus, .citations, .reconstruction, .rhymes, .sign_gloss, .supplemental }) |kind| {
+            const spool = &@field(self.spools, @tagName(kind));
+            if (spool.offset == 0) {
+                var has_alias = false;
+                var rows = self.namespace_coverage.rows.valueIterator();
+                while (rows.next()) |row| if (row.kind == kind and row.alias_pages != 0) {
+                    has_alias = true;
+                    break;
+                };
+                if (has_alias) {
+                    const path = try std.fs.path.join(self.allocator, &.{ self.output_root, blob_catalog.featureBlobFilename(kind).? });
+                    defer self.allocator.free(path);
+                    try writeBlobFile(self.io, path, kind, "", &.{});
+                }
+            }
+        }
         try self.namespace_coverage.write(self.io, self.allocator, self.output_root);
         self.finished = true;
         return self.stats;
@@ -1806,4 +1863,94 @@ test "supplemental namespaces keep full titles and cannot collide by suffix" {
     try std.testing.expectEqualStrings("Conjugaison:aller", (try iterator.next()).?.title);
     try std.testing.expectEqualStrings("Racine:aller", (try iterator.next()).?.title);
     try std.testing.expect((try iterator.next()) == null);
+}
+
+test "direct XML aliases emit typed data without fabricated language ownership" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/aliases", .{tmp.sub_path});
+    defer a.free(root);
+    var writer = try Writer.init(io, a, root);
+    defer writer.deinit();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const cases = [_][2][]const u8{ .{ "Animus", "animus" }, .{ "Combustible", "combustible" }, .{ "County seat", "county seat" }, .{ "Gainst", "gainst" } };
+    for (cases) |pair| {
+        try writer.namespace_coverage.input(a, 0, "", .language, true);
+        try writer.addAlias(arena.allocator(), .{ .source_namespace = 0, .source_kind = .language, .source_title = pair[0], .source_key = pair[0], .xml_target = pair[1], .target_title = pair[1], .target_namespace = 0, .target_kind = .language, .target_key = pair[1], .fragment = "", .presentation = "" });
+    }
+    try writer.namespace_coverage.input(a, 110, "Thesaurus", .thesaurus, true);
+    try writer.addAlias(arena.allocator(), .{ .source_namespace = 110, .source_kind = .thesaurus, .source_title = "Thesaurus:Animus", .source_key = "Animus", .xml_target = "animus", .target_title = "animus", .target_namespace = 0, .target_kind = .language, .target_key = "animus", .fragment = "Latin", .presentation = "" });
+    writer.stats.pages_seen = 5;
+    const stats = try writer.finish(.{});
+    try std.testing.expectEqual(@as(usize, 5), stats.alias_records);
+    try std.testing.expectEqual(@as(usize, 4), stats.main_pages);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    const path = try std.fs.path.join(a, &.{ root, "aliases.wikblb" });
+    defer a.free(path);
+    var mapped = try mmapPath(io, path);
+    defer mapped.deinit();
+    const view = try blob_format.inspect(mapped.bytes);
+    try std.testing.expectEqual(blob_format.BlobKind.alias, view.kind);
+    var rows = view.iterator();
+    var count: usize = 0;
+    while (try rows.next()) |row| {
+        const alias = try blobs.alias_codec.decode(row.payload);
+        try blobs.alias_codec.validateKey(row.title, alias);
+        const doc = try blobs.presentation_codec.decodeAlloc(arena.allocator(), alias.presentation, alias.source_title, .alias, null);
+        try std.testing.expect(doc.entry.language == null);
+        try std.testing.expectEqual(blobs.presentation_types.InlineKind.link, doc.entry.preamble_spans[0].kind);
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 5), count);
+    // This empty ordinary feature blob is necessary for opening an alias-only store.
+    const feature_path = try std.fs.path.join(a, &.{ root, "thesaurus.wikblb" });
+    defer a.free(feature_path);
+    var feature = try mmapPath(io, feature_path);
+    defer feature.deinit();
+    try std.testing.expectEqual(@as(usize, 0), (try blob_format.inspect(feature.bytes)).records.len);
+}
+
+test "redirect tail presentation and recoverable tail failures retain exact accounting" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const pa = arena.allocator();
+    const root = try std.fmt.allocPrint(pa, ".zig-cache/tmp/{s}/tail", .{tmp.sub_path});
+    var writer = try Writer.init(io, a, root);
+    defer writer.deinit();
+    const alias: blobs.alias_codec.Record = .{ .source_namespace = 0, .source_kind = .language, .source_title = "A", .source_key = "A", .xml_target = "Missing", .target_title = "Missing", .target_namespace = null, .target_kind = null, .target_key = "", .fragment = "Part", .presentation = "" };
+    try writer.namespace_coverage.input(a, 0, "", .language, true);
+    try writer.addAliasExpanded(pa, alias, "Tail [[retained]].\n===Details===\nVisible body.", null, .{}, &.{});
+    var failed = alias;
+    failed.source_title = "B";
+    failed.source_key = "B";
+    try writer.namespace_coverage.input(a, 0, "", .language, true);
+    try writer.addAliasExpanded(pa, failed, "", null, .{ .expansion_error = true }, &.{"expansion_error:expand:SourceFailure"});
+    writer.stats.pages_seen = 2;
+    const stats = try writer.finish(.{});
+    try std.testing.expectEqual(@as(usize, 2), stats.alias_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    const row = writer.namespace_coverage.rows.get(0).?;
+    try std.testing.expectEqual(@as(u64, 2), row.alias_pages);
+    try std.testing.expectEqual(@as(u64, 1), row.expanded_pages);
+    try std.testing.expectEqual(@as(u64, 1), row.fallback_pages);
+    const path = try std.fs.path.join(pa, &.{ root, "aliases.wikblb" });
+    var mapped = try mmapPath(io, path);
+    defer mapped.deinit();
+    const view = try blob_format.inspect(mapped.bytes);
+    var rows = view.iterator();
+    const first = try blobs.alias_codec.decode((try rows.next()).?.payload);
+    const doc = try blobs.presentation_codec.decodeAlloc(pa, first.presentation, first.source_title, .alias, null);
+    try std.testing.expectEqualStrings("Missing#Part", doc.entry.preamble_spans[0].target);
+    try std.testing.expect(std.mem.indexOf(u8, first.presentation, "Visible body.") != null);
+    const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(pa, &.{ root, "fallback-pages.jsonl" }), pa, .limited(4096));
+    try std.testing.expect(std.mem.indexOf(u8, report, "expansion_error:expand:SourceFailure") != null);
 }

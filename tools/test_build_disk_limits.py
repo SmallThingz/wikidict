@@ -69,6 +69,38 @@ class MergeDiskAdmissionTests(unittest.TestCase):
         self.assertFalse(self.destination.exists())
         self.assertEqual(before, {p: p.read_bytes() for p in before})
 
+    def test_alias_only_shard_counts_raw_bytes_and_retains_header_check(self):
+        shard, ordinary = self.shard()
+        ordinary.unlink()
+        (shard / 'languages').rmdir()
+        (shard / 'languages.tsv').write_bytes(b'heading\n')
+        coverage = json.loads((shard / 'namespace-coverage.json').read_text())
+        coverage['namespaces'][0]['alias_pages'] = 9
+        (shard / 'namespace-coverage.json').write_text(json.dumps(coverage))
+        aliases = shard / 'aliases.wikblb'
+        aliases.write_bytes(b'WIKBLB08\x08opaque verified alias records')
+        receipt = self.admit([shard])
+        self.assertEqual(receipt['raw_shard_bytes'], aliases.stat().st_size)
+        self.assertEqual(receipt['raw_blob_count'], 1)
+        self.admit([shard], receipt['required_free_bytes'])
+        with self.assertRaisesRegex(ValueError, 'Insufficient merge disk space'):
+            self.admit([shard], receipt['required_free_bytes'] - 1)
+        aliases.write_bytes(b'WIKBLB08\x07wrong kind')
+        with self.assertRaisesRegex(ValueError, 'Expected raw WIKBLB08 shard'):
+            self.admit([shard])
+
+    def test_alias_counter_included_in_coverage_bound_and_validation(self):
+        row = dict(id=0, name='', kind='language', alias_pages=2**64 - 1)
+        source = dict(version=1, namespaces=[row])
+        bound = d._coverage_bound(json.dumps(source).encode())
+        all_counters = dict(row, **{key: 2**64 - 1 for key in d._COUNTERS})
+        merged = dict(version=1, registry_sha256='a' * 64, namespaces=[all_counters])
+        self.assertGreaterEqual(bound, len(json.dumps(merged, separators=(',', ':')).encode()))
+        for value in (-1, 2**64, True):
+            row['alias_pages'] = value
+            with self.assertRaisesRegex(ValueError, 'Invalid namespace counter'):
+                d._coverage_bound(json.dumps(source).encode())
+
     def test_raw_header_only_read_and_logical_sparse_size(self):
         shard, raw = self.shard()
         with raw.open('r+b') as out:

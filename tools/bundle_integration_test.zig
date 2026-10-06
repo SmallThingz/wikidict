@@ -244,6 +244,12 @@ const module_source =
     \\    return 'repaired invoke'
     \\end,
     \\fail_probe = function() error('fixture failure') end,
+    \\redirect_tail = function()
+    \\    local page = mw.title.getCurrentTitle()
+    \\    assert(page.prefixedText == 'BrokenAlias')
+    \\    assert(page:getContent() == '#REDIRECT [[Absent article|{{#invoke:IntegrationForms|fail_probe}}]]\n{{#invoke:IntegrationForms|redirect_tail}}')
+    \\    return 'alias tail from original source'
+    \\end,
     \\random_probe = function(frame) return math.random(1, 10), math.random(1, 10) end,
     \\render_dictionary_fixture = function(frame)
     \\    local auxiliary_title = mw.title.new('Appendix:IntegrationFixture')
@@ -252,6 +258,8 @@ const module_source =
     \\    assert(string.find(mw.title.new('SharedAlias'):getContent(), '#REDIRECT', 1, true))
     \\    local shared_alias = mw.title.new('SharedAlias')
     \\    assert(shared_alias.isRedirect and shared_alias.redirectTarget.prefixedText == 'Shared')
+    \\    assert(shared_alias.redirectTarget.fragment == 'é')
+    \\    assert(mw.title.new('Template:forms-alias').redirectTarget.fragment == 'Forms')
     \\    assert(shared_alias.id == 24 and shared_alias.redirectTarget.id == 23)
     \\    assert(mw.title.new('rat').contentModel == 'wikitext')
     \\    assert(mw.title.new('rat').isContentPage and not mw.title.new('Appendix:IntegrationFixture').isContentPage and not mw.title.new('Template:show-forms').isContentPage)
@@ -513,13 +521,14 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
         .{ .title = "rat", .ns = 0, .id = 22, .body = "==English==\n===Noun===\n# Another rodent.\n", .user = "Rat editor" },
         .{ .title = "Shared", .ns = 0, .id = 23, .body = "shared main transclusion" },
-        .{ .title = "SharedAlias", .ns = 0, .id = 24, .body = "#REDIRECT [[Shared]]", .redirect = "Shared" },
+        .{ .title = "SharedAlias", .ns = 0, .id = 24, .body = "#REDIRECT [[Shared#é]]", .redirect = "Shared" },
+        .{ .title = "BrokenAlias", .ns = 0, .id = 5000, .body = "#REDIRECT [[Absent article|{{#invoke:IntegrationForms|fail_probe}}]]\n{{#invoke:IntegrationForms|redirect_tail}}", .redirect = "Absent article" },
         .{ .title = "Wiktionary:Sandbox", .ns = 4, .id = 25, .body = "project namespace transclusion" },
         .{ .title = "MediaWiki:Mainpage", .ns = 8, .id = 26, .body = "{{ns:Project}}:Main Page" },
         .{ .title = "Appendix:IntegrationFixture", .ns = 100, .id = 21, .body = "a real auxiliary source page" },
         .{ .title = "Template:show-forms", .ns = 10, .id = 10, .body = template_source },
         .{ .title = "Template:repair-parent", .ns = 10, .id = 17, .body = "{{#invoke:IntegrationForms|repair_parent_probe}}" },
-        .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms]]", .redirect = "Template:show-forms" },
+        .{ .title = "Template:forms-alias", .ns = 10, .id = 11, .body = "#REDIRECT [[Template:show-forms#Forms]]", .redirect = "Template:show-forms" },
         .{ .title = "Template:Template:nested", .ns = 10, .id = 12, .body = "nested namespace retained" },
         .{ .title = "Template:nested", .ns = 10, .id = 13, .body = "ordinary namespace distinct" },
         .{ .title = "Template:نط:10", .ns = 10, .id = 31, .body = "English ordinary namespace template" },
@@ -785,6 +794,8 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     const page_index = try std.fs.path.join(h.a, &.{ root, "page-index.tsv" });
     const index_line = try std.fmt.allocPrint(h.a, "0\t{d}\tfailure-page\t\t1\t1\t20260901000000\t\twikitext\t0\t1\t0\n", .{source_text.len});
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = page_index, .data = index_line });
+    const title_index = try std.fs.path.join(h.a, &.{ root, @import("wikimedia_dump").page_title_index_filename });
+    try @import("wikimedia_dump").buildPageTitleIndex(h.io, h.a, page_index, title_index);
 
     const output = try std.fs.path.join(h.a, &.{ dir, "failure-dictionary" });
     _ = try h.run(&.{ blob_builder, dump, output, "--expander-root", root, "--workers", "1" }, 0);
@@ -1858,7 +1869,16 @@ pub fn main(init: std.process.Init) !void {
             "en\tdefinitely-missing-message\tM\n",
     });
     const root = try std.fs.path.join(a, &.{ dir, "dictionary" });
-    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespace_registry, "--category-tree-snapshot", category_snapshot, "--interface-messages-snapshot", message_snapshot, "--language-registry-snapshot", language_registry, "--llvm-workers", "1", "--page-workers", "2" }, 0);
+    const redirect_snapshot = try std.fs.path.join(a, &.{ dir, "page-redirects.tsv" });
+    try std.Io.Dir.cwd().writeFile(init.io, .{
+        .sub_path = redirect_snapshot,
+        .data = "# wikidict-page-redirects-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# sql-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n" ++
+            "4\t828\t496e746567726174696f6e466f726d7344617461\t\t\n" ++
+            "11\t10\t73686f772d666f726d73\t\t466f726d73\n" ++
+            "24\t0\t536861726564\t\t65cc81\n" ++
+            "5000\t0\t416273656e745f61727469636c65\t\t\n# end\t4\n",
+    });
+    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespace_registry, "--page-redirects-snapshot", redirect_snapshot, "--category-tree-snapshot", category_snapshot, "--interface-messages-snapshot", message_snapshot, "--language-registry-snapshot", language_registry, "--llvm-workers", "1", "--page-workers", "2" }, 0);
     _ = try h.run(&.{ verifier, root }, 0);
     const language_manifest_path = try std.fs.path.join(a, &.{ root, "languages.tsv" });
     const language_manifest = try std.Io.Dir.cwd().readFileAlloc(init.io, language_manifest_path, a, .limited(4096));
@@ -1877,6 +1897,8 @@ pub fn main(init: std.process.Init) !void {
     try h.require(!exists(init.io, incomplete), "completed bundle marker removed");
 
     const text = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--details" }, 0);
+    const broken_alias = try h.run(&.{ bin, "lookup", "BrokenAlias", "--root", root, "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, broken_alias, "alias tail from original source") != null and std.mem.indexOf(u8, broken_alias, "Lua error") == null and std.mem.indexOf(u8, broken_alias, "#invoke") == null, "redirect tails keep original getContent context without executing the ignored redirect label");
     try h.require(std.mem.indexOf(u8, text, "Talk:Category discussion") != null and std.mem.indexOf(u8, text, "Nested category") != null, "default CategoryTree pages mode compiles other namespaces and subcategory links");
     try h.require(std.mem.indexOf(u8, text, "plural mice") != null, "Lua result is baked into data");
     try h.require(std.mem.indexOf(u8, text, "Legacy varargs: legacy varargs verified") != null, "Lua 5.1 legacy vararg tables preserve scope, counts, closures and native AF bold-link behavior");

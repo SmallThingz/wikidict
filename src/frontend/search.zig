@@ -176,7 +176,7 @@ pub const Task = struct {
         self.exact_match = null;
     }
     fn ensureFolded(self: *Task, a: std.mem.Allocator, db: *store.Store) void {
-        const fingerprint = db.file.fingerprint;
+        const fingerprint = db.searchFingerprint();
         const count = db.count();
         if (!self.folded_source_set or self.folded_count != count or !std.mem.eql(u8, &self.folded_source, &fingerprint)) {
             self.clearFolded(a);

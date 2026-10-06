@@ -119,10 +119,13 @@ export fn dict_close(handle: ?*Handle) callconv(.c) void {
     allocator.destroy(h);
 }
 fn selectImpl(h: *Handle, language: []const u8, kind: store.Kind) !void {
-    const copy = try allocator.dupe(u8, language);
-    errdefer allocator.free(copy);
-    var db = try store.Store.open(h.io(), allocator, h.root, kind, language);
+    var db = store.Store.open(h.io(), allocator, h.root, kind, language) catch |err| {
+        if (kind == .language and language.len == 0 and err == error.FileNotFound) return error.InvalidArgument;
+        return err;
+    };
     errdefer db.deinit();
+    const copy = try allocator.dupe(u8, db.heading() orelse "");
+    errdefer allocator.free(copy);
     if (h.selected) |*old| {
         old.db.deinit();
         allocator.free(old.language);
@@ -141,7 +144,6 @@ export fn dict_select(
     const language = input(language_ptr, language_len, 4096) catch |err| return @backingInt(h.fail("language", err));
     const kind_text = input(kind_ptr, kind_len, 64) catch |err| return @backingInt(h.fail("kind", err));
     const kind = store.parseKind(kind_text) orelse return @backingInt(h.fail("kind", error.InvalidArgument));
-    if (kind == .language and language.len == 0) return @backingInt(h.fail("language", error.InvalidArgument));
     selectImpl(h, language, kind) catch |err| return @backingInt(h.fail("select", err));
     h.clearError();
     return @backingInt(Status.ok);
@@ -152,7 +154,7 @@ fn lookupInternal(handle: *Handle, query: []const u8, out: *Buffer) !bool {
         .operation = .lookup,
         .query = query,
         .kind = current.kind,
-        .language = if (current.kind == .language) current.language else null,
+        .language = current.db.heading(),
         .record_count = current.db.count(),
         .total_matches = 0,
         .match_mode = "exact-utf8",
@@ -213,7 +215,7 @@ export fn dict_search_json(
         .operation = .search,
         .query = query,
         .kind = current.kind,
-        .language = if (current.kind == .language) current.language else null,
+        .language = current.db.heading(),
         .record_count = current.db.count(),
         .total_matches = total,
         .offset = offset,
@@ -263,7 +265,7 @@ export fn dict_stats_json(handle: ?*Handle, out: *Buffer) callconv(.c) c_int {
     const payload = .{
         .schema = "dict.stats.v1",
         .kind = @tagName(current.kind),
-        .language = if (current.kind == .language) current.language else null,
+        .language = current.db.heading(),
         .records = current.db.count(),
         .index_bytes = current.db.file.indexBytes(),
         .index_heap_bytes = current.db.file.indexHeapBytes(),

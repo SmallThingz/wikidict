@@ -309,6 +309,7 @@ const ExpansionJob = struct {
     ns: encoder.blob_builder.PageNamespace,
     title: []const u8,
     source: []const u8,
+    alias_record: ?encoder.alias_codec.Record = null,
 };
 
 fn expansionFallbackReasonAlloc(a: std.mem.Allocator, err: anyerror, failure: ?bundle_expander.Failure) !?[]const u8 {
@@ -388,11 +389,19 @@ const ExpansionSlot = struct {
             // Retain explicitly recoverable expansion failures with their exact
             // audit cause. Operational deadlines propagate through the classifier
             // above rather than masquerading as successfully encoded empty pages.
+            if (self.job.alias_record) |alias| {
+                try writer.addAliasExpanded(self.arena.allocator(), alias, "", null, .{ .expansion_error = true }, &.{fallback_reason});
+                return true;
+            }
             try writer.addExpansionFailure(self.arena.allocator(), self.job.ns, self.job.title, &.{fallback_reason});
             try writer.namespace_coverage.outcome(self.job.ns.id, .fallback);
             return true;
         }
         if (self.expansion) |expanded| {
+            if (self.job.alias_record) |alias| {
+                try writer.addAliasExpanded(self.arena.allocator(), alias, expanded.source, expanded.display_title, .{}, &.{});
+                return true;
+            }
             const fallback_before = writer.stats.fallback_pages;
             writer.addExpandedPage(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title) catch |err| {
                 std.debug.print(
@@ -412,6 +421,9 @@ const ExpansionPool = struct {
     allocator: std.mem.Allocator,
     completion: *std.Io.Event,
     slots: []ExpansionSlot,
+    page_index_bytes: []const u8 = "",
+    page_title_index: ?dump_source.PageTitleIndex = null,
+    page_redirects: ?*const encoder.page_redirects.Snapshot = null,
 
     fn init(
         io: std.Io,
@@ -624,6 +636,31 @@ test "page coverage rejects short explicit shards and records actual selection" 
     try std.testing.expectEqual(@as(usize, 3), full.pages_seen);
 }
 
+fn compiledKind(spec: namespace_registry.Spec) ?encoder.blob_format.BlobKind {
+    return switch (spec.role) {
+        .main => .language,
+        .compile_only => null,
+        .supplemental => .supplemental,
+        .thesaurus => .thesaurus,
+        .citations => .citations,
+        .reconstruction => .reconstruction,
+        .rhymes => .rhymes,
+        .sign_gloss => .sign_gloss,
+    };
+}
+fn compiledKey(title: []const u8, kind: encoder.blob_format.BlobKind) []const u8 {
+    if (kind == .language or kind == .supplemental) return title;
+    const colon = std.mem.indexOfScalar(u8, title, ':') orelse return title;
+    return title[colon + 1 ..];
+}
+fn aliasTargetPage(pool: *const ExpansionPool, title: []const u8) !?dump_source.IndexedPage {
+    const index = pool.page_title_index orelse return error.MissingPageTitleIndex;
+    const ref = (try index.lookup(pool.page_index_bytes, title)) orelse return null;
+    const start = dump_source.pageRowRefOffset(ref);
+    const end = std.mem.indexOfScalarPos(u8, pool.page_index_bytes, start, '\n') orelse pool.page_index_bytes.len;
+    return try dump_source.parsePageIndexLine(index.kind, pool.page_index_bytes[start..end]);
+}
+
 fn dispatchIndexedPage(
     pool: *ExpansionPool,
     writer: *encoder.blob_builder.Writer,
@@ -635,18 +672,56 @@ fn dispatchIndexedPage(
 ) !void {
     const page = try dump_source.parsePageIndexLine(kind, line);
     const spec = namespaces.byId(std.math.cast(i32, page.ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace;
-    const role: ?encoder.blob_format.BlobKind = switch (spec.role) {
-        .main => .language,
-        .compile_only => null,
-        .supplemental => .supplemental,
-        .thesaurus => .thesaurus,
-        .citations => .citations,
-        .reconstruction => .reconstruction,
-        .rhymes => .rhymes,
-        .sign_gloss => .sign_gloss,
-    };
+    const role = compiledKind(spec);
     try writer.namespace_coverage.input(writer.allocator, page.ns, spec.name, role, page.has_source);
     if (!page.has_source or role == null) return;
+    if (page.redirect) |xml_target| {
+        const index = pool.page_title_index orelse return error.MissingPageTitleIndex;
+        const own_ref = (try index.lookup(pool.page_index_bytes, page.title)) orelse return error.InvalidPageTitleIndex;
+        if (dump_source.pageRowRefOrdinal(own_ref) != ordinal) {
+            try writer.namespace_coverage.outcome(page.ns, .duplicate);
+            return;
+        }
+        var arena = std.heap.ArenaAllocator.init(writer.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const raw_source = try dump.readAlloc(a, page.source);
+        const source = if (page.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw_source) else raw_source;
+        const redirects = pool.page_redirects orelse return error.PageRedirectSnapshotMissing;
+        const target = redirects.lookup(a, page.page_id, xml_target) catch |err| {
+            std.debug.print("redirect SQL mismatch: page_id={d} title={s} xml_target={s} error={s}\n", .{ page.page_id, page.title, xml_target, @errorName(err) });
+            return err;
+        };
+        const tail = try encoder.redirect_source.tail(source);
+        const target_page = if (target.interwiki.len == 0) try aliasTargetPage(pool, target.title) else null;
+        if (target_page) |row| if (target.namespace < 0 or row.ns != @as(u32, @intCast(target.namespace))) return error.PageRedirectTargetMismatch;
+        const target_kind = if (target_page) |row| if (row.has_source) compiledKind(namespaces.byId(std.math.cast(i32, row.ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace) else null else null;
+        const alias: encoder.alias_codec.Record = .{
+            .source_namespace = page.ns,
+            .source_kind = role.?,
+            .source_title = page.title,
+            .source_key = compiledKey(page.title, role.?),
+            .xml_target = xml_target,
+            .target_title = target.title,
+            .target_namespace = if (target.interwiki.len == 0 and target.namespace >= 0) @intCast(target.namespace) else null,
+            .target_kind = target_kind,
+            .target_key = if (target_kind) |k| compiledKey(target.title, k) else "",
+            .fragment = target.fragment,
+            .presentation = "",
+        };
+        if (tail.len == 0) {
+            try writer.addAlias(a, alias);
+        } else {
+            const slot = try pool.acquire(writer);
+            const retained = slot.arena.allocator();
+            var owned = alias;
+            owned.target_title = try retained.dupe(u8, alias.target_title);
+            owned.target_key = try retained.dupe(u8, alias.target_key);
+            owned.fragment = try retained.dupe(u8, alias.fragment);
+            slot.dispatch(.{ .ordinal = @intCast(ordinal), .ns = .{ .id = page.ns, .kind = role.? }, .title = page.title, .source = try retained.dupe(u8, tail), .alias_record = owned });
+        }
+        return;
+    }
     const slot = try pool.acquire(writer);
     const page_allocator = slot.arena.allocator();
     const raw_source = try dump.readAlloc(page_allocator, page.source);
@@ -823,6 +898,21 @@ pub fn main(init: std.process.Init) !void {
     var page_index = try mmapPath(init.io, page_index_path);
     defer page_index.deinit();
     const page_index_kind = dump_source.pageIndexKind(page_index.bytes);
+    const page_title_index_path = try std.fs.path.join(a, &.{ options.expander_root, dump_source.page_title_index_filename });
+    defer a.free(page_title_index_path);
+    var page_title_index = try mmapPath(init.io, page_title_index_path);
+    defer page_title_index.deinit();
+    const title_index = try dump_source.PageTitleIndex.init(page_title_index.bytes);
+    if (title_index.page_index_size != page_index.bytes.len or title_index.kind != page_index_kind) return error.PageTitleIndexMismatch;
+    const redirects_path = try std.fs.path.join(a, &.{ options.expander_root, "page-redirects.tsv" });
+    defer a.free(redirects_path);
+    var redirects_storage: ?Mapped = mmapPath(init.io, redirects_path) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    defer if (redirects_storage) |*mapped| mapped.deinit();
+    var redirects: ?encoder.page_redirects.Snapshot = if (redirects_storage) |mapped| try encoder.page_redirects.Snapshot.init(a, mapped.bytes, &namespaces) else null;
+    defer if (redirects) |*snapshot| snapshot.deinit();
     const stream_index_path = try std.fs.path.join(a, &.{ options.expander_root, "dump-streams.tsv" });
     defer a.free(stream_index_path);
     var dump = try dump_source.SourceReader.open(
@@ -842,6 +932,9 @@ pub fn main(init: std.process.Init) !void {
     defer a.free(worker_path);
     var pool = try ExpansionPool.init(init.io, a, options.expander_root, worker_path, args[1], options.workers, options.now_unix, options.expansion_timeout_ms orelse expansion_deadline.default_ms);
     defer pool.deinit();
+    pool.page_index_bytes = page_index.bytes;
+    pool.page_title_index = title_index;
+    pool.page_redirects = if (redirects) |*snapshot| snapshot else null;
     if (options.shard_pages != null) {
         try runContinuous(init.io, a, args[2], options, codes, &namespaces, &pool, &dump, &page_index, page_index_kind, page_index_path);
         return;
@@ -883,7 +976,7 @@ pub fn main(init: std.process.Init) !void {
     try writePageCoverage(init.io, a, args[2], coverage);
 
     std.debug.print(
-        "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} supplemental={d} fallback_pages={d}\n",
+        "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} supplemental={d} fallback_pages={d} alias_records={d}\n",
         .{
             stats.pages_seen,
             stats.main_pages,
@@ -896,6 +989,7 @@ pub fn main(init: std.process.Init) !void {
             stats.sign_gloss_records,
             stats.supplemental_records,
             stats.fallback_pages,
+            stats.alias_records,
         },
     );
 }
@@ -1166,4 +1260,65 @@ test "operational expansion timeouts cannot become successful empty pages" {
     const recoverable = (try expansionFallbackReasonAlloc(a, error.ExpansionFailed, null)).?;
     defer a.free(recoverable);
     try std.testing.expectEqualStrings("expansion_error:ExpansionFailed", recoverable);
+}
+
+test "indexed XML redirects bypass workers and preserve source namespace accounting" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const pa = arena.allocator();
+    const root = try std.fmt.allocPrint(pa, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tbgwiktionary\n# dump-date\t20261001\n# content-language\tbg\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tШаблон\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tКатегория\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const pairs = [_][2][]const u8{ .{ "Animus", "animus" }, .{ "Combustible", "combustible" }, .{ "County seat", "county seat" }, .{ "Gainst", "gainst" } };
+    var text: std.ArrayList(u8) = .empty;
+    var index_text: std.ArrayList(u8) = .empty;
+    var selected: std.ArrayList([]const u8) = .empty;
+    for (pairs, 0..) |pair, i| {
+        const source = try std.fmt.allocPrint(pa, "#REDIRECT [[{s}]]\n", .{pair[1]});
+        const row = try std.fmt.allocPrint(pa, "{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0", .{ text.items.len, source.len, pair[0], pair[1], i + 1, i + 11 });
+        try selected.append(pa, row);
+        try index_text.appendSlice(pa, row);
+        try index_text.append(pa, '\n');
+        try text.appendSlice(pa, source);
+    }
+    for (pairs, 0..) |pair, i| {
+        const row = try std.fmt.allocPrint(pa, "0\t0\t{s}\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n", .{ pair[1], i + 101, i + 201 });
+        try index_text.appendSlice(pa, row);
+    }
+    const compile_only = "0\t0\tШаблон:Alias\tanimus\t900\t901\t2026-10-01T00:00:00Z\tUser\twikitext\t10\t1\t0";
+    try index_text.appendSlice(pa, compile_only);
+    try index_text.append(pa, '\n');
+    const dump_path = try std.fs.path.join(pa, &.{ root, "pages.xml" });
+    const index_path = try std.fs.path.join(pa, &.{ root, "page-index.tsv" });
+    const titles_path = try std.fs.path.join(pa, &.{ root, dump_source.page_title_index_filename });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = text.items });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = index_text.items });
+    try dump_source.buildPageTitleIndex(io, a, index_path, titles_path);
+    const title_bytes = try std.Io.Dir.cwd().readFileAlloc(io, titles_path, pa, .limited(4096));
+    var dump = try dump_source.SourceReader.open(io, a, a, dump_path, .raw_xml, null);
+    defer dump.deinit();
+    // There is no executable, event, or worker: an accidental dispatch cannot pass.
+    var redirects = try encoder.page_redirects.Snapshot.init(a, "# wikidict-page-redirects-v1\n# wiki\tbgwiktionary\n# dump-date\t20261001\n# sql-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n" ++
+        "1\t0\t616e696d7573\t\t\n2\t0\t636f6d6275737469626c65\t\t\n3\t0\t636f756e74795f73656174\t\t\n4\t0\t6761696e7374\t\t\n# end\t4\n", &namespaces);
+    defer redirects.deinit();
+    var pool: ExpansionPool = .{ .io = io, .allocator = a, .completion = undefined, .slots = &.{}, .page_index_bytes = index_text.items, .page_title_index = try dump_source.PageTitleIndex.init(title_bytes), .page_redirects = &redirects };
+    const out = try std.fs.path.join(pa, &.{ root, "dictionary" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, out);
+    defer writer.deinit();
+    for (selected.items, 0..) |row, i| try dispatchIndexedPage(&pool, &writer, &dump, .raw_xml, &namespaces, row, i);
+    try dispatchIndexedPage(&pool, &writer, &dump, .raw_xml, &namespaces, compile_only, 8);
+    writer.stats.pages_seen = 5;
+    const stats = try writer.finish(.{});
+    try std.testing.expectEqual(@as(usize, 4), stats.alias_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+    try std.testing.expectEqual(@as(u64, 4), writer.namespace_coverage.rows.get(0).?.alias_pages);
+    try std.testing.expectEqual(@as(u64, 0), writer.namespace_coverage.rows.get(10).?.alias_pages);
+    try std.testing.expectEqual(@as(u64, 1), writer.namespace_coverage.rows.get(10).?.compile_only_rows);
 }

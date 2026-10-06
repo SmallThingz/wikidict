@@ -8,6 +8,7 @@ const wikimedia_dump = @import("wikimedia_dump");
 const magic_words = lua_program.namespace_registry.magic_words;
 const language_names_lib = @import("language_names.zig");
 const site_info_lib = @import("site_info.zig");
+const page_redirects_lib = lua_program.namespace_registry.page_redirects;
 const ExternalData = lua_program.WikitextProvider.ExternalData;
 const CategoryStats = lua_program.WikitextProvider.CategoryStats;
 const InterfaceMessage = lua_program.WikitextProvider.InterfaceMessage;
@@ -214,6 +215,8 @@ pub const Provider = struct {
     transclusion_seen: []usize = &.{},
     transclusion_redirects: std.StringHashMapUnmanaged([]const u8) = .empty,
     transclusion_redirects_storage: ?Mapped = null,
+    page_redirects_storage: ?Mapped = null,
+    page_redirects: ?page_redirects_lib.Snapshot = null,
     external_data: std.StringHashMapUnmanaged(ExternalData) = .empty,
     external_data_storage: ?Mapped = null,
     external_data_available: bool = false,
@@ -260,6 +263,7 @@ pub const Provider = struct {
         errdefer self.deinit();
         try self.loadCorpusPages(dump_path);
         try self.loadTransclusionRedirects();
+        try self.loadPageRedirects();
         try self.loadExternalData();
         try self.loadSiteInfo();
         try self.loadCategoryStats();
@@ -303,6 +307,8 @@ pub const Provider = struct {
         }
         self.transclusion_redirects.deinit(self.a);
         if (self.transclusion_redirects_storage) |*mapped| mapped.deinit();
+        if (self.page_redirects) |*snapshot| snapshot.deinit();
+        if (self.page_redirects_storage) |*mapped| mapped.deinit();
         self.external_data.deinit(self.a);
         if (self.external_data_storage) |*mapped| mapped.deinit();
         if (self.site_info) |*snapshot| snapshot.deinit();
@@ -367,6 +373,7 @@ pub const Provider = struct {
             .redirect_target = redirectTarget,
             .page_metadata = pageMetadata,
             .stable_page_reads = true,
+            .authoritative_page_source = true,
             .exists = exists,
             .external_data = if (self.external_data_available) externalData else null,
             .site_server = if (self.site_info) |snapshot| snapshot.server else null,
@@ -1220,11 +1227,28 @@ pub const Provider = struct {
         return self.transclusionBody(a, title);
     }
 
-    fn redirectTarget(ctx: ?*anyopaque, title: []const u8) anyerror!?[]const u8 {
+    fn loadPageRedirects(self: *Provider) !void {
+        var mapped = (try self.mapOptional("page-redirects.tsv")) orelse return;
+        errdefer mapped.deinit();
+        self.page_redirects = try page_redirects_lib.Snapshot.init(self.a, mapped.bytes, self.namespace_catalog);
+        self.page_redirects_storage = mapped;
+    }
+
+    fn redirectTarget(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?[]const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
-        if (try self.transclusionRedirectTarget(title)) |target| return target;
-        const page = (try self.findPage(title)) orelse return null;
-        return page.redirect;
+        if (try self.findPage(title)) |page| {
+            const xml_target = page.redirect orelse return null;
+            const snapshot = if (self.page_redirects) |*value| value else return error.PageRedirectSnapshotMissing;
+            const target = try snapshot.lookup(a, page.page_id, xml_target);
+            defer a.free(target.interwiki);
+            defer a.free(target.fragment);
+            if (target.fragment.len == 0) return target.title;
+            defer a.free(target.title);
+            return try std.fmt.allocPrint(a, "{s}#{s}", .{ target.title, target.fragment });
+        }
+        // Supplemental redirects absent from the selected XML have explicit
+        // captured targets. Ordinary transclusion routing remains title-only.
+        return try self.transclusionRedirectTarget(title);
     }
 
     fn pageMetadata(ctx: ?*anyopaque, title: []const u8) anyerror!?lua_program.WikitextProvider.PageMetadata {
@@ -1453,7 +1477,7 @@ test "supplemental transclusion redirects resolve omitted namespace pages" {
     var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), dump_path);
     defer provider.deinit();
     try std.testing.expect(try Provider.exists(&provider, "User:Example/helper"));
-    try std.testing.expectEqualStrings("Template:Target", (try Provider.redirectTarget(&provider, "User:Example/helper")).?);
+    try std.testing.expectEqualStrings("Template:Target", (try Provider.redirectTarget(&provider, a, "User:Example/helper")).?);
     var page_arena = std.heap.ArenaAllocator.init(a);
     defer page_arena.deinit();
     const body = (try Provider.getTransclusionBody(&provider, page_arena.allocator(), "User:Example/helper")).?;
@@ -1936,9 +1960,18 @@ test "provider owns paths and separates raw content from redirect-following tran
     defer a.free(page_index);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = page_index_path, .data = page_index });
 
+    const namespaces = try lua_program.namespace_registry.englishTestRegistry();
+    const redirects_path = try std.fs.path.join(a, &.{ root, "page-redirects.tsv" });
+    defer a.free(redirects_path);
+    // This fixture explicitly supplies the SQL identity of page 3's redirect,
+    // including the known empty fragment; XML alone does not prove that field.
+    const redirects = try std.fmt.allocPrint(a, "# wikidict-page-redirects-v1\n# wiki\t{s}\n# dump-date\t{s}\n# sql-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n3\t10\t4c617a79\t\t\n# end\t1\n", .{ namespaces.wiki, namespaces.dump_date });
+    defer a.free(redirects);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = redirects_path, .data = redirects });
+
     const caller_root = try a.dupe(u8, root);
     defer a.free(caller_root);
-    var provider = try Provider.init(io, a, caller_root, try lua_program.namespace_registry.englishTestRegistry(), dump_path);
+    var provider = try Provider.init(io, a, caller_root, namespaces, dump_path);
     defer provider.deinit();
     @memset(caller_root, 'x');
     var page_arena = std.heap.ArenaAllocator.init(a);
@@ -1978,8 +2011,8 @@ test "provider owns paths and separates raw content from redirect-following tran
     try std.testing.expect(!provider.source_cache.contains(@intCast(template_page.ordinal)));
     var decoded_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 1 });
     try std.testing.expectError(error.OutOfMemory, provider.lookup(decoded_alloc.allocator(), "Ordinary page", true));
-    try std.testing.expectEqualStrings("Template:Lazy", (try Provider.redirectTarget(&provider, "Template:Alias")).?);
-    try std.testing.expect((try Provider.redirectTarget(&provider, "Template:Lazy")) == null);
+    try std.testing.expectEqualStrings("Template:Lazy", (try Provider.redirectTarget(&provider, page_a, "Template:Alias")).?);
+    try std.testing.expect((try Provider.redirectTarget(&provider, page_a, "Template:Lazy")) == null);
     const metadata = (try Provider.pageMetadata(&provider, "Ordinary page")).?;
     try std.testing.expectEqual(@as(u64, 1), metadata.page_id);
     try std.testing.expectEqual(@as(u64, 101), metadata.revision_id);
@@ -2198,4 +2231,36 @@ test "file metadata v2 owns canonical AUDIO identity and rejects malformed rows"
     defer legacy.deinit();
     const old = try Provider.fileMetadata(&legacy, "File:Old.ogg");
     try std.testing.expect(old.exists and old.media_type == null and old.canonical_title == null);
+}
+
+test "provider redirect metadata requires SQL fragments while transclusion stays title only" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const pa = arena.allocator();
+    const root = try std.fmt.allocPrint(pa, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const dump_path = try std.fs.path.join(pa, &.{ root, "dump.xml" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = "target body" });
+    const index_path = try std.fs.path.join(pa, &.{ root, "page-index.tsv" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "0\t0\tTemplate:Alias\tTemplate:Target\t1\t11\t2026-10-01T00:00:00Z\tUser\twikitext\t10\t1\t0\n" ++
+        "0\t11\tTemplate:Target\t\t2\t12\t2026-10-01T00:00:00Z\tUser\twikitext\t10\t1\t0\n" });
+    const namespaces = try lua_program.namespace_registry.englishTestRegistry();
+    {
+        var provider = try Provider.init(io, a, root, namespaces, dump_path);
+        defer provider.deinit();
+        try std.testing.expectError(error.PageRedirectSnapshotMissing, Provider.redirectTarget(&provider, pa, "Template:Alias"));
+        try std.testing.expect(try Provider.redirectTarget(&provider, pa, "Template:Target") == null);
+    }
+    const snapshot_path = try std.fs.path.join(pa, &.{ root, "page-redirects.tsv" });
+    const source = try std.fmt.allocPrint(pa, "# wikidict-page-redirects-v1\n# wiki\t{s}\n# dump-date\t{s}\n# sql-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n1\t10\t546172676574\t\t65cc81\n# end\t1\n", .{ namespaces.wiki, namespaces.dump_date });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = snapshot_path, .data = source });
+    var provider = try Provider.init(io, a, root, namespaces, dump_path);
+    defer provider.deinit();
+    try std.testing.expectEqualStrings("Template:Target#e\u{301}", (try Provider.redirectTarget(&provider, pa, "Template:Alias")).?);
+    const body = (try Provider.getTransclusionBody(&provider, pa, "Template:Alias")).?;
+    try std.testing.expectEqualStrings("Template:Target", body.title);
+    try std.testing.expectEqualStrings("target body", body.text);
 }

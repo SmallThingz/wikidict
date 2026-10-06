@@ -109,7 +109,7 @@ fn run(init: std.process.Init) !u8 {
         .never => false,
         .auto => !init.environ_map.contains("NO_COLOR") and !(if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false) and try std.Io.File.stdout().isTty(init.io),
     };
-    const label = try std.fmt.allocPrint(a, "{s} / {s}", .{ if (opts.kind == .language) opts.language else "Features", @tagName(opts.kind) });
+    const label = try db.labelAlloc(a);
     if (opts.command == .tui) {
         try tui.run(init.io, init.gpa, &db, label, opts.query, opts.theme, color, opts.details, opts.case_sensitive);
         return 0;
@@ -118,7 +118,7 @@ fn run(init: std.process.Init) !u8 {
         .operation = opts.command,
         .query = try model.utf8Text(a, opts.query),
         .kind = opts.kind,
-        .language = if (opts.kind == .language) try model.utf8Text(a, opts.language) else null,
+        .language = if (db.heading()) |heading| try model.utf8Text(a, heading) else null,
         .record_count = db.count(),
         .total_matches = 0,
     };
@@ -215,7 +215,7 @@ fn run(init: std.process.Init) !u8 {
         .stats => {
             response.total_matches = db.count();
             if (opts.format == .json) try output.json(w, response) else {
-                try output.terminalText(w, if (opts.kind == .language) opts.language else "All languages");
+                try output.terminalText(w, if (db.neutral_main) "Redirects" else db.heading() orelse "All languages");
                 try w.print(" / {s}\nrecords: {d}\nblob bytes: {d}\nruntime index bytes: {d}\nindex heap bytes: {d}\ncache map bytes: {d}\n", .{ @tagName(opts.kind), db.count(), db.file.size, db.file.indexBytes(), db.file.indexHeapBytes(), db.file.cacheMappedBytes() });
             }
         },

@@ -16,7 +16,7 @@ import tempfile
 import time
 
 VERSION = 1
-EXTRACTION_IDENTITY_VERSION = 2
+EXTRACTION_IDENTITY_VERSION = 3
 # Keep this equal to the extractor argv in bundle_build.zig. Changing the
 # extraction mode also changes the cache identity, even with the same binary.
 EXTRACTOR_ARGS = ("--page-index",)
@@ -109,7 +109,7 @@ def unicode_case_identity():
     return {"libraries":[{"path":str(path),"sha256":sha256(path)} for path in sorted(paths)]}
 
 
-def identity(executable, dump_sha256, index_sha256, namespace_sha256, transclusion_redirects_sha256=None):
+def identity(executable, dump_sha256, index_sha256, namespace_sha256, transclusion_redirects_sha256=None, page_redirects_sha256=None):
     if not all(re.fullmatch(r"[0-9a-fA-F]{64}", value)
                for value in (dump_sha256, index_sha256, namespace_sha256)):
         raise ValueError("Invalid verified staged input digest")
@@ -118,6 +118,7 @@ def identity(executable, dump_sha256, index_sha256, namespace_sha256, transclusi
             "index_sha256": index_sha256.lower(),
             "namespace_registry_sha256": namespace_sha256.lower(),
             "transclusion_redirects_sha256": transclusion_redirects_sha256,
+            "page_redirects_sha256": page_redirects_sha256,
             "unicode_case": unicode_case_identity(),
             "tool": tool_identity(executable)}
 
@@ -696,7 +697,9 @@ def main(argv):
         raise SystemExit("usage: extraction_cache.py probe|publish CACHE_ROOT EXTRACTOR DUMP_SHA256 INDEX_SHA256 EXPANDER_ROOT")
     _, action, root, executable, dump_sha256, index_sha256, output = argv
     redirects = Path(output) / "transclusion-redirects.tsv"
-    expected = identity(Path(executable), dump_sha256, index_sha256, sha256(Path(output) / "namespace-registry.tsv"), sha256(redirects) if redirects.exists() else None)
+    page_redirects = Path(output) / "page-redirects.tsv"
+    if page_redirects.exists():regular(page_redirects)
+    expected = identity(Path(executable), dump_sha256, index_sha256, sha256(Path(output) / "namespace-registry.tsv"), sha256(redirects) if redirects.exists() else None, sha256(page_redirects) if page_redirects.exists() else None)
     if action == "probe":
         return probe(Path(root), expected, Path(output))
     return publish(Path(root), expected, Path(output))

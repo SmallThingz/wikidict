@@ -1,16 +1,19 @@
 const std = @import("std");
 const encoder = @import("blob_encoder");
 const format = encoder.blob_format;
+const Redirect = encoder.presentation_types.Redirect;
 
 pub const DataRecordView = struct {
     title: []const u8,
     payload: []const u8,
+    redirect: ?Redirect = null,
 };
 
 pub const LanguageRecordView = struct {
     title: []const u8,
     payload: []const u8,
     metadata: format.LanguageMetadata,
+    redirect: ?Redirect = null,
 };
 
 pub const RecordView = union(format.BlobKind) {
@@ -21,6 +24,19 @@ pub const RecordView = union(format.BlobKind) {
     rhymes: DataRecordView,
     sign_gloss: DataRecordView,
     supplemental: DataRecordView,
+    alias: DataRecordView,
+
+    pub fn redirect(self: RecordView) ?Redirect {
+        return switch (self) {
+            inline else => |record| record.redirect,
+        };
+    }
+
+    pub fn setRedirect(self: *RecordView, value: Redirect) void {
+        switch (self.*) {
+            inline else => |*record| record.redirect = value,
+        }
+    }
 
     pub fn kind(self: RecordView) format.BlobKind {
         return std.meta.activeTag(self);
@@ -131,6 +147,7 @@ pub const BlobView = struct {
             .rhymes => .{ .rhymes = .{ .title = record.title, .payload = record.payload } },
             .sign_gloss => .{ .sign_gloss = .{ .title = record.title, .payload = record.payload } },
             .supplemental => .{ .supplemental = .{ .title = record.title, .payload = record.payload } },
+            .alias => .{ .alias = .{ .title = record.title, .payload = record.payload } },
         };
     }
 };

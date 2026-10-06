@@ -287,7 +287,7 @@ test "window reader rejects malformed framing and source order with InvalidBlob"
     const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/malformed", .{tmp.sub_path});
     defer a.free(path);
     const malformed = [_][]const u8{
-        "", "WIKBLB08", "BADBLB08\x07", "WIKBLB08\x00", "WIKBLB08\x08",
+        "", "WIKBLB08", "BADBLB08\x07", "WIKBLB08\x00", "WIKBLB08\xff",
         "WIKBLB08\x01", // No language code terminator.
         "WIKBLB08\x01en\x00", // No heading terminator.
         "WIKBLB08\x01en\x00English", // Unterminated heading.

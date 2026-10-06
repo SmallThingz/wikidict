@@ -78,13 +78,19 @@ pub fn install(io: std.Io, a: A, root: []const u8, input: []const u8, expected: 
         std.crypto.hash.sha2.Sha256.hash(file.bytes, &actual, .{});
         if (!std.mem.eql(u8, &actual, &wanted)) return error.ChecksumMismatch;
     }
-    if (file.recordCount() == 0) return error.EmptyDictionary;
+    const kind = file.view.kind;
+    if (file.recordCount() == 0 and kind == .language) return error.EmptyDictionary;
     for (0..file.recordCount()) |i| {
         var record = try file.readAlloc(a, i);
         defer record.deinit();
-        if (!std.mem.startsWith(u8, record.payload, "DPR2")) return error.UncompiledDictionary;
+        if (kind == .alias) {
+            var decoded = @import("model.zig").fromRecord(a, .{ .alias = .{ .title = record.title, .payload = record.payload } }) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => return error.UncompiledDictionary,
+            };
+            decoded.deinit();
+        } else if (!std.mem.startsWith(u8, record.payload, "DPR2")) return error.UncompiledDictionary;
     }
-    const kind = file.view.kind;
     const heading = if (kind == .language) (try file.view.languageMetadata()).heading else "";
     const raw_path = try store.pathAlloc(a, root, kind, heading);
     defer a.free(raw_path);
@@ -118,4 +124,66 @@ pub fn install(io: std.Io, a: A, root: []const u8, input: []const u8, expected: 
     try w.print("Installed {d} words: ", .{file.recordCount()});
     try output.terminalText(w, destination);
     try w.writeByte('\n');
+}
+
+test "installer accepts internal compiled aliases and empty feature framing" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const enc = @import("blob_encoder");
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/installed", .{tmp.sub_path});
+    const source = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/input.wikblb", .{tmp.sub_path});
+    var log: std.Io.Writer.Allocating = .init(a);
+    defer log.deinit();
+    const presentation = try enc.presentation_codec.encodeAlloc(fixture, .{ .entry = .{ .title = "A", .kind = .alias } });
+    var alias: enc.alias_codec.Record = .{
+        .source_namespace = 0,
+        .source_kind = .language,
+        .source_title = "A",
+        .source_key = "A",
+        .xml_target = "B",
+        .target_title = "B",
+        .target_namespace = 0,
+        .target_kind = .language,
+        .target_key = "B",
+        .fragment = "",
+        .presentation = presentation,
+    };
+    const payload = try enc.alias_codec.encodeAlloc(fixture, alias);
+    const bytes = try enc.blob_format.buildAlloc(fixture, .alias, "", &.{.{ .title = "1\tA", .payload = payload }});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = bytes });
+    try install(io, a, root, source, "", &log.writer);
+    const alias_path = try store.pathAlloc(fixture, root, .alias, "");
+    {
+        var file = try storage.File.open(io, a, alias_path);
+        defer file.deinit();
+        try std.testing.expectEqual(enc.blob_format.BlobKind.alias, file.view.kind);
+        try std.testing.expectEqual(@as(usize, 1), file.recordCount());
+    }
+    const empty = try enc.blob_format.buildAlloc(fixture, .thesaurus, "", &.{});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = empty });
+    try install(io, a, root, source, "", &log.writer);
+    const feature_path = try store.pathAlloc(fixture, root, .thesaurus, "");
+    {
+        var file = try storage.File.open(io, a, feature_path);
+        defer file.deinit();
+        try std.testing.expectEqual(@as(usize, 0), file.recordCount());
+    }
+    const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().openFile(io, manifest, .{}));
+    try std.testing.expectEqual(@as(?store.Kind, null), store.parseKind("alias"));
+
+    alias.presentation = "DPR2broken";
+    const invalid_payload = try enc.alias_codec.encodeAlloc(fixture, alias);
+    const invalid = try enc.blob_format.buildAlloc(fixture, .alias, "", &.{.{ .title = "1\tA", .payload = invalid_payload }});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = invalid });
+    try std.testing.expectError(error.UncompiledDictionary, install(io, a, root, source, "", &log.writer));
+    const language_metadata = try enc.blob_format.buildLanguageMetadataAlloc(fixture, "en", "English");
+    const empty_language = try enc.blob_format.buildAlloc(fixture, .language, language_metadata, &.{});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = empty_language });
+    try std.testing.expectError(error.EmptyDictionary, install(io, a, root, source, "", &log.writer));
 }
