@@ -42,6 +42,18 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
         .link_libc = true,
     });
+    // Parent bundle processes share the worker's bounded single-write logger.
+    // This standalone module does not pull the Lua runtime into blob building.
+    const build_diagnostics_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/runtime/work_stats.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const build_diagnostics_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/lua/runtime/work_stats.zig"),
+        .target = b.graph.host,
+        .optimize = test_optimize,
+    });
     const bundle_protocol_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/bundle_protocol.zig"),
         .target = target,
@@ -138,6 +150,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
         .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
         .{ .name = "bundle_protocol", .module = bundle_protocol_mod },
+        .{ .name = "build_diagnostics", .module = build_diagnostics_mod },
     });
     blob_build_exe.root_module.link_libc = true;
     blob_build_exe.root_module.linkSystemLibrary("bz2", .{});
@@ -287,6 +300,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "xml_decode", .module = shared_xml_decode_mod_test },
                 .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod },
                 .{ .name = "bundle_protocol", .module = bundle_protocol_mod_test },
+                .{ .name = "build_diagnostics", .module = build_diagnostics_test_mod },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -650,6 +664,7 @@ pub fn build(b: *std.Build) void {
     const media_fetch_exe = addCliExecutable(b, "dict-media-fetch", b.path("tools/media_fetch.zig"), target, optimize, &.{ .{ .name = "media_types", .module = b.createModule(.{ .root_source_file = b.path("src/frontend/media_types.zig"), .target = target, .optimize = optimize }) }, .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod } });
     addPublicRunStep(b, "fetch-media", "Download bounded attributed Wikimedia assets for an export", addRunArtifactCommand(b, media_fetch_exe, &.{}), &.{});
     const bundle_test_exe = addCliExecutable(b, "dict-bundle-integration-test", b.path("tools/bundle_integration_test.zig"), b.graph.host, test_optimize, &.{ .{ .name = "bundle_protocol", .module = bundle_protocol_mod_test }, .{ .name = "namespace_registry", .module = namespace_registry_test_mod } });
+    bundle_test_exe.root_module.addImport("build_diagnostics", build_diagnostics_test_mod);
     bundle_test_exe.root_module.addImport("encoder", encoder_mod_test);
     bundle_test_exe.root_module.addImport("wikimedia_dump", wikimedia_dump_mod_test);
     const bundle_test_run = b.addRunArtifact(bundle_test_exe);

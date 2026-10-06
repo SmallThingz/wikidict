@@ -548,12 +548,218 @@ fn languageGetCode(ctx_raw: ?*anyopaque, runtime: *rt.Context, _: []const Value)
     return one(a, .{ .string = ctx.code });
 }
 
-fn languageFormatDate(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    _ = try requireEnglishLocale(ctx_raw);
+const date_month_keys = [_][]const u8{ "january", "february", "march", "april", "may_long", "june", "july", "august", "september", "october", "november", "december" };
+const date_month_genitive_keys = [_][]const u8{ "january-gen", "february-gen", "march-gen", "april-gen", "may-gen", "june-gen", "july-gen", "august-gen", "september-gen", "october-gen", "november-gen", "december-gen" };
+const date_month_short_keys = [_][]const u8{ "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec" };
+const date_weekday_keys = [_][]const u8{ "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday" };
+const date_weekday_short_keys = [_][]const u8{ "sun", "mon", "tue", "wed", "thu", "fri", "sat" };
+
+fn dateNumbering(runtime: *rt.Context, code: []const u8) !host_api.DateNumbering {
+    const host = host_api.getForStablePageRead(runtime) orelse {
+        rt.work_stats.logLine("date numbering missing: language={s}\n", .{code[0..@min(code.len, 128)]});
+        return error.DateNumberingSnapshotMissing;
+    };
+    const get = host.date_numbering orelse {
+        rt.work_stats.logLine("date numbering missing: language={s}\n", .{code[0..@min(code.len, 128)]});
+        return error.DateNumberingSnapshotMissing;
+    };
+    return get(host.ctx, code) catch |err| {
+        if (err == error.DateNumberingSnapshotMissing)
+            rt.work_stats.logLine("date numbering missing: language={s}\n", .{code[0..@min(code.len, 128)]});
+        if (err == error.DateNumberingUnsupported)
+            rt.work_stats.logLine("date numbering unsupported: language={s}\n", .{code[0..@min(code.len, 128)]});
+        return err;
+    };
+}
+
+fn appendDateMessage(out: *std.ArrayList(u8), runtime: *rt.Context, code: []const u8, key: []const u8) !void {
+    const host = host_api.getForStablePageRead(runtime) orelse return error.InterfaceMessageSnapshotMissing;
+    const get = host.interface_message orelse return error.InterfaceMessageSnapshotMissing;
+    const entry = (try get(host.ctx, runtime.allocator, code, key)) orelse return error.InterfaceMessageSnapshotMissing;
+    const source = entry.source orelse return error.UnsupportedDateMessage;
+    // MediaWiki uses Message::text(). Plain captured labels are exact; a message
+    // needing template/parameter expansion needs its own evaluated capture.
+    if (std.mem.indexOf(u8, source, "{{") != null or std.mem.indexOf(u8, source, "}}") != null or
+        std.mem.indexOfScalar(u8, source, '$') != null)
+        return error.UnsupportedDateMessage;
+    try out.appendSlice(runtime.allocator, source);
+}
+
+fn appendDateNumber(out: *std.ArrayList(u8), a: std.mem.Allocator, profile: host_api.DateNumbering, number: i64, width: usize, raw: bool) !void {
+    var buffer: [32]u8 = undefined;
+    const text = try std.fmt.bufPrint(&buffer, "{d}", .{number});
+    const padding = width -| text.len;
+    for (0..padding) |_| try out.appendSlice(a, if (raw or number < 0) "0" else profile.digits[0]);
+    // sprintfDate translates only /^[\d.]+$/. In particular negative Unix
+    // timestamps retain the ASCII minus and ASCII digits, not a Unicode minus.
+    if (raw or number < 0) return out.appendSlice(a, text);
+    for (text) |digit| try out.appendSlice(a, profile.digits[digit - '0']);
+}
+
+/// MediaWiki Gregorian format codes use captured messages and effective site
+/// numeral policy. The old formatDateAlloc remains the existing parser-function
+/// implementation; this path implements mw.language:formatDate.
+fn localizedDateAlloc(runtime: *rt.Context, code: []const u8, profile: host_api.DateNumbering, timestamp: i64, format: []const u8) ![]const u8 {
+    // Matches Scribunto's 0..9999 DateTime year envelope before civil arithmetic.
+    if (timestamp < -62167219200 or timestamp > 253402300799) return error.InvalidDate;
     const a = runtime.allocator;
+    const c = civilFromUnix(timestamp);
+    const weekday = weekdaySunday0(timestamp);
+    const week = isoWeek(timestamp, c);
+    const iso_year = c.year + (if (c.month == 1 and week >= 52) @as(i64, -1) else if (c.month == 12 and week == 1) @as(i64, 1) else 0);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    var raw_next = false;
+    var raw_all = false;
+    var i: usize = 0;
+    while (i < format.len) : (i += 1) {
+        const token = format[i];
+        if (token == '\\') {
+            if (i + 1 < format.len) i += 1;
+            try out.append(a, format[i]);
+            continue;
+        }
+        if (token == '"') {
+            if (std.mem.indexOfScalarPos(u8, format, i + 1, '"')) |end| {
+                try out.appendSlice(a, format[i + 1 .. end]);
+                i = end;
+            } else try out.append(a, '"');
+            continue;
+        }
+        if (token == 'x' and i + 1 < format.len) {
+            i += 1;
+            switch (format[i]) {
+                'x' => try out.append(a, 'x'),
+                'n' => raw_next = true,
+                'N' => raw_all = !raw_all,
+                'g' => try appendDateMessage(&out, runtime, code, date_month_genitive_keys[c.month - 1]),
+                'r', 'h' => return error.UnsupportedDateNumeralMode,
+                'i', 'j', 'k', 'm', 'o', 't' => {
+                    if (i + 1 < format.len) {
+                        i += 1;
+                        const extension = format[i - 2 .. i + 1];
+                        inline for (.{ "xij", "xiF", "xin", "xiy", "xiY", "xit", "xiz", "xjj", "xjF", "xjt", "xjx", "xjn", "xjY", "xmj", "xmF", "xmn", "xmY", "xkY", "xoY", "xtY" }) |calendar| {
+                            if (std.mem.eql(u8, extension, calendar)) return error.UnsupportedDateCalendar;
+                        }
+                    }
+                    try out.append(a, format[i]);
+                },
+                // MediaWiki consumes x and emits only the unknown second byte.
+                else => try out.append(a, format[i]),
+            }
+            continue;
+        }
+        var number: ?i64 = null;
+        var width: usize = 0;
+        switch (token) {
+            'F' => try appendDateMessage(&out, runtime, code, date_month_keys[c.month - 1]),
+            'M' => try appendDateMessage(&out, runtime, code, date_month_short_keys[c.month - 1]),
+            'l' => try appendDateMessage(&out, runtime, code, date_weekday_keys[weekday]),
+            'D' => try appendDateMessage(&out, runtime, code, date_weekday_short_keys[weekday]),
+            'U' => number = timestamp,
+            'j' => number = c.day,
+            'd' => {
+                number = c.day;
+                width = 2;
+            },
+            'Y' => {
+                number = c.year;
+                width = 4;
+            },
+            'y' => {
+                number = @mod(c.year, 100);
+                width = 2;
+            },
+            'm' => {
+                number = c.month;
+                width = 2;
+            },
+            'n' => number = c.month,
+            'H' => {
+                number = c.hour;
+                width = 2;
+            },
+            'G' => number = c.hour,
+            'g', 'h' => {
+                number = if (c.hour % 12 == 0) 12 else c.hour % 12;
+                width = if (token == 'h') 2 else 0;
+            },
+            'i' => {
+                number = c.minute;
+                width = 2;
+            },
+            's' => {
+                number = c.second;
+                width = 2;
+            },
+            'a' => try out.appendSlice(a, if (c.hour < 12) "am" else "pm"),
+            'A' => try out.appendSlice(a, if (c.hour < 12) "AM" else "PM"),
+            'w' => number = weekday,
+            'N' => number = if (weekday == 0) 7 else weekday,
+            'z' => number = daysFromCivil(c.year, c.month, c.day) - daysFromCivil(c.year, 1, 1),
+            'W' => {
+                number = week;
+                width = 2;
+            },
+            'o' => number = iso_year,
+            't' => number = std.time.epoch.getDaysInMonth(@intCast(c.year), @fromBackingInt(@intCast(c.month))),
+            'L' => number = if (@mod(c.year, 4) == 0 and (@mod(c.year, 100) != 0 or @mod(c.year, 400) == 0)) 1 else 0,
+            'I', 'Z' => number = 0,
+            'e', 'T' => try out.appendSlice(a, "UTC"),
+            'O' => try out.appendSlice(a, "+0000"),
+            'P' => try out.appendSlice(a, "+00:00"),
+            // These two PHP DateTime composite formats are deliberately ASCII,
+            // including English abbreviations in r, for every output language.
+            'c' => {
+                try appendPadded(&out, a, c.year, 4);
+                try out.append(a, '-');
+                try writeTwo(&out, a, c.month);
+                try out.append(a, '-');
+                try writeTwo(&out, a, c.day);
+                try out.append(a, 'T');
+                try writeTwo(&out, a, c.hour);
+                try out.append(a, ':');
+                try writeTwo(&out, a, c.minute);
+                try out.append(a, ':');
+                try writeTwo(&out, a, c.second);
+                try out.appendSlice(a, "+00:00");
+            },
+            'r' => {
+                try out.appendSlice(a, weekday_names[weekday][0..3]);
+                try out.appendSlice(a, ", ");
+                try writeTwo(&out, a, c.day);
+                try out.append(a, ' ');
+                try out.appendSlice(a, month_names[c.month - 1][0..3]);
+                try out.append(a, ' ');
+                try appendPadded(&out, a, c.year, 4);
+                try out.append(a, ' ');
+                try writeTwo(&out, a, c.hour);
+                try out.append(a, ':');
+                try writeTwo(&out, a, c.minute);
+                try out.append(a, ':');
+                try writeTwo(&out, a, c.second);
+                try out.appendSlice(a, " +0000");
+            },
+            else => try out.append(a, token),
+        }
+        if (number) |value| {
+            try appendDateNumber(&out, a, profile, value, width, raw_next or raw_all);
+            raw_next = false;
+        }
+    }
+    return out.toOwnedSlice(a);
+}
+
+fn languageFormatDate(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const ctx = try languageContext(ctx_raw);
     if (args.len < 2 or args[1] != .string) return error.StringExpected;
+    if (args.len > 2 and args[2] != .nil and args[2] != .string) return error.StringExpected;
+    const local = if (args.len <= 3 or args[3] == .nil) false else if (args[3] == .boolean) args[3].boolean else return error.BooleanExpected;
     const timestamp = try parseTimestamp(runtime, if (args.len > 2) args[2] else null);
-    return one(a, .{ .string = try formatDateAlloc(a, timestamp, args[1].string) });
+    if (timestamp < -62167219200 or timestamp > 253402300799) return error.InvalidDate;
+    const profile = try dateNumbering(runtime, ctx.code);
+    if (local and !std.mem.eql(u8, profile.timezone, "UTC")) return error.UnsupportedDateTimezone;
+    return one(runtime.allocator, .{ .string = try localizedDateAlloc(runtime, ctx.code, profile, timestamp, args[1].string) });
 }
 
 fn sourceMethodArg(args: []const Value) ![]const u8 {
@@ -1165,7 +1371,7 @@ test "AOT language objects expose MediaWiki helpers" {
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
     runtime.namespace_catalog = registry;
-    var host = host_api.Host{ .now_unix = 1_670_803_200 };
+    var host = host_api.Host{ .now_unix = 1_670_803_200, .date_numbering = DateFormattingProbe.numbering };
     host_api.set(&runtime, &host);
     const month_cases = [_]struct { raw: []const u8, expected: []const u8 }{
         .{ .raw = "first day of this month", .expected = "2022-12-01" },
@@ -1582,4 +1788,167 @@ test "Arabic number parsing preserves missing message and provider errors while 
     defer rt.freeResults(ordinary_english);
     try std.testing.expectEqual(@as(f64, -1234.5), ordinary_english[0].number);
     try std.testing.expectError(error.StringExpected, languageParseFormattedNumber(&language, &runtime, &.{.nil}));
+}
+
+const DateFormattingProbe = struct {
+    timezone: []const u8 = "UTC",
+    profile_failure: ?anyerror = null,
+    message_failure: ?anyerror = null,
+    message_source: ?[]const u8 = null,
+    absent_message: bool = false,
+    missing_message: bool = false,
+    const ascii_digits = [_][]const u8{ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+    const bengali_digits = [_][]const u8{ "০", "১", "২", "৩", "৪", "৫", "৬", "৭", "৮", "৯" };
+    const months = [_][]const u8{ "জানুয়ারি", "ফেব্রুয়ারি", "মার্চ", "এপ্রিল", "মে", "জুন", "জুলাই", "আগস্ট", "সেপ্টেম্বর", "অক্টোবর", "নভেম্বর", "ডিসেম্বর" };
+    fn numbering(raw: ?*anyopaque, code: []const u8) !host_api.DateNumbering {
+        const self: ?*DateFormattingProbe = if (raw) |ptr| @ptrCast(@alignCast(ptr)) else null;
+        if (self) |probe| if (probe.profile_failure) |err| return err;
+        if (std.mem.eql(u8, code, "unknown")) return error.DateNumberingUnsupported;
+        if (!std.mem.eql(u8, code, "bn") and !std.mem.eql(u8, code, "fr") and !std.mem.eql(u8, code, "ar") and !std.mem.eql(u8, code, "en")) return error.DateNumberingSnapshotMissing;
+        return .{
+            .digits = if (std.mem.eql(u8, code, "bn")) bengali_digits else ascii_digits,
+            .timezone = if (self) |probe| probe.timezone else "UTC",
+        };
+    }
+    fn message(raw: ?*anyopaque, _: std.mem.Allocator, code: []const u8, key: []const u8) !?host_api.InterfaceMessage {
+        const self: *DateFormattingProbe = @ptrCast(@alignCast(raw.?));
+        if (self.message_failure) |err| return err;
+        if (self.absent_message) return null;
+        if (self.missing_message) return .{ .source = null };
+        if (self.message_source) |source| return .{ .source = source };
+        for (date_month_keys, 0..) |candidate, i| {
+            if (std.mem.eql(u8, candidate, key)) {
+                if (std.mem.eql(u8, code, "bn")) return .{ .source = months[i] };
+                if (std.mem.eql(u8, code, "fr") and i == 2) return .{ .source = "mars" };
+                if (std.mem.eql(u8, code, "ar") and i == 2) return .{ .source = "مارس" };
+            }
+        }
+        if (std.mem.eql(u8, key, "march-gen")) return .{ .source = "captured-genitive" };
+        if (std.mem.eql(u8, key, "mar")) return .{ .source = "captured-abbreviation" };
+        if (std.mem.eql(u8, key, "wednesday")) return .{ .source = "captured-weekday" };
+        if (std.mem.eql(u8, key, "wed")) return .{ .source = "captured-weekday-short" };
+        return error.InterfaceMessageSnapshotMissing;
+    }
+};
+
+test "localized Gregorian date formatting uses exact messages and effective site digits across locales" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var probe = DateFormattingProbe{};
+    var host = host_api.Host{ .ctx = &probe, .date_numbering = DateFormattingProbe.numbering, .interface_message = DateFormattingProbe.message };
+    host_api.set(&runtime, &host);
+    const timestamp = try parseTimestampText(&runtime, "2024-03-27");
+    const cases = [_]struct { code: []const u8, format: []const u8, expected: []const u8 }{
+        .{ .code = "bn", .format = "j F '''Y'''", .expected = "২৭ মার্চ '''২০২৪'''" },
+        .{ .code = "fr", .format = "j F Y", .expected = "27 mars 2024" },
+        // arwiktionary disables TranslateNumerals: captured ASCII is authoritative.
+        .{ .code = "ar", .format = "j F Y", .expected = "27 مارس 2024" },
+        .{ .code = "bn", .format = "xnF j j xNY xNY", .expected = "মার্চ 27 ২৭ 2024 ২০২৪" },
+        .{ .code = "bn", .format = "\"Y\" \\Y Y xx xq", .expected = "Y Y ২০২৪ x q" },
+        .{ .code = "bn", .format = "d y m n H G g h i s w N z W t L o I Z", .expected = "২৭ ২৪ ০৩ ৩ ০০ ০ ১২ ১২ ০০ ০০ ৩ ৩ ৮৬ ১৩ ৩১ ১ ২০২৪ ০ ০" },
+        .{ .code = "bn", .format = "M xg l D", .expected = "captured-abbreviation captured-genitive captured-weekday captured-weekday-short" },
+        .{ .code = "bn", .format = "c r e T O P", .expected = "2024-03-27T00:00:00+00:00 Wed, 27 Mar 2024 00:00:00 +0000 UTC UTC +0000 +00:00" },
+    };
+    for (cases) |case| {
+        const profile = try dateNumbering(&runtime, case.code);
+        const actual = try localizedDateAlloc(&runtime, case.code, profile, timestamp, case.format);
+        try std.testing.expectEqualStrings(case.expected, actual);
+    }
+    const profile = try dateNumbering(&runtime, "bn");
+    const zero_year = try localizedDateAlloc(&runtime, "bn", profile, -62167219200, "Y o");
+    try std.testing.expectEqualStrings("০০০০ -1", zero_year);
+    const first_year = try localizedDateAlloc(&runtime, "bn", profile, daysFromCivil(1, 1, 4) * std.time.s_per_day, "Y o");
+    try std.testing.expectEqualStrings("০০০১ ১", first_year);
+    inline for (.{ .{ "xiQ", "Q" }, .{ "xjQ", "Q" }, .{ "xkQ", "Q" }, .{ "xmQ", "Q" }, .{ "xoQ", "Q" }, .{ "xtQ", "Q" }, .{ "xi", "i" } }) |extension| {
+        const unknown = try localizedDateAlloc(&runtime, "bn", profile, timestamp, extension[0]);
+        try std.testing.expectEqualStrings(extension[1], unknown);
+    }
+    const negative = try localizedDateAlloc(&runtime, "bn", profile, -1, "U");
+    try std.testing.expectEqualStrings("-1", negative);
+    const raw = try localizedDateAlloc(&runtime, "bn", profile, 1234567890, "U xnU");
+    try std.testing.expectEqualStrings("১২৩৪৫৬৭৮৯০ 1234567890", raw);
+    // Numeral replacement never touches captured names or quoted literal digits.
+    probe.message_source = "name3";
+    const literal = try localizedDateAlloc(&runtime, "bn", profile, timestamp, "F \"123\"");
+    try std.testing.expectEqualStrings("name3 123", literal);
+    var variable = profile;
+    variable.digits[2] = "২২";
+    const multi = try localizedDateAlloc(&runtime, "bn", variable, timestamp, "j");
+    try std.testing.expectEqualStrings("২২৭", multi);
+}
+
+test "localized dates preserve absent unknown malformed and provider failures without English substitution" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var lang = LanguageCtx{ .code = "bn", .case_mapper = undefined };
+    const args = [_]Value{ .nil, .{ .string = "j F Y" }, .{ .string = "2024-03-27" } };
+    try std.testing.expectError(error.DateNumberingSnapshotMissing, languageFormatDate(&lang, &runtime, &args));
+    try std.testing.expectError(error.StringExpected, languageFormatDate(&lang, &runtime, &.{ .nil, .{ .string = "Y" }, .{ .number = 2024 }, .{ .number = 1 } }));
+    try std.testing.expectError(error.InvalidDate, languageFormatDate(&lang, &runtime, &.{ .nil, .{ .string = "Y" }, .{ .string = "invalid" } }));
+    var probe = DateFormattingProbe{};
+    var host = host_api.Host{ .ctx = &probe, .date_numbering = DateFormattingProbe.numbering };
+    host_api.set(&runtime, &host);
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, languageFormatDate(&lang, &runtime, &args));
+    host.interface_message = DateFormattingProbe.message;
+    probe.profile_failure = error.AccessDenied;
+    try std.testing.expectError(error.AccessDenied, languageFormatDate(&lang, &runtime, &args));
+    probe.profile_failure = error.OutOfMemory;
+    try std.testing.expectError(error.OutOfMemory, languageFormatDate(&lang, &runtime, &args));
+    probe.profile_failure = null;
+    lang.code = "unknown";
+    try std.testing.expectError(error.DateNumberingUnsupported, languageFormatDate(&lang, &runtime, &args));
+    lang.code = "missing";
+    try std.testing.expectError(error.DateNumberingSnapshotMissing, languageFormatDate(&lang, &runtime, &args));
+    lang.code = "bn";
+    probe.absent_message = true;
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, languageFormatDate(&lang, &runtime, &args));
+    probe.absent_message = false;
+    probe.missing_message = true;
+    try std.testing.expectError(error.UnsupportedDateMessage, languageFormatDate(&lang, &runtime, &args));
+    probe.missing_message = false;
+    probe.message_source = "{{dynamic}}";
+    try std.testing.expectError(error.UnsupportedDateMessage, languageFormatDate(&lang, &runtime, &args));
+    probe.message_source = null;
+    probe.message_failure = error.OutOfMemory;
+    try std.testing.expectError(error.OutOfMemory, languageFormatDate(&lang, &runtime, &args));
+    probe.message_failure = null;
+    probe.timezone = "Europe/Paris";
+    const local_args = [_]Value{ .nil, .{ .string = "Y" }, .{ .string = "2024-03-27" }, .{ .boolean = true } };
+    try std.testing.expectError(error.UnsupportedDateTimezone, languageFormatDate(&lang, &runtime, &local_args));
+    // Default output stays UTC even for a site whose local zone is unsupported.
+    const ordinary = try languageFormatDate(&lang, &runtime, &args);
+    defer rt.freeResults(ordinary);
+    try std.testing.expectEqualStrings("২৭ মার্চ ২০২৪", ordinary[0].string);
+    probe.timezone = "UTC";
+    const local_utc = try languageFormatDate(&lang, &runtime, &local_args);
+    defer rt.freeResults(local_utc);
+    try std.testing.expectEqualStrings("২০২৪", local_utc[0].string);
+    try std.testing.expectError(error.BooleanExpected, languageFormatDate(&lang, &runtime, &.{ .nil, .{ .string = "Y" }, .nil, .{ .string = "true" } }));
+    try std.testing.expectError(error.InvalidDate, languageFormatDate(&lang, &runtime, &.{ .nil, .{ .string = "Y" }, .{ .string = "not-a-date" } }));
+    const profile = try dateNumbering(&runtime, "bn");
+    const timestamp = try parseTimestampText(&runtime, "2024-03-27");
+    for ([_][]const u8{ "xiY", "xjF", "xmj", "xtY", "xkY", "xoY" }) |format|
+        try std.testing.expectError(error.UnsupportedDateCalendar, localizedDateAlloc(&runtime, "bn", profile, timestamp, format));
+    for ([_][]const u8{ "xrY", "xhY" }) |format|
+        try std.testing.expectError(error.UnsupportedDateNumeralMode, localizedDateAlloc(&runtime, "bn", profile, timestamp, format));
+    try std.testing.expectError(error.InvalidDate, localizedDateAlloc(&runtime, "bn", profile, 253402300800, "Y"));
+}
+
+fn dateFormattingAllocationProbe(a: std.mem.Allocator) !void {
+    var runtime = try rt.Context.init(a, 0);
+    defer runtime.deinit();
+    var probe = DateFormattingProbe{};
+    var host = host_api.Host{ .ctx = &probe, .date_numbering = DateFormattingProbe.numbering, .interface_message = DateFormattingProbe.message };
+    host_api.set(&runtime, &host);
+    const profile = try dateNumbering(&runtime, "bn");
+    const actual = try localizedDateAlloc(&runtime, "bn", profile, 1711497600, "j F Y c r");
+    defer a.free(actual);
+    try std.testing.expect(std.mem.startsWith(u8, actual, "২৭ মার্চ ২০২৪"));
+}
+test "localized date output releases partially allocated output on failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, dateFormattingAllocationProbe, .{});
 }

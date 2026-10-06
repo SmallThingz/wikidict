@@ -541,13 +541,15 @@ fn jsonFlags(args: []const Value) !u32 {
     return @intFromFloat(raw);
 }
 
+// Keep immutable JSON key/value copies with the Context's other Lua strings.
+// The existing string arena batches tiny copies; every decoded table stays fresh.
 fn jsonObjectKey(runtime: *rt.Context, raw: []const u8) !Value {
     const integer = std.fmt.parseInt(i64, raw, 10) catch
-        return .{ .string = try runtime.allocator.dupe(u8, raw) };
+        return .{ .string = try runtime.ownString(raw) };
     var buffer: [32]u8 = undefined;
     const canonical = try std.fmt.bufPrint(&buffer, "{d}", .{integer});
     if (!std.mem.eql(u8, canonical, raw))
-        return .{ .string = try runtime.allocator.dupe(u8, raw) };
+        return .{ .string = try runtime.ownString(raw) };
     return .{ .number = @floatFromInt(integer) };
 }
 
@@ -562,7 +564,7 @@ pub fn jsonToLua(runtime: *rt.Context, value: std.json.Value, preserve_keys: boo
             if (!std.math.isFinite(v)) return error.InvalidJsonNumber;
             break :blk .{ .number = v };
         },
-        .string => |raw| .{ .string = try runtime.allocator.dupe(u8, raw) },
+        .string => |raw| .{ .string = try runtime.ownString(raw) },
         .array => |array| blk: {
             const table = try runtime.newArrayTable(@intCast(array.items.len));
             for (array.items, 0..) |item, index| {
@@ -583,6 +585,77 @@ pub fn jsonToLua(runtime: *rt.Context, value: std.json.Value, preserve_keys: boo
             break :blk .{ .table = table };
         },
     };
+}
+
+test "JSON graph strings survive parsed cache release and nested graphs stay independent" {
+    for ([_]bool{ false, true }) |bulk_strings| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var runtime = try rt.Context.init(arena.allocator(), 0);
+        defer runtime.deinit();
+        if (bulk_strings) runtime.useContextAllocatorForStrings();
+
+        var source = "{\"1\":\"numeric\",\"01\":\"leading\",\"-0\":\"minus-zero\",\"ключ\":{\"items\":[{\"value\":\"original\",\"empty\":\"\"}]}}".*;
+        const graphs = blk: {
+            var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, &source, .{
+                .allocate = .alloc_always,
+            });
+            defer parsed.deinit();
+            break :blk [2]Value{
+                try jsonToLua(&runtime, parsed.value, false),
+                try jsonToLua(&runtime, parsed.value, false),
+            };
+        };
+        // Both possible owners of borrowed JSON bytes are now unavailable.
+        @memset(&source, '?');
+        for (graphs) |graph| {
+            const table = graph.table;
+            try std.testing.expectEqualStrings("numeric", table.rawGet(.{ .number = 1 }).?.string);
+            try std.testing.expect(table.rawGet(.{ .string = "1" }) == null);
+            try std.testing.expectEqualStrings("leading", table.rawGet(.{ .string = "01" }).?.string);
+            try std.testing.expectEqualStrings("minus-zero", table.rawGet(.{ .string = "-0" }).?.string);
+            const nested = table.rawGet(.{ .string = "ключ" }).?.table;
+            const items = nested.rawGet(.{ .string = "items" }).?.table;
+            const item = items.rawGet(.{ .number = 1 }).?.table;
+            try std.testing.expectEqualStrings("original", item.rawGet(.{ .string = "value" }).?.string);
+            try std.testing.expectEqualStrings("", item.rawGet(.{ .string = "empty" }).?.string);
+        }
+        const first = graphs[0].table.rawGet(.{ .string = "ключ" }).?.table
+            .rawGet(.{ .string = "items" }).?.table.rawGet(.{ .number = 1 }).?.table;
+        const second = graphs[1].table.rawGet(.{ .string = "ключ" }).?.table
+            .rawGet(.{ .string = "items" }).?.table.rawGet(.{ .number = 1 }).?.table;
+        try first.rawSet(runtime.allocator, .{ .string = "value" }, .{ .string = "changed" });
+        try std.testing.expectEqualStrings("changed", first.rawGet(.{ .string = "value" }).?.string);
+        try std.testing.expectEqualStrings("original", second.rawGet(.{ .string = "value" }).?.string);
+    }
+}
+
+test "JSON string ownership preserves allocation failure and existing values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    // Bound the allocator that actually owns default Context strings. Changing
+    // runtime.allocator alone would not exercise this arena's failure path.
+    var string_storage: [256]u8 = undefined;
+    var strings = std.heap.FixedBufferAllocator.init(&string_storage);
+    runtime.string_arena.deinit();
+    runtime.string_arena = .init(strings.allocator());
+    const stable = try jsonToLua(&runtime, .{ .string = "stable" }, false);
+
+    var oversized: [8192]u8 = undefined;
+    @memset(&oversized, 'x');
+    try std.testing.expectError(error.OutOfMemory, jsonToLua(&runtime, .{ .string = &oversized }, false));
+    try std.testing.expectError(error.OutOfMemory, jsonObjectKey(&runtime, &oversized));
+    // Leading zeroes parse successfully as zero but are noncanonical keys.
+    @memset(&oversized, '0');
+    try std.testing.expectError(error.OutOfMemory, jsonObjectKey(&runtime, &oversized));
+    const source = try std.fmt.allocPrint(runtime.allocator, "\"{s}\"", .{&oversized});
+    try std.testing.expectError(error.OutOfMemory, jsonDecodeValue(&runtime, source, 0));
+    try std.testing.expectEqualStrings("stable", stable.string);
+    const recovered = try jsonToLua(&runtime, .{ .string = "ok" }, false);
+    try std.testing.expectEqualStrings("ok", recovered.string);
+    try std.testing.expectEqualStrings("stable", stable.string);
 }
 
 fn fixJsonTrailingCommas(a: std.mem.Allocator, source: []const u8) !?[]u8 {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const diagnostics = @import("build_diagnostics");
 const A = std.mem.Allocator;
 const L = std.os.linux;
 const protocol = @import("bundle_protocol");
@@ -49,7 +50,7 @@ pub const Worker = struct {
     }
 
     pub fn deinit(self: *Worker) void {
-        if (self.oom_retry_attempts != 0) std.debug.print("bundle OOM recovery totals attempted={d} recovered={d} failed={d}\n", .{
+        if (self.oom_retry_attempts != 0) diagnostics.printLine("bundle OOM recovery totals attempted={d} recovered={d} failed={d}\n", .{
             self.oom_retry_attempts, self.oom_retry_recovered, self.oom_retry_failed,
         });
         if (self.child) |*child| {
@@ -98,17 +99,17 @@ pub const Worker = struct {
             const ready = std.posix.poll(&fds, 100) catch 0;
             if (ready != 0 and (fds[0].revents & std.posix.POLL.IN) != 0) {
                 const term = child.wait(self.io) catch |err| {
-                    std.debug.print("bundle worker closed pid={d} ordinal={d} title={s} wait_error={s}\n", .{ pid, ordinal, title, @errorName(err) });
+                    diagnostics.printLine("bundle worker closed pid={d} ordinal={d} title={s} wait_error={s}\n", .{ pid, ordinal, title, @errorName(err) });
                     return;
                 };
-                std.debug.print("bundle worker closed pid={d} ordinal={d} title={s} termination={any}\n", .{ pid, ordinal, title, term });
+                diagnostics.printLine("bundle worker closed pid={d} ordinal={d} title={s} termination={any}\n", .{ pid, ordinal, title, term });
                 self.child = null;
                 return;
             }
         }
         // EOF can precede process exit or be an explicit stdout close. Do not
         // block indefinitely waiting for a worker whose pipe has disappeared.
-        std.debug.print("bundle worker closed pid={d} ordinal={d} title={s} termination=not-ready\n", .{ pid, ordinal, title });
+        diagnostics.printLine("bundle worker closed pid={d} ordinal={d} title={s} termination=not-ready\n", .{ pid, ordinal, title });
     }
 
     fn ensure(self: *Worker) !*std.process.Child {
@@ -171,7 +172,7 @@ pub const Worker = struct {
             // transport, semantic and deadline failures never authorize replay.
             const retired_generation = self.generation;
             self.oom_retry_attempts +|= 1;
-            std.debug.print("bundle OOM recovery start ordinal={d} retired_generation={d} source_bytes={d} now_unix={d}\n", .{
+            diagnostics.printLine("bundle OOM recovery start ordinal={d} retired_generation={d} source_bytes={d} now_unix={d}\n", .{
                 page_ordinal, retired_generation, source.len, self.now_unix,
             });
             self.last_failure = null;
@@ -179,7 +180,7 @@ pub const Worker = struct {
             const recovered = self.expandOnce(a, page_ordinal, title, source, deadline, &remote_oom) catch |cold_err| {
                 self.reset();
                 self.oom_retry_failed +|= 1;
-                std.debug.print("bundle OOM recovery failed ordinal={d} generation={d} error={s}\n", .{ page_ordinal, self.generation, @errorName(cold_err) });
+                diagnostics.printLine("bundle OOM recovery failed ordinal={d} generation={d} error={s}\n", .{ page_ordinal, self.generation, @errorName(cold_err) });
                 return if (remote_oom and cold_err == error.OutOfMemory) error.OutOfMemory else error.ColdRetryFailed;
             };
             if (recovered) |output| {
@@ -188,14 +189,14 @@ pub const Worker = struct {
                 var digest: [32]u8 = undefined;
                 std.crypto.hash.sha2.Sha256.hash(output.source, &digest, .{});
                 const hex = std.fmt.bytesToHex(digest, .lower);
-                std.debug.print("bundle OOM recovery success ordinal={d} generation={d} output_bytes={d} output_sha256={s}\n", .{
+                diagnostics.printLine("bundle OOM recovery success ordinal={d} generation={d} output_bytes={d} output_sha256={s}\n", .{
                     page_ordinal, self.generation, output.source.len, hex,
                 });
                 return output;
             }
             self.reset();
             self.oom_retry_failed +|= 1;
-            std.debug.print("bundle OOM recovery failed ordinal={d} generation={d} error=UnexpectedSkip\n", .{ page_ordinal, self.generation });
+            diagnostics.printLine("bundle OOM recovery failed ordinal={d} generation={d} error=UnexpectedSkip\n", .{ page_ordinal, self.generation });
             return error.ColdRetryFailed;
         };
     }
@@ -210,7 +211,7 @@ pub const Worker = struct {
         var raw_length: [4]u8 = undefined;
         self.readExact(child.stdout.?, &raw_length, deadline) catch |err| {
             if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
-            if (err == error.Timeout) std.debug.print(
+            if (err == error.Timeout) diagnostics.printLine(
                 "bundle expansion timed out title={s} ordinal={d} source_bytes={d} timeout_ms={d}\n",
                 .{ title, page_ordinal, source.len, self.timeout_ms },
             );
@@ -228,7 +229,7 @@ pub const Worker = struct {
         };
         self.readExact(child.stdout.?, response, deadline) catch |err| {
             if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
-            if (err == error.Timeout) std.debug.print(
+            if (err == error.Timeout) diagnostics.printLine(
                 "bundle expansion response timed out title={s} ordinal={d} source_bytes={d} response_bytes={d} timeout_ms={d}\n",
                 .{ title, page_ordinal, source.len, response_len, self.timeout_ms },
             );
@@ -247,7 +248,7 @@ pub const Worker = struct {
             .skip => return null,
             .failure => |failure| {
                 self.last_failure = failure;
-                std.debug.print("bundle expansion failed title={s} stage={s} error={s}{s}{s}\n", .{
+                diagnostics.printLine("bundle expansion failed title={s} stage={s} error={s}{s}{s}\n", .{
                     title,
                     failure.stage,
                     failure.error_name,

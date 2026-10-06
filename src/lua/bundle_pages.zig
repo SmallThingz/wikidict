@@ -7,6 +7,7 @@ const preprocess = @import("lua_wikitext_preprocess");
 const wikimedia_dump = @import("wikimedia_dump");
 const magic_words = lua_program.namespace_registry.magic_words;
 const language_names_lib = @import("language_names.zig");
+const date_numbering_lib = @import("date_numbering.zig");
 const site_info_lib = @import("site_info.zig");
 const page_redirects_lib = lua_program.namespace_registry.page_redirects;
 const ExternalData = lua_program.WikitextProvider.ExternalData;
@@ -252,6 +253,7 @@ pub const Provider = struct {
     language_fallbacks: std.StringHashMapUnmanaged([]const []const u8) = .empty,
     language_fallbacks_storage: ?Mapped = null,
     language_names: ?language_names_lib.Registry = null,
+    date_numbering: ?date_numbering_lib.Registry = null,
     language_registry: std.StringHashMapUnmanaged([]const u8) = .empty,
     language_registry_storage: ?Mapped = null,
     language_registry_available: bool = false,
@@ -278,6 +280,7 @@ pub const Provider = struct {
         try self.loadWikibaseEntityTerms();
         try self.loadLanguageFallbacks();
         try self.loadLanguageNames();
+        try self.loadDateNumbering();
         try self.loadLanguageRegistry();
         try self.loadTitleMagicWords();
         return self;
@@ -357,6 +360,7 @@ pub const Provider = struct {
         self.language_fallbacks.deinit(self.a);
         if (self.language_fallbacks_storage) |*mapped| mapped.deinit();
         if (self.language_names) |*registry| registry.deinit();
+        if (self.date_numbering) |*registry| registry.deinit();
         self.language_registry.deinit(self.a);
         if (self.language_registry_storage) |*mapped| mapped.deinit();
         if (self.title_magic_words) |*registry| registry.deinit();
@@ -394,6 +398,7 @@ pub const Provider = struct {
             .wikibase_page_entity_id = if (self.wikibase_page_links_storage != null) wikibasePageEntityId else null,
             .wikibase_entity_terms = if (self.wikibase_entity_terms_storage != null) wikibaseEntityTerms else null,
             .language_fallbacks = if (self.language_fallbacks_storage != null) languageFallbacks else null,
+            .date_numbering = if (self.date_numbering != null) dateNumbering else null,
             .language_names = if (self.language_names != null) languageNames else null,
             .language_name = if (self.language_names != null) languageName else null,
             .language_direction = if (self.language_names != null) languageDirection else null,
@@ -847,6 +852,12 @@ pub const Provider = struct {
         self.wikibase_entity_terms_arena = arena;
     }
 
+    fn loadDateNumbering(self: *Provider) !void {
+        var mapped = (try self.mapOptional("date-numbering.tsv")) orelse return;
+        defer mapped.deinit();
+        self.date_numbering = try date_numbering_lib.Registry.init(self.a, mapped.bytes, self.namespace_catalog.wiki, self.namespace_catalog.dump_date, self.namespace_catalog.content_language);
+    }
+
     fn loadLanguageNames(self: *Provider) !void {
         var mapped = (try self.mapOptional("language-names.tsv")) orelse return;
         defer mapped.deinit();
@@ -1184,7 +1195,7 @@ pub const Provider = struct {
         const raw = try self.readCorpusSource(a, page);
         defer if (wikimedia_dump.sourceLen(page.source) != 0) a.free(raw);
         const body = preprocess.transcludeDecodedAlloc(a, raw) catch |err| {
-            std.log.warn("transclusion body failed: title={s} page_id={d} error={s}", .{ page.title, page.page_id, @errorName(err) });
+            lua_program.work_stats.logLine("warning: transclusion body failed: title={s} page_id={d} error={s}\n", .{ page.title, page.page_id, @errorName(err) });
             return err;
         };
         if (page.ns != 10 or wikimedia_dump.sourceLen(page.source) > max_transclusion_cache_entry_bytes) return .{ .text = body, .title = page.title, .borrowed = false };
@@ -1361,6 +1372,11 @@ pub const Provider = struct {
     fn wikibaseEntityTerms(ctx: ?*anyopaque, entity_id: []const u8) anyerror!WikibaseEntityTerms {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return self.wikibase_entity_terms.get(entity_id) orelse error.WikibaseEntityTermSnapshotMissing;
+    }
+
+    fn dateNumbering(ctx: ?*anyopaque, code: []const u8) anyerror!lua_program.WikitextProvider.DateNumbering {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return (self.date_numbering orelse return error.DateNumberingSnapshotMissing).lookup(code);
     }
 
     fn languageNames(ctx: ?*anyopaque, display: ?[]const u8, scope: lua_program.WikitextProvider.LanguageNameScope) anyerror![]const lua_program.WikitextProvider.LanguageNameRow {
@@ -2124,6 +2140,42 @@ test "decoded source cache respects byte budget and maximum entry size" {
     provider.admitSource(page, too_large);
     try std.testing.expect(!provider.source_cache.contains(0));
     try std.testing.expectEqual(@as(usize, 2), provider.source_cache_bytes);
+}
+
+test "provider exposes immutable date numbering and distinguishes absent unsupported and foreign captures" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const catalog = try lua_program.namespace_registry.englishTestRegistry();
+    {
+        var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+        defer provider.deinit();
+        try std.testing.expect(provider.api().date_numbering == null);
+    }
+    const path = try std.fs.path.join(a, &.{ root, "date-numbering.tsv" });
+    defer a.free(path);
+    const bytes = try std.fmt.allocPrint(a, "# wikidict-date-numbering-v1\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\n# timezone\tUTC\n# profiles\t2\n" ++
+        "D\tbn\t০\t১\t২\t৩\t৪\t৫\t৬\t৭\t৮\t৯\n" ++
+        "U\tzz\traw-control-mismatch\n", .{ catalog.wiki, catalog.dump_date, catalog.content_language });
+    defer a.free(bytes);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    {
+        var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+        defer provider.deinit();
+        const api = provider.api();
+        const profile = try api.date_numbering.?(&provider, "bn");
+        try std.testing.expectEqualStrings("০", profile.digits[0]);
+        try std.testing.expectEqualStrings("UTC", profile.timezone);
+        try std.testing.expectError(error.DateNumberingUnsupported, api.date_numbering.?(&provider, "zz"));
+        try std.testing.expectError(error.DateNumberingSnapshotMissing, api.date_numbering.?(&provider, "en"));
+        // The reader owns its source: replacing the mapped input cannot alter it.
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "# wikidict-date-numbering-v1\n# wiki\tforeignwiktionary\n" });
+        try std.testing.expectEqualStrings("৯", (try api.date_numbering.?(&provider, "bn")).digits[9]);
+    }
+    try std.testing.expectError(error.InvalidDateNumberingSnapshot, Provider.init(io, a, root, catalog, "unused-dump.xml"));
 }
 
 test "provider exposes captured language profiles with exact single aliases and explicit direction" {

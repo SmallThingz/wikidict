@@ -136,10 +136,10 @@ pub const PatternCache = struct {
         return entry;
     }
 
-    pub fn logDiagnostics(self: *PatternCache) void {
+    pub fn logDiagnostics(self: *PatternCache, comptime log: anytype) void {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        std.debug.print("unicode pattern cache: entries={d} requested_bytes={d} hits={d} misses={d} capacity_bypasses={d} allocation_bypasses={d}\n", .{ self.entry_count, self.requested_bytes, self.hits, self.misses, self.capacity_bypasses, self.allocation_bypasses });
+        log("unicode pattern cache: entries={d} requested_bytes={d} hits={d} misses={d} capacity_bypasses={d} allocation_bypasses={d}\n", .{ self.entry_count, self.requested_bytes, self.hits, self.misses, self.capacity_bypasses, self.allocation_bypasses });
     }
 };
 

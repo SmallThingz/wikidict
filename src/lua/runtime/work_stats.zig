@@ -20,18 +20,190 @@ test "expansion profile requires an explicit one flag" {
     try std.testing.expectError(error.InvalidExpansionProfile, profileEnabledFromEnv("true"));
 }
 
-/// Emit one bounded stderr record so concurrent workers cannot interleave its bytes.
-pub fn logLine(comptime format: []const u8, args: anytype) void {
-    var buffer: [4096]u8 = undefined;
-    const prefix = std.fmt.bufPrint(&buffer, "pid={d} ", .{linux.getpid()}) catch return;
-    const body = std.fmt.bufPrint(buffer[prefix.len..], format, args) catch return;
-    const line = buffer[0 .. prefix.len + body.len];
+const diagnostic_record_bytes = 4096;
+const truncation_marker = " [diagnostic truncated]\n";
+
+// Keep a valid UTF-8 input valid when a bounded record ends inside a codepoint.
+// Invalid input bytes elsewhere are retained rather than silently rewritten.
+fn completeUtf8Prefix(bytes: []const u8) usize {
+    if (bytes.len == 0) return 0;
+    var start = bytes.len - 1;
+    while (start != 0 and bytes[start] & 0xc0 == 0x80) start -= 1;
+    const expected = std.unicode.utf8ByteSequenceLength(bytes[start]) catch return bytes.len;
+    return if (bytes.len - start < expected) start else bytes.len;
+}
+
+fn formatDiagnostic(
+    buffer: *[diagnostic_record_bytes]u8,
+    pid: ?linux.pid_t,
+    comptime format: []const u8,
+    args: anytype,
+) []const u8 {
+    // Fixed Writer retains the filled prefix on overflow. Reserve the suffix
+    // before formatting: oversized diagnostics must be visible, never dropped.
+    var writer = std.Io.Writer.fixed(buffer[0 .. buffer.len - truncation_marker.len]);
+    if (pid) |value| writer.print("pid={d} ", .{value}) catch unreachable;
+    var truncated = false;
+    writer.print(format, args) catch {
+        truncated = true;
+    };
+    var record_end = writer.end;
+    if (truncated) {
+        record_end = completeUtf8Prefix(buffer[0..record_end]);
+        @memcpy(buffer[record_end..][0..truncation_marker.len], truncation_marker);
+        record_end += truncation_marker.len;
+    } else if (record_end == 0 or buffer[record_end - 1] != '\n') {
+        buffer[record_end] = '\n';
+        record_end += 1;
+    }
+    return buffer[0..record_end];
+}
+
+fn writeDiagnostic(fd: linux.fd_t, pid: ?linux.pid_t, comptime format: []const u8, args: anytype) void {
+    var buffer: [diagnostic_record_bytes]u8 = undefined;
+    const line = formatDiagnostic(&buffer, pid, format, args);
     for (0..4) |_| {
-        const written = linux.write(2, line.ptr, line.len);
+        const written = linux.write(fd, line.ptr, line.len);
         if (linux.errno(written) == .INTR) continue;
-        // A <= PIPE_BUF blocking pipe write is atomic. Do not split a partial
-        // write into another syscall, which could interleave with a peer.
+        // A <= PIPE_BUF blocking pipe write is atomic. Never retry a partial
+        // write as a suffix, which could interleave with a peer. I/O failure
+        // remains best-effort diagnostic loss, not a semantic build result.
         return;
+    }
+}
+
+/// Worker diagnostics retain their process identity in one bounded write.
+pub fn logLine(comptime format: []const u8, args: anytype) void {
+    writeDiagnostic(2, linux.getpid(), format, args);
+}
+
+/// Parent bundle diagnostics preserve their existing text and parser prefixes.
+pub fn printLine(comptime format: []const u8, args: anytype) void {
+    writeDiagnostic(2, null, format, args);
+}
+
+test "bounded diagnostics retain ordinary text and expose oversized records" {
+    var buffer: [diagnostic_record_bytes]u8 = undefined;
+    const title = "চিত্র:LL-Q9610 (ben)-Aishik Rehman-ইসবগুল.wav";
+    const line = formatDiagnostic(&buffer, 123, "warning: file metadata missing: title={s}\n", .{title});
+    try std.testing.expectEqualStrings("pid=123 warning: file metadata missing: title=" ++ title ++ "\n", line);
+    const parent = formatDiagnostic(&buffer, null, "bundle expansion failed title={s} stage=expand error={s}\n", .{ "ইষ্টি", "FileMetadataSnapshotMissing" });
+    try std.testing.expectEqualStrings("bundle expansion failed title=ইষ্টি stage=expand error=FileMetadataSnapshotMissing\n", parent);
+    try std.testing.expectEqualStrings("without newline\n", formatDiagnostic(&buffer, null, "without newline", .{}));
+    const huge: [6000]u8 = @splat('x');
+    const truncated = formatDiagnostic(&buffer, 123, "large={s}\n", .{&huge});
+    try std.testing.expect(truncated.len <= diagnostic_record_bytes);
+    try std.testing.expect(std.mem.startsWith(u8, truncated, "pid=123 large=xxx"));
+    try std.testing.expect(std.mem.endsWith(u8, truncated, truncation_marker));
+}
+
+test "bounded diagnostics never split valid UTF-8 at truncation" {
+    const piece = "বাংলা";
+    var text: [piece.len * 400]u8 = undefined;
+    for (0..400) |i| @memcpy(text[i * piece.len ..][0..piece.len], piece);
+    const padding = "0123456789abcdef";
+    var buffer: [diagnostic_record_bytes]u8 = undefined;
+    for (0..padding.len) |offset| {
+        const line = formatDiagnostic(&buffer, 321, "{s}{s}\n", .{ padding[0..offset], &text });
+        try std.testing.expect(line.len <= diagnostic_record_bytes);
+        try std.testing.expect(std.unicode.utf8ValidateSlice(line));
+        try std.testing.expect(std.mem.endsWith(u8, line, truncation_marker));
+    }
+}
+
+test "independent processes preserve complete concurrent diagnostic records" {
+    // Four real processes share one blocking pipe. No process-local mutex can
+    // serialize this test. Each record is >64 bytes and carries an independently
+    // checked writer, sequence and Unicode payload; loss or mixing fails.
+    const count = 4;
+    const rounds = 64;
+    const title_prefix = "চিত্র:";
+    var fds: [2]linux.fd_t = undefined;
+    if (linux.errno(linux.pipe2(&fds, .{ .CLOEXEC = true })) != .SUCCESS)
+        return error.DiagnosticTestPipeFailed;
+    defer _ = linux.close(fds[0]);
+    var write_open = true;
+    defer if (write_open) {
+        _ = linux.close(fds[1]);
+    };
+    var pids: [count]linux.pid_t = @splat(0);
+    defer for (&pids) |*pid| {
+        if (pid.* != 0) {
+            _ = linux.kill(pid.*, .KILL);
+            var status: i32 = undefined;
+            while (linux.errno(linux.waitpid(pid.*, &status, 0)) == .INTR) {}
+        }
+    };
+    for (0..count) |index| {
+        const forked = linux.fork();
+        if (linux.errno(forked) != .SUCCESS) return error.DiagnosticTestForkFailed;
+        if (forked == 0) {
+            _ = linux.close(fds[0]);
+            var payload: [2048]u8 = @splat(@as(u8, @intCast('A' + index)));
+            @memcpy(payload[0..title_prefix.len], title_prefix);
+            for (0..rounds) |sequence|
+                writeDiagnostic(fds[1], linux.getpid(), "writer={d} sequence={d} title={s}\n", .{ index, sequence, &payload });
+            _ = linux.close(fds[1]);
+            linux.exit_group(0);
+        }
+        pids[index] = @intCast(forked);
+    }
+    _ = linux.close(fds[1]);
+    write_open = false;
+    var seen: [count][rounds]bool = @splat(@splat(false));
+    var received: usize = 0;
+    var line_buffer: [diagnostic_record_bytes]u8 = undefined;
+    var line_len: usize = 0;
+    var read_buffer: [8192]u8 = undefined;
+    while (true) {
+        var ready = [_]std.posix.pollfd{.{ .fd = fds[0], .events = std.posix.POLL.IN, .revents = 0 }};
+        if (try std.posix.poll(&ready, 5_000) == 0) return error.DiagnosticTestTimeout;
+        const n = linux.read(fds[0], &read_buffer, read_buffer.len);
+        if (linux.errno(n) == .INTR) continue;
+        if (linux.errno(n) != .SUCCESS) return error.DiagnosticTestReadFailed;
+        if (n == 0) break;
+        for (read_buffer[0..n]) |byte| {
+            if (byte != '\n') {
+                if (line_len == line_buffer.len) return error.DiagnosticTestOversizedLine;
+                line_buffer[line_len] = byte;
+                line_len += 1;
+                continue;
+            }
+            const line = line_buffer[0..line_len];
+            var fields = std.mem.splitScalar(u8, line, ' ');
+            const pid_field = fields.next() orelse return error.DiagnosticTestMalformedLine;
+            const writer_field = fields.next() orelse return error.DiagnosticTestMalformedLine;
+            const sequence_field = fields.next() orelse return error.DiagnosticTestMalformedLine;
+            const title = fields.rest();
+            try std.testing.expect(std.mem.startsWith(u8, pid_field, "pid="));
+            try std.testing.expect(std.mem.startsWith(u8, writer_field, "writer="));
+            try std.testing.expect(std.mem.startsWith(u8, sequence_field, "sequence="));
+            const index = try std.fmt.parseInt(usize, writer_field["writer=".len..], 10);
+            const sequence = try std.fmt.parseInt(usize, sequence_field["sequence=".len..], 10);
+            try std.testing.expect(index < count and sequence < rounds);
+            try std.testing.expectEqual(pids[index], try std.fmt.parseInt(linux.pid_t, pid_field["pid=".len..], 10));
+            try std.testing.expect(!seen[index][sequence]);
+            try std.testing.expectEqual(@as(usize, 2048 + "title=".len), title.len);
+            try std.testing.expect(std.mem.startsWith(u8, title, "title=" ++ title_prefix));
+            for (title["title=".len + title_prefix.len ..]) |value|
+                try std.testing.expectEqual(@as(u8, @intCast('A' + index)), value);
+            seen[index][sequence] = true;
+            received += 1;
+            line_len = 0;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), line_len);
+    try std.testing.expectEqual(@as(usize, count * rounds), received);
+    for (&pids) |*pid| {
+        var status: i32 = undefined;
+        while (true) {
+            const waited = linux.waitpid(pid.*, &status, 0);
+            if (linux.errno(waited) == .INTR) continue;
+            if (linux.errno(waited) != .SUCCESS) return error.DiagnosticTestWaitFailed;
+            pid.* = 0;
+            try std.testing.expectEqual(@as(i32, 0), status);
+            break;
+        }
     }
 }
 

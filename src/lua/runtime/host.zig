@@ -86,6 +86,9 @@ pub const WikibasePageEntityIdFn = *const fn (?*anyopaque, []const u8) anyerror!
 pub const WikibaseTerm = struct { value: []const u8, language: []const u8, source_language: ?[]const u8 = null };
 pub const WikibaseEntityTerms = struct { label: ?WikibaseTerm, description: ?WikibaseTerm };
 pub const WikibaseEntityTermsFn = *const fn (?*anyopaque, []const u8) anyerror!WikibaseEntityTerms;
+// Immutable capture owned by the build provider, borrowed for its lifetime.
+pub const DateNumbering = struct { digits: [10][]const u8, timezone: []const u8 };
+pub const DateNumberingFn = *const fn (?*anyopaque, []const u8) anyerror!DateNumbering;
 pub const LanguageFallbacksFn = *const fn (?*anyopaque, []const u8) anyerror![]const []const u8;
 pub const LanguageNameRow = struct { code: []const u8, name: []const u8 };
 pub const LanguageNameScope = enum { all, mw, mwfile };
@@ -132,6 +135,7 @@ pub const Host = struct {
     wikibase_entity: ?WikibaseEntityFn = null,
     wikibase_page_entity_id: ?WikibasePageEntityIdFn = null,
     wikibase_entity_terms: ?WikibaseEntityTermsFn = null,
+    date_numbering: ?DateNumberingFn = null,
     language_fallbacks: ?LanguageFallbacksFn = null,
     language_names: ?LanguageNamesFn = null,
     language_name: ?LanguageNameFn = null,

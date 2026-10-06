@@ -338,11 +338,11 @@ fn snapshotMessageSource(runtime: *rt.Context, host: *host_api.Host, language: [
     const normalized = try host_api.normalizeInterfaceMessageKeyAlloc(runtime.allocator, key);
     defer runtime.allocator.free(normalized);
     const get = host.interface_message orelse {
-        std.log.warn("interface message snapshot unavailable: language={s} key={s}", .{ language[0..@min(language.len, 128)], normalized[0..@min(normalized.len, 256)] });
+        rt.work_stats.logLine("warning: interface message snapshot unavailable: language={s} key={s}\n", .{ language[0..@min(language.len, 128)], normalized[0..@min(normalized.len, 256)] });
         return error.InterfaceMessageSnapshotMissing;
     };
     const resolved = (try get(host.ctx, runtime.allocator, language, normalized)) orelse {
-        std.log.warn("interface message missing: language={s} key={s}", .{ language[0..@min(language.len, 128)], normalized[0..@min(normalized.len, 256)] });
+        rt.work_stats.logLine("warning: interface message missing: language={s} key={s}\n", .{ language[0..@min(language.len, 128)], normalized[0..@min(normalized.len, 256)] });
         return error.InterfaceMessageSnapshotMissing;
     };
     // Scribunto plain() substitutes $N but preserves template/parser syntax.
@@ -359,7 +359,7 @@ fn messageSource(runtime: *rt.Context, ctx: *const MessageCtx) !?[]const u8 {
         const normalized = try host_api.normalizeInterfaceMessageKeyAlloc(runtime.allocator, key);
         defer runtime.allocator.free(normalized);
         const language = ctx.language orelse if (runtime.namespace_catalog) |catalog| catalog.content_language else "<unavailable>";
-        std.log.warn("interface message host unavailable: language={s} key={s}", .{ language[0..@min(language.len, 128)], normalized[0..@min(normalized.len, 256)] });
+        rt.work_stats.logLine("warning: interface message host unavailable: language={s} key={s}\n", .{ language[0..@min(language.len, 128)], normalized[0..@min(normalized.len, 256)] });
         return error.InterfaceMessageSnapshotMissing;
     };
     if (ctx.language) |language|
@@ -537,7 +537,7 @@ fn localizedJsonString(host: *host_api.Host, language: []const u8, value: std.js
     }
     if (!std.mem.eql(u8, language, "en")) {
         const get = host.language_fallbacks orelse {
-            std.log.warn("language fallback snapshot unavailable: language={s}", .{language[0..@min(language.len, 128)]});
+            rt.work_stats.logLine("warning: language fallback snapshot unavailable: language={s}\n", .{language[0..@min(language.len, 128)]});
             return error.LanguageFallbackSnapshotMissing;
         };
         for (try get(host.ctx, language)) |fallback| {

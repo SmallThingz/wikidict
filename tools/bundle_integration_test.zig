@@ -1687,9 +1687,15 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
     const french_ns = try std.fs.path.join(h.a, &.{ dir, "french-namespaces.tsv" });
     const french_languages = try std.fs.path.join(h.a, &.{ dir, "french-languages.tsv" });
     const french_files = try std.fs.path.join(h.a, &.{ dir, "french-file-metadata.tsv" });
+    const french_interwiki = try std.fs.path.join(h.a, &.{ dir, "french-interwiki.tsv" });
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = french_ns, .data = namespaces.french_test_fixture });
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = french_languages, .data = "# wikidict-language-registry-v2\n# content-language\tfr\n# mediawiki\nfr\tfrançais\tfr\tfra\n# iso-639-3\n" });
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = french_files, .data = "Fichier:Example.svg\t1\t640\t480\nFichier:Missing.svg\t0\t0\t0\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = french_interwiki, .data = "en\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\n" });
+    const french_dates = try std.fs.path.join(h.a, &.{ dir, "french-date-numbering.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = french_dates, .data = "# wikidict-date-numbering-v1\n# wiki\tfrwiktionary\n# dump-date\t20261001\n# content-language\tfr\n# timezone\tUTC\n# profiles\t4\nD\tbn\t০\t১\t২\t৩\t৪\t৫\t৬\t৭\t৮\t৯\nD\ten\t0\t1\t2\t3\t4\t5\t6\t7\t8\t9\nD\tfr\t0\t1\t2\t3\t4\t5\t6\t7\t8\t9\nU\tzz-unknown\tinvalid-glyphs\n" });
+    const french_date_messages = try std.fs.path.join(h.a, &.{ dir, "french-date-messages.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = french_date_messages, .data = "# wikidict-interface-messages-v1\n# wiki\tfrwiktionary\n# dump-date\t20261001\n# content-language\tfr\nbn\tmarch\tV\tমার্চ\nen\tmarch\tV\tsite-specific March\nfr\tmarch\tV\tmars\n" });
     try writePages(h.io, h.a, french_xml, &.{
         .{ .title = "mot", .ns = 0, .id = 11, .body = "==français==\n# Un mot. [[Catégorie:Exemple]]\n" ++
             "# {{#invoke:MetadataProbe|run}}\n" ++
@@ -1699,6 +1705,31 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
         .{ .title = "Conjugaison:aller", .ns = 116, .id = 13, .body = "French conjugation content." },
         .{ .title = "Racine:aller", .ns = 118, .id = 14, .body = "French root content." },
         .{ .title = "Module:MetadataProbe", .ns = 828, .id = 15, .body = "return {run=function() " ++
+            "local bn = mw.language.new('bn'); local fr = mw.getContentLanguage(); " ++
+            "assert(mw.language.new('en'):formatDate('j F Y', '2024-03-27') == '27 site-specific March 2024'); " ++
+            "assert(fr:formatDate('j F Y', '2024-03-27') == '27 mars 2024'); " ++
+            "assert(bn:formatDate('j F Y', '2024-03-27') == '২৭ মার্চ ২০২৪'); " ++
+            "assert(bn:formatDate('U xnU', '@1234567890') == '১২৩৪৫৬৭৮৯০ 1234567890'); " ++
+            "assert(bn:formatDate('U', '@-1') == '-1'); " ++
+            "assert(bn:formatDate('xnF j j', '2024-03-27') == 'মার্চ 27 ২৭'); " ++
+            "assert(bn:formatDate('Y', '2024-03-27', true) == '২০২৪'); " ++
+            "local missing_ok, missing_err = pcall(function() return mw.language.new('zz'):formatDate('Y', '2024-03-27') end); " ++
+            "assert(not missing_ok and tostring(missing_err):find('DateNumberingSnapshotMissing', 1, true)); " ++
+            "local unknown_ok, unknown_err = pcall(function() return mw.language.new('zz-unknown'):formatDate('Y', '2024-03-27') end); " ++
+            "assert(not unknown_ok and tostring(unknown_err):find('DateNumberingUnsupported', 1, true)); " ++
+            "local cal_ok, cal_err = pcall(function() return bn:formatDate('xiY', '2024-03-27') end); " ++
+            "assert(not cal_ok and tostring(cal_err):find('UnsupportedDateCalendar', 1, true)); " ++
+            "for _, input in ipairs({':en:#Etymology 2', 'en:#Etymology_2'}) do " ++
+            "local title = mw.title.new(input); " ++
+            "assert(title.text == '' and title.prefixedText == 'en:' and title.fullText == 'en:#Etymology 2'); " ++
+            "assert(title.fragment == 'Etymology 2' and title.interwiki == 'en'); " ++
+            "assert(title.isExternal and not title.isLocal and not title.exists and title:getContent() == nil); end; " ++
+            "assert(mw.title.new('  : en : #Etymology_2  ', 10).fullText == 'en:#Etymology 2'); " ++
+            "assert(mw.title.new(':en:read').prefixedText == 'en:read'); " ++
+            "assert(mw.title.new(':en:').fullText == 'en:'); " ++
+            "assert(mw.title.new('::en:read') == nil and mw.title.new('en:::read') == nil and mw.title.new(':en:bad[title') == nil); " ++
+            "local batch = mw.title.newBatch({':en:#Etymology 2', ':en:read'}):lookupExistence():getTitles(); " ++
+            "assert(batch[1].fullText == 'en:#Etymology 2' and batch[2].prefixedText == 'en:read'); " ++
             "assert(mw.title.new('Thésaurus:mot').isContentPage); " ++
             "assert(mw.title.new('Annexe:missing').isContentPage); " ++
             "assert(not mw.title.new('Discussion Thésaurus:mot').isContentPage); " ++
@@ -1710,10 +1741,10 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
             "local absent = mw.title.new(prefix .. 'Missing.svg'); " ++
             "assert(not absent.file.exists and not absent.fileExists); " ++
             "if prefix == 'Média:' or prefix == 'Media:' then assert(present.exists and not absent.exists) end; " ++
-            "end; return 'French native metadata verified' end}" },
+            "end; return 'French native metadata verified / ' .. bn:formatDate('j F Y', '2024-03-27') end}" },
         .{ .title = "Modèle:SEITENNAME", .ns = 10, .id = 16, .body = "French ordinary template" },
     });
-    _ = try h.run(&.{ pipeline, french_xml, french_root, "--namespace-registry-snapshot", french_ns, "--language-registry-snapshot", french_languages, "--file-metadata-snapshot", french_files, "--llvm-workers", "1", "--page-workers", "1", "--now-unix", "1791072000" }, 0);
+    _ = try h.run(&.{ pipeline, french_xml, french_root, "--namespace-registry-snapshot", french_ns, "--language-registry-snapshot", french_languages, "--file-metadata-snapshot", french_files, "--interwiki-map-snapshot", french_interwiki, "--date-numbering-snapshot", french_dates, "--interface-messages-snapshot", french_date_messages, "--llvm-workers", "1", "--page-workers", "1", "--now-unix", "1791072000" }, 0);
     _ = try h.run(&.{ verifier, french_root }, 0);
     const thesaurus = try h.run(&.{ bin, "lookup", "mot", "--root", french_root, "--kind", "thesaurus", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, thesaurus, "French thesaurus content") != null, "French namespace106 routes to thesaurus rather than English rhymes");
@@ -1724,6 +1755,7 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
     const french_word = try h.run(&.{ bin, "lookup", "mot", "--root", french_root, "--language", "français", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, french_word, "Catégorie:Exemple") == null, "localized category membership stays metadata rather than visible prose");
     try h.require(std.mem.indexOf(u8, french_word, "French native metadata verified") != null, "localized content flags, default models and file metadata survive native compilation");
+    try h.require(std.mem.indexOf(u8, french_word, "২৭ মার্চ ২০২৪") != null, "captured locale names and digits survive native Lua compilation and stored reader output");
     try h.require(std.mem.indexOf(u8, french_word, "Foreign title alias: French ordinary template") != null, "German title aliases do not become global magic words in a different edition");
     try h.require(std.mem.indexOf(u8, french_word, "existing-media-confirmed") != null and std.mem.indexOf(u8, french_word, "missing-media-confirmed") != null, "localized media existence uses the pinned file snapshot");
 

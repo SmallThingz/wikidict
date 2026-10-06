@@ -32,7 +32,7 @@ SHARD_STATE_VERSION = 2
 AUXILIARY_SNAPSHOT_NAMES = (
     'site-info', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
-    'wikibase-entity-terms', 'wikibase-page-links', 'language-fallbacks', 'language-names', 'file-metadata',
+    'wikibase-entity-terms', 'wikibase-page-links', 'language-fallbacks', 'language-names', 'date-numbering', 'file-metadata',
     'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words',
 )
 MAX_TOTAL_BUILD_WORKERS = 8
@@ -262,8 +262,14 @@ def auxiliary_capture_helper(name, path):
         # Explicit capture schemas must pass replay, including unknown schemas.
         # Only schema-less legacy snapshots use generic manifest validation.
         if 'schema' not in record:return None
+        if record.get('schema')=='wikidict.commons-data-capture.v2':
+            import prepare_commons_data_v2
+            return prepare_commons_data_v2
         import prepare_commons_data
         return prepare_commons_data
+    if name=='date-numbering':
+        import prepare_date_numbering
+        return prepare_date_numbering
     if name=='language-names':
         record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
         if isinstance(record,dict) and record.get('schema')=='wikidict.language-names-translate-capture.v1':
@@ -288,8 +294,13 @@ def auxiliary_capture_helper(name, path):
         # Older explicit snapshots predate capture schemas. A present schema
         # must pass the current helper, including unknown/unsupported schemas.
         if 'schema' not in record:return None
-    elif name!='language-fallbacks':
+    elif name=='language-fallbacks':
+        record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
+    else:
         return None
+    if isinstance(record,dict) and record.get('schema')=='wikidict.language-messages-capture.v2':
+        import prepare_language_messages_v2
+        return prepare_language_messages_v2
     import prepare_language_messages
     return prepare_language_messages
 
@@ -379,18 +390,41 @@ def validated_auxiliary_capture(name, path, edition=None, date=None):
         manifest_digest=hashlib.sha256(helper.small(path.with_name(helper.MANIFEST),helper.MAX_MANIFEST)).hexdigest()
         replay_key=(producer_key,manifest_digest)
         previous=_FILE_METADATA_V2_REPLAYS.get(replay_key)
-    if previous is None:
-        record=helper.validate_snapshot(path,edition,date)
-    else:
-        record=json.loads(previous[0])
-        if ((edition is not None and record['wiki']!=edition) or
-                (date is not None and record['date']!=date)):
-            raise ValueError('File metadata edition/date mismatch')
-    if name=='magic-words':
-        artifacts=dict(record['artifacts'])
-        artifacts['magic-words.manifest.json']=sha256_file(path.with_name('magic-words.manifest.json'))
-    else:
+    if getattr(helper,'__name__',None) in (
+            'prepare_wikibase_entities','prepare_language_messages',
+            'prepare_language_messages_v2','prepare_date_numbering',
+            'prepare_site_info','prepare_language_names_translate'):
+        # These helpers replay the complete capture inside capture_artifacts.
+        # Bind that one replay to exact preread bytes, rather than replaying the
+        # inventory twice at this boundary. Other boundaries still replay.
+        manifest_name=auxiliary_manifest_filename(name,path)
+        manifest_path=Path(path).with_name(manifest_name)
+        if helper.__name__=='prepare_wikibase_entities':
+            manifest_raw=helper.regular(manifest_path,helper.MAX_PROOF_BYTES)
+            record=helper.parse_json(manifest_raw)
+        else:
+            manifest_raw=helper.evidence.small(manifest_path,helper.MAX_MANIFEST)
+            record=helper.evidence.decode(manifest_raw)
+        if (not isinstance(record,dict) or
+                (edition is not None and record.get('wiki')!=edition) or
+                (date is not None and record.get('date')!=date)):
+            raise ValueError('Auxiliary capture edition/date mismatch: '+name)
         artifacts=helper.capture_artifacts(path,record)
+        if artifacts.get(manifest_name)!=hashlib.sha256(manifest_raw).hexdigest():
+            raise ValueError('Auxiliary manifest changed during validation: '+name)
+    else:
+        if previous is None:
+            record=helper.validate_snapshot(path,edition,date)
+        else:
+            record=json.loads(previous[0])
+            if ((edition is not None and record['wiki']!=edition) or
+                    (date is not None and record['date']!=date)):
+                raise ValueError('File metadata edition/date mismatch')
+        if name=='magic-words':
+            artifacts=dict(record['artifacts'])
+            artifacts['magic-words.manifest.json']=sha256_file(path.with_name('magic-words.manifest.json'))
+        else:
+            artifacts=helper.capture_artifacts(path,record)
     if not isinstance(artifacts,dict) or auxiliary_manifest_filename(name,path) not in artifacts or auxiliary_snapshot_filename(name) not in artifacts:
         raise ValueError('Incomplete auxiliary capture inventory: '+name)
     for filename,digest in artifacts.items():
@@ -438,7 +472,7 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
             raise ValueError(f'Unknown auxiliary snapshot: {name}')
         path=Path(source)
         capture=validated_auxiliary_capture(name,path,edition,date)
-        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','site-info','wikibase-page-links','file-metadata'):
+        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','wikibase-page-links','file-metadata'):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
@@ -500,7 +534,7 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
             return
         if capture_root is not None and bound[1]['capture.complete.json']!=sha256_file(capture_root/'capture.complete.json'):
             raise ValueError('Siteinfo belongs to a different namespace capture')
-    if capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms','language-fallbacks','interface-messages','commons-data','language-names','file-metadata'):
+    if capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','file-metadata'):
         bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
         if bound is not None:
             _,inventory=bound
@@ -508,6 +542,7 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
                     ('wikibase-namespace-capture.complete.json','capture.complete.json')) if name.startswith('wikibase-') else (
                     ('commons-namespace-registry.tsv','namespace-registry.tsv'),) if name=='commons-data' else (
                     ('language-names.namespace-registry.tsv','namespace-registry.tsv'),) if name=='language-names' else (
+                    ('date-numbering.namespace-registry.tsv','namespace-registry.tsv'),) if name=='date-numbering' else (
                     ('file-metadata.namespace-registry.tsv','namespace-registry.tsv'),) if name=='file-metadata' else (
                     ('language-messages.namespace-registry.tsv','namespace-registry.tsv'),)
             for copied,original in inputs:
@@ -590,6 +625,8 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 ('commons-data',),edition,date))
             preferred.update(discover_auxiliary_generation(root,'language-names',
                 ('language-names',),edition,date))
+            preferred.update(discover_auxiliary_generation(root,'date-numbering',
+                ('date-numbering',),edition,date))
             preferred.update(discover_auxiliary_generation(root,'wikibase-page-links',
                 ('wikibase-page-links',),edition,date))
             preferred.update(discover_auxiliary_generation(root,'site-info',
@@ -661,9 +698,9 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         copies.setdefault(key,(source,digest))
     for name,source in sorted((snapshots or {}).items()):
         source=Path(source)
-        # Commons replay certifies the entire directory, including absence of
-        # extra payloads. Keep its capture separate from other pins and input.
-        folder=destination/'commons-data' if name=='commons-data' else (
+        # Keep complete directory-provenance captures separate from other
+        # snapshots so strict replay sees only their own recorded payloads.
+        folder=destination/name if name in ('commons-data','date-numbering') else (
             destination/'site-info' if name=='site-info' and
             auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
         if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))

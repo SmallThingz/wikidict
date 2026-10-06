@@ -395,7 +395,7 @@ pub const Program = struct {
         }
         self.stdlib_template.deinit();
         if (self.pattern_cache) |cache| {
-            cache.logDiagnostics();
+            cache.logDiagnostics(work_stats.logLine);
             cache.destroy();
         }
         self.allocator.free(self.shape_string_indices);

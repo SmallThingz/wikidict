@@ -484,11 +484,10 @@ fn makeExternalTitleValue(
 ) !?Value {
     const body = (try normalizeName(runtime.allocator, raw_body)) orelse return null;
     const main_spec = namespaceSpecById(runtime, 0).?;
-    if (!validTitleBody(runtime, main_spec, body)) return null;
+    if (body.len != 0 and !validTitleBody(runtime, main_spec, body)) return null;
     const hash = std.mem.indexOfScalar(u8, body, '#');
     const base_body = if (hash) |pos| body[0..pos] else body;
     const fragment_raw = if (hash) |pos| body[pos + 1 ..] else "";
-    if (base_body.len == 0) return null;
     const fragment = try normalizeFragment(runtime.allocator, fragment_raw);
     const normalized_prefix = (try normalizeName(runtime.allocator, prefix)) orelse return null;
     if (normalized_prefix.len == 0) return null;
@@ -619,15 +618,20 @@ fn externalInterwikiParts(
     decode_entities: bool,
 ) !?ExternalInterwiki {
     const source = if (decode_entities) try normalizedNewText(runtime, state, text_raw) else text_raw;
-    const text = (try normalizeName(runtime.allocator, source)) orelse return null;
-    if (text.len == 0 or text[0] == ':') return null;
+    var text = (try normalizeName(runtime.allocator, source)) orelse return null;
+    // An initial colon resets the default namespace and still allows an
+    // external prefix, including a fragment on that wiki's main page.
+    if (text.len != 0 and text[0] == ':')
+        text = std.mem.trimStart(u8, text[1..], " ");
+    if (text.len == 0) return null;
     const colon = std.mem.indexOfScalar(u8, text, ':') orelse return null;
     if (colon == 0) return null;
     const prefix = std.mem.trim(u8, text[0..colon], " ");
     if (prefix.len == 0 or namespaceSpecByName(runtime, prefix) != null) return null;
     if (try interwikiDisposition(runtime, prefix) != .external) return null;
-    const body = std.mem.trimStart(u8, text[colon + 1 ..], " ");
-    if (body.len == 0) return null;
+    var body = std.mem.trimStart(u8, text[colon + 1 ..], " ");
+    if (body.len != 0 and body[0] == ':')
+        body = std.mem.trimStart(u8, body[1..], " ");
     return .{ .prefix = prefix, .body = body };
 }
 
@@ -1328,6 +1332,31 @@ test "AOT title constructors and current title use the live host" {
     try std.testing.expectEqualStrings("w:Thing", (try runtime.getIndex(external_made[0], .{ .string = "prefixedText" })).string);
     try std.testing.expectEqualStrings("w", (try runtime.getIndex(external_made[0], .{ .string = "interwiki" })).string);
     try std.testing.expectEqualStrings("frag", (try runtime.getIndex(external_made[0], .{ .string = "fragment" })).string);
+    inline for (.{
+        .{ ":w:#Etymology 2", "", "Etymology 2", "w:#Etymology 2", 10 },
+        .{ "w:#Etymology_2", "", "Etymology 2", "w:#Etymology 2", 0 },
+        .{ ":w:", "", "", "w:", 10 },
+        .{ ":w:Thing#frag", "Thing", "frag", "w:Thing#frag", 10 },
+        .{ "w::Thing#frag", "Thing", "frag", "w:Thing#frag", 10 },
+        .{ "  : w : #Etymology_2  ", "", "Etymology 2", "w:#Etymology 2", 10 },
+    }) |case| {
+        const result = try runtime.callValue(new_fn, &.{ .{ .string = case[0] }, .{ .number = case[4] } });
+        defer rt.freeResults(result);
+        const value = result[0];
+        try std.testing.expectEqualStrings(case[1], (try runtime.getIndex(value, .{ .string = "text" })).string);
+        try std.testing.expectEqualStrings(case[2], (try runtime.getIndex(value, .{ .string = "fragment" })).string);
+        try std.testing.expectEqualStrings(case[3], (try runtime.getIndex(value, .{ .string = "fullText" })).string);
+        try std.testing.expectEqualStrings("w", (try runtime.getIndex(value, .{ .string = "interwiki" })).string);
+        try std.testing.expectEqual(@as(f64, 0), (try runtime.getIndex(value, .{ .string = "namespace" })).number);
+        try std.testing.expect((try runtime.getIndex(value, .{ .string = "isExternal" })).boolean);
+        try std.testing.expect(!(try runtime.getIndex(value, .{ .string = "isLocal" })).boolean);
+        try std.testing.expect(!(try runtime.getIndex(value, .{ .string = "exists" })).boolean);
+    }
+    inline for (.{ "::w:Thing", "w:::Thing", ":w:bad[title", ":w:foo/../bar", ":Template:" }) |invalid| {
+        const result = try runtime.callValue(new_fn, &.{.{ .string = invalid }});
+        defer rt.freeResults(result);
+        try std.testing.expect(result[0] == .nil);
+    }
     const local_interwiki = try runtime.callValue(new_fn, &.{.{ .string = "self:Template:Thing" }});
     defer rt.freeResults(local_interwiki);
     try std.testing.expectEqualStrings("Template:Thing", (try runtime.getIndex(local_interwiki[0], .{ .string = "prefixedText" })).string);

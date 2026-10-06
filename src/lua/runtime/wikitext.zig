@@ -71,6 +71,7 @@ pub const Provider = struct {
     pub const ExternalData = host_api.ExternalData;
     pub const CategoryStats = host_api.CategoryStats;
     pub const InterfaceMessage = host_api.InterfaceMessage;
+    pub const DateNumbering = host_api.DateNumbering;
     pub const LanguageNameRow = host_api.LanguageNameRow;
     pub const LanguageNameScope = host_api.LanguageNameScope;
     pub const LanguageDirection = host_api.LanguageDirection;
@@ -123,6 +124,7 @@ pub const Provider = struct {
     wikibase_entity: ?host_api.WikibaseEntityFn = null,
     wikibase_page_entity_id: ?host_api.WikibasePageEntityIdFn = null,
     wikibase_entity_terms: ?host_api.WikibaseEntityTermsFn = null,
+    date_numbering: ?host_api.DateNumberingFn = null,
     language_fallbacks: ?host_api.LanguageFallbacksFn = null,
     language_names: ?host_api.LanguageNamesFn = null,
     language_name: ?host_api.LanguageNameFn = null,
@@ -206,6 +208,7 @@ pub const Expander = struct {
         self.host.wikibase_entity = if (self.provider.wikibase_entity != null) hostWikibaseEntity else null;
         self.host.wikibase_page_entity_id = if (self.provider.wikibase_page_entity_id != null) hostWikibasePageEntityId else null;
         self.host.wikibase_entity_terms = if (self.provider.wikibase_entity_terms != null) hostWikibaseEntityTerms else null;
+        self.host.date_numbering = if (self.provider.date_numbering != null) hostDateNumbering else null;
         self.host.language_fallbacks = if (self.provider.language_fallbacks != null) hostLanguageFallbacks else null;
         self.host.language_names = if (self.provider.language_names != null) hostLanguageNames else null;
         self.host.language_name = if (self.provider.language_name != null) hostLanguageName else null;
@@ -407,6 +410,11 @@ pub const Expander = struct {
     fn hostWikibaseEntityTerms(raw: ?*anyopaque, entity_id: []const u8) anyerror!host_api.WikibaseEntityTerms {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         return (self.provider.wikibase_entity_terms orelse return error.NotImplemented)(self.provider.ctx, entity_id);
+    }
+
+    fn hostDateNumbering(raw: ?*anyopaque, code: []const u8) anyerror!host_api.DateNumbering {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        return (self.provider.date_numbering orelse return error.DateNumberingSnapshotMissing)(self.provider.ctx, code);
     }
 
     fn hostLanguageNames(raw: ?*anyopaque, display: ?[]const u8, scope: host_api.LanguageNameScope) anyerror![]const host_api.LanguageNameRow {
@@ -1992,7 +2000,7 @@ pub const Expander = struct {
     fn phonosError(self: *Expander, label: []const u8, language: []const u8, key: []const u8, file: []const u8) ![]const u8 {
         const a = self.runtime.allocator;
         const aria = try message_lib.interfaceMessagePlain(self.runtime, "phonos-aria-error", &.{});
-        std.log.warn("phonos error: key={s} file={s}", .{ key, file[0..@min(file.len, 512)] });
+        rt.work_stats.logLine("warning: phonos error: key={s} file={s}\n", .{ key, file });
         var out: std.ArrayList(u8) = .empty;
         try out.appendSlice(a, "<span class=\"ext-phonos ext-phonos-error ");
         try appendAttrEscaped(&out, a, key);
@@ -2047,7 +2055,7 @@ pub const Expander = struct {
         // validates the supplied name in NS_FILE without stripping its prefix.
         const title = try registry.normalizeTitle(a, file, 6, .only_default);
         const get = self.provider.file_metadata orelse {
-            std.log.warn("file metadata snapshot unavailable: phonos file={s}", .{title});
+            rt.work_stats.logLine("warning: file metadata snapshot unavailable: phonos file={s}\n", .{title});
             return error.FileMetadataSnapshotMissing;
         };
         const metadata = try get(self.provider.ctx, title);
@@ -4159,6 +4167,46 @@ test "expander attachment preserves absent legacy Wikibase providers and exact m
     expander.provider.wikibase_entity_text = null;
     expander.attach();
     try std.testing.expect(expander.host.wikibase_sitelink == null and expander.host.wikibase_entity_text == null);
+}
+
+test "date numbering attachment forwards captured identity errors and provider removal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 0,
+        .mw_slot = 0,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .stable_page_reads = true },
+    };
+    expander.attach();
+    try std.testing.expect(expander.host.date_numbering == null);
+    const Probe = struct {
+        fn numbering(raw: ?*anyopaque, code: []const u8) anyerror!host_api.DateNumbering {
+            const calls: *usize = @ptrCast(@alignCast(raw.?));
+            calls.* += 1;
+            if (std.mem.eql(u8, code, "unsupported")) return error.DateNumberingUnsupported;
+            if (!std.mem.eql(u8, code, "bn")) return error.DateNumberingSnapshotMissing;
+            return .{ .digits = .{ "০", "১", "২", "৩", "৪", "৫", "৬", "৭", "৮", "৯" }, .timezone = "Asia/Dhaka" };
+        }
+    };
+    var calls: usize = 0;
+    expander.provider.ctx = &calls;
+    expander.provider.date_numbering = Probe.numbering;
+    expander.attach();
+    const lookup = expander.host.date_numbering.?;
+    const profile = try lookup(expander.host.ctx, "bn");
+    try std.testing.expectEqualStrings("০", profile.digits[0]);
+    try std.testing.expectEqualStrings("Asia/Dhaka", profile.timezone);
+    try std.testing.expectError(error.DateNumberingUnsupported, lookup(expander.host.ctx, "unsupported"));
+    try std.testing.expectError(error.DateNumberingSnapshotMissing, lookup(expander.host.ctx, "en"));
+    try std.testing.expectEqual(@as(usize, 3), calls);
+    expander.provider.date_numbering = null;
+    expander.attach();
+    try std.testing.expect(expander.host.date_numbering == null);
+    try std.testing.expectError(error.DateNumberingSnapshotMissing, lookup(expander.host.ctx, "bn"));
 }
 
 test "int parser uses captured aliases and messages with child-frame expansion" {

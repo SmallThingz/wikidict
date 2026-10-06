@@ -1,4 +1,5 @@
 const std = @import("std");
+const diagnostics = @import("build_diagnostics");
 const namespace_registry = @import("namespace_registry");
 const encoder = @import("encoder");
 const xml_decode = @import("xml_decode");
@@ -381,7 +382,7 @@ const ExpansionSlot = struct {
             _ = self.arena.reset(.retain_capacity);
         }
         if (self.failure) |err| {
-            std.debug.print(
+            diagnostics.printLine(
                 "page expansion failed title={s} ordinal={d} ns={d} source_bytes={d} error={s}\n",
                 .{ self.job.title, self.job.ordinal, self.job.ns.id, self.job.source.len, @errorName(err) },
             );
@@ -404,7 +405,7 @@ const ExpansionSlot = struct {
             }
             const fallback_before = writer.stats.fallback_pages;
             writer.addExpandedPage(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title) catch |err| {
-                std.debug.print(
+                diagnostics.printLine(
                     "blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n",
                     .{ self.job.title, self.job.ordinal, self.job.ns.id, self.job.source.len, expanded.source.len, @errorName(err) },
                 );
@@ -689,7 +690,7 @@ fn dispatchIndexedPage(
         const source = if (page.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw_source) else raw_source;
         const redirects = pool.page_redirects orelse return error.PageRedirectSnapshotMissing;
         const target = redirects.lookup(a, page.page_id, xml_target) catch |err| {
-            std.debug.print("redirect SQL mismatch: page_id={d} title={s} xml_target={s} error={s}\n", .{ page.page_id, page.title, xml_target, @errorName(err) });
+            diagnostics.printLine("redirect SQL mismatch: page_id={d} title={s} xml_target={s} error={s}\n", .{ page.page_id, page.title, xml_target, @errorName(err) });
             return err;
         };
         const tail = try encoder.redirect_source.tail(source);
@@ -797,7 +798,7 @@ const PendingShard = struct {
         }
         try std.Io.Dir.cwd().rename(self.temporary, std.Io.Dir.cwd(), self.final, self.io);
         self.published = true;
-        std.debug.print("continuous shard published start={d} pages={d} main_pages={d} language_records={d} fallback_pages={d}\n", .{
+        diagnostics.printLine("continuous shard published start={d} pages={d} main_pages={d} language_records={d} fallback_pages={d}\n", .{
             self.start, stats.pages_seen, stats.main_pages, stats.language_records, stats.fallback_pages,
         });
     }
@@ -855,7 +856,7 @@ fn runContinuous(
         const progress_now = std.Io.Clock.awake.now(io).toNanoseconds();
         if (selected % 100_000 == 0 or progress_now >= next_progress) {
             next_progress = progress_now + 10 * std.time.ns_per_s;
-            std.debug.print("page compilation progress selected={d} ordinal={d} shard_start={d} main_pages={d} language_records={d} workers={d}\n", .{
+            diagnostics.printLine("page compilation progress selected={d} ordinal={d} shard_start={d} main_pages={d} language_records={d} workers={d}\n", .{
                 selected,                              page_ordinal,   shard.start, shard.writer.?.stats.main_pages,
                 shard.writer.?.stats.language_records, pool.slots.len,
             });
@@ -874,16 +875,16 @@ pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        std.debug.print("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N]\n", .{});
         return error.Usage;
     };
     const cpu_limit = @min(max_worker_count, std.Thread.getCpuCount() catch 1);
     if (options.workers > @max(@as(usize, 1), cpu_limit)) {
-        std.debug.print("refusing {d} expansion workers; safe limit on this host is {d}\n", .{ options.workers, @max(@as(usize, 1), cpu_limit) });
+        diagnostics.printLine("refusing {d} expansion workers; safe limit on this host is {d}\n", .{ options.workers, @max(@as(usize, 1), cpu_limit) });
         return error.ResourceLimit;
     }
 
@@ -960,7 +961,7 @@ pub fn main(init: std.process.Init) !void {
         const progress_now = std.Io.Clock.awake.now(init.io).toNanoseconds();
         if (pages_selected % 100_000 == 0 or progress_now >= next_progress) {
             next_progress = progress_now + 10 * std.time.ns_per_s;
-            std.debug.print(
+            diagnostics.printLine(
                 "page compilation progress selected={d} ordinal={d} main_pages={d} language_records={d} workers={d}\n",
                 .{ pages_selected, page_ordinal, writer.stats.main_pages, writer.stats.language_records, pool.slots.len },
             );
@@ -975,7 +976,7 @@ pub fn main(init: std.process.Init) !void {
     }
     try writePageCoverage(init.io, a, args[2], coverage);
 
-    std.debug.print(
+    diagnostics.printLine(
         "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} supplemental={d} fallback_pages={d} alias_records={d}\n",
         .{
             stats.pages_seen,
