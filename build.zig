@@ -833,5 +833,5 @@ fn addPublicRunStep(
 
 fn namespaceRegistryModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) *std.Build.Module {
     const unicode = b.createModule(.{ .root_source_file = b.path("src/frontend/unicode_lower.zig"), .target = target, .optimize = optimize });
-    return b.createModule(.{ .root_source_file = b.path("src/shared/namespace_registry.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{.{ .name = "unicode_lower", .module = unicode }} });
+    return b.createModule(.{ .root_source_file = b.path("src/shared/namespace_registry_module.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{.{ .name = "unicode_lower", .module = unicode }} });
 }
