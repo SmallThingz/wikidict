@@ -1709,6 +1709,11 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
             "assert(mw.language.new('en'):formatDate('j F Y', '2024-03-27') == '27 site-specific March 2024'); " ++
             "assert(fr:formatDate('j F Y', '2024-03-27') == '27 mars 2024'); " ++
             "assert(bn:formatDate('j F Y', '2024-03-27') == '২৭ মার্চ ২০২৪'); " ++
+            "assert(bn:formatDate('Y-m-d', '30th June 1982') == '১৯৮২-০৬-৩০'); " ++
+            "assert(bn:formatDate('Y-m-d', 'Dec.1921') == '১৯২১-১২-০১'); " ++
+            "for _, input in ipairs({'30th 06 1982', 'Dec.+921', '১৩ এপ্রিল ২০১৫', '০১-০১-২০২২', '14 মার্চ 1927'}) do " ++
+            "local date_ok, date_err = pcall(function() return bn:formatDate('Y-m-d', input) end); " ++
+            "assert(not date_ok and tostring(date_err):find('InvalidDate', 1, true)); end; " ++
             "assert(bn:formatDate('U xnU', '@1234567890') == '১২৩৪৫৬৭৮৯০ 1234567890'); " ++
             "assert(bn:formatDate('U', '@-1') == '-1'); " ++
             "assert(bn:formatDate('xnF j j', '2024-03-27') == 'মার্চ 27 ২৭'); " ++

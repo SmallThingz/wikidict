@@ -167,6 +167,32 @@ fn parseDottedDate(raw: []const u8) ?Civil {
     };
 }
 
+// This is the bounded English monthtext + separator* + year4 form used by
+// PHP's datenoday grammar. Keep numeric dotted dates in their existing parser.
+fn parseNamedMonthYear(raw: []const u8) ?Civil {
+    var month_end: usize = 0;
+    while (month_end < raw.len and std.ascii.isAlphabetic(raw[month_end])) : (month_end += 1) {}
+    if (month_end == 0) return null;
+    const month = monthNumber(raw[0..month_end]) orelse return null;
+    const year_raw = std.mem.trimStart(u8, raw[month_end..], " .\t-");
+    if (year_raw.len != 4) return null;
+    for (year_raw) |byte| if (!std.ascii.isDigit(byte)) return null;
+    const year = std.fmt.parseInt(i64, year_raw, 10) catch return null;
+    return .{ .year = year, .month = month, .day = 1 };
+}
+
+fn parseOrdinalDay(raw: []const u8) ?u8 {
+    if (raw.len < 3 or raw.len > 4) return null;
+    const digits = raw[0 .. raw.len - 2];
+    for (digits) |byte| if (!std.ascii.isDigit(byte)) return null;
+    const suffix = raw[raw.len - 2 ..];
+    if (!std.mem.eql(u8, suffix, "st") and !std.mem.eql(u8, suffix, "nd") and
+        !std.mem.eql(u8, suffix, "rd") and !std.mem.eql(u8, suffix, "th")) return null;
+    const day = std.fmt.parseInt(u8, digits, 10) catch return null;
+    // PHP's suffix is independent of the numeric day: do not enforce 1st/2nd/etc.
+    return if (day >= 1 and day <= 31) day else null;
+}
+
 fn parseSpaceDate(raw: []const u8) ?Civil {
     var fields: [3][]const u8 = undefined;
     var it = std.mem.tokenizeAny(u8, raw, " \t,");
@@ -194,6 +220,12 @@ fn parseSpaceDate(raw: []const u8) ?Civil {
         const month = monthNumber(fields[1]) orelse return null;
         return .{ .year = year, .month = month, .day = day };
     } else |_| {}
+    if (parseOrdinalDay(fields[0])) |day| {
+        // monthNumber also accepts numbers; this addition is named-month only.
+        if (!std.ascii.isAlphabetic(fields[1][0])) return null;
+        const month = monthNumber(fields[1]) orelse return null;
+        return .{ .year = year, .month = month, .day = day };
+    }
     const month = monthNumber(fields[0]) orelse return null;
     const day = std.fmt.parseInt(u8, fields[1], 10) catch return null;
     return .{ .year = year, .month = month, .day = day };
@@ -226,7 +258,7 @@ fn parseIsoDateTime(raw: []const u8) ?Civil {
 }
 
 fn parseCivil(raw: []const u8) ?Civil {
-    return parseIsoDateTime(raw) orelse parseDelimitedDate(raw);
+    return parseIsoDateTime(raw) orelse parseDelimitedDate(raw) orelse parseNamedMonthYear(raw);
 }
 
 fn parseClockDateTime(raw: []const u8) ?Civil {
@@ -1296,12 +1328,38 @@ test "MediaWiki partial and word date grammar" {
         .{ .raw = "2 Nov.. 1999", .expected = "1999-11-02" },
         .{ .raw = "Sept. 2 1999", .expected = "1999-09-02" },
         .{ .raw = "November. 2 1999", .expected = "1999-11-02" },
+        // Observed BN quote inputs, then the exact added grammar boundaries.
+        .{ .raw = "30th June 1982", .expected = "1982-06-30" },
+        .{ .raw = "Dec.1921", .expected = "1921-12-01" },
+        .{ .raw = "1st June 1982", .expected = "1982-06-01" },
+        .{ .raw = "2nd June 1982", .expected = "1982-06-02" },
+        .{ .raw = "3rd June 1982", .expected = "1982-06-03" },
+        .{ .raw = "1th June 1982", .expected = "1982-06-01" },
+        .{ .raw = "01st June 1982", .expected = "1982-06-01" },
+        .{ .raw = "30th jUnE 1982", .expected = "1982-06-30" },
+        .{ .raw = "dec.1921", .expected = "1921-12-01" },
+        .{ .raw = "December1921", .expected = "1921-12-01" },
+        .{ .raw = "Dec.- \t1921", .expected = "1921-12-01" },
+        .{ .raw = "Dec.0684", .expected = "0684-12-01" },
     };
     for (cases) |case| {
         const ts = try parseTimestamp(&ctx, .{ .string = case.raw });
         const got = try formatDateAlloc(std.testing.allocator, ts, "Y-m-d");
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings(case.expected, got);
+    }
+    // These remain outside this bounded addition; not all are upstream-invalid.
+    for ([_][]const u8{
+        "30thx June 1982",    "30thth June 1982", "+30th June 1982", "030th June 1982",
+        "30TH June 1982",     "30th 06 1982",     "0th June 1982",   "32nd June 1982",
+        "31st February 1982", "12.1921",          "Dec.84",          "Dec.+921",
+        "Dec.1921junk",       "Dec.0000",
+        "৩০th June 1982",
+        "১৩ এপ্রিল ২০১৫",
+        "০১-০১-২০২২",
+        "14 মার্চ 1927",
+    }) |raw| {
+        try std.testing.expectError(error.InvalidDate, parseTimestampText(&ctx, raw));
     }
     try std.testing.expectError(error.InvalidDate, parseTimestamp(&ctx, .{ .string = "2022 July 1" }));
     try std.testing.expectError(error.InvalidDate, parseTimestamp(&ctx, .{ .string = "Feb 84" }));
