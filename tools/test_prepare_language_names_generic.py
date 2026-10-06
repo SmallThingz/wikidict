@@ -112,8 +112,52 @@ class GenericTest(unittest.TestCase):
                 names.reconstruct(self.config(), batches, ALIASES, TABLES)
         tables = copy.deepcopy(TABLES)
         tables['ca']['extra'] = 'extra'
+        profiles, _ = names.reconstruct(self.config(), self.batches(), ALIASES, tables)
+        self.assertEqual(profiles['ca']['all']['extra'], 'extra')
+        self.assertEqual(profiles['ca']['single']['extra'], 'extra')
+        self.assertNotIn('extra', profiles['en']['all'])
+        self.assertNotIn('extra', profiles['ca']['mw'])
+        extra_api = copy.deepcopy(self.batches())
+        extra_api[0][1]['query']['languageinfo']['extra'] = {
+            'code': 'extra', 'name': 'extra', 'dir': 'ltr', 'fallbacks': []}
         with self.assertRaisesRegex(ValueError, 'universe'):
-            names.reconstruct(self.config(), self.batches(), ALIASES, tables)
+            names.reconstruct(self.config(), extra_api, ALIASES, tables)
+
+    def test_disabled_pig_latin_direct_locale_and_unfiltered_fallback_differ(self):
+        tables = {'en': {'en': 'English', 'ca': 'Catalan', 'en-x-piglatin': 'Pig Latin'},
+                  'oc': {'en-x-piglatin': 'fallback Pig Latin'},
+                  'ca': {'ca': 'català', 'en-x-piglatin': 'direct Pig Latin'}}
+        observed = {'en': 'English', 'ca': 'català'}
+        result = names.finish_profile(observed, {'ca': 'català'}, {}, tables,
+                                      'ca', {'ca': ('oc',)})
+        self.assertEqual(result['all']['en-x-piglatin'], 'fallback Pig Latin')
+        self.assertEqual(result['single']['en-x-piglatin'], 'fallback Pig Latin')
+        self.assertNotIn('en-x-piglatin', result['mw'])
+        english = names.finish_profile({'en': 'English', 'ca': 'Catalan'},
+            {'en': 'English'}, {}, tables, 'en', {'en': ()})
+        self.assertNotIn('en-x-piglatin', english['all'])
+        self.assertNotIn('en-x-piglatin', english['single'])
+
+    def test_enabled_pig_latin_is_in_complete_api_universe(self):
+        tables = {'en': {'en': 'English', 'ca': 'Catalan', 'en-x-piglatin': 'Pig Latin'},
+                  'ca': {'ca': 'català', 'en-x-piglatin': 'direct Pig Latin'}}
+        for display, observed in (
+                ('en', {'en': 'English', 'ca': 'Catalan', 'en-x-piglatin': 'Pig Latin'}),
+                ('ca', {'en': 'English', 'ca': 'català', 'en-x-piglatin': 'direct Pig Latin'})):
+            with self.subTest(display=display):
+                mw = {display: observed[display], 'en-x-piglatin': observed['en-x-piglatin']}
+                result = names.finish_profile(observed, mw, {}, tables, display, {display: ()})
+                self.assertEqual(result['all']['en-x-piglatin'], observed['en-x-piglatin'])
+                self.assertEqual(result['single']['en-x-piglatin'], observed['en-x-piglatin'])
+                incomplete = dict(observed); incomplete.pop('en-x-piglatin')
+                with self.assertRaisesRegex(ValueError, 'universe'):
+                    names.finish_profile(incomplete, mw, {}, tables, display, {display: ()})
+
+    def test_disabled_pig_latin_api_presence_is_rejected(self):
+        tables = {'en': {'en': 'English', 'en-x-piglatin': 'Pig Latin'}}
+        with self.assertRaisesRegex(ValueError, 'universe'):
+            names.finish_profile(dict(tables['en']), {'en': 'English'}, {},
+                                 tables, 'en', {'en': ()})
 
     def test_normalized_display_uses_normalized_captured_chain(self):
         tables = {'en': {'gsw': 'Swiss', 'de': 'German'}, 'gsw': {'de': 'Düütsch'}}

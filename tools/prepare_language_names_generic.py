@@ -312,13 +312,26 @@ def finish_profile(single, mw, aliases, tables, display, fallbacks):
     chain = list(fallbacks[normalized])
     if normalized != 'en' and (not chain or chain[-1] != 'en'):
         chain.append('en')
+    # Names::NAMES always defines this code. The captured DEFINED list omits
+    # it exactly when UsePigLatinVariant is false (LanguageNameUtils:219-220).
+    pig_latin_enabled = 'en-x-piglatin' in mw
+    local = dict(tables.get(normalized, {}))
+    if not pig_latin_enabled:
+        # CLDR getNames suppresses only the directly loaded locale. Its later
+        # FALLBACK_NORMAL merge uses unfiltered loadLanguage fallback tables.
+        local.pop('en-x-piglatin', None)
     raw = {}
-    for locale in reversed([normalized, *chain]):
+    for locale in reversed(chain):
         # Absence is proved by the complete pinned source catalog. CLDR's
         # loadLanguage explicitly returns [] for a locale with no source file.
         raw.update(tables.get(locale, {}))
+    raw.update(local)
+    # languageinfo enumerates English ALL, not the display locale's ALL.
+    # English has no fallback, so a disabled Pig Latin variant stays omitted.
     expected_keys = set(tables['en']) | set(mw)
-    if set(single) != expected_keys or not set(raw) <= expected_keys:
+    if not pig_latin_enabled:
+        expected_keys.discard('en-x-piglatin')
+    if set(single) != expected_keys:
         raise ValueError('Complete API enumeration differs from source key universe')
     # API siteinfo gives raw MW keys/values, including configured extra names
     # and the special native-name overwrite for the display language itself.
@@ -326,7 +339,10 @@ def finish_profile(single, mw, aliases, tables, display, fallbacks):
     for language, observed in single.items():
         if raw.get(aliases.get(language, language), '') != observed:
             raise ValueError('API name differs from source/fallback derivation: ' + language)
-    lookup = dict(single)
+    # Localized-only and fallback-only keys remain valid source-derived single
+    # lookups even when absent from the API's English enumeration.
+    lookup = {language: raw.get(aliases.get(language, language), '')
+              for language in sorted(set(single) | set(raw))}
     for alias, target in aliases.items():
         lookup[alias] = raw.get(target, '')
     return {'all': raw, 'mw': dict(mw), 'single': lookup}
