@@ -29,6 +29,88 @@ class ExtractionCacheTest(unittest.TestCase):
                          "index_sha256": "d" * 64,
                          "tool": {"extractor_sha256": "b" * 64, "libraries": []}}
 
+    def snapshot_output(self, output, backing, *, copied=False):
+        output.mkdir(exist_ok=True)
+        (output / "namespace-registry.tsv").write_bytes(b"namespace fixture")
+        destination = output / "page-redirects.tsv"
+        if copied:
+            destination.write_bytes(backing.read_bytes())
+        else:
+            destination.symlink_to(backing)
+        return destination
+
+    def snapshot_main(self, action, output):
+        with mock.patch.object(cache, "tool_identity", return_value=self.expected["tool"]), \
+             mock.patch.object(cache, "unicode_case_identity", return_value={}):
+            return cache.main(["extraction_cache.py", action, str(self.root),
+                               "extractor", "a" * 64, "d" * 64, str(output)])
+
+    def test_snapshot_main_cold_publish_warm_link_and_copy(self):
+        backing = self.base / "redirects.tsv"
+        backing.write_bytes(b"exact redirect snapshot")
+        installed = self.snapshot_output(self.source, backing)
+        self.assertEqual(cache.MISS, self.snapshot_main("probe", self.source))
+        self.assertEqual(0, self.snapshot_main("publish", self.source))
+        generation, = [p for p in self.root.iterdir() if not p.name.startswith(".")]
+        marker = cache.read_marker(generation / ".complete.json")
+        self.assertEqual(cache.sha256(backing), marker["identity"]["page_redirects_sha256"])
+        self.assertNotIn("page-redirects.tsv", cache.FILES)
+        self.assertFalse((generation / "page-redirects.tsv").exists())
+        for name in cache.walk_assets(generation):
+            self.assertFalse((generation / name).is_symlink(), name)
+        self.assertTrue(installed.is_symlink())
+        for copied in (False, True):
+            with self.subTest(copied=copied):
+                output = self.base / ("copy" if copied else "linked")
+                sidecar = self.snapshot_output(output, backing, copied=copied)
+                self.assertEqual(0, self.snapshot_main("probe", output))
+                self.assertEqual(not copied, sidecar.is_symlink())
+                self.assertEqual(backing.read_bytes(), sidecar.read_bytes())
+                self.assertEqual(b"return 1", (output / "modules/123.lua").read_bytes())
+
+    def test_snapshot_backing_mutation_invalidates_main_probe(self):
+        backing = self.base / "redirects.tsv"
+        backing.write_bytes(b"snapshot before")
+        self.snapshot_output(self.source, backing)
+        self.assertEqual(0, self.snapshot_main("publish", self.source))
+        backing.write_bytes(b"snapshot after")
+        output = self.base / "changed"
+        self.snapshot_output(output, backing)
+        self.assertEqual(cache.MISS, self.snapshot_main("probe", output))
+        self.assertFalse((output / "modules").exists())
+        self.assertTrue(all(not (output / name).exists() for name in cache.FILES))
+
+    def test_snapshot_dangling_and_directory_links_are_not_absent(self):
+        for kind in ("dangling", "directory"):
+            with self.subTest(kind=kind):
+                backing = self.base / (kind + "-target")
+                if kind == "directory":
+                    backing.mkdir()
+                output = self.base / kind
+                self.snapshot_output(output, backing)
+                with self.assertRaises((FileNotFoundError, ValueError)):
+                    self.snapshot_main("probe", output)
+                self.assertFalse(self.root.exists())
+
+    def test_snapshot_input_resolution_does_not_allow_symlink_cache_assets(self):
+        backing = self.base / "redirects.tsv"
+        backing.write_bytes(b"snapshot")
+        self.snapshot_output(self.source, backing)
+        self.assertEqual(0, self.snapshot_main("publish", self.source))
+        generation, = [p for p in self.root.iterdir() if not p.name.startswith(".")]
+        external = self.base / "external-page-index.tsv"
+        external.write_bytes((generation / "page-index.tsv").read_bytes())
+        (generation / "page-index.tsv").unlink()
+        (generation / "page-index.tsv").symlink_to(external)
+        output = self.base / "corrupt-cache"
+        self.snapshot_output(output, backing)
+        self.assertEqual(cache.MISS, self.snapshot_main("probe", output))
+        self.assertFalse((output / "modules").exists())
+        (self.source / "page-index.tsv").unlink()
+        (self.source / "page-index.tsv").symlink_to(external)
+        with self.assertRaisesRegex(ValueError, "Expected regular extraction asset"):
+            self.snapshot_main("publish", self.source)
+
     def test_round_trip_and_corruption(self):
         self.assertEqual(0, cache.publish(self.root, self.expected, self.source))
         output = self.base / "output"

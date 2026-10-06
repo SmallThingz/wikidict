@@ -698,7 +698,11 @@ def main(argv):
     _, action, root, executable, dump_sha256, index_sha256, output = argv
     redirects = Path(output) / "transclusion-redirects.tsv"
     page_redirects = Path(output) / "page-redirects.tsv"
-    if page_redirects.exists():regular(page_redirects)
+    # bundle_build installs input snapshots as links; they are not cached assets.
+    # Resolve only this identity input, retaining strict asset symlink rejection.
+    if page_redirects.exists() or page_redirects.is_symlink():
+        page_redirects = page_redirects.resolve(strict=True)
+        regular(page_redirects)
     expected = identity(Path(executable), dump_sha256, index_sha256, sha256(Path(output) / "namespace-registry.tsv"), sha256(redirects) if redirects.exists() else None, sha256(page_redirects) if page_redirects.exists() else None)
     if action == "probe":
         return probe(Path(root), expected, Path(output))
