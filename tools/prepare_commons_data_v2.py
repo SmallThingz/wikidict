@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture positive Commons tabular pages with immutable raw revision evidence.
+"""Capture exact Commons tabular observations with immutable raw API evidence.
 
 This is a current API observation associated with a dated dictionary input,
 not a historical reconstruction. Only explicitly requested titles are covered.
@@ -83,6 +83,15 @@ def classify(data, title):
     if not isinstance(pages, list) or len(pages) != 1:
         raise ValueError('Expected one exact Commons page')
     page = pages[0]
+    if isinstance(page, dict) and 'missing' in page:
+        # Missing is an observed state, never an interpretation of an error,
+        # inaccessible revision, malformed title, or absent capture row.
+        if (data.get('batchcomplete') is not True
+                or set(page) != {'ns', 'title', 'missing'}
+                or type(page['ns']) is not int or page['ns'] != 486
+                or page['title'] != 'Data:' + title or page['missing'] is not True):
+            raise ValueError('Invalid or ambiguous missing Commons observation')
+        return {'title': title, 'missing': True}
     if (not isinstance(page, dict) or page.get('title') != 'Data:' + title
             or not isinstance(page.get('pageid'), int) or isinstance(page['pageid'], bool)
             or page['pageid'] <= 0 or any(k in page for k in ('missing', 'invalid', 'redirect'))):
@@ -125,11 +134,17 @@ def classify(data, title):
 
 
 def render(records, wiki, date, language):
-    lines = ['# wikidict-commons-data-v1', '# wiki\t' + wiki, '# dump-date\t' + date,
+    has_missing = any(record.get('missing') is True for record in records.values())
+    header = '# wikidict-commons-data-v2' if has_missing else '# wikidict-commons-data-v1'
+    lines = [header, '# wiki\t' + wiki, '# dump-date\t' + date,
              '# content-language\t' + language, '# repository\thttps://commons.wikimedia.org']
     for title in sorted(records):
         record = records[title]
-        lines.append(title + '\t' + record['content_model'] + '\t' + record['compact_source'])
+        if record.get('missing') is True:
+            lines.append(title + '\tmissing\t\t')
+        else:
+            state = '\tpresent' if has_missing else ''
+            lines.append(title + state + '\t' + record['content_model'] + '\t' + record['compact_source'])
     return ('\n'.join(lines) + '\n').encode()
 
 

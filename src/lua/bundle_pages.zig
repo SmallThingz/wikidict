@@ -218,7 +218,7 @@ pub const Provider = struct {
     transclusion_redirects_storage: ?Mapped = null,
     page_redirects_storage: ?Mapped = null,
     page_redirects: ?page_redirects_lib.Snapshot = null,
-    external_data: std.StringHashMapUnmanaged(ExternalData) = .empty,
+    external_data: std.StringHashMapUnmanaged(?ExternalData) = .empty,
     external_data_storage: ?Mapped = null,
     external_data_available: bool = false,
     site_info: ?site_info_lib.Snapshot = null,
@@ -491,23 +491,35 @@ pub const Provider = struct {
     fn loadExternalData(self: *Provider) !void {
         var mapped = (try self.mapOptional("commons-data.tsv")) orelse return;
         errdefer mapped.deinit();
-        var entries: std.StringHashMapUnmanaged(ExternalData) = .empty;
+        var entries: std.StringHashMapUnmanaged(?ExternalData) = .empty;
         errdefer entries.deinit(self.a);
         const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse return error.ExternalDataSnapshotTooLarge;
         try entries.ensureTotalCapacity(self.a, capacity);
 
         var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
+        const header = lines.next() orelse return error.InvalidExternalDataSnapshot;
+        const explicit_state = std.mem.eql(u8, header, "# wikidict-commons-data-v2");
+        if (!explicit_state and !std.mem.eql(u8, header, "# wikidict-commons-data-v1"))
+            return error.InvalidExternalDataSnapshot;
         while (lines.next()) |line| {
             if (line.len == 0 or line[0] == '#') continue;
-            const first_tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidExternalDataSnapshot;
-            const second_tab = std.mem.indexOfScalarPos(u8, line, first_tab + 1, '\t') orelse return error.InvalidExternalDataSnapshot;
-            const name = line[0..first_tab];
-            const content_model = line[first_tab + 1 .. second_tab];
-            const source = line[second_tab + 1 ..];
-            if (name.len == 0 or content_model.len == 0 or source.len == 0) return error.InvalidExternalDataSnapshot;
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const name = fields.next() orelse return error.InvalidExternalDataSnapshot;
+            const state = if (explicit_state) fields.next() orelse return error.InvalidExternalDataSnapshot else "present";
+            const content_model = fields.next() orelse return error.InvalidExternalDataSnapshot;
+            const source = fields.next() orelse return error.InvalidExternalDataSnapshot;
+            if (name.len == 0 or fields.next() != null) return error.InvalidExternalDataSnapshot;
+            const entry: ?ExternalData = if (std.mem.eql(u8, state, "missing")) missing: {
+                if (content_model.len != 0 or source.len != 0) return error.InvalidExternalDataSnapshot;
+                break :missing null;
+            } else present: {
+                if (!std.mem.eql(u8, state, "present") or content_model.len == 0 or source.len == 0)
+                    return error.InvalidExternalDataSnapshot;
+                break :present .{ .content_model = content_model, .source = source };
+            };
             const result = try entries.getOrPut(self.a, name);
             if (result.found_existing) return error.DuplicateExternalData;
-            result.value_ptr.* = .{ .content_model = content_model, .source = source };
+            result.value_ptr.* = entry;
         }
         self.external_data = entries;
         self.external_data_storage = mapped;
@@ -1270,7 +1282,9 @@ pub const Provider = struct {
 
     fn externalData(ctx: ?*anyopaque, title: []const u8) anyerror!?ExternalData {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
-        return self.external_data.get(title);
+        if (self.external_data.getPtr(title)) |entry| return entry.*;
+        lua_program.work_stats.logLine("warning: Commons data snapshot missing: title={s}\n", .{title});
+        return error.CommonsDataSnapshotMissing;
     }
 
     fn categoryStats(ctx: ?*anyopaque, db_key: []const u8) anyerror!?CategoryStats {
@@ -1432,6 +1446,66 @@ pub const Provider = struct {
         return (try self.lookup(self.a, title, false)) != null;
     }
 };
+
+test "Commons provider separates present captured missing and uncaptured titles" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const catalog = try lua_program.namespace_registry.englishTestRegistry();
+    const tabular = "{\"schema\":{\"fields\":[{\"name\":\"key\",\"type\":\"string\"}]},\"data\":[[\"value\"]]}";
+    const snapshots = [_][]const u8{
+        "# wikidict-commons-data-v1\nPresent.tab\tTabular.JsonConfig\t" ++ tabular ++ "\n",
+        "# wikidict-commons-data-v2\nPresent.tab\tpresent\tTabular.JsonConfig\t" ++ tabular ++ "\n" ++
+            "Unicode data/emoji images/00A.tab\tmissing\t\t\n",
+    };
+    for (snapshots, 0..) |bytes, index| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "commons-data.tsv", .data = bytes });
+        var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+        defer provider.deinit();
+        const get = provider.api().external_data orelse return error.TestExpectedEqual;
+        const present = (try get(&provider, "Present.tab")) orelse return error.TestExpectedEqual;
+        try std.testing.expectEqualStrings("Tabular.JsonConfig", present.content_model);
+        try std.testing.expectEqualStrings(tabular, present.source);
+        if (index == 1) {
+            // Existing mw.ext.data.get maps this explicit provider null to false.
+            try std.testing.expect((try get(&provider, "Unicode data/emoji images/00A.tab")) == null);
+        } else {
+            try std.testing.expectError(error.CommonsDataSnapshotMissing, get(&provider, "Unicode data/emoji images/00A.tab"));
+        }
+        try std.testing.expectError(error.CommonsDataSnapshotMissing, get(&provider, "Never queried.tab"));
+    }
+}
+
+test "Commons provider rejects malformed or ambiguous negative records" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const catalog = try lua_program.namespace_registry.englishTestRegistry();
+    const Case = struct { bytes: []const u8, expected_error: anyerror };
+    const cases = [_]Case{
+        .{ .bytes = "# wikidict-commons-data-v999\n", .expected_error = error.InvalidExternalDataSnapshot },
+        .{ .bytes = "Missing.tab\tmissing\t\t\n", .expected_error = error.InvalidExternalDataSnapshot },
+        .{ .bytes = "# wikidict-commons-data-v1\nMissing.tab\t\t\n", .expected_error = error.InvalidExternalDataSnapshot },
+        .{ .bytes = "# wikidict-commons-data-v2\nMissing.tab\tunknown\t\t\n", .expected_error = error.InvalidExternalDataSnapshot },
+        .{ .bytes = "# wikidict-commons-data-v2\nMissing.tab\tmissing\tTabular.JsonConfig\t{}\n", .expected_error = error.InvalidExternalDataSnapshot },
+        .{ .bytes = "# wikidict-commons-data-v2\nMissing.tab\tmissing\t\t{}\n", .expected_error = error.InvalidExternalDataSnapshot },
+        .{ .bytes = "# wikidict-commons-data-v2\nMissing.tab\tmissing\t\n", .expected_error = error.InvalidExternalDataSnapshot },
+        .{ .bytes = "# wikidict-commons-data-v2\nMissing.tab\tmissing\t\t\textra\n", .expected_error = error.InvalidExternalDataSnapshot },
+        .{ .bytes = "# wikidict-commons-data-v2\n\tmissing\t\t\n", .expected_error = error.InvalidExternalDataSnapshot },
+        .{ .bytes = "# wikidict-commons-data-v2\nPresent.tab\tpresent\t\t{}\n", .expected_error = error.InvalidExternalDataSnapshot },
+        .{ .bytes = "# wikidict-commons-data-v2\nBoth.tab\tpresent\tTabular.JsonConfig\t{}\nBoth.tab\tmissing\t\t\n", .expected_error = error.DuplicateExternalData },
+    };
+    for (cases) |case| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "commons-data.tsv", .data = case.bytes });
+        try std.testing.expectError(case.expected_error, Provider.init(io, a, root, catalog, "unused-dump.xml"));
+    }
+}
 
 test "title magic provider loads optional snapshots and enforces edition identity" {
     const a = std.testing.allocator;

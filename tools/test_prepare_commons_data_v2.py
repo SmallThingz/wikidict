@@ -245,6 +245,130 @@ class CommonsCaptureV2Tests(unittest.TestCase):
                     build.auxiliary_capture_identities(
                         {'commons-data': path}, 'arwiktionary', '20261001')
 
+    @staticmethod
+    def missing_response(title):
+        return {'batchcomplete': True, 'query': {
+            'general': {'wikiid': 'commonswiki'},
+            'pages': [{'ns': 486, 'title': 'Data:' + title, 'missing': True}]}}
+
+    def mixed_capture(self):
+        self.args.title = ['Present.tab', 'Unicode data/emoji images/00A.tab']
+        def transport(url, timeout):
+            title = parse_qs(urlsplit(url).query)['titles'][0].removeprefix('Data:')
+            if title == 'Present.tab':
+                return self.transport(url, timeout)
+            self.assertEqual('Unicode data/emoji images/00A.tab', title)
+            self.calls.append('Data:' + title)
+            return 200, {'Content-Type': 'application/json'}, json.dumps(
+                self.missing_response(title)).encode()
+        return helper.capture(self.args, transport, sleep=lambda _: None)
+
+    def test_exact_missing_observation_has_no_invented_revision_or_content(self):
+        title = 'Unicode data/emoji images/00A.tab'
+        value = self.missing_response(title)
+        self.assertEqual({'title': title, 'missing': True}, helper.classify(value, title))
+        changes = [
+            {'missing': False}, {'missing': ''}, {'missing': 1},
+            {'ns': 0}, {'ns': True}, {'title': 'Data:Different.tab'},
+            {'pageid': 123}, {'revisions': []}, {'content': ''},
+            {'invalid': True}, {'redirect': True}, {'suppressed': True},
+        ]
+        for change in changes:
+            bad = copy.deepcopy(value)
+            bad['query']['pages'][0].update(change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                helper.classify(bad, title)
+        for key in ('error', 'errors', 'warnings', 'continue'):
+            bad = copy.deepcopy(value)
+            bad[key] = {}
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                helper.classify(bad, title)
+        for complete in (None, False, 1):
+            bad = copy.deepcopy(value)
+            if complete is None:
+                bad.pop('batchcomplete')
+            else:
+                bad['batchcomplete'] = complete
+            with self.subTest(batchcomplete=complete), self.assertRaises(ValueError):
+                helper.classify(bad, title)
+        bad = copy.deepcopy(value)
+        bad['query']['general']['wikiid'] = 'enwiki'
+        with self.assertRaisesRegex(ValueError, 'repository identity'):
+            helper.classify(bad, title)
+        bad = copy.deepcopy(value)
+        bad['query']['normalized'] = [{'from': title, 'to': 'Different.tab'}]
+        with self.assertRaisesRegex(ValueError, 'normalization'):
+            helper.classify(bad, title)
+
+    def test_mixed_positive_and_missing_capture_replays_through_builder(self):
+        manifest = self.mixed_capture()
+        root = self.args.output
+        path = root / 'commons-data.tsv'
+        lines = path.read_text().splitlines()
+        self.assertEqual('# wikidict-commons-data-v2', lines[0])
+        rows = [line.split('\t') for line in lines if not line.startswith('#')]
+        self.assertEqual(['Present.tab', 'present', 'Tabular.JsonConfig'], rows[0][:3])
+        self.assertEqual([['PMID', 40400000], ['OCLC', 10450000000]], json.loads(rows[0][3])['data'])
+        self.assertEqual(['Unicode data/emoji images/00A.tab', 'missing', '', ''], rows[1])
+        index = helper.read_index(root, manifest)
+        self.assertEqual({'title': 'Unicode data/emoji images/00A.tab', 'missing': True}, index['records'][1])
+        self.assertEqual(2, manifest['rows'])
+        self.assertEqual(2, len(self.calls))
+        self.assertFalse(manifest['corpus_query_closure_proven'])
+        self.assertEqual(manifest, helper.verify(root))
+        self.assertEqual(manifest['output_sha256'], build.verified_auxiliary_hashes(
+            {'commons-data': path, 'namespace-registry': self.args.namespace_registry},
+            'arwiktionary', '20261001')['commons-data'])
+        copied = self.root / 'mixed-copied'
+        copied.mkdir()
+        for name in helper.capture_artifacts(path, manifest):
+            (copied / name).write_bytes((root / name).read_bytes())
+        self.assertEqual(manifest, helper.verify(copied))
+
+    def test_missing_proof_cannot_be_changed_after_index_reseal(self):
+        manifest = self.mixed_capture()
+        index = helper.read_index(self.args.output, manifest)
+        index['records'][1]['missing'] = False
+        self.rewrite_index(manifest, index)
+        with self.assertRaisesRegex(ValueError, 'Commons revision proof mismatch'):
+            helper.verify(self.args.output)
+
+    def test_missing_tsv_cannot_be_replaced_with_fake_table_after_reseal(self):
+        manifest = self.mixed_capture()
+        path = self.args.output / 'commons-data.tsv'
+        raw = path.read_bytes().replace(
+            b'Unicode data/emoji images/00A.tab\tmissing\t\t\n',
+            b'Unicode data/emoji images/00A.tab\tpresent\tTabular.JsonConfig\t{}\n')
+        path.write_bytes(raw)
+        index = helper.read_index(self.args.output, manifest)
+        index['artifacts'] = helper.payload_inventory(self.args.output)
+        manifest['output_bytes'] = len(raw)
+        manifest['output_sha256'] = helper.evidence.digest(raw)
+        self.rewrite_index(manifest, index)
+        with self.assertRaisesRegex(ValueError, 'Commons TSV replay mismatch'):
+            helper.verify(self.args.output)
+
+
+
+    def test_explicit_missing_states_cannot_use_generic_manifest_fallback(self):
+        manifest = self.mixed_capture()
+        path = self.args.output / 'commons-data.tsv'
+        manifest_path = self.args.output / 'commons-data.manifest.json'
+        snapshots = {'commons-data': path}
+        manifest_path.unlink()
+        with self.assertRaisesRegex(ValueError, 'Explicit Commons states require'):
+            build.verified_auxiliary_hashes(snapshots, 'arwiktionary', '20261001')
+        for schema in (None, legacy.SCHEMA):
+            value = copy.deepcopy(manifest)
+            if schema is None:
+                value.pop('schema')
+            else:
+                value['schema'] = schema
+            manifest_path.write_bytes(helper.evidence.encoded(value))
+            with self.subTest(schema=schema), self.assertRaisesRegex(
+                    ValueError, 'Explicit Commons states require'):
+                build.auxiliary_capture_identities(snapshots, 'arwiktionary', '20261001')
+
 
 if __name__ == '__main__':
     unittest.main()
