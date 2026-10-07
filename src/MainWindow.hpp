@@ -65,7 +65,7 @@ private:
     QString entryHtml(const QJsonObject &entry) const;
     QString blockHtml(const QJsonObject &block) const;
     QString spansHtml(const QJsonArray &spans) const;
-    QString tableHtml(const QJsonObject &table) const;
+    QString tableHtml(const QJsonObject &table, int depth) const;
     SavedWord savedWord(const QJsonObject &entry) const;
     QString clueFor(const QJsonObject &entry) const;
     QVector<SavedWord> learningPool() const;

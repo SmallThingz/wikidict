@@ -1,4 +1,5 @@
 import {chromium} from 'playwright';
+import {build as buildRendererTestBundle} from 'esbuild';
 import {createServer} from 'node:http';
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -16,6 +17,74 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM||'/opt/brave-bin/brave',headless:true,args:['--no-sandbox']});
 const errors=[];
 try{
+ const rendererBundle=await buildRendererTestBundle({entryPoints:[fileURLToPath(new URL('./renderer.js',import.meta.url))],bundle:true,format:'iife',globalName:'WikidictRendererQA',write:false});
+ const rendererPage=await browser.newPage();rendererPage.on('pageerror',e=>errors.push(e.message));
+ await rendererPage.setContent('<main id="compiled-renderer-fixture"></main>');
+ await rendererPage.addScriptTag({content:rendererBundle.outputFiles[0].text});
+ const listBlock=(kind,text,number,path,depth)=>({kind,number,path,depth,spans:[{kind:'text',text,trail:''}]});
+ const renderedLists=await rendererPage.evaluate(entry=>{
+  const host=document.getElementById('compiled-renderer-fixture');
+  host.replaceChildren(WikidictRendererQA.renderEntry(entry,()=>{}, {collapseOtherSections:false,collapseDetails:false}));
+  return {prefixes:[...host.querySelectorAll('.block.list_item > .prefix')].map(el=>el.textContent),
+   indents:[...host.querySelectorAll('.block.list_item')].map(el=>parseFloat(el.style.marginInlineStart)),
+   definitions:host.querySelectorAll('.block.definition').length,
+   meaningSections:[...host.querySelectorAll('details.meaning > summary')].map(el=>el.textContent),
+   text:host.textContent,literalLinks:host.querySelectorAll('.block.paragraph a').length};
+ },{title:'Ordered fixture',kind:'supplemental',sections:[
+  {title:'List',blocks:[
+   listBlock('list_item','Parent ordered','3','#',1),listBlock('list_item','Nested unordered','','#*',2),
+   listBlock('list_item','Nested ordered','3.1','#*#',3),listBlock('list_detail','Parent continuation','','#:',2),
+   listBlock('list_item','Explicit value','8','#',1),listBlock('list_item','Following value','9','#',1),
+   listBlock('list_item','Alphabetic label','AA','#',1),listBlock('list_item','Roman label','iii','#',1),
+   listBlock('list_item','Roman value','xxvi','#',1),listBlock('list_item','Escaped label','<i>','#',1),listBlock('paragraph','{{example}} [[literal]]','','',0)]},
+  {title:'Meaning',blocks:[listBlock('definition','Actual dictionary meaning','1','#',1)]}]});
+ assert.deepEqual(renderedLists.prefixes,['3.','•','3.1.','8.','9.','AA.','iii.','xxvi.','<i>.']);
+ assert.equal(await rendererPage.locator('.list_item > .prefix i').count(),0);
+ assert.ok(renderedLists.indents[2]>renderedLists.indents[1] && renderedLists.indents[1]>renderedLists.indents[0]);
+ assert.equal(renderedLists.definitions,1);assert.deepEqual(renderedLists.meaningSections,['Meaning']);
+ assert.ok(renderedLists.text.includes('{{example}} [[literal]]'));assert.equal(renderedLists.literalLinks,0);
+ const renderedTables=await rendererPage.evaluate(()=>{
+  const table=(depth,caption)=>({kind:'table',depth,path:depth?'#:':'',spans:[],table:{caption:[{kind:'text',text:caption}],rows:[{cells:[{header:false,colspan:1,rowspan:1,spans:[{kind:'text',text:'Cell'}]}]}]}});
+  const host=document.getElementById('compiled-renderer-fixture');
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Table fixture',kind:'supplemental',sections:[{title:'Tables',blocks:[table(0,'Outer caption'),table(2,'Nested caption')]}]},()=>{}, {collapseOtherSections:false}));
+  return {margins:[...host.querySelectorAll('.table-scroll')].map(el=>parseFloat(el.style.marginInlineStart)),captions:[...host.querySelectorAll('caption')].map(el=>el.textContent),rows:host.querySelectorAll('tr').length};
+ });
+ assert.deepEqual(renderedTables.margins,[0,.9]);
+ assert.deepEqual(renderedTables.captions,['Outer caption','Nested caption']);assert.equal(renderedTables.rows,2);
+
+ const referenceFixture=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture');window.referenceNavigations=[];
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Reference fixture',kind:'supplemental',sections:[{title:'Notes',blocks:[
+   {kind:'paragraph',spans:[
+    {kind:'link',text:'Grouped reference',target:'#reference-2'},
+    {kind:'link',text:'Ordinary title',target:'a title #reference-2 & 猫'},
+    {kind:'link',text:'Unmatched fragment',target:'#reference-404'}]}]}],references:[
+     {number:1,group_number:1,group:'',spans:[{kind:'text',text:'Ordinary citation'}]},
+     {number:2,group_number:1,group:'note <one>',spans:[{kind:'text',text:'{{Example}} [[Link]] __NOEDITSECTION__'}]}
+   ]},target=>window.referenceNavigations.push(target),{collapseOtherSections:true}));
+  const reference=host.querySelector('#reference-2');
+  return {initiallyClosed:!reference.closest('details').open,text:reference.textContent};
+ });
+ await rendererPage.addStyleTag({content:'#compiled-renderer-fixture{padding-bottom:180px}.reference{min-height:80px}#compiled-renderer-fixture .block.paragraph{min-height:1000px}#renderer-fixed-nav{position:fixed;bottom:0;left:0;right:0;height:80px;background:white;z-index:9}'});
+ await rendererPage.evaluate(()=>{const nav=document.createElement('nav');nav.id='renderer-fixed-nav';nav.textContent='Reader navigation';document.body.append(nav);});
+ assert.equal(referenceFixture.initiallyClosed,true);
+ assert.equal(referenceFixture.text,'[note <one> 1]{{Example}} [[Link]] __NOEDITSECTION__');
+ await rendererPage.getByText('Notes',{exact:true}).click();
+ await rendererPage.getByRole('link',{name:'Grouped reference',exact:true}).click();
+ assert.equal(await rendererPage.locator('#reference-2').isVisible(),true);
+ const matchedReference=await rendererPage.evaluate(()=>{
+  const reference=document.getElementById('reference-2');
+  return {opened:reference.closest('details').open,focused:document.activeElement===reference,navigation:window.referenceNavigations};
+ });
+ assert.deepEqual(matchedReference,{opened:true,focused:true,navigation:[]});
+ assert.equal(await rendererPage.locator('#reference-2').evaluate(el=>{const target=el.getBoundingClientRect(),nav=document.getElementById('renderer-fixed-nav').getBoundingClientRect();return target.top>=0&&target.bottom<=nav.top;}),true);
+ const ordinaryLink=rendererPage.getByRole('link',{name:'Ordinary title',exact:true});
+ assert.equal(await ordinaryLink.getAttribute('href'),'#'+encodeURIComponent('a title #reference-2 & 猫'));
+ await ordinaryLink.click();
+ await rendererPage.getByRole('link',{name:'Unmatched fragment',exact:true}).click();
+ assert.deepEqual(await rendererPage.evaluate(()=>window.referenceNavigations),['a title #reference-2 & 猫','#reference-404']);
+
+ await rendererPage.close();
  const page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`http://127.0.0.1:${server.address().port}`);await page.getByRole('button',{name:'Import dictionary',exact:true}).waitFor();
  await page.locator('#file').setInputFiles(fixture);await page.getByText(/English · 182 words/).waitFor();

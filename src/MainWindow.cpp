@@ -835,8 +835,9 @@ QString MainWindow::spansHtml(const QJsonArray &spans) const {
     }
     return out;
 }
-QString MainWindow::tableHtml(const QJsonObject &table) const {
-    QString out = QStringLiteral("<table cellspacing='0' cellpadding='5' style='border-collapse:collapse;margin:8px 0'>");
+QString MainWindow::tableHtml(const QJsonObject &table, int depth) const {
+    const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
+    QString out = QStringLiteral("<table cellspacing='0' cellpadding='5' style='border-collapse:collapse;margin:8px 0;margin-left:%1px'>").arg(indent);
     const QJsonArray caption = table.value(QStringLiteral("caption")).toArray();
     if (!caption.isEmpty()) out += QStringLiteral("<caption>%1</caption>").arg(spansHtml(caption));
     for (const QJsonValue &rowValue : table.value(QStringLiteral("rows")).toArray()) {
@@ -860,7 +861,7 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
     if (kind == QStringLiteral("blank")) return {};
     if (kind == QStringLiteral("rule")) return QStringLiteral("<hr>");
     const QJsonValue table = block.value(QStringLiteral("table"));
-    if (table.isObject()) return tableHtml(table.toObject());
+    if (table.isObject()) return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt());
     const QString body = spansHtml(block.value(QStringLiteral("spans")).toArray());
     const int indent = std::clamp(block.value(QStringLiteral("depth")).toInt(1) - 1, 0, 20) * 16;
     if (kind == QStringLiteral("preformatted")) return QStringLiteral("<pre>%1</pre>").arg(body);
@@ -870,8 +871,12 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
     }
     if (kind == QStringLiteral("example")) return QStringLiteral("<blockquote><i>Example:</i> %1</blockquote>").arg(body);
     if (kind == QStringLiteral("quotation")) return QStringLiteral("<blockquote>%1</blockquote>").arg(body);
-    if (kind == QStringLiteral("term")) return QStringLiteral("<p><b>%1</b></p>").arg(body);
-    if (kind == QStringLiteral("list_item")) return QStringLiteral("<p style='margin-left:%1px'>• %2</p>").arg(18 + indent).arg(body);
+    if (kind == QStringLiteral("term")) return QStringLiteral("<p style='margin-left:%1px'><b>%2</b></p>").arg(indent).arg(body);
+    if (kind == QStringLiteral("list_item")) {
+        const QString number = block.value(QStringLiteral("number")).toString();
+        const QString marker = number.isEmpty() ? QStringLiteral("•") : number.toHtmlEscaped() + QChar('.');
+        return QStringLiteral("<p style='margin-left:%1px'>%2 %3</p>").arg(18 + indent).arg(marker, body);
+    }
     if (kind == QStringLiteral("list_detail") || kind == QStringLiteral("indent"))
         return QStringLiteral("<p style='margin-left:%1px'>%2</p>").arg(30 + indent).arg(body);
     if (kind == QStringLiteral("heading")) return QStringLiteral("<h3>%1</h3>").arg(body);
@@ -906,14 +911,17 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
     }
     const QJsonArray references = entry.value(QStringLiteral("references")).toArray();
     if (!references.isEmpty()) {
-        out += QStringLiteral("<h2>References</h2><ol>");
+        out += QStringLiteral("<h2>References</h2>");
         for (const QJsonValue &reference : references) {
             const QJsonObject ref = reference.toObject();
-            out += QStringLiteral("<li><a name='reference-%1'></a>%2</li>")
+            const QString group = ref.value(QStringLiteral("group")).toString();
+            const int groupNumber = ref.value(QStringLiteral("group_number")).toInt();
+            const QString label = group.isEmpty() ? QStringLiteral("[%1]").arg(groupNumber)
+                : QStringLiteral("[%1 %2]").arg(group, QString::number(groupNumber));
+            out += QStringLiteral("<p><a name='reference-%1'></a>%2 %3</p>")
                 .arg(ref.value(QStringLiteral("number")).toInt())
-                .arg(spansHtml(ref.value(QStringLiteral("spans")).toArray()));
+                .arg(label.toHtmlEscaped(), spansHtml(ref.value(QStringLiteral("spans")).toArray()));
         }
-        out += QStringLiteral("</ol>");
     }
     const QJsonArray media = entry.value(QStringLiteral("media")).toArray();
     if (!media.isEmpty()) {

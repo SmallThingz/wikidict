@@ -660,6 +660,118 @@ private slots:
         QVERIFY(reloaded.bookmarks().first().originEdition.isEmpty());
     }
 
+    void orderedListItemsKeepNumbersWithoutBecomingDefinitions() {
+        MainWindow window{QString()};
+        const auto block = [](const QString &kind, const QString &text, const QString &number, const QString &path, int depth) {
+            return QJsonObject{{QStringLiteral("kind"), kind}, {QStringLiteral("number"), number},
+                {QStringLiteral("list_path"), path}, {QStringLiteral("depth"), depth},
+                {QStringLiteral("spans"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), text}}}}};
+        };
+        // Labels are opaque: wiki lists may retain hierarchical numbering.
+        QJsonArray items{
+            block(QStringLiteral("list_item"), QStringLiteral("Parent ordered"), QStringLiteral("3"), QStringLiteral("#"), 1),
+            block(QStringLiteral("list_item"), QStringLiteral("Nested unordered"), {}, QStringLiteral("#*"), 2),
+            block(QStringLiteral("list_item"), QStringLiteral("Nested ordered"), QStringLiteral("3.1"), QStringLiteral("#*#"), 3),
+            block(QStringLiteral("list_detail"), QStringLiteral("Parent continuation"), {}, QStringLiteral("#:"), 2),
+            block(QStringLiteral("list_item"), QStringLiteral("Explicit value"), QStringLiteral("8"), QStringLiteral("#"), 1),
+            block(QStringLiteral("list_item"), QStringLiteral("Following value"), QStringLiteral("9"), QStringLiteral("#"), 1),
+            block(QStringLiteral("list_item"), QStringLiteral("Alphabetic label"), QStringLiteral("AA"), QStringLiteral("#"), 1),
+            block(QStringLiteral("list_item"), QStringLiteral("Roman label"), QStringLiteral("iii"), QStringLiteral("#"), 1),
+            block(QStringLiteral("list_item"), QStringLiteral("Roman value"), QStringLiteral("xxvi"), QStringLiteral("#"), 1),
+            block(QStringLiteral("list_item"), QStringLiteral("Escaped label"), QStringLiteral("<i>"), QStringLiteral("#"), 1),
+            block(QStringLiteral("paragraph"), QStringLiteral("{{example}} [[literal]]"), {}, {}, 0)};
+        QJsonObject entry{{QStringLiteral("title"), QStringLiteral("Ordered fixture")}, {QStringLiteral("kind"), QStringLiteral("supplemental")},
+            {QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), QStringLiteral("List")}, {QStringLiteral("blocks"), items}}}}};
+        QCOMPARE(window.clueFor(entry), QStringLiteral("Parent ordered"));
+        QJsonArray sections = entry.value(QStringLiteral("sections")).toArray();
+        sections.append(QJsonObject{{QStringLiteral("title"), QStringLiteral("Meaning")}, {QStringLiteral("blocks"), QJsonArray{
+            block(QStringLiteral("definition"), QStringLiteral("Actual dictionary meaning"), QStringLiteral("1"), QStringLiteral("#"), 1)}}});
+        entry.insert(QStringLiteral("sections"), sections);
+        const QJsonObject original = entry;
+        QCOMPARE(window.clueFor(entry), QStringLiteral("Actual dictionary meaning"));
+        QTextDocument document;
+        document.setHtml(window.entryHtml(entry));
+        const QString text = document.toPlainText();
+        for (const QString &expected : {QStringLiteral("3. Parent ordered"), QStringLiteral("• Nested unordered"),
+                QStringLiteral("3.1. Nested ordered"), QStringLiteral("8. Explicit value"), QStringLiteral("9. Following value"),
+                QStringLiteral("AA. Alphabetic label"), QStringLiteral("iii. Roman label"), QStringLiteral("xxvi. Roman value"),
+                QStringLiteral("<i>. Escaped label"), QStringLiteral("Parent continuation"), QStringLiteral("{{example}} [[literal]]")})
+            QVERIFY2(text.contains(expected), qPrintable(text));
+        const QTextCursor parent = document.find(QStringLiteral("Parent ordered"));
+        const QTextCursor child = document.find(QStringLiteral("Nested ordered"));
+        QVERIFY(!parent.isNull() && !child.isNull());
+        QVERIFY(child.blockFormat().leftMargin() > parent.blockFormat().leftMargin());
+        QCOMPARE(entry, original);
+    }
+
+    void nestedTermsKeepTheirCompiledDepth() {
+        MainWindow window{QString()};
+        const auto term = [](const QString &text, int depth, const QString &path) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("term")}, {QStringLiteral("depth"), depth},
+                {QStringLiteral("list_path"), path}, {QStringLiteral("spans"), QJsonArray{QJsonObject{
+                    {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), text}}}}};
+        };
+        QTextDocument document;
+        document.setHtml(window.blockHtml(term(QStringLiteral("Outer term"), 1, QStringLiteral(";")))
+            + window.blockHtml(term(QStringLiteral("Nested term"), 2, QStringLiteral("*;"))));
+        const QTextCursor outer = document.find(QStringLiteral("Outer term"));
+        const QTextCursor inner = document.find(QStringLiteral("Nested term"));
+        QVERIFY(!outer.isNull() && !inner.isNull());
+        QCOMPARE(outer.blockFormat().leftMargin(), 0.0);
+        QCOMPARE(inner.blockFormat().leftMargin(), 16.0);
+        QVERIFY(outer.charFormat().fontWeight() >= QFont::Bold);
+        QVERIFY(inner.charFormat().fontWeight() >= QFont::Bold);
+    }
+
+    void groupedReferenceLabelsUseCompiledIdentity() {
+        MainWindow window{QString()};
+        const auto reference = [](int number, int groupNumber, const QString &group, const QString &text) {
+            return QJsonObject{{QStringLiteral("number"), number}, {QStringLiteral("group_number"), groupNumber},
+                {QStringLiteral("group"), group}, {QStringLiteral("spans"), QJsonArray{QJsonObject{
+                    {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), text}}}}};
+        };
+        const QJsonObject entry{{QStringLiteral("title"), QStringLiteral("Reference fixture")},
+            {QStringLiteral("kind"), QStringLiteral("supplemental")}, {QStringLiteral("sections"), QJsonArray{}},
+            {QStringLiteral("references"), QJsonArray{
+                reference(1, 1, {}, QStringLiteral("Ordinary citation")),
+                reference(2, 1, QStringLiteral("note <one>"), QStringLiteral("{{Example}} [[Link]] __NOEDITSECTION__")),
+                reference(3, 2, {}, QStringLiteral("Later ordinary citation"))}}};
+        QTextDocument document;
+        document.setHtml(window.entryHtml(entry));
+        const QString text = document.toPlainText();
+        QVERIFY(text.contains(QStringLiteral("[1] Ordinary citation")));
+        QVERIFY(text.contains(QStringLiteral("[note <one> 1] {{Example}} [[Link]] __NOEDITSECTION__")));
+        QVERIFY(text.contains(QStringLiteral("[2] Later ordinary citation")));
+        QVERIFY(hasAnchor(&document, QStringLiteral("reference-2")));
+        QVERIFY(hasAnchor(&document, QStringLiteral("reference-3")));
+    }
+
+    void nestedTablesKeepTheirCompiledDepth() {
+        MainWindow window{QString()};
+        const auto block = [](int depth, const QString &caption) {
+            const auto text = [](const QString &value) { return QJsonArray{QJsonObject{
+                {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), value}}}; };
+            const QJsonObject cell{{QStringLiteral("colspan"), 1}, {QStringLiteral("rowspan"), 1},
+                {QStringLiteral("spans"), text(QStringLiteral("Cell"))}};
+            const QJsonObject row{{QStringLiteral("cells"), QJsonArray{cell}}};
+            const QJsonObject table{{QStringLiteral("caption"), text(caption)}, {QStringLiteral("rows"), QJsonArray{row}}};
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")}, {QStringLiteral("depth"), depth},
+                {QStringLiteral("list_path"), depth ? QStringLiteral("#:") : QString()}, {QStringLiteral("table"), table}};
+        };
+        QTextDocument document;
+        document.setHtml(window.blockHtml(block(0, QStringLiteral("Outer caption"))) + window.blockHtml(block(2, QStringLiteral("Nested caption"))));
+        QList<QTextTable *> tables;
+        for(QTextFrame *frame : document.rootFrame()->childFrames())
+            if(auto *table = qobject_cast<QTextTable *>(frame)) tables.append(table);
+        QCOMPARE(tables.size(), 2);
+        QCOMPARE(tables[0]->format().leftMargin(), 0.0);
+        QCOMPARE(tables[1]->format().leftMargin(), 46.0);
+        QCOMPARE(tables[1]->rows(), 1);
+        QCOMPARE(tables[1]->columns(), 1);
+        QVERIFY(document.toPlainText().contains(QStringLiteral("Outer caption")));
+        QVERIFY(document.toPlainText().contains(QStringLiteral("Nested caption")));
+    }
+
     void savedPreviewSkipsAudioControlsAndKeepsLinkedMeanings() {
         MainWindow window{QString()};
         const auto span = [](const QString &text, const QString &classes = QString(), const QString &target = QString()) {

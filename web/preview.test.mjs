@@ -64,3 +64,19 @@ test('saved clue refresh requires exact dictionary, selected context and raw key
   assert.equal(refreshSavedClue(saved,{...hit,dictionary:'absent'},'No match'),saved);
   assert.equal(hitKey({dictionary:'one',title:'cat'}),hitKey({dictionary:'one',context:'one',raw_key:'cat',title:'Other display'}));
 });
+
+test('ordered list numbering remains distinct from a semantic definition',()=>{
+  const items=[
+    {...block('list_item',span('Parent ordered')),number:'3',path:'#',depth:1},
+    {...block('list_item',span('Nested unordered')),number:'',path:'#*',depth:2},
+    {...block('list_item',span('Nested ordered')),number:'3.1',path:'#*#',depth:3},
+    {...block('list_detail',span('Parent continuation')),number:'',path:'#:',depth:2},
+    {...block('list_item',span('Explicit value')),number:'8',path:'#',depth:1},
+    {...block('list_item',span('Following value')),number:'9',path:'#',depth:1}
+  ];
+  assert.equal(entryClue(entry(...items)),'Parent ordered');
+  const value=entry(...items,block('definition',span('Actual dictionary meaning')));
+  const original=structuredClone(value);
+  assert.equal(entryClue(value),'Actual dictionary meaning');
+  assert.deepEqual(value,original);
+});

@@ -29,8 +29,9 @@ export function spans(values = [], onLink = () => {}, preserve = false) {
   return fragment;
 }
 function blockView(block, onLink) {
+  const margin = `${Math.min(Math.max(block.depth || 0,0),8)*.45}rem`;
   if (block.table) {
-    const wrap = node('div', null, 'table-scroll'), table = node('table'); wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
+    const wrap = node('div', null, 'table-scroll'), table = node('table'); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
     if (block.table.caption?.length) { const caption = node('caption'); caption.append(spans(block.table.caption,onLink)); table.append(caption); }
     for (const row of block.table.rows) { const tr = node('tr'); for (const cell of row.cells) { const td = node(cell.header?'th':'td'); td.colSpan = cell.colspan || 1; td.rowSpan = cell.rowspan || 1; td.append(spans(cell.spans,onLink)); tr.append(td); } table.append(tr); }
     wrap.append(table); return wrap;
@@ -40,19 +41,27 @@ function blockView(block, onLink) {
   const allowed = new Set(['paragraph','definition','example','quotation','list_item','list_detail','indent','term','heading']);
   const kind = allowed.has(block.kind) ? block.kind : 'paragraph';
   const el = node(kind === 'heading'?'h4':'div',null,'block '+kind);
-  el.style.marginInlineStart = `${Math.min(Math.max(block.depth || 0,0),8)*.45}rem`;
-  const prefix = kind==='definition'?(block.number?`${block.number}.`:'•'):['example','quotation'].includes(kind)?'│':kind==='list_item'?'•':kind==='list_detail'?'↳':'';
+  el.style.marginInlineStart = margin;
+  const prefix = kind==='definition'?(block.number?`${block.number}.`:'•'):['example','quotation'].includes(kind)?'│':kind==='list_item'?(block.number?`${block.number}.`:'•'):kind==='list_detail'?'↳':'';
   if (prefix) el.append(node('span',prefix,'prefix'));
   const body = node('span',null,'body'); body.append(spans(block.spans,onLink)); el.append(body); return el;
 }
 export function renderEntry(entry, onLink, settings = {}, mediaView = () => null) {
-  const root = document.createDocumentFragment();
+  const root = document.createDocumentFragment(), references = new Map();
+  const followLink = target => {
+    const reference = references.get(target);
+    if (!reference) { onLink(target); return; }
+    for (let parent = reference.parentElement; parent; parent = parent.parentElement)
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    reference.scrollIntoView({block:'center'});
+    reference.focus({preventScroll:true});
+  };
   root.append(node('p',entry.language || entry.kind,'entry-language'));
-  const title = node('h1'); title.append(entry.display_title?.length?spans(entry.display_title,onLink):document.createTextNode(entry.title)); root.append(title);
+  const title = node('h1'); title.append(entry.display_title?.length?spans(entry.display_title,followLink):document.createTextNode(entry.title)); root.append(title);
   if(entry.redirect){const r=entry.redirect;root.append(node('p',(r.followed?'Redirected from '+r.source_title+' to ':'Redirect to ')+r.target_title+(r.fragment?'#'+r.fragment:''),'entry-redirect'));}
   if(entry.alias&&entry.redirect?.followed){const a=entry.alias;root.append(node('p','Redirect to '+a.target_title+(a.fragment?'#'+a.fragment:''),'entry-alias'));}
   function fold(title, open=false) {const el=node('details');el.open=open;el.append(node('summary',title));return el;}
-  if (entry.preamble_spans?.length) { const preamble=fold('About this entry',entry.kind==='alias'||!settings.collapseOtherSections);preamble.append(spans(entry.preamble_spans,onLink));root.append(preamble); }
+  if (entry.preamble_spans?.length) { const preamble=fold('About this entry',entry.kind==='alias'||!settings.collapseOtherSections);preamble.append(spans(entry.preamble_spans,followLink));root.append(preamble); }
   for (const section of entry.sections) {
     const meaning=section.blocks.some(b=>b.kind==='definition');
     const expanded=meaning || (section.title.startsWith('Pronunciation')?!settings.collapsePronunciation:section.title.startsWith('Etymology')?!settings.collapseEtymology:!settings.collapseOtherSections);
@@ -61,7 +70,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     const notes=[];
     for (const block of section.blocks) {
       if(block.kind==='blank'||(!block.table&&block.kind!=='rule'&&!block.spans?.some(s=>s.text?.trim())))continue;
-      const view=blockView(block,onLink);
+      const view=blockView(block,followLink);
       if(meaning&&block.kind!=='definition')notes.push(view);else el.append(view);
     }
     if(notes.length){const details=fold('Examples & notes',!settings.collapseDetails);details.className='sense-notes';details.append(...notes);el.append(details);}
@@ -69,7 +78,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   }
   if (entry.references?.length) {
     const section=fold('References',!settings.collapseOtherSections);
-    for (const ref of entry.references) { const p=node('p',null,'reference'); p.id=`cite_note-${ref.number}`; p.append(node('span',`[${ref.group?ref.group+' ':''}${ref.group_number}]`)); const body=node('span'); body.append(spans(ref.spans,onLink)); p.append(body); section.append(p); } root.append(section);
+    for (const ref of entry.references) { const p=node('p',null,'reference'); p.id=`reference-${ref.number}`; p.tabIndex=-1; references.set(`#${p.id}`,p); p.append(node('span',`[${ref.group?ref.group+' ':''}${ref.group_number}]`)); const body=node('span'); body.append(spans(ref.spans,followLink)); p.append(body); section.append(p); } root.append(section);
   }
   if (entry.media?.length) { const section=fold('Images & sound',!settings.collapseOtherSections);for(const media of entry.media){const view=mediaView(media);if(view)section.append(view);}root.append(section); }
   const edition=/^[a-z0-9_-]+wiktionary$/.test(entry.source_edition||'')?entry.source_edition.slice(0,-10).replaceAll('_','-'):null;
