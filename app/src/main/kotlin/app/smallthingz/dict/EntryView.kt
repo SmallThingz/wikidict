@@ -55,10 +55,8 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     val uri = LocalUriHandler.current
     val context = LocalContext.current
     DisposableEffect(entry.key) { onDispose { SpeechPlayback.stop() } }
-    val currentLink = rememberUpdatedState(onLink)
     val colors = MaterialTheme.colorScheme
-    val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
-    CompositionLocalProvider(LocalTextCache provides cache, LocalEntryMedia provides entry.media, LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings) {
+    CompositionLocalProvider(LocalEntryMedia provides entry.media, LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings) {
       key(entry.key) {
         val scroll = rememberLazyListState()
         val reportScroll by rememberUpdatedState(onScrollDirection)
@@ -95,6 +93,17 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
         }
         val visibleRows = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
+        val readerLink: (String) -> Unit = { target ->
+            val referenceIndex = referenceScrollIndex(entry, target, folded.filterValues { it }.keys)
+            if (referenceIndex != null) {
+                folded["references"] = false
+                // Apply the destination in the next remeasure, after References opens.
+                scroll.requestScrollToItem(referenceIndex)
+            } else onLink(target)
+        }
+        val currentLink = rememberUpdatedState(readerLink)
+        val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
+        CompositionLocalProvider(LocalTextCache provides cache) {
         LazyColumn(Modifier.fillMaxSize().nestedScroll(dockScroll).testTag("entry-scroll"), state = scroll, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 56.dp)) {
             item("title", contentType = "title") {
                 Column(Modifier.padding(bottom = 6.dp)) {
@@ -119,7 +128,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         }
                         IconButton(onClick = onBookmark) { Icon(if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, if (bookmarked) "Remove bookmark" else "Bookmark", Modifier.size(22.dp)) }
                     }
-                    if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium, onLink = onLink)
+                    if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium, onLink = readerLink)
                     else Text(entry.title, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium.copy(textDirection=TextDirection.Content))
                     entry.redirect?.let { redirect ->
                         Text("${redirect.source} -> ${redirect.target}" + if (redirect.fragment.isEmpty()) "" else "#${redirect.fragment}",
@@ -133,7 +142,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
             if (entry.preamble.isNotEmpty()) item("preamble", contentType = "paragraph") {
                 FoldHeading("About this entry", folded["preamble"] == true) { folded["preamble"] = folded["preamble"] != true }
-                if (folded["preamble"] != true) StyledText(compactSpans(entry.preamble), Modifier.padding(bottom = 4.dp), onLink = onLink)
+                if (folded["preamble"] != true) StyledText(compactSpans(entry.preamble), Modifier.padding(bottom = 4.dp), onLink = readerLink)
             }
             items(visibleRows, key = { it.key }, contentType = { if (it.heading != null) "heading" else it.block?.kind }) { row ->
                 Column(Modifier.animateItem()) {
@@ -153,14 +162,14 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     }
                 }
                 row.block?.let { block ->
-                    Box(Modifier.padding(bottom = if (row.compact) 2.dp else 6.dp)) { BlockView(block, onLink) }
+                    Box(Modifier.padding(bottom = if (row.compact) 2.dp else 6.dp)) { BlockView(block, readerLink) }
                 }
                 }
             }
             if (entry.references.isNotEmpty()) item("references-heading") { FoldHeading("References", folded["references"] == true) { folded["references"] = folded["references"] != true } }
             items(if (folded["references"] == true) emptyList() else entry.references, key = { "reference-${it.number}" }, contentType = { "reference" }) { ref ->
-                val label = if (ref.group.isBlank()) "[${ref.groupNumber}]" else "[${ref.group} ${ref.groupNumber}]"
-                Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text(label, style = MaterialTheme.typography.labelMedium, color = colors.primary); StyledText(ref.spans, Modifier.weight(1f), onLink = onLink) }
+                val label = referenceLabel(ref)
+                Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text(label, style = MaterialTheme.typography.labelMedium, color = colors.primary); StyledText(ref.spans, Modifier.weight(1f), onLink = readerLink) }
             }
             val linkedFiles = entry.sections.flatMap { it.blocks }.flatMap { block -> block.spans + block.table?.rows.orEmpty().flatten().flatMap { it.spans } }.filter { it.classes == "wikidict-media" }.map { it.target.removePrefix("File:").replace('_',' ') }.toSet()
             val remainingMedia = entry.media.filter { it.file !in linkedFiles }
@@ -174,6 +183,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     TextButton(onClick = { uri.openUri("https://creativecommons.org/licenses/by-sa/4.0/") }) { Text("CC BY-SA 4.0",style=MaterialTheme.typography.labelSmall) }
                 }
             }
+        }
         }
       }
     }
@@ -192,20 +202,14 @@ private fun FoldHeading(title: String, folded: Boolean, onClick: () -> Unit) {
 @Composable
 private fun BlockView(block: Block, onLink: (String) -> Unit) {
     when {
-        block.table != null -> TableView(block.table, onLink)
+        block.table != null -> Box(Modifier.padding(start = blockIndentDp(block).dp)) { TableView(block.table, onLink) }
         block.kind == "rule" -> HorizontalDivider()
         block.kind == "preformatted" -> Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp)) {
             StyledText(block.spans, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), onLink = onLink, preserveWhitespace = true)
         }
         else -> {
-            val prefix = when (block.kind) {
-                "definition" -> if (block.number.isNotBlank()) "${block.number.padStart(2, '0')}" else "•"
-                "example", "quotation" -> "│ "
-                "list_item" -> "• "
-                "list_detail" -> "↳ "
-                else -> ""
-            }
-            Row(Modifier.padding(start = ((block.depth - 1).coerceIn(0, 8) * 7).dp)) {
+            val prefix = blockPrefix(block)
+            Row(Modifier.padding(start = blockIndentDp(block).dp)) {
                 if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 StyledText(block.spans, Modifier.weight(1f), onLink = onLink)
             }

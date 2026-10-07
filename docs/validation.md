@@ -1,6 +1,66 @@
 # Android validation
 
-## Corpus compatibility qualification — 2026-10-07
+## Saved previews and compiled grammar qualification — 2026-10-07
+
+The final source passed all **32 JVM tests** (zero failures, errors or skips),
+plus lint with zero errors and 14 existing warnings. Optimized validation and
+unsigned release builds passed with unchanged source; every recorded build
+process closed. The APKs are version 0.3.0/code 3, minimum API 28/target API 37,
+non-debuggable, and contain no native libraries or development dictionaries.
+The optimized validation APK SHA-256 is
+`af4868b37f7a17e417b1ecb9fba579bbb05ab9f7b714d30240bcb36117146715`;
+the unsigned release APK SHA-256 is
+`7df96d0bc6d8cbc2fe2399edfdf7ead9936cbc629edb258bbc08d77302b6a711`.
+The `.validation` APK uses the existing debug signing identity and was installed
+in place on the same API 36 Xiaomi device. Installed bytes match the qualified
+artifact. The production-package APK was built and inspected, remains unsigned,
+and was **not installed**; an established production signer is still required.
+
+Saved clues keep definition priority and exclude media/audio-only fallback spans
+without changing reader content. The actual full AF144 Engels collection (1,322
+records) and matching 88-record alias sidecar were already installed. Its saved
+original alias `spinal chord` reopened the scoped `spinal cord` entry and refreshed
+the cached clue from pronunciation filenames to `(anatomie) Rugmurg`. Original
+alias/source context, the other English and Arabic saved rows, and pronunciation
+controls remained. Selecting another word before force-stop and then inspecting
+Saved proved the new clue persisted without first rereading the Afrikaans entry.
+JVM regressions additionally prove exact-scoped clue refresh preserves saved time
+and review metadata, including when history is disabled. No broad startup reindex
+or destructive re-saving is performed; ambiguous legacy identities are unchanged.
+
+The synthetic compiler V2 fixture (2,748 bytes, SHA-256
+`80c3448a3204271d69bf9b3041aacc424193fc8be9efb5d482a39b71cc6ef958`)
+was imported with the normal file picker under an unscoped filename. Physical
+checks confirmed ordered labels `3`, `1`, `8`, `9`, `ii`, `i`, the single real
+meaning, nested terms and the nested table, and protected literal text in body,
+media caption and reference footer. A normal tap on `[audit 1]` opened the folded
+References section and displayed its exact compiled destination. The entire
+reference text was visible, 168 pixels above all five bottom-navigation buttons.
+Independent saved-image review confirmed the layout. The fixture's synthetic
+`Grammar.png` is unavailable; this is not a live-media test. Literal delimiters
+preserved from protected source are valid compiled text, not runtime markup.
+
+A separate selected-corpus check imported the accepted AR149 supplemental
+collection (55 records) and alias sidecar (1,756 records). The exact page
+`ملحق:يونيكود/هانغل جامو` displayed the U+1100 Name cell as
+`HANGUL CHOSEONG KIYEOK`, with no visible `reserved-1100`. Its retained,
+source-authenticated character-list Lua diagnostic remained visible. This proves
+that selected metadata repair renders correctly; it does not establish an
+error-free page or whole-Arabic semantic acceptance. A separately reviewed,
+self-targeted QA helper entered the Unicode query through the normal accessibility
+text action, then was removed. It changed no keyboard, clipboard or global
+settings and was not a rerun of the application instrumentation suite.
+
+All original installed collections and saved entries remained; visible app
+settings and global network/input settings matched the preflight state. Only
+owned temporary helper/staging files were removed. Final receipts and exact
+screenshots are retained under ignored `.tmp/android-qa-20261007/`. The earlier
+19 debug instrumentation tests, live-download/media checks and 24-swipe frame
+smoke below remain **historical evidence on the prior APK**, not reruns against
+this successor. The final physical scope is one API 36 device, with no new frame
+benchmark, current live-download test, or physical speech-quality claim.
+
+## Earlier corpus compatibility qualification — 2026-10-07
 
 Device: Xiaomi M2101K7BG, Android API 36; isolated package `app.smallthingz.dict.validation`. The installed APK was hashed before and after instrumentation. Existing unrelated applications and their data were left intact; the phone stayed awake. Private DNS remained `hostname` / `dns.adguard.com` throughout this run.
 

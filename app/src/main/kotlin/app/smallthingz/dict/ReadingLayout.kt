@@ -67,3 +67,26 @@ private fun compactBlock(block: Block): Block {
     val table = block.table?.let { t -> t.copy(caption = compactSpans(t.caption), rows = t.rows.map { row -> row.map { cell -> cell.copy(spans = compactSpans(cell.spans)) } }) }
     return if (spans === block.spans && table == null) block else block.copy(spans = spans, table = table)
 }
+
+/** Labels come from compiled structure; ordered lists do not become dictionary senses. */
+internal fun blockPrefix(block: Block): String = when (block.kind) {
+    "definition" -> if (block.number.isNotBlank()) "${block.number.padStart(2, '0')}" else "•"
+    "example", "quotation" -> "│ "
+    "list_item" -> if (block.number.isNotBlank()) "${block.number}. " else "• "
+    "list_detail" -> "↳ "
+    else -> ""
+}
+
+/** Shared nesting indentation for tables and ordinary text/list blocks. */
+internal fun blockIndentDp(block: Block): Int = (block.depth - 1).coerceIn(0, 8) * 7
+
+/** Match only actual compiled reference identities; no source or fragment interpretation. */
+internal fun referenceScrollIndex(entry: Entry, target: String, folded: Set<String>): Int? {
+    val referenceIndex = entry.references.indexOfFirst { target == "#reference-${it.number}" }
+    if (referenceIndex < 0) return null
+    return 1 + (if (entry.preamble.isEmpty()) 0 else 1) +
+        visibleReadingRows(entry.readingRows, folded).size + 1 + referenceIndex
+}
+
+internal fun referenceLabel(reference: Reference): String =
+    if (reference.group.isBlank()) "[${reference.groupNumber}]" else "[${reference.group} ${reference.groupNumber}]"

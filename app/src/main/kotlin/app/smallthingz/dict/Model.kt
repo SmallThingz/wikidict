@@ -57,13 +57,19 @@ data class Entry(
     // Constructed with the decoded entry on the import dispatcher.
     val readingRows: List<ReadingRow> = readingRows(sections)
     fun clue(): String {
-        val definition = sections.asSequence().flatMap { it.blocks.asSequence() }
-            .firstOrNull { it.kind == "definition" && textOf(it.spans).isNotBlank() }
-        val fallback = sections.asSequence().flatMap { it.blocks.asSequence() }
-            .firstOrNull { it.kind !in setOf("blank", "rule") && textOf(it.spans).isNotBlank() }
-        return textOf((definition ?: fallback)?.spans.orEmpty()).ifBlank { "Definition unavailable." }.take(420)
+        // Media controls belong in the reader, not a saved word's textual clue.
+        fun preview(block: Block) = textOf(block.spans.filterNot { span ->
+            span.classes.split(previewClassWhitespace).any { it == "wikidict-media" || it == "audiotable" }
+        })
+        val blocks = sections.asSequence().flatMap { it.blocks.asSequence() }
+        val definition = blocks.filter { it.kind == "definition" }.map(::preview).firstOrNull { it.isNotBlank() }
+        val fallback = definition ?: blocks.filter { it.kind !in setOf("blank", "rule") }
+            .map(::preview).firstOrNull { it.isNotBlank() }
+        return (fallback ?: "Definition unavailable.").take(420)
     }
 }
+
+private val previewClassWhitespace = Regex("\\s+")
 
 fun textOf(spans: List<Span>): String = spans.joinToString("") { it.text + it.trail }
     .replace(Regex("\\s+"), " ").trim()

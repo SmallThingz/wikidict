@@ -48,14 +48,8 @@ class LearningStore private constructor(context: Context) {
         private set
 
     fun record(entry: Entry) {
-        if (!data.settings.historyEnabled) return
-        val now = System.currentTimeMillis()
-        val word = entry.saved(now)
-        val previous = data.history.firstOrNull { it.key == word.key }
-        val merged = word.copy(views = (previous?.views ?: 0) + 1, lastViewed = now)
-        val history = (listOf(merged) + data.history.filterNot { it.key == word.key })
-            .take(data.settings.historyLimit.coerceIn(1, 100_000))
-        update(data.copy(history = history))
+        val recorded = data.recordEntry(entry, System.currentTimeMillis())
+        if (recorded != data) update(recorded)
     }
 
     fun toggleBookmark(entry: Entry) {
@@ -180,6 +174,24 @@ class LearningStore private constructor(context: Context) {
             val stat = value.getJSONObject(key)
             key to StudyStat(stat.optInt("right").coerceAtLeast(0), stat.optInt("wrong").coerceAtLeast(0), stat.optLong("last").coerceAtLeast(0))
         }.getOrNull() }.toMap()
+}
+
+internal fun LearningData.recordEntry(entry: Entry, now: Long): LearningData {
+    val word = entry.saved(now)
+    // Refresh only a resolved stored identity; legacy rows without provenance are not guessed.
+    fun refresh(words: List<SavedWord>) = words.map { old ->
+        if (word.dictionary != null && word.recordKey != null && old.key == word.key &&
+            old.dictionary == word.dictionary && old.recordKey == word.recordKey &&
+            old.contextDictionary == word.contextDictionary && old.edition.orEmpty() == word.edition.orEmpty())
+            old.copy(clue = word.clue) else old
+    }
+    val refreshedBookmarks = refresh(bookmarks)
+    if (!settings.historyEnabled) return copy(bookmarks = refreshedBookmarks, history = refresh(history))
+    val previous = history.firstOrNull { it.key == word.key }
+    val merged = word.copy(views = (previous?.views ?: 0) + 1, lastViewed = now)
+    val recorded = (listOf(merged) + history.filterNot { it.key == word.key })
+        .take(settings.historyLimit.coerceIn(1, 100_000))
+    return copy(history = recorded, bookmarks = refreshedBookmarks)
 }
 
 private fun Entry.saved(now: Long) = SavedWord(

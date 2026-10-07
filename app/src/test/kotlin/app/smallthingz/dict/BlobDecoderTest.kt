@@ -38,6 +38,8 @@ class BlobDecoderTest {
         records.forEach { (title,payload)-> val e=BlobDecoder.decode(payload,title,"language","English","en");assertEquals(title,e.title);assertTrue(e.sections.isNotEmpty()) }
         val cat=records.first{it.first=="cat"}.let{BlobDecoder.decode(it.second,it.first,"language","English","en")}
         assertTrue(cat.sections.any{it.title.startsWith("Etymology")});assertTrue(cat.media.any{it.kind=="audio"});assertTrue(cat.media.any{it.kind=="image"})
+        // This historical fixture has a real parent definition, not a media fallback.
+        assertEquals("Terms relating to animals.", cat.clue())
     }
     @Test fun truncatedUnknownAndTrailingPayloadsAreRejected() {
         val bytes=records().first().second

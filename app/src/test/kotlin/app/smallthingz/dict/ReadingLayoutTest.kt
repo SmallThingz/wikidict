@@ -55,4 +55,43 @@ class ReadingLayoutTest {
         assertEquals(listOf(Span("text", "one"), br, Span("text", "two")), rows[1].block!!.spans)
         assertEquals(spans, rows[2].block!!.spans)
     }
+    @Test fun numberedListItemsDisplayCompiledLabelsWithoutBecomingSenses() {
+        fun item(number: String, path: String = "#", depth: Int = 1) =
+            Block("list_item", depth, listOf(Span("text", "An instruction")), listPath = path, number = number)
+        for (number in listOf("3", "8", "9", "-2", "AA", "iii", "xxvi")) assertEquals("$number. ", blockPrefix(item(number)))
+        assertEquals("• ", blockPrefix(item("", "#*", 2)))
+        assertEquals("3.1. ", blockPrefix(item("3.1", "#*#", 3)))
+        assertEquals("↳ ", blockPrefix(Block("list_detail", 1, emptyList(), listPath = "#:")))
+        val meaning = Block("definition", 1, listOf(Span("text", "Actual dictionary meaning")), number = "1")
+        assertEquals("01", blockPrefix(meaning))
+        val sections = listOf(Section(3, "Instructions", listOf(item("3"))), Section(3, "Meaning", listOf(meaning)))
+        val rows = readingRows(sections)
+        assertFalse(rows.first { it.block?.kind == "list_item" }.meaningSection)
+        assertTrue(rows.first { it.block?.kind == "definition" }.meaningSection)
+        val entry = Entry("word", emptyList(), "language", "Language", "und", sections, emptyList())
+        assertEquals("Actual dictionary meaning", entry.clue())
+    }
+
+    @Test fun compiledReferenceTargetsUseGlobalIdentityAndGroupedDisplayLabels() {
+        val references = listOf(
+            Reference(1, 1, "notes", listOf(Span("text", "Grouped note"))),
+            Reference(2, 1, "", listOf(Span("text", "Default note"))),
+            Reference(3, 2, "notes", listOf(Span("text", "Second grouped note")))
+        )
+        val entry = Entry("reference fixture", emptyList(), "language", "English", "en", listOf(
+            Section(3, "Usage notes", listOf(Block("paragraph", 0, listOf(Span("text", "Body")))))
+        ), references, listOf(Span("text", "Preamble")), emptyList())
+        assertEquals(listOf("[notes 1]", "[1]", "[notes 2]"), references.map(::referenceLabel))
+        val folded = setOf("heading-0", "references")
+        // Title, preamble, folded section heading, references heading, then reference rows.
+        assertEquals(4, referenceScrollIndex(entry, "#reference-1", folded))
+        assertEquals(5, referenceScrollIndex(entry, "#reference-2", folded))
+        assertEquals(6, referenceScrollIndex(entry, "#reference-3", folded))
+        assertEquals(7, referenceScrollIndex(entry, "#reference-3", emptySet()))
+        assertEquals(5, referenceScrollIndex(entry.copy(preamble = emptyList()), "#reference-3", folded))
+        listOf("word", "word#reference-1", "#reference-01", "#reference-4", "#cite_note-1").forEach {
+            assertNull(referenceScrollIndex(entry, it, folded))
+        }
+    }
+
 }

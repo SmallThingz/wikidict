@@ -1,0 +1,13 @@
+==English==
+===Noun===
+# A real dictionary meaning with [[cat|a link]] and an &amp; entity.
+<ol start='3'><li>instruction parent<ul><li>instruction child<ol><li>instruction grandchild</ol></ul>instruction tail<li value='8'><p>instruction next</p><p>second paragraph</p><table><tr><td>nested left</td><td>nested right</td></tr></table>instruction continuation<li>instruction last</ol>
+<ol reversed type='i'><li>reverse first<li>reverse second</ol>
+before__NOEDITSECTION__after <nowiki>{{Example}} [[Link]] __NOEDITSECTION__</nowiki> entity &#123;&#123;EntityLiteral&#125;&#125;
+Visible audit marker<ref group='audit'><nowiki>{{ReferenceLiteral}} __NOEDITSECTION__</nowiki></ref><references group='audit'/>
+[[File:Grammar.png|thumb|<nowiki>{{MediaLiteral}} __NOEDITSECTION__</nowiki>]]
+<dl><dt>HTML term<dd>HTML descriptor<dt>Other term<dd>Other descriptor</dl>
+*; [[HTTP:term|Nested term]] : nested descriptor
+<table><caption>Actual caption</caption><div>Fostered first paragraph</div><p>Fostered second paragraph</p>
+* Fostered list item
+<tr><td>before<!--</td></tr><tr><td>hidden-->after<td>second<tr><td>third</table>
