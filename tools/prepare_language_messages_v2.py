@@ -26,8 +26,11 @@ MAX_MANIFEST = 64 * 1024
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_URL = 7 * 1024
 MAX_REQUESTS = 128
-# Full date-format names use50 keys; the largest existing inventory (AR) has14.
-MAX_MESSAGE_KEYS = 64
+# The full Arabic profile has64 keys; captured Commons data adds2 license keys.
+MAX_MESSAGE_KEYS = 66
+# This exact previous collector retains its original64-key scope. Dependencies,
+# ordered request replay and every retained evidence byte remain mandatory.
+PRE_LICENSE_GENERATOR_SHA256 = 'ee9c7745aa4bcea3bb44060fd49d086ae49ad1aa47fb2cd82527fbe6f47ebd08'
 # Ordinary MediaWiki clients accept at most50 ammessages values. Keep each
 # request at32 values and replay every exact chunk.
 MAX_MESSAGE_KEYS_PER_REQUEST = 32
@@ -355,8 +358,11 @@ def verify(root, require_complete=True):
     if {k: v for k, v in manifest.items() if k not in per_output} != {k: v for k, v in other.items() if k not in per_output}:
         raise ValueError('Paired language/message manifests differ')
     identity = producer()
+    prior_scope = (manifest.get('generator_sha256') == PRE_LICENSE_GENERATOR_SHA256
+                   and isinstance(manifest.get('keys'), list)
+                   and 1 <= len(manifest['keys']) <= 64)
     if (manifest.get('dependency_sha256') != identity['dependency_sha256']
-            or manifest.get('generator_sha256') != identity['generator_sha256']):
+            or manifest.get('generator_sha256') != identity['generator_sha256'] and not prior_scope):
         raise ValueError('Capture requires its original collector and dependencies')
     if (manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('dump_date') is not None
             or manifest.get('fallback_mode') != 'strict' or manifest.get('message_mode') != 'plain-with-database'

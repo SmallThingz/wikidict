@@ -88,7 +88,7 @@ class MessageV2Test(unittest.TestCase):
             {'schema': capture.SCHEMA, 'manifests': hashes}))
 
     def test_boundaries_chunk_replay_and_both_builder_dispatches(self):
-        for count in (17, 24, 32, 33, 63, 64):
+        for count in (17, 24, 32, 33, 63, 64, 65, 66):
             with self.subTest(count=count):
                 args, transport, result = self.collect(count, str(count), ['bn', 'fr'])
                 self.assertEqual(capture.verify(args.output), result)
@@ -122,28 +122,42 @@ class MessageV2Test(unittest.TestCase):
         self.assertFalse(args.output.exists())
         self.assertEqual(transport.calls, [])
 
-    def test_sixty_five_rejected_before_capture_or_transport(self):
-        args = self.options(65)
+        # Exact prior-v2 producer retains its original evidence and64-key bound.
+        self.assertEqual(capture.PRE_LICENSE_GENERATOR_SHA256,
+                         'ee9c7745aa4bcea3bb44060fd49d086ae49ad1aa47fb2cd82527fbe6f47ebd08')
+        for count in (64, 65, 66):
+            args, _, _ = self.collect(count, 'prior-v2-' + str(count))
+            self.rebind(args.output, lambda value: value.update(
+                generator_sha256=capture.PRE_LICENSE_GENERATOR_SHA256))
+            if count == 64:
+                capture.verify(args.output)
+                self.rebind(args.output, lambda value: value['dependency_sha256'].update(
+                    {'tools/prepare_file_metadata.py': '0' * 64}))
+            with self.assertRaisesRegex(ValueError, 'original collector'):
+                capture.verify(args.output)
+
+    def test_sixty_seven_rejected_before_capture_or_transport(self):
+        args = self.options(67)
         transport = Transport()
         with self.assertRaisesRegex(ValueError, 'excessive requested'):
             capture.capture(args, transport=transport, sleep=lambda _: None)
         self.assertFalse(args.output.exists())
         self.assertEqual(transport.calls, [])
 
-    def test_sixty_five_resealed_selection_rejected_by_replay(self):
+    def test_sixty_seven_resealed_selection_rejected_by_replay(self):
         args, _, _ = self.collect(64)
         path = args.output / (capture.PREFIX + 'requested.json')
         config = json.loads(path.read_text())
-        config['keys'] = keys(65)
+        config['keys'] = keys(67)
         path.write_bytes(capture.evidence.encoded(config))
-        self.rebind(args.output, lambda value: value.update(keys=keys(65)))
+        self.rebind(args.output, lambda value: value.update(keys=keys(67)))
         with self.assertRaisesRegex(ValueError, 'Invalid captured language/message selection'):
             capture.verify(args.output)
 
     def test_duplicate_missing_and_reordered_chunks_rejected_after_reseal(self):
         for mode in ('duplicate', 'missing', 'reordered'):
             with self.subTest(mode=mode):
-                args, _, _ = self.collect(63, mode)
+                args, _, _ = self.collect(66, mode)
                 def mutate(value):
                     rows = value['requests']
                     if mode == 'duplicate':
@@ -177,11 +191,12 @@ class MessageV2Test(unittest.TestCase):
             capture.verify(args.output)
 
     def test_paired_schema_and_own_producer_identity_required(self):
-        for mode in ('paired', 'legacy-producer', 'unknown-schema'):
+        for mode in ('paired', 'legacy-producer', 'unknown-producer', 'unknown-schema'):
             with self.subTest(mode=mode):
                 args, _, _ = self.collect(24, mode)
-                if mode == 'legacy-producer':
-                    self.rebind(args.output, lambda value: value.update(generator_sha256=LEGACY_SHA))
+                if mode in ('legacy-producer', 'unknown-producer'):
+                    self.rebind(args.output, lambda value: value.update(
+                        generator_sha256=LEGACY_SHA if mode == 'legacy-producer' else '0' * 64))
                     with self.assertRaisesRegex(ValueError, 'original collector'):
                         capture.verify(args.output)
                 else:
