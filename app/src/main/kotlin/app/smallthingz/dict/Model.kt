@@ -45,8 +45,15 @@ data class Entry(
     val references: List<Reference>,
     val preamble: List<Span> = emptyList(),
     val media: List<Media> = emptyList(),
+    val redirect: Redirect? = null,
+    val edition: String = "",
+    val origin: WordHit? = null,
+    val navigationKind: String = kind,
+    val navigationLanguage: String? = language,
 ) {
-    val key: String = "$kind\u0000${language.orEmpty()}\u0000$title"
+    val key: String = origin?.takeIf { edition.isNotEmpty() || redirect != null }?.let {
+        "${it.dictionary}\u0000${it.contextDictionary.orEmpty()}\u0000${it.recordKey}"
+    } ?: "$kind\u0000${language.orEmpty()}\u0000$title"
     // Constructed with the decoded entry on the import dispatcher.
     val readingRows: List<ReadingRow> = readingRows(sections)
     fun clue(): String {

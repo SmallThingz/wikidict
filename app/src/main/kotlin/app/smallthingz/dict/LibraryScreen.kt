@@ -30,7 +30,7 @@ fun LibraryScreen(library: LibraryStore, onImport: ()->Unit) {
         items(library.dictionaries,key={it.id}) { dictionary ->
             Column {
                 Row(verticalAlignment=Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text(dictionary.language,style=MaterialTheme.typography.titleMedium);Text("${dictionary.count} words · ${dictionary.bytes/1024/1024} MB",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
+                    Column(Modifier.weight(1f)) { Text(dictionary.language,style=MaterialTheme.typography.titleMedium);Text(sourceLabel(dictionary.edition),style=MaterialTheme.typography.bodySmall);Text("${dictionary.count} words · ${dictionary.bytes/1024/1024} MB",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
                     IconButton(onClick={remove=dictionary.id},enabled=library.busy==null) {Icon(Icons.Outlined.DeleteOutline,"Remove ${dictionary.language}")}
                 }
                 androidx.compose.animation.AnimatedVisibility(remove==dictionary.id) { Row(verticalAlignment=Alignment.CenterVertically) {
@@ -42,7 +42,8 @@ fun LibraryScreen(library: LibraryStore, onImport: ()->Unit) {
         item { Text("Available",style=MaterialTheme.typography.titleLarge) }
         items(library.catalog,key={it.url}) { item -> Row(verticalAlignment=Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) { Text(item.label,style=MaterialTheme.typography.titleMedium);item.bytes?.let {Text("${it/1024/1024} MB",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)} }
-            val installed = library.dictionaries.any { it.id==item.sha256 }
+            val edition = dictionaryEdition(java.net.URI(item.url).path.substringAfterLast('/'))
+            val installed = library.dictionaries.any { it.id==if(edition.isEmpty())item.sha256 else "${item.sha256}-$edition" }
             IconButton(onClick={library.download(item)},enabled=!installed&&library.busy==null) {Icon(if(installed) Icons.Outlined.Check else Icons.Outlined.Download,if(installed)"Installed" else "Download ${item.label}")}
         } }
         item { Row(verticalAlignment=Alignment.CenterVertically) { Text("Catalogue sources",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge);IconButton(onClick={add=!add}){Icon(Icons.Outlined.Add,"Add catalogue")} } }

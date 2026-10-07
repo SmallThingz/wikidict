@@ -9,6 +9,8 @@ class SpeechVoiceTest {
         assertEquals(british, chooseSpeechVoice(listOf(jamaican, british), "en", british.name, Locale.forLanguageTag("en-AU")))
     }
     @Test fun offlineAndLanguageRequirementsOverrideDefault() {
+        val undefined = SpeechVoice("undefined",Locale.ROOT,300,false)
+        for (language in listOf("", "und", "x-private")) assertNull(chooseSpeechVoice(listOf(undefined,british),language,undefined.name,Locale.UK))
         val cloud = british.copy(name = "cloud", network = true)
         assertEquals(jamaican, chooseSpeechVoice(listOf(cloud, jamaican), "en", "cloud", Locale.UK))
         assertNull(chooseSpeechVoice(listOf(cloud), "en", "cloud", Locale.UK))

@@ -11,6 +11,28 @@ class BlobDecoderTest {
         val magic=ByteArray(8);f.readFully(magic);assertEquals("WIKBLB08",magic.decodeToString());assertEquals(1,f.read());assertEquals("en",nul());assertEquals("English",nul())
         buildList { while(f.filePointer<f.length()) { val title=nul();var size=0;var shift=0;while(true){val v=f.read();size=size or ((v and 127) shl shift);if(v and 128==0)break;shift+=7};val b=ByteArray(size);f.readFully(b);add(title to b) } }
     }
+    @Test fun supplementalKindIsValidatedAndFullTitlesStayDistinct() {
+        assertEquals(listOf("language", "thesaurus", "citations", "reconstruction", "rhymes", "sign_gloss", "supplemental", "alias"), (1..8).map(::blobKind))
+        for (tag in listOf(-1, 0, 9, 255)) assertThrows(Exception::class.java) { blobKind(tag) }
+        RandomAccessFile(File("src/androidTest/assets/supplemental.wikblb"), "r").use { f ->
+            val magic = ByteArray(8); f.readFully(magic); assertEquals("WIKBLB08", magic.decodeToString())
+            assertEquals("supplemental", blobKind(f.read()))
+            val titles = mutableListOf<String>()
+            while (f.filePointer < f.length()) {
+                val text = java.io.ByteArrayOutputStream()
+                while (true) { val v=f.read(); require(v>=0); if(v==0)break; text.write(v) }
+                val title=text.toByteArray().decodeToString(); titles.add(title)
+                var size=0; var shift=0
+                while(true) { val v=f.read(); require(v>=0 && shift<28); size=size or ((v and 127) shl shift); if(v and 128==0)break; shift+=7 }
+                val payload=ByteArray(size); f.readFully(payload)
+                val entry=BlobDecoder.decode(payload,title,"supplemental",null,"")
+                assertEquals(title,entry.title)
+                assertEquals(title,entry.sections.single().blocks.single().spans.single().text)
+            }
+            assertEquals(listOf("Annexe:école", "Appendix:école"),titles)
+        }
+    }
+
     @Test fun everyRealCorpusRecordDecodesDirectly() {
         val records=records();assertTrue(records.size>20)
         records.forEach { (title,payload)-> val e=BlobDecoder.decode(payload,title,"language","English","en");assertEquals(title,e.title);assertTrue(e.sections.isNotEmpty()) }

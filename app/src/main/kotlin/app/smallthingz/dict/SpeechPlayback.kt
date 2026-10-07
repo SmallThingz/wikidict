@@ -18,9 +18,12 @@ object SpeechPlayback {
     private val main = Handler(Looper.getMainLooper())
     var active by mutableStateOf<String?>(null); private set
     var error by mutableStateOf<String?>(null); private set
-    fun stop() { utterance++; pending = null; engine?.stop(); active = null }
+    fun stop() { utterance++; pending = null; engine?.stop(); active = null; error = null }
     fun close() { generation++; stop(); engine?.shutdown(); engine = null; ready = false }
     fun play(context: Context, word: String, language: String) {
+        if (Locale.forLanguageTag(language).language.let { it.isBlank() || it == "und" }) {
+            stop(); error = "This entry has no identified language for speech."; return
+        }
         val key = word
         if (active == key) { stop(); return }
         stop(); MediaPlayback.stop(); error = null; active = key

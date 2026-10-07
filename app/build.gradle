@@ -31,6 +31,9 @@ android {
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
     buildTypes {
+        debug {
+            if (providers.gradleProperty('isolatedValidation').getOrElse('false').toBoolean()) applicationIdSuffix '.validation'
+        }
         release {
             minifyEnabled true
             shrinkResources true
@@ -41,6 +44,7 @@ android {
     buildTypes {
         performance {
             initWith release
+            if (providers.gradleProperty('isolatedValidation').getOrElse('false').toBoolean()) applicationIdSuffix '.validation'
             signingConfig signingConfigs.debug
             debuggable false
             matchingFallbacks = ['release']

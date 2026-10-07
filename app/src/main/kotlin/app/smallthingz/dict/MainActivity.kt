@@ -29,5 +29,11 @@ class MainActivity : ComponentActivity() {
         if (intent.action == Intent.ACTION_VIEW) intent.data?.let(::import)
         if (intent.action == Intent.ACTION_SEND) intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let(::import)
     }
-    private fun import(uri: Uri) { library.importFile { requireNotNull(contentResolver.openInputStream(uri)) { "Cannot open dictionary" } } }
+    private fun import(uri: Uri) {
+        library.importFile(name = {
+            contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0).orEmpty() else ""
+            }.orEmpty()
+        }) { requireNotNull(contentResolver.openInputStream(uri)) { "Cannot open dictionary" } }
+    }
 }

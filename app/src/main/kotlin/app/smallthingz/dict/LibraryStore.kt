@@ -3,8 +3,7 @@ package app.smallthingz.dict
 import android.app.DownloadManager
 import android.net.Uri
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
-import android.database.sqlite.SQLiteOpenHelper
+import android.database.Cursor
 import androidx.compose.runtime.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -15,9 +14,17 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 
-data class DictionaryInfo(val id: String, val language: String, val code: String, val kind: String, val count: Int, val bytes: Long)
-data class WordHit(val dictionary: String, val title: String, val language: String, val kind: String, val offset: Long, val length: Int) {
-    val key get() = "$kind\u0000$language\u0000$title"
+private val blobKinds = listOf("language", "thesaurus", "citations", "reconstruction", "rhymes", "sign_gloss", "supplemental", "alias")
+internal fun blobKind(tag: Int): String = blobKinds.getOrNull(tag - 1) ?: error("Invalid blob kind")
+
+// Android's sqlite3_bind_text16 interprets an initial U+FEFF as a byte-order mark.
+// Prefix query parameters and remove only that sentinel on the constant SQL side.
+private fun sqlText(value: String) = "x$value"
+
+data class DictionaryInfo(val id: String, val language: String, val code: String, val kind: String, val count: Int, val bytes: Long, val edition: String = "")
+data class WordHit(val dictionary: String, val title: String, val language: String, val kind: String, val offset: Long, val length: Int,
+    val recordKey: String = title, val contextDictionary: String? = null, val edition: String = "") {
+    val key get() = "$dictionary\u0000${contextDictionary.orEmpty()}\u0000$recordKey"
 }
 data class CatalogItem(val url: String, val label: String, val bytes: Long? = null, val sha256: String? = null)
 object Catalog {
@@ -40,15 +47,7 @@ class LibraryStore private constructor(private val context: Context) {
         fun get(context: Context) = instance ?: synchronized(this) { instance ?: LibraryStore(context.applicationContext).also { instance = it } }
     }
     private val directory = File(context.filesDir, "dictionaries").apply { mkdirs() }
-    private val helper = object : SQLiteOpenHelper(context, "library.db", null, 1) {
-        override fun onCreate(db: SQLiteDatabase) {
-            db.execSQL("CREATE TABLE dictionaries(id TEXT PRIMARY KEY,language TEXT,code TEXT,kind TEXT,count INTEGER,bytes INTEGER)")
-            db.execSQL("CREATE TABLE words(dictionary TEXT,title TEXT,normalized TEXT,payload INTEGER,length INTEGER)")
-            db.execSQL("CREATE INDEX word_lookup ON words(normalized,title)")
-            db.execSQL("CREATE INDEX word_dictionary ON words(dictionary)")
-        }
-        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
-    }.apply { setWriteAheadLoggingEnabled(true) }
+    private val helper = LibraryDatabase(context).apply { setWriteAheadLoggingEnabled(true) }
     private val mutex = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var dictionaries by mutableStateOf<List<DictionaryInfo>>(emptyList()); private set
@@ -67,7 +66,7 @@ class LibraryStore private constructor(private val context: Context) {
     }; resumeDownload() } }
     private suspend fun refresh() {
         val values = helper.readableDatabase.rawQuery("SELECT * FROM dictionaries ORDER BY language", null).use { c -> buildList {
-            while (c.moveToNext()) add(DictionaryInfo(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getInt(4), c.getLong(5)))
+            while (c.moveToNext()) add(DictionaryInfo(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getInt(4), c.getLong(5), c.getString(6)))
         } }
         withContext(Dispatchers.Main) { dictionaries = values; revision++ }
     }
@@ -130,7 +129,7 @@ class LibraryStore private constructor(private val context: Context) {
                         require(item.bytes==null || size==item.bytes) { "Incomplete download" }
                         require(item.sha256==null || hash==item.sha256) { "Dictionary checksum does not match" }
                         withContext(Dispatchers.Main) { busy="Indexing ${item.label}" }
-                        install(temp,hash)
+                        install(temp,hash,URI(item.url).path.substringAfterLast('/'))
                         manager.remove(id); clearDownload()
                     } finally { temp.delete() }
                     return
@@ -204,10 +203,10 @@ class LibraryStore private constructor(private val context: Context) {
             require(item.bytes == null || item.bytes == size) { "Incomplete download" }
             require(item.sha256 == null || item.sha256 == hash) { "Dictionary checksum does not match" }
             withContext(Dispatchers.Main) { busy = "Indexing ${item.label}" }
-            install(temp, hash)
+            install(temp, hash, URI(item.url).path.orEmpty().substringAfterLast('/'))
         } finally { temp.delete() }
     }
-    fun importFile(input: () -> InputStream) = operation("Importing dictionary") {
+    fun importFile(name: () -> String = { "" }, input: () -> InputStream) = operation("Importing dictionary") {
         val temp = File(directory, "${UUID.randomUUID()}.part")
         try {
             input().use { source -> temp.outputStream().use { out ->
@@ -215,23 +214,28 @@ class LibraryStore private constructor(private val context: Context) {
                 while (true) { currentCoroutineContext().ensureActive(); val n = source.read(buffer); if (n < 0) break; total += n; require(total <= max); out.write(buffer,0,n) }
             } }
             val hash = temp.inputStream().use { stream -> val d=MessageDigest.getInstance("SHA-256"); val b=ByteArray(256*1024); while(true){val n=stream.read(b);if(n<0)break;d.update(b,0,n)};d.digest().joinToString(""){"%02x".format(it)} }
-            install(temp, hash)
+            install(temp, hash, name())
         } finally { temp.delete() }
     }
-    private suspend fun install(temp: File, id: String) {
+    private suspend fun install(temp: File, hash: String, filename: String) {
         val db = helper.writableDatabase
-        if (db.rawQuery("SELECT id FROM dictionaries WHERE id=?", arrayOf(id)).use { it.moveToFirst() }) return
+        val edition = dictionaryEdition(filename)
+        val id = if (edition.isEmpty()) hash else "$hash-$edition"
+        val alreadyInstalled = db.rawQuery("SELECT id FROM dictionaries WHERE id=?", arrayOf(id)).use { it.moveToFirst() }
         var count = 0; var language = ""; var code = ""; var kind = ""
         val final = File(directory, "$id.wikblb")
+        var placedFile = false
         db.beginTransaction()
         try {
             BlobSource(temp).use { source ->
             CountingInput(source.stream().buffered(256*1024)).use { input ->
                 require(input.bytes(8).contentEquals("WIKBLB08".toByteArray())) { "Choose a WIKBLB08 dictionary" }
-                kind = listOf("language","thesaurus","citations","reconstruction","rhymes","sign_gloss").getOrNull(input.read()-1) ?: error("Invalid blob kind")
+                kind = blobKind(input.read())
                 if (kind == "language") { code = input.nul(); language = input.nul(); require(language.isNotBlank()) } else language = kind.replace('_',' ')
+                validateDictionaryFilename(filename,kind,language)
+                if (alreadyInstalled) return
                 var previous: ByteArray? = null
-                val statement = db.compileStatement("INSERT INTO words VALUES(?,?,?,?,?)")
+                val statement = db.compileStatement("INSERT INTO words VALUES(?,CAST(? AS TEXT),CAST(? AS TEXT),?,?,CAST(? AS TEXT),?)")
                 statement.use {
                     while (input.position < source.length) {
                         currentCoroutineContext().ensureActive()
@@ -239,25 +243,38 @@ class LibraryStore private constructor(private val context: Context) {
                         val raw = title.toByteArray(); previous?.let { require(compareUtf8(it,raw) < 0) { "Dictionary titles are not sorted" } }; previous = raw
                         val length = input.varuint(); require(length in 4..128L*1024*1024 && length <= source.length-input.position) { "Invalid record size" }
                         val offset = input.position
-                        require(input.bytes(4).contentEquals("DPR2".toByteArray())) { "Dictionary is not compiled presentation data" }
-                        input.skipFully(length-4)
-                        statement.bindString(1,id); statement.bindString(2,title); statement.bindString(3,title.lowercase(Locale.ROOT)); statement.bindLong(4,offset); statement.bindLong(5,length); statement.executeInsert(); count++
+                        val alias = if (kind == "alias") AliasDecoder.decode(input.bytes(length.toInt()), title) else null
+                        if (alias == null) {
+                            require(input.bytes(4).contentEquals("DPR2".toByteArray())) { "Dictionary is not compiled presentation data" }
+                            input.skipFully(length-4)
+                        }
+                        val lookup = alias?.sourceKey ?: title
+                        statement.bindString(1,id); statement.bindBlob(2,lookup.toByteArray(Charsets.UTF_8)); statement.bindBlob(3,lookup.lowercase(Locale.ROOT).toByteArray(Charsets.UTF_8)); statement.bindLong(4,offset); statement.bindLong(5,length)
+                        statement.bindBlob(6,title.toByteArray(Charsets.UTF_8)); statement.bindString(7,alias?.sourceKind ?: kind); statement.executeInsert(); count++
                     }
                 }
                 require(input.read() == -1) { "Trailing dictionary data" }
             }
             }
-            require(count > 0) { "Dictionary has no entries" }
+            require(count > 0 || kind != "language") { "Dictionary has no entries" }
             require(temp.renameTo(final)) { "Cannot install dictionary" }
-            db.execSQL("INSERT INTO dictionaries VALUES(?,?,?,?,?,?)", arrayOf<Any>(id,language,code,kind,count,final.length()))
+            placedFile = true
+            db.execSQL("INSERT INTO dictionaries VALUES(?,CAST(? AS TEXT),CAST(? AS TEXT),?,?,?,?)", arrayOf<Any>(id,language.toByteArray(Charsets.UTF_8),code.toByteArray(Charsets.UTF_8),kind,count,final.length(),edition))
+            if (edition.isNotEmpty()) {
+                val collision = db.rawQuery("""SELECT 1 FROM words a JOIN dictionaries ad ON ad.id=a.dictionary
+                    JOIN dictionaries d ON d.edition=ad.edition AND d.kind=a.source_kind
+                    JOIN words w ON w.dictionary=d.id AND w.title=a.title
+                    WHERE ad.kind='alias' AND ad.edition=? LIMIT 1""", arrayOf(edition)).use { it.moveToFirst() }
+                require(!collision) { "Redirect collides with a definition in this edition" }
+            }
             db.setTransactionSuccessful()
-        } catch (e: Exception) { final.delete(); throw e } finally { db.endTransaction() }
+        } catch (e: Exception) { if (placedFile) final.delete(); throw e } finally { db.endTransaction() }
         refresh()
     }
     suspend fun search(query: String, limit: Int = 80): List<WordHit> = withContext(Dispatchers.IO) {
         val q = query.trim().lowercase(Locale.ROOT)
-        helper.readableDatabase.rawQuery("SELECT w.dictionary,w.title,d.language,d.kind,w.payload,w.length FROM words w JOIN dictionaries d ON d.id=w.dictionary WHERE normalized >= ? AND normalized < ? ORDER BY normalized,w.title LIMIT ?", arrayOf(q,q + String(Character.toChars(0x10ffff)),limit.coerceIn(1,500).toString())).use { c -> buildList {
-            while(c.moveToNext()) add(WordHit(c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getLong(4),c.getInt(5)))
+        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized >= substr(?,2) AND normalized < substr(?,2) ORDER BY normalized,title,language,dictionary LIMIT ?", arrayOf(sqlText(q),sqlText(q + String(Character.toChars(0x10ffff))),limit.coerceIn(1,500).toString())).use { c -> buildList {
+            while(c.moveToNext()) add(hit(c))
         } }
     }
     suspend fun random(): WordHit? = withContext(Dispatchers.IO) {
@@ -267,24 +284,83 @@ class LibraryStore private constructor(private val context: Context) {
         val dictionary=choices.first { if(pick<it.count) true else {pick-=it.count;false} }
         val db=helper.readableDatabase
         val first=db.rawQuery("SELECT MIN(rowid) FROM words WHERE dictionary=?",arrayOf(dictionary.id)).use{it.moveToFirst();it.getLong(0)}
-        db.rawQuery("SELECT title,payload,length FROM words WHERE rowid=? AND dictionary=?",arrayOf((first+pick).toString(),dictionary.id)).use{c ->
-            if(c.moveToFirst()) WordHit(dictionary.id,c.getString(0),dictionary.language,dictionary.kind,c.getLong(1),c.getInt(2)) else null
+        db.rawQuery("SELECT $hitColumns FROM word_choices WHERE wordid=? AND dictionary=? ORDER BY language LIMIT 1",arrayOf((first+pick).toString(),dictionary.id)).use{c ->
+            if(c.moveToFirst()) hit(c) else null
         }
     }
-    suspend fun exact(title: String, language: String? = null): WordHit? = withContext(Dispatchers.IO) {
-        helper.readableDatabase.rawQuery("SELECT w.dictionary,w.title,d.language,d.kind,w.payload,w.length FROM words w JOIN dictionaries d ON d.id=w.dictionary WHERE normalized=? ORDER BY CASE WHEN d.language=? THEN 0 ELSE 1 END, CASE WHEN w.title=? THEN 0 ELSE 1 END LIMIT 1",arrayOf(title.lowercase(Locale.ROOT),language.orEmpty(),title)).use{c ->
-            if(c.moveToFirst()) WordHit(c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getLong(4),c.getInt(5)) else null
+    suspend fun exact(title: String, language: String? = null, edition: String? = null): WordHit? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND (?='0' OR edition=?) ORDER BY CASE WHEN language=substr(?,2) THEN 0 ELSE 1 END, CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END, dictionary LIMIT 1",arrayOf(sqlText(title.lowercase(Locale.ROOT)),if(edition==null) "0" else "1",edition.orEmpty(),sqlText(language.orEmpty()),sqlText(title))).use{c ->
+            if(c.moveToFirst()) hit(c) else null
         }
     }
-    suspend fun lastWord(): WordHit? = prefs.getString("lastTitle",null)?.let { exact(it,prefs.getString("lastLanguage",null)) }
+    private val hitColumns = "dictionary,title,language,kind,payload,length,record_key,context_dictionary,edition"
+    private fun hit(c: Cursor) = WordHit(c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getLong(4),c.getInt(5),c.getString(6),if(c.isNull(7)) null else c.getString(7),c.getString(8))
+    private fun legacySelection(title: String, language: String?, kind: String?, edition: String): WordHit? {
+        // Old records did not retain a dictionary ID. Preserve their recorded context;
+        // an ambiguous match cannot establish which source the user had selected.
+        return helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND title=substr(?,2) AND edition=? AND (?='' OR kind=?) AND (?='0' OR language=substr(?,2)) LIMIT 2",
+            arrayOf(sqlText(title.lowercase(Locale.ROOT)),sqlText(title),edition,kind.orEmpty(),kind.orEmpty(),if(language==null) "0" else "1",sqlText(language.orEmpty()))).use { c ->
+            if (!c.moveToFirst()) null else hit(c).takeUnless { c.moveToNext() }
+        }
+    }
+    suspend fun lastWord(): WordHit? = withContext(Dispatchers.IO) {
+        val savedDictionary = prefs.getString("lastDictionary",null)
+        if (savedDictionary != null) return@withContext helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND record_key=substr(?,2) AND COALESCE(context_dictionary,'')=? LIMIT 1",
+            arrayOf(savedDictionary,sqlText(prefs.getString("lastRecordKey",null).orEmpty()),prefs.getString("lastContextDictionary",null).orEmpty())).use { c -> if(c.moveToFirst()) hit(c) else null }
+        prefs.getString("lastTitle",null)?.let { legacySelection(it,prefs.getString("lastLanguage",null),null,prefs.getString("lastEdition",null).orEmpty()) }
+    }
+    private fun payload(hit: WordHit): ByteArray = BlobSource(File(directory,"${hit.dictionary}.wikblb")).use { it.read(hit.offset,hit.length) }
+    private fun plain(hit: WordHit): Entry {
+        val dictionary = dictionaries.firstOrNull { it.id == hit.dictionary } ?: error("Dictionary was removed")
+        return (if(dictionary.kind == "alias") AliasDecoder.decode(payload(hit),hit.recordKey).entry()
+            else BlobDecoder.decode(payload(hit),hit.title,hit.kind,if(hit.kind=="language")hit.language else null,dictionary.code)).copy(edition=dictionary.edition)
+    }
     suspend fun read(hit: WordHit): Entry = withContext(Dispatchers.IO) {
         val dictionary = dictionaries.firstOrNull { it.id == hit.dictionary } ?: error("Dictionary was removed")
-        BlobSource(File(directory,"${hit.dictionary}.wikblb")).use { file ->
-            val data = file.read(hit.offset, hit.length)
-            BlobDecoder.decode(data,hit.title,hit.kind,if(hit.kind=="language")hit.language else null,dictionary.code)
+        if (dictionary.kind != "alias") return@withContext plain(hit)
+        val alias = AliasDecoder.decode(payload(hit),hit.recordKey)
+        val own = alias.entry().copy(redirect=alias.redirect(false),edition=dictionary.edition,
+            navigationKind=alias.sourceKind,navigationLanguage=hit.language.takeIf { alias.sourceKind == "language" && it.isNotEmpty() })
+        val kind = alias.targetKind ?: return@withContext own
+        // Follow only one edge. Another redirect (including a cycle) stays a compiled redirect page.
+        val targetKey = "${blobKinds.indexOf(kind)+1}\t${alias.targetKey}"
+        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND record_key=? LIMIT 1",arrayOf(hit.dictionary,targetKey)).use { c ->
+            if (c.moveToFirst()) {
+                val nextHit = hit(c)
+                val next = AliasDecoder.decode(payload(nextHit),nextHit.recordKey)
+                require(next.sourceNamespace == alias.targetNamespace && next.sourceTitle == alias.targetTitle && next.sourceKind == kind)
+                return@withContext next.entry().copy(redirect=alias.redirect(true),edition=dictionary.edition,
+                    navigationKind=next.sourceKind,navigationLanguage=hit.language.takeIf { hit.kind == "language" && next.sourceKind == "language" && it.isNotEmpty() })
+            }
         }
+        if (dictionary.edition.isEmpty()) return@withContext own
+        val targetDictionary = if (kind == "language") {
+            if (hit.kind != "language") return@withContext own
+            dictionaries.firstOrNull { it.id == hit.contextDictionary && it.edition == dictionary.edition && it.kind == kind }
+        } else dictionaries.singleOrNull { it.edition == dictionary.edition && it.kind == kind }
+        targetDictionary ?: return@withContext own
+        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND title=substr(?,2) LIMIT 1",arrayOf(targetDictionary.id,sqlText(alias.targetKey))).use { c ->
+            if (c.moveToFirst()) plain(hit(c)).copy(redirect=alias.redirect(true)) else own
+        }
+    }.copy(origin=hit)
+    suspend fun savedWord(word: SavedWord): WordHit? = withContext(Dispatchers.IO) {
+        if (word.dictionary == null) return@withContext legacySelection(word.title,word.language,word.kind,word.edition.orEmpty())
+        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND record_key=substr(?,2) AND COALESCE(context_dictionary,'')=? LIMIT 1",
+            arrayOf(word.dictionary,sqlText(word.recordKey.orEmpty()),word.contextDictionary.orEmpty())).use { c -> if(c.moveToFirst()) hit(c) else null }
     }
-    fun rememberWord(hit:WordHit) { prefs.edit().putString("lastTitle",hit.title).putString("lastLanguage",hit.language).apply() }
+    suspend fun link(title: String, entry: Entry): WordHit? = withContext(Dispatchers.IO) {
+        val key = title.substringBefore('#').replace('_',' ')
+        if (entry.edition.isEmpty()) {
+            val dictionary = entry.origin?.dictionary ?: return@withContext null
+            return@withContext helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND dictionary=? AND kind=? ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
+                arrayOf(sqlText(key.lowercase(Locale.ROOT)),dictionary,entry.navigationKind,sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
+        }
+        if (entry.navigationKind == "language" && entry.navigationLanguage.isNullOrEmpty()) return@withContext null
+        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND edition=? AND kind=? AND (substr(?,2)='' OR language=substr(?,2)) ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
+            arrayOf(sqlText(key.lowercase(Locale.ROOT)),entry.edition,entry.navigationKind,sqlText(entry.navigationLanguage.orEmpty()),sqlText(entry.navigationLanguage.orEmpty()),sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
+    }
+    fun rememberWord(hit:WordHit) { prefs.edit().putString("lastTitle",hit.title).putString("lastLanguage",hit.language)
+        .putString("lastDictionary",hit.dictionary).putString("lastRecordKey",hit.recordKey).putString("lastContextDictionary",hit.contextDictionary).putString("lastEdition",hit.edition).apply() }
     fun remove(id: String) = operation("Removing dictionary") {
         helper.writableDatabase.apply { beginTransaction();try { delete("words","dictionary=?",arrayOf(id));delete("dictionaries","id=?",arrayOf(id));setTransactionSuccessful() } finally { endTransaction() } }
         File(directory,"$id.wikblb").delete();refresh()

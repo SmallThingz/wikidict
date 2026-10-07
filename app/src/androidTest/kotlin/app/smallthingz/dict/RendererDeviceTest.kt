@@ -29,6 +29,46 @@ class RendererDeviceTest {
         compose.onAllNodesWithText(word).onFirst().performClick()
         compose.waitUntil(10000){compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isNotEmpty()}
     }
+    private fun capture(name: String) {
+        compose.waitForIdle()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val directory = java.io.File(instrumentation.targetContext.filesDir,"qa-screenshots").apply { mkdirs() }
+        val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+        try { java.io.File(directory,name).outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)) } }
+        finally { bitmap.recycle() }
+    }
+    @Test fun corpusArabicAndCompiledAliasRemainReadableInPortrait(): Unit = runBlocking {
+        val before = library.dictionaries.map { it.id }.toSet()
+        val assets = InstrumentationRegistry.getInstrumentation().context.assets
+        try {
+            for ((name,asset) in listOf(
+                "arwiktionary-20261001-d274159863057eb5c633116c3b54e4f8659167f0b73fabbee256e881fa1ac8c8.wikblb" to "arabic-visual.wikblb",
+                "bgwiktionary-20261001-aliases.wikblb" to "compiled-aliases.wikblb",
+                "bgwiktionary-20261001-ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb" to "compiled-alias-targets.wikblb")) {
+                library.importFile(name={name}) { assets.open(asset) }.join()
+                assertNull(library.error)
+            }
+            assertEquals("ar",library.read(library.exact("-هُم","العربية","arwiktionary-20261001")!!).languageCode)
+            search("ChainA")
+            compose.onNodeWithContentDescription("Pronounce word offline").performClick()
+            compose.onNodeWithText("This entry has no identified language for speech.").assertExists()
+            search("-هُم")
+            compose.onAllNodesWithText("This entry has no identified language for speech.").assertCountEquals(0)
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            compose.onNodeWithTag("entry-title").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            assertEquals(1,layouts.single().lineCount)
+            capture("actual-arabic-excerpt.png")
+            search("ChainA")
+            compose.onNodeWithText("ChainA -> ChainB#Incoming").assertExists()
+            compose.onNodeWithText("gainst",substring=true).assertExists()
+            capture("synthetic-alias-chain.png")
+            compose.onNodeWithContentDescription("Settings").performClick()
+            compose.onNodeWithTag("settings-scroll").performScrollToNode(hasText("Images & sound"))
+            capture("portrait-media-settings.png")
+        } finally {
+            library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
+        }
+    }
     @Test fun binaryLibrarySearchDecodeAndRandomCoverMultipleWords() = runBlocking {
         assertTrue(library.dictionaries.sumOf{it.count}>20)
         val words=library.search("")
@@ -134,18 +174,45 @@ class RendererDeviceTest {
     }
     @Test fun systemDownloadManagerFetchesAndVerifiesDictionary() = runBlocking {
         val item = CatalogItem(
-            "https://raw.githubusercontent.com/SmallThingz/wikidict-android/main/app/src/debug/assets/English.wikblb",
+            InstrumentationRegistry.getArguments().getString("dictionaryUrl") ?: "https://github.com/SmallThingz/wikidict/releases/download/app-qa-fixtures-20261007/English.wikblb",
             "English device transfer", 3365898,
             "1388760245fdfc7aaadebe1770415f44cf26e391811abae8d62b4044528b4ee3",
         )
-        withTimeout(120_000) { library.download(item).join() }
-        assertNull(library.error)
-        assertTrue(library.dictionaries.any { it.id == item.sha256 })
+        val before = library.dictionaries.map { it.id }.toSet()
+        try {
+            withTimeout(120_000) { library.download(item).join() }
+            assertNull(library.error)
+            val edition = dictionaryEdition(java.net.URI(item.url).path.substringAfterLast('/'))
+            val id = if (edition.isEmpty()) item.sha256 else "${item.sha256}-$edition"
+            assertTrue(library.dictionaries.any { it.id == id && it.edition == edition })
+            assertEquals("cat",library.read(library.search("cat").single { it.dictionary == id && it.title == "cat" }).title)
+        } finally {
+            library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
+        }
+    }
+    @Test fun searchChoicesDistinguishTheSameWordInDifferentSourceEditions(): Unit = runBlocking {
+        val before = library.dictionaries.map { it.id }.toSet()
+        val bytes = InstrumentationRegistry.getInstrumentation().context.assets.open("compiled-alias-targets.wikblb").use { it.readBytes() }
+        try {
+            for (edition in listOf("ar","bg")) {
+                library.importFile(name={"${edition}wiktionary-20261001-ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"}) { java.io.ByteArrayInputStream(bytes) }.join()
+                assertNull(library.error)
+            }
+            compose.onNodeWithContentDescription("Dictionary").performClick()
+            compose.onNode(hasSetTextAction()).performTextInput("animus")
+            compose.waitUntil(10000){compose.onAllNodesWithText("ar.wiktionary.org · 2026-10-01").fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithText("ar.wiktionary.org · 2026-10-01").assertExists()
+            compose.onNodeWithText("bg.wiktionary.org · 2026-10-01").assertExists()
+            capture("source-edition-choices.png")
+        } finally {
+            library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
+        }
     }
     @Test fun compressedDictionaryIndexesAndReadsWithoutExpandingOnDisk() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val rawHit = library.exact("elephant", "English")!!
         val expected = library.read(rawHit)
+        val before = library.dictionaries.map { it.id }.toSet()
         val compressed = java.io.File(context.cacheDir, "test.wikblb.xz")
         try {
             InstrumentationRegistry.getInstrumentation().context.assets.open("English-extreme.wikblb.xz").use { input ->
@@ -153,13 +220,17 @@ class RendererDeviceTest {
             }
             library.importFile { compressed.inputStream() }.join()
             assertNull(library.error)
-            val info = library.dictionaries.first { it.id != rawHit.dictionary }
+            val info = library.dictionaries.single { it.id !in before }
             val hit = library.search("elephant").first { it.dictionary == info.id && it.title == "elephant" }
             val actual = library.read(hit)
-            assertEquals(expected, actual)
+            assertEquals(expected.copy(origin=null), actual.copy(origin=null))
+            assertNotEquals(expected.origin?.dictionary, actual.origin?.dictionary)
             assertEquals(compressed.length(), java.io.File(context.filesDir, "dictionaries/${info.id}.wikblb").length())
             library.remove(info.id).join()
-        } finally { compressed.delete() }
+        } finally {
+            library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
+            compressed.delete()
+        }
     }
 
 }

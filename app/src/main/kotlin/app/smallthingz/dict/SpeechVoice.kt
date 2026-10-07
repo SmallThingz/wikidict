@@ -6,6 +6,7 @@ data class SpeechVoice(val name: String, val locale: Locale, val quality: Int, v
 
 fun chooseSpeechVoice(voices: List<SpeechVoice>, language: String, defaultName: String?, deviceLocale: Locale): SpeechVoice? {
     val requested = Locale.forLanguageTag(language)
+    if (requested.language.isBlank() || requested.language == "und") return null
     val local = voices.filter { !it.network && it.installed && it.locale.language == requested.language }
     local.firstOrNull { it.name == defaultName }?.let { return it }
     // The dictionary usually supplies only a language, not an accent. Preserve

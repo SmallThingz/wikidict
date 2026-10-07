@@ -46,6 +46,7 @@ private class TextCache(val link: State<(String) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<FontWeight?, AnnotatedString>>()
 }
 private val LocalEntryMedia = staticCompositionLocalOf<List<Media>> { emptyList() }
+private val LocalEntryEdition = staticCompositionLocalOf { "" }
 private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
 private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
 
@@ -57,7 +58,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     val currentLink = rememberUpdatedState(onLink)
     val colors = MaterialTheme.colorScheme
     val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
-    CompositionLocalProvider(LocalTextCache provides cache, LocalEntryMedia provides entry.media, LocalReaderSettings provides settings) {
+    CompositionLocalProvider(LocalTextCache provides cache, LocalEntryMedia provides entry.media, LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings) {
       key(entry.key) {
         val scroll = rememberLazyListState()
         val reportScroll by rememberUpdatedState(onScrollDirection)
@@ -88,7 +89,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     this[row.key] = initiallyFolded(row, settings)
                     if (row.meaningSection) this[row.key + "-details"] = settings.collapseDetails
                 } }
-                this["preamble"] = settings.collapseOtherSections
+                this["preamble"] = settings.collapseOtherSections && entry.kind != "alias"
                 this["references"] = settings.collapseOtherSections
                 this["media"] = settings.collapseOtherSections
             }
@@ -118,8 +119,12 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         }
                         IconButton(onClick = onBookmark) { Icon(if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, if (bookmarked) "Remove bookmark" else "Bookmark", Modifier.size(22.dp)) }
                     }
-                    if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, style = MaterialTheme.typography.displayMedium, onLink = onLink)
-                    else Text(entry.title, style = MaterialTheme.typography.displayMedium)
+                    if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium, onLink = onLink)
+                    else Text(entry.title, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium.copy(textDirection=TextDirection.Content))
+                    entry.redirect?.let { redirect ->
+                        Text("${redirect.source} -> ${redirect.target}" + if (redirect.fragment.isEmpty()) "" else "#${redirect.fragment}",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     SpeechPlayback.error?.let { message ->
                         Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         TextButton(onClick = { runCatching { context.startActivity(android.content.Intent("com.android.settings.TTS_SETTINGS")) } }) { Text("Speech settings") }
@@ -161,11 +166,11 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             val remainingMedia = entry.media.filter { it.file !in linkedFiles }
             if (remainingMedia.isNotEmpty()) item("media-heading") { FoldHeading("Media", folded["media"] == true) { folded["media"] = folded["media"] != true } }
             (if (folded["media"] == true) emptyList() else remainingMedia).forEachIndexed { index, media -> item("media-$index", contentType = "media") {
-                MediaView(media, settings)
+                MediaView(media, settings, edition=entry.edition)
             } }
             item("attribution") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(onClick = { uri.openUri("https://en.wiktionary.org/w/index.php?title=" + java.net.URLEncoder.encode(entry.title,"UTF-8") + "&action=history") }) { Text("Wiktionary contributors",style=MaterialTheme.typography.labelSmall) }
+                    TextButton(onClick = { uri.openUri(attributionUrl(entry)) }) { Text("Wiktionary contributors",style=MaterialTheme.typography.labelSmall) }
                     TextButton(onClick = { uri.openUri("https://creativecommons.org/licenses/by-sa/4.0/") }) { Text("CC BY-SA 4.0",style=MaterialTheme.typography.labelSmall) }
                 }
             }
@@ -251,7 +256,7 @@ private fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight
         Column(modifier) {
             val text = spans.filter { it.classes != "wikidict-media" }.dropLastWhile { it.text.isBlank() && it.trail.isBlank() }
             if (text.any { it.text.isNotBlank() }) StyledText(text, weight = weight, style = style, onLink = onLink)
-            embedded.forEach { MediaView(it, LocalReaderSettings.current, showFileName = false) }
+            embedded.forEach { MediaView(it, LocalReaderSettings.current, showFileName = false, edition=LocalEntryEdition.current) }
         }
         return
     }

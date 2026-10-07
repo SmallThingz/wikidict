@@ -56,7 +56,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
         if (library.dictionaries.isEmpty()) { selected = null; screen = AppScreen.Library }
         else if (selected == null) (library.lastWord() ?: library.search("", 1).firstOrNull())?.let(::open)
     }
-    fun openWord(word: SavedWord) { scope.launch { library.exact(word.title,word.language)?.let(::open) ?: snackbar.showSnackbar("Install the dictionary for ${word.title}.") } }
+    fun openWord(word: SavedWord) { scope.launch { library.savedWord(word)?.let(::open) ?: snackbar.showSnackbar(if(word.dictionary==null) "Choose ${word.title} again from search." else "Install the dictionary for ${word.title}.") } }
     fun randomWord() { scope.launch { library.random()?.let(::open) } }
     androidx.activity.compose.BackHandler(searching || screen != AppScreen.Dictionary) {
         searching = false; query = ""; screen = if (screen == AppScreen.Library) AppScreen.Settings else AppScreen.Dictionary; keyboard?.hide()
@@ -103,8 +103,8 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                             WordMatches(matches, ::open)
                         } else selected?.let { entry -> EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, settings = learning.data.settings, onScrollDirection = { dockHidden = it }, onLink = { target ->
                             if (target.startsWith("File:",true) || target.startsWith("Image:",true)) {
-                                uri.openUri("https://en.wiktionary.org/wiki/" + java.net.URLEncoder.encode(target,"UTF-8").replace("+","%20"))
-                            } else scope.launch { library.exact(target.substringBefore('#').replace('_',' '),entry.language)?.let(::open) ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
+                                uri.openUri(sourcePage(entry,target))
+                            } else scope.launch { library.link(target,entry)?.let(::open) ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
                         }) } ?: LibraryScreen(library,onImport)
                     }
                     AppScreen.Saved -> SavedScreen(learning, false, ::openWord)
@@ -133,10 +133,10 @@ private fun screenIcon(screen: AppScreen) = when(screen) {
     AppScreen.Settings -> Icons.Filled.Settings
 }
 @Composable
-private fun WordMatches(hits: List<WordHit>, open: (WordHit)->Unit) {
+internal fun WordMatches(hits: List<WordHit>, open: (WordHit)->Unit) {
     if(hits.isEmpty()) Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) { Text("No matching words",style=MaterialTheme.typography.bodyMedium) }
-    else LazyColumn(contentPadding=PaddingValues(horizontal=12.dp)) { items(hits,key={it.dictionary+"/"+it.title}) { hit ->
-        ListItem(headlineContent={Text(hit.title,style=MaterialTheme.typography.titleLarge)},supportingContent={Text(hit.language)},modifier=Modifier.clickable {open(hit)})
+    else LazyColumn(contentPadding=PaddingValues(horizontal=12.dp)) { items(hits,key={it.key}) { hit ->
+        ListItem(headlineContent={Text(hit.title,style=MaterialTheme.typography.titleLarge)},supportingContent={Column {Text(hit.language);Text(sourceLabel(hit.edition))}},modifier=Modifier.clickable {open(hit)})
     } }
 }
 
@@ -167,7 +167,7 @@ private fun SavedScreen(learning: LearningStore, history: Boolean, onOpen: (Save
             items(words, key = { it.key }) { word ->
                 ListItem(
                     headlineContent = { Text(word.title, style = MaterialTheme.typography.titleLarge) },
-                    supportingContent = { Column { Text(word.language ?: word.kind.replace('_', ' ')); Text(word.clue, maxLines = 2) } },
+                    supportingContent = { Column { Text(word.language ?: word.kind.replace('_', ' ')); Text(sourceLabel(word.edition.orEmpty())); Text(word.clue, maxLines = 2) } },
                     trailingContent = { IconButton(onClick = { if (history) learning.removeHistory(word.key) else learning.removeBookmark(word.key) }) { Icon(Icons.Filled.Close, "Remove ${word.title}", Modifier.size(18.dp)) } },
                     modifier = Modifier.clickable { onOpen(word) },
                 )

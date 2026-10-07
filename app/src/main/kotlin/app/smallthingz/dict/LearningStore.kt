@@ -13,6 +13,7 @@ import kotlinx.coroutines.channels.Channel
 data class SavedWord(
     val key: String, val title: String, val language: String?, val kind: String, val clue: String,
     val savedAt: Long = 0, val lastViewed: Long = 0, val views: Int = 1,
+    val dictionary: String? = null, val recordKey: String? = null, val contextDictionary: String? = null, val edition: String? = null,
 )
 data class StudyStat(val right: Int = 0, val wrong: Int = 0, val last: Long = 0)
 data class AppSettings(
@@ -156,6 +157,7 @@ class LearningStore private constructor(context: Context) {
         .put("key", word.key).put("title", word.title).put("language", word.language)
         .put("kind", word.kind).put("clue", word.clue).put("savedAt", word.savedAt)
         .put("lastViewed", word.lastViewed).put("views", word.views)
+        .put("dictionary",word.dictionary).put("recordKey",word.recordKey).put("contextDictionary",word.contextDictionary).put("edition",word.edition)
 
     private fun words(array: JSONArray?): List<SavedWord> = if (array == null) emptyList() else
         (0 until array.length()).mapNotNull { index -> runCatching {
@@ -166,6 +168,10 @@ class LearningStore private constructor(context: Context) {
                 kind = value.optString("kind", "language"), clue = value.optString("clue"),
                 savedAt = value.optLong("savedAt"), lastViewed = value.optLong("lastViewed"),
                 views = value.optInt("views", 1),
+                dictionary = value.optString("dictionary").takeIf { it.isNotEmpty() },
+                recordKey = value.optString("recordKey").takeIf { it.isNotEmpty() },
+                contextDictionary = value.optString("contextDictionary").takeIf { it.isNotEmpty() },
+                edition = value.optString("edition").takeIf { it.isNotEmpty() },
             )
         }.getOrNull() }
 
@@ -177,6 +183,8 @@ class LearningStore private constructor(context: Context) {
 }
 
 private fun Entry.saved(now: Long) = SavedWord(
-    key = key, title = title, language = language, kind = kind, clue = clue(),
+    key = key, title = redirect?.source ?: origin?.title ?: title, language = origin?.language?.takeIf { it.isNotEmpty() } ?: language,
+    kind = origin?.kind ?: kind, clue = clue(),
     lastViewed = now, views = 1,
+    dictionary = origin?.dictionary, recordKey = origin?.recordKey, contextDictionary = origin?.contextDictionary, edition = edition.takeIf { it.isNotEmpty() },
 )
