@@ -1283,6 +1283,15 @@ pub const Provider = struct {
     fn externalData(ctx: ?*anyopaque, title: []const u8) anyerror!?ExternalData {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         if (self.external_data.getPtr(title)) |entry| return entry.*;
+        // JsonConfig normalizes ASCII spaces and underscores to the same title
+        // key. Captured Commons titles use spaces (and are bounded to 512 bytes).
+        // Keep the original query in diagnostics and borrow only snapshot data.
+        if (title.len <= 512 and std.mem.indexOfScalar(u8, title, '_') != null) {
+            var spaced: [512]u8 = undefined;
+            @memcpy(spaced[0..title.len], title);
+            std.mem.replaceScalar(u8, spaced[0..title.len], '_', ' ');
+            if (self.external_data.getPtr(spaced[0..title.len])) |entry| return entry.*;
+        }
         lua_program.work_stats.logLine("warning: Commons data snapshot missing: title={s}\n", .{title});
         return error.CommonsDataSnapshotMissing;
     }
@@ -1457,8 +1466,10 @@ test "Commons provider separates present captured missing and uncaptured titles"
     const catalog = try lua_program.namespace_registry.englishTestRegistry();
     const tabular = "{\"schema\":{\"fields\":[{\"name\":\"key\",\"type\":\"string\"}]},\"data\":[[\"value\"]]}";
     const snapshots = [_][]const u8{
-        "# wikidict-commons-data-v1\nPresent.tab\tTabular.JsonConfig\t" ++ tabular ++ "\n",
+        "# wikidict-commons-data-v1\nPresent.tab\tTabular.JsonConfig\t" ++ tabular ++ "\n" ++
+            "Unicode data/emoji images/000.tab\tTabular.JsonConfig\t" ++ tabular ++ "\n",
         "# wikidict-commons-data-v2\nPresent.tab\tpresent\tTabular.JsonConfig\t" ++ tabular ++ "\n" ++
+            "Unicode data/emoji images/000.tab\tpresent\tTabular.JsonConfig\t" ++ tabular ++ "\n" ++
             "Unicode data/emoji images/00A.tab\tmissing\t\t\n",
     };
     for (snapshots, 0..) |bytes, index| {
@@ -1469,13 +1480,27 @@ test "Commons provider separates present captured missing and uncaptured titles"
         const present = (try get(&provider, "Present.tab")) orelse return error.TestExpectedEqual;
         try std.testing.expectEqualStrings("Tabular.JsonConfig", present.content_model);
         try std.testing.expectEqualStrings(tabular, present.source);
+        const canonical = (try get(&provider, "Unicode data/emoji images/000.tab")) orelse return error.TestExpectedEqual;
+        const underscored = (try get(&provider, "Unicode data/emoji_images/000.tab")) orelse return error.TestExpectedEqual;
+        try std.testing.expectEqualStrings(canonical.content_model, underscored.content_model);
+        try std.testing.expectEqualStrings(canonical.source, underscored.source);
+        try std.testing.expect(canonical.source.ptr == underscored.source.ptr);
+        const all_underscored = (try get(&provider, "Unicode_data/emoji_images/000.tab")) orelse return error.TestExpectedEqual;
+        try std.testing.expectEqualStrings(tabular, all_underscored.source);
+        // A temporary lookup key must never replace the mapped payload bytes.
+        try std.testing.expectEqualStrings(tabular, underscored.source);
         if (index == 1) {
             // Existing mw.ext.data.get maps this explicit provider null to false.
             try std.testing.expect((try get(&provider, "Unicode data/emoji images/00A.tab")) == null);
+            try std.testing.expect((try get(&provider, "Unicode data/emoji_images/00A.tab")) == null);
         } else {
             try std.testing.expectError(error.CommonsDataSnapshotMissing, get(&provider, "Unicode data/emoji images/00A.tab"));
+            try std.testing.expectError(error.CommonsDataSnapshotMissing, get(&provider, "Unicode data/emoji_images/00A.tab"));
         }
         try std.testing.expectError(error.CommonsDataSnapshotMissing, get(&provider, "Never queried.tab"));
+        try std.testing.expectError(error.CommonsDataSnapshotMissing, get(&provider, "Never_queried.tab"));
+        try std.testing.expectError(error.CommonsDataSnapshotMissing, get(&provider, "Unicode data/emoji_images/00b.tab"));
+        try std.testing.expectError(error.CommonsDataSnapshotMissing, get(&provider, "Unicode data/Emoji_images/000.tab"));
     }
 }
 
