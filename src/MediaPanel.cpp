@@ -36,7 +36,10 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStandardPaths>
+#include <QTextBlock>
+#include <QTextDocument>
 #include <QTextDocumentFragment>
+#include <QTextFragment>
 #include <QTimer>
 #include <QUrlQuery>
 #include <QVBoxLayout>
@@ -56,8 +59,25 @@ bool allowedUrl(const QUrl &url, bool download, const QString &sourceHost = {}) 
 }
 
 QString plainMetadata(const QJsonObject &metadata, const QString &key) {
-    return QTextDocumentFragment::fromHtml(metadata.value(key).toObject().value(QStringLiteral("value")).toString())
-        .toPlainText().simplified().left(240);
+    QTextDocument document;
+    document.setHtml(metadata.value(key).toObject().value(QStringLiteral("value")).toString());
+    QString text;
+    for (auto block = document.begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid()) continue;
+            const auto format = fragment.charFormat();
+            if (format.isImageFormat()) {
+                // Qt retains HTML entities in image alt attributes. Decode
+                // them once while keeping literal angle brackets as text.
+                QString alt = format.stringProperty(QTextFormat::ImageAltText);
+                alt.replace(QChar('<'), QStringLiteral("&lt;")).replace(QChar('>'), QStringLiteral("&gt;"));
+                text += QTextDocumentFragment::fromHtml(alt).toPlainText();
+            } else text += fragment.text();
+        }
+        text += QChar(' ');
+    }
+    return text.remove(QChar::ObjectReplacementCharacter).simplified().left(240);
 }
 
 QString voiceLanguage(QString code) {

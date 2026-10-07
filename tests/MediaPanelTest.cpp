@@ -94,10 +94,11 @@ QJsonObject entry(const QString &title = QStringLiteral("cat")) {
                 {QStringLiteral("file"), QStringLiteral("File:Cat.jpg")}, {QStringLiteral("caption"), QStringLiteral("A cat")}}}}};
 }
 
-QByteArray metadata(const QString &url = QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/c/cat.jpg")) {
+QByteArray metadata(const QString &url = QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/c/cat.jpg"),
+        const QString &artist = QStringLiteral("<b>Example artist</b>"), const QString &licence = QStringLiteral("CC BY-SA 4.0")) {
     const QJsonObject credit{
-        {QStringLiteral("Artist"), QJsonObject{{QStringLiteral("value"), QStringLiteral("<b>Example artist</b>")}}},
-        {QStringLiteral("LicenseShortName"), QJsonObject{{QStringLiteral("value"), QStringLiteral("CC BY-SA 4.0")}}}
+        {QStringLiteral("Artist"), QJsonObject{{QStringLiteral("value"), artist}}},
+        {QStringLiteral("LicenseShortName"), QJsonObject{{QStringLiteral("value"), licence}}}
     };
     const QJsonObject info{{QStringLiteral("url"), url},
         {QStringLiteral("descriptionurl"), QStringLiteral("https://commons.wikimedia.org/wiki/File:Cat.jpg")},
@@ -181,6 +182,43 @@ private slots:
         QTest::qWait(10);
         panel.grab().save(QStringLiteral(".tmp/media-panel-narrow.png"));
         QVERIFY(panel.minimumSizeHint().width() <= 360);
+    }
+
+    void imageOnlyCreditsPreserveAltText_data() {
+        QTest::addColumn<QString>("artist");
+        QTest::addColumn<QString>("expected");
+        // Commons Example.jpg Artist HTML is an unknown-author pictogram with
+        // no alt text. A filename or object placeholder is not an author name.
+        QTest::newRow("commons-example-unknown-author")
+            << QStringLiteral("<span typeof=\"mw:File\"><span><img src=\"https://thumb.wikimedia.org/wikipedia/commons/thumb/7/77/Pictogram-voting_question.svg/20px-Pictogram-voting_question.svg.png\" decoding=\"async\" loading=\"lazy\" width=\"15\" height=\"15\" class=\"mw-file-element\"></span></span>")
+            << QStringLiteral("Public domain");
+        QTest::newRow("image-alt-entities-and-unicode")
+            << QStringLiteral("<span><img src='signature.png' alt='A &amp; É'></span>") << QStringLiteral("A & É / Public domain");
+        QTest::newRow("image-alt-literal-angle-brackets")
+            << QStringLiteral("<img src='signature.png' alt='&lt;Name&gt; &amp; <literal>'>") << QStringLiteral("<Name> & <literal> / Public domain");
+        QTest::newRow("text-around-decorative-image")
+            << QStringLiteral("<b>Known creator</b> <img src='icon.png' alt=''>") << QStringLiteral("Known creator / Public domain");
+    }
+
+    void imageOnlyCreditsPreserveAltText() {
+        QFETCH(QString, artist);
+        QFETCH(QString, expected);
+        Network network;
+        network.responses = {{metadata(QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/c/cat.jpg"), artist, QStringLiteral("Public domain"))}, {picture()}};
+        MediaPanel panel(nullptr, &network); panel.setEntry(entry()); panel.show();
+        enableImages(panel); QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTRY_COMPARE(status(panel)->text(), QStringLiteral("Ready."));
+        bool found = false;
+        for (auto *label : panel.findChildren<QLabel *>()) {
+            QVERIFY(!label->text().contains(QChar::ObjectReplacementCharacter));
+            found |= label->text() == expected;
+        }
+        QVERIFY(found);
+        bool source = false;
+        for (auto *button : panel.findChildren<QPushButton *>())
+            source |= button->text() == QStringLiteral("Source and licence") && button->isEnabled();
+        QVERIFY(source);
+        QCOMPARE(network.urls.size(), 2);
     }
 
     void reusesDiskCacheAndOffDeletesIt() {
