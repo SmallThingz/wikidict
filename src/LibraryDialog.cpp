@@ -265,12 +265,19 @@ void LibraryDialog::refreshCatalogView() {
     available_->clear();
     QSet<QByteArray> hashes;
     for (const auto &dictionary : dictionaries_) if (!dictionary.sha256.isEmpty()) hashes.insert(dictionary.sha256);
+    QString installedEdition;
+    bool validEdition = true;
+    try {
+        installedEdition = LibraryStorage::editionIdentity(root_);
+    } catch (const std::exception &) {
+        validEdition = false;
+    }
     const QString filter = filter_->text().trimmed();
     for (int i = 0; i < catalog_.size(); ++i) {
         const auto &entry = catalog_[i];
         if (!filter.isEmpty() && !entry.label.contains(filter, Qt::CaseInsensitive)
             && !entry.url.toString().contains(filter, Qt::CaseInsensitive)) continue;
-        const bool installed = !entry.sha256.isEmpty() && hashes.contains(entry.sha256);
+        const bool installed = validEdition && LibraryStorage::catalogItemInstalled(entry, installedEdition, hashes);
         auto *item = new QTreeWidgetItem(available_, {entry.label, LibraryStorage::formatBytes(entry.bytes),
             installed ? QStringLiteral("Installed") : QStringLiteral("Available")});
         item->setData(0, Qt::UserRole, i);

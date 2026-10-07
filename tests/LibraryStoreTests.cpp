@@ -260,6 +260,50 @@ int main(int argc, char **argv) {
         require(!QFileInfo::exists(QDir(root).filePath(QStringLiteral(".desktop-edition"))), "rejected association has no marker");
         LibraryStorage::removeDictionary(root, LibraryStorage::installed(root)[0]);
 
+        // Identical transport bytes do not make different source editions/snapshots installed.
+        const QByteArray realFixture = read(QStringLiteral("tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"));
+        const QByteArray realHash = QCryptographicHash::hash(realFixture, QCryptographicHash::Sha256).toHex();
+        const QString identityRoot = temporary.filePath(QStringLiteral("catalogue-identity"));
+        write(source, realFixture);
+        auto identityImport = LibraryStorage::prepareImport(identityRoot, source, realHash, realFixture.size(), cancelled, progress, canonicalLanguage);
+        LibraryStorage::commitImport(identityRoot, *identityImport);
+        QSet<QByteArray> installedHashes;
+        for (const auto &dictionary : LibraryStorage::installed(identityRoot)) installedHashes.insert(dictionary.sha256);
+        const QString identity = LibraryStorage::editionIdentity(identityRoot);
+        const QString otherEdition = QString(canonicalLanguage).replace(QStringLiteral("enwiktionary"), QStringLiteral("afwiktionary"));
+        const QString otherDate = QString(canonicalLanguage).replace(QStringLiteral("20261001"), QStringLiteral("20261101"));
+        const QString invalidDate = QString(canonicalLanguage).replace(QStringLiteral("20261001"), QStringLiteral("20260230"));
+        QByteArray identityCatalog;
+        for (const QString &name : {canonicalLanguage, otherEdition, otherDate, QStringLiteral("English.wikblb"), invalidDate}) {
+            identityCatalog += "https://example.org/" + name.toUtf8() + "\tEnglish\t" + QByteArray::number(realFixture.size()) + '\t' + realHash + '\n';
+        }
+        const auto identicalRows = LibraryStorage::parseCatalog(identityCatalog);
+        require(LibraryStorage::catalogItemInstalled(identicalRows[0], identity, installedHashes), "same bytes and exact edition/date are installed");
+        require(!LibraryStorage::catalogItemInstalled(identicalRows[1], identity, installedHashes), "same bytes from another edition remain available");
+        require(!LibraryStorage::catalogItemInstalled(identicalRows[2], identity, installedHashes), "same bytes from another snapshot remain available");
+        require(!LibraryStorage::catalogItemInstalled(identicalRows[3], identity, installedHashes), "unscoped catalogue row cannot match a scoped import");
+        require(!LibraryStorage::catalogItemInstalled(identicalRows[4], identity, installedHashes), "invalid canonical date cannot be installed");
+        auto unverifiedRow = identicalRows[0];
+        unverifiedRow.sha256.clear();
+        require(!LibraryStorage::catalogItemInstalled(unverifiedRow, identity, installedHashes), "catalogue row without checksum cannot claim installed");
+        unverifiedRow.sha256 = QByteArray(64, '0');
+        require(!LibraryStorage::catalogItemInstalled(unverifiedRow, identity, installedHashes), "matching edition alone cannot claim installed");
+        for (const QString &name : {otherEdition, otherDate, QStringLiteral("English.wikblb")})
+            rejects([&] { LibraryStorage::prepareImport(identityRoot, source, realHash, realFixture.size(), cancelled, progress, name); }, "identical bytes do not bypass import source conflicts");
+        require(read(identityImport->dictionary.path) == realFixture &&
+            read(QDir(identityRoot).filePath(QStringLiteral(".desktop-edition"))) == QByteArrayLiteral("enwiktionary-20261001\n"),
+            "conflicting catalogue identity preserves installed bytes and marker");
+        const QString legacyRoot = temporary.filePath(QStringLiteral("catalogue-unscoped"));
+        auto legacyImport = LibraryStorage::prepareImport(legacyRoot, source, realHash, realFixture.size(), cancelled, progress);
+        LibraryStorage::commitImport(legacyRoot, *legacyImport);
+        const QString legacyIdentity = LibraryStorage::editionIdentity(legacyRoot);
+        QSet<QByteArray> legacyHashes;
+        for (const auto &dictionary : LibraryStorage::installed(legacyRoot)) legacyHashes.insert(dictionary.sha256);
+        require(legacyIdentity.isEmpty() && LibraryStorage::catalogItemInstalled(identicalRows[3], legacyIdentity, legacyHashes),
+            "legacy unscoped bytes retain unscoped Installed status");
+        require(!LibraryStorage::catalogItemInstalled(identicalRows[0], legacyIdentity, legacyHashes),
+            "legacy unscoped bytes cannot claim a canonical source identity");
+
         const QString published = temporary.filePath(QStringLiteral("published-root"));
         require(QDir().mkpath(published), "published fixture root");
         write(QDir(published).filePath(QStringLiteral("complete.json")), QByteArrayLiteral("{\"edition\":\"arwiktionary\",\"date\":\"20261001\"}"));

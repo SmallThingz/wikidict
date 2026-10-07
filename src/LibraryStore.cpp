@@ -328,6 +328,15 @@ QList<CatalogItem> parseCatalog(const QByteArray &data) {
     }
     return result;
 }
+bool catalogItemInstalled(const CatalogItem &item, const QString &installedEdition,
+        const QSet<QByteArray> &installedHashes) {
+    if (item.sha256.isEmpty() || !installedHashes.contains(item.sha256)) return false;
+    try {
+        return editionGroup(item.url.path()) == installedEdition;
+    } catch (const std::exception &) {
+        return false;
+    }
+}
 QString editionIdentity(const QString &root) {
     return installedEditionGroup(root);
 }

@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QList>
+#include <QSet>
 #include <QString>
 #include <QUrl>
 #include <atomic>
@@ -42,6 +43,8 @@ QString sourceHost(const QString &root);
 QString editionIdentity(const QString &root);
 bool isHttpsUrl(const QUrl &url);
 QList<CatalogItem> parseCatalog(const QByteArray &data);
+bool catalogItemInstalled(const CatalogItem &item, const QString &installedEdition,
+    const QSet<QByteArray> &installedHashes);
 QList<Dictionary> installed(const QString &root);
 QString dictionaryPath(const QString &root, const Dictionary &dictionary);
 QString formatBytes(qint64 bytes);
