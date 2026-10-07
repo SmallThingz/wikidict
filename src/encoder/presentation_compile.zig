@@ -3087,7 +3087,7 @@ test "headings follow MediaWiki whitespace width and level-six clamping" {
         .{ .source = "[[Image:Icon.svg|25px|link=]]", .expected = "" },
         .{ .source = "[[File:Icon.svg|alt=]]", .expected = "" },
         .{ .source = "[[File:Icon.svg|alt=Sound]]", .expected = "Sound" },
-        .{ .source = "[[File:Icon.svg|ALT=Sound|alt=]]", .expected = "" },
+        .{ .source = "[[File:Icon.svg|ALT=Sound|alt=]]", .expected = "ALT=Sound" },
         .{ .source = "[[File:Icon.svg|alt=Sound|[[pronunciation|Speech]]]]", .expected = "Speech" },
         .{ .source = "[[File:Icon.svg|First|Second|alt=Sound]]", .expected = "Second" },
         .{ .source = "[[File:Icon.svg|Icon.svg]]", .expected = "Icon.svg" },

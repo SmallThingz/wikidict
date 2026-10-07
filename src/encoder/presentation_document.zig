@@ -641,10 +641,10 @@ test "literal provenance preserves structural templates line breaks and normaliz
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var template_spans = [_]compiler.Span{.{ .kind = .template, .target = "Missing", .text = "stale argument", .provenance = .protected_literal }};
-    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &template_spans, null));
+    const template_spans = try a.dupe(compiler.Span, &.{.{ .kind = .template, .target = "Missing", .text = "stale argument", .provenance = .protected_literal }});
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, template_spans, null));
     var report: Fallbacks = .{};
-    try validateSpans(a, &template_spans, &report);
+    try validateSpans(a, template_spans, &report);
     try std.testing.expectEqual(ir.InlineKind.link, template_spans[0].kind);
     try std.testing.expectEqualStrings("Template:Missing", template_spans[0].text);
     try std.testing.expect(report.missing_template);
