@@ -7,6 +7,12 @@ pub fn kind(file: []const u8) ?Kind {
     for ([_][]const u8{ ".ogg", ".oga", ".wav", ".mp3", ".flac" }) |s| if (std.ascii.eqlIgnoreCase(extension, s)) return .audio;
     return null;
 }
+// Source file references may name an SVG rendered through the existing remote
+// raster-thumbnail path. This does not admit raw SVG bytes for inline export.
+pub fn referencedKind(file: []const u8) ?Kind {
+    if (std.ascii.eqlIgnoreCase(std.fs.path.extension(file), ".svg")) return .image;
+    return kind(file);
+}
 pub fn key(file: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(file, &digest, .{});

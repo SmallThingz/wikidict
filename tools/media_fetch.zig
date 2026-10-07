@@ -67,7 +67,7 @@ fn fetch(io: std.Io, a: A, root: []const u8, file: []const u8) !void {
         std.debug.print("Unsupported media license for {s}: {s}\n", .{ file, license });
         return error.UnsupportedMediaLicense;
     }
-    const is_image = types.kind(file) == .image;
+    const is_image = types.referencedKind(file) == .image;
     var url = (if (is_image and !gfdl) image.object.get("thumburl") orelse image.object.get("url").? else image.object.get("url").?).string;
     // Official imageinfo can return a Wikimedia thumbnail-rendering endpoint.
     if (std.mem.startsWith(u8, url, "//")) url = try std.fmt.allocPrint(a, "https:{s}", .{url});
@@ -109,7 +109,7 @@ pub fn main(init: std.process.Init) !void {
     var count: usize = 0;
     for (data.value.object.get("entries").?.array.items) |entry| if (entry.object.get("media")) |items| for (items.array.items) |item| {
         const file = item.object.get("file").?.string;
-        if (file.len == 0 or file.len > 4096 or types.kind(file) == null) return error.InvalidMedia;
+        if (file.len == 0 or file.len > 4096 or types.referencedKind(file) == null) return error.InvalidMedia;
         const slot = try seen.getOrPut(file);
         if (slot.found_existing) continue;
         if (count >= 128) return error.MediaLimit;

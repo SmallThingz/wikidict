@@ -564,7 +564,7 @@ pub const Renderer = struct {
         defer self.media_depth -= 1;
         const file = try self.a.dupe(u8, std.mem.trim(u8, raw, " \t\r\n"));
         std.mem.replaceScalar(u8, file, '_', ' ');
-        const kind = authoritative_kind orelse media_types.kind(file) orelse return;
+        const kind = authoritative_kind orelse media_types.referencedKind(file) orelse return;
         for (self.media.items) |item| if (std.mem.eql(u8, item.file, file)) return;
         if (self.media.items.len >= 128) {
             self.fallbacks.render_limit = true;
@@ -868,7 +868,7 @@ pub const Renderer = struct {
             const raw_file = trim(line[0 .. pipe orelse line.len]);
             const colon = std.mem.indexOfScalar(u8, raw_file, ':');
             const file = if (colon != null and self.namespaceOfTarget(raw_file) == 6) raw_file[colon.? + 1 ..] else raw_file;
-            if (media_types.kind(file) == null) continue;
+            if (media_types.referencedKind(file) == null) continue;
             const options = if (pipe) |at_pipe| trim(line[at_pipe + 1 ..]) else "";
             const caption = self.mediaCaption(options, file, mediaOptionMode(file, true));
             try self.mediaFile(file, caption);
@@ -881,6 +881,105 @@ pub const Renderer = struct {
             try self.mediaLabel(if (caption.len == 0) file else caption, media_style, false);
         }
     }
+    fn imageMap(self: *Renderer, input: []const u8, style: Style, depth: usize) Error!bool {
+        var pos: usize = 0;
+        var image_seen = false;
+        while (pos < input.len) {
+            const end = syntax.logicalEnd(input, pos);
+            var line = trim(input[pos..end]);
+            pos = if (end < input.len) end + 1 else end;
+            while (starts(line, "<!--")) {
+                const comment_end = syntax.protectedEnd(line, 0) orelse line.len;
+                line = trim(line[comment_end..]);
+            }
+            if (line.len == 0 or line[0] == '#') continue;
+            if (!image_seen) {
+                const pipe = syntax.delimiter(line, "|", 0) orelse line.len;
+                const target = trim(line[0..pipe]);
+                if (self.namespaceOfTarget(target) != 6) return false;
+                const colon = std.mem.indexOfScalar(u8, target, ':') orelse return false;
+                if (media_types.referencedKind(trim(target[colon + 1 ..])) != .image) return false;
+                const wrapped = try std.fmt.allocPrint(self.a, "[[{s}]]", .{line});
+                const wrapped_pair = syntax.balanced(wrapped, 0) orelse return false;
+                if (wrapped_pair.end != wrapped.len) return false;
+                try self.inlineText(wrapped, style, depth + 1);
+                image_seen = true;
+                continue;
+            }
+            const space = std.mem.indexOfAny(u8, line, " \t") orelse {
+                self.fallbacks.unsupported_element = true;
+                continue;
+            };
+            if (std.mem.eql(u8, line[0..space], "desc")) {
+                if (!oneOf(trim(line[space..]), &.{ "top-left", "top-right", "bottom-left", "bottom-right", "none" })) self.fallbacks.unsupported_element = true;
+                continue;
+            }
+            if (!oneOf(line[0..space], &.{ "rect", "circle", "poly", "default" })) {
+                self.fallbacks.unsupported_element = true;
+                continue;
+            }
+            const link_at = syntax.delimiter(line, "[", space) orelse {
+                self.fallbacks.unsupported_element = true;
+                continue;
+            };
+            var coordinates = std.mem.tokenizeAny(u8, line[space..link_at], " \t");
+            var count: usize = 0;
+            var valid = true;
+            while (coordinates.next()) |coordinate| {
+                const number = std.fmt.parseFloat(f64, coordinate) catch {
+                    valid = false;
+                    break;
+                };
+                if (!std.math.isFinite(number)) valid = false;
+                count += 1;
+            }
+            const command = line[0..space];
+            valid = valid and (if (std.mem.eql(u8, command, "rect")) count == 4 else if (std.mem.eql(u8, command, "circle")) count == 3 else if (std.mem.eql(u8, command, "poly")) count >= 6 and count % 2 == 0 else count == 0);
+            if (!valid) {
+                self.fallbacks.unsupported_element = true;
+                continue;
+            }
+            const internal = starts(line[link_at..], "[[");
+            var link_end: usize = undefined;
+            var inner_end: usize = undefined;
+            if (internal) {
+                const pair = syntax.balanced(line, link_at) orelse {
+                    self.fallbacks.unsupported_element = true;
+                    continue;
+                };
+                link_end = pair.end;
+                inner_end = pair.inner_end;
+            } else {
+                var cursor = link_at + 1;
+                while (cursor < line.len and line[cursor] != ']') {
+                    if (syntax.protectedEnd(line, cursor)) |protected_end| cursor = protected_end else cursor += 1;
+                }
+                if (cursor == line.len) {
+                    self.fallbacks.unsupported_element = true;
+                    continue;
+                }
+                inner_end = cursor;
+                link_end = cursor + 1;
+            }
+            var trailing = trim(line[link_end..]);
+            while (starts(trailing, "<!--")) trailing = trim(trailing[(syntax.protectedEnd(trailing, 0) orelse trailing.len)..]);
+            if (trailing.len != 0) {
+                self.fallbacks.unsupported_element = true;
+                continue;
+            }
+            const body = line[link_at + (if (internal) @as(usize, 2) else 1) .. inner_end];
+            const separator = if (internal) syntax.delimiter(body, "|", 0) orelse body.len else std.mem.indexOfAny(u8, body, " \t") orelse body.len;
+            const target = trim(body[0..separator]);
+            const label = if (separator < body.len) trim(body[separator + 1 ..]) else target;
+            if (if (internal) target.len == 0 or !safeInternalTarget(target) else !safeUrl(try self.entityText(target))) {
+                self.fallbacks.unsupported_element = true;
+                continue;
+            }
+            try self.lineBreak(style);
+            try self.link(label, target, style, depth + 1, !internal);
+        }
+        return image_seen;
+    }
     fn opaqueExtension(self: *Renderer, input: []const u8, tag: syntax.Tag, style: Style, depth: usize) Error!usize {
         if (tag.self_closing) return tag.end;
         const pair = syntax.matchingTag(input, tag) orelse blk: {
@@ -890,6 +989,8 @@ pub const Renderer = struct {
         const content = input[tag.end..pair.inner_end];
         if (tag.is("gallery")) {
             try self.gallery(content, style, depth + 1);
+        } else if (tag.is("imagemap")) {
+            if (!try self.imageMap(content, style, depth + 1)) self.fallbacks.unsupported_element = true;
         } else if (tag.is("poem")) {
             try self.inlineLines(content, style, depth + 1);
         } else if (oneOf(tag.name, &.{ "pre", "source", "syntaxhighlight", "math", "ce", "chem", "score", "timeline", "hiero" })) {
@@ -3887,4 +3988,96 @@ test "page reference context preserves first definitions groups protection and u
         try std.testing.expectEqualStrings(expected, try flattened(a, refs[i].spans));
     }
     try std.testing.expect(!r.fallbacks.template_presentation);
+}
+
+
+
+
+test "imagemap preserves source backed image and hotspot link occurrences" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    // Source-instantiated picdic/picdicimg syntax, not captured page expansion.
+    const spans = try r.parseSpans("<imagemap>\n# source comment [[hidden]]\n<!--header-->\nimage:G50.png|310x150px|Picture|alt=Picture\nrect 0 0 1 1 [[vogel|Bird]]\ndefault [[voël|Voël]]\nrect 0 0 2 2 [https://example.test/picture Outside source]\ndesc none\n</imagemap>[[voël|Outside]]", .{});
+    try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
+    try std.testing.expectEqualStrings("G50.png", r.media.items[0].file);
+    try std.testing.expectEqualStrings("Picture", r.media.items[0].caption);
+    var links: std.ArrayList(Span) = .empty;
+    for (spans) |span| if (span.kind == .link) {
+        try links.append(a, span);
+    };
+    try std.testing.expectEqual(@as(usize, 4), links.items.len);
+    try std.testing.expectEqualStrings("File:G50.png", links.items[0].target);
+    try std.testing.expectEqualStrings("vogel", links.items[1].target);
+    try std.testing.expectEqualStrings("voël", links.items[2].target);
+    try std.testing.expectEqualStrings("voël", links.items[3].target);
+    try std.testing.expectEqualStrings("Outside", links.items[3].text);
+    var external_count: usize = 0;
+    for (spans) |span| if (span.kind == .external_link) {
+        try std.testing.expectEqualStrings("https://example.test/picture", span.target);
+        external_count += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), external_count);
+    try std.testing.expect(!r.fallbacks.unsupported_element);
+    const text = try flattened(a, spans);
+    try std.testing.expect(std.mem.indexOf(u8, text, "rect") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "desc") == null);
+    // Actual retained oog picdic file/header shape, instantiated rather than captured expansion.
+    var svg: Renderer = .{ .a = a, .context = .{} };
+    const svg_spans = try svg.parseSpans("<imagemap>image:Human head and brain diagram.svg|310x310px|oog|alt=oog\nrect 0 0 1 1 [[oog]]\ndesc none\n</imagemap>[[oog|Outside]]", .{});
+    try std.testing.expectEqual(@as(usize, 1), svg.media.items.len);
+    try std.testing.expectEqualStrings("Human head and brain diagram.svg", svg.media.items[0].file);
+    try std.testing.expectEqualStrings("oog", svg.media.items[0].caption);
+    try std.testing.expectEqual(media_types.Kind.image, svg.media.items[0].kind);
+    var svg_links: std.ArrayList(Span) = .empty;
+    for (svg_spans) |span| if (span.kind == .link) {
+        try svg_links.append(a, span);
+    };
+    try std.testing.expectEqual(@as(usize, 3), svg_links.items.len);
+    try std.testing.expectEqualStrings("File:Human head and brain diagram.svg", svg_links.items[0].target);
+    try std.testing.expectEqualStrings("oog", svg_links.items[1].target);
+    try std.testing.expectEqualStrings("oog", svg_links.items[2].target);
+    try std.testing.expectEqualStrings("Outside", svg_links.items[2].text);
+    try std.testing.expect(!svg.fallbacks.unsupported_element);
+    try std.testing.expect(media_types.kind("file.JPG") == .image);
+    var file_ref: Renderer = .{ .a = a, .context = .{} };
+    _ = try file_ref.parseSpans("[[File:Human head and brain diagram.svg|thumb|File caption]]", .{});
+    try std.testing.expectEqual(@as(usize, 1), file_ref.media.items.len);
+    try std.testing.expectEqualStrings("File caption", file_ref.media.items[0].caption);
+    var gallery_ref: Renderer = .{ .a = a, .context = .{} };
+    _ = try gallery_ref.parseSpans("<gallery>Human head and brain diagram.svg|Gallery caption</gallery>", .{});
+    try std.testing.expectEqual(@as(usize, 1), gallery_ref.media.items.len);
+    try std.testing.expectEqualStrings("Gallery caption", gallery_ref.media.items[0].caption);
+    // References are metadata only; raw SVG is still ineligible for inline export.
+    try std.testing.expect(media_types.kind("script.svg") == null);
+    try std.testing.expect(media_types.mime("<svg onload='alert(1)'>") == null);
+}
+
+test "imagemap invalid directives and protected source retain conservative diagnostics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    _ = try r.parseSpans("<imagemap>not an image\ndefault [[wrong]]</imagemap>", .{});
+    try std.testing.expectEqual(@as(usize, 0), r.media.items.len);
+    try std.testing.expect(r.fallbacks.unsupported_element);
+    var escaped: Renderer = .{ .a = a, .context = .{} };
+    _ = try escaped.parseSpans("<imagemap>image:G50.png|x]] [[File:Other.png|other\ndefault [[wrong]]</imagemap>", .{});
+    try std.testing.expectEqual(@as(usize, 0), escaped.media.items.len);
+    try std.testing.expect(escaped.fallbacks.unsupported_element);
+    var valid: Renderer = .{ .a = a, .context = .{} };
+    const spans = try valid.parseSpans("<imagemap>image:G50.png|Caption\nrect NaN 0 1 1 [[wrong]]\ndefault [[wrong]] [[extra]]\ndefault [[wrong]] garbage\ndesc garbage\ndefault [[|empty]]\n<!-- default [[hidden]] -->\ncircle 1 2 3 [[shown]]\npoly 0 0 1 0 1 1 [[polygon]]</imagemap>", .{});
+    try std.testing.expectEqual(@as(usize, 1), valid.media.items.len);
+    try std.testing.expect(valid.fallbacks.unsupported_element);
+    var count: usize = 0;
+    for (spans) |span| if (span.kind == .link and !std.mem.startsWith(u8, span.target, "File:")) {
+        try std.testing.expect(!std.mem.eql(u8, span.target, "wrong"));
+        try std.testing.expect(!std.mem.eql(u8, span.target, "hidden"));
+        count += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), count);
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    _ = try protected.parseSpans("<nowiki><imagemap>image:G50.png\ndefault [[vogel]]</imagemap></nowiki><pre><imagemap>image:G50.png\ndefault [[vogel]]</imagemap></pre>", .{});
+    try std.testing.expectEqual(@as(usize, 0), protected.media.items.len);
 }
