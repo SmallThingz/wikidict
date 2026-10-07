@@ -54,7 +54,7 @@ bool allowedUrl(const QUrl &url, bool download, const QString &sourceHost = {}) 
     if (!url.isValid() || url.scheme() != QStringLiteral("https") || !url.userInfo().isEmpty() ||
         (url.port() != -1 && url.port() != 443)) return false;
     const QString host = url.host().toLower();
-    return download ? host == QStringLiteral("upload.wikimedia.org")
+    return download ? (host == QStringLiteral("upload.wikimedia.org") || host == QStringLiteral("thumb.wikimedia.org"))
                     : host == QStringLiteral("commons.wikimedia.org") || (!sourceHost.isEmpty() && host == sourceHost);
 }
 

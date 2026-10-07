@@ -78,11 +78,13 @@ private:
 class Network final : public QNetworkAccessManager {
 public:
     QList<QUrl> urls;
+    QList<QNetworkRequest> requests;
     QList<Response> responses;
     int cancelled = 0;
 protected:
     QNetworkReply *createRequest(Operation, const QNetworkRequest &request, QIODevice *) override {
         urls.append(request.url());
+        requests.append(request);
         return new Reply(request, responses.isEmpty() ? Response{"{}"} : responses.takeFirst(), &cancelled, this);
     }
 };
@@ -95,14 +97,15 @@ QJsonObject entry(const QString &title = QStringLiteral("cat")) {
 }
 
 QByteArray metadata(const QString &url = QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/c/cat.jpg"),
-        const QString &artist = QStringLiteral("<b>Example artist</b>"), const QString &licence = QStringLiteral("CC BY-SA 4.0")) {
+        const QString &artist = QStringLiteral("<b>Example artist</b>"), const QString &licence = QStringLiteral("CC BY-SA 4.0"), const QString &thumbnail = {}) {
     const QJsonObject credit{
         {QStringLiteral("Artist"), QJsonObject{{QStringLiteral("value"), artist}}},
         {QStringLiteral("LicenseShortName"), QJsonObject{{QStringLiteral("value"), licence}}}
     };
-    const QJsonObject info{{QStringLiteral("url"), url},
+    QJsonObject info{{QStringLiteral("url"), url},
         {QStringLiteral("descriptionurl"), QStringLiteral("https://commons.wikimedia.org/wiki/File:Cat.jpg")},
         {QStringLiteral("extmetadata"), credit}};
+    if (!thumbnail.isEmpty()) info.insert(QStringLiteral("thumburl"), thumbnail);
     const QJsonObject page{{QStringLiteral("imageinfo"), QJsonArray{info}}};
     const QJsonObject query{{QStringLiteral("pages"), QJsonArray{page}}};
     return QJsonDocument(QJsonObject{{QStringLiteral("query"), query}}).toJson(QJsonDocument::Compact);
@@ -238,6 +241,56 @@ private slots:
         panel.findChild<QComboBox *>(QStringLiteral("mediaCacheLimit"))->setCurrentIndex(0);
         QCOMPARE(QDir(cacheRoot()).entryList(QDir::Files).size(), 0);
         QCOMPARE(QSettings().value(QStringLiteral("media/cacheMb")).toInt(), 0);
+    }
+
+    void svgUsesCommonsRasterThumbnailAndReusesCache() {
+        // Actual Commons imageinfo response (iiurlwidth=960), 2026-10-07.
+        const QString thumbnail = QStringLiteral("https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c4/Human_head_and_brain_diagram.svg/960px-Human_head_and_brain_diagram.svg.png?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail");
+        Network network;
+        network.responses = {{metadata(QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/c/c4/Human_head_and_brain_diagram.svg"),
+            QStringLiteral("Diagram artist"), QStringLiteral("CC BY-SA 4.0"), thumbnail)}, {picture()}};
+        QJsonObject word = entry(QStringLiteral("oog"));
+        word[QStringLiteral("media")] = QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("image")},
+            {QStringLiteral("file"), QStringLiteral("Human head and brain diagram.svg")},
+            {QStringLiteral("caption"), QStringLiteral("Human head and brain diagram")}}};
+        MediaPanel panel(nullptr, &network);
+        panel.setEntry(word, QStringLiteral("af.wiktionary.org")); panel.show();
+        enableImages(panel); QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTRY_COMPARE(status(panel)->text(), QStringLiteral("Ready."));
+        QCOMPARE(network.urls.size(), 2);
+        QCOMPARE(network.urls[1], QUrl(thumbnail));
+        for (const auto &request : network.requests) {
+            QCOMPARE(request.attribute(QNetworkRequest::RedirectPolicyAttribute).toInt(), int(QNetworkRequest::SameOriginRedirectPolicy));
+            QCOMPARE(request.maximumRedirectsAllowed(), 5);
+            QCOMPARE(request.transferTimeout(), 30000);
+        }
+        QCOMPARE(QDir(cacheRoot()).entryList(QDir::Files).size(), 2);
+        panel.setEntry(word, QStringLiteral("af.wiktionary.org"));
+        QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QCOMPARE(status(panel)->text(), QStringLiteral("Loaded from this device."));
+        QCOMPARE(network.urls.size(), 2);
+    }
+
+    void rejectsUnsafeThumbnailAddress_data() {
+        QTest::addColumn<QString>("thumbnail");
+        QTest::newRow("http") << QStringLiteral("http://thumb.wikimedia.org/wikipedia/commons/thumb/image.png");
+        QTest::newRow("credentials") << QStringLiteral("https://user@thumb.wikimedia.org/wikipedia/commons/thumb/image.png");
+        QTest::newRow("port") << QStringLiteral("https://thumb.wikimedia.org:8443/wikipedia/commons/thumb/image.png");
+        QTest::newRow("host-suffix") << QStringLiteral("https://thumb.wikimedia.org.example.invalid/image.png");
+        QTest::newRow("subdomain") << QStringLiteral("https://other.thumb.wikimedia.org/image.png");
+        QTest::newRow("unrelated-wikimedia-host") << QStringLiteral("https://commons.wikimedia.org/image.png");
+    }
+
+    void rejectsUnsafeThumbnailAddress() {
+        QFETCH(QString, thumbnail);
+        Network network;
+        network.responses = {{metadata(QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/c/cat.jpg"),
+            QStringLiteral("Artist"), QStringLiteral("CC BY-SA 4.0"), thumbnail)}};
+        MediaPanel panel(nullptr, &network); panel.setEntry(entry()); panel.show();
+        enableImages(panel); QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTRY_VERIFY(status(panel)->text().contains(QStringLiteral("unsupported address")));
+        QCOMPARE(network.urls.size(), 1);
+        QCOMPARE(QDir(cacheRoot()).entryList(QDir::Files).size(), 0);
     }
 
     void navigationCancelsRequestAndPermissionCancelsRequest() {
