@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 from urllib.parse import parse_qs, urlsplit
 
 import build_wiktionaries as build
@@ -69,7 +70,18 @@ class CommonsCaptureV2Tests(unittest.TestCase):
             if attempts[title] < 4:
                 return 503, {}, b'{"error":{"code":"readonly"}}'
             return self.transport(url, timeout)
-        manifest = helper.capture(self.args, retry_transport, sleep=lambda _: None)
+        # This bounds fixture skips backoff sleeps; storage speed must not consume
+        # its synthetic request deadline while writing all 512 attempt receipts.
+        with mock.patch.object(helper, 'time') as clock:
+            clock.monotonic.return_value = 0.0
+            manifest = helper.capture(self.args, retry_transport, sleep=lambda _: None)
+            deadline_root = self.root / 'deadline'
+            deadline_root.mkdir()
+            with self.assertRaisesRegex(ValueError, 'Retry exceeds capture deadline'):
+                helper.observe(deadline_root, 1, self.args.title[0],
+                               lambda *_: (503, {}, b'{}'),
+                               lambda _: self.fail('Expired retry must not sleep'),
+                               deadline=1, delay=0)
         self.assertEqual(512, sum(attempts.values()))
         self.assertEqual(128, len(self.calls))
         index = helper.read_index(self.args.output, manifest)
