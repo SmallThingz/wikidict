@@ -612,7 +612,7 @@ fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?Res
 
 // Only a purely decorative image prefix may be shared between language entries.
 // Retain exact source and let each normal renderer own captions, refs and dedup.
-fn sharedImagePrefix(codes: LanguageCodes, prefix: []const u8) ?[]const u8 {
+fn sharedImagePrefix(a: std.mem.Allocator, codes: LanguageCodes, prefix: []const u8) std.mem.Allocator.Error!?[]const u8 {
     const namespaces = codes.namespace_catalog orelse return null;
     const syntax = blobs.wikitext_syntax;
     var cursor: usize = 0;
@@ -628,6 +628,14 @@ fn sharedImagePrefix(codes: LanguageCodes, prefix: []const u8) ?[]const u8 {
             const end = std.mem.indexOfPos(u8, prefix, cursor + 4, "-->") orelse return null;
             if (std.mem.indexOfScalar(u8, prefix[cursor..end], '\n') != null) separated = true;
             cursor = end + 3;
+            continue;
+        }
+        const control_end = if (codes.behavior_switches) |registry|
+            try registry.matchAt(a, prefix, cursor)
+        else
+            syntax.behaviorSwitchEnd(prefix, cursor);
+        if (control_end) |end| {
+            cursor = end;
             continue;
         }
         if (!separated or !std.mem.startsWith(u8, prefix[cursor..], "[[")) return null;
@@ -847,7 +855,7 @@ fn processMain(
     };
 
     const shared_prefix = if (page_sections.items.len != 0)
-        sharedImagePrefix(codes, source[0 .. @intFromPtr(page_sections.items[0].source.ptr) - @intFromPtr(source.ptr)])
+        try sharedImagePrefix(page_allocator, codes, source[0 .. @intFromPtr(page_sections.items[0].source.ptr) - @intFromPtr(source.ptr)])
     else
         null;
 
@@ -2317,9 +2325,9 @@ test "image only page prefixes preserve per language captions and reference owne
     codes.namespace_catalog = &namespaces;
     const image = "[[ملف:Shared.svg|240px|alt=Alt|Shared [[label]]<ref name=shared>caption reference</ref>]]\n";
     const prefix = "<!-- [[ملف:Hidden.png]] -->\n" ++ image;
-    try std.testing.expectEqualStrings(prefix, sharedImagePrefix(codes, prefix).?);
+    try std.testing.expectEqualStrings(prefix, (try sharedImagePrefix(a, codes, prefix)).?);
     inline for (.{ "prose\n" ++ image, image ++ "[[:ملف:Visible.png]]\n", image ++ "[[ordinary]]\n", "<nowiki>" ++ image ++ "</nowiki>\n", "<pre>" ++ image ++ "</pre>\n", image ++ "<ref>standalone reference</ref>\n", image ++ "[[ملف:broken\n", image ++ "[[تصنيف:French]]\n", "[[ملف:Audio.ogg]]\n", "[[ملف:One.png]] [[ملف:Two.png]]\n" }) |bad|
-        try std.testing.expect(sharedImagePrefix(codes, bad) == null);
+        try std.testing.expect(try sharedImagePrefix(a, codes, bad) == null);
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
     var writer = try Writer.init(std.testing.io, a, root);
     defer writer.deinit();
@@ -2379,4 +2387,35 @@ test "image only page prefixes preserve per language captions and reference owne
         if (std.mem.eql(u8, row[1], "en")) try std.testing.expectEqualStrings("body caption", rejected_page.entry.media[0].caption);
         try std.testing.expectEqual(@as(usize, 1), rejected_page.entry.references.len);
     }
+}
+
+test "image only page prefixes retain images across active behavior controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tafwiktionary\n# dump-date\t20261001\n# content-language\taf\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tLêer\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tSjabloon\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const namespace_hex = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
+    const behavior_raw = try std.fmt.allocPrint(a, "# wikidict-behavior-switches-v1\n# wiki\tafwiktionary\n# dump-date\t20261001\n# content-language\taf\n# namespace-registry-sha256\t{s}\nnoeditsection\t0\t__NOEDITSECTION__\nnoeditsection\t0\t__GEENNUWEAFDELING__\nindex\t1\t__INDEX__\n", .{namespace_hex});
+    var behavior = try @import("namespace_registry").behavior_switches.Registry.init(a, behavior_raw, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256);
+    defer behavior.deinit();
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &namespaces;
+    codes.behavior_switches = &behavior;
+    const image = "[[Lêer:Iris - left eye of a girl.jpg|duimnael|280px|[1] 'n Menslike oog (kyk hoe kyk hy vir jou).]]\n";
+    const prefix = image ++ "__NOEDITSECTION__\n";
+    inline for (.{ prefix, "__noeditsection__\n" ++ image, image ++ "__geennuweafdeling__\n", image ++ "__INDEX__\n" }) |value|
+        try std.testing.expectEqualStrings(value, (try sharedImagePrefix(a, codes, value)).?);
+    inline for (.{ "__NOEDITSECTION__\n", image ++ "__UNKNOWN__\n", image ++ "__index__\n", image ++ "<nowiki>__NOEDITSECTION__</nowiki>\n", image ++ "<pre>__NOEDITSECTION__</pre>\n", image ++ "visible prose\n", image ++ "[[__NOEDITSECTION__]]\n" }) |value|
+        try std.testing.expect(try sharedImagePrefix(a, codes, value) == null);
+    // Caption content remains inside its balanced image, not scanned as a control.
+    const literal_caption = "[[Lêer:Caption.jpg|<nowiki>__NOEDITSECTION__</nowiki>]]\n";
+    try std.testing.expectEqualStrings(literal_caption, (try sharedImagePrefix(a, codes, literal_caption)).?);
+    codes.behavior_switches = null;
+    try std.testing.expectEqualStrings(prefix, (try sharedImagePrefix(a, codes, prefix)).?);
+    try std.testing.expect(try sharedImagePrefix(a, codes, image ++ "__GEENNUWEAFDELING__\n") == null);
 }
