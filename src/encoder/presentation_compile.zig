@@ -1440,7 +1440,8 @@ pub const Renderer = struct {
                     if (!explicit and self.namespaceOfTarget(target) == 6) {
                         const file_name = target[(std.mem.indexOfScalar(u8, target, ':').? + 1)..];
                         label_value = self.mediaCaption(label_value, file_name, mediaOptionMode(file_name, false));
-                        try self.mediaFile(file_name, label_value);
+                        // Keep newly eligible SVG heading decoration out of entry media.
+                        if (!s.heading or media_types.kind(file_name) != null) try self.mediaFile(file_name, label_value);
                         if (s.heading) label_value = self.mediaHeadingCaption(if (token.link_has_pipe) token.text else "", file_name);
                         var media_style = s;
                         media_style.classes = "wikidict-media";
@@ -4049,6 +4050,15 @@ test "imagemap preserves source backed image and hotspot link occurrences" {
     _ = try gallery_ref.parseSpans("<gallery>Human head and brain diagram.svg|Gallery caption</gallery>", .{});
     try std.testing.expectEqual(@as(usize, 1), gallery_ref.media.items.len);
     try std.testing.expectEqualStrings("Gallery caption", gallery_ref.media.items[0].caption);
+    var heading_then_body: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try heading_then_body.renderBody("==[[File:Human head and brain diagram.svg|alt=Heading]] Title==\n[[File:Human head and brain diagram.svg|thumb|Body caption]]\n==[[File:Heading.png|20px]]Raster title==\n");
+    try std.testing.expectEqualStrings("Heading Title", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("File:Human head and brain diagram.svg", blocks[0].spans[0].target);
+    try std.testing.expectEqual(@as(usize, 2), heading_then_body.media.items.len);
+    try std.testing.expectEqualStrings("Human head and brain diagram.svg", heading_then_body.media.items[0].file);
+    try std.testing.expectEqualStrings("Body caption", heading_then_body.media.items[0].caption);
+    try std.testing.expectEqualStrings("Heading.png", heading_then_body.media.items[1].file);
+    try std.testing.expectEqualStrings("Heading.png", heading_then_body.media.items[1].caption);
     // References are metadata only; raw SVG is still ineligible for inline export.
     try std.testing.expect(media_types.kind("script.svg") == null);
     try std.testing.expect(media_types.mime("<svg onload='alert(1)'>") == null);
