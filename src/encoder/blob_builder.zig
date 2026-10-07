@@ -528,8 +528,37 @@ fn resolveLinkedDeclaration(codes: LanguageCodes, value: []const u8) ?ResolvedLa
     return resolveLinkedHeading(codes, std.mem.trimEnd(u8, rest[0 .. rest.len - 1], " \t"));
 }
 
+// Language templates can append invisible category links inside a heading.
+// Accept only a whole trusted name followed by categories for that same language.
+fn resolveCategorizedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    const heading = std.mem.trim(u8, value, " \t\r\n");
+    const open = std.mem.indexOf(u8, heading, "[[") orelse return null;
+    const name = std.mem.trim(u8, heading[0..open], " \t\r\n");
+    const language = codes.resolveStrong(name) orelse codes.resolveTrusted(name) orelse return null;
+    var rest = heading[open..];
+    while (rest.len != 0) {
+        if (!std.mem.startsWith(u8, rest, "[[")) return null;
+        const close = std.mem.indexOf(u8, rest, "]]") orelse return null;
+        const body = rest[2..close];
+        if (std.mem.indexOfAny(u8, body, "[]{}<>") != null) return null;
+        const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+        const target = std.mem.trim(u8, body[0..pipe], " \t\r\n");
+        // Leading ':' creates a visible link, rather than hidden category metadata.
+        if (std.mem.startsWith(u8, target, ":")) return null;
+        const title = namespaces.ofTitle(target);
+        if (title.id != 14) return null;
+        const category = codes.resolveStrong(std.mem.trim(u8, title.text, " \t\r\n")) orelse
+            codes.resolveTrusted(std.mem.trim(u8, title.text, " \t\r\n")) orelse return null;
+        if (!std.mem.eql(u8, language.code, category.code)) return null;
+        rest = std.mem.trim(u8, rest[close + 2 ..], " \t\r\n");
+    }
+    return language;
+}
+
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
     const classified = language_source.classificationSection(section);
+    if (resolveCategorizedHeading(codes, classified)) |resolved| return resolved;
 
     if (!std.mem.eql(u8, classified, section.heading))
         if (resolveTrimmed(codes, classified)) |resolved| return resolved;
@@ -559,6 +588,7 @@ fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source
 
 fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
     const heading = language_source.classificationSection(section);
+    if (resolveCategorizedHeading(codes, heading)) |resolved| return resolved;
     if (codes.resolve(std.mem.trim(u8, heading, " \t\r\n\'\""))) |resolved| return resolved;
     if (resolveLinkedHeading(codes, heading)) |resolved| return resolved;
     var cursor: usize = 0;
@@ -578,6 +608,41 @@ fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?Res
         found = language;
     }
     return found;
+}
+
+// Only a purely decorative image prefix may be shared between language entries.
+// Retain exact source and let each normal renderer own captions, refs and dedup.
+fn sharedImagePrefix(codes: LanguageCodes, prefix: []const u8) ?[]const u8 {
+    const namespaces = codes.namespace_catalog orelse return null;
+    const syntax = blobs.wikitext_syntax;
+    var cursor: usize = 0;
+    var found = false;
+    var separated = true;
+    while (cursor < prefix.len) {
+        if (std.ascii.isWhitespace(prefix[cursor])) {
+            if (prefix[cursor] == '\n' or prefix[cursor] == '\r') separated = true;
+            cursor += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, prefix[cursor..], "<!--")) {
+            const end = std.mem.indexOfPos(u8, prefix, cursor + 4, "-->") orelse return null;
+            if (std.mem.indexOfScalar(u8, prefix[cursor..end], '\n') != null) separated = true;
+            cursor = end + 3;
+            continue;
+        }
+        if (!separated or !std.mem.startsWith(u8, prefix[cursor..], "[[")) return null;
+        const pair = syntax.balanced(prefix, cursor) orelse return null;
+        const body = prefix[cursor + 2 .. pair.inner_end];
+        const pipe = syntax.delimiter(body, "|", 0) orelse body.len;
+        const target = std.mem.trim(u8, body[0..pipe], " \t\r\n");
+        if (std.mem.startsWith(u8, target, ":") or std.mem.indexOfAny(u8, target, "[]{}<>") != null) return null;
+        const title = namespaces.ofTitle(target);
+        if (title.id != 6 or @import("presentation_media.zig").referencedKind(title.text) != .image) return null;
+        cursor = pair.end;
+        separated = false;
+        found = true;
+    }
+    return if (found) prefix else null;
 }
 
 const LanguageMarkers = struct {
@@ -608,6 +673,7 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
                 const section: language_source.Section = .{ .heading = heading, .source = "" };
                 if (hasExplicitLanguageDeclaration(markers.codes.*, section)) return true;
                 const classified = language_source.classificationHeading(heading);
+                if (resolveCategorizedHeading(markers.codes.*, classified) != null) return true;
                 if (resolveLinkedHeading(markers.codes.*, classified) != null or
                     resolveLinkedDeclaration(markers.codes.*, classified) != null) return true;
                 const plain = std.mem.trim(u8, classified, " \t\r\n\'\"");
@@ -780,6 +846,11 @@ fn processMain(
         return;
     };
 
+    const shared_prefix = if (page_sections.items.len != 0)
+        sharedImagePrefix(codes, source[0 .. @intFromPtr(page_sections.items[0].source.ptr) - @intFromPtr(source.ptr)])
+    else
+        null;
+
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
     defer {
         for (groups.items) |*group| group.source.deinit(page_allocator);
@@ -814,6 +885,7 @@ fn processMain(
         if (resolved) |language| {
             const group_index = groupIndex(groups.items, language) orelse blk: {
                 try groups.append(page_allocator, .{ .language = language });
+                if (shared_prefix) |prefix| try groups.items[groups.items.len - 1].source.appendSlice(page_allocator, prefix);
                 break :blk groups.items.len - 1;
             };
             current = group_index;
@@ -2044,8 +2116,8 @@ test "mixed linked declarations separate exact Arabic bodies" {
     const heading = "=[[في|فِي]] [[لغة|ٱللُّغَةِ]] [[إنجليزية|ٱلْإِنْجْلِيزِيَّةِ]]:=\n";
     try std.testing.expect(resolveLinkedDeclaration(codes, "topic [[إنجليزية]]:") == null);
     try std.testing.expect(resolveLinkedDeclaration(codes, "[[في]] [[لغة]] [[إنجليزية]]: extra") == null);
-    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Ohm", heading ++ "[[تصنيف:إنجليزية]]\n* [[أوم]]\n\n== فرنسية ==\n* [[وهم]]", "{{علمي}}\n{{إنكليزية}}\n* [[أوم]]\n\n== {{اللغة|فرنسية}} ==\n* [[وهم]]", null);
-    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "alpha", heading ++ "[[تصنيف:إنجليزية]] '''alpha'''\n# ألفا\n== لاتينية ==\n=== اسم ===\n# [[ألف]]", "{{علمي}}\n{{إنكليزية}} '''alpha'''\n# ألفا\n== {{اللغة|لاتينية}} ==\n=== اسم ===\n# [[ألف]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Ohm", heading ++ "[[تصنيف:إنجليزية]]\n* [[أوم]]\n\n== فرنسية[[تصنيف:فرنسية]] ==\n* [[وهم]]", "{{علمي}}\n{{إنكليزية}}\n* [[أوم]]\n\n== {{اللغة|فرنسية}} ==\n* [[وهم]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "alpha", heading ++ "[[تصنيف:إنجليزية]] '''alpha'''\n# ألفا\n== لاتينية[[تصنيف:لاتينية]] ==\n=== اسم ===\n# [[ألف]]", "{{علمي}}\n{{إنكليزية}} '''alpha'''\n# ألفا\n== {{اللغة|لاتينية}} ==\n=== اسم ===\n# [[ألف]]", null);
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "uncertain", "=topic [[إنجليزية]]=\n# uncertain-only\n==French==\n# french-only", "==French==\n# french-only", null);
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "support", "==English==\n# meaning\n==References==\nsupport-only", "==English==\n# meaning\n==References==\nsupport-only", null);
     const aligned_uncertain = "=topic [[English]]=\n# uncertain-equal\n==French==\n# french-equal";
@@ -2136,4 +2208,175 @@ test "cross language named references retain page scoped definitions without bod
         try std.testing.expect(std.mem.indexOf(u8, span.text, "enu") == null);
     };
     try std.testing.expectEqual(@as(usize, 3), markers);
+}
+
+test "categorized language headings require matching hidden language metadata" {
+    var namespaces = try @import("namespace_registry").Registry.init(std.testing.allocator, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &namespaces;
+    try std.testing.expectEqualStrings("fr", resolveCategorizedHeading(codes, "French[[تصنيف:French|sort]]").?.code);
+    inline for (.{ "French[[تصنيف:English]]", "French[[:تصنيف:French]]", "French[[French]]", "French[[تصنيف:French]] extra", "French[[تصنيف:French]", "{{-adj-}}[[تصنيف:French]]", "topic French[[تصنيف:French]]", "French<nowiki>[[تصنيف:French]]</nowiki>" }) |heading|
+        try std.testing.expect(resolveCategorizedHeading(codes, heading) == null);
+}
+
+test "categorized Russian Bulgarian headings preserve Macedonian and audio" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tملف\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+
+    // Exact raw revision 1069817; expanded input is source-instantiated, NOT captured.
+    // Language-template categories follow pinned revision1048305. Macedonian
+    // heading/audio are synthetic markup matching retained current decoded values.
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "روسية", "ru", "الروسية" }, .{ "بلغارية", "bg", "البلغارية" }, .{ "مقدونية", "mk", "المقدونية" } }) |row|
+                if ((std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[2]))) return .{ .code = row[1], .heading = row[2] };
+            return null;
+        }
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |r| r.code else null;
+        }
+    };
+    var codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve };
+    const profile_digest: [32]u8 = @splat(0);
+    const image_tsv = try std.fmt.allocPrint(a, "# wikidict-image-options-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n# namespace-registry-sha256\t{s}\n# behavior-switches-sha256\t{s}\nimg_thumbnail\t1\t\"تصغير\"\n", .{ std.fmt.bytesToHex(namespaces.source_sha256, .lower), std.fmt.bytesToHex(profile_digest, .lower) });
+    var image_options = try @import("namespace_registry").image_options.Registry.init(a, image_tsv, "arwiktionary", "20261001", "ar", namespaces.source_sha256, profile_digest);
+    defer image_options.deinit();
+    codes.image_options = &image_options;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const raw = "[[ملف:Aptenodytes patagonicus.JPG|تصغير]]\n== {{اللغة|روسية}} ==\n=== اللفظ ===\nألفبائية صوتية دولية: [pʲɪnˈgvʲin] {{لفظ روسي}}\n=== اسم ===\nпингви́н اسم مذكر يجمع على пингви́ны.\n* [[بِطْرِيق]] (طائِرٌ مائِيّ)\n\n== {{اللغة|بلغارية}} ==\n=== اسم ===\nпингвин اسم مذكر يجمع على пингвини.\n* [[بِطْرِيق]] (طائِرٌ مائِيّ)\n{{مقدونية}}\n=== اسم ===\n[[بِطْرِيق]] (طائِرٌ مائِيّ)";
+    const expanded = "[[ملف:Aptenodytes patagonicus.JPG|تصغير]]\n== روسية[[تصنيف:روسية]] ==\n=== اللفظ ===\nألفبائية صوتية دولية: [pʲɪnˈgvʲin] [[ملف:Ru-пингвин.ogg]]\n=== اسم ===\nпингви́н اسم مذكر يجمع على пингви́ны.\n* [[بِطْرِيق]] (طائِرٌ مائِيّ)\n\n== بلغارية[[تصنيف:بلغارية]] ==\n=== اسم ===\nпингвин اسم مذكر يجمع على пингвини.\n* [[بِطْرِيق]] (طائِرٌ مائِيّ)\n=مقدونية=\n\n=== اسم ===\n[[بِطْرِيق]] (طائِرٌ مائِيّ)";
+    const markers: LanguageMarkers = .{ .codes = &codes };
+    var raw_it = languageSections(raw, &markers);
+    var raw_count: usize = 0;
+    while (raw_it.next() != null) raw_count += 1;
+    var expanded_it = languageSections(expanded, &markers);
+    var expanded_count: usize = 0;
+    while (expanded_it.next() != null) expanded_count += 1;
+    try std.testing.expectEqual(@as(usize, 2), raw_count);
+    try std.testing.expectEqual(@as(usize, 3), expanded_count);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "пингвин", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    inline for (.{ .{ "الروسية", "ru" }, .{ "البلغارية", "bg" }, .{ "المقدونية", "mk" } }) |row| {
+        const path = try languageBlobPathAlloc(a, root, row[0]);
+        var mapped = try mmapPath(std.testing.io, path);
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("пингвин")).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(row[1], decoded.entry.language_code);
+        var text: std.ArrayList(u8) = .empty;
+        var definitions: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try text.appendSlice(a, span.text);
+            if (std.mem.eql(u8, span.target, "بِطْرِيق")) definitions += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(std.mem.eql(u8, row[1], "ru"), std.mem.indexOf(u8, text.items, "пингви́ны") != null);
+        try std.testing.expectEqual(std.mem.eql(u8, row[1], "bg"), std.mem.indexOf(u8, text.items, "пингвини") != null);
+        try std.testing.expectEqual(std.mem.eql(u8, row[1], "ru"), std.mem.indexOf(u8, text.items, "[pʲɪnˈgvʲin]") != null);
+        try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, row[1], "ru")) 2 else 1), decoded.entry.media.len);
+        try std.testing.expectEqualStrings("Aptenodytes patagonicus.JPG", decoded.entry.media[0].file);
+        try std.testing.expectEqualStrings("Aptenodytes patagonicus.JPG", decoded.entry.media[0].caption);
+        if (std.mem.eql(u8, row[1], "ru")) try std.testing.expectEqualStrings("Ru-пингвин.ogg", decoded.entry.media[1].file);
+    }
+}
+
+test "image only page prefixes preserve per language captions and reference ownership" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tملف\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &namespaces;
+    const image = "[[ملف:Shared.svg|240px|alt=Alt|Shared [[label]]<ref name=shared>caption reference</ref>]]\n";
+    const prefix = "<!-- [[ملف:Hidden.png]] -->\n" ++ image;
+    try std.testing.expectEqualStrings(prefix, sharedImagePrefix(codes, prefix).?);
+    inline for (.{ "prose\n" ++ image, image ++ "[[:ملف:Visible.png]]\n", image ++ "[[ordinary]]\n", "<nowiki>" ++ image ++ "</nowiki>\n", "<pre>" ++ image ++ "</pre>\n", image ++ "<ref>standalone reference</ref>\n", image ++ "[[ملف:broken\n", image ++ "[[تصنيف:French]]\n", "[[ملف:Audio.ogg]]\n", "[[ملف:One.png]] [[ملف:Two.png]]\n" }) |bad|
+        try std.testing.expect(sharedImagePrefix(codes, bad) == null);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const body = "==English==\n# english<ref name=en>english reference</ref>\n[[ملف:Shared.svg|body caption]]\n==French==\n# french<ref name=fr>french reference</ref>\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "prefix", prefix ++ body, prefix ++ body, null);
+    const rejected = "visible prose\n" ++ image ++ body;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "prose-prefix", rejected, rejected, null);
+    try std.testing.expectEqual(@as(usize, 4), (try writer.finish(codes)).language_records);
+    inline for (.{ .{ "English", "en", "english reference", "french reference" }, .{ "French", "fr", "french reference", "english reference" } }) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row[0]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const metadata = try blob.languageMetadata();
+        const rec = (try index.find("prefix")).?;
+        const page = try blobs.presentation_codec.decodeAlloc(a, rec.payload, rec.title, .language, metadata);
+        try std.testing.expectEqual(@as(usize, 1), page.entry.media.len);
+        try std.testing.expectEqualStrings("Shared.svg", page.entry.media[0].file);
+        try std.testing.expect(std.mem.startsWith(u8, page.entry.media[0].caption, "Shared label"));
+        try std.testing.expectEqual(@as(usize, 2), page.entry.references.len);
+        var own: usize = 0;
+        var caption_refs: usize = 0;
+        for (page.entry.references) |reference| {
+            var visible: std.ArrayList(u8) = .empty;
+            for (reference.spans) |span| {
+                if (span.kind == .line_break) try visible.append(a, '\n');
+                try visible.appendSlice(a, span.text);
+                try visible.appendSlice(a, span.trail);
+            }
+            const text = visible.items;
+            if (std.mem.eql(u8, text, row[2])) own += 1;
+            if (std.mem.eql(u8, text, "caption reference")) caption_refs += 1;
+            try std.testing.expect(!std.mem.eql(u8, text, row[3]));
+        }
+        try std.testing.expectEqual(@as(usize, 1), own);
+        try std.testing.expectEqual(@as(usize, 1), caption_refs);
+        // Existing mediaLabel flattens caption links into the outer File link.
+        try std.testing.expectEqualStrings("Shared label[1]", page.entry.media[0].caption);
+        var caption_labels: usize = 0;
+        for (page.entry.sections) |section| for (section.blocks) |block| {
+            var visible: std.ArrayList(u8) = .empty;
+            var media_target = false;
+            for (block.spans) |span| {
+                if (std.mem.eql(u8, span.target, "File:Shared.svg")) media_target = true;
+                if (span.kind == .line_break) try visible.append(a, '\n');
+                try visible.appendSlice(a, span.text);
+                try visible.appendSlice(a, span.trail);
+            }
+            if (media_target and std.mem.eql(u8, std.mem.trim(u8, visible.items, " \t\r\n"), "Shared label[1]")) caption_labels += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), caption_labels);
+        const rejected_rec = (try index.find("prose-prefix")).?;
+        const rejected_page = try blobs.presentation_codec.decodeAlloc(a, rejected_rec.payload, rejected_rec.title, .language, metadata);
+        try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, row[1], "en")) 1 else 0), rejected_page.entry.media.len);
+        if (std.mem.eql(u8, row[1], "en")) try std.testing.expectEqualStrings("body caption", rejected_page.entry.media[0].caption);
+        try std.testing.expectEqual(@as(usize, 1), rejected_page.entry.references.len);
+    }
 }
