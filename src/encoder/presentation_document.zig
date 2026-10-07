@@ -20,6 +20,8 @@ const ImageRegistry = @import("namespace_registry").image_options.Registry;
 const BehaviorRegistry = @import("namespace_registry").behavior_switches.Registry;
 const NamespaceRegistry = @import("namespace_registry").Registry;
 pub const Fallbacks = @import("presentation_fallback.zig").Report;
+pub const ReferenceDefinitions = compiler.ReferenceDefinitions;
+pub const referenceDefinitionsAlloc = compiler.referenceDefinitionsAlloc;
 
 fn requireCompiledText(text: []const u8) !void {
     for ([_][]const u8{ "[[", "]]", "{{", "}}", "{|", "|}" }) |token| {
@@ -138,7 +140,7 @@ const Builder = struct {
         try self.flush(rendered[section_start..]);
     }
 };
-fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry) !Work {
+fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions) !Work {
     var renderer: compiler.Renderer = .{
         .a = a,
         .context = .{
@@ -150,6 +152,8 @@ fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, 
             .image_options = image_options,
         },
     };
+    renderer.page_reference_definitions = reference_context.items;
+    renderer.fallbacks.merge(reference_context.fallbacks);
     var builder: Builder = .{
         .a = a,
         .renderer = &renderer,
@@ -297,9 +301,27 @@ pub fn compileReportedWithOptionsAlloc(
     image_options: ?*const ImageRegistry,
     fallbacks: ?*Fallbacks,
 ) ![]u8 {
+    return compileReportedWithReferencesAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, .{}, fallbacks);
+}
+
+pub fn compileReportedWithReferencesAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: []const u8,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    reference_context: compiler.ReferenceDefinitions,
+    fallbacks: ?*Fallbacks,
+) ![]u8 {
     _ = kind;
     _ = language_code;
-    const work = try workAlloc(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options);
+    const work = try workAlloc(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;
@@ -366,7 +388,7 @@ test "builder sections borrow contiguous rendered block slices" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const work = try workAlloc(a, "page", "English", "preamble\n===First===\n# one\n===Second===\n===Third===\n# three\n", .{}, null, null, null);
+    const work = try workAlloc(a, "page", "English", "preamble\n===First===\n# one\n===Second===\n===Third===\n# three\n", .{}, null, null, null, .{});
     try std.testing.expectEqual(@as(usize, 4), work.sections.len);
     try std.testing.expectEqualStrings("English", work.sections[0].title);
     try std.testing.expectEqual(@as(usize, 1), work.sections[0].blocks.len);

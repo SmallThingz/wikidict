@@ -866,8 +866,9 @@ fn processMain(
         pending.clearRetainingCapacity();
     }
 
+    const reference_context = try presentation_document.referenceDefinitionsAlloc(page_allocator, source);
     for (groups.items) |group| {
-        const payload = try presentation_document.compileReportedWithOptionsAlloc(
+        const payload = try presentation_document.compileReportedWithReferencesAlloc(
             page_allocator,
             title,
             .language,
@@ -879,6 +880,7 @@ fn processMain(
             codes.namespace_catalog,
             codes.behavior_switches,
             codes.image_options,
+            reference_context,
             fallbacks,
         );
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
@@ -2080,4 +2082,58 @@ test "mixed boundaries reject arbitrary POS ISO template candidates" {
     try std.testing.expectEqualStrings(english, it.next().?.source);
     try std.testing.expectEqualStrings(french, it.next().?.source);
     try std.testing.expect(it.next() == null);
+}
+
+// Raw witness retained separately; the citation expansion below is explicitly synthetic.
+test "cross language named references retain page scoped definitions without body leakage" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "أكادية") or std.mem.eql(u8, value, "Akkadian")) return .{ .code = "akk", .heading = "Akkadian" };
+            if (std.mem.eql(u8, value, "سومرية") or std.mem.eql(u8, value, "Sumerian")) return .{ .code = "sux", .heading = "Sumerian" };
+            return null;
+        }
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |language| language.code else null;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "𒂗", "== أكادية ==\n=== المعاني ===\n* '''𒂗''' ([[bēlu]])\n# [[مَالِك]]<ref name=\"a\">𒂗 | Definition of 𒂗 at Definify</ref>\n# [[رَبّ]]<ref name=\"a\"/>\n# [[سَيِّد]]<ref name=\"a\"/>\n# [[حَاكِم]]<ref name=\"a\"/>\n# لقب لآلهة بابلية، منها ''بعل'' و''مردوخ''.<ref name=\"a\"/>\n\n* '''𒂗''' ([[enu]])\n# [[رَئِيس]] [[كَاهِن|اَلْكَهَنَة]]<ref name=\"a\"/>\n# [[إيرل]]<ref name=\"a\"/>\n\n=== الأصل والاشتقاق ===\n* ([[bēlu]]) مشتقة من ''[[*baʿl-]]'' السامية البدائية.<ref name=\"a\"/>\n* ([[enu]]) مشتقة من ''[[𒂗#سومرية|𒂗]]'' السومرية.<ref name=\"a\"/>\n\n== سومرية ==\n=== المعاني ===\n'''𒂗'''\n# شكل بديل من [[𒂗𒈾]].\n# [[رَبّ]]<ref name=\"a\"/>\n# [[مَلِك]]<ref name=\"a\"/>\n# [[سَيِّد]]<ref name=\"a\"/>\n\n=== الأصل والاشتقاق ===\n==== الاشتقاق ====\nأشتقت من '''𒂗''' الكلمات التالية:\n* [[𒂗#آكادية|𒂗]] الآكادية\n\n== المراجع ==\n<references/>", "== {{اللغة|أكادية}} ==\n=== المعاني ===\n* '''𒂗''' ([[bēlu]])\n# [[مَالِك]]<ref name=\"a\">{{استشهاد ويب|عنوان=𒂗 {{!}} Definition of 𒂗 at Definify|مسار=https://www.definify.com/word/%F0%92%82%97|تاريخ الوصول=2024-10-17|موقع=www.definify.com}}</ref>\n# [[رَبّ]]<ref name=\"a\"/>\n# [[سَيِّد]]<ref name=\"a\"/>\n# [[حَاكِم]]<ref name=\"a\"/>\n# لقب لآلهة بابلية، منها ''بعل'' و''مردوخ''.<ref name=\"a\"/>\n\n* '''𒂗''' ([[enu]])\n# [[رَئِيس]] [[كَاهِن|اَلْكَهَنَة]]<ref name=\"a\"/>\n# [[إيرل]]<ref name=\"a\"/>\n\n=== الأصل والاشتقاق ===\n* ([[bēlu]]) مشتقة من ''[[*baʿl-]]'' السامية البدائية.<ref name=\"a\"/>\n* ([[enu]]) مشتقة من ''[[𒂗#سومرية|𒂗]]'' السومرية.<ref name=\"a\"/>\n\n== {{اللغة|سومرية}} ==\n=== المعاني ===\n'''𒂗'''\n# شكل بديل من [[𒂗𒈾]].\n# [[رَبّ]]<ref name=\"a\"/>\n# [[مَلِك]]<ref name=\"a\"/>\n# [[سَيِّد]]<ref name=\"a\"/>\n\n=== الأصل والاشتقاق ===\n==== الاشتقاق ====\nأشتقت من '''𒂗''' الكلمات التالية:\n* [[𒂗#آكادية|𒂗]] الآكادية\n\n== المراجع ==\n{{مراجع}}", null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    const path = try languageBlobPathAlloc(a, root, "Sumerian");
+    var mapped = try mmapPath(std.testing.io, path);
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("𒂗")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings("sux", decoded.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    try std.testing.expectEqualStrings("a", decoded.entry.references[0].name);
+    var references_text: std.ArrayList(u8) = .empty;
+    for (decoded.entry.references[0].spans) |span| try references_text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("𒂗 | Definition of 𒂗 at Definify", references_text.items);
+    var markers: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.target, "#reference-1")) markers += 1;
+        try std.testing.expect(std.mem.indexOf(u8, span.text, "bēlu") == null);
+        try std.testing.expect(std.mem.indexOf(u8, span.text, "enu") == null);
+    };
+    try std.testing.expectEqual(@as(usize, 3), markers);
 }

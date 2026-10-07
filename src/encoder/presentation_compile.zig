@@ -188,7 +188,16 @@ pub const Block = struct {
     relation_note: bool = false,
 };
 pub const Reference = struct { number: usize, group_number: usize, name: []const u8 = "", group: []const u8 = "", body: []const u8 = "", spans: []const Span = &.{} };
-const ReferenceDefinition = struct { name: []const u8, group: []const u8 = "", body: []const u8 = "" };
+pub const ReferenceDefinition = struct { name: []const u8, group: []const u8 = "", body: []const u8 = "" };
+pub const ReferenceDefinitions = struct { items: []const ReferenceDefinition = &.{}, fallbacks: @import("presentation_fallback.zig").Report = .{} };
+
+/// Collect names once without rendering reference bodies or creating citations.
+pub fn referenceDefinitionsAlloc(a: std.mem.Allocator, source: []const u8) Error!ReferenceDefinitions {
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    try renderer.referenceDefinitions(source, "");
+    return .{ .items = try renderer.ref_defs.toOwnedSlice(a), .fallbacks = renderer.fallbacks };
+}
+
 const max_nodes = 100_000;
 const max_depth = 48;
 fn starts(text: []const u8, prefix: []const u8) bool {
@@ -519,6 +528,8 @@ pub const Renderer = struct {
     block_formatting: SpanFlags = .{},
     refs: std.ArrayList(Reference) = .empty,
     ref_defs: std.ArrayList(ReferenceDefinition) = .empty,
+    // Borrowed build-only page definitions. Unused names never become references.
+    page_reference_definitions: []const ReferenceDefinition = &.{},
     default_group_reference_count: usize = 0,
     media_caption_spans: std.ArrayList([]const Span) = .empty,
     media: std.ArrayList(media_types.Media) = .empty,
@@ -725,6 +736,12 @@ pub const Renderer = struct {
             return i;
         };
         var resolved_body = body;
+        if (name.len != 0) for (self.page_reference_definitions) |definition| {
+            if (definition.body.len != 0 and std.mem.eql(u8, definition.name, name) and std.mem.eql(u8, definition.group, group)) {
+                resolved_body = definition.body;
+                break;
+            }
+        };
         if (name.len != 0 and resolved_body.len == 0) for (self.ref_defs.items) |definition| {
             if (std.mem.eql(u8, definition.name, name) and std.mem.eql(u8, definition.group, group)) {
                 resolved_body = definition.body;
@@ -767,6 +784,13 @@ pub const Renderer = struct {
         try self.text(marker, s);
     }
     fn referenceDefinitions(self: *Renderer, content: []const u8, default_group: []const u8) Error!void {
+        try self.referenceDefinitionsInner(content, default_group, 0);
+    }
+    fn referenceDefinitionsInner(self: *Renderer, content: []const u8, default_group: []const u8, depth: usize) Error!void {
+        if (depth >= max_depth) {
+            self.fallbacks.render_limit = true;
+            return;
+        }
         var pos: usize = 0;
         while (std.mem.indexOfScalarPos(u8, content, pos, '<')) |open| {
             if (starts(content[open..], "<!--")) {
@@ -778,6 +802,13 @@ pub const Renderer = struct {
                 continue;
             };
             pos = tag.end;
+            if (!tag.closing and tag.is("references")) {
+                const pair = syntax.matchingTag(content, tag) orelse continue;
+                const own_group = try self.entityText(tag.attr("group") orelse "");
+                try self.referenceDefinitionsInner(content[tag.end..pair.inner_end], if (own_group.len != 0) own_group else default_group, depth + 1);
+                pos = pair.end;
+                continue;
+            }
             if (!tag.closing and syntax.isOpaqueTag(tag.name) and !tag.is("ref")) {
                 pos = if (syntax.matchingTag(content, tag)) |pair| pair.end else content.len;
                 continue;
@@ -799,7 +830,13 @@ pub const Renderer = struct {
                 found = true;
                 break;
             }
-            if (!found) try self.ref_defs.append(self.a, .{ .name = name, .group = group, .body = body });
+            if (!found) {
+                if (self.ref_defs.items.len >= max_nodes) {
+                    self.fallbacks.render_limit = true;
+                    return;
+                }
+                try self.ref_defs.append(self.a, .{ .name = name, .group = group, .body = body });
+            }
             for (self.refs.items) |*ref| {
                 if (std.mem.eql(u8, ref.name, name) and std.mem.eql(u8, ref.group, group) and ref.body.len == 0 and body.len != 0) ref.body = body;
             }
@@ -3827,4 +3864,27 @@ test "image option timed audio handler validates values without hiding unsupport
     for (cases) |case| try std.testing.expectEqualStrings(case.expected, r.mediaCaption(try std.fmt.allocPrint(r.a, "Caption|{s}", .{case.option}), case.file, Renderer.mediaOptionMode(case.file, false)));
     for ([_][]const u8{ "de", "ZH-hant-TW", "x-private", "i-klingon", "en-a-test-b-more-x-p", "en-123", "en\n" }) |tag| try std.testing.expect(Renderer.mediaLanguageTag(tag));
     for ([_][]const u8{ "", "en_US", "e", "en-1-test", "en-a", "en-x", "en--US", "en-abcdefghi", "en\n\n" }) |tag| try std.testing.expect(!Renderer.mediaLanguageTag(tag));
+}
+
+
+test "page reference context preserves first definitions groups protection and used only output" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const context = try referenceDefinitionsAlloc(a,
+        "<ref name='a&amp;b'/><ref name='a&amp;b'>First</ref><ref name='a&amp;b'>Later</ref>" ++
+        "<references group='g&amp;x'><ref name=a>Grouped</ref><ref name=a group=other>Other</ref></references>" ++
+        "<!-- <ref name=comment>Wrong</ref> --><nowiki><ref name=raw>Wrong</ref></nowiki>" ++
+        "<pre><ref name=pre>Wrong</ref></pre><code><nowiki><ref name=nested>Wrong</ref></nowiki><ref name=code>Parsed code</ref></code>" ++
+        "<ref name=unused>{{uncompiled-neighbor}}</ref><ref name=forward>Forward</ref>");
+    try std.testing.expectEqual(@as(usize, 6), context.items.len);
+    var r: Renderer = .{ .a = a, .context = .{}, .page_reference_definitions = context.items };
+    const spans = try r.parseSpans("Body<ref name='a&amp;b'>Conflicting local</ref><ref name=a group='g&amp;x'/><ref name=a group=other/><ref name=code/><ref name=forward/><ref name=missing/>", .{});
+    try std.testing.expectEqualStrings("Body[1][g&x 1][other 1][2][3][4]", try flattened(a, spans));
+    const refs = try r.finishReferences();
+    try std.testing.expectEqual(@as(usize, 6), refs.len);
+    inline for (.{ "First", "Grouped", "Other", "Parsed code", "Forward", "Reference text unavailable" }, 0..) |expected, i| {
+        try std.testing.expectEqualStrings(expected, try flattened(a, refs[i].spans));
+    }
+    try std.testing.expect(!r.fallbacks.template_presentation);
 }
