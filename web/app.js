@@ -1,4 +1,5 @@
 import {renderEntry} from './renderer.js';
+import {entryClue as clue,hitKey as key,refreshSavedClue} from './preview.js';
 import {mediaView,trimMedia,clearMedia} from './media.js';
 const $=id=>document.getElementById(id),panel=$('panel'),entryView=$('entry');
 const worker=new Worker('./import-worker.js',{type:'module'}),pending=new Map();let sequence=0;
@@ -10,7 +11,6 @@ let state={history:[],saved:[],scores:{},settings:{...defaults},sources:[default
 const node=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
 const button=(text,label,action,cls)=>{const b=node('button',text,cls);b.type='button';b.setAttribute('aria-label',label||text);b.onclick=()=>Promise.resolve(action()).catch(error=>status(error.message,true));return b;};
 const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
-const key=h=>JSON.stringify([h.dictionary,h.context||h.dictionary,h.raw_key??h.title]);
 let saveTimer;function flushSave(){clearTimeout(saveTimer);saveTimer=null;return call('saveState',state);}
 function save(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>flushSave().catch(e=>status(e.message,true)),80);}
 function theme(){document.documentElement.dataset.theme=state.settings.darkMode==='system'?(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'):state.settings.darkMode;}
@@ -19,10 +19,12 @@ function navigate(next){page=next;renderVersion++;panel.replaceChildren();entryV
  if(next==='search')search();else if(next==='history'||next==='saved')wordList(next);else if(next==='learn')learn();else if(next==='settings')settings();else if(next==='dictionaries')dictionaries();else if(next==='reading')renderWord();
 }
 async function open(hit){if(!hit)return;const version=++renderVersion;status('Opening…');const value=await call('read',hit);if(version!==renderVersion)return;current=value;currentHit=hit;
- if(state.settings.historyLimit>0){const item={...hit,clue:clue(value),at:Date.now()};state.history=[item,...state.history.filter(x=>key(x)!==key(hit))].slice(0,state.settings.historyLimit);save();}
+ const preview=clue(value),saved=refreshSavedClue(state.saved,hit,preview),savedChanged=saved!==state.saved;state.saved=saved;
+ if(state.settings.historyLimit>0){const item={...hit,clue:preview,at:Date.now()};state.history=[item,...state.history.filter(x=>key(x)!==key(hit))].slice(0,state.settings.historyLimit);save();}
+ if(savedChanged)await flushSave();
+ if(version!==renderVersion)return;
  navigate('reading');
 }
-function clue(entry){return entry.sections.flatMap(s=>s.blocks).find(b=>b.kind==='definition')?.spans.map(s=>s.text+s.trail).join('')||entry.title;}
 async function openLink(target){const [name,anchor]=target.split('#');if(name){const hit=await call('exact',{title:name.replaceAll('_',' '),context:current?.navigation_context||currentHit?.context||currentHit?.dictionary});if(!hit){status('Word is not installed in this dictionary.');return;}await open(hit);}if(anchor){const el=document.getElementById(anchor);if(el){if(el.tagName==='DETAILS')el.open=true;el.scrollIntoView({behavior:'smooth'});}}}
 function speak(){if(!current)return;const lang=current.language_code;if(!lang||lang==='und'){status('No language is identified for offline pronunciation.');return;}const voices=speechSynthesis.getVoices().filter(v=>v.localService&&v.lang.split('-')[0]===lang.split('-')[0]);const voice=voices.find(v=>v.default)||voices.find(v=>v.lang===navigator.language)||voices[0];if(!voice){status('No offline voice for this language is installed.');return;}speechSynthesis.cancel();const speech=new SpeechSynthesisUtterance(current.title);speech.voice=voice;speech.lang=voice.lang;speechSynthesis.speak(speech);}
 function renderWord(){

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test blob.test.mjs alias.test.mjs validate.test.mjs",
+    "test": "node --test blob.test.mjs alias.test.mjs validate.test.mjs preview.test.mjs",
     "test:browser": "node browser.test.mjs"
   },
   "devDependencies": {
