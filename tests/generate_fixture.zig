@@ -86,6 +86,41 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
     defer a.free(thesaurus_blob);
     const thesaurus_path = try std.fs.path.join(a, &.{ root, "thesaurus.wikblb" });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = thesaurus_path, .data = thesaurus_blob });
+    var supplemental_records: [2]enc.blob_format.RecordInput = undefined;
+    for ([_][]const u8{ "Annexe:école", "Appendix:école" }, 0..) |title, at| {
+        const spans = [_]enc.presentation_types.Span{.{ .text = title }};
+        const blocks = [_]enc.presentation_types.Block{.{ .kind = .paragraph, .spans = &spans }};
+        const sections_supp = [_]enc.presentation_types.Section{.{ .level = 2, .title = "Supplemental", .blocks = &blocks }};
+        const entry: enc.presentation_types.Stored = .{ .entry = .{ .title = title, .kind = .supplemental, .language = null, .language_code = "", .sections = &sections_supp } };
+        supplemental_records[at] = .{ .title = title, .payload = try enc.presentation_codec.encodeAlloc(a, entry) };
+    }
+    const supplemental_blob = try enc.blob_format.buildAlloc(a, .supplemental, "", &supplemental_records);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "supplemental.wikblb" }), .data = supplemental_blob });
+
+    const alias_specs = [_]struct { source: []const u8, target: []const u8, kind: enc.blob_format.BlobKind = .language, namespace: u32 = 0 }{
+        .{ .source = "Cats", .target = "cat" },
+        .{ .source = "Loop A", .target = "Loop B" },
+        .{ .source = "Loop B", .target = "cat" },
+        .{ .source = "Missing", .target = "not installed" },
+        .{ .source = "Annexe:École", .target = "Annexe:école", .kind = .supplemental, .namespace = 100 },
+    };
+    var alias_records: [alias_specs.len]enc.blob_format.RecordInput = undefined;
+    for (alias_specs, 0..) |spec, at| {
+        const spans = [_]enc.presentation_types.Span{.{ .kind = .link, .text = spec.target, .target = spec.target }};
+        const entry: enc.presentation_types.Stored = .{ .entry = .{ .title = spec.source, .kind = .alias, .preamble_spans = &spans } };
+        alias_records[at] = .{
+            .title = try enc.alias_codec.keyAlloc(a, spec.kind, spec.source),
+            .payload = try enc.alias_codec.encodeAlloc(a, .{
+                .source_namespace = spec.namespace, .source_kind = spec.kind, .source_title = spec.source, .source_key = spec.source,
+                .xml_target = spec.target, .target_title = spec.target, .target_namespace = spec.namespace, .target_kind = spec.kind,
+                .target_key = spec.target, .fragment = "", .presentation = try enc.presentation_codec.encodeAlloc(a, entry),
+            }),
+        };
+    }
+    const alias_root = try std.fs.path.join(a, &.{ root, "alias-cases" });
+    try std.Io.Dir.cwd().createDirPath(io, alias_root);
+    const aliases_blob = try enc.blob_format.buildAlloc(a, .alias, "", &alias_records);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ alias_root, "aliases.wikblb" }), .data = aliases_blob });
 }
 
 pub fn main(init: std.process.Init) !void {
