@@ -1,5 +1,21 @@
 //! Bounded runtime helpers for template arguments and literal/HTML boundaries.
 const std = @import("std");
+/// Core MediaWiki behavior switches have no visible dictionary text.
+/// Match only registered canonical aliases, retaining their case rules. Never
+/// call this on nowiki, opaque extension bodies, decoded entities or attributes.
+pub fn behaviorSwitchEnd(text: []const u8, start: usize) ?usize {
+    if (start >= text.len or !starts(text[start..], "__")) return null;
+    const close = std.mem.indexOfPos(u8, text, start + 2, "__") orelse return null;
+    const name = text[start + 2 .. close];
+    inline for (&.{ "NOTOC", "FORCETOC", "TOC", "NOEDITSECTION", "NOGALLERY", "NOCONTENTCONVERT", "NOCC", "NOTITLECONVERT", "NOTC" }) |alias| {
+        if (std.ascii.eqlIgnoreCase(name, alias)) return close + 2;
+    }
+    inline for (&.{ "HIDDENCAT", "INDEX", "NOINDEX", "NEWSECTIONLINK", "NONEWSECTIONLINK", "STATICREDIRECT", "EXPECTUNUSEDCATEGORY", "EXPECTUNUSEDTEMPLATE", "EXPECTSHORTPAGE" }) |alias| {
+        if (std.mem.eql(u8, name, alias)) return close + 2;
+    }
+    return null;
+}
+
 pub const Pair = struct { inner_end: usize, end: usize };
 pub fn starts(text: []const u8, prefix: []const u8) bool {
     return std.mem.startsWith(u8, text, prefix);
@@ -471,4 +487,11 @@ test "delimiter search stops conservatively at malformed nested opener storms" {
     for (0..8_000) |_| try text.appendSlice(a, "{{broken");
     try text.appendSlice(a, "|not-top-level");
     try std.testing.expect(delimiter(text.items, "|", 0) == null);
+}
+
+test "behavior switches preserve unknown names and source case rules" {
+    try std.testing.expectEqual(@as(?usize, 17), behaviorSwitchEnd("__NOEDITSECTION__", 0));
+    try std.testing.expectEqual(@as(?usize, 9), behaviorSwitchEnd("__notoc__", 0));
+    for ([_][]const u8{ "__unknown__", "__index__", "__NOEDITSECTION_", "__NOTOC extra__", "ordinary" }) |value|
+        try std.testing.expectEqual(@as(?usize, null), behaviorSwitchEnd(value, 0));
 }

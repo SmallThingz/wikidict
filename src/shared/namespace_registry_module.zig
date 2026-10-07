@@ -1,6 +1,8 @@
 //! Compiler-facing exports; keep the capture-bound normalization source stable.
 const registry = @import("namespace_registry.zig");
 
+pub const image_options = @import("image_options.zig");
+pub const behavior_switches = @import("behavior_switches.zig");
 pub const magic_words = registry.magic_words;
 pub const Role = registry.Role;
 pub const Spec = registry.Spec;
@@ -16,4 +18,6 @@ test {
     // Retain discovery of both original registry and redirect parser tests.
     _ = registry;
     _ = page_redirects;
+    _ = behavior_switches;
+    _ = image_options;
 }

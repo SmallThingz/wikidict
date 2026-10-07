@@ -101,6 +101,8 @@ pub const Iterator = struct {
     balance: Balance = .{},
     done: bool = false,
     marker_filter: ?MarkerFilter = null,
+    heading_filter: ?MarkerFilter = null,
+    mixed_levels: bool = false,
 
     pub const MarkerFilter = struct {
         ctx: ?*const anyopaque,
@@ -144,8 +146,11 @@ pub const Iterator = struct {
                 else if (marker != null) 2 else null;
                 if (candidate_level) |level| {
                     if (self.active_level == null) self.active_level = level;
-                    if (level == self.active_level.?) {
-                        const title = if (heading) |value| value.title else marker.?;
+                    const title = if (heading) |value| value.title else marker.?;
+                    const declared = if (self.heading_filter) |filter| filter.accepts(filter.ctx, title) else false;
+                    if (level == self.active_level.? or declared) {
+                        if (level != self.active_level.?) self.mixed_levels = true;
+                        self.active_level = level;
                         if (self.active_start) |start| {
                             const result: Section = .{
                                 .heading = self.active_heading,
@@ -461,4 +466,35 @@ test "category attribution ignores hidden source and colon-prefixed links" {
         "<nowiki/>[[Category:English|sort key]]\n" };
     try std.testing.expectEqualStrings("Category:English", it.next().?);
     try std.testing.expect(it.next() == null);
+}
+
+test "mixed language depths preserve ordinary nested POS" {
+    const english = "=English=\n==Noun==\n# english\n";
+    const french = "==French==\n===Nom===\n# french\n";
+    var it = Iterator.init(english ++ french ++ "=English=\n# second\n");
+    it.heading_filter = .{ .ctx = null, .accepts = struct {
+        fn accepts(_: ?*const anyopaque, heading: []const u8) bool {
+            return std.mem.eql(u8, heading, "English") or std.mem.eql(u8, heading, "French");
+        }
+    }.accepts };
+    try std.testing.expectEqualStrings(english, it.next().?.source);
+    try std.testing.expectEqualStrings(french, it.next().?.source);
+    try std.testing.expectEqualStrings("=English=\n# second\n", it.next().?.source);
+    try std.testing.expect(it.next() == null);
+}
+
+test "mixed language boundaries change active depth in both directions" {
+    const english = "==English==\n===Noun===\n# english\n";
+    const french = "=French=\n==Nom==\n# french\n";
+    var it = Iterator.init(english ++ french ++ "==English==\n===Verb===\n# second\n");
+    it.heading_filter = .{ .ctx = null, .accepts = struct {
+        fn accepts(_: ?*const anyopaque, heading: []const u8) bool {
+            return std.mem.eql(u8, heading, "English") or std.mem.eql(u8, heading, "French");
+        }
+    }.accepts };
+    try std.testing.expectEqualStrings(english, it.next().?.source);
+    try std.testing.expectEqualStrings(french, it.next().?.source);
+    try std.testing.expectEqualStrings("==English==\n===Verb===\n# second\n", it.next().?.source);
+    try std.testing.expect(it.next() == null);
+    try std.testing.expect(it.mixed_levels);
 }

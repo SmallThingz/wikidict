@@ -26,6 +26,8 @@ const Options = struct {
     language_fallbacks_snapshot: ?[]const u8 = null,
     language_names_snapshot: ?[]const u8 = null,
     date_numbering_snapshot: ?[]const u8 = null,
+    behavior_switches_snapshot: ?[]const u8 = null,
+    image_options_snapshot: ?[]const u8 = null,
     magic_words_snapshot: ?[]const u8 = null,
     file_metadata_snapshot: ?[]const u8 = null,
     transclusion_redirects_snapshot: ?[]const u8 = null,
@@ -113,6 +115,14 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.language_fallbacks_snapshot != null) return error.Usage;
             options.language_fallbacks_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--image-options-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.image_options_snapshot != null) return error.Usage;
+            options.image_options_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--behavior-switches-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.behavior_switches_snapshot != null) return error.Usage;
+            options.behavior_switches_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--magic-words-snapshot")) {
             index += 1;
             if (index >= args.len or options.magic_words_snapshot != null) return error.Usage;
@@ -902,7 +912,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--page-redirects-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--date-numbering-snapshot FILE] [--magic-words-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--page-redirects-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--date-numbering-snapshot FILE] [--magic-words-snapshot FILE] [--behavior-switches-snapshot FILE] [--image-options-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -962,6 +972,10 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "date-numbering.tsv");
     if (options.language_names_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "language-names.tsv");
+    if (options.image_options_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "image-options.tsv");
+    if (options.behavior_switches_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "behavior-switches.tsv");
     if (options.magic_words_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "magic-words.tsv");
     if (options.file_metadata_snapshot) |snapshot|
@@ -1028,4 +1042,18 @@ test "pipeline pins explicit build time and rejects invalid duplicate timestamps
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--now-unix", "-1" }));
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--now-unix", "9223372036854775808" }));
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--now-unix", "1", "--now-unix", "2" }));
+}
+
+test "behavior switch snapshot option is strict" {
+    const options = try parseOptions(&.{ "dump.xml", "out", "--behavior-switches-snapshot", "behavior.tsv" });
+    try std.testing.expectEqualStrings("behavior.tsv", options.behavior_switches_snapshot.?);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--behavior-switches-snapshot" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--behavior-switches-snapshot", "behavior.tsv", "--behavior-switches-snapshot", "other.tsv" }));
+}
+
+test "bundle image option snapshot arguments are strict" {
+    const options = try parseOptions(&.{ "dump.xml", "out", "--image-options-snapshot", "image.tsv" });
+    try std.testing.expectEqualStrings("image.tsv", options.image_options_snapshot.?);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--image-options-snapshot" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--image-options-snapshot", "image.tsv", "--image-options-snapshot", "other.tsv" }));
 }

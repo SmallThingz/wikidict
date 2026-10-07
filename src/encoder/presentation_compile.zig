@@ -11,6 +11,10 @@ const A = std.mem.Allocator;
 fn optionalTableEnd(input: []const u8, opening: syntax.Tag) syntax.Pair {
     var cursor = opening.end;
     while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |at| {
+        if (syntax.protectedEnd(input, at)) |end| {
+            cursor = end;
+            continue;
+        }
         const tag = syntax.tagAt(input, at) orelse {
             cursor = at + 1;
             continue;
@@ -29,16 +33,102 @@ fn optionalTableEnd(input: []const u8, opening: syntax.Tag) syntax.Pair {
     }
     return .{ .inner_end = input.len, .end = input.len };
 }
+fn optionalListItemEnd(input: []const u8, opening: syntax.Tag) syntax.Pair {
+    if (opening.self_closing) return .{ .inner_end = opening.end, .end = opening.end };
+    var cursor = opening.end;
+    while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |at| {
+        if (syntax.protectedEnd(input, at)) |end| {
+            cursor = end;
+            continue;
+        }
+        const tag = syntax.tagAt(input, at) orelse {
+            cursor = at + 1;
+            continue;
+        };
+        cursor = tag.end;
+        if (!tag.closing and (tag.is("ul") or tag.is("ol") or tag.is("dl") or tag.is("table"))) {
+            if (syntax.matchingTag(input, tag)) |pair| {
+                cursor = pair.end;
+                continue;
+            }
+        }
+        if (tag.closing and tag.is(opening.name)) return .{ .inner_end = at, .end = tag.end };
+        const sibling = !tag.closing and (if (opening.is("li")) tag.is("li") else tag.is("dt") or tag.is("dd"));
+        const parent = tag.closing and (tag.is("ul") or tag.is("ol") or tag.is("dl"));
+        if (sibling or parent) return .{ .inner_end = at, .end = at };
+    }
+    return .{ .inner_end = input.len, .end = input.len };
+}
+fn htmlAttributePresent(tag: syntax.Tag, key: []const u8) bool {
+    var at: usize = 0;
+    while (at < tag.attrs.len) {
+        while (at < tag.attrs.len and (std.ascii.isWhitespace(tag.attrs[at]) or tag.attrs[at] == '/')) : (at += 1) {}
+        const begin = at;
+        while (at < tag.attrs.len and !std.ascii.isWhitespace(tag.attrs[at]) and tag.attrs[at] != '=' and tag.attrs[at] != '/') : (at += 1) {}
+        if (at == begin) {
+            at += 1;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(tag.attrs[begin..at], key)) return true;
+        while (at < tag.attrs.len and std.ascii.isWhitespace(tag.attrs[at])) : (at += 1) {}
+        if (at == tag.attrs.len or tag.attrs[at] != '=') continue;
+        at += 1;
+        while (at < tag.attrs.len and std.ascii.isWhitespace(tag.attrs[at])) : (at += 1) {}
+        if (at == tag.attrs.len) break;
+        const quote = tag.attrs[at];
+        const quoted = quote == '\'' or quote == '"';
+        if (quoted) at += 1;
+        while (at < tag.attrs.len and (if (quoted) tag.attrs[at] != quote else !std.ascii.isWhitespace(tag.attrs[at]))) : (at += 1) {}
+        if (quoted and at < tag.attrs.len) at += 1;
+    }
+    return false;
+}
+const HtmlListNumberStyle = enum { decimal, lower_alpha, upper_alpha, lower_roman, upper_roman };
+fn htmlListNumberStyle(value: []const u8) ?HtmlListNumberStyle {
+    if (std.mem.eql(u8, value, "1")) return .decimal;
+    if (std.mem.eql(u8, value, "a")) return .lower_alpha;
+    if (std.mem.eql(u8, value, "A")) return .upper_alpha;
+    if (std.mem.eql(u8, value, "i")) return .lower_roman;
+    if (std.mem.eql(u8, value, "I")) return .upper_roman;
+    return null;
+}
+fn htmlListItemCount(input: []const u8) i32 {
+    var count: i32 = 0;
+    var cursor: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |at| {
+        if (syntax.protectedEnd(input, at)) |end| {
+            cursor = end;
+            continue;
+        }
+        const tag = syntax.tagAt(input, at) orelse {
+            cursor = at + 1;
+            continue;
+        };
+        cursor = tag.end;
+        if (tag.closing) continue;
+        if (tag.is("li")) {
+            count +|= 1;
+            cursor = optionalListItemEnd(input, tag).end;
+        } else if (tag.is("ul") or tag.is("ol") or tag.is("dl") or tag.is("table")) {
+            if (syntax.matchingTag(input, tag)) |pair| cursor = pair.end;
+        }
+    }
+    return count;
+}
 pub const media_types = @import("presentation_media.zig");
 pub const Error = A.Error || error{RenderLimit};
 pub const Context = struct {
+    image_options: ?*const @import("namespace_registry").image_options.Registry = null,
+    behavior_switches: ?*const @import("namespace_registry").behavior_switches.Registry = null,
     namespace_catalog: ?*const @import("namespace_registry").Registry = null,
     title: []const u8 = "Entry",
     language: []const u8 = "English",
     link_trail: ir.LinkTrail = .{},
 };
 pub const Role = enum { normal, label, pronunciation, headword, example, quotation, citation, reference };
+pub const Provenance = enum { parsed, protected_literal, entity_literal };
 pub const Style = struct {
+    provenance: Provenance = .parsed,
     kind: ir.InlineKind = .text,
     target: []const u8 = "",
     language: []const u8 = "",
@@ -67,6 +157,8 @@ pub const SpanFlags = packed struct(u8) {
     underline: bool = false,
 };
 pub const Span = struct {
+    // Build-only validation origin. Never serialized into DPR2.
+    provenance: Provenance = .parsed,
     kind: ir.InlineKind = .text,
     text: []const u8,
     target: []const u8 = "",
@@ -428,6 +520,7 @@ pub const Renderer = struct {
     refs: std.ArrayList(Reference) = .empty,
     ref_defs: std.ArrayList(ReferenceDefinition) = .empty,
     default_group_reference_count: usize = 0,
+    media_caption_spans: std.ArrayList([]const Span) = .empty,
     media: std.ArrayList(media_types.Media) = .empty,
     media_depth: usize = 0,
     spans: std.ArrayList(Span) = .empty,
@@ -466,8 +559,10 @@ pub const Renderer = struct {
             self.fallbacks.render_limit = true;
             return;
         }
-        const description = try plainText(self.a, try self.parseSpans(caption, .{}));
+        const caption_spans = try self.parseSpans(caption, .{});
+        const description = try plainText(self.a, caption_spans);
         try self.media.append(self.a, .{ .file = file, .kind = kind, .caption = description });
+        try self.media_caption_spans.append(self.a, caption_spans);
     }
     fn spend(self: *Renderer) bool {
         if (self.nodes >= max_nodes) {
@@ -489,7 +584,7 @@ pub const Renderer = struct {
         }
         const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
         const inherited_flags: SpanFlags = @bitCast(@as(u8, @bitCast(flags)) | @as(u8, @bitCast(self.block_formatting)));
-        try self.spans.append(self.a, .{ .kind = s.kind, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .flags = inherited_flags, .role = s.role });
+        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .flags = inherited_flags, .role = s.role });
     }
     pub fn lineBreak(self: *Renderer, s: Style) Error!void {
         var style = s;
@@ -542,6 +637,20 @@ pub const Renderer = struct {
         try self.plain(link_value.text, link_style);
     }
     fn plainWithMagicLinks(self: *Renderer, value: []const u8, style: Style) Error!void {
+        var emitted: usize = 0;
+        var scan: usize = 0;
+        while (scan < value.len) {
+            const at = scan;
+            const matched = if (self.context.behavior_switches) |registry| try registry.matchAt(self.a, value, at) else syntax.behaviorSwitchEnd(value, at);
+            if (matched) |end| {
+                try self.plainWithMagicLinksVisible(value[emitted..at], style);
+                emitted = end;
+                scan = end;
+            } else scan = at + 1;
+        }
+        try self.plainWithMagicLinksVisible(value[emitted..], style);
+    }
+    fn plainWithMagicLinksVisible(self: *Renderer, value: []const u8, style: Style) Error!void {
         if (style.kind == .link or style.kind == .external_link) return self.plain(value, style);
         var pos: usize = 0;
         while (magicLinkStart(value, pos)) |start| {
@@ -571,8 +680,15 @@ pub const Renderer = struct {
     fn entity(self: *Renderer, input: []const u8, style: Style) Error!?usize {
         var buf: [4]u8 = undefined;
         const decoded = decodeEntity(input, &buf) orelse return null;
-        try self.text(if (decoded.scratch) try self.a.dupe(u8, decoded.bytes) else decoded.bytes, style);
+        var entity_style = style;
+        if (entity_style.provenance == .parsed) entity_style.provenance = .entity_literal;
+        try self.text(if (decoded.scratch) try self.a.dupe(u8, decoded.bytes) else decoded.bytes, entity_style);
         return decoded.consumed;
+    }
+    fn protectedLiteral(self: *Renderer, input: []const u8, style: Style) Error!void {
+        var literal_style = style;
+        literal_style.provenance = .protected_literal;
+        try self.literal(input, literal_style);
     }
     fn literal(self: *Renderer, input: []const u8, style: Style) Error!void {
         var start: usize = 0;
@@ -717,7 +833,7 @@ pub const Renderer = struct {
             const file = if (colon != null and self.namespaceOfTarget(raw_file) == 6) raw_file[colon.? + 1 ..] else raw_file;
             if (media_types.kind(file) == null) continue;
             const options = if (pipe) |at_pipe| trim(line[at_pipe + 1 ..]) else "";
-            const caption = mediaCaption(options, file);
+            const caption = self.mediaCaption(options, file, mediaOptionMode(file, true));
             try self.mediaFile(file, caption);
             if (emitted) try self.lineBreak(style);
             emitted = true;
@@ -725,7 +841,7 @@ pub const Renderer = struct {
             media_style.classes = "wikidict-media";
             media_style.kind = .link;
             media_style.target = try std.fmt.allocPrint(self.a, "File:{s}", .{file});
-            try self.text(try plainText(self.a, try self.parseSpans(if (caption.len == 0) file else caption, .{})), media_style);
+            try self.mediaLabel(if (caption.len == 0) file else caption, media_style, false);
         }
     }
     fn opaqueExtension(self: *Renderer, input: []const u8, tag: syntax.Tag, style: Style, depth: usize) Error!usize {
@@ -742,7 +858,7 @@ pub const Renderer = struct {
         } else if (oneOf(tag.name, &.{ "pre", "source", "syntaxhighlight", "math", "ce", "chem", "score", "timeline", "hiero" })) {
             var literal_style = style;
             literal_style.code = true;
-            try self.literal(content, literal_style);
+            try self.protectedLiteral(content, literal_style);
         } else if (!oneOf(tag.name, &.{ "indicator", "references", "templatestyles", "section", "charinsert" })) {
             // Registered extensions can render data-backed UI that this data-only
             // compiler cannot reproduce. Do not invent substitute prose; report
@@ -751,47 +867,168 @@ pub const Renderer = struct {
         }
         return pair.end;
     }
-    fn mediaOption(value: []const u8) bool {
-        const option = trim(value);
-        if (option.len == 0) return true;
-        if (oneOf(option, &.{ "thumb", "thumbnail", "frame", "frameless", "border", "left", "right", "center", "none", "baseline", "sub", "super", "top", "text-top", "middle", "bottom", "text-bottom", "noicon", "muted", "loop", "autoplay", "disablecontrols" })) return true;
-        inline for (&.{ "alt=", "link=", "lang=", "page=", "class=", "upright=", "thumbtime=", "start=", "end=", "manualthumb=" }) |prefix| if (std.ascii.startsWithIgnoreCase(option, prefix)) return true;
-        if (std.ascii.eqlIgnoreCase(option, "upright")) return true;
-        if (std.mem.endsWith(u8, option, "px")) {
-            const size = option[0 .. option.len - 2];
-            if (size.len != 0) {
-                var valid = true;
-                for (size) |ch| if (!std.ascii.isDigit(ch) and ch != 'x') {
-                    valid = false;
-                    break;
-                };
-                if (valid) return true;
+    fn mediaLabel(self: *Renderer, label: []const u8, style: Style, heading: bool) Error!void {
+        const spans = try self.parseSpans(label, .{ .heading = heading });
+        for (spans) |span| {
+            var label_style = style;
+            label_style.provenance = span.provenance;
+            if (span.kind == .line_break) {
+                try self.lineBreak(label_style);
+            } else {
+                if (span.kind == .template) {
+                    label_style.kind = .template;
+                    label_style.target = span.target;
+                }
+                try self.text(span.text, label_style);
             }
         }
-        return false;
     }
-    fn mediaCaption(raw: []const u8, fallback: []const u8) []const u8 {
+    fn mediaOptionMode(file: []const u8, gallery_mode: bool) @import("namespace_registry").image_options.Mode {
+        const ext = std.fs.path.extension(file);
+        const timed = media_types.kind(file) == .audio or oneOf(ext, &.{ ".webm", ".ogv", ".mp4" });
+        if (gallery_mode) return if (timed) .timed_gallery else .gallery;
+        if (std.ascii.eqlIgnoreCase(ext, ".pdf")) return .pdf;
+        if (std.ascii.eqlIgnoreCase(ext, ".djvu") or std.ascii.eqlIgnoreCase(ext, ".djv")) return .djvu;
+        if (std.ascii.eqlIgnoreCase(ext, ".svg")) return .svg;
+        return if (timed) .timed else .image;
+    }
+    fn mediaTime(input: []const u8) bool {
+        var parts = std.mem.splitScalar(u8, input, ':');
+        var count: usize = 0;
+        while (parts.next()) |part| {
+            count += 1;
+            if (count > 3 or !mediaNumber(trim(part))) return false;
+        }
+        return true;
+    }
+    fn mediaOption(self: *Renderer, value: []const u8, mode: @import("namespace_registry").image_options.Mode, seen_format: *bool) ?@import("namespace_registry").image_options.Match {
+        const options = @import("namespace_registry").image_options;
+        const option = trim(value);
+        const found = if (self.context.image_options) |registry| registry.match(option, mode) else options.matchEnglish(option, mode);
+        const matched = found orelse return null;
+        if (oneOf(matched.id, &.{ "img_thumbnail", "img_framed", "img_frameless", "img_manualthumb" })) {
+            const valid = !seen_format.*;
+            seen_format.* = true;
+            if (!valid) return null;
+        } else if (matched.value) |parameter| {
+            if (std.mem.eql(u8, matched.id, "img_page")) {
+                const page = std.mem.trim(u8, parameter, " \n\r\t\x0b\x00");
+                if (mode == .pdf) {
+                    if (page.len == 0) return null;
+                    for (page) |byte| if (!std.ascii.isDigit(byte)) return null;
+                } else {
+                    const number = std.fmt.parseInt(i64, page, 10) catch return null;
+                    var buffer: [32]u8 = undefined;
+                    const canonical = std.fmt.bufPrint(&buffer, "{d}", .{number}) catch return null;
+                    if (!std.mem.eql(u8, page, canonical)) return null;
+                }
+            }
+            if (std.mem.eql(u8, matched.id, "img_lang") and !mediaLanguageTag(parameter)) return null;
+            if (oneOf(matched.id, &.{ "timedmedia_thumbtime", "timedmedia_starttime", "timedmedia_endtime" }) and !mediaTime(parameter)) return null;
+            if (std.mem.eql(u8, matched.id, "timedmedia_disablecontrols")) {
+                var controls = std.mem.splitScalar(u8, parameter, ',');
+                while (controls.next()) |control| {
+                    if (!(std.mem.eql(u8, control, "options") or std.mem.eql(u8, control, "timedText") or std.mem.eql(u8, control, "fullscreen"))) return null;
+                }
+            }
+            if (oneOf(matched.id, &.{ "img_upright", "img_left", "img_right", "img_center", "img_none", "img_baseline", "img_sub", "img_super", "img_top", "img_text_top", "img_middle", "img_bottom", "img_text_bottom", "img_border" }) and !mediaNumber(trim(parameter))) return null;
+        }
+        return matched;
+    }
+    fn tagAlpha(part: []const u8) bool {
+        for (part) |c| if (!std.ascii.isAlphabetic(c)) return false;
+        return true;
+    }
+    fn tagAlnum(part: []const u8) bool {
+        for (part) |c| if (!std.ascii.isAlphanumeric(c)) return false;
+        return true;
+    }
+    fn mediaLanguageTag(raw: []const u8) bool {
+        // LanguageCode::isWellFormedLanguageTag current retained source, not code registration.
+        // PCRE dollar accepts a final LF; no other surrounding whitespace is permitted.
+        const input = if (std.mem.endsWith(u8, raw, "\n")) raw[0..raw.len-1] else raw;
+        if (oneOf(input, &.{ "en-gb-oed", "i-ami", "i-bnn", "i-default", "i-enochian", "i-hak", "i-klingon", "i-lux", "i-mingo", "i-navajo", "i-pwn", "i-tao", "i-tay", "i-tsu", "no-bok", "no-nyn", "sgn-be-fr", "sgn-be-nl", "sgn-ch-de", "zh-min-nan" })) return true;
+        var parts = std.mem.splitScalar(u8, input, '-');
+        const primary = parts.next() orelse return false;
+        var next = parts.next();
+        if (std.ascii.eqlIgnoreCase(primary, "x")) return tagPrivate(next, &parts);
+        if (primary.len < 2 or primary.len > 8 or !tagAlpha(primary)) return false;
+        if (next) |p| if (primary.len <= 3 and p.len == 3 and tagAlpha(p)) { next = parts.next(); };
+        if (next) |p| if (p.len == 4 and tagAlpha(p)) { next = parts.next(); };
+        if (next) |p| {
+            var region = p.len == 2 and tagAlpha(p);
+            if (p.len == 3) { region = true; for (p) |c| { if (!std.ascii.isDigit(c)) region = false; } }
+            if (region) next = parts.next();
+        }
+        while (next) |p| {
+            if (tagAlnum(p) and ((p.len >= 5 and p.len <= 8) or (p.len == 4 and std.ascii.isDigit(p[0])))) next = parts.next() else break;
+        }
+        while (next) |p| {
+            if (std.ascii.eqlIgnoreCase(p, "x")) return tagPrivate(parts.next(), &parts);
+            if (p.len != 1 or !tagAlpha(p)) return false;
+            next = parts.next();
+            var count: usize = 0;
+            while (next) |value| {
+                if (value.len < 2 or value.len > 8 or !tagAlnum(value)) break;
+                count += 1; next = parts.next();
+            }
+            if (count == 0) return false;
+        }
+        return true;
+    }
+    fn tagPrivate(first: ?[]const u8, parts: *std.mem.SplitIterator(u8, .scalar)) bool {
+        var next = first;
+        if (next == null) return false;
+        while (next) |p| {
+            if (p.len == 0 or p.len > 8 or !tagAlnum(p)) return false;
+            next = parts.next();
+        }
+        return true;
+    }
+    fn mediaNumber(input: []const u8) bool {
+        // PHP is_numeric's decimal/exponent syntax, without accepting NaN/Inf.
+        var cursor: usize = 0;
+        if (cursor < input.len and (input[cursor] == '+' or input[cursor] == '-')) cursor += 1;
+        var digits: usize = 0;
+        while (cursor < input.len and std.ascii.isDigit(input[cursor])) : (cursor += 1) digits += 1;
+        if (cursor < input.len and input[cursor] == '.') {
+            cursor += 1;
+            while (cursor < input.len and std.ascii.isDigit(input[cursor])) : (cursor += 1) digits += 1;
+        }
+        if (digits == 0) return false;
+        if (cursor < input.len and (input[cursor] == 'e' or input[cursor] == 'E')) {
+            cursor += 1;
+            if (cursor < input.len and (input[cursor] == '+' or input[cursor] == '-')) cursor += 1;
+            const begin = cursor;
+            while (cursor < input.len and std.ascii.isDigit(input[cursor])) : (cursor += 1) {}
+            if (begin == cursor) return false;
+        }
+        return cursor == input.len;
+    }
+    fn mediaCaption(self: *Renderer, raw: []const u8, fallback: []const u8, mode: @import("namespace_registry").image_options.Mode) []const u8 {
         var candidate: []const u8 = "";
+        var seen_format = false;
         var pos: usize = 0;
         while (pos <= raw.len) {
             const end = syntax.delimiter(raw, "|", pos) orelse raw.len;
             const part = trim(raw[pos..end]);
-            if (!mediaOption(part)) candidate = part;
+            if (self.mediaOption(part, mode, &seen_format) == null) candidate = part;
             if (end == raw.len) break;
             pos = end + 1;
         }
         return if (candidate.len == 0) fallback else candidate;
     }
-    fn mediaHeadingCaption(raw: []const u8) []const u8 {
+    fn mediaHeadingCaption(self: *Renderer, raw: []const u8, file: []const u8) []const u8 {
         var caption: []const u8 = "";
         var alt: []const u8 = "";
+        var seen_format = false;
         var pos: usize = 0;
         while (pos <= raw.len) {
             const end = syntax.delimiter(raw, "|", pos) orelse raw.len;
             const part = trim(raw[pos..end]);
-            if (std.ascii.startsWithIgnoreCase(part, "alt=")) {
-                alt = trim(part[4..]);
-            } else if (!mediaOption(part)) caption = part;
+            if (self.mediaOption(part, mediaOptionMode(file, false), &seen_format)) |matched| {
+                if (std.mem.eql(u8, matched.id, "img_alt")) alt = trim(matched.value orelse "");
+            } else caption = part;
             if (end == raw.len) break;
             pos = end + 1;
         }
@@ -874,7 +1111,7 @@ pub const Renderer = struct {
             };
             var s = style;
             s.code = !tag.is("nowiki");
-            try self.literal(input[tag.end..pair.inner_end], s);
+            try self.protectedLiteral(input[tag.end..pair.inner_end], s);
             return pair.end;
         }
         if (oneOf(tag.name, &.{ "script", "style", "iframe", "object", "embed" })) {
@@ -1064,14 +1301,14 @@ pub const Renderer = struct {
                     }
                     if (!explicit and self.namespaceOfTarget(target) == 6) {
                         const file_name = target[(std.mem.indexOfScalar(u8, target, ':').? + 1)..];
-                        label_value = mediaCaption(label_value, file_name);
+                        label_value = self.mediaCaption(label_value, file_name, mediaOptionMode(file_name, false));
                         try self.mediaFile(file_name, label_value);
-                        if (s.heading) label_value = mediaHeadingCaption(if (token.link_has_pipe) token.text else "");
+                        if (s.heading) label_value = self.mediaHeadingCaption(if (token.link_has_pipe) token.text else "", file_name);
                         var media_style = s;
                         media_style.classes = "wikidict-media";
                         media_style.kind = .link;
                         media_style.target = try std.fmt.allocPrint(self.a, "File:{s}", .{file_name});
-                        try self.text(try plainText(self.a, try self.parseSpans(label_value, .{ .heading = s.heading })), media_style);
+                        try self.mediaLabel(label_value, media_style, s.heading);
                     } else {
                         if (label_value.len == 0) label_value = pipeTrickLabel(target);
                         if (safeInternalTarget(target)) {
@@ -1155,6 +1392,13 @@ pub const Renderer = struct {
         if (self.block_limit_reached) return;
         self.block_limit_reached = true;
         try list.append(self.a, value);
+    }
+    fn protectedBlock(self: *Renderer, list: *std.ArrayList(Block), raw: []const u8) Error!void {
+        const parent = self.spans;
+        self.spans = .empty;
+        defer self.spans = parent;
+        try self.protectedLiteral(raw, .{ .code = true });
+        try self.appendBlockBudgeted(list, .{ .kind = .preformatted, .spans = try self.spans.toOwnedSlice(self.a) });
     }
     fn block(self: *Renderer, list: *std.ArrayList(Block), kind: Kind, raw: []const u8, path: []const u8, number: []const u8, level: u8) Error!void {
         var hints: SemanticHints = .{};
@@ -1324,9 +1568,15 @@ pub const Renderer = struct {
                             cursor += 1;
                         }
                         try blocks.appendSlice(self.a, try self.renderBody(body.items));
-                    } else if (try self.htmlTable(clean[tag.end..pair.inner_end])) |table_value| {
-                        try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value });
-                    } else try self.block(&blocks, .preformatted, clean[0..pair.end], "", "", 0);
+                    } else {
+                        var fostered: std.ArrayList(Block) = .empty;
+                        if (try self.htmlTable(clean[tag.end..pair.inner_end], &fostered)) |table_value| {
+                            try blocks.appendSlice(self.a, fostered.items);
+                            try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value });
+                        } else try self.block(&blocks, .preformatted, clean[0..pair.end], "", "", 0);
+                    }
+                } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
+                    try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0);
                 } else try blocks.appendSlice(self.a, try self.renderBody(clean[tag.end..pair.inner_end]));
                 pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
                 if (pos < input.len and input[pos] == '\n') pos += 1;
@@ -1355,6 +1605,7 @@ pub const Renderer = struct {
                 const table = try self.parseTable(input, pos);
                 pos = table.end;
                 if (table.table.rows.len != 0) {
+                    try blocks.appendSlice(self.a, table.fostered);
                     try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table.table });
                 } else {
                     self.fallbacks.malformed_table = true;
@@ -1367,7 +1618,7 @@ pub const Renderer = struct {
             if (starts(clean, "<pre") or starts(clean, "<syntaxhighlight")) {
                 if (syntax.tagAt(clean, 0)) |tag| {
                     const pair = syntax.matchingTag(clean, tag) orelse syntax.Pair{ .inner_end = clean.len, .end = clean.len };
-                    try self.block(&blocks, .preformatted, clean[tag.end..pair.inner_end], "", "", 0);
+                    try self.protectedBlock(&blocks, clean[tag.end..pair.inner_end]);
                     continue;
                 }
             }
@@ -1383,9 +1634,11 @@ pub const Renderer = struct {
                 if (list_root != 0 and list_root != root) @memset(&counts, 0);
                 list_root = root;
                 const body = std.mem.trimStart(u8, line[prefix..], " \t");
-                if (path.len == 1 and path[0] == ';') if (inlineDefinitionSplit(body)) |pair| {
-                    try self.block(&blocks, .term, pair.term, ";", "", 0);
-                    try self.block(&blocks, .list_detail, pair.definition, ":", "", 0);
+                if (path[path.len - 1] == ';') if (inlineDefinitionSplit(body)) |pair| {
+                    const detail_path = try self.a.dupe(u8, path);
+                    detail_path[detail_path.len - 1] = ':';
+                    try self.block(&blocks, .term, pair.term, path, "", 0);
+                    try self.block(&blocks, .list_detail, pair.definition, detail_path, "", 0);
                     continue;
                 };
                 const last = path[path.len - 1];
@@ -1420,12 +1673,249 @@ pub const Renderer = struct {
         if (para) |p| try self.paragraph(&blocks, input[p..]);
         return try blocks.toOwnedSlice(self.a);
     }
-    fn htmlTable(self: *Renderer, input: []const u8) Error!?Table {
+    fn htmlList(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, list_tag: syntax.Tag, parent_path: []const u8, depth: usize) Error!void {
+        if (depth >= max_depth) {
+            self.fallbacks.render_limit = true;
+            try self.block(blocks, .preformatted, input, parent_path, "", 0);
+            return;
+        }
+        const reversed = list_tag.is("ol") and htmlAttributePresent(list_tag, "reversed");
+        const default_start: i32 = if (reversed) htmlListItemCount(input) else 1;
+        var ordinal: i32 = if (list_tag.attr("start")) |value| std.fmt.parseInt(i32, trim(try self.entityText(value)), 10) catch default_start else default_start;
+        const number_style = if (list_tag.attr("type")) |value| htmlListNumberStyle(try self.entityText(value)) orelse .decimal else .decimal;
+        var cursor: usize = 0;
+        var preceding: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |at| {
+            if (self.truncated) break;
+            if (syntax.protectedEnd(input, at)) |end| {
+                cursor = end;
+                continue;
+            }
+            const item = syntax.tagAt(input, at) orelse {
+                cursor = at + 1;
+                continue;
+            };
+            cursor = item.end;
+            const accepted = !item.closing and (if (list_tag.is("dl")) item.is("dt") or item.is("dd") else item.is("li"));
+            if (!accepted) {
+                if (!item.closing and (item.is("ul") or item.is("ol") or item.is("dl") or item.is("table"))) {
+                    if (syntax.matchingTag(input, item)) |pair| cursor = pair.end;
+                }
+                continue;
+            }
+            try blocks.appendSlice(self.a, try self.renderBody(input[preceding..at]));
+            const pair = optionalListItemEnd(input, item);
+            const mark: u8 = if (list_tag.is("ol")) '#' else if (list_tag.is("ul")) '*' else if (item.is("dt")) ';' else ':';
+            const path = try std.fmt.allocPrint(self.a, "{s}{c}", .{ parent_path, mark });
+            var number: []const u8 = "";
+            if (list_tag.is("ol")) {
+                if (item.attr("value")) |value| ordinal = std.fmt.parseInt(i32, trim(try self.entityText(value)), 10) catch ordinal;
+                const item_style = if (item.attr("type")) |value| htmlListNumberStyle(try self.entityText(value)) orelse number_style else number_style;
+                const label = try self.htmlListNumber(ordinal, item_style);
+                number = label;
+                if (reversed) ordinal -|= 1 else ordinal +|= 1;
+            }
+            const kind: Kind = if (mark == '#' or mark == '*') .list_item else if (mark == ';') .term else .list_detail;
+            try self.htmlListItem(blocks, input[item.end..pair.inner_end], kind, path, number, item, depth);
+            cursor = pair.end;
+            preceding = cursor;
+        }
+        try blocks.appendSlice(self.a, try self.renderBody(input[preceding..]));
+    }
+    fn htmlListNumber(self: *Renderer, ordinal: i32, style: HtmlListNumberStyle) Error![]const u8 {
+        if (style == .decimal or ordinal <= 0 or ((style == .lower_roman or style == .upper_roman) and ordinal > 3999))
+            return std.fmt.allocPrint(self.a, "{d}", .{ordinal});
+        if (style == .lower_alpha or style == .upper_alpha) {
+            var buffer: [7]u8 = undefined;
+            var begin = buffer.len;
+            var value: u32 = @intCast(ordinal);
+            while (value != 0) {
+                value -= 1;
+                begin -= 1;
+                buffer[begin] = @as(u8, if (style == .lower_alpha) 'a' else 'A') + @as(u8, @intCast(value % 26));
+                value /= 26;
+            }
+            return self.a.dupe(u8, buffer[begin..]);
+        }
+        const values = [_]i32{ 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 };
+        const labels = [_][]const u8{ "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" };
+        var result: std.ArrayList(u8) = .empty;
+        var value = ordinal;
+        for (values, labels) |amount, label| {
+            while (value >= amount) : (value -= amount) try result.appendSlice(self.a, label);
+        }
+        if (style == .lower_roman) for (result.items) |*byte| {
+            byte.* = std.ascii.toLower(byte.*);
+        };
+        return result.toOwnedSlice(self.a);
+    }
+    fn htmlListItem(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, depth: usize) Error!void {
+        var cursor: usize = 0;
+        var preceding: usize = 0;
+        var emitted = false;
+        while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |at| {
+            if (self.truncated) break;
+            if (syntax.protectedEnd(input, at)) |end| {
+                cursor = end;
+                continue;
+            }
+            const tag = syntax.tagAt(input, at) orelse {
+                cursor = at + 1;
+                continue;
+            };
+            cursor = tag.end;
+            if (tag.closing or !(tag.is("ul") or tag.is("ol") or tag.is("dl") or tag.is("table"))) continue;
+            const pair = syntax.matchingTag(input, tag) orelse continue;
+            try self.htmlListItemPart(blocks, input[preceding..at], if (emitted) .list_detail else kind, path, if (emitted) "" else number, item, !emitted);
+            emitted = true;
+            if (tag.is("table")) {
+                const nested = try self.renderBody(input[at..pair.end]);
+                for (nested) |block_value| {
+                    var child = block_value;
+                    child.list_path = try std.fmt.allocPrint(self.a, "{s}:", .{path});
+                    child.depth = @intCast(@min(child.list_path.len, 255));
+                    if (child.kind == .paragraph) child.kind = .list_detail;
+                    try self.appendBlockBudgeted(blocks, child);
+                }
+            } else try self.htmlList(blocks, input[tag.end..pair.inner_end], tag, path, depth + 1);
+            cursor = pair.end;
+            preceding = cursor;
+        }
+        try self.htmlListItemPart(blocks, input[preceding..], if (emitted) .list_detail else kind, path, if (emitted) "" else number, item, !emitted);
+    }
+    fn htmlListItemPart(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, keep_empty: bool) Error!void {
+        // Reuse semantic attribute/style handling while removing only the list
+        // marker tag. Its li identity must not reach the inline bullet path.
+        const styled = try std.fmt.allocPrint(self.a, "<span{s}>{s}</span>", .{ item.attrs, input });
+        const spans = try self.parseSpans(styled, .{});
+        if (!keep_empty and trim(try plainText(self.a, spans)).len == 0) return;
+        const effective_path = if (kind == .list_detail and (path[path.len - 1] == '*' or path[path.len - 1] == '#')) try std.fmt.allocPrint(self.a, "{s}:", .{path}) else path;
+        try self.appendBlockBudgeted(blocks, .{ .kind = kind, .spans = spans, .depth = @intCast(@min(effective_path.len, 255)), .list_path = effective_path, .number = number });
+    }
+    fn htmlTableFostered(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, joinable: *bool, formatting: *std.ArrayList([]const u8)) Error!void {
+        // HTML moves non-cell table content before the table. Preserve that
+        // visible content in ordinary blocks, never in a fabricated caption.
+        var source: std.ArrayList(u8) = .empty;
+        for (formatting.items) |opening| try source.appendSlice(self.a, opening);
+        var local_blocks: std.ArrayList([]const u8) = .empty;
+        var at: usize = 0;
+        while (at < input.len) {
+            if (input[at] == '<') {
+                if (syntax.protectedEnd(input, at)) |end| {
+                    try source.appendSlice(self.a, input[at..end]);
+                    at = end;
+                    continue;
+                }
+                if (syntax.tagAt(input, at)) |tag| {
+                    if (!tag.closing and (tag.is("td") or tag.is("th"))) {
+                        at = optionalTableEnd(input, tag).end;
+                        continue;
+                    }
+                    if (!tag.closing and tag.is("caption")) if (syntax.matchingTag(input, tag)) |pair| {
+                        at = pair.end;
+                        continue;
+                    };
+                    if (oneOf(tag.name, &.{ "tbody", "thead", "tfoot", "tr", "td", "th", "caption" })) {
+                        at = tag.end;
+                        continue;
+                    }
+                    if (!tag.closing and oneOf(tag.name, &.{ "script", "style", "iframe", "object", "embed" })) {
+                        if (syntax.matchingTag(input, tag)) |pair| {
+                            try source.appendSlice(self.a, input[at..pair.end]);
+                            at = pair.end;
+                            continue;
+                        }
+                    }
+                    const reconstruct = oneOf(tag.name, &.{ "b", "big", "em", "font", "i", "s", "small", "strike", "strong", "tt", "u" });
+                    const layout = oneOf(tag.name, &.{ "div", "p", "blockquote", "center" });
+                    if (reconstruct or layout) {
+                        const stack = if (reconstruct) formatting else &local_blocks;
+                        if (tag.closing) {
+                            var index = stack.items.len;
+                            while (index != 0) {
+                                index -= 1;
+                                const opening = syntax.tagAt(stack.items[index], 0).?;
+                                if (std.ascii.eqlIgnoreCase(opening.name, tag.name)) {
+                                    stack.shrinkRetainingCapacity(index);
+                                    break;
+                                }
+                            }
+                        } else if (!tag.self_closing and stack.items.len < max_depth) try stack.append(self.a, input[at..tag.end]);
+                    }
+                    try source.appendSlice(self.a, input[at..tag.end]);
+                    at = tag.end;
+                    continue;
+                }
+            }
+            try source.append(self.a, input[at]);
+            at += 1;
+        }
+        // Cell entry pops layout wrappers; active HTML formatting elements
+        // are reconstructed for subsequent fostered text, not for cell text.
+        var closing = local_blocks.items.len;
+        while (closing != 0) {
+            closing -= 1;
+            const tag = syntax.tagAt(local_blocks.items[closing], 0).?;
+            try source.appendSlice(self.a, try std.fmt.allocPrint(self.a, "</{s}>", .{tag.name}));
+        }
+        closing = formatting.items.len;
+        while (closing != 0) {
+            closing -= 1;
+            const tag = syntax.tagAt(formatting.items[closing], 0).?;
+            try source.appendSlice(self.a, try std.fmt.allocPrint(self.a, "</{s}>", .{tag.name}));
+        }
+        var explicit_blocks = false;
+        var lines = std.mem.splitScalar(u8, source.items, '\n');
+        while (lines.next()) |line| {
+            if (line.len != 0 and (std.mem.indexOfScalar(u8, "*#;:=", line[0]) != null or starts(line, "{|"))) explicit_blocks = true;
+        }
+        var cursor: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, source.items, cursor, '<')) |open| {
+            if (syntax.protectedEnd(source.items, open)) |end| {
+                cursor = end;
+                continue;
+            }
+            const tag = syntax.tagAt(source.items, open) orelse {
+                cursor = open + 1;
+                continue;
+            };
+            cursor = tag.end;
+            if (oneOf(tag.name, &.{ "div", "p", "blockquote", "center", "ul", "ol", "dl", "table", "h1", "h2", "h3", "h4", "h5", "h6" })) explicit_blocks = true;
+        }
+        const produced = if (explicit_blocks) try self.renderBody(source.items) else blk: {
+            // Parsing inline character data directly retains source boundary
+            // whitespace. Joining adds no separator that was not in source.
+            const spans = try self.parseSpans(source.items, .{});
+            if (spans.len == 0 or (!joinable.* and trim(try plainText(self.a, spans)).len == 0)) break :blk &.{};
+            const result = try self.a.alloc(Block, 1);
+            result[0] = .{ .kind = .paragraph, .spans = spans };
+            break :blk result;
+        };
+        if (produced.len == 1 and produced[0].kind == .paragraph and !explicit_blocks and joinable.* and blocks.items.len != 0) {
+            // Cell boundaries do not introduce paragraph breaks in fostered
+            // character data. Join their already-compiled spans without
+            // executing references or other source effects a second time.
+            const last = &blocks.items[blocks.items.len - 1];
+            var spans: std.ArrayList(Span) = .empty;
+            try spans.appendSlice(self.a, last.spans);
+            try spans.appendSlice(self.a, produced[0].spans);
+            last.spans = try spans.toOwnedSlice(self.a);
+        } else try blocks.appendSlice(self.a, produced);
+        if (produced.len != 0) joinable.* = produced[produced.len - 1].kind == .paragraph and !explicit_blocks;
+    }
+    fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block)) Error!?Table {
         var rows: std.ArrayList(Row) = .empty;
         var caption: []const Span = &.{};
         var pos: usize = 0;
+        var processed: usize = 0;
+        var foster_joinable = false;
+        var foster_formatting: std.ArrayList([]const u8) = .empty;
         while (std.mem.indexOfScalarPos(u8, input, pos, '<')) |open| {
             if (self.truncated) break;
+            if (syntax.protectedEnd(input, open)) |end| {
+                pos = end;
+                continue;
+            }
             const tag = syntax.tagAt(input, open) orelse {
                 pos = open + 1;
                 continue;
@@ -1435,13 +1925,19 @@ pub const Renderer = struct {
             const pair = if (tag.is("tr")) optionalTableEnd(input, tag) else syntax.matchingTag(input, tag) orelse return null;
             pos = pair.end;
             if (tag.is("caption")) {
+                try self.htmlTableFostered(fostered, input[processed..open], &foster_joinable, &foster_formatting);
                 caption = try self.parseSpans(input[tag.end..pair.inner_end], .{});
+                processed = pair.end;
                 continue;
             }
             var cells: std.ArrayList(Cell) = .empty;
             var at = tag.end;
             while (std.mem.indexOfScalarPos(u8, input[0..pair.inner_end], at, '<')) |cell_open| {
                 if (self.truncated) break;
+                if (syntax.protectedEnd(input[0..pair.inner_end], cell_open)) |end| {
+                    at = end;
+                    continue;
+                }
                 const cell_tag = syntax.tagAt(input, cell_open) orelse {
                     at = cell_open + 1;
                     continue;
@@ -1450,6 +1946,10 @@ pub const Renderer = struct {
                 if (cell_tag.closing or !(cell_tag.is("td") or cell_tag.is("th"))) continue;
                 const cell_pair = optionalTableEnd(input[0..pair.inner_end], cell_tag);
                 at = cell_pair.end;
+                // Render each source prefix before its next cell so references
+                // and other page-local effects retain source traversal order.
+                try self.htmlTableFostered(fostered, input[processed..cell_open], &foster_joinable, &foster_formatting);
+                processed = cell_pair.end;
                 if (!self.spend()) continue;
                 try cells.append(self.a, .{
                     .spans = try self.cellSpans(input[cell_tag.end..cell_pair.inner_end]),
@@ -1460,11 +1960,13 @@ pub const Renderer = struct {
             }
             if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
         }
+        try self.htmlTableFostered(fostered, input[processed..], &foster_joinable, &foster_formatting);
         return .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) };
     }
-    const TableResult = struct { table: Table, end: usize, body_end: usize };
+    const TableResult = struct { table: Table, end: usize, body_end: usize, fostered: []const Block };
     fn parseTable(self: *Renderer, input: []const u8, start: usize) Error!TableResult {
         var rows: std.ArrayList(Row) = .empty;
+        var fostered: std.ArrayList(Block) = .empty;
         var cells: std.ArrayList(Cell) = .empty;
         var cell_source: std.ArrayList(u8) = .empty;
         var current: ?Cell = null;
@@ -1515,7 +2017,9 @@ pub const Renderer = struct {
             } else if (starts(line, "<tr")) {
                 try self.finishCell(&cells, &cell_source, &current);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
-                if (try self.htmlTable(line)) |table| try rows.appendSlice(self.a, table.rows);
+                if (try self.htmlTable(line, &fostered)) |table| {
+                    try rows.appendSlice(self.a, table.rows);
+                }
             } else if (current != null) {
                 if (cell_source.items.len != 0) try cell_source.append(self.a, '\n');
                 try cell_source.appendSlice(self.a, line);
@@ -1524,7 +2028,7 @@ pub const Renderer = struct {
         try self.finishCell(&cells, &cell_source, &current);
         if (body_end == input.len) self.fallbacks.malformed_table = true;
         if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
-        return .{ .table = .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .body_end = body_end };
+        return .{ .table = .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .body_end = body_end, .fostered = try fostered.toOwnedSlice(self.a) };
     }
     fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *std.ArrayList(u8), current: *?Cell) Error!void {
         if (current.*) |value| {
@@ -1791,6 +2295,29 @@ test "optional table cell closures compile semantic cells" {
     try std.testing.expectEqualStrings("valuable content", try flattened(arena.allocator(), blocks[0].table.?.rows[0].cells[0].spans));
 }
 
+test "HTML table structure ignores protected row and cell delimiters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody(
+        "<table><!--<tr><td>hidden</td></tr>-->" ++
+            "<tr><nowiki><td>outside cell</td></nowiki><td>before" ++
+            "<!--</td></tr><tr><td>hidden-->after" ++
+            "<nowiki></td></tr><td>literal</nowiki>end<td>second" ++
+            "<tr><td>third</table>",
+    );
+    const table = blk: {
+        for (blocks) |block_value| if (block_value.table) |value| break :blk value;
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 2), table.rows[0].cells.len);
+    try std.testing.expectEqualStrings("beforeafter</td></tr><td>literalend", try flattened(a, table.rows[0].cells[0].spans));
+    try std.testing.expectEqualStrings("second", try flattened(a, table.rows[0].cells[1].spans));
+    try std.testing.expectEqualStrings("third", try flattened(a, table.rows[1].cells[0].spans));
+}
+
 test "table span attributes decode entities and stay bounded" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1885,7 +2412,7 @@ test "audio layout width is not mistaken for its caption" {
     defer arena.deinit();
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
-    _ = try r.parseSpans("[[File:En-us-cat.ogg|noicon|175px]]", .{});
+    _ = try r.parseSpans("[[File:En-us-cat.ogg|muted|175px]]", .{});
     try std.testing.expectEqualStrings("En-us-cat.ogg", r.media.items[0].caption);
 }
 
@@ -2006,7 +2533,7 @@ test "gallery media options stay metadata instead of leaking into captions" {
     const spans = try r.parseSpans("<gallery>\nFile:Cat.jpg|thumb|200px|alt=cat photo|A [[cat]] resting\nFile:Dog.jpg|frameless|alt=dog photo\n</gallery>", .{});
     try std.testing.expectEqual(@as(usize, 2), r.media.items.len);
     try std.testing.expectEqualStrings("A cat resting", r.media.items[0].caption);
-    try std.testing.expectEqualStrings("Dog.jpg", r.media.items[1].caption);
+    try std.testing.expectEqualStrings("frameless", r.media.items[1].caption);
     const text_value = try flattened(a, spans);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "thumb") == null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "200px") == null);
@@ -2418,6 +2945,23 @@ test "same-line definition lists split term and definition without splitting nes
     try std.testing.expectEqualStrings("a definition", try flattened(a, blocks[1].spans));
     try std.testing.expectEqualStrings("plain term", try flattened(a, blocks[2].spans));
     try std.testing.expectEqualStrings("another", try flattened(a, blocks[3].spans));
+}
+
+test "nested same-line definition lists retain their parent list paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("*; [[HTTP:foo|term]] : description\n**; child : nested description\n#; ordered : ordered description\n");
+    try std.testing.expectEqual(@as(usize, 6), blocks.len);
+    const paths = [_][]const u8{ "*;", "*:", "**;", "**:", "#;", "#:" };
+    const labels = [_][]const u8{ "term", "description", "child", "nested description", "ordered", "ordered description" };
+    for (blocks, paths, labels, 0..) |block_value, path, label, i| {
+        try std.testing.expectEqualStrings(path, block_value.list_path);
+        try std.testing.expectEqual(@as(u8, @intCast(path.len)), block_value.depth);
+        try std.testing.expectEqual(if (i % 2 == 0) Kind.term else Kind.list_detail, block_value.kind);
+        try std.testing.expectEqualStrings(label, try flattened(a, block_value.spans));
+    }
 }
 
 test "parameter defaults remain visible when preceded by ordinary text" {
@@ -2969,4 +3513,318 @@ test "nested block formatting restores parent flags and keeps unclosed reports" 
     try std.testing.expectEqual(Kind.preformatted, preformatted[0].kind);
     try std.testing.expect(indented.fallbacks.unclosed_formatting);
     for (preformatted[1].spans) |span| try std.testing.expect(!span.flags.small);
+}
+
+test "behavior controls are compiled away only in parsed source text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "before__NOEDITSECTION__after__notoc__", .visible = "beforeafter" },
+        .{ .source = "__UNKNOWN____index__", .visible = "__UNKNOWN____index__" },
+        .{ .source = "<!--__NOTOC__-->kept", .visible = "kept" },
+        .{ .source = "<nowiki>__NOEDITSECTION__</nowiki>", .visible = "__NOEDITSECTION__" },
+        .{ .source = "<pre>__NOTOC__</pre>", .visible = "__NOTOC__" },
+        .{ .source = "&#95;&#95;NOTOC&#95;&#95;", .visible = "__NOTOC__" },
+        .{ .source = "<span title='__NOTOC__'>kept</span>", .visible = "kept" },
+        .{ .source = "<code><nowiki>__NOTOC__</nowiki></code>", .visible = "__NOTOC__" },
+        .{ .source = "<code>before__NOTOC__after</code>", .visible = "beforeafter" },
+    };
+    for (cases) |case| try std.testing.expectEqualStrings(case.visible, try flattened(a, try r.parseSpans(case.source, .{})));
+}
+
+test "localized behavior controls use complete captured aliases and protect literals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const registry_type = @import("namespace_registry").behavior_switches;
+    const raw = registry_type.header ++ "\n# wiki\tjawiktionary\n# dump-date\t20261001\n# content-language\tja\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nnotoc\t0\t＿＿目次非表示＿＿\nnoeditsection\t0\t__لاتحريرقسم__\nindex\t1\t__INDEX__\n";
+    var registry = try registry_type.Registry.init(a, raw, "jawiktionary", "20261001", "ja", @splat(0));
+    defer registry.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .behavior_switches = &registry } };
+    const spans = try renderer.parseSpans("a＿＿目次非表示＿＿b__لاتحريرقسم__c __index__ __NOTOC__ <nowiki>＿＿目次非表示＿＿</nowiki>", .{});
+    try std.testing.expectEqualStrings("abc __index__ __NOTOC__ ＿＿目次非表示＿＿", try flattened(a, spans));
+}
+
+// Append to presentation_compile.zig for a focused current-behavior regression.
+// Expected failure today: non-cell visible text is dropped by htmlTable.
+test "HTML tables preserve fostered visible text outside cells" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<table>before<tbody><tr><nowiki>outside cell</nowiki><td>inside</td></tr></tbody>after</table>");
+    const parent = r.spans;
+    r.spans = .empty;
+    defer r.spans = parent;
+    try r.blocksInline(blocks, .{});
+    const visible = try flattened(a, r.spans.items);
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqual(Kind.table, blocks[1].kind);
+    try std.testing.expectEqualStrings("beforeoutside cellafter", try flattened(a, blocks[0].spans));
+    try std.testing.expect(std.mem.indexOf(u8, visible, "before") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "outside cell") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "inside") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "after") != null);
+}
+
+test "fostered table text neither invents captions nor duplicates cell contents" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<table><caption>actual caption</caption><b>before</b><tr><td>inside</td></tr>after</table>");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqualStrings("beforeafter", try flattened(a, blocks[0].spans));
+    try std.testing.expect(blocks[0].spans[0].flags.bold);
+    const table = blocks[1].table.?;
+    try std.testing.expectEqualStrings("actual caption", try flattened(a, table.caption));
+    try std.testing.expectEqualStrings("inside", try flattened(a, table.rows[0].cells[0].spans));
+}
+
+test "mixed wiki HTML table rows retain their fostered visible text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n<tr>outside<td>inside</td></tr>\n|}\n");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqualStrings("outside", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("inside", try flattened(a, blocks[1].table.?.rows[0].cells[0].spans));
+}
+
+test "fostered wikitext lists keep their semantic blocks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<table>\n* outside list\n<tr><td>inside</td></tr></table>");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.list_item, blocks[0].kind);
+    try std.testing.expectEqualStrings("outside list", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.table, blocks[1].kind);
+}
+
+test "fostered div paragraph and list content retains separate semantic blocks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<table><div>first</div><p>second</p>\n* outside list\n<tr><td>inside</td></tr></table>");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqual(Kind.paragraph, blocks[1].kind);
+    try std.testing.expectEqual(Kind.list_item, blocks[2].kind);
+    try std.testing.expectEqual(Kind.table, blocks[3].kind);
+    try std.testing.expectEqualStrings("first", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("second", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqualStrings("outside list", try flattened(a, blocks[2].spans));
+}
+
+test "fostered reference registration retains source order around table cells" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    _ = try r.renderBody("<table><ref name='before'>first</ref><tr><td><ref name='cell'>second</ref></td></tr><ref name='after'>third</ref></table>");
+    const refs = try r.finishReferences();
+    try std.testing.expectEqual(@as(usize, 3), refs.len);
+    try std.testing.expectEqualStrings("before", refs[0].name);
+    try std.testing.expectEqualStrings("cell", refs[1].name);
+    try std.testing.expectEqualStrings("after", refs[2].name);
+}
+
+
+test "fostered whitespace and reconstructed formatting cross cell boundaries exactly once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spaced = try r.renderBody("<table>before <tr><td>inside</td></tr> after</table>");
+    try std.testing.expectEqualStrings("before  after", try flattened(a, spaced[0].spans));
+    const adjacent = try r.renderBody("<table>before<tr><td>inside</td></tr>after</table>");
+    try std.testing.expectEqualStrings("beforeafter", try flattened(a, adjacent[0].spans));
+    const styled = try r.renderBody("<table><b>before<tr><td>inside</td></tr>after</b></table>");
+    try std.testing.expectEqualStrings("beforeafter", try flattened(a, styled[0].spans));
+    for (styled[0].spans) |span| try std.testing.expect(span.flags.bold);
+    for (styled[1].table.?.rows[0].cells[0].spans) |span| try std.testing.expect(!span.flags.bold);
+    const layout = try r.renderBody("<table><div>before<tr><td>inside</td></tr>after</div></table>");
+    try std.testing.expectEqual(@as(usize, 3), layout.len);
+    try std.testing.expectEqualStrings("before", try flattened(a, layout[0].spans));
+    try std.testing.expectEqualStrings("after", try flattened(a, layout[1].spans));
+    try std.testing.expect(!r.fallbacks.unclosed_formatting);
+}
+// Append to presentation_compile.zig for separate open HTML-list gaps.
+// Expected failure today: ul/ol wrappers are stripped; li contents become inline paragraphs.
+test "HTML ordered lists preserve numbering as semantic list blocks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<ol><li>first</li><li>second</li></ol>");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.list_item, blocks[0].kind);
+    try std.testing.expectEqualStrings("#", blocks[0].list_path);
+    try std.testing.expectEqualStrings("1", blocks[0].number);
+    try std.testing.expectEqualStrings("2", blocks[1].number);
+    try std.testing.expectEqualStrings("first", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("second", try flattened(a, blocks[1].spans));
+    const sections = [_]struct { title: []const u8, level: u8, blocks: []const Block }{.{ .title = "Noun", .level = 3, .blocks = blocks }};
+    const organization = try @import("presentation_layout.zig").build(a, &sections);
+    try std.testing.expectEqual(@as(usize, 0), organization.lexemes[0].definitions.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, organization.lexemes[0].introduction);
+}
+
+test "HTML unordered lists honor optional item closure without merging visible words" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<ul><li>first<li>second</ul>");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqualStrings("*", blocks[0].list_path);
+    try std.testing.expectEqualStrings("*", blocks[1].list_path);
+    try std.testing.expectEqualStrings("first", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("second", try flattened(a, blocks[1].spans));
+}
+test "HTML lists preserve nested order explicit ordinals attributes and trailing item content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<ol start='3'><li lang='en' class='IPA'>parent<ul><li>child<ol><li>grandchild</ol></ul>tail<li value='8'>next<li>last</ol>");
+    try std.testing.expectEqual(@as(usize, 6), blocks.len);
+    const paths = [_][]const u8{ "#", "#*", "#*#", "#:", "#", "#" };
+    const numbers = [_][]const u8{ "3", "", "1", "", "8", "9" };
+    const labels = [_][]const u8{ "parent", "child", "grandchild", "tail", "next", "last" };
+    for (blocks, paths, numbers, labels) |block_value, path, number, label| {
+        try std.testing.expectEqualStrings(path, block_value.list_path);
+        try std.testing.expectEqualStrings(number, block_value.number);
+        try std.testing.expectEqualStrings(label, try flattened(a, block_value.spans));
+    }
+    try std.testing.expectEqualStrings("en", blocks[0].spans[0].language);
+    try std.testing.expectEqual(Role.pronunciation, blocks[0].spans[0].role);
+}
+
+test "HTML definition lists optional closures retain protected item-looking text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<dl><dt>term<dd>before<!--<dt>hidden--><nowiki><dd>literal</nowiki>after<dt>other<dd>definition</dl>");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqual(Kind.term, blocks[0].kind);
+    try std.testing.expectEqual(Kind.list_detail, blocks[1].kind);
+    try std.testing.expectEqualStrings("before<dd>literalafter", try flattened(a, blocks[1].spans));
+}
+
+test "HTML ordered list types reversed order and explicit resets compile to labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<ol reversed type='i'><li>first<ul><li>nested</ul><li type='A' value='27'>reset<li>last</ol>");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqualStrings("iii", blocks[0].number);
+    try std.testing.expectEqualStrings("", blocks[1].number);
+    try std.testing.expectEqualStrings("AA", blocks[2].number);
+    try std.testing.expectEqualStrings("xxvi", blocks[3].number);
+    const explicit = try r.renderBody("<ol reversed='false' start='2' type='a'><li>first<li>second<li>third</ol>");
+    try std.testing.expectEqualStrings("b", explicit[0].number);
+    try std.testing.expectEqualStrings("a", explicit[1].number);
+    try std.testing.expectEqualStrings("0", explicit[2].number);
+    const ordinary = try r.renderBody("<ol data-note='reversed'><li>first<li>second</ol>");
+    try std.testing.expectEqualStrings("1", ordinary[0].number);
+    try std.testing.expectEqualStrings("2", ordinary[1].number);
+}
+
+
+test "HTML ordered nested lists use their own counters and retain item block boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const nested = try r.renderBody("<ol start='27' type='A'><li>outer<ol start='3' type='i'><li>inner</li></ol></li></ol>");
+    try std.testing.expectEqualStrings("AA", nested[0].number);
+    try std.testing.expectEqualStrings("iii", nested[1].number);
+    try std.testing.expectEqualStrings("##", nested[1].list_path);
+    const blocks = try r.renderBody("<ol><li><p>one</p><p>two</p><table><tr><td>left</td><td>right</td></tr></table>tail</li></ol>");
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    try std.testing.expectEqual(Kind.list_item, blocks[0].kind);
+    try std.testing.expectEqualStrings("1", blocks[0].number);
+    var breaks: usize = 0;
+    for (blocks[0].spans) |span| { if (span.kind == .line_break) breaks += 1; }
+    try std.testing.expect(breaks >= 2);
+    try std.testing.expectEqual(Kind.table, blocks[1].kind);
+    try std.testing.expectEqualStrings("#:", blocks[1].list_path);
+    try std.testing.expectEqual(@as(usize, 2), blocks[1].table.?.rows[0].cells.len);
+    try std.testing.expectEqualStrings("left", try flattened(a, blocks[1].table.?.rows[0].cells[0].spans));
+    try std.testing.expectEqualStrings("right", try flattened(a, blocks[1].table.?.rows[0].cells[1].spans));
+    try std.testing.expectEqual(Kind.list_detail, blocks[2].kind);
+    try std.testing.expectEqualStrings("tail", try flattened(a, blocks[2].spans));
+}
+
+const image_option_test_identity = @import("namespace_registry").image_options.header ++ "\n# wiki\tdewiktionary\n# dump-date\t20261001\n# content-language\tde\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n# behavior-switches-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n";
+test "image option localized aliases preserve real body heading and gallery captions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ns = @import("namespace_registry");
+    var namespaces = try ns.Registry.init(a, ns.german_test_fixture);
+    defer namespaces.deinit();
+    var options = try ns.image_options.Registry.init(a, image_option_test_identity ++ "img_thumbnail\t1\t\"miniatur\"\nimg_right\t1\t\"rechts\"\nimg_alt\t1\t\"alternativtext=$1\"\nimg_width\t1\t\"$1px\"\n", "dewiktionary", "20261001", "de", @splat(0), @splat(0));
+    defer options.deinit();
+    var r: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &namespaces, .image_options = &options } };
+    _ = try r.parseSpans("[[Datei:Example.jpg|miniatur|CaptionProbeAlpha|rechts|alternativtext=HiddenAlt]]", .{});
+    try std.testing.expectEqualStrings("CaptionProbeAlpha", r.media.items[0].caption);
+    const heading = try r.parseSpans("[[Datei:Heading.jpg|alternativtext=GermanHeadingAlt]]", .{ .heading = true });
+    try std.testing.expectEqualStrings("GermanHeadingAlt", try flattened(a, heading));
+    _ = try r.parseSpans("<gallery>\nDatei:Gallery.jpg|GalleryCaption|alternativtext=HiddenAlt\nDatei:Width.jpg|GalleryCaption|200px\n</gallery>", .{});
+    try std.testing.expectEqualStrings("GalleryCaption", r.media.items[2].caption);
+    try std.testing.expectEqualStrings("200px", r.media.items[3].caption);
+}
+test "image option case invalid widths formats and unsupported parameters remain visible captions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    _ = try r.parseSpans("[[File:Case.jpg|thumb|THUMB]] [[File:Zero.jpg|Caption|0px]] [[File:Malformed.jpg|Caption|200xx100px]] [[File:Good.jpg|Caption|x100px]] [[File:Handler.jpg|Caption|page=bad]] [[File:Scale.jpg|Caption|upright=bogus]] [[File:Format.jpg|thumb|Caption|frameless]]", .{});
+    const captions = [_][]const u8{ "THUMB", "0px", "200xx100px", "Caption", "page=bad", "upright=bogus", "frameless" };
+    try std.testing.expectEqual(captions.len, r.media.items.len);
+    for (r.media.items, captions) |media, caption| try std.testing.expectEqualStrings(caption, media.caption);
+}
+
+test "image option timed audio handler validates values without hiding unsupported captions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    _ = try r.parseSpans("[[File:Audio.ogg|AudioCaption|LOOP|MUTED|START=-1: 2e1|disablecontrols=options,timedText]] [[File:Image.jpg|ImageCaption|loop]] [[File:Bad.ogg|AudioCaption|start=1:2:3:4]] [[File:BadControls.ogg|AudioCaption|disablecontrols=options, fullscreen]] [[File:Unsupported.ogg|AudioCaption|autoplay]] [[File:NoIcon.ogg|AudioCaption|noicon]] <gallery>\nFile:Gallery.ogg|GalleryAudioCaption|loop|muted\n</gallery>", .{});
+    const captions = [_][]const u8{ "AudioCaption", "loop", "start=1:2:3:4", "disablecontrols=options, fullscreen", "autoplay", "noicon", "GalleryAudioCaption" };
+    try std.testing.expectEqual(captions.len, r.media.items.len);
+    for (r.media.items, captions) |media, caption| try std.testing.expectEqualStrings(caption, media.caption);
+}
+
+ test "typed image handler options preserve valid captions without swallowing unrelated options" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const cases = [_]struct { file: []const u8, option: []const u8, expected: []const u8 }{
+        .{ .file="Doc.pdf", .option="page=002", .expected="Caption" },
+        .{ .file="Doc.PDF", .option="page=0", .expected="Caption" },
+        .{ .file="Doc.pdf", .option="page=+2", .expected="page=+2" },
+        .{ .file="Doc.djvu", .option="page=-2", .expected="Caption" },
+        .{ .file="Doc.djv", .option="page=02", .expected="page=02" },
+        .{ .file="Map.svg", .option="lang=zh-Hant-TW", .expected="Caption" },
+        .{ .file="Map.svg", .option="lang=en_US", .expected="lang=en_US" },
+        .{ .file="Photo.jpg", .option="page=2", .expected="page=2" },
+        .{ .file="Photo.jpg", .option="lang=de", .expected="lang=de" },
+        .{ .file="Scan.tiff", .option="page=2", .expected="page=2" },
+        .{ .file="Scan.tiff", .option="lossy=1", .expected="lossy=1" },
+    };
+    for (cases) |case| try std.testing.expectEqualStrings(case.expected, r.mediaCaption(try std.fmt.allocPrint(r.a, "Caption|{s}", .{case.option}), case.file, Renderer.mediaOptionMode(case.file, false)));
+    for ([_][]const u8{ "de", "ZH-hant-TW", "x-private", "i-klingon", "en-a-test-b-more-x-p", "en-123", "en\n" }) |tag| try std.testing.expect(Renderer.mediaLanguageTag(tag));
+    for ([_][]const u8{ "", "en_US", "e", "en-1-test", "en-a", "en-x", "en--US", "en-abcdefghi", "en\n\n" }) |tag| try std.testing.expect(!Renderer.mediaLanguageTag(tag));
 }

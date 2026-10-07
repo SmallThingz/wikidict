@@ -892,7 +892,30 @@ pub fn main(init: std.process.Init) !void {
     defer namespaces.deinit();
     var registry = try loadLanguageRegistry(init.io, a, options.expander_root, &namespaces);
     defer registry.deinit();
-    const codes = languageCodes(&registry, &namespaces);
+    const behavior_path = try std.fs.path.join(a, &.{ options.expander_root, "behavior-switches.tsv" });
+    defer a.free(behavior_path);
+    const behavior_bytes = std.Io.Dir.cwd().readFileAlloc(init.io, behavior_path, a, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    defer if (behavior_bytes) |bytes| a.free(bytes);
+    var behavior: ?namespace_registry.behavior_switches.Registry = if (behavior_bytes) |bytes| try namespace_registry.behavior_switches.Registry.init(a, bytes, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256) else null;
+    defer if (behavior) |*value| value.deinit();
+    const image_path = try std.fs.path.join(a, &.{ options.expander_root, "image-options.tsv" });
+    defer a.free(image_path);
+    const image_bytes = std.Io.Dir.cwd().readFileAlloc(init.io, image_path, a, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    defer if (image_bytes) |bytes| a.free(bytes);
+    var behavior_digest: [32]u8 = undefined;
+    if (image_bytes != null and behavior_bytes == null) return error.ImageIdentityMismatch;
+    std.crypto.hash.sha2.Sha256.hash(behavior_bytes orelse "", &behavior_digest, .{});
+    var images: ?namespace_registry.image_options.Registry = if (image_bytes) |bytes| try namespace_registry.image_options.Registry.init(a, bytes, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256, behavior_digest) else null;
+    defer if (images) |*value| value.deinit();
+    var codes = languageCodes(&registry, &namespaces);
+    codes.behavior_switches = if (behavior) |*value| value else null;
+    codes.image_options = if (images) |*value| value else null;
 
     const page_index_path = try std.fs.path.join(a, &.{ options.expander_root, "page-index.tsv" });
     defer a.free(page_index_path);

@@ -33,7 +33,7 @@ AUXILIARY_SNAPSHOT_NAMES = (
     'site-info', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
     'wikibase-entity-terms', 'wikibase-page-links', 'language-fallbacks', 'language-names', 'date-numbering', 'file-metadata',
-    'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words',
+    'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words', 'behavior-switches', 'image-options',
 )
 MAX_TOTAL_BUILD_WORKERS = 8
 MAX_PIPELINE_WORKERS = 4
@@ -286,6 +286,12 @@ def auxiliary_capture_helper(name, path):
             return prepare_language_names_generic
         import prepare_language_names
         return prepare_language_names
+    if name=='image-options':
+        import prepare_image_options
+        return prepare_image_options
+    if name=='behavior-switches':
+        import prepare_behavior_switches
+        return prepare_behavior_switches
     if name=='magic-words':
         import prepare_magic_words_int
         return prepare_magic_words_int
@@ -472,14 +478,15 @@ def require_auxiliary_capture_identity(snapshots, identity):
 
 
 def verified_auxiliary_hashes(snapshots, edition=None, date=None):
-    hashes={};namespace_inputs={}
+    hashes={};namespace_inputs={};captures={}
     for name, source in sorted((snapshots or {}).items()):
         if name not in AUXILIARY_SNAPSHOT_NAMES:
             raise ValueError(f'Unknown auxiliary snapshot: {name}')
         path=Path(source)
         capture=validated_auxiliary_capture(name,path,edition,date)
-        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','wikibase-page-links','file-metadata'):
+        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','wikibase-page-links','file-metadata','behavior-switches','image-options'):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
+        if capture is not None: captures[name]=capture
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
         sha=sha256_file(path)
@@ -497,6 +504,10 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
             if header[0]!='# wikidict-namespace-registry-v1' or (edition is not None and header[1]!='# wiki\t'+edition) or (date is not None and header[2]!='# dump-date\t'+date):
                 raise ValueError('Namespace registry identifies a different edition or date')
         hashes[name]=sha
+    if 'image-options' in captures:
+        behavior=captures.get('behavior-switches')
+        if behavior is None or captures['image-options'][0]['behavior_manifest_sha256']!=behavior[1]['behavior-switches.manifest.json']:
+            raise ValueError('Image options use a different selected behavior capture')
     if 'namespace-registry' in hashes:
         for name,digest in namespace_inputs.items():
             if digest!=hashes['namespace-registry']:
@@ -526,6 +537,15 @@ def validate_capture_artifacts(root, record, required=()):
 
 
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
+    if name in ('behavior-switches','image-options'):
+        bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
+        if capture_root is not None:
+            if bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
+                raise ValueError(name+' uses a different selected namespace registry')
+            for embedded,selected_name in (('behavior-source-namespace-siteinfo.raw.json','namespace-siteinfo.raw.json'),('behavior-source-namespace-capture.complete.json','capture.complete.json')):
+                if bound[1][embedded]!=sha256_file(capture_root/selected_name):
+                    raise ValueError(name+' uses a different namespace capture')
+        return
     if name=='wikibase-page-links':
         record=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))[0]
         for source in record['source_dump_files']:selected_source(source,selected)

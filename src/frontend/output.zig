@@ -171,7 +171,10 @@ fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void
                 } else try w.print("{d}. ", .{ordinal});
             },
             .example, .quotation => try w.writeAll("│ "),
-            .list_item => try w.writeAll("• "),
+            .list_item => if (block.number.len != 0) {
+                try terminalText(w, block.number);
+                try w.writeAll(". ");
+            } else try w.writeAll("• "),
             .preformatted => try w.writeAll("    "),
             else => {},
         }
@@ -396,4 +399,15 @@ pub fn entryTextFolded(frame: *std.Io.Writer.Allocating, entry: model.Entry, col
     }
     if (preferences.details) try entryMetadata(w, entry, color) else if (entry.media.len != 0 or entry.references.len != 0) try w.writeAll("\n  d: media and references\n");
     return selected_offset;
+}
+test "ordered list items render numbers without becoming dictionary meanings" {
+    const spans = [_]model.Span{.{ .text = "instruction" }};
+    const blocks = [_]model.Block{
+        .{ .kind = .list_item, .depth = 1, .list_path = "#", .number = "3", .spans = &spans },
+        .{ .kind = .list_item, .depth = 1, .list_path = "*", .spans = &spans },
+    };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try blocksText(&out.writer, &blocks, false);
+    try std.testing.expectEqualStrings("  3. instruction\n  • instruction\n", out.written());
 }
