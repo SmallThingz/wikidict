@@ -14,6 +14,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMessageBox>
+#include <QStatusBar>
 #include <QPalette>
 #include <QPointer>
 #include <QPushButton>
@@ -33,6 +35,7 @@
 #include <QTextTable>
 #include <QTimer>
 #include <QtTest>
+#include <algorithm>
 
 class MainWindowTest final : public QObject {
     Q_OBJECT
@@ -523,6 +526,138 @@ private slots:
         QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("reference-1")));
         QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:%23reference-1")));
         QVERIFY(textIsVisible(window.reading_, QStringLiteral("Reference content.")));
+    }
+
+    void savedOriginsSeparateIdenticalEntriesAndRejectReplacedEditions() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-saved-origin-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString rootA = directory.filePath(QStringLiteral("a"));
+        const QString rootB = directory.filePath(QStringLiteral("b"));
+        const auto marker = [](const QString &root, const QByteArray &edition) {
+            QFile file(QDir(root).filePath(QStringLiteral(".desktop-edition")));
+            return file.open(QIODevice::WriteOnly) && file.write(edition + '\n') == edition.size() + 1;
+        };
+        for (const QString &root : {rootA, rootB}) {
+            QVERIFY(QDir().mkpath(root + QStringLiteral("/languages")));
+            const QString relative = QStringLiteral("/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb");
+            QVERIFY(QFile::copy(fixture_ + relative, root + relative));
+            QFile manifest(root + QStringLiteral("/languages.tsv"));
+            QVERIFY(manifest.open(QIODevice::WriteOnly));
+            QCOMPARE(manifest.write("heading\nEnglish\n"), qint64(16));
+        }
+        QVERIFY(marker(rootA, "enwiktionary-20261001"));
+        // Equal edition markers still require the exact canonical folder.
+        QVERIFY(marker(rootB, "enwiktionary-20261001"));
+        MainWindow window(rootA, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const SavedWord a = window.savedWord(window.currentEntry_);
+        QCOMPARE(a.originRoot, QFileInfo(rootA).canonicalFilePath());
+        QCOMPARE(a.originEdition, QStringLiteral("enwiktionary-20261001"));
+        QVERIFY(window.learning_.toggleBookmark(a));
+        const qint64 savedAt = window.learning_.bookmarks().first().savedAt;
+
+        window.openRoot(rootB, QStringLiteral("cat"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->root() == rootB, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const SavedWord b = window.savedWord(window.currentEntry_);
+        QVERIFY(a.key != b.key);
+        QVERIFY(window.learning_.toggleBookmark(b));
+        QCOMPARE(window.learning_.bookmarks().size(), 2);
+        const int viewsB = window.learning_.history().first().views;
+        const int historySize = window.learning_.history().size();
+        window.openSavedWord(a);
+        QVERIFY(!window.loading_);
+        QCOMPARE(window.api_->root(), rootB);
+        QCOMPARE(window.learning_.history().first().views, viewsB);
+        QCOMPARE(window.learning_.history().size(), historySize);
+        QVERIFY(window.statusBar()->currentMessage().contains(QStringLiteral("enwiktionary-20261001")));
+
+        window.openRoot(rootA, QStringLiteral("cat"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->root() == rootA, 30000);
+        const int viewsA = window.learning_.history().first().views;
+        QVERIFY(marker(rootA, "enwiktionary-20261101"));
+        window.openSavedWord(a);
+        QCOMPARE(window.learning_.history().first().views, viewsA);
+        QVERIFY(window.statusBar()->currentMessage().contains(QStringLiteral("changed")));
+        QVERIFY(marker(rootA, "enwiktionary-20261001"));
+        window.openSavedWord(a);
+        QCOMPARE(window.learning_.history().first().views, viewsA + 1);
+
+        LearningStore reopened;
+        QCOMPARE(reopened.bookmarks().size(), 2);
+        const auto found = std::find_if(reopened.bookmarks().cbegin(), reopened.bookmarks().cend(), [&](const SavedWord &word) { return word.key == a.key; });
+        QVERIFY(found != reopened.bookmarks().cend());
+        QCOMPARE(found->originRoot, a.originRoot);
+        QCOMPARE(found->originEdition, a.originEdition);
+        QCOMPARE(found->savedAt, savedAt);
+    }
+
+    void legacySavedOriginRequiresChoiceWithoutRebindingRecords() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        SavedWord legacy = window.savedWord(window.currentEntry_);
+        QVERIFY(!legacy.originRoot.isEmpty());
+        QVERIFY(legacy.originEdition.isEmpty());
+        const int unlabelledViews = window.learning_.history().first().views;
+        bool unlabelledPrompted = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *choice = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!choice) return;
+            unlabelledPrompted = true;
+            choice->done(QMessageBox::Cancel);
+        });
+        window.openSavedWord(legacy);
+        QVERIFY(unlabelledPrompted);
+        QCOMPARE(window.learning_.history().first().views, unlabelledViews);
+        legacy.key = QStringLiteral("language\nEnglish\ncat");
+        legacy.originRoot.clear();
+        legacy.originEdition.clear();
+        legacy.clue = QStringLiteral("Legacy clue");
+        QVERIFY(window.learning_.toggleBookmark(legacy));
+        const SavedWord original = window.learning_.bookmarks().first();
+        window.learning_.answer(legacy.key, true);
+        const StudyStat study = window.learning_.study().value(legacy.key);
+        const int historySize = window.learning_.history().size();
+        const int views = window.learning_.history().first().views;
+        bool prompted = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *choice = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!choice) return;
+            prompted = choice->text() == QStringLiteral("Open from this dictionary?");
+            choice->done(QMessageBox::Cancel);
+        });
+        window.openSavedWord(legacy);
+        QVERIFY(prompted);
+        QCOMPARE(window.learning_.history().size(), historySize);
+        QCOMPARE(window.learning_.history().first().views, views);
+        prompted = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *choice = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!choice) return;
+            prompted = true;
+            choice->done(QMessageBox::Open);
+        });
+        window.openSavedWord(legacy);
+        QVERIFY(prompted);
+        QCOMPARE(window.learning_.history().first().views, views + 1);
+        const SavedWord retained = window.learning_.bookmarks().first();
+        QCOMPARE(retained.key, original.key);
+        QCOMPARE(retained.clue, original.clue);
+        QCOMPARE(retained.savedAt, original.savedAt);
+        QCOMPARE(retained.lastViewed, original.lastViewed);
+        QCOMPARE(retained.views, original.views);
+        QVERIFY(retained.originRoot.isEmpty());
+        QVERIFY(retained.originEdition.isEmpty());
+        QCOMPARE(window.learning_.study().value(legacy.key).right, study.right);
+        QCOMPARE(window.learning_.study().value(legacy.key).last, study.last);
+        LearningStore reloaded;
+        QCOMPARE(reloaded.bookmarks().first().key, legacy.key);
+        QVERIFY(reloaded.bookmarks().first().originRoot.isEmpty());
+        QVERIFY(reloaded.bookmarks().first().originEdition.isEmpty());
     }
 
     void savedPreviewSkipsAudioControlsAndKeepsLinkedMeanings() {

@@ -11,6 +11,8 @@ struct SavedWord {
     QString language;
     QString kind;
     QString clue;
+    QString originRoot;
+    QString originEdition;
     qint64 savedAt = 0;
     qint64 lastViewed = 0;
     int views = 0;

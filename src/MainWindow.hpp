@@ -42,7 +42,7 @@ private:
 
     void setupUi();
     void openRoot(const QString &root, const QString &word = {});
-    void loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word = {}, int restoreVisit = -1);
+    void loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word = {}, int restoreVisit = -1, const QString &expectedRoot = {}, const QString &expectedEdition = {});
     void setLoading(bool loading);
     void chooseRoot();
     void refreshSearch();
@@ -72,6 +72,8 @@ private:
     void reportError(const QString &title, const std::exception &error);
 
     std::unique_ptr<DictApi> api_;
+    QString originRoot_;
+    QString originEdition_;
     LearningStore learning_;
     QLineEdit *search_ = nullptr;
     QListWidget *results_ = nullptr;

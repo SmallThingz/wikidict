@@ -39,6 +39,7 @@ using Progress = std::function<void(const QString &, qint64, qint64)>;
 
 QString defaultSource();
 QString sourceHost(const QString &root);
+QString editionIdentity(const QString &root);
 bool isHttpsUrl(const QUrl &url);
 QList<CatalogItem> parseCatalog(const QByteArray &data);
 QList<Dictionary> installed(const QString &root);

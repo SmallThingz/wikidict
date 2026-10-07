@@ -15,6 +15,8 @@ QJsonObject wordJson(const SavedWord &word) {
         {QStringLiteral("language"), word.language},
         {QStringLiteral("kind"), word.kind},
         {QStringLiteral("clue"), word.clue},
+        {QStringLiteral("origin_root"), word.originRoot},
+        {QStringLiteral("origin_edition"), word.originEdition},
         {QStringLiteral("saved_at"), static_cast<double>(word.savedAt)},
         {QStringLiteral("last_viewed"), static_cast<double>(word.lastViewed)},
         {QStringLiteral("views"), word.views},
@@ -28,6 +30,8 @@ SavedWord parseWord(const QJsonObject &object) {
     word.language = object.value(QStringLiteral("language")).toString();
     word.kind = object.value(QStringLiteral("kind")).toString();
     word.clue = object.value(QStringLiteral("clue")).toString();
+    word.originRoot = object.value(QStringLiteral("origin_root")).toString();
+    word.originEdition = object.value(QStringLiteral("origin_edition")).toString();
     word.savedAt = static_cast<qint64>(object.value(QStringLiteral("saved_at")).toDouble());
     word.lastViewed = static_cast<qint64>(object.value(QStringLiteral("last_viewed")).toDouble());
     word.views = object.value(QStringLiteral("views")).toInt();

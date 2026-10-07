@@ -328,6 +328,9 @@ QList<CatalogItem> parseCatalog(const QByteArray &data) {
     }
     return result;
 }
+QString editionIdentity(const QString &root) {
+    return installedEditionGroup(root);
+}
 QString sourceHost(const QString &root) {
     QString group = installedEditionGroup(root);
     if (group.isEmpty()) return {};

@@ -62,6 +62,8 @@ struct LoadedDataset {
     QStringList languages;
     QVector<QString> titles;
     QVector<QJsonObject> practice;
+    QString originRoot;
+    QString originEdition;
     QString error;
 };
 
@@ -122,7 +124,7 @@ void MainWindow::openRoot(const QString &root, const QString &word) {
     loadDataset(root, QSettings().value(QStringLiteral("reader/language"), QStringLiteral("English")).toString(), QStringLiteral("language"), true, word);
 }
 
-void MainWindow::loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word, int restoreVisit) {
+void MainWindow::loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word, int restoreVisit, const QString &expectedRoot, const QString &expectedEdition) {
     if (cancelLoad_) cancelLoad_->store(true);
     const auto cancelled = std::make_shared<std::atomic_bool>(false);
     cancelLoad_ = cancelled;
@@ -153,6 +155,8 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             return;
         }
         api_ = std::move(loaded->api);
+        originRoot_ = loaded->originRoot;
+        originEdition_ = loaded->originEdition;
         searchTitles_ = std::move(loaded->titles);
         sampleWords_.clear();
         for (const QJsonObject &entry : loaded->practice) {
@@ -200,10 +204,14 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
         search_->setFocus();
         statusBar()->showMessage(QStringLiteral("Opened %1").arg(QDir::toNativeSeparators(root)), 4000);
     });
-    watcher->setFuture(QtConcurrent::run([root, language, kind, resetVisits, cancelled] {
+    watcher->setFuture(QtConcurrent::run([root, language, kind, resetVisits, cancelled, expectedRoot, expectedEdition] {
         auto loaded = std::make_shared<LoadedDataset>();
         try {
             if (root.isEmpty()) throw DictApiError("Choose the folder containing your compiled dictionaries.");
+            loaded->originRoot = QFileInfo(root).canonicalFilePath();
+            loaded->originEdition = LibraryStorage::editionIdentity(root);
+            if (!expectedRoot.isEmpty() && (loaded->originRoot != expectedRoot || loaded->originEdition != expectedEdition))
+                throw DictApiError("The saved dictionary has changed. Open its original folder.");
             loaded->api = std::make_unique<DictApi>(root);
             if (cancelled->load()) return loaded;
             if (QFileInfo::exists(QDir(root).filePath(QStringLiteral("languages.tsv")))) {
@@ -244,6 +252,8 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 const auto entries = QJsonDocument::fromJson(loaded->api->lookup(loaded->titles[index])).object().value(QStringLiteral("entries")).toArray();
                 if (!entries.isEmpty()) loaded->practice.append(entries.first().toObject());
             }
+            if (QFileInfo(root).canonicalFilePath() != loaded->originRoot || LibraryStorage::editionIdentity(root) != loaded->originEdition)
+                throw DictApiError("The dictionary changed while opening. Open it again.");
         } catch (const std::exception &error) { loaded->error = QString::fromUtf8(error.what()); }
         return loaded;
     }));
@@ -749,6 +759,34 @@ void MainWindow::openSavedWord(const SavedWord &word) {
         return;
     }
     const SavedWord requested = word;
+    if (loading_) {
+        statusBar()->showMessage(QStringLiteral("Wait for the dictionary to finish opening."), 5000);
+        return;
+    }
+    try {
+        const QString currentRoot = QFileInfo(api_->root()).canonicalFilePath();
+        const QString currentEdition = LibraryStorage::editionIdentity(api_->root());
+        if (currentRoot != originRoot_ || currentEdition != originEdition_) {
+            statusBar()->showMessage(QStringLiteral("This dictionary has changed. Open it again."), 5000);
+            return;
+        }
+        if (!requested.originRoot.isEmpty() &&
+            (requested.originRoot != currentRoot || requested.originEdition != currentEdition)) {
+            const QString required = requested.originEdition.isEmpty() ? QStringLiteral("the saved dictionary") : requested.originEdition;
+            statusBar()->showMessage(QStringLiteral("Open %1 in %2.").arg(required, QDir::toNativeSeparators(requested.originRoot)), 8000);
+            return;
+        }
+        if (requested.originRoot.isEmpty() || requested.originEdition.isEmpty()) {
+            QMessageBox choice(QMessageBox::Question, QStringLiteral("Open saved word"),
+                QStringLiteral("Open from this dictionary?"), QMessageBox::Open | QMessageBox::Cancel, this);
+            choice.setInformativeText(QDir::toNativeSeparators(currentRoot));
+            choice.setDefaultButton(QMessageBox::Cancel);
+            if (choice.exec() != QMessageBox::Open) return;
+        }
+    } catch (const std::exception &error) {
+        reportError(QStringLiteral("Open saved word"), error);
+        return;
+    }
     const int kindIndex = kind_->findData(requested.kind);
     const int languageIndex = language_->findText(requested.language);
     if (kindIndex < 0 || (requested.kind == QStringLiteral("language") && languageIndex < 0)) {
@@ -756,7 +794,7 @@ void MainWindow::openSavedWord(const SavedWord &word) {
         return;
     }
     if (api_->kind() == requested.kind && (requested.kind != QStringLiteral("language") || api_->language() == requested.language)) openWord(requested.title);
-    else loadDataset(api_->root(), requested.language, requested.kind, false, requested.title);
+    else loadDataset(api_->root(), requested.language, requested.kind, false, requested.title, -1, originRoot_, originEdition_);
 }
 QString MainWindow::spansHtml(const QJsonArray &spans) const {
     QString out;
@@ -943,7 +981,9 @@ SavedWord MainWindow::savedWord(const QJsonObject &entry) const {
     word.language = entry.value(QStringLiteral("language")).toString();
     word.kind = entry.value(QStringLiteral("kind")).toString();
     word.clue = clueFor(entry);
-    word.key = word.kind + QChar('\n') + word.language + QChar('\n') + word.title;
+    word.originRoot = originRoot_;
+    word.originEdition = originEdition_;
+    word.key = QString::fromUtf8(QJsonDocument(QJsonArray{word.originRoot, word.originEdition, word.kind, word.language, word.title}).toJson(QJsonDocument::Compact));
     word.lastViewed = QDateTime::currentMSecsSinceEpoch();
     word.views = 1;
     return word;
@@ -988,8 +1028,10 @@ void MainWindow::showLearningDialog(int tab) {
             item->setFlags(Qt::NoItemFlags);
         } else {
             for (const SavedWord &word : words) {
-                auto *item = new QListWidgetItem(QStringLiteral("%1 · %2\n%3").arg(word.title, word.language, word.clue), list);
+                const QString origin = word.originEdition.isEmpty() ? QStringLiteral("Unknown edition") : word.originEdition;
+                auto *item = new QListWidgetItem(QStringLiteral("%1 · %2 · %3\n%4").arg(word.title, word.language, origin, word.clue), list);
                 item->setData(Qt::UserRole, word.key);
+                item->setToolTip(word.originRoot.isEmpty() ? QStringLiteral("Original dictionary unknown") : QDir::toNativeSeparators(word.originRoot));
             }
         }
         return list;
