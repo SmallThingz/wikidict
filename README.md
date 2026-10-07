@@ -18,13 +18,14 @@ remain build-time concerns in the core repository.
 - CMake 3.21+
 - C++20 compiler
 - Qt 6.5+ with Core, Gui, Widgets, Concurrent, Network and Multimedia
+- Zig 0.17.0 for the core and fixture generator
 - a built [wikidict](https://github.com/SmallThingz/wikidict) checkout
 
 Point `CORE` at a wikidict checkout and build its C ABI first:
 
 ```sh
 CORE=/path/to/wikidict
-(cd "$CORE" && zig build ffi -Doptimize=ReleaseFast)
+(cd "$CORE" && zig build ffi -Doptimize=fast)
 ```
 
 Then, from this repository, build the desktop application against that checkout:

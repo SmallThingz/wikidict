@@ -21,11 +21,11 @@ The thesaurus blob SHA-256 is:
 df626983893d887931379c19f32557c038567e3391cc3cfe86749bf011b1fe1e
 ```
 
-To regenerate using a compatible core checkout and its Zig 0.16 toolchain, from
+To regenerate using a compatible core checkout and its Zig 0.17.0 toolchain, from
 the desktop checkout:
 
 ```sh
-zig run -O ReleaseSafe --cache-dir .tmp/fixture-cache \
+zig run -O safe --cache-dir .tmp/fixture-cache \
   --dep blob_encoder -Mroot=tests/generate_fixture.zig \
   -Mblob_encoder=../wikidict/src/encoder/blob_root.zig -- tests/fixtures
 ```
@@ -57,8 +57,7 @@ target, one-edge traversal through another alias, an absent target, a neutral
 alias-only library and a Unicode supplemental title. Its SHA-256 is
 `59b4cd82d3d410cbd141a207ec2d0e7a4c683a47ab57cea37a094ed2d873e97c`.
 The nested directory keeps these aliases out of the existing 182-entry fixture.
-Generate against the current core's configured Zig toolchain (currently 0.17)
-using `-O safe` in place of the historical command's `-O ReleaseSafe`.
+Regenerate this fixture with the same Zig 0.17 command shown above.
 
 Import validation checks DAL1 identities, namespaces, text encoding and framing,
 plus the nested presentation magic. The core reader performs full presentation
