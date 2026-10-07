@@ -1,4 +1,5 @@
 #include "MainWindow.hpp"
+#include "LibraryStore.hpp"
 
 #include <QApplication>
 #include <QComboBox>
@@ -194,6 +195,177 @@ private slots:
         QTest::keyClick(window.search_, Qt::Key_Return);
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QCOMPARE(window.currentEntry_.value(QStringLiteral("kind")).toString(), QStringLiteral("thesaurus"));
+    }
+
+
+    void supplementalOnlyFolderPreservesUnicodeNamespaces() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-supplemental-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString root = QDir(directory.path()).absolutePath();
+        QVERIFY(QFile::copy(fixture_ + QStringLiteral("/supplemental.wikblb"), root + QStringLiteral("/supplemental.wikblb")));
+        MainWindow window(root); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QCOMPARE(window.api_->kind(), QStringLiteral("supplemental"));
+        window.search_->setText(QStringLiteral("ANNEXE:É"));
+        QTRY_COMPARE(window.results_->count(), 1);
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QTRY_COMPARE(title(window), QStringLiteral("Annexe:école"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Annexe:école")));
+        QCOMPARE(window.currentEntry_.value(QStringLiteral("kind")).toString(), QStringLiteral("supplemental"));
+        window.search_->setText(QStringLiteral("APPENDIX:É"));
+        QTRY_COMPARE(window.results_->count(), 1);
+        QTRY_COMPARE(window.results_->item(0)->data(Qt::UserRole).toString(), QStringLiteral("Appendix:école"));
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QTRY_COMPARE(title(window), QStringLiteral("Appendix:école"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Appendix:école")));
+    }
+
+    void importedAliasesFollowOneEdgeAndRenderMissingTargets() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-aliases-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString root = QDir(directory.path()).absolutePath();
+        std::atomic_bool cancelled = false;
+        const auto progress = [](const QString &, qint64, qint64) {};
+        for (const QString &file : {
+                QStringLiteral("languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"),
+                QStringLiteral("supplemental.wikblb"), QStringLiteral("alias-cases/aliases.wikblb")}) {
+            auto prepared = LibraryStorage::prepareImport(root, fixture_ + QChar('/') + file, {}, -1, cancelled, progress);
+            LibraryStorage::commitImport(root, *prepared);
+        }
+        MainWindow window(root); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.search_->setText(QStringLiteral("CATS"));
+        QTRY_COMPARE(window.results_->count(), 1);
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        QCOMPARE(window.currentEntry_.value(QStringLiteral("redirect")).toObject().value(QStringLiteral("source_title")).toString(), QStringLiteral("Cats"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Redirected from Cats")));
+        window.openWord(QStringLiteral("Loop A"));
+        QTRY_COMPARE(title(window), QStringLiteral("Loop B"));
+        QCOMPARE(window.currentEntry_.value(QStringLiteral("kind")).toString(), QStringLiteral("alias"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Redirected from Loop A")));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("cat")));
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        window.openWord(QStringLiteral("Missing"));
+        QTRY_COMPARE(title(window), QStringLiteral("Missing"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("not installed")));
+        const int supplemental = window.kind_->findData(QStringLiteral("supplemental"));
+        QVERIFY(supplemental >= 0); window.kind_->setCurrentIndex(supplemental);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->kind() == QStringLiteral("supplemental"), 30000);
+        window.openWord(QStringLiteral("Annexe:École"));
+        QTRY_COMPARE(title(window), QStringLiteral("Annexe:école"));
+    }
+
+    void aliasOnlyFolderUsesNeutralCollection() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-neutral-aliases-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString root = QDir(directory.path()).absolutePath();
+        std::atomic_bool cancelled = false;
+        auto prepared = LibraryStorage::prepareImport(root, fixture_ + QStringLiteral("/alias-cases/aliases.wikblb"), {}, -1, cancelled, [](const QString &, qint64, qint64) {});
+        LibraryStorage::commitImport(root, *prepared);
+        MainWindow window(root); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QCOMPARE(window.api_->kind(), QStringLiteral("language"));
+        window.openWord(QStringLiteral("Cats"));
+        QTRY_COMPARE(title(window), QStringLiteral("Cats"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("cat")));
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+    }
+
+    void aliasesOverlayAnEmptyFeatureCollection() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-empty-feature-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString root = QDir(directory.path()).absolutePath();
+        QVERIFY(QFile::copy(fixture_ + QStringLiteral("/alias-cases/aliases.wikblb"), root + QStringLiteral("/aliases.wikblb")));
+        QFile manifest(root + QStringLiteral("/languages.tsv")); QVERIFY(manifest.open(QIODevice::WriteOnly));
+        manifest.write("heading\n"); manifest.close();
+        QFile empty(root + QStringLiteral("/supplemental.wikblb")); QVERIFY(empty.open(QIODevice::WriteOnly));
+        empty.write(QByteArrayLiteral("WIKBLB08") + char(7)); empty.close();
+        MainWindow window(root); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.kind_->setCurrentIndex(window.kind_->findData(QStringLiteral("supplemental")));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->kind() == QStringLiteral("supplemental"), 30000);
+        window.openWord(QStringLiteral("Annexe:École"));
+        QTRY_COMPARE(title(window), QStringLiteral("Annexe:École"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Annexe:école")));
+    }
+
+    void malformedAliasPresentationFailsSafelyOnRead() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-invalid-alias-XXXXXX"));
+        QVERIFY(directory.isValid());
+        QFile fixture(fixture_ + QStringLiteral("/alias-cases/aliases.wikblb"));
+        QVERIFY(fixture.open(QIODevice::ReadOnly));
+        QByteArray bytes = fixture.readAll();
+        const qsizetype presentation = bytes.indexOf("DPR2");
+        QVERIFY(presentation >= 0 && presentation + 8 <= bytes.size());
+        for (qsizetype i = 4; i < 8; ++i) bytes[presentation + i] = char(255);
+        const QString source = directory.filePath(QStringLiteral("bad.wikblb"));
+        QFile malformed(source); QVERIFY(malformed.open(QIODevice::WriteOnly));
+        QCOMPARE(malformed.write(bytes), bytes.size()); malformed.close();
+        const QString root = directory.filePath(QStringLiteral("library"));
+        std::atomic_bool cancelled = false;
+        auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled, [](const QString &, qint64, qint64) {});
+        LibraryStorage::commitImport(root, *prepared);
+        DictApi api(root); api.select(QString(), QStringLiteral("language"));
+        QVERIFY_EXCEPTION_THROWN(api.lookup(QStringLiteral("Cats")), DictApiError);
+    }
+
+    void initialBomSurvivesLanguageAndTitleJsonBoundaries() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-bom-identities-XXXXXX"));
+        QVERIFY(directory.isValid());
+        QFile fixture(fixture_ + QStringLiteral("/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"));
+        QVERIFY(fixture.open(QIODevice::ReadOnly));
+        const QByteArray original = fixture.readAll();
+        qsizetype at = 9;
+        for (int i = 0; i < 3; ++i) { at = original.indexOf('\0', at) + 1; QVERIFY(at > 0); }
+        const qsizetype lengthStart = at;
+        quint64 length = 0;
+        for (int shift = 0; ; shift += 7) {
+            QVERIFY(at < original.size() && shift < 64);
+            const auto byte = static_cast<unsigned char>(original[at++]);
+            length |= quint64(byte & 127) << shift;
+            if (!(byte & 128)) break;
+        }
+        QVERIFY(length <= quint64(original.size() - at));
+        const QByteArray bom = QByteArray::fromHex("efbbbf");
+        const QByteArray bytes = QByteArrayLiteral("WIKBLB08") + char(1) + QByteArrayLiteral("en\0") + bom +
+            QByteArrayLiteral("English\0") + bom + QByteArrayLiteral("cat\0") + original.mid(lengthStart, at - lengthStart + qsizetype(length));
+        const QString source = directory.filePath(QStringLiteral("source.wikblb"));
+        QFile file(source); QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(bytes), bytes.size()); file.close();
+        const QString root = directory.filePath(QStringLiteral("library"));
+        std::atomic_bool cancelled = false;
+        auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled, [](const QString &, qint64, qint64) {});
+        LibraryStorage::commitImport(root, *prepared);
+        MainWindow window(root); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QCOMPARE(window.language_->currentText(), QChar(0xfeff) + QStringLiteral("English"));
+        const QString exact = QChar(0xfeff) + QStringLiteral("cat");
+        window.search_->setText(exact);
+        QTRY_COMPARE(window.results_->count(), 1);
+        QTRY_COMPARE(window.results_->item(0)->data(Qt::UserRole).toString(), exact);
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QTRY_COMPARE(title(window), exact);
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+    }
+
+    void attributionUsesKnownEditionAndFullTitlesOnly() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-source-edition-XXXXXX"));
+        QVERIFY(directory.isValid());
+        MainWindow window(fixture_); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QJsonObject entry{{QStringLiteral("kind"), QStringLiteral("language")}, {QStringLiteral("title"), QStringLiteral("école")}};
+        QVERIFY(window.entryHtml(entry).contains(QStringLiteral("href='https://www.wiktionary.org/'")));
+        const QString root = QDir(directory.path()).absolutePath();
+        QFile marker(root + QStringLiteral("/.desktop-edition")); QVERIFY(marker.open(QIODevice::WriteOnly));
+        marker.write("arwiktionary-20261001\n"); marker.close();
+        window.api_ = std::make_unique<DictApi>(root);
+        QVERIFY(window.entryHtml(entry).contains(QStringLiteral("https://ar.wiktionary.org/wiki/%C3%A9cole")));
+        entry.insert(QStringLiteral("kind"), QStringLiteral("rhymes"));
+        QVERIFY(window.entryHtml(entry).contains(QStringLiteral("href='https://ar.wiktionary.org/'")));
+        entry.insert(QStringLiteral("redirect"), QJsonObject{{QStringLiteral("followed"), true}, {QStringLiteral("target_title"), QStringLiteral("قافية:école")}});
+        QVERIFY(window.entryHtml(entry).contains(QStringLiteral("https://ar.wiktionary.org/wiki/%D9%82%D8%A7%D9%81%D9%8A%D8%A9%3A%C3%A9cole")));
     }
 
     void startupKeepsUiResponsiveAndOpensRequestedWord() {

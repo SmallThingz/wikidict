@@ -39,6 +39,9 @@ QByteArray DictApi::take(dict_buffer &buffer) {
         result = QByteArray(reinterpret_cast<const char *>(buffer.data), static_cast<qsizetype>(buffer.len));
     }
     dict_buffer_free(handle_, &buffer);
+    // Qt's JSON string conversion drops a leading raw U+FEFF. Core responses
+    // are valid JSON objects; escaping this code point preserves exact keys.
+    result.replace(QByteArray::fromHex("efbbbf"), QByteArrayLiteral("\\ufeff"));
     return result;
 }
 

@@ -47,12 +47,12 @@ namespace {
 constexpr qint64 MaxMediaBytes = 50 * 1024 * 1024;
 constexpr qint64 MaxMetadataBytes = 2 * 1024 * 1024;
 
-bool allowedUrl(const QUrl &url, bool download) {
+bool allowedUrl(const QUrl &url, bool download, const QString &sourceHost = {}) {
     if (!url.isValid() || url.scheme() != QStringLiteral("https") || !url.userInfo().isEmpty() ||
         (url.port() != -1 && url.port() != 443)) return false;
     const QString host = url.host().toLower();
     return download ? host == QStringLiteral("upload.wikimedia.org")
-                    : host == QStringLiteral("commons.wikimedia.org") || host == QStringLiteral("en.wiktionary.org");
+                    : host == QStringLiteral("commons.wikimedia.org") || (!sourceHost.isEmpty() && host == sourceHost);
 }
 
 QString plainMetadata(const QJsonObject &metadata, const QString &key) {
@@ -202,7 +202,7 @@ public:
         source->setAccessibleName(QStringLiteral("Open media source and licence in browser"));
         layout->addWidget(source, 0, Qt::AlignLeft);
     }
-    QString kind, file, key;
+    QString kind, file, key, sourceHost;
     QByteArray data;
     QJsonObject metadata;
     ImagePreview *image;
@@ -427,7 +427,7 @@ struct MediaPanel::Impl {
         }
     }
 
-    void setEntry(const QJsonObject &entry) {
+    void setEntry(const QJsonObject &entry, const QString &sourceHost) {
         cancelRequests();
         stopSpeech();
         stopAudio();
@@ -450,7 +450,8 @@ struct MediaPanel::Impl {
             if ((kind != QStringLiteral("image") && kind != QStringLiteral("audio")) ||
                 media.value(QStringLiteral("file")).toString().trimmed().isEmpty()) continue;
             auto *card = new MediaCard(media, cardsBody);
-            card->key = QString::fromLatin1(QCryptographicHash::hash((kind + QChar(':') + card->file).toUtf8(), QCryptographicHash::Sha256).toHex());
+            if (QRegularExpression(QStringLiteral("^[a-z0-9-]+\\.wiktionary\\.org$")).match(sourceHost).hasMatch()) card->sourceHost = sourceHost;
+            card->key = QString::fromLatin1(QCryptographicHash::hash((card->sourceHost + QChar(':') + kind + QChar(':') + card->file).toUtf8(), QCryptographicHash::Sha256).toHex());
             cards.append(card);
             cardsLayout->addWidget(card);
             card->status->setText(allowed(card) ? QStringLiteral("Ready when you are.")
@@ -469,7 +470,7 @@ struct MediaPanel::Impl {
             });
             QObject::connect(card->source, &QPushButton::clicked, q, [card] {
                 const QUrl url(card->metadata.value(QStringLiteral("source")).toString());
-                if (allowedUrl(url, false) || allowedUrl(url, true)) {
+                if (allowedUrl(url, false, card->sourceHost) || allowedUrl(url, true)) {
                     if (!QDesktopServices::openUrl(url)) card->status->setText(QStringLiteral("Could not open your browser."));
                 }
             });
@@ -573,7 +574,7 @@ struct MediaPanel::Impl {
         }
         const auto info = QJsonDocument::fromJson(metadata.readAll()).object();
         const QUrl source(info.value(QStringLiteral("source")).toString());
-        if ((!allowedUrl(source, false) && !allowedUrl(source, true)) ||
+        if ((!allowedUrl(source, false, card->sourceHost) && !allowedUrl(source, true)) ||
             !allowedUrl(QUrl(info.value(QStringLiteral("url")).toString()), true)) {
             removeCached(card);
             return false;
@@ -696,7 +697,7 @@ struct MediaPanel::Impl {
     }
 
     void resolve(MediaCard *card, int hostIndex) {
-        const QString host = hostIndex == 0 ? QStringLiteral("commons.wikimedia.org") : QStringLiteral("en.wiktionary.org");
+        const QString host = hostIndex == 0 ? QStringLiteral("commons.wikimedia.org") : card->sourceHost;
         QUrl url(QStringLiteral("https://") + host + QStringLiteral("/w/api.php"));
         QUrlQuery query;
         query.addQueryItem(QStringLiteral("action"), QStringLiteral("query"));
@@ -718,7 +719,7 @@ struct MediaPanel::Impl {
                 if (!media.isEmpty()) { info = media.first().toObject(); break; }
             }
             if (info.isEmpty()) {
-                if (hostIndex == 0) resolve(card, 1);
+                if (hostIndex == 0 && !card->sourceHost.isEmpty()) resolve(card, 1);
                 else fail(card, QStringLiteral("This media is no longer available from Wikimedia."));
                 return;
             }
@@ -726,7 +727,7 @@ struct MediaPanel::Impl {
                 ? info.value(QStringLiteral("thumburl")).toString() : info.value(QStringLiteral("url")).toString());
             if (!allowedUrl(mediaUrl, true)) { fail(card, QStringLiteral("The media server returned an unsupported address.")); return; }
             QUrl source(info.value(QStringLiteral("descriptionurl")).toString());
-            if (!allowedUrl(source, false) && !allowedUrl(source, true)) source = mediaUrl;
+            if (!allowedUrl(source, false, card->sourceHost) && !allowedUrl(source, true)) source = mediaUrl;
             const QJsonObject ext = info.value(QStringLiteral("extmetadata")).toObject();
             QStringList credit;
             for (const QString &key : {QStringLiteral("Artist"), QStringLiteral("LicenseShortName")}) {
@@ -856,6 +857,6 @@ struct MediaPanel::Impl {
 
 MediaPanel::MediaPanel(QWidget *parent, QNetworkAccessManager *network) : QWidget(parent), impl_(std::make_unique<Impl>(this, network)) {}
 MediaPanel::~MediaPanel() = default;
-void MediaPanel::setEntry(const QJsonObject &entry) { impl_->setEntry(entry); }
+void MediaPanel::setEntry(const QJsonObject &entry, const QString &sourceHost) { impl_->setEntry(entry, sourceHost); }
 void MediaPanel::sayWord(const QString &title, const QString &languageCode) { impl_->say(title, languageCode); }
 void MediaPanel::stopPlayback() { impl_->stopSpeech(); impl_->stopAudio(); }

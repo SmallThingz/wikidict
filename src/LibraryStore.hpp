@@ -32,11 +32,13 @@ struct PreparedImport {
     std::unique_ptr<QTemporaryDir> directory;
     Dictionary dictionary;
     QString stagedFile;
+    QString editionGroup;
     ~PreparedImport();
 };
 using Progress = std::function<void(const QString &, qint64, qint64)>;
 
 QString defaultSource();
+QString sourceHost(const QString &root);
 bool isHttpsUrl(const QUrl &url);
 QList<CatalogItem> parseCatalog(const QByteArray &data);
 QList<Dictionary> installed(const QString &root);
@@ -45,7 +47,7 @@ QString formatBytes(qint64 bytes);
 bool containsDictionary(const QString &root, const Dictionary &dictionary);
 std::shared_ptr<PreparedImport> prepareImport(const QString &root, const QString &source,
     const QByteArray &expectedHash, qint64 expectedBytes, const std::atomic_bool &cancel,
-    const Progress &progress);
+    const Progress &progress, const QString &sourceName = {});
 void commitImport(const QString &root, PreparedImport &prepared);
 void removeDictionary(const QString &root, const Dictionary &dictionary);
 }

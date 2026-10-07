@@ -12,7 +12,7 @@ public:
     explicit MediaPanel(QWidget *parent = nullptr, QNetworkAccessManager *network = nullptr);
     ~MediaPanel() override;
 
-    void setEntry(const QJsonObject &entry);
+    void setEntry(const QJsonObject &entry, const QString &sourceHost = {});
     void sayWord(const QString &title, const QString &languageCode);
     void stopPlayback();
 

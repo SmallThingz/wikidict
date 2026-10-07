@@ -295,13 +295,13 @@ void LibraryDialog::importFile() {
         QStringLiteral("Compiled dictionaries (*.wikblb *.wikblb.xz);;All files (*)"));
     if (!file.isEmpty()) startImport(file);
 }
-void LibraryDialog::startImport(const QString &file, const QByteArray &hash, qint64 bytes) {
+void LibraryDialog::startImport(const QString &file, const QByteArray &hash, qint64 bytes, const QString &sourceName) {
     setBusy(true, QStringLiteral("Preparing dictionary"));
     auto prepared = std::make_shared<std::shared_ptr<LibraryStorage::PreparedImport>>();
     const QString root = root_;
     const auto progress = progressCallback();
-    runWorker([this, root, file, hash, bytes, prepared, progress] {
-        *prepared = LibraryStorage::prepareImport(root, file, hash, bytes, cancelled_, progress);
+    runWorker([this, root, file, hash, bytes, prepared, progress, sourceName] {
+        *prepared = LibraryStorage::prepareImport(root, file, hash, bytes, cancelled_, progress, sourceName);
     }, [this, prepared, root](const QString &error) {
         if (!error.isEmpty()) { finishOperation(error, error != QStringLiteral("Cancelled")); return; }
         if (cancelled_.load()) { finishOperation(QStringLiteral("Cancelled")); return; }
@@ -450,7 +450,7 @@ void LibraryDialog::downloadSelected() {
         if (!error.isEmpty()) { finishOperation(error, true); return; }
         if (item.bytes > 0 && *received != item.bytes) { finishOperation(QStringLiteral("The download is incomplete. Please try again."), true); return; }
         download_->close();
-        startImport(download_->fileName(), item.sha256, item.bytes);
+        startImport(download_->fileName(), item.sha256, item.bytes, QFileInfo(item.url.path()).fileName());
     });
 }
 void LibraryDialog::cancelOperation() {

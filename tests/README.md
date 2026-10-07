@@ -50,3 +50,23 @@ to validate a real dictionary; CTest supplies the committed fixture for the GUI.
 `MediaPanelTest` supplies controlled HTTPS replies and a local fake speech process.
 It tests the boundary between permission, downloading, caching and playback without
 accessing public media or depending on an installed voice or sound device.
+
+`fixtures/alias-cases/aliases.wikblb` contains five synthetic DAL1 redirect records
+with presentation encoded by the same core generator. It covers an ordinary
+target, one-edge traversal through another alias, an absent target, a neutral
+alias-only library and a Unicode supplemental title. Its SHA-256 is
+`59b4cd82d3d410cbd141a207ec2d0e7a4c683a47ab57cea37a094ed2d873e97c`.
+The nested directory keeps these aliases out of the existing 182-entry fixture.
+Generate against the current core's configured Zig toolchain (currently 0.17)
+using `-O safe` in place of the historical command's `-O ReleaseSafe`.
+
+Import validation checks DAL1 identities, namespaces, text encoding and framing,
+plus the nested presentation magic. The core reader performs full presentation
+decoding; a separate test corrupts a nested presentation and requires lookup to
+fail safely. Edition tests check that canonical release filenames bind an empty
+library only after a successful import, preserve that binding on failures, and
+reject mixed editions, dates or unlabelled files in a bound library.
+Language-heading tests preserve an initial U+FEFF through import, SHA-256 naming,
+the language manifest and installed metadata; it is part of the binary identity.
+The reader regression also searches and opens a BOM-prefixed title through the
+JSON API, which must preserve the same heading and title identities.

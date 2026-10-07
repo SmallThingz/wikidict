@@ -1,7 +1,9 @@
 #include "LibraryStore.hpp"
 
+#include <QBuffer>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDate>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -15,7 +17,9 @@
 #include <QSet>
 #include <QStandardPaths>
 #include <QStorageInfo>
+#include <QStringDecoder>
 #include <QTemporaryDir>
+#include <QtEndian>
 #include <algorithm>
 #include <stdexcept>
 
@@ -27,10 +31,11 @@ void checkCancel(const std::atomic_bool &cancel) {
 }
 const QStringList kinds = {QStringLiteral("language"), QStringLiteral("thesaurus"),
     QStringLiteral("citations"), QStringLiteral("reconstruction"), QStringLiteral("rhymes"),
-    QStringLiteral("sign_gloss")};
+    QStringLiteral("sign_gloss"), QStringLiteral("supplemental"), QStringLiteral("alias")};
 
 QString featureName(const QString &kind) {
     if (kind == QStringLiteral("sign_gloss")) return QStringLiteral("sign-gloss.wikblb");
+    if (kind == QStringLiteral("alias")) return QStringLiteral("aliases.wikblb");
     if (!kinds.contains(kind) || kind == QStringLiteral("language")) fail(QStringLiteral("Unknown dictionary kind."));
     return kind + QStringLiteral(".wikblb");
 }
@@ -48,6 +53,41 @@ QByteArray readFile(const QString &path, qint64 limit) {
     const auto data = file.readAll();
     if (file.error() != QFileDevice::NoError) fail(file.errorString());
     return data;
+}
+QString editionGroup(const QString &name) {
+    const auto match = QRegularExpression(QStringLiteral("^([a-z][a-z0-9_-]*wiktionary-[0-9]{8})-(?:[0-9a-f]{64}|aliases|supplemental|thesaurus|citations|reconstruction|rhymes|sign-gloss)\\.wikblb(?:\\.xz)?$")).match(QFileInfo(name).fileName());
+    if (!match.hasMatch()) return {};
+    const QString group = match.captured(1);
+    const QString date = group.right(8);
+    if (QDate::fromString(date, QStringLiteral("yyyyMMdd")).toString(QStringLiteral("yyyyMMdd")) != date)
+        fail(QStringLiteral("The release filename contains an invalid snapshot date."));
+    return group;
+}
+QString installedEditionGroup(const QString &root) {
+    const QString path = QDir(root).filePath(QStringLiteral(".desktop-edition"));
+    QByteArray bytes;
+    if (QFileInfo::exists(path)) bytes = readFile(path, 256);
+    else {
+        const QString completePath = QDir(root).filePath(QStringLiteral("complete.json"));
+        if (!QFileInfo::exists(completePath)) return {};
+        const auto complete = QJsonDocument::fromJson(readFile(completePath, 4 * 1024 * 1024)).object();
+        bytes = (complete.value(QStringLiteral("edition")).toString() + QChar('-') + complete.value(QStringLiteral("date")).toString()).toUtf8();
+    }
+    const QString group = QString::fromUtf8(bytes).trimmed();
+    if (!bytes.isValidUtf8() || !QRegularExpression(QStringLiteral("^[a-z][a-z0-9_-]*wiktionary-[0-9]{8}$")).match(group).hasMatch() ||
+        QDate::fromString(group.right(8), QStringLiteral("yyyyMMdd")).toString(QStringLiteral("yyyyMMdd")) != group.right(8))
+        fail(QStringLiteral("This dictionary folder has an invalid edition marker."));
+    return group;
+}
+void checkEditionGroup(const QString &root, const QString &incoming) {
+    const QString current = installedEditionGroup(root);
+    if (!current.isEmpty() && current != incoming)
+        fail(QStringLiteral("This folder belongs to %1. Choose a separate folder for another edition or unlabelled files.").arg(current));
+    if (current.isEmpty() && !incoming.isEmpty()) {
+        for (const QString &directory : {root, QDir(root).filePath(QStringLiteral("languages"))})
+            if (!QDir(directory).entryList({QStringLiteral("*.wikblb"), QStringLiteral("*.wikblb.xz")}, QDir::Files).isEmpty())
+                fail(QStringLiteral("The existing files have no edition identity. Import this release into an empty folder."));
+    }
 }
 QStringList headings(const QString &root) {
     const QString path = QDir(root).filePath(QStringLiteral("languages.tsv"));
@@ -108,7 +148,7 @@ QByteArray nulField(QFile &file) {
     }
     fail(QStringLiteral("The dictionary is truncated."));
 }
-quint64 varuint(QFile &file) {
+quint64 varuint(QIODevice &file) {
     quint64 value = 0;
     for (int shift = 0; shift < 64; shift += 7) {
         char ch;
@@ -123,17 +163,52 @@ quint64 varuint(QFile &file) {
     }
     fail(QStringLiteral("The dictionary contains an invalid record length."));
 }
+void validateAlias(const QByteArray &payload, const QByteArray &key) {
+    const auto invalid = [] { fail(QStringLiteral("The dictionary contains an invalid redirect record.")); };
+    if (payload.size() < 15 || !payload.startsWith("DAL1")) invalid();
+    const auto sourceNamespace = qFromLittleEndian<quint32>(payload.constData() + 4);
+    const auto sourceKind = static_cast<unsigned char>(payload[8]);
+    const auto hasNamespace = static_cast<unsigned char>(payload[9]);
+    const auto targetNamespace = qFromLittleEndian<quint32>(payload.constData() + 10);
+    const auto targetKind = static_cast<unsigned char>(payload[14]);
+    if (sourceKind < 1 || sourceKind > 7 || hasNamespace > 1 || targetKind > 7 ||
+        (sourceKind == 1) != (sourceNamespace == 0) || (!hasNamespace && targetNamespace != 0) ||
+        (targetKind && (!hasNamespace || (targetKind == 1) != (targetNamespace == 0)))) invalid();
+    QBuffer input;
+    input.setData(payload);
+    input.open(QIODevice::ReadOnly);
+    input.seek(15);
+    QList<QByteArray> fields;
+    for (int i = 0; i < 7; ++i) {
+        const quint64 length = varuint(input);
+        if (length > quint64(input.bytesAvailable())) invalid();
+        fields.append(input.read(qint64(length)));
+        if (i < 6 && (!fields.last().isValidUtf8() || fields.last().contains('\0') || (i < 4 && fields.last().isEmpty()))) invalid();
+    }
+    if (!input.atEnd() || fields[5].size() > 255 || !fields[6].startsWith("DPR2")) invalid();
+    const auto lookupKey = [&](const QByteArray &title, unsigned char kind) {
+        if (kind == 1 || kind == 7) return title;
+        const qsizetype colon = title.indexOf(':');
+        if (colon < 0) invalid();
+        return title.mid(colon + 1);
+    };
+    if (fields[1] != lookupKey(fields[0], sourceKind) ||
+        (targetKind ? fields[4].isEmpty() || fields[4] != lookupKey(fields[3], targetKind) : !fields[4].isEmpty()) ||
+        key != QByteArray(1, char('0' + sourceKind)) + '\t' + fields[1]) invalid();
+}
 Dictionary validate(const QString &path, const std::atomic_bool &cancel, const Progress &progress) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) fail(file.errorString());
     if (file.read(8) != QByteArrayLiteral("WIKBLB08")) fail(QStringLiteral("Choose a WIKBLB08 dictionary containing compiled entries."));
     char ch;
-    if (!file.getChar(&ch) || ch < 1 || ch > 6) fail(QStringLiteral("The dictionary has an invalid kind."));
+    if (!file.getChar(&ch)) fail(QStringLiteral("The dictionary has an invalid kind."));
+    const auto kindTag = static_cast<unsigned char>(ch);
+    if (kindTag < 1 || kindTag > kinds.size()) fail(QStringLiteral("The dictionary has an invalid kind."));
     Dictionary result;
-    result.kind = kinds.at(ch - 1);
-    if (ch == 1) {
+    result.kind = kinds.at(kindTag - 1);
+    if (kindTag == 1) {
         nulField(file); // The reader obtains the language code from the dictionary itself.
-        result.heading = QString::fromUtf8(nulField(file));
+        result.heading = QStringDecoder(QStringDecoder::Utf8, QStringConverter::Flag::ConvertInitialBom)(nulField(file));
         if (result.heading.isEmpty() || result.heading.contains(QLatin1Char('\n')))
             fail(QStringLiteral("The dictionary has an invalid language heading."));
     } else {
@@ -154,7 +229,8 @@ Dictionary validate(const QString &path, const std::atomic_bool &cancel, const P
         if (length < 4 || length > 64 * 1024 * 1024 || length > quint64(file.size() - file.pos()))
             fail(QStringLiteral("The dictionary contains an invalid or truncated record."));
         const qint64 end = file.pos() + qint64(length);
-        if (file.read(4) != QByteArrayLiteral("DPR2"))
+        if (result.kind == QStringLiteral("alias")) validateAlias(file.read(qint64(length)), title);
+        else if (file.read(4) != QByteArrayLiteral("DPR2"))
             fail(QStringLiteral("The dictionary contains entries that are not compiled presentation data."));
         if (!file.seek(end)) fail(file.errorString());
         ++result.words;
@@ -163,7 +239,7 @@ Dictionary validate(const QString &path, const std::atomic_bool &cancel, const P
             progress(QStringLiteral("Checking dictionary"), file.pos(), file.size());
         }
     }
-    if (result.words == 0) fail(QStringLiteral("This dictionary has no entries."));
+    if (result.words == 0 && result.kind == QStringLiteral("language")) fail(QStringLiteral("This dictionary has no entries."));
     return result;
 }
 qint64 availableBytes(const QString &root) {
@@ -252,6 +328,13 @@ QList<CatalogItem> parseCatalog(const QByteArray &data) {
     }
     return result;
 }
+QString sourceHost(const QString &root) {
+    QString group = installedEditionGroup(root);
+    if (group.isEmpty()) return {};
+    group.chop(9); // The separator and snapshot date.
+    group.chop(10); // The Wikimedia database suffix "wiktionary".
+    return group.replace(QChar('_'), QChar('-')) + QStringLiteral(".wiktionary.org");
+}
 QString dictionaryPath(const QString &root, const Dictionary &dictionary) {
     if (dictionary.kind != QStringLiteral("language")) return QDir(root).filePath(featureName(dictionary.kind));
     const QByteArray hash = QCryptographicHash::hash(dictionary.heading.toUtf8(), QCryptographicHash::Sha256).toHex();
@@ -297,7 +380,7 @@ bool containsDictionary(const QString &root, const Dictionary &dictionary) {
     return QFileInfo::exists(path) || QFileInfo::exists(path + QStringLiteral(".xz"));
 }
 std::shared_ptr<PreparedImport> prepareImport(const QString &root, const QString &source,
-        const QByteArray &expectedHash, qint64 expectedBytes, const std::atomic_bool &cancel, const Progress &progress) {
+        const QByteArray &expectedHash, qint64 expectedBytes, const std::atomic_bool &cancel, const Progress &progress, const QString &sourceName) {
     ensureRoot(root);
     auto prepared = std::make_shared<PreparedImport>();
     prepared->directory = std::make_unique<QTemporaryDir>(QDir(root).filePath(QStringLiteral(".import-XXXXXX")));
@@ -334,6 +417,12 @@ std::shared_ptr<PreparedImport> prepareImport(const QString &root, const QString
         decompress(copied, validationPath, root, cancel, progress);
     }
     prepared->dictionary = validate(validationPath, cancel, progress);
+    const QString originalName = sourceName.isEmpty() ? QFileInfo(source).fileName() : QFileInfo(sourceName).fileName();
+    prepared->editionGroup = editionGroup(originalName);
+    if (!prepared->editionGroup.isEmpty() && originalName != prepared->editionGroup + QChar('-') +
+            QFileInfo(dictionaryPath(root, prepared->dictionary)).fileName() + (compressed ? QStringLiteral(".xz") : QString()))
+        fail(QStringLiteral("The release filename does not match the dictionary it contains."));
+    checkEditionGroup(root, prepared->editionGroup);
     if (compressed) QFile::remove(validationPath);
     prepared->dictionary.sha256 = actualHash;
     prepared->dictionary.bytes = total;
@@ -346,6 +435,7 @@ void commitImport(const QString &root, PreparedImport &prepared) {
     ensureRoot(root);
     QLockFile lock(QDir(root).filePath(QStringLiteral(".library.lock")));
     if (!lock.tryLock()) fail(QStringLiteral("Another dictionary operation is using this folder. Try again when it finishes."));
+    checkEditionGroup(root, prepared.editionGroup);
     QStringList languages = headings(root);
     const auto &dictionary = prepared.dictionary;
     if (dictionary.kind == QStringLiteral("language") && !languages.contains(dictionary.heading)) languages.append(dictionary.heading);
@@ -354,7 +444,16 @@ void commitImport(const QString &root, PreparedImport &prepared) {
     QSaveFile index(QDir(root).filePath(QStringLiteral("languages.tsv")));
     const QByteArray content = manifest(languages);
     if (!index.open(QIODevice::WriteOnly) || index.write(content) != content.size()) fail(QStringLiteral("Cannot update the dictionary list: %1").arg(index.errorString()));
+    const QString markerPath = QDir(root).filePath(QStringLiteral(".desktop-edition"));
+    const bool needsMarker = !prepared.editionGroup.isEmpty() && installedEditionGroup(root).isEmpty();
+    QSaveFile marker(markerPath);
+    if (needsMarker) {
+        const QByteArray bytes = prepared.editionGroup.toUtf8() + '\n';
+        if (!marker.open(QIODevice::WriteOnly) || marker.write(bytes) != bytes.size()) fail(QStringLiteral("Cannot save the dictionary edition."));
+    }
     QList<QPair<QString, QString>> backups;
+    bool published = false;
+    bool markerCommitted = false;
     try {
         for (const QString &old : {raw, raw + QStringLiteral(".xz")}) {
             if (!QFileInfo::exists(old)) continue;
@@ -364,12 +463,20 @@ void commitImport(const QString &root, PreparedImport &prepared) {
             backups.append({old, backup});
         }
         if (!QFile::rename(prepared.stagedFile, dictionary.path)) fail(QStringLiteral("Cannot finish installing the dictionary. Check folder permissions."));
-        if (!index.commit()) {
-            QFile::rename(dictionary.path, prepared.stagedFile);
-            fail(QStringLiteral("Cannot finish updating the dictionary list: %1").arg(index.errorString()));
+        published = true;
+        if (needsMarker) {
+            if (!marker.commit()) fail(QStringLiteral("Cannot finish saving the dictionary edition."));
+            markerCommitted = true;
         }
+        if (!index.commit()) fail(QStringLiteral("Cannot finish updating the dictionary list: %1").arg(index.errorString()));
     } catch (...) {
+        if (published && !QFile::rename(dictionary.path, prepared.stagedFile)) {
+            prepared.directory->setAutoRemove(false);
+            fail(QStringLiteral("The import could not be rolled back. Recovery files remain in %1.").arg(prepared.directory->path()));
+        }
+        const bool markerRestored = !markerCommitted || QFile::remove(markerPath);
         restoreBackups(backups, *prepared.directory);
+        if (!markerRestored) fail(QStringLiteral("The dictionary was restored, but its edition marker could not be rolled back."));
         throw;
     }
     auto cache = metadata(root);

@@ -53,6 +53,13 @@ restores its previous dictionary folder and word.
 
 Dictionary opening, indexing, imports and network work stay off the UI thread.
 
+Each native dictionary folder holds one edition and snapshot. Extract a complete
+edition archive into its own folder, then open that folder. Individual release
+files named `<edition>-<YYYYMMDD>-<blob filename>` can be imported together into
+an empty folder; the reader rejects files from another edition or date there.
+Import the matching `aliases.wikblb` file to include redirects. Existing folders
+of manually named files remain readable; use a new folder for named releases.
+
 ### Keyboard
 
 | Shortcut | Action |

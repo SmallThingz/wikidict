@@ -37,7 +37,7 @@ private:
     void downloadSelected();
     void addSource();
     void removeSource();
-    void startImport(const QString &file, const QByteArray &hash = {}, qint64 bytes = -1);
+    void startImport(const QString &file, const QByteArray &hash = {}, qint64 bytes = -1, const QString &sourceName = {});
     void finishOperation(const QString &message, bool error = false);
     void setBusy(bool busy, const QString &label = {});
     void runWorker(std::function<void()> task, std::function<void(const QString &)> finished);

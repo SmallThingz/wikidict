@@ -228,16 +228,39 @@ private slots:
         network.responses = {{QByteArrayLiteral("{\"query\":{\"pages\":[{\"missing\":true}]}}")},
                              {metadata(QStringLiteral("http://example.org/unsafe.png"))}};
         MediaPanel panel(nullptr, &network);
-        panel.setEntry(entry());
+        panel.setEntry(entry(), QStringLiteral("ar.wiktionary.org"));
         panel.show();
         enableImages(panel);
         QTest::mouseClick(loadButton(panel), Qt::LeftButton);
         QTRY_COMPARE(network.urls.size(), 2);
         QTRY_VERIFY(status(panel)->text().contains(QStringLiteral("unsupported address")));
         QCOMPARE(network.urls[0].host(), QStringLiteral("commons.wikimedia.org"));
-        QCOMPARE(network.urls[1].host(), QStringLiteral("en.wiktionary.org"));
+        QCOMPARE(network.urls[1].host(), QStringLiteral("ar.wiktionary.org"));
         QCOMPARE(loadButton(panel)->text(), QStringLiteral("Retry"));
         QVERIFY(loadButton(panel)->isEnabled());
+    }
+
+    void unknownEditionDoesNotGuessAMediaWiki() {
+        Network network;
+        network.responses = {{QByteArrayLiteral("{\"query\":{\"pages\":[{\"missing\":true}]}}")}};
+        MediaPanel panel(nullptr, &network); panel.setEntry(entry()); panel.show();
+        enableImages(panel); QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTRY_VERIFY(status(panel)->text().contains(QStringLiteral("no longer available")));
+        QCOMPARE(network.urls.size(), 1);
+        QCOMPARE(network.urls[0].host(), QStringLiteral("commons.wikimedia.org"));
+    }
+
+    void mediaCacheDoesNotCrossEditionContexts() {
+        Network network;
+        network.responses = {{metadata()}, {picture()}, {metadata()}, {picture()}};
+        MediaPanel panel(nullptr, &network); panel.setEntry(entry(), QStringLiteral("af.wiktionary.org")); panel.show();
+        enableImages(panel); QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTRY_COMPARE(status(panel)->text(), QStringLiteral("Ready."));
+        QCOMPARE(network.urls.size(), 2);
+        panel.setEntry(entry(), QStringLiteral("ar.wiktionary.org"));
+        QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTRY_COMPARE(status(panel)->text(), QStringLiteral("Ready."));
+        QCOMPARE(network.urls.size(), 4);
     }
 
     void rejectsOversizedDownloadAndRetryRecovers() {

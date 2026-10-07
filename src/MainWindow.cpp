@@ -214,15 +214,16 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 (resetVisits && !loaded->languages.contains(language) ? loaded->languages.first() : language);
             QStringList candidates{kind};
             if (resetVisits) {
-                if (!loaded->languages.isEmpty()) candidates.append(QStringLiteral("language"));
-                candidates.append({QStringLiteral("thesaurus"), QStringLiteral("citations"), QStringLiteral("reconstruction"), QStringLiteral("rhymes"), QStringLiteral("sign_gloss")});
+                candidates.append(QStringLiteral("language"));
+                candidates.append({QStringLiteral("thesaurus"), QStringLiteral("citations"), QStringLiteral("reconstruction"), QStringLiteral("rhymes"), QStringLiteral("sign_gloss"), QStringLiteral("supplemental")});
                 candidates.removeDuplicates();
             }
             bool selectedCollection = false;
             QString lastError;
             for (const QString &candidate : candidates) {
                 if (cancelled->load()) return loaded;
-                if (candidate == QStringLiteral("language") && selected.isEmpty()) continue;
+                // The core admits a neutral redirect collection only when the
+                // language manifest and language directory are both empty.
                 try { loaded->api->select(selected, candidate); selectedCollection = true; break; }
                 catch (const std::exception &error) { lastError = QString::fromUtf8(error.what()); }
             }
@@ -295,6 +296,7 @@ void MainWindow::setupUi() {
     kind_->addItem(QStringLiteral("Reconstruction"), QStringLiteral("reconstruction"));
     kind_->addItem(QStringLiteral("Rhymes"), QStringLiteral("rhymes"));
     kind_->addItem(QStringLiteral("Sign gloss"), QStringLiteral("sign_gloss"));
+    kind_->addItem(QStringLiteral("Supplemental"), QStringLiteral("supplemental"));
     side->addWidget(kind_);
 
     language_ = new QComboBox(sidebar);
@@ -652,7 +654,7 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit) {
     entryTabs_->setCurrentIndex(0);
 
     const SavedWord word = savedWord(currentEntry_);
-    media_->setEntry(currentEntry_);
+    media_->setEntry(currentEntry_, LibraryStorage::sourceHost(api_->root()));
     listen_->setEnabled(true);
     QSettings().setValue(QStringLiteral("reader/lastWord"), title);
     QSettings().setValue(QStringLiteral("reader/lastKind"), api_->kind());
@@ -845,6 +847,9 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         "a{color:%3;text-decoration:none;}blockquote{margin:8px 18px;}"
         "code,pre{font-family:monospace;}</style><body>")
         .arg(readingPointSize_).arg(palette().color(QPalette::Text).name(), palette().color(QPalette::Link).name(), readerFamily());
+    const QJsonObject redirect = entry.value(QStringLiteral("redirect")).toObject();
+    if (redirect.value(QStringLiteral("followed")).toBool())
+        out += QStringLiteral("<p><small>Redirected from %1</small></p>").arg(redirect.value(QStringLiteral("source_title")).toString().toHtmlEscaped());
     const QJsonArray preamble = entry.value(QStringLiteral("preamble_spans")).toArray();
     if (!preamble.isEmpty()) out += QStringLiteral("<p>%1</p>").arg(spansHtml(preamble));
     int index = -1;
@@ -886,6 +891,17 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         }
         out += QStringLiteral("</ul><p><small>Media links open online in your browser.</small></p>");
     }
+    const QString host = api_ ? LibraryStorage::sourceHost(api_->root()) : QString();
+    QString source = host.isEmpty() ? QStringLiteral("https://www.wiktionary.org/") : QStringLiteral("https://") + host + QChar('/');
+    if (!host.isEmpty()) {
+        const QString kind = entry.value(QStringLiteral("kind")).toString();
+        QString pageTitle;
+        if (kind == QStringLiteral("language") || kind == QStringLiteral("supplemental") || kind == QStringLiteral("alias"))
+            pageTitle = entry.value(QStringLiteral("title")).toString();
+        else if (redirect.value(QStringLiteral("followed")).toBool()) pageTitle = redirect.value(QStringLiteral("target_title")).toString();
+        if (!pageTitle.isEmpty()) source += QStringLiteral("wiki/") + QString::fromLatin1(QUrl::toPercentEncoding(pageTitle));
+    }
+    out += QStringLiteral("<hr><p><small><a href='%1'>Wiktionary contributors</a> · <a href='https://creativecommons.org/licenses/by-sa/4.0/'>CC BY-SA 4.0</a></small></p>").arg(source.toHtmlEscaped());
     return out + QStringLiteral("</body>");
 }
 
