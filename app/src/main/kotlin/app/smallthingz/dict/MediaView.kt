@@ -106,7 +106,7 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
                 val caption=media.caption.takeUnless{it==media.file}.orEmpty()
                 if(caption.isNotBlank() || showFileName) Text(caption.ifBlank{media.file.substringBeforeLast('.').replace('_',' ')},style=MaterialTheme.typography.bodyMedium)
                 error?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)}
-                resource?.credit?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall,maxLines=2,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                resource?.credit?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
             }
             resource?.let{r->IconButton(onClick={uri.openUri(r.source)}){Icon(Icons.Outlined.OpenInNew,"Source and licence",Modifier.size(17.dp))}}
         }
