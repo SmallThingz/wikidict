@@ -56,7 +56,10 @@ LearningStore::LearningStore()
     load();
 }
 void LearningStore::load() {
-    const QByteArray bytes = storage_.value(QStringLiteral("learning/state")).toByteArray();
+    QByteArray bytes = storage_.value(QStringLiteral("learning/state")).toByteArray();
+    // Preserve initial U+FEFF in saved titles and headings through Qt's JSON
+    // string conversion, just as for the reader API boundary.
+    bytes.replace(QByteArray::fromHex("efbbbf"), QByteArrayLiteral("\\ufeff"));
     QJsonParseError error{};
     const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
     if (error.error != QJsonParseError::NoError || !document.isObject()) return;

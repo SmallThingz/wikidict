@@ -348,6 +348,14 @@ private slots:
         QTest::keyClick(window.search_, Qt::Key_Return);
         QTRY_COMPARE(title(window), exact);
         QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        QTest::mouseClick(window.bookmark_, Qt::LeftButton);
+        LearningStore reopened;
+        QCOMPARE(reopened.bookmarks().size(), 1);
+        QCOMPARE(reopened.bookmarks().first().title, exact);
+        QCOMPARE(reopened.bookmarks().first().language, QChar(0xfeff) + QStringLiteral("English"));
+        QVERIFY(!reopened.history().isEmpty());
+        QCOMPARE(reopened.history().first().title, exact);
+        QCOMPARE(reopened.history().first().language, QChar(0xfeff) + QStringLiteral("English"));
     }
 
     void attributionUsesKnownEditionAndFullTitlesOnly() {
