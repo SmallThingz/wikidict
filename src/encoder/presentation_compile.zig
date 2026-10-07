@@ -53,6 +53,8 @@ pub const Style = struct {
     strike: bool = false,
     underline: bool = false,
     role: Role = .normal,
+    // Build-only context: decorative file names are not semantic heading text.
+    heading: bool = false,
 };
 pub const SpanFlags = packed struct(u8) {
     bold: bool = false,
@@ -780,6 +782,21 @@ pub const Renderer = struct {
         }
         return if (candidate.len == 0) fallback else candidate;
     }
+    fn mediaHeadingCaption(raw: []const u8) []const u8 {
+        var caption: []const u8 = "";
+        var alt: []const u8 = "";
+        var pos: usize = 0;
+        while (pos <= raw.len) {
+            const end = syntax.delimiter(raw, "|", pos) orelse raw.len;
+            const part = trim(raw[pos..end]);
+            if (std.ascii.startsWithIgnoreCase(part, "alt=")) {
+                alt = trim(part[4..]);
+            } else if (!mediaOption(part)) caption = part;
+            if (end == raw.len) break;
+            pos = end + 1;
+        }
+        return if (caption.len != 0) caption else alt;
+    }
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize) Error!?usize {
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
         const tag = syntax.tagAt(input, at) orelse return null;
@@ -1049,11 +1066,12 @@ pub const Renderer = struct {
                         const file_name = target[(std.mem.indexOfScalar(u8, target, ':').? + 1)..];
                         label_value = mediaCaption(label_value, file_name);
                         try self.mediaFile(file_name, label_value);
+                        if (s.heading) label_value = mediaHeadingCaption(if (token.link_has_pipe) token.text else "");
                         var media_style = s;
                         media_style.classes = "wikidict-media";
                         media_style.kind = .link;
                         media_style.target = try std.fmt.allocPrint(self.a, "File:{s}", .{file_name});
-                        try self.text(try plainText(self.a, try self.parseSpans(label_value, .{})), media_style);
+                        try self.text(try plainText(self.a, try self.parseSpans(label_value, .{ .heading = s.heading })), media_style);
                     } else {
                         if (label_value.len == 0) label_value = pipeTrickLabel(target);
                         if (safeInternalTarget(target)) {
@@ -1149,7 +1167,7 @@ pub const Renderer = struct {
             defer self.spans = parent;
             try self.literal(raw, .{ .code = true });
             break :blk try self.spans.toOwnedSlice(self.a);
-        } else try self.parseSpans(raw, .{});
+        } else try self.parseSpans(raw, .{ .heading = kind == .heading });
         if (spans.len == 0 and kind != .heading and kind != .blank and kind != .rule) return;
         try self.appendBlockBudgeted(list, .{ .kind = kind, .text = raw, .spans = spans, .depth = @intCast(@min(path.len, 255)), .list_path = path[0..@min(path.len, 255)], .number = number, .level = level, .relation_note = hints.relation_note });
     }
@@ -2518,6 +2536,29 @@ test "headings follow MediaWiki whitespace width and level-six clamping" {
     try std.testing.expectEqual(Kind.heading, seven[0].kind);
     try std.testing.expectEqual(@as(u8, 6), seven[0].level);
     try std.testing.expectEqualStrings("= Head =", try flattened(a, seven[0].spans));
+
+    // Captions and alt text carry meaning; an implicit file name does not.
+    const media_cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "[[File:Icon.svg]]", .expected = "" },
+        .{ .source = "[[Image:Icon.svg|25px|link=]]", .expected = "" },
+        .{ .source = "[[File:Icon.svg|alt=]]", .expected = "" },
+        .{ .source = "[[File:Icon.svg|alt=Sound]]", .expected = "Sound" },
+        .{ .source = "[[File:Icon.svg|ALT=Sound|alt=]]", .expected = "" },
+        .{ .source = "[[File:Icon.svg|alt=Sound|[[pronunciation|Speech]]]]", .expected = "Speech" },
+        .{ .source = "[[File:Icon.svg|First|Second|alt=Sound]]", .expected = "Second" },
+        .{ .source = "[[File:Icon.svg|Icon.svg]]", .expected = "Icon.svg" },
+        .{ .source = "[[:File:Icon.svg]]", .expected = "File:Icon.svg" },
+        .{ .source = "[[:File:Icon.svg|Picture]]", .expected = "Picture" },
+        .{ .source = "Icon.svg", .expected = "Icon.svg" },
+        .{ .source = "<span>[[File:Icon.svg|25px]]</span>Speech", .expected = "Speech" },
+        .{ .source = "[[File:Outer.svg|[[File:Inner.svg|25px]]Speech]]", .expected = "Speech" },
+    };
+    for (media_cases) |case| {
+        const heading = try r.renderBody(try std.fmt.allocPrint(a, "=={s}==\n[[File:Body.jpg|20px]]", .{case.source}));
+        try std.testing.expectEqual(Kind.heading, heading[0].kind);
+        try std.testing.expectEqualStrings(case.expected, try flattened(a, heading[0].spans));
+        try std.testing.expectEqualStrings("Body.jpg", try flattened(a, heading[1].spans));
+    }
 }
 
 test "misnested formatting follows MediaWiki visible style ownership" {
@@ -2808,6 +2849,11 @@ test "localized namespace aliases classify media and category membership" {
     try std.testing.expect(std.mem.indexOf(u8, text, "Un chat") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "Catégorie:Animaux"));
     try std.testing.expect(std.mem.indexOf(u8, text, "Fichier:Cat.jpg") == null);
+
+    const headings = try renderer.renderBody("==[[Fichier:Icon.svg|25px]]Titre==\n==[[Fichier:Icon.svg|alt=Sens]]==\n[[Fichier:Body.jpg|20px]]");
+    try std.testing.expectEqualStrings("Titre", try plainText(arena.allocator(), headings[0].spans));
+    try std.testing.expectEqualStrings("Sens", try plainText(arena.allocator(), headings[1].spans));
+    try std.testing.expectEqualStrings("Body.jpg", try plainText(arena.allocator(), headings[2].spans));
 }
 
 test "Phonos presentation keeps canonical audio caption and language with explicit error flags" {

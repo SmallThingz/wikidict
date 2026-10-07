@@ -7,6 +7,15 @@ const types = blobs.presentation_types;
 const format = blobs.blob_format;
 const codec = blobs.presentation_codec;
 const A = std.mem.Allocator;
+// Expanded heading templates can leave spacing around decorative media.
+// Consume the whole NBSP sequence, never individual UTF-8 continuation bytes.
+fn trimHeading(raw: []const u8) []const u8 {
+    var text = std.mem.trim(u8, raw, " \t\r\n");
+    while (std.mem.startsWith(u8, text, "\u{a0}")) text = std.mem.trimStart(u8, text[2..], " \t\r\n");
+    while (std.mem.endsWith(u8, text, "\u{a0}")) text = std.mem.trimEnd(u8, text[0 .. text.len - 2], " \t\r\n");
+    return text;
+}
+
 const NamespaceRegistry = @import("namespace_registry").Registry;
 pub const Fallbacks = @import("presentation_fallback.zig").Report;
 
@@ -101,7 +110,7 @@ const Builder = struct {
             if (item.kind == .heading) {
                 try self.flush(rendered[section_start..i]);
                 self.started = true;
-                self.title = try compiler.plainText(self.a, item.spans);
+                self.title = trimHeading(try compiler.plainText(self.a, item.spans));
                 self.level = item.level;
                 section_start = i + 1;
             } else {
@@ -307,6 +316,39 @@ test "compiled presentation contains no executable template syntax" {
     try std.testing.expectEqualStrings(types.schema, parsed.schema);
     try std.testing.expectEqualStrings("cat", parsed.entry.title);
     try std.testing.expectEqual(types.BlockKind.definition, parsed.entry.sections[1].blocks[0].kind);
+
+    var registry = try NamespaceRegistry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tafwiktionary\n# dump-date\t20261001\n# content-language\taf\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "6\tLêer\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\n" ++
+        "10\tSjabloon\tTemplate\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer registry.deinit();
+    // Expanded forms of the actual AF pronunciation, noun and definition templates.
+    const heading_source = "==Engels==\n" ++
+        "===[[Lêer:Nuvola apps edu languages.svg|30px]] [[uitspraak|Uitspraak]]===\n" ++
+        "=== [[Lêer:Open book 01.svg|35px]] [[selfstandige naamwoord|Selfstandige naamwoord]] ===\n" ++
+        "====&nbsp;&nbsp;&nbsp;[[Lêer:Crystal Clear app kedit.svg|25px]] [[betekenis|Betekenisse]]====\n" ++
+        "# (anatomie) [[rugmurg|Rugmurg]]\n" ++
+        "===[[Lêer:Icon.svg|alt=Speech]]&nbsp;===\n" ++
+        "===[[Lêer:Icon.svg|alt=Speech|Caption]]===\n" ++
+        "===[[:Lêer:Icon.svg]]===\n" ++
+        "[[Lêer:Body.jpg|20px]]\n" ++
+        "===\u{4e20}===\n" ++
+        "===\u{feff}Literal\u{feff}===\n";
+    var report: Fallbacks = .{};
+    const heading_bytes = try compileReportedWithLinkTrailAlloc(a, "spinal cord", .language, "Engels", "en", heading_source, null, .{}, &registry, &report);
+    const heading_page = try codec.decodeAlloc(a, heading_bytes, "spinal cord", .language, .{ .code = "en", .heading = "Engels" });
+    const expected_titles = [_][]const u8{ "Engels", "Uitspraak", "Selfstandige naamwoord", "Betekenisse", "Speech", "Caption", "Lêer:Icon.svg", "\u{4e20}", "\u{feff}Literal\u{feff}" };
+    try std.testing.expectEqual(expected_titles.len, heading_page.entry.sections.len);
+    for (expected_titles, heading_page.entry.sections) |expected, section| try std.testing.expectEqualStrings(expected, section.title);
+    try std.testing.expectEqual(types.BlockKind.definition, heading_page.entry.sections[3].blocks[0].kind);
+    try std.testing.expectEqualStrings("(anatomie) ", heading_page.entry.sections[3].blocks[0].spans[0].text);
+    try std.testing.expectEqualStrings("Rugmurg", heading_page.entry.sections[3].blocks[0].spans[1].text);
+    try std.testing.expectEqualStrings("Body.jpg", heading_page.entry.sections[6].blocks[0].spans[0].text);
+    try std.testing.expectEqual(@as(usize, 1), heading_page.entry.media.len);
+    try std.testing.expectEqualStrings("Body.jpg", heading_page.entry.media[0].file);
+    try std.testing.expectEqualStrings("Body.jpg", heading_page.entry.media[0].caption);
+    try std.testing.expect(!report.any());
 }
 
 test "edition link trail survives compiled presentation encoding" {
