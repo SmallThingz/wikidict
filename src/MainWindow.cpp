@@ -911,6 +911,10 @@ QString MainWindow::clueFor(const QJsonObject &entry) const {
         for (const QJsonValue &value : spans) {
             const QJsonObject span = value.toObject();
             if (span.value(QStringLiteral("kind")).toString() == QStringLiteral("template")) throw DictApiError("compiled dictionary contains an uncompiled template span");
+            // Preview prose must not become an audio control or its filename.
+            // Keep ordinary linked text, including meanings compiled as indents.
+            const QStringList classes = span.value(QStringLiteral("classes")).toString().simplified().split(QChar(' '), Qt::SkipEmptyParts);
+            if (classes.contains(QStringLiteral("wikidict-media")) || classes.contains(QStringLiteral("audiotable"))) continue;
             text += span.value(QStringLiteral("text")).toString();
             text += span.value(QStringLiteral("trail")).toString();
         }

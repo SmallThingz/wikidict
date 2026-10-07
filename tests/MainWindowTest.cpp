@@ -525,6 +525,57 @@ private slots:
         QVERIFY(textIsVisible(window.reading_, QStringLiteral("Reference content.")));
     }
 
+    void savedPreviewSkipsAudioControlsAndKeepsLinkedMeanings() {
+        MainWindow window{QString()};
+        const auto span = [](const QString &text, const QString &classes = QString(), const QString &target = QString()) {
+            return QJsonObject{{QStringLiteral("kind"), target.isEmpty() ? QStringLiteral("text") : QStringLiteral("link")},
+                {QStringLiteral("text"), text}, {QStringLiteral("classes"), classes}, {QStringLiteral("target"), target}};
+        };
+        const auto block = [](const QString &kind, const QJsonArray &spans) {
+            return QJsonObject{{QStringLiteral("kind"), kind}, {QStringLiteral("spans"), spans}};
+        };
+        const auto section = [](const QString &title, const QJsonArray &blocks) {
+            return QJsonObject{{QStringLiteral("title"), title}, {QStringLiteral("blocks"), blocks}};
+        };
+        // Actual AF144 spinal cord shape: no definition blocks; pronunciation
+        // controls precede an ordinary linked meaning, both compiled as indents.
+        const QJsonObject audio = block(QStringLiteral("indent"), QJsonArray{
+            span(QStringLiteral("\u00a0\u00a0")),
+            span(QStringLiteral("Nuvola apps amarok.png"), QStringLiteral("wikidict-media"), QStringLiteral("File:Nuvola apps amarok.png")),
+            span(QStringLiteral("\u00a0")),
+            span(QStringLiteral("LL-Q1860 (eng)-Vealhurl-spinal cord.wav"), QStringLiteral("wikidict-media"), QStringLiteral("File:LL-Q1860 (eng)-Vealhurl-spinal cord.wav")),
+            span(QStringLiteral("("), QStringLiteral("audiotable")),
+            span(QStringLiteral("lêer"), QStringLiteral("audiotable"), QStringLiteral("Image:LL-Q1860 (eng)-Vealhurl-spinal cord.wav")),
+            span(QStringLiteral(")"), QStringLiteral("audiotable"))});
+        const QJsonObject meaning = block(QStringLiteral("indent"), QJsonArray{
+            span(QStringLiteral("(")), span(QStringLiteral("anatomie"), {}, QStringLiteral("anatomie")),
+            span(QStringLiteral(") ")), span(QStringLiteral("Rugmurg"), {}, QStringLiteral("rugmurg"))});
+        QJsonObject entry{{QStringLiteral("title"), QStringLiteral("spinal cord")}, {QStringLiteral("sections"), QJsonArray{
+            section(QStringLiteral("Engels (en)"), QJsonArray{block(QStringLiteral("paragraph"), QJsonArray{span(QStringLiteral(" "))}), block(QStringLiteral("table"), {})}),
+            section(QStringLiteral("Uitspraak"), QJsonArray{audio}),
+            section(QStringLiteral("Selfstandige naamwoord"), {}),
+            section(QStringLiteral("Betekenisse"), QJsonArray{meaning})}}};
+        const QJsonObject original = entry;
+        QCOMPARE(window.clueFor(entry), QStringLiteral("(anatomie) Rugmurg"));
+        QCOMPARE(entry, original); // Preview selection never edits the reading body.
+
+        QJsonArray sections = entry.value(QStringLiteral("sections")).toArray();
+        sections.append(section(QStringLiteral("Other"), QJsonArray{
+            block(QStringLiteral("definition"), QJsonArray{span(QStringLiteral(" "))}),
+            block(QStringLiteral("definition"), QJsonArray{span(QStringLiteral("Preferred definition."))})}));
+        entry.insert(QStringLiteral("sections"), sections);
+        QCOMPARE(window.clueFor(entry), QStringLiteral("Preferred definition."));
+
+        entry.insert(QStringLiteral("sections"), QJsonArray{section({}, QJsonArray{audio})});
+        QCOMPARE(window.clueFor(entry), QStringLiteral("Definition unavailable in this entry."));
+        entry.insert(QStringLiteral("sections"), QJsonArray{section({}, QJsonArray{
+            block(QStringLiteral("paragraph"), QJsonArray{
+                span(QStringLiteral("controls.wav"), QStringLiteral("other\taudiotable  note"), QStringLiteral("File:controls.wav")),
+                span(QStringLiteral("Useful linked prose"), QStringLiteral("not-audiotable"), QStringLiteral("ordinary")),
+                span(QStringLiteral(" example.wav"), {}, QStringLiteral("example.wav"))})})});
+        QCOMPARE(window.clueFor(entry), QStringLiteral("Useful linked prose example.wav"));
+    }
+
     void learningSourceChangesWithoutReopeningDialog() {
         MainWindow window(fixture_, QStringLiteral("cat"));
         window.show();
