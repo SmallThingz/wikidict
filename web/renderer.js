@@ -49,8 +49,10 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   const root = document.createDocumentFragment();
   root.append(node('p',entry.language || entry.kind,'entry-language'));
   const title = node('h1'); title.append(entry.display_title?.length?spans(entry.display_title,onLink):document.createTextNode(entry.title)); root.append(title);
+  if(entry.redirect){const r=entry.redirect;root.append(node('p',(r.followed?'Redirected from '+r.source_title+' to ':'Redirect to ')+r.target_title+(r.fragment?'#'+r.fragment:''),'entry-redirect'));}
+  if(entry.alias&&entry.redirect?.followed){const a=entry.alias;root.append(node('p','Redirect to '+a.target_title+(a.fragment?'#'+a.fragment:''),'entry-alias'));}
   function fold(title, open=false) {const el=node('details');el.open=open;el.append(node('summary',title));return el;}
-  if (entry.preamble_spans?.length) { const preamble=fold('About this entry',!settings.collapseOtherSections);preamble.append(spans(entry.preamble_spans,onLink));root.append(preamble); }
+  if (entry.preamble_spans?.length) { const preamble=fold('About this entry',entry.kind==='alias'||!settings.collapseOtherSections);preamble.append(spans(entry.preamble_spans,onLink));root.append(preamble); }
   for (const section of entry.sections) {
     const meaning=section.blocks.some(b=>b.kind==='definition');
     const expanded=meaning || (section.title.startsWith('Pronunciation')?!settings.collapsePronunciation:section.title.startsWith('Etymology')?!settings.collapseEtymology:!settings.collapseOtherSections);
@@ -70,6 +72,8 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     for (const ref of entry.references) { const p=node('p',null,'reference'); p.id=`cite_note-${ref.number}`; p.append(node('span',`[${ref.group?ref.group+' ':''}${ref.group_number}]`)); const body=node('span'); body.append(spans(ref.spans,onLink)); p.append(body); section.append(p); } root.append(section);
   }
   if (entry.media?.length) { const section=fold('Images & sound',!settings.collapseOtherSections);for(const media of entry.media){const view=mediaView(media);if(view)section.append(view);}root.append(section); }
-  const credit=node('footer');const link=node('a','Wiktionary contributors');link.href='https://en.wiktionary.org/wiki/'+encodeURIComponent(entry.title);link.target='_blank';link.rel='noopener';credit.append(link,node('span','CC BY-SA 4.0'));root.append(credit);
+  const edition=/^[a-z0-9_-]+wiktionary$/.test(entry.source_edition||'')?entry.source_edition.slice(0,-10).replaceAll('_','-'):null;
+  const source=edition?'https://'+edition+'.wiktionary.org/':'https://www.wiktionary.org/';
+  const credit=node('footer');const link=node('a','Wiktionary contributors');link.href=source+(edition&&entry.source_title?'wiki/'+encodeURIComponent(entry.source_title):'');link.target='_blank';link.rel='noopener';credit.append(link,node('span','CC BY-SA 4.0'));root.append(credit);
   return root;
 }

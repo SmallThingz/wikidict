@@ -29,3 +29,22 @@ test('concatenated streams and damaged framing',async()=>{
  const corrupt=first.slice();corrupt[40]^=32;
  await assert.rejects(async()=>{const x=await openSource(new Blob([corrupt]));await x.read(0,x.size);});
 });
+
+test('supplemental namespaces preserve full Unicode titles in raw and XZ',async()=>{
+ const raw=new Uint8Array(await readFile('../tests/fixtures/supplemental.wikblb'));
+ const packed=execFileSync('xz',['-1','-c'],{input:raw});
+ const sources=[new RawSource(new Blob([raw])),await openSource(new Blob([packed]))];
+ const indexes=await Promise.all(sources.map(buildIndex));
+ assert.deepEqual(indexes[0],indexes[1]);
+ assert.equal(indexes[0].metadata.kind,'supplemental');
+ assert.equal(indexes[0].metadata.language_code,'');
+ assert.equal(indexes[0].metadata.language,null);
+ assert.deepEqual(indexes[0].rows.map(x=>x.title),['Annexe:école','Appendix:école']);
+ for(const row of indexes[0].rows){
+  const entries=await Promise.all(sources.map(async source=>decode(await source.read(row.offset,row.length),{...indexes[0].metadata,title:row.title})));
+  assert.deepEqual(entries[0],entries[1]);
+  assert.equal(entries[0].title,row.title);
+  assert.equal(entries[0].sections[0].blocks[0].spans[0].text,row.title);
+ }
+ for(const tag of [0,8,255]){const corrupt=raw.slice();corrupt[8]=tag;await assert.rejects(()=>buildIndex(new RawSource(new Blob([corrupt]))));}
+});

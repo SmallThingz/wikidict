@@ -1,6 +1,7 @@
-// WIKBLB08 + DPR2 only. Every record remains binary until requested.
-const utf8 = new TextDecoder('utf-8', {fatal:true});
-const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss'];
+// WIKBLB08 contains compiled DPR2 pages or typed DAL1 redirect envelopes.
+// A leading U+FEFF belongs to a compiled title or field, not a file BOM.
+const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
+const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table'];
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
@@ -41,6 +42,38 @@ export function decode(bytes, metadata) {
   require(p===bytes.length,'Trailing presentation data');return entry;
 }
 
+export function decodeAlias(bytes, rawKey) {
+  const invalid='Invalid compiled alias';
+  require(bytes.length>=15 && utf8.decode(bytes.subarray(0,4))==='DAL1',invalid);
+  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+  const source_namespace=view.getUint32(4,true),sourceKind=bytes[8],hasNamespace=bytes[9],targetNamespace=view.getUint32(10,true),targetKind=bytes[14];
+  require(sourceKind>=1&&sourceKind<=7&&hasNamespace<=1&&targetKind<=7,invalid);
+  require(hasNamespace===1||targetNamespace===0,invalid);
+  require((sourceKind===1)===(source_namespace===0),invalid);
+  if(targetKind)require(hasNamespace===1&&(targetKind===1)===(targetNamespace===0),invalid);
+  let p=15;
+  const field=()=>{
+    let n=0,multiplier=1,count=0,b;
+    do{require(p<bytes.length&&count++<8,invalid);b=bytes[p++];n+=(b&127)*multiplier;multiplier*=128;}while(b&128);
+    require((count===1||b!==0)&&Number.isSafeInteger(n)&&n<=bytes.length-p,invalid);
+    const value=bytes.subarray(p,p+n);p+=n;return value;
+  };
+  const text=()=>utf8.decode(field());
+  const source_title=text(),source_key=text(),xml_target=text(),target_title=text(),target_key=text(),fragmentBytes=field(),fragment=utf8.decode(fragmentBytes),presentation=field();
+  require(p===bytes.length&&presentation.length>0,invalid);
+  for(const value of [source_title,source_key,xml_target,target_title])require(value.length>0&&!value.includes('\0'),invalid);
+  require(!target_key.includes('\0')&&!fragment.includes('\0')&&fragmentBytes.length<=255,invalid);
+  const key=(kind,title)=>{if(kind===1||kind===7)return title;const colon=title.indexOf(':');require(colon>=0,invalid);return title.slice(colon+1);};
+  require(source_key===key(sourceKind,source_title),invalid);
+  require(targetKind?target_key.length>0&&target_key===key(targetKind,target_title):target_key.length===0,invalid);
+  require(rawKey===sourceKind+'\t'+source_key,invalid);
+  const alias={source_namespace,source_kind:kinds[sourceKind-1],source_title,source_key,xml_target,target_title,target_namespace:hasNamespace?targetNamespace:null,target_kind:targetKind?kinds[targetKind-1]:null,target_key,fragment};
+  const entry=decode(presentation,{kind:'alias',language:null,language_code:'',title:source_title});
+  entry.alias={xml_target,target_title,fragment};
+  entry.redirect={source_title,target_title,fragment,followed:false};
+  return {alias,entry};
+}
+
 export async function buildIndex(source) {
   let p=0, buffer=new Uint8Array(), start=-1;
   const byte=async()=>{require(p<source.size,'Truncated dictionary');if(p<start||p>=start+buffer.length){start=p;buffer=await source.read(p,Math.min(256*1024,source.size-p));}return buffer[p++-start];};
@@ -56,10 +89,16 @@ export async function buildIndex(source) {
     let length=0,multiplier=1,n=0,b;
     do{b=await byte();require(n++<8);length+=(b&127)*multiplier;multiplier*=128;}while(b&128);
     require(n===1||b!==0);require(Number.isSafeInteger(length)&&length>=4&&length<=128*1024*1024&&length<=source.size-p);
-    require(utf8.decode(await source.read(p,4))==='DPR2');
-    rows.push({title,offset:p,length});require(rows.length<=10000000);p+=length;
+    if(kind==='alias'){
+      const {alias}=decodeAlias(await source.read(p,length),title);
+      rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
+    }else{
+      require(utf8.decode(await source.read(p,4))==='DPR2');
+      rows.push({title,offset:p,length});
+    }
+    require(rows.length<=10000000);p+=length;
   }
-  require(rows.length>0);return {metadata,rows};
+  require(kind!=='language'||rows.length>0,'Empty language dictionary');return {metadata,rows};
 }
 export class RawSource {
   constructor(file){this.file=file;this.size=file.size;}
