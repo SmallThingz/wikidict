@@ -180,10 +180,18 @@ pub fn balanced(text: []const u8, start: usize) ?Pair {
     var n: usize = 0;
     var i = start;
     while (i < text.len) {
-        if (text[i] == '<') if (protectedEnd(text, i)) |end| {
-            i = end;
-            continue;
-        };
+        if (text[i] == '<') {
+            if (protectedEnd(text, i)) |end| {
+                i = end;
+                continue;
+            }
+            // Attribute delimiters are HTML syntax only inside a root link frame.
+            // Template and parameter braces retain their existing semantics.
+            if (n == 1 and stack[0] == .link) if (tagAt(text, i)) |tag| {
+                i = tag.end;
+                continue;
+            };
+        }
         const rest = text[i..];
         const open: ?struct { kind: Kind, len: usize } = if (starts(rest, "{{{")) .{ .kind = .parameter, .len = 3 } else if (starts(rest, "{{")) .{ .kind = .template, .len = 2 } else if (starts(rest, "[[")) .{ .kind = .link, .len = 2 } else null;
         if (open) |item| {
@@ -222,6 +230,7 @@ pub fn logicalEnd(text: []const u8, start: usize) usize {
             if (protectedEnd(text, i)) |end| {
                 skip_to = end;
             } else if (tagAt(text, i)) |tag| {
+                skip_to = tag.end;
                 if (!tag.closing and isMultilineContainerTag(tag.name)) {
                     if (matchingTag(text, tag)) |pair| skip_to = pair.end;
                 }
@@ -512,4 +521,39 @@ test "redundant terminal attribute quote follows HTML recovery without unclosing
     try std.testing.expect(tagAt("<span title='unterminated>", 0) == null);
     const quoted = tagAt("<span title=\"a>b\">tail", 0).?;
     try std.testing.expectEqualStrings("a>b", quoted.attr("title").?);
+}
+
+test "balanced internal links ignore quoted HTML attribute brackets only in link frames" {
+    for ([_][]const u8{
+        "[[cat|<span title=\"]]\">visible</span>]]",
+        "[[cat|<span title=\"[[ ]]\">visible</span>]]",
+        "[[cat|<span title=']]'>visible</span>]]",
+        "[[cat|<nowiki>]]</nowiki>visible]]",
+    }) |source| {
+        try std.testing.expectEqual(source.len, balanced(source, 0).?.end);
+    }
+    const nested = "{{x|[[cat|<span title=\"]]\">visible</span>]]|tail}}";
+    try std.testing.expectEqual(nested.len, balanced(nested, 0).?.end);
+    // A nested link must not hide braces from its outer template scan.
+    const nested_braces = "{{x|[[cat|<span title=\"{{\">visible</span>]]|tail}}";
+    try std.testing.expect(balanced(nested_braces, 0) == null);
+    const template = "{{x|<span title=\"}}\">visible</span>}}";
+    try std.testing.expectEqual(std.mem.indexOf(u8, template, "}}").? + 2, balanced(template, 0).?.end);
+    const parameter = "{{{x|<span title=\"}}}\">visible</span>}}}";
+    try std.testing.expectEqual(std.mem.indexOf(u8, parameter, "}}}").? + 3, balanced(parameter, 0).?.end);
+    const malformed = "[[cat|<span title=\"]] visible";
+    try std.testing.expectEqual(std.mem.indexOf(u8, malformed, "]]").? + 2, balanced(malformed, 0).?.end);
+}
+
+test "logical lines skip complete quoted HTML tags without hiding content breaks" {
+    const blank = "before <span title=\"one\n\ntwo\">visible</span> after\nnext";
+    const ordinary = "before <span title=\"one\ntwo\">visible</span> after\nnext";
+    try std.testing.expectEqual(blank.len - 5, logicalEnd(blank, 0));
+    try std.testing.expectEqual(ordinary.len - 5, logicalEnd(ordinary, 0));
+    const protected = "before <nowiki>one\n\ntwo</nowiki> after\nnext";
+    try std.testing.expectEqual(protected.len - 5, logicalEnd(protected, 0));
+    const content = "before <span>one\n\ntwo</span> after";
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, content, '\n').?, logicalEnd(content, 0));
+    const malformed = "before <span title=\"one\n\ntwo>visible";
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, malformed, '\n').?, logicalEnd(malformed, 0));
 }

@@ -773,10 +773,17 @@ fn findExternalLinkClose(input: []const u8, start: usize) ?usize {
     var link_depth: usize = 0;
     var cursor = start + 1;
     while (cursor < input.len) : (cursor += 1) {
-        if (input[cursor] == '<') if (syntax.protectedEnd(input, cursor)) |end| {
-            cursor = end - 1;
-            continue;
-        };
+        if (input[cursor] == '<') {
+            if (syntax.protectedEnd(input, cursor)) |end| {
+                cursor = end - 1;
+                continue;
+            }
+            // Only the external link's own label treats tag attributes as opaque.
+            if (template_depth == 0 and link_depth == 0) if (syntax.tagAt(input, cursor)) |tag| {
+                cursor = tag.end - 1;
+                continue;
+            };
+        }
         if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "{{")) {
             template_depth += 1;
             cursor += 1;
@@ -792,8 +799,8 @@ fn findExternalLinkClose(input: []const u8, start: usize) ?usize {
             cursor += 1;
             continue;
         }
-        if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "]]")) {
-            if (link_depth != 0) link_depth -= 1;
+        if (link_depth != 0 and cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "]]")) {
+            link_depth -= 1;
             cursor += 1;
             continue;
         }
@@ -1039,4 +1046,24 @@ test "block classifier accepts compact and mixed MediaWiki list markers" {
         try std.testing.expectEqualStrings(case.text, block.text);
         try std.testing.expectEqual(@as(u8, @intCast(case.path.len)), block.depth);
     }
+}
+
+test "external link closure ignores quoted HTML attributes outside nested templates" {
+    for ([_][]const u8{
+        "[https://example.test <span title=\"]\">visible</span>]",
+        "[https://example.test <span title=\"[[ ]]\">visible</span>]",
+        "[https://example.test <span title=']'>visible</span>]",
+        "[https://example.test <nowiki>]</nowiki>visible]",
+    }) |source| {
+        try std.testing.expectEqual(source.len - 1, findExternalLinkClose(source, 0).?);
+    }
+    const nested = "[https://example.test {{x|<span title=\"{{\">visible</span>}}]";
+    try std.testing.expect(findExternalLinkClose(nested, 0) == null);
+    const malformed = "[https://example.test <span title=\"] visible";
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, malformed, ']').?, findExternalLinkClose(malformed, 0).?);
+}
+
+test "external sequential closing bracket leaves the second bracket outside the link" {
+    const source = "[https://example.test visible]]";
+    try std.testing.expectEqual(source.len - 2, findExternalLinkClose(source, 0).?);
 }

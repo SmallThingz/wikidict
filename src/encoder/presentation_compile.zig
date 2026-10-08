@@ -4220,3 +4220,43 @@ test "ruby empty annotations do not invent a reading and bare rt remains transpa
     const spans = try r.parseSpans("<ruby>字<rt><!-- absent --></rt></ruby><rt>plain</rt>", .{});
     try std.testing.expectEqualStrings("字plain", try flattened(arena.allocator(), spans));
 }
+
+test "internal link HTML quoted attributes retain visible labels and protected controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const witness = "[[cat|<span title=\"]]\">visible</span>]]";
+    const spans = try renderer.parseSpans(witness, .{});
+    try std.testing.expectEqualStrings("visible", try flattened(a, spans));
+    try std.testing.expectEqual(@as(usize, 1), spans.len);
+    try std.testing.expect(spans[0].kind == .link);
+    try std.testing.expectEqualStrings("cat", spans[0].target);
+    try std.testing.expectEqualStrings("visible", spans[0].text);
+    const external = try renderer.parseSpans("[https://example.test <span title=\"]\">visible</span>]", .{});
+    try std.testing.expectEqualStrings("visible", try flattened(a, external));
+    try std.testing.expectEqual(@as(usize, 1), external.len);
+    try std.testing.expect(external[0].kind == .external_link);
+    try std.testing.expectEqualStrings("https://example.test", external[0].target);
+    const protected_external = try renderer.parseSpans("<nowiki>[https://example.test <span title=\"]\">visible</span>]</nowiki>", .{});
+    try std.testing.expectEqualStrings("[https://example.test <span title=\"]\">visible</span>]", try flattened(a, protected_external));
+    for (protected_external) |span| try std.testing.expect(span.kind != .external_link);
+    const plain = try renderer.parseSpans("A<span title=\"]]\">visible</span>Z", .{});
+    try std.testing.expectEqualStrings("AvisibleZ", try flattened(a, plain));
+    const protected = try renderer.parseSpans("<nowiki>[[cat|<span title=\"]]\">visible</span>]]</nowiki>", .{});
+    try std.testing.expectEqualStrings(witness, try flattened(a, protected));
+    for (protected) |span| try std.testing.expect(span.kind != .link);
+}
+
+test "external sequential closing bracket retains a literal unlinked tail" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var renderer: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const spans = try renderer.parseSpans("[https://example.test visible]]", .{});
+    try std.testing.expectEqual(@as(usize, 2), spans.len);
+    try std.testing.expect(spans[0].kind == .external_link);
+    try std.testing.expectEqualStrings("visible", spans[0].text);
+    try std.testing.expectEqualStrings("https://example.test", spans[0].target);
+    try std.testing.expect(spans[1].kind == .text and spans[1].target.len == 0);
+    try std.testing.expectEqualStrings("]", spans[1].text);
+}
