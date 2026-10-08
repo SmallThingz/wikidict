@@ -4,7 +4,7 @@
 The watchdog starts this as a single detached process before its build child.
 Only one verified private session may be signalled; no shared cgroup is touched.
 """
-from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
+from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS, WATCHDOG_GUARDIAN_CLEANUP_SECONDS
 
 import argparse
 import json
@@ -157,7 +157,7 @@ def main():
         if not same_process(args.supervisor_pid, args.supervisor_start):
             reason = 'supervisor_lost'
             break
-        if time.monotonic() - started > args.wall_seconds + 30:
+        if time.monotonic() - started > args.wall_seconds + WATCHDOG_GUARDIAN_CLEANUP_SECONDS:
             reason = 'independent_wall_limit'
             break
         ready, _, _ = select.select([args.liveness_fd], [], [], 0.2)

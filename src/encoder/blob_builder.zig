@@ -556,7 +556,43 @@ fn resolveCategorizedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedL
     return language;
 }
 
+// Exact captured AZ Dil declaration output, not arbitrary HTML/template inference.
+fn azDecoratedDeclaration(codes: LanguageCodes, raw: []const u8) ?[]const u8 {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "az")) return null;
+    const heading = std.mem.trim(u8, raw, " \t\r\n");
+    const tag = blobs.wikitext_syntax.tagAt(heading, 0) orelse return null;
+    if (!tag.is("div") or tag.closing or tag.self_closing or
+        !std.mem.eql(u8, std.mem.trim(u8, tag.attrs, " \t"), "style=\"background:#EEEEFF\"") or
+        !std.mem.endsWith(u8, heading, "</div>")) return null;
+    const body = heading[tag.end .. heading.len - 6];
+    if (!std.mem.startsWith(u8, body, "[[")) return null;
+    const close = std.mem.indexOf(u8, body, "]]") orelse return null;
+    const link = body[2..close];
+    const pipe = std.mem.indexOfScalar(u8, link, '|') orelse return null;
+    const label = link[0..pipe];
+    if (label.len == 0 or !std.mem.eql(u8, label, link[pipe + 1 ..]) or
+        std.mem.indexOfAny(u8, label, "[]{}<>|=:\r\n") != null) return null;
+    const category = body[close + 2 ..];
+    if (!std.mem.startsWith(u8, category, "[[") or !std.mem.endsWith(u8, category, "]]")) return null;
+    const target = category[2 .. category.len - 2];
+    if (std.mem.indexOfAny(u8, target, "[]{}<>|") != null or std.mem.startsWith(u8, target, ":")) return null;
+    const title = namespaces.ofTitle(target);
+    if (title.id != 14 or !std.mem.startsWith(u8, title.text, label) or
+        !std.mem.eql(u8, title.text[label.len..], "ndəki sözlər")) return null;
+    return label;
+}
+
+fn declarationLabel(codes: LanguageCodes, heading: []const u8) ?[]const u8 {
+    const namespaces = codes.namespace_catalog orelse return null;
+    return language_source.explicitLanguageDeclaration(heading, namespaces.content_language) orelse
+        azDecoratedDeclaration(codes, heading);
+}
+
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    if (codes.namespace_catalog) |namespaces| if (std.mem.eql(u8, namespaces.content_language, "az")) {
+        if (declarationLabel(codes, section.heading)) |label| return codes.resolve(label);
+    };
     const classified = language_source.classificationSection(section);
     if (resolveCategorizedHeading(codes, classified)) |resolved| return resolved;
 
@@ -582,8 +618,7 @@ fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?Resol
 }
 
 fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source.Section) bool {
-    const namespaces = codes.namespace_catalog orelse return false;
-    return language_source.explicitLanguageDeclaration(section.heading, namespaces.content_language) != null;
+    return declarationLabel(codes, section.heading) != null;
 }
 
 fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
@@ -2418,4 +2453,97 @@ test "image only page prefixes retain images across active behavior controls" {
     codes.behavior_switches = null;
     try std.testing.expectEqualStrings(prefix, (try sharedImagePrefix(a, codes, prefix)).?);
     try std.testing.expect(try sharedImagePrefix(a, codes, image ++ "__GEENNUWEAFDELING__\n") == null);
+}
+
+test "AZ finite Dil declarations isolate unknown labels and reject nonlanguage wrappers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tazwiktionary\n# dump-date\t20261001\n# content-language\taz\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tŞəkil\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tŞablon\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tKateqoriya\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &namespaces;
+    const unknown = "<div style=\"background:#EEEEFF\">[[Unknown dili|Unknown dili]][[Kateqoriya:Unknown dilindəki sözlər]]</div>";
+    try std.testing.expect(hasExplicitLanguageDeclaration(codes, .{ .heading = unknown, .source = "" }));
+    try std.testing.expect(resolveSection(codes, .{ .heading = unknown, .source = "# retained" }) == null);
+    try std.testing.expect(hasExplicitLanguageDeclaration(codes, .{ .heading = "{{Dil|Unknown dili}}", .source = "" }));
+    inline for (.{ "{{adj|English}}", "{{syn|English}}", "{{Dil|English|extra}}", "{{Dil|lang=English}}", "<div>[[English|English]][[Kateqoriya:Englishndəki sözlər]]</div>", "<div style=\"background:#EEEEFF\">[[English|French]][[Kateqoriya:Englishndəki sözlər]]</div>", "<div style=\"background:#EEEEFF\">[[English|English]][[:Kateqoriya:Englishndəki sözlər]]</div>", "<div style=\"background:#EEEEFF\">[[English|English]][[Kateqoriya:Frenchndəki sözlər]]</div>", "<div style=\"background:#EEEEFF\">[[English|English]][[Kateqoriya:Englishndəki sözlər]]extra</div>", "<nowiki>{{Dil|English}}</nowiki>" }) |bad|
+        try std.testing.expect(!hasExplicitLanguageDeclaration(codes, .{ .heading = bad, .source = "" }));
+}
+
+test "AZ source proven English declaration retains separate lexical audio and unknown body" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tazwiktionary\n# dump-date\t20261001\n# content-language\taz\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tŞəkil\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tŞablon\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tKateqoriya\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "Azərbaycan dili", "az", "azərbaycanca" }, .{ "İngilis dili", "en", "English" } }) |row|
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[2])) return .{ .code = row[1], .heading = row[2] };
+            return null;
+        }
+        fn trusted(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Azərbaycan dili") or std.mem.eql(u8, value, "İngilis dili")) return null;
+            return resolve(null, value);
+        }
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |r| r.code else null;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.trusted };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact raw Dil labels and lexical excerpts from it revision 358640;
+    // wrapper/audio are source-instantiated, not captured expanded wikitext.
+    const raw = "=={{Dil|Azərbaycan dili}}==\n# native [[köpək]]\n=={{Dil|Unknown dili}}==\n# unknown-only\n=={{Dil|İngilis dili}}==\n# O (orta cins)\n# Onu, ona (orta cins)\n";
+    const expanded = "==<div style=\"background:#EEEEFF\">[[Azərbaycan dili|Azərbaycan dili]][[Kateqoriya:Azərbaycan dilindəki sözlər]]</div>==\n# native [[köpək]]\n" ++
+        "==<div style=\"background:#EEEEFF\">[[Unknown dili|Unknown dili]][[Kateqoriya:Unknown dilindəki sözlər]]</div>==\n# unknown-only\n" ++
+        "==<div style=\"background:#EEEEFF\">[[İngilis dili|İngilis dili]][[Kateqoriya:İngilis dilindəki sözlər]]</div>==\n# O (orta cins)\n# Onu, ona (orta cins)\n* [ɪt]\n[[Şəkil:En-us-it.ogg|audio (ABŞ)]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "it", expanded, raw, null);
+    try std.testing.expectEqual(@as(usize, 3), (try writer.finish(codes)).language_records);
+    inline for (.{ .{ "azərbaycanca", "az", "native", "O (orta cins)" }, .{ "English", "en", "O (orta cins)", "native" }, .{ "Unclassified", "", "unknown-only", "native" } }) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row[0]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("it")).?;
+        const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualStrings(row[1], page.entry.language_code);
+        var text: std.ArrayList(u8) = .empty;
+        var definitions: usize = 0;
+        var native_links: usize = 0;
+        for (page.entry.sections) |section| for (section.blocks) |block| {
+            if (std.mem.eql(u8, block.list_path, "#")) definitions += 1;
+            for (block.spans) |span| {
+                try text.appendSlice(a, span.text);
+                try text.appendSlice(a, span.trail);
+                if (std.mem.eql(u8, span.target, "köpək")) native_links += 1;
+            }
+        };
+        const english = std.mem.eql(u8, row[1], "en");
+        const native = std.mem.eql(u8, row[1], "az");
+        try std.testing.expectEqual(@as(usize, if (english) 2 else 1), definitions);
+        try std.testing.expectEqual(@as(usize, if (native) 1 else 0), native_links);
+        try std.testing.expectEqual(english, std.mem.indexOf(u8, text.items, "O (orta cins)") != null);
+        try std.testing.expectEqual(english, std.mem.indexOf(u8, text.items, "Onu, ona (orta cins)") != null);
+        try std.testing.expect(std.mem.indexOf(u8, text.items, row[2]) != null);
+        try std.testing.expect(std.mem.indexOf(u8, text.items, row[3]) == null);
+        if (row[1].len != 0) try std.testing.expect(std.mem.indexOf(u8, text.items, "unknown-only") == null);
+        try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, row[1], "en")) 1 else 0), page.entry.media.len);
+        if (page.entry.media.len != 0) try std.testing.expectEqualStrings("En-us-it.ogg", page.entry.media[0].file);
+    }
 }

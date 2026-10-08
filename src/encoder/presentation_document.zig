@@ -704,3 +704,57 @@ test "localized image options reach serialized media captions without swallowing
         try std.testing.expectEqualStrings(case.caption, decoded.entry.media[0].caption);
     }
 }
+
+test "malformed redundant attribute quote preserves semantic heading and protected literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact Plantía:-de- revision 309509 markup; source-instantiated, not
+    // captured whole-page expansion. Live action=parse normalizes this tag.
+    const markup = "<span style=\"color:#6b5a40;\"\">'''Alemán'''</span>";
+    const work = try workAlloc(a, "asturisch", "alemán", "=" ++ markup ++ "=\n# [[asturianu|Asturianu]], d'[[Asturies]].\n", .{}, null, null, null, .{});
+    try std.testing.expectEqual(@as(usize, 1), work.sections.len);
+    try std.testing.expectEqualStrings("Alemán", work.sections[0].title);
+    try std.testing.expectEqual(@as(u8, 1), work.sections[0].level);
+    try std.testing.expect(work.sections[0].title_spans[0].flags.bold);
+    try std.testing.expectEqualStrings("Asturianu, d'Asturies.", try compiler.plainText(a, work.sections[0].blocks[0].spans));
+    var asturianu_links: usize = 0;
+    var asturies_links: usize = 0;
+    for (work.sections[0].blocks[0].spans) |span| {
+        if (std.mem.eql(u8, span.target, "asturianu")) asturianu_links += 1;
+        if (std.mem.eql(u8, span.target, "Asturies")) asturies_links += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), asturianu_links);
+    try std.testing.expectEqual(@as(usize, 1), asturies_links);
+    const protected = try workAlloc(a, "page", "alemán", "=<nowiki>" ++ markup ++ "</nowiki>=\n# retained\n", .{}, null, null, null, .{});
+    try std.testing.expectEqualStrings(markup, protected.sections[0].title);
+    const unclosed = try workAlloc(a, "page", "alemán", "=<span title=\"unterminated>Alemán=\n# retained\n", .{}, null, null, null, .{});
+    try std.testing.expectEqualStrings("<span title=\"unterminated>Alemán", unclosed.sections[0].title);
+}
+
+test "ruby strict compiled record preserves readable annotation and existing typed spans" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==Japanese==\n===Usage===\n" ++
+        "日とは<ruby>実<rt>じつ</rt></ruby>である\n\n" ++
+        "七月に<ruby>心宿<rt>なかごぼし</rt></ruby>が天頂を過ぎ\n\n" ++
+        "月光を<ruby lang='ja'>[[看]]<rt>''[[み]]''</rt></ruby>る\n\n" ++
+        "<ruby>字<rp>[</rp><rt>じ</rt><rp>]</rp></ruby>\n\n" ++
+        "<nowiki><ruby>保護<rt>ほご</rt></ruby></nowiki>\n";
+    const bytes = try compileAlloc(a, "Ruby source excerpts", .language, "Japanese", "ja", source, null);
+    const parsed = try codec.decodeAlloc(a, bytes, "Ruby source excerpts", .language, .{ .code = "ja", .heading = "Japanese" });
+    try std.testing.expectEqualStrings(types.schema, parsed.schema);
+    var text: std.ArrayList(u8) = .empty;
+    var reading_link = false;
+    for (parsed.entry.sections) |section| for (section.blocks) |block| {
+        for (block.spans) |span| {
+            try text.appendSlice(a, span.text);
+            if (std.mem.eql(u8, span.text, "み")) reading_link = span.kind == .link and std.mem.eql(u8, span.target, "み") and span.italic and std.mem.eql(u8, span.language, "ja");
+        }
+        try text.append(a, '\n');
+    };
+    for ([_][]const u8{ "日とは実（じつ）である", "七月に心宿（なかごぼし）が天頂を過ぎ", "月光を看（み）る", "字[じ]", "<ruby>保護<rt>ほご</rt></ruby>" }) |expected|
+        try std.testing.expect(std.mem.indexOf(u8, text.items, expected) != null);
+    try std.testing.expect(reading_link);
+}

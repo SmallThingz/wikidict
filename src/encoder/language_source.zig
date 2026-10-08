@@ -14,12 +14,12 @@ pub const Section = struct {
 /// A language declaration remains a boundary even when its label is unknown.
 /// Keep this separate from name resolution and from ordinary grammar headings.
 pub fn explicitLanguageDeclaration(raw: []const u8, content_language: []const u8) ?[]const u8 {
-    if (!std.mem.eql(u8, content_language, "ar")) return null;
+    const declaration = if (std.mem.eql(u8, content_language, "ar")) "اللغة" else if (std.mem.eql(u8, content_language, "az")) "Dil" else return null;
     const heading = std.mem.trim(u8, raw, " \t");
     if (!std.mem.startsWith(u8, heading, "{{") or !std.mem.endsWith(u8, heading, "}}")) return null;
     const body = heading[2 .. heading.len - 2];
     const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return null;
-    if (!std.mem.eql(u8, std.mem.trim(u8, body[0..pipe], " \t"), "اللغة")) return null;
+    if (!std.mem.eql(u8, std.mem.trim(u8, body[0..pipe], " \t"), declaration)) return null;
     const label = std.mem.trim(u8, body[pipe + 1 ..], " \t");
     if (label.len == 0 or std.mem.indexOfAny(u8, label, "{}[]<>|=\r\n") != null) return null;
     return label;

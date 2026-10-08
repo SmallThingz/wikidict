@@ -94,6 +94,12 @@ pub fn tagAt(text: []const u8, start: usize) ?Tag {
             continue;
         }
         if (ch == '\'' or ch == '"') {
+            // HTML tokenization tolerates a redundant quote in the attribute
+            // name position after a completed quoted value. Admit only the
+            // exact adjacent-quote-before-close form; unclosed values remain
+            // conservative and literal.
+            if (i > attr_start and text[i - 1] == ch and
+                i + 1 < text.len and text[i + 1] == '>') continue;
             quote = ch;
             continue;
         }
@@ -494,4 +500,16 @@ test "behavior switches preserve unknown names and source case rules" {
     try std.testing.expectEqual(@as(?usize, 9), behaviorSwitchEnd("__notoc__", 0));
     for ([_][]const u8{ "__unknown__", "__index__", "__NOEDITSECTION_", "__NOTOC extra__", "ordinary" }) |value|
         try std.testing.expectEqual(@as(?usize, null), behaviorSwitchEnd(value, 0));
+}
+
+test "redundant terminal attribute quote follows HTML recovery without unclosing values" {
+    const input = "<span style=\"color:#6b5a40;\"\">tail";
+    const tag = tagAt(input, 0).?;
+    try std.testing.expect(tag.is("span"));
+    try std.testing.expectEqualStrings("color:#6b5a40;", tag.attr("style").?);
+    try std.testing.expectEqualStrings("tail", input[tag.end..]);
+    try std.testing.expect(tagAt("<span title=\"unterminated>", 0) == null);
+    try std.testing.expect(tagAt("<span title='unterminated>", 0) == null);
+    const quoted = tagAt("<span title=\"a>b\">tail", 0).?;
+    try std.testing.expectEqualStrings("a>b", quoted.attr("title").?);
 }

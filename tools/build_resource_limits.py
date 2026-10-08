@@ -31,6 +31,8 @@ WATCHDOG_PROOF_FD = 'WIKIDICT_BUILD_WATCHDOG_PROOF_FD'
 WATCHDOG_WALL_SECONDS = 2 * 60 * 60
 MAX_WATCHDOG_WALL_SECONDS = 7 * 24 * 60 * 60
 WATCHDOG_POLL_SECONDS = 0.2
+# Same allowance as the independent guardian; never extends build admission.
+WATCHDOG_GUARDIAN_CLEANUP_SECONDS = 30.0
 _verified_watchdog_pid = None
 
 
@@ -792,7 +794,13 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                     os.close(guardian_liveness_write)
             if guardian is not None:
                 try:
-                    guardian.wait(timeout=5)
+                    # A normal disarm includes an owned-tree scan and durable
+                    # report I/O. Give it the guardian's existing cleanup
+                    # allowance, capped by this invocation's original wall.
+                    cleanup_deadline = min(
+                        time.monotonic() + WATCHDOG_GUARDIAN_CLEANUP_SECONDS,
+                        started + wall_seconds + WATCHDOG_GUARDIAN_CLEANUP_SECONDS)
+                    guardian.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
                     report['guardian_exit_status'] = guardian.returncode
                     if guardian.returncode != 0:
                         if reason != 'guardian_lost':

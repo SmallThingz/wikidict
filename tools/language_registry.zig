@@ -70,9 +70,19 @@ pub const Registry = struct {
     }
 
     pub fn resolveTrusted(self: *const Registry, value: []const u8) ?Resolved {
-        // An exact ordinary alias retains its existing trust level.
-        if (self.names.contains(value)) {
-            if (!self.trusted_names.contains(value)) return null;
+        // The pinned generator includes first-letter capitalizations of its
+        // preferred labels. Admit that exact existing alias for the same owner;
+        // other ordinary aliases, code aliases, and conflicts retain their trust.
+        if (self.names.get(value)) |owner| {
+            if (!self.trusted_names.contains(value)) {
+                const preferred = self.headings.get(owner) orelse return null;
+                const preferred_owner = self.names.get(preferred) orelse return null;
+                if (!self.trusted_names.contains(preferred) or
+                    !std.mem.eql(u8, owner, preferred_owner) or
+                    preferred.len == 0 or value.len != preferred.len or
+                    !std.ascii.isLower(preferred[0]) or value[0] != std.ascii.toUpper(preferred[0]) or
+                    !std.mem.eql(u8, value[1..], preferred[1..])) return null;
+            }
         } else if (self.fallbackCode(value) == null) return null;
         return self.resolve(value);
     }
@@ -415,6 +425,15 @@ pub const Registry = struct {
             }
             if (line.len == 0) continue;
             if (line[0] == '#') {
+                const local_marker = "# local-alias\t";
+                if (std.mem.eql(u8, line, "# local-alias")) return error.InvalidLanguageRegistry;
+                if (std.mem.startsWith(u8, line, local_marker)) {
+                    var fields = std.mem.splitScalar(u8, line[local_marker.len..], '\t');
+                    const code_value = fields.next() orelse return error.InvalidLanguageRegistry;
+                    const label = fields.next() orelse return error.InvalidLanguageRegistry;
+                    if (fields.next() != null or !validCode(code_value) or !self.codes.contains(code_value) or !validLocalLabel(label)) return error.InvalidLanguageRegistry;
+                    continue;
+                }
                 const content_marker = "# content-language\t";
                 if (std.mem.startsWith(u8, line, content_marker)) {
                     const code_value = line[content_marker.len..];
@@ -447,6 +466,16 @@ pub const Registry = struct {
                 try self.addArabicArticlelessName(preferred, code_value);
             }
             while (fields.next()) |alias| try self.addAlias(alias, code_value);
+        }
+        // Ordinary aliases and canonical ownership must be installed before local directives.
+        var local_lines = std.mem.splitScalar(u8, source, '\n');
+        while (local_lines.next()) |line| {
+            const marker = "# local-alias\t";
+            if (!std.mem.startsWith(u8, line, marker)) continue;
+            var fields = std.mem.splitScalar(u8, line[marker.len..], '\t');
+            const code_value = fields.next().?;
+            const label = fields.next().?;
+            try self.addLocalAlias(label, code_value);
         }
         if (self.content_code) |code_value| {
             if (self.resolve(code_value) == null) return error.InvalidLanguageRegistry;
@@ -1448,4 +1477,86 @@ test "link trail sequences and guarded apostrophes match MediaWiki rules" {
     );
     try std.testing.expectEqual(@as(usize, 2), catalan.linkTrailEnd("a'Z", 0));
     try std.testing.expectEqual(@as(usize, 1), catalan.linkTrailEnd("a''Z", 0));
+}
+
+test "capitalized preferred language aliases preserve trust and exact conflicts" {
+    var r = Registry.empty(std.testing.allocator);
+    defer r.deinit();
+    try r.addTsv("# content-language\tay\n# mediawiki\nay\tAymar aru\tay\nru\truso\tRuso\tRUSO\trUsO\tRussian\tru\trus\nsyn\tSenaya\tsyn\nnum\tniuafoou\tnum\nadj\tadioukrou\tadj\n# iso-639-3\nxxy\talpha\tAlpha\n");
+    try std.testing.expectEqualStrings("ru", r.resolveTrusted("Ruso").?.code);
+    try std.testing.expectEqualStrings("ruso", r.resolveTrusted("Ruso").?.heading);
+    try std.testing.expectEqualStrings("ru", r.resolveTrusted("ruso").?.code);
+    try std.testing.expect(r.resolveStrong("Ruso") == null);
+    for ([_][]const u8{ "RUSO", "rUsO", "Russian", "ru", "rus", "syn", "num", "adj", "Alpha", "RusO" }) |label|
+        try std.testing.expect(r.resolveTrusted(label) == null);
+    try r.addLocalAlias("RUSO", "ru");
+    try std.testing.expect(r.resolveTrusted("RUSO") == null);
+    try r.addTsv("# mediawiki\nen\tEnglish\tRuso\n");
+    try std.testing.expect(r.resolve("Ruso") == null);
+    try std.testing.expect(r.resolveTrusted("Ruso") == null);
+    try std.testing.expectEqualStrings("ru", r.resolveTrusted("ruso").?.code);
+
+    var exact = Registry.empty(std.testing.allocator);
+    defer exact.deinit();
+    try exact.addTsv("ru\truso\tRuso\nxx\tRuso\n");
+    try std.testing.expectEqualStrings("xx", exact.resolveTrusted("Ruso").?.code);
+    try std.testing.expectEqualStrings("ru", exact.resolveTrusted("ruso").?.code);
+}
+
+test "AZ declaration aliases stay ordinary and conflicting source aliases remain unresolved" {
+    var r = Registry.empty(std.testing.allocator);
+    defer r.deinit();
+    try r.addTsv("# content-language\taz\naz\tazərbaycanca\tAzərbaycan dili\nen\tingilis\tİngilis dili\tConflicted dili\ntr\ttürk\tConflicted dili\nadj\tAdioukrou\nsyn\tSenaya\n");
+    try std.testing.expectEqualStrings("en", r.resolve("İngilis dili").?.code);
+    try std.testing.expectEqualStrings("az", r.resolve("Azərbaycan dili").?.code);
+    try std.testing.expect(r.resolveTrusted("İngilis dili") == null);
+    try std.testing.expect(r.resolveStrong("İngilis dili") == null);
+    try std.testing.expect(r.resolveTrusted("Azərbaycan dili") == null);
+    try std.testing.expect(r.resolve("Conflicted dili") == null);
+    try std.testing.expect(r.resolveTrusted("Conflicted dili") == null);
+    try std.testing.expect(r.resolve("Adjective") == null);
+    try std.testing.expect(r.resolve("Synonyms") == null);
+}
+
+test "explicit local alias directives preserve registry identity and trust" {
+    var r = Registry.empty(std.testing.allocator);
+    defer r.deinit();
+    try r.addTsv("# local-alias\tceb\tSinugbuanon\nceb\tCebuano\tOrdinary alias\ncts\tNorthern Catanduanes Bikol\n# local-alias\tcts\tBikol Catanduanes\n# local-alias\tcts\tOrdinary alias\n# local-alias\tcts\tCebuano\n");
+    try std.testing.expectEqualStrings("ceb", r.resolveTrusted("Sinugbuanon").?.code);
+    try std.testing.expectEqualStrings("Cebuano", r.resolveTrusted("Sinugbuanon").?.heading);
+    try std.testing.expectEqualStrings("cts", r.resolveTrusted("Bikol Catanduanes").?.code);
+    try std.testing.expect(r.resolveTrusted("Ordinary alias") == null);
+    try std.testing.expectEqualStrings("ceb", r.resolve("Ordinary alias").?.code);
+    try std.testing.expectEqualStrings("ceb", r.resolveTrusted("Cebuano").?.code);
+    try std.testing.expectEqual(@as(usize, 2), r.codes.count());
+    try r.addTsv("# local-alias\tceb\tConflicting\n# local-alias\tcts\tConflicting\n");
+    try std.testing.expect(r.resolveTrusted("Conflicting") == null);
+}
+
+test "explicit local alias directives reject malformed or unregistered inputs" {
+    for ([_][]const u8{
+        "# local-alias",                "# local-alias\tceb",              "# local-alias\tceb\t",
+        "# local-alias\tunknown\tName", "# local-alias\tceb\tName\textra", "# local-alias\tceb\tBad\x00Name",
+    }) |directive| {
+        var r = Registry.empty(std.testing.allocator);
+        defer r.deinit();
+        try r.addTsv("ceb\tCebuano\n");
+        try std.testing.expectError(error.InvalidLanguageRegistry, r.addTsv(directive));
+    }
+}
+
+test "explicit local alias directives do not depend on row order" {
+    for ([_]bool{ false, true }) |before| {
+        var r = Registry.empty(std.testing.allocator);
+        defer r.deinit();
+        const directives = "# local-alias\tcts\tOrdinary\n# local-alias\tcts\tCebuano\n# local-alias\tceb\tAmbiguous\n";
+        const rows = "ceb\tCebuano\tOrdinary\tAmbiguous\ncts\tNorthern Catanduanes Bikol\tAmbiguous\n";
+        const source = if (before) directives ++ rows else rows ++ directives;
+        try r.addTsv(source);
+        try std.testing.expect(r.resolveTrusted("Ordinary") == null);
+        try std.testing.expectEqualStrings("ceb", r.resolve("Ordinary").?.code);
+        try std.testing.expectEqualStrings("ceb", r.resolveTrusted("Cebuano").?.code);
+        try std.testing.expect(r.resolveTrusted("Ambiguous") == null);
+        try std.testing.expectEqual(@as(usize, 2), r.codes.count());
+    }
 }

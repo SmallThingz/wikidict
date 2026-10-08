@@ -59,6 +59,29 @@ fn optionalListItemEnd(input: []const u8, opening: syntax.Tag) syntax.Pair {
     }
     return .{ .inner_end = input.len, .end = input.len };
 }
+// Explicit ruby fallback punctuation belongs to this ruby, not nested ruby or
+// protected literal markup. Existing rp text must pass through unchanged.
+fn rubyHasFallback(input: []const u8) bool {
+    var cursor: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |at| {
+        if (syntax.protectedEnd(input, at)) |end| {
+            cursor = end;
+            continue;
+        }
+        const tag = syntax.tagAt(input, at) orelse {
+            cursor = at + 1;
+            continue;
+        };
+        cursor = tag.end;
+        if (tag.closing) continue;
+        if (tag.is("rp")) return true;
+        if (tag.is("ruby")) {
+            if (syntax.matchingTag(input, tag)) |pair| cursor = pair.end;
+        }
+    }
+    return false;
+}
+
 fn htmlAttributePresent(tag: syntax.Tag, key: []const u8) bool {
     var at: usize = 0;
     while (at < tag.attrs.len) {
@@ -145,6 +168,8 @@ pub const Style = struct {
     role: Role = .normal,
     // Build-only context: decorative file names are not semantic heading text.
     heading: bool = false,
+    // Build-only annotation boundary; readers receive ordinary semantic spans.
+    ruby_parentheses: bool = false,
 };
 pub const SpanFlags = packed struct(u8) {
     bold: bool = false,
@@ -1084,18 +1109,27 @@ pub const Renderer = struct {
     fn mediaLanguageTag(raw: []const u8) bool {
         // LanguageCode::isWellFormedLanguageTag current retained source, not code registration.
         // PCRE dollar accepts a final LF; no other surrounding whitespace is permitted.
-        const input = if (std.mem.endsWith(u8, raw, "\n")) raw[0..raw.len-1] else raw;
+        const input = if (std.mem.endsWith(u8, raw, "\n")) raw[0 .. raw.len - 1] else raw;
         if (oneOf(input, &.{ "en-gb-oed", "i-ami", "i-bnn", "i-default", "i-enochian", "i-hak", "i-klingon", "i-lux", "i-mingo", "i-navajo", "i-pwn", "i-tao", "i-tay", "i-tsu", "no-bok", "no-nyn", "sgn-be-fr", "sgn-be-nl", "sgn-ch-de", "zh-min-nan" })) return true;
         var parts = std.mem.splitScalar(u8, input, '-');
         const primary = parts.next() orelse return false;
         var next = parts.next();
         if (std.ascii.eqlIgnoreCase(primary, "x")) return tagPrivate(next, &parts);
         if (primary.len < 2 or primary.len > 8 or !tagAlpha(primary)) return false;
-        if (next) |p| if (primary.len <= 3 and p.len == 3 and tagAlpha(p)) { next = parts.next(); };
-        if (next) |p| if (p.len == 4 and tagAlpha(p)) { next = parts.next(); };
+        if (next) |p| if (primary.len <= 3 and p.len == 3 and tagAlpha(p)) {
+            next = parts.next();
+        };
+        if (next) |p| if (p.len == 4 and tagAlpha(p)) {
+            next = parts.next();
+        };
         if (next) |p| {
             var region = p.len == 2 and tagAlpha(p);
-            if (p.len == 3) { region = true; for (p) |c| { if (!std.ascii.isDigit(c)) region = false; } }
+            if (p.len == 3) {
+                region = true;
+                for (p) |c| {
+                    if (!std.ascii.isDigit(c)) region = false;
+                }
+            }
             if (region) next = parts.next();
         }
         while (next) |p| {
@@ -1108,7 +1142,8 @@ pub const Renderer = struct {
             var count: usize = 0;
             while (next) |value| {
                 if (value.len < 2 or value.len > 8 or !tagAlnum(value)) break;
-                count += 1; next = parts.next();
+                count += 1;
+                next = parts.next();
             }
             if (count == 0) return false;
         }
@@ -1343,9 +1378,27 @@ pub const Renderer = struct {
             try self.mediaFileKind(try self.entityText(raw_file), content, .audio);
         };
         if (tag.is("li")) try self.text("• ", style);
+        const annotation = tag.is("rt") or tag.is("rtc");
+        const parenthetical = annotation and style.ruby_parentheses;
+        if (tag.is("ruby")) s.ruby_parentheses = !rubyHasFallback(content);
+        if (annotation) s.ruby_parentheses = false;
+        const annotation_start = self.spans.items.len;
+        if (parenthetical) try self.text("（", s);
         if (std.mem.indexOf(u8, content, "{|") != null) {
             try self.blocksInline(try self.renderBody(content), s);
         } else try self.inlineText(content, s, depth + 1);
+        if (parenthetical and annotation_start < self.spans.items.len and
+            std.mem.eql(u8, self.spans.items[annotation_start].text, "（"))
+        {
+            var visible = false;
+            for (self.spans.items[annotation_start + 1 ..]) |span| {
+                if (trim(span.text).len != 0) {
+                    visible = true;
+                    break;
+                }
+            }
+            if (visible) try self.text("）", s) else _ = self.spans.orderedRemove(annotation_start);
+        }
         if (oneOf(tag.name, &.{ "p", "div", "blockquote", "center", "li", "dt", "dd", "tr", "h1", "h2", "h3", "h4", "h5", "h6" })) try self.lineBreak(style);
         return pair.end;
     }
@@ -2815,7 +2868,7 @@ test "renderer accepts current MediaWiki semantic HTML tags without leaking tag 
     try std.testing.expect(std.mem.indexOf(u8, text_value, "<meta") == null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "heading") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "shown") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "xreading") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "x（reading）") != null);
     try std.testing.expect(std.mem.endsWith(u8, text_value, "Z"));
 }
 
@@ -3160,7 +3213,7 @@ test "benign semantic HTML renders content while dangerous HTML stays inert" {
     var r: Renderer = .{ .a = a, .context = .{} };
     const spans = try r.parseSpans("<abbr title='abbreviation'>abbr</abbr> <cite>cite</cite> <ins>inserted</ins> <samp>sample</samp> <ruby>漢<rt>kan</rt></ruby><wbr>ok <script>alert(1)</script>", .{});
     const text_value = try flattened(a, spans);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "abbr cite inserted sample 漢kanok") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "abbr cite inserted sample 漢（kan）ok") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "alert(1)") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "unsupported HTML") == null);
     try std.testing.expect(r.fallbacks.unsupported_element);
@@ -3775,7 +3828,6 @@ test "fostered reference registration retains source order around table cells" {
     try std.testing.expectEqualStrings("after", refs[2].name);
 }
 
-
 test "fostered whitespace and reconstructed formatting cross cell boundaries exactly once" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -3879,7 +3931,6 @@ test "HTML ordered list types reversed order and explicit resets compile to labe
     try std.testing.expectEqualStrings("2", ordinary[1].number);
 }
 
-
 test "HTML ordered nested lists use their own counters and retain item block boundaries" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -3894,7 +3945,9 @@ test "HTML ordered nested lists use their own counters and retain item block bou
     try std.testing.expectEqual(Kind.list_item, blocks[0].kind);
     try std.testing.expectEqualStrings("1", blocks[0].number);
     var breaks: usize = 0;
-    for (blocks[0].spans) |span| { if (span.kind == .line_break) breaks += 1; }
+    for (blocks[0].spans) |span| {
+        if (span.kind == .line_break) breaks += 1;
+    }
     try std.testing.expect(breaks >= 2);
     try std.testing.expectEqual(Kind.table, blocks[1].kind);
     try std.testing.expectEqualStrings("#:", blocks[1].list_path);
@@ -3946,35 +3999,33 @@ test "image option timed audio handler validates values without hiding unsupport
     for (r.media.items, captions) |media, caption| try std.testing.expectEqualStrings(caption, media.caption);
 }
 
- test "typed image handler options preserve valid captions without swallowing unrelated options" {
+test "typed image handler options preserve valid captions without swallowing unrelated options" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
     const cases = [_]struct { file: []const u8, option: []const u8, expected: []const u8 }{
-        .{ .file="Doc.pdf", .option="page=002", .expected="Caption" },
-        .{ .file="Doc.PDF", .option="page=0", .expected="Caption" },
-        .{ .file="Doc.pdf", .option="page=+2", .expected="page=+2" },
-        .{ .file="Doc.djvu", .option="page=-2", .expected="Caption" },
-        .{ .file="Doc.djv", .option="page=02", .expected="page=02" },
-        .{ .file="Map.svg", .option="lang=zh-Hant-TW", .expected="Caption" },
-        .{ .file="Map.svg", .option="lang=en_US", .expected="lang=en_US" },
-        .{ .file="Photo.jpg", .option="page=2", .expected="page=2" },
-        .{ .file="Photo.jpg", .option="lang=de", .expected="lang=de" },
-        .{ .file="Scan.tiff", .option="page=2", .expected="page=2" },
-        .{ .file="Scan.tiff", .option="lossy=1", .expected="lossy=1" },
+        .{ .file = "Doc.pdf", .option = "page=002", .expected = "Caption" },
+        .{ .file = "Doc.PDF", .option = "page=0", .expected = "Caption" },
+        .{ .file = "Doc.pdf", .option = "page=+2", .expected = "page=+2" },
+        .{ .file = "Doc.djvu", .option = "page=-2", .expected = "Caption" },
+        .{ .file = "Doc.djv", .option = "page=02", .expected = "page=02" },
+        .{ .file = "Map.svg", .option = "lang=zh-Hant-TW", .expected = "Caption" },
+        .{ .file = "Map.svg", .option = "lang=en_US", .expected = "lang=en_US" },
+        .{ .file = "Photo.jpg", .option = "page=2", .expected = "page=2" },
+        .{ .file = "Photo.jpg", .option = "lang=de", .expected = "lang=de" },
+        .{ .file = "Scan.tiff", .option = "page=2", .expected = "page=2" },
+        .{ .file = "Scan.tiff", .option = "lossy=1", .expected = "lossy=1" },
     };
     for (cases) |case| try std.testing.expectEqualStrings(case.expected, r.mediaCaption(try std.fmt.allocPrint(r.a, "Caption|{s}", .{case.option}), case.file, Renderer.mediaOptionMode(case.file, false)));
     for ([_][]const u8{ "de", "ZH-hant-TW", "x-private", "i-klingon", "en-a-test-b-more-x-p", "en-123", "en\n" }) |tag| try std.testing.expect(Renderer.mediaLanguageTag(tag));
     for ([_][]const u8{ "", "en_US", "e", "en-1-test", "en-a", "en-x", "en--US", "en-abcdefghi", "en\n\n" }) |tag| try std.testing.expect(!Renderer.mediaLanguageTag(tag));
 }
 
-
 test "page reference context preserves first definitions groups protection and used only output" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const context = try referenceDefinitionsAlloc(a,
-        "<ref name='a&amp;b'/><ref name='a&amp;b'>First</ref><ref name='a&amp;b'>Later</ref>" ++
+    const context = try referenceDefinitionsAlloc(a, "<ref name='a&amp;b'/><ref name='a&amp;b'>First</ref><ref name='a&amp;b'>Later</ref>" ++
         "<references group='g&amp;x'><ref name=a>Grouped</ref><ref name=a group=other>Other</ref></references>" ++
         "<!-- <ref name=comment>Wrong</ref> --><nowiki><ref name=raw>Wrong</ref></nowiki>" ++
         "<pre><ref name=pre>Wrong</ref></pre><code><nowiki><ref name=nested>Wrong</ref></nowiki><ref name=code>Parsed code</ref></code>" ++
@@ -3990,9 +4041,6 @@ test "page reference context preserves first definitions groups protection and u
     }
     try std.testing.expect(!r.fallbacks.template_presentation);
 }
-
-
-
 
 test "imagemap preserves source backed image and hotspot link occurrences" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -4090,4 +4138,85 @@ test "imagemap invalid directives and protected source retain conservative diagn
     var protected: Renderer = .{ .a = a, .context = .{} };
     _ = try protected.parseSpans("<nowiki><imagemap>image:G50.png\ndefault [[vogel]]</imagemap></nowiki><pre><imagemap>image:G50.png\ndefault [[vogel]]</imagemap></pre>", .{});
     try std.testing.expectEqual(@as(usize, 0), protected.media.items.len);
+}
+
+test "ruby Japanese 日 keeps annotation separate from prose" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    // jawiktionary page 925, revision 2299765 (20261001 dump).
+    const spans = try r.parseSpans("日とは<ruby>実<rt>じつ</rt></ruby>である", .{});
+    try std.testing.expectEqualStrings("日とは実（じつ）である", try flattened(arena.allocator(), spans));
+}
+
+test "ruby Japanese 火 keeps the supplied multi-character reading" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    // jawiktionary page 967, revision 2173516 (20261001 dump).
+    const spans = try r.parseSpans("七月に<ruby>心宿<rt>なかごぼし</rt></ruby>が天頂を過ぎ", .{});
+    try std.testing.expectEqualStrings("七月に心宿（なかごぼし）が天頂を過ぎ", try flattened(arena.allocator(), spans));
+}
+
+test "ruby Japanese 月 retains trailing inflection outside its reading" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    // jawiktionary page 1744, revision 2351336 (20261001 dump).
+    const spans = try r.parseSpans("月光を<ruby>看<rt>み</rt></ruby>る", .{});
+    try std.testing.expectEqualStrings("月光を看（み）る", try flattened(arena.allocator(), spans));
+}
+
+test "ruby explicit rp fallback punctuation is preserved exactly" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const spans = try r.parseSpans("<ruby>漢<rp>〔</rp><rt>かん</rt><rp>〕</rp></ruby>", .{});
+    try std.testing.expectEqualStrings("漢〔かん〕", try flattened(arena.allocator(), spans));
+}
+
+test "ruby annotation links emphasis and language remain typed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const spans = try r.parseSpans("<ruby lang='ja'>[[看]]<rt>''[[み]]''</rt></ruby>る", .{});
+    try std.testing.expectEqualStrings("看（み）る", try flattened(arena.allocator(), spans));
+    var base = false;
+    var reading = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "看")) base = span.kind == .link and std.mem.eql(u8, span.target, "看") and std.mem.eql(u8, span.language, "ja");
+        if (std.mem.eql(u8, span.text, "み")) reading = span.kind == .link and std.mem.eql(u8, span.target, "み") and span.flags.italic and std.mem.eql(u8, span.language, "ja");
+        if (std.mem.eql(u8, span.text, "る")) try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.flags.italic);
+    }
+    try std.testing.expect(base and reading);
+}
+
+test "ruby protected markup is literal and cannot supply fallback punctuation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const literal = "<ruby>漢<rt>かん</rt></ruby>";
+    const protected = try r.parseSpans("<nowiki>" ++ literal ++ "</nowiki>", .{});
+    try std.testing.expectEqualStrings(literal, try flattened(arena.allocator(), protected));
+    for (protected) |span| try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+    const inner = try r.parseSpans("<ruby>字<nowiki><rp></nowiki><rt>じ</rt></ruby>", .{});
+    try std.testing.expectEqualStrings("字<rp>（じ）", try flattened(arena.allocator(), inner));
+}
+
+test "ruby nested fallbacks and grouped annotations do not duplicate delimiters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const nested = try r.parseSpans("<ruby>外<rt>そと</rt><ruby>内<rp>[</rp><rt>うち</rt><rp>]</rp></ruby></ruby>", .{});
+    try std.testing.expectEqualStrings("外（そと）内[うち]", try flattened(arena.allocator(), nested));
+    const grouped = try r.parseSpans("<ruby><rb>漢字</rb><rtc><rt>かんじ</rt></rtc></ruby>", .{});
+    try std.testing.expectEqualStrings("漢字（かんじ）", try flattened(arena.allocator(), grouped));
+}
+
+test "ruby empty annotations do not invent a reading and bare rt remains transparent" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const spans = try r.parseSpans("<ruby>字<rt><!-- absent --></rt></ruby><rt>plain</rt>", .{});
+    try std.testing.expectEqualStrings("字plain", try flattened(arena.allocator(), spans));
 }

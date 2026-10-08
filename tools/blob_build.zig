@@ -1346,3 +1346,113 @@ test "indexed XML redirects bypass workers and preserve source namespace account
     try std.testing.expectEqual(@as(u64, 0), writer.namespace_coverage.rows.get(10).?.alias_pages);
     try std.testing.expectEqual(@as(u64, 1), writer.namespace_coverage.rows.get(10).?.compile_only_rows);
 }
+
+test "AY source Russian heading keeps Maksim in the Russian record" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    // Exact two rows from AY's pinned registry; source page 5074/revision 18725.
+    try registry.addTsv("# wikidict-language-registry-v2\n# content-language\tay\n# mediawiki\nay\tAymar aru\tay\tAymara\taym\nru\truso\tRuso\tРусский\tрусский\tru\tRussian\trus\n");
+    const codes = languageCodes(&registry, null);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Raw source SHA256 1306af4e73c20e79525534c6d1fac66474df7be644998002a6de663f49f91cce.
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "Максим", "== Ruso ==\n'''Макси́м'''\n#Rusiya jaqiqapa", null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename("ruso", &filename) }));
+    defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("ru", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("Максим")).?;
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings("ru", decoded.entry.language_code);
+    try std.testing.expectEqualStrings("Максим", decoded.entry.title);
+    var name_count: usize = 0;
+    var definition_count: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.text, "Макси́м")) {
+            name_count += 1;
+            try std.testing.expect(span.bold);
+        }
+        if (std.mem.eql(u8, span.text, "Rusiya jaqiqapa")) {
+            definition_count += 1;
+            try std.testing.expect(block.kind == .definition);
+            try std.testing.expectEqualStrings("1", block.number);
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), name_count);
+    try std.testing.expectEqual(@as(usize, 1), definition_count);
+}
+
+test "explicit locale aliases separate source backed BCL lexical sections" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tbclwiktionary\n# dump-date\t20261001\n# content-language\tbcl\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tPlantilya\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+
+    var registry = language_registry.Registry.empty(std.testing.allocator);
+    defer registry.deinit();
+    try registry.addTsv("bcl\tBikol Central\nceb\tCebuano\ncts\tNorthern Catanduanes Bikol\n# local-alias\tceb\tSinugbuanon\n# local-alias\tcts\tBikol Catanduanes\n# local-alias\tbcl\tBikol Sentral\n");
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact source heading roles; the small lexical expansion is source-instantiated, not captured runtime output.
+    const talisay_raw = "==Sinugbuanon==\n===Toltol na pangngaran===\n{{head|ceb|toltol na pangngaran}}\n# sarong [[syudad]] sa [[Cebu]], [[Filipinas]]\n# sarong [[barangay]] sa [[Santander]], Cebu\n==Bikol Central==\n{{bcl-tng-png}}\n# sarong ikaapat na klase nin [[banwaan]] sa [[probinsya]] kan [[Camarines Norte]]\n";
+    const talisay_expanded = "==Sinugbuanon==\n===Toltol na pangngaran===\n# sarong [[syudad]] sa [[Cebu]], [[Filipinas]]\n# sarong [[barangay]] sa [[Santander]], Cebu\n==Bikol Central==\n# sarong ikaapat na klase nin [[banwaan]] sa [[probinsya]] kan [[Camarines Norte]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Talisay", talisay_expanded, talisay_raw, null);
+    const angog_raw = "==Bikol Sentral==\n{{bcl-png.|}} An parte kan lalawgon\n==Bikol Catanduanes==\n{{head|cts|pangngaran}}\n#An parte kan lalawgon\n";
+    const angog_expanded = "==Bikol Sentral==\n# [[local-owner]]\n==Bikol Catanduanes==\n# [[foreign-owner]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "angog", angog_expanded, angog_raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    inline for (.{ .{ "Cebuano", "Talisay", "Cebu", "Camarines Norte", "ceb" }, .{ "Bikol Central", "Talisay", "Camarines Norte", "Santander", "bcl" }, .{ "Bikol Central", "angog", "local-owner", "foreign-owner", "bcl" }, .{ "Northern Catanduanes Bikol", "angog", "foreign-owner", "local-owner", "cts" } }) |entry| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(entry[0], &filename) });
+        var mapped = try mmapPath(std.testing.io, path);
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(entry[4], metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(entry[1])).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var own_links: usize = 0;
+        var second_foreign_links: usize = 0;
+        var definition_count: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| {
+            if (block.kind == .definition) definition_count += 1;
+            for (block.spans) |span| {
+                if (std.mem.eql(u8, span.target, "Santander")) second_foreign_links += 1;
+                if (std.mem.eql(u8, span.target, entry[2])) own_links += 1;
+                try std.testing.expect(!std.mem.eql(u8, span.target, entry[3]));
+            }
+        };
+        const is_foreign = std.mem.eql(u8, entry[4], "ceb");
+        try std.testing.expectEqual(@as(usize, if (is_foreign) 2 else 1), definition_count);
+        try std.testing.expectEqual(@as(usize, if (is_foreign) 1 else 0), second_foreign_links);
+        try std.testing.expectEqual(@as(usize, 1), own_links);
+    }
+}

@@ -393,6 +393,90 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
             self.assertFalse(Path('/proc', native_pid_path.read_text()).exists())
 
+
+    @contextlib.contextmanager
+    def guardian_normal_done_fixture(self, shutdown_statement):
+        """Run the real guardian, changing only its final normal-disarm delay."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / 'build_watchdog_guardian.py'
+            source = Path(limits.__file__).with_name('build_watchdog_guardian.py').read_text()
+            original = (
+                "        record['tracked_processes'] = len(known)\n"
+                "        report(args.report, record)\n"
+                "        return\n"
+                "    record['status'] = 'cleanup'"
+            )
+            replacement = (
+                "        record['tracked_processes'] = len(known)\n"
+                "        " + shutdown_statement + "\n"
+                "        report(args.report, record)\n"
+                "        return\n"
+                "    record['status'] = 'cleanup'"
+            )
+            self.assertEqual(source.count(original), 1)
+            fixture.write_text(source.replace(original, replacement))
+            real_popen = limits.subprocess.Popen
+            guardians = []
+
+            def launch(argv, *args, **kwargs):
+                if (isinstance(argv, list) and len(argv) > 2 and
+                        Path(argv[2]).name == 'build_watchdog_guardian.py'):
+                    argv = [*argv[:2], str(fixture), *argv[3:]]
+                    env = dict(os.environ)
+                    env['PYTHONPATH'] = str(Path(limits.__file__).resolve().parent) + os.pathsep + env.get('PYTHONPATH', '')
+                    kwargs['env'] = env
+                    child = real_popen(argv, *args, **kwargs)
+                    guardians.append(child)
+                    return child
+                return real_popen(argv, *args, **kwargs)
+
+            try:
+                with patch.object(limits.subprocess, 'Popen', side_effect=launch):
+                    yield Path(tmp) / 'watchdog.json', guardians
+            finally:
+                # A negative test owns and reaps its deliberately hung fixture.
+                # Do not leave a test guardian attached to the unittest runner.
+                for guardian in guardians:
+                    try:
+                        guardian.wait(timeout=2)
+                    except limits.subprocess.TimeoutExpired:
+                        guardian.kill()
+                        guardian.wait(timeout=5)
+
+    def test_watchdog_normal_guardian_exit_after_five_seconds_is_reaped(self):
+        with self.guardian_normal_done_fixture('time.sleep(6.0)') as (report_path, guardians):
+            status = limits.supervise_watchdog(
+                argv=['-c', 'import build_resource_limits as l; assert l.inside_watchdog()'],
+                report_path=report_path, wall_seconds=2,
+                memory_limit_bytes=64 * 1024**2, max_tasks=4)
+            report = json.loads(report_path.read_text())
+            self.assertEqual(status, 0)
+            self.assertEqual(report['termination_reason'], 'child_exit')
+            self.assertEqual(report['guardian_exit_status'], 0)
+            self.assertEqual(len(guardians), 1)
+            self.assertEqual(guardians[0].returncode, 0)
+            self.assertFalse(Path('/proc', str(report['guardian_pid'])).exists())
+            guardian_report = json.loads(report_path.with_name('watchdog-guardian.json').read_text())
+            self.assertEqual(guardian_report['status'], 'disarmed')
+            self.assertEqual(guardian_report['reason'], 'normal_done')
+
+    def test_watchdog_nonterminating_guardian_still_fails_cleanup(self):
+        with self.guardian_normal_done_fixture('time.sleep(60.0)') as (report_path, guardians):
+            with patch.object(limits, 'WATCHDOG_GUARDIAN_CLEANUP_SECONDS', 0.25, create=True):
+                with self.assertRaisesRegex(limits.ContainmentUnavailable, 'cleanup_error'):
+                    limits.supervise_watchdog(
+                        argv=['-c', 'import build_resource_limits as l; assert l.inside_watchdog()'],
+                        report_path=report_path, wall_seconds=2,
+                        memory_limit_bytes=64 * 1024**2, max_tasks=4)
+            report = json.loads(report_path.read_text())
+            self.assertEqual(report['termination_reason'], 'cleanup_error')
+            self.assertEqual(report['error'], 'Independent guardian did not finish cleanup')
+            self.assertNotIn('guardian_exit_status', report)
+            self.assertEqual(report['child_exit_status'], 0)
+            self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
+            self.assertEqual(len(guardians), 1)
+            self.assertIsNone(guardians[0].poll())
+
     def test_watchdog_normal_exit_with_native_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / 'watchdog.json'
