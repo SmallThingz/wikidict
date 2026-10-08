@@ -1,4 +1,5 @@
 const std = @import("std");
+const syntax = @import("blob_encoder").wikitext_syntax;
 
 const ParsedHeading = struct {
     level: u8,
@@ -103,10 +104,12 @@ pub const Iterator = struct {
     marker_filter: ?MarkerFilter = null,
     heading_filter: ?MarkerFilter = null,
     mixed_levels: bool = false,
+    control_matcher: ?syntax.ControlMatcher = null,
 
     pub const MarkerFilter = struct {
         ctx: ?*const anyopaque,
         accepts: *const fn (?*const anyopaque, []const u8) bool,
+        accepts_equals: ?*const fn (?*const anyopaque, []const u8) bool = null,
     };
 
     pub fn init(source: []const u8) Iterator {
@@ -119,7 +122,12 @@ pub const Iterator = struct {
 
     fn languageMarker(self: *const Iterator, line: []const u8) ?[]const u8 {
         const code = parseStandaloneLanguageMarker(line) orelse return null;
-        if (self.marker_filter) |filter| if (!filter.accepts(filter.ctx, code)) return null;
+        if (self.marker_filter) |filter| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            const body = std.mem.trim(u8, trimmed[2 .. trimmed.len - 2], " \t");
+            const accepts = if (body[0] == '=') filter.accepts_equals orelse filter.accepts else filter.accepts;
+            if (!accepts(filter.ctx, code)) return null;
+        }
         return code;
     }
 
@@ -133,8 +141,8 @@ pub const Iterator = struct {
             const line = self.source[line_start..content_end];
             self.cursor = if (newline == self.source.len) self.source.len else newline + 1;
 
-            if (!self.balance.isOpen()) {
-                const heading = parseHeading(line);
+            if (!self.balance.isOpen() and line_start >= self.balance.protected_until) {
+                const heading = parseHeading(syntax.headingControlPrefix(line, self.control_matcher));
                 const marker = if (heading == null) self.languageMarker(line) else null;
                 const hyphen_marker = if (marker != null) blk: {
                     const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -169,7 +177,7 @@ pub const Iterator = struct {
                     }
                 }
             }
-            self.balance.update(line);
+            self.balance.update(self.source, line_start, content_end);
         }
 
         self.done = true;
@@ -186,14 +194,16 @@ const Balance = struct {
     links: usize = 0,
     comments: usize = 0,
     tables: usize = 0,
+    protected_until: usize = 0,
 
-    fn update(self: *Balance, line: []const u8) void {
+    fn update(self: *Balance, source: []const u8, line_start: usize, line_end: usize) void {
+        const line = source[line_start..line_end];
         const content = std.mem.trimStart(u8, line, " \t");
-        if (self.comments == 0) {
+        if (self.comments == 0 and line_start >= self.protected_until) {
             if (std.mem.startsWith(u8, content, "{|")) self.tables += 1;
             if (std.mem.startsWith(u8, content, "|}") and self.tables != 0) self.tables -= 1;
         }
-        var i: usize = 0;
+        var i: usize = @min(line.len, self.protected_until -| line_start);
         while (i < line.len) : (i += 1) {
             if (self.comments != 0) {
                 if (std.mem.startsWith(u8, line[i..], "-->")) {
@@ -201,6 +211,17 @@ const Balance = struct {
                     i += 2;
                 }
                 continue;
+            }
+            if (line[i] == '<' and !std.mem.startsWith(u8, line[i..], "<!--")) {
+                const absolute = line_start + i;
+                const token_end: ?usize = syntax.protectedEnd(source, absolute) orelse
+                    if (self.templates == 0) (if (syntax.tagAt(source, absolute)) |tag| tag.end else null) else null;
+                if (token_end) |end| {
+                    self.protected_until = end;
+                    if (end >= line_end) return;
+                    i = end - line_start - 1;
+                    continue;
+                }
             }
             if (i + 4 <= line.len and std.mem.eql(u8, line[i .. i + 4], "<!--")) {
                 self.comments = 1;
@@ -315,6 +336,12 @@ pub const CategoryIterator = struct {
                     }
                 }
                 if (self.cursor != start) continue;
+                if (self.templates == 0) {
+                    if (syntax.tagAt(self.source, start)) |tag| {
+                        self.cursor = tag.end;
+                        continue;
+                    }
+                }
             }
             if (std.mem.startsWith(u8, rest, "{{")) {
                 self.templates += 1;
@@ -497,4 +524,58 @@ test "mixed language boundaries change active depth in both directions" {
     try std.testing.expectEqualStrings("==English==\n===Verb===\n# second\n", it.next().?.source);
     try std.testing.expect(it.next() == null);
     try std.testing.expect(it.mixed_levels);
+}
+
+test "language boundaries ignore protected bodies and quoted tag delimiters" {
+    const bodies = [_][]const u8{
+        "# <nowiki>[[</nowiki>\n",                                "# <pre>{{</pre>\n",
+        "# <span title=\"[[\">visible</span>\n",                  "<nowiki>\n==German==\n{{\n</nowiki>\n",
+        "<span title=\"first\n==German==\n[[\">visible</span>\n",
+    };
+    for (bodies) |body| {
+        const source = try std.mem.concat(std.testing.allocator, u8, &.{ "==English==\n", body, "==French==\n# chat\n" });
+        defer std.testing.allocator.free(source);
+        var it = Iterator.init(source);
+        try std.testing.expectEqualStrings("English", it.next().?.heading);
+        try std.testing.expectEqualStrings("French", it.next().?.heading);
+        try std.testing.expect(it.next() == null);
+    }
+    for ([_][]const u8{ "==English==\n[[open\n==French==\n", "==English==\n{{open|\n==French==\n" }) |source| {
+        var it = Iterator.init(source);
+        try std.testing.expectEqualStrings("English", it.next().?.heading);
+        try std.testing.expect(it.next() == null);
+    }
+}
+
+test "category attribution ignores quoted tag targets and keeps active categories" {
+    for ([_][]const u8{
+        "<span title=\"[[Category:German]]\">visible</span>[[Category:English]]",
+        "<includeonly>[[Category:German]]</includeonly>[[Category:English]]",
+        "<nowiki>[[Category:German]]</nowiki>[[Category:English]]",
+    }) |source| {
+        var it: CategoryIterator = .{ .source = source };
+        try std.testing.expectEqualStrings("Category:English", it.next().?);
+        try std.testing.expect(it.next() == null);
+    }
+}
+
+test "language and category scanners preserve outer template brace handling" {
+    var sections = Iterator.init("==English==\n{{x|<span title=\"}}\">text</span>\n==French==\n# chat\n");
+    try std.testing.expectEqualStrings("English", sections.next().?.heading);
+    try std.testing.expectEqualStrings("French", sections.next().?.heading);
+    try std.testing.expect(sections.next() == null);
+    var categories: CategoryIterator = .{ .source = "{{x|<span title=\"}}\">[[Category:English]]</span>" };
+    try std.testing.expectEqualStrings("Category:English", categories.next().?);
+    try std.testing.expect(categories.next() == null);
+}
+
+test "language headings accept active control suffix without consuming literal suffix" {
+    var it = Iterator.init("=English=__NOTOC__ __NOEDITSECTION__\n# first\n=French=\n# second\n");
+    const first = it.next().?;
+    try std.testing.expectEqualStrings("English", first.heading);
+    try std.testing.expect(std.mem.indexOf(u8, first.source, "# first") != null);
+    try std.testing.expectEqualStrings("French", it.next().?.heading);
+    try std.testing.expect(it.next() == null);
+    var literal = Iterator.init("=English=__UNKNOWN__\n# retained\n");
+    try std.testing.expect(literal.next() == null);
 }

@@ -758,3 +758,40 @@ test "ruby strict compiled record preserves readable annotation and existing typ
         try std.testing.expect(std.mem.indexOf(u8, text.items, expected) != null);
     try std.testing.expect(reading_link);
 }
+
+test "AM source malformed style preserves both pronunciations and typed hiragana through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact revision 21290 style bytes; source-instantiated expanded list.
+    const source = "==ጃፓንኛ==\n" ++
+        "* [[IPA]]:[b<big style=\"color: #00008B;”>ɯ̟̃m</big>pʲit͡sɯ̟]\n**[[ሂራጋና]]፡[[ぶんぴつ]]\n" ++
+        "* [[IPA]]:<small>(''[[casual]]'')</small>[b<big style=\"color: #00008B;”>ɯ̟̃m</big>pʲi]\n**[[ሂራጋና]]፡[[ぶんぴ]]\n" ++
+        "===ስም===\n#[[እዠት]]\n";
+    const bytes = try compileAlloc(a, "分泌", .language, "ጃፓንኛ", "ja", source, null);
+    const decoded = try codec.decodeAlloc(a, bytes, "分泌", .language, .{ .code = "ja", .heading = "ጃፓንኛ" });
+    var text: std.ArrayList(u8) = .empty;
+    var first_reading: usize = 0;
+    var second_reading: usize = 0;
+    var casual: usize = 0;
+    var definition: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.target, "ぶんぴつ")) first_reading += 1;
+        if (std.mem.eql(u8, span.target, "ぶんぴ")) second_reading += 1;
+        if (std.mem.eql(u8, span.target, "casual")) casual += 1;
+        if (std.mem.eql(u8, span.target, "እዠት")) {
+            definition += 1;
+            try std.testing.expect(block.kind == .definition);
+        }
+    };
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "pʲit͡sɯ̟]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "pʲi]") != null);
+    try std.testing.expectEqual(@as(usize, 1), first_reading);
+    try std.testing.expectEqual(@as(usize, 1), second_reading);
+    try std.testing.expectEqual(@as(usize, 1), casual);
+    try std.testing.expectEqual(@as(usize, 1), definition);
+    const literal = "<big style=\"color: #00008B;”>protected</big>";
+    const protected = try workAlloc(a, "literal", "ጃፓንኛ", "<nowiki>" ++ literal ++ "</nowiki>", .{}, null, null, null, .{});
+    try std.testing.expectEqualStrings(literal, try compiler.plainText(a, protected.sections[0].blocks[0].spans));
+}

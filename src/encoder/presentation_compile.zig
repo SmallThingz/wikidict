@@ -1706,7 +1706,16 @@ pub const Renderer = struct {
                     }
                 }
             }
-            const heading = headingLine(std.mem.trimEnd(u8, line, " \t"));
+            const control_matcher: ?syntax.ControlMatcher = if (self.context.behavior_switches) |registry| .{
+                .ctx = registry,
+                .match = struct {
+                    fn match(raw: ?*const anyopaque, value: []const u8, at: usize) ?usize {
+                        const profile: *const @import("namespace_registry").behavior_switches.Registry = @ptrCast(@alignCast(raw.?));
+                        return profile.matchAt(std.heap.page_allocator, value, at) catch null;
+                    }
+                }.match,
+            } else null;
+            const heading = headingLine(syntax.headingControlPrefix(line, control_matcher));
             var multiline_data: ?[]const u8 = null;
             if (starts(clean, "{{multitrans|")) if (syntax.balanced(clean, 0)) |pair| {
                 if (pair.end == clean.len) {
@@ -1750,11 +1759,18 @@ pub const Renderer = struct {
                         const content = clean[tag.end..pair.inner_end];
                         var cursor: usize = 0;
                         while (cursor < content.len) {
+                            // Literal extension bodies and comments are not table wrappers.
+                            if (content[cursor] == '<') if (syntax.protectedEnd(content, cursor)) |protected_end| {
+                                try body.appendSlice(self.a, content[cursor..protected_end]);
+                                cursor = protected_end;
+                                continue;
+                            };
                             if (content[cursor] == '<') if (syntax.tagAt(content, cursor)) |cell| {
-                                if (oneOf(cell.name, &.{ "tr", "td", "th", "tbody" })) {
-                                    cursor = cell.end;
-                                    continue;
-                                }
+                                // Keep ordinary tags whole so quoted attribute text is not rescanned.
+                                if (!oneOf(cell.name, &.{ "tr", "td", "th", "tbody" }))
+                                    try body.appendSlice(self.a, content[cursor..cell.end]);
+                                cursor = cell.end;
+                                continue;
                             };
                             try body.append(self.a, content[cursor]);
                             cursor += 1;
@@ -2535,6 +2551,50 @@ test "translation layout tables preserve lists with optional closing tags" {
     try std.testing.expectEqual(@as(usize, 2), blocks.len);
     try std.testing.expectEqual(Kind.list_item, blocks[0].kind);
     try std.testing.expectEqualStrings("French: chat", try flattened(a, blocks[0].spans));
+}
+
+test "translation layout stripping preserves protected table tags and neighboring cells" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody(
+        "<table class=\"translations\"><tr><td>\n" ++
+            "* French: [[chat]]\n" ++
+            "* Literal: <nowiki><td>literal</td></nowiki> tail\n" ++
+            "</td><td>\n" ++
+            "* German: [[Katze]]\n" ++
+            "</td></tr></table>",
+    );
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    for (blocks) |block_value| try std.testing.expectEqual(Kind.list_item, block_value.kind);
+    try std.testing.expectEqualStrings("French: chat", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("Literal: <td>literal</td> tail", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqualStrings("German: Katze", try flattened(a, blocks[2].spans));
+    var protected_literal = false;
+    for (blocks[1].spans) |span| {
+        if (span.provenance == .protected_literal and std.mem.eql(u8, span.text, "<td>literal</td>")) protected_literal = true;
+    }
+    try std.testing.expect(protected_literal);
+    var neighboring_links: usize = 0;
+    for (blocks) |block_value| for (block_value.spans) |span| {
+        if (span.kind == .link and (std.mem.eql(u8, span.target, "chat") or std.mem.eql(u8, span.target, "Katze"))) neighboring_links += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), neighboring_links);
+
+    // A protected-tag spelling inside an ordinary quoted attribute is not an opener.
+    var quoted: Renderer = .{ .a = a, .context = .{} };
+    const quoted_blocks = try quoted.renderBody(
+        "<table class=\"translations\"><tr><td>\n" ++
+            "* French: <span title=\"<nowiki>\">[[chat]]</span>\n" ++
+            "</td><td>\n" ++
+            "* German: [[Katze]]\n" ++
+            "</td></tr></table>",
+    );
+    try std.testing.expectEqual(@as(usize, 2), quoted_blocks.len);
+    for (quoted_blocks) |block_value| try std.testing.expectEqual(Kind.list_item, block_value.kind);
+    try std.testing.expectEqualStrings("French: chat", try flattened(a, quoted_blocks[0].spans));
+    try std.testing.expectEqualStrings("German: Katze", try flattened(a, quoted_blocks[1].spans));
 }
 
 test "anagrams render only supplied terms with language and preserve unsupported options" {
@@ -4259,4 +4319,34 @@ test "external sequential closing bracket retains a literal unlinked tail" {
     try std.testing.expectEqualStrings("https://example.test", spans[0].target);
     try std.testing.expect(spans[1].kind == .text and spans[1].target.len == 0);
     try std.testing.expectEqualStrings("]", spans[1].text);
+}
+
+test "heading control suffix renders headings through exact profile and preserves literals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("=English=__NOTOC__ __NOEDITSECTION__\nbody\n=French=\nsecond");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqual(Kind.heading, blocks[0].kind);
+    try std.testing.expectEqualStrings("English", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.paragraph, blocks[1].kind);
+    try std.testing.expectEqualStrings("body", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqual(Kind.heading, blocks[2].kind);
+    try std.testing.expectEqualStrings("French", try flattened(a, blocks[2].spans));
+    const registry_type = @import("namespace_registry").behavior_switches;
+    const raw = registry_type.header ++ "\n# wiki\tjawiktionary\n# dump-date\t20261001\n# content-language\tja\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nnotoc\t0\t＿＿目次非表示＿＿\n";
+    var registry = try registry_type.Registry.init(a, raw, "jawiktionary", "20261001", "ja", @splat(0));
+    defer registry.deinit();
+    renderer.context.behavior_switches = &registry;
+    const localized = try renderer.renderBody("=English=＿＿目次非表示＿＿");
+    try std.testing.expectEqual(@as(usize, 1), localized.len);
+    try std.testing.expectEqual(Kind.heading, localized[0].kind);
+    try std.testing.expectEqualStrings("English", try flattened(a, localized[0].spans));
+    for ([_][]const u8{ "=English=__NOTOC__", "=English=__UNKNOWN__", "=English=&#95;&#95;NOTOC&#95;&#95;", "=English=<nowiki>＿＿目次非表示＿＿</nowiki>" }) |literal| {
+        const retained = try renderer.renderBody(literal);
+        try std.testing.expectEqual(@as(usize, 1), retained.len);
+        try std.testing.expectEqual(Kind.paragraph, retained[0].kind);
+        try std.testing.expect(std.mem.startsWith(u8, try flattened(a, retained[0].spans), "=English="));
+    }
 }

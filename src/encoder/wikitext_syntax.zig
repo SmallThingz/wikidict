@@ -16,6 +16,58 @@ pub fn behaviorSwitchEnd(text: []const u8, start: usize) ?usize {
     return null;
 }
 
+pub const ControlMatcher = struct {
+    ctx: ?*const anyopaque,
+    match: *const fn (?*const anyopaque, []const u8, usize) ?usize,
+
+    pub fn end(self: ControlMatcher, text: []const u8, at: usize) ?usize {
+        return self.match(self.ctx, text, at);
+    }
+};
+
+/// Only an active, complete suffix after a heading delimiter is invisible.
+/// Scan original bytes, retaining protected bodies, attributes and entities.
+pub fn headingControlPrefix(raw: []const u8, matcher: ?ControlMatcher) []const u8 {
+    const line = std.mem.trimEnd(u8, raw, " \t");
+    if (line.len == 0 or line[0] != '=') return line;
+    var at: usize = 0;
+    while (at < line.len) {
+        if (protectedEnd(line, at)) |end| {
+            at = end;
+            continue;
+        }
+        if (line[at] == '<') if (tagAt(line, at)) |tag| {
+            at = tag.end;
+            continue;
+        };
+        if (starts(line[at..], "{{") or starts(line[at..], "[[")) {
+            if (balanced(line, at)) |pair| {
+                at = pair.end;
+                continue;
+            }
+            return line;
+        }
+        const end = if (matcher) |m| m.end(line, at) else behaviorSwitchEnd(line, at);
+        if (end) |first_end| {
+            const prefix = std.mem.trimEnd(u8, line[0..at], " \t");
+            if (prefix.len != 0 and prefix[prefix.len - 1] == '=') {
+                var cursor = first_end;
+                while (cursor < line.len) {
+                    if (line[cursor] == ' ' or line[cursor] == '\t') {
+                        cursor += 1;
+                        continue;
+                    }
+                    const next = if (matcher) |m| m.end(line, cursor) else behaviorSwitchEnd(line, cursor);
+                    cursor = next orelse break;
+                }
+                if (cursor == line.len) return prefix;
+            }
+            at = first_end;
+        } else at += 1;
+    }
+    return line;
+}
+
 pub const Pair = struct { inner_end: usize, end: usize };
 pub fn starts(text: []const u8, prefix: []const u8) bool {
     return std.mem.startsWith(u8, text, prefix);
@@ -75,6 +127,38 @@ pub const Tag = struct {
         return null;
     }
 };
+// Recover only the source-proven malformed style terminator. A genuine ASCII
+// closure at an attribute boundary wins even when its quoted data contains
+// typographic quotes, >, markup-looking text or line breaks.
+fn recoverTypographicStyleEnd(text: []const u8, name: []const u8, attr_start: usize, quote_start: usize, end: usize, quote: u8) bool {
+    if (end < 3 or quote_start == 0) return false;
+    const typographic = if (quote == '"') "”" else "’";
+    if (!std.mem.endsWith(u8, text[quote_start..end], typographic)) return false;
+    const before_quote = std.mem.trimEnd(u8, text[attr_start .. quote_start - 1], " \t\r\n");
+    if (!std.mem.endsWith(u8, before_quote, "=")) return false;
+    const before_equal = std.mem.trimEnd(u8, before_quote[0 .. before_quote.len - 1], " \t\r\n");
+    if (before_equal.len < 5 or !std.ascii.eqlIgnoreCase(before_equal[before_equal.len - 5 ..], "style")) return false;
+    if (before_equal.len > 5 and !std.ascii.isWhitespace(before_equal[before_equal.len - 6])) return false;
+    const ascii_close = std.mem.indexOfScalarPos(u8, text, end + 1, quote);
+    if (ascii_close) |close| {
+        if (close + 1 == text.len or std.ascii.isWhitespace(text[close + 1]) or
+            text[close + 1] == '/' or text[close + 1] == '>') return false;
+    }
+    const limit = ascii_close orelse text.len;
+    var cursor = end + 1;
+    while (std.mem.indexOfPos(u8, text, cursor, "</")) |open| {
+        if (open >= limit) break;
+        const start = open + 2;
+        if (start + name.len <= limit and std.ascii.eqlIgnoreCase(text[start .. start + name.len], name)) {
+            var close = start + name.len;
+            while (close < limit and std.ascii.isWhitespace(text[close])) : (close += 1) {}
+            if (close < limit and text[close] == '>') return true;
+        }
+        cursor = start;
+    }
+    return false;
+}
+
 pub fn tagAt(text: []const u8, start: usize) ?Tag {
     if (start >= text.len or text[start] != '<') return null;
     var i = start + 1;
@@ -87,11 +171,23 @@ pub fn tagAt(text: []const u8, start: usize) ?Tag {
     if (i < text.len and !std.ascii.isWhitespace(text[i]) and text[i] != '/' and text[i] != '>') return null;
     const attr_start = i;
     var quote: u8 = 0;
+    var quote_start: usize = 0;
+    var quote_recovery_attempted = false;
     while (i < text.len) : (i += 1) {
         const ch = text[i];
         if (quote != 0) {
-            if (ch == quote) quote = 0;
-            continue;
+            if (ch == quote) {
+                quote = 0;
+                continue;
+            }
+            if (ch != '>' or quote_recovery_attempted) continue;
+            const typographic = if (quote == '"') "”" else "’";
+            if (!std.mem.endsWith(u8, text[quote_start..i], typographic)) continue;
+            // At most one suffix lookahead per quoted value; repeated literal
+            // typographic delimiters in valid data cannot cause quadratic work.
+            quote_recovery_attempted = true;
+            if (!recoverTypographicStyleEnd(text, name, attr_start, quote_start, i, quote)) continue;
+            quote = 0;
         }
         if (ch == '\'' or ch == '"') {
             // HTML tokenization tolerates a redundant quote in the attribute
@@ -101,6 +197,8 @@ pub fn tagAt(text: []const u8, start: usize) ?Tag {
             if (i > attr_start and text[i - 1] == ch and
                 i + 1 < text.len and text[i + 1] == '>') continue;
             quote = ch;
+            quote_start = i + 1;
+            quote_recovery_attempted = false;
             continue;
         }
         if (ch == '>') {
@@ -556,4 +654,32 @@ test "logical lines skip complete quoted HTML tags without hiding content breaks
     try std.testing.expectEqual(std.mem.indexOfScalar(u8, content, '\n').?, logicalEnd(content, 0));
     const malformed = "before <span title=\"one\n\ntwo>visible";
     try std.testing.expectEqual(std.mem.indexOfScalar(u8, malformed, '\n').?, logicalEnd(malformed, 0));
+}
+
+test "malformed typographic style terminator preserves later readings without changing valid quote data" {
+    const malformed = "<big style=\"color: #00008B;”>first</big>\n<big style=\"color: #00008B;”>second</big>";
+    const first = tagAt(malformed, 0).?;
+    try std.testing.expectEqualStrings("first</big>\n<big style=\"color: #00008B;”>second</big>", malformed[first.end..]);
+    const second_start = std.mem.indexOfPos(u8, malformed, first.end, "<big").?;
+    const second = tagAt(malformed, second_start).?;
+    try std.testing.expectEqualStrings("second</big>", malformed[second.end..]);
+    // A real closure wins despite the exact apparent recovery trigger in data.
+    const valid = "<big style=\"literal ”> </big>\n still quoted\">visible</big>";
+    const good = tagAt(valid, 0).?;
+    try std.testing.expectEqualStrings("literal ”> </big>\n still quoted", good.attr("style").?);
+    try std.testing.expectEqualStrings("visible</big>", valid[good.end..]);
+    const title = "<span title=\"literal ”> </span>\">tail</span>";
+    try std.testing.expectEqualStrings("literal ”> </span>", tagAt(title, 0).?.attr("title").?);
+    try std.testing.expect(tagAt("<big style=\"unterminated>first</big>", 0) == null);
+    try std.testing.expect(tagAt("<big style=\"color:red;”>no closing element", 0) == null);
+    const repeated = "<big style=\"one ”> two ”> three ”> end\">visible</big>";
+    try std.testing.expectEqualStrings("one ”> two ”> three ”> end", tagAt(repeated, 0).?.attr("style").?);
+    const multiline = "<big style=\"color:\nred;\">tail</big>";
+    try std.testing.expectEqualStrings("color:\nred;", tagAt(multiline, 0).?.attr("style").?);
+}
+
+test "heading control suffix keeps protected unknown and entity literals" {
+    try std.testing.expectEqualStrings("=English=", headingControlPrefix("=English=__NOTOC__ __NOEDITSECTION__", null));
+    for ([_][]const u8{ "=English=__UNKNOWN__", "=English=&#95;&#95;NOTOC__", "=English=<nowiki>__NOTOC__</nowiki>", "=English=<span title=\"__NOTOC__\">text</span>", "=English=__NOTOC__ tail" }) |line|
+        try std.testing.expectEqualStrings(line, headingControlPrefix(line, null));
 }

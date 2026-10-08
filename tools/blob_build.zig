@@ -1456,3 +1456,127 @@ test "explicit locale aliases separate source backed BCL lexical sections" {
         try std.testing.expectEqual(@as(usize, 1), own_links);
     }
 }
+
+test "AF barn equals declarations keep Bokmal and Nynorsk lexical bodies separate" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    // Exact preferred AF rows; aliases shortened for this hermetic fixture.
+    try registry.addTsv("nb\tBoeknoors\nno\tNoors\nnn\tNuwe Noors\nadj\tAdioukrou\n");
+    const codes = languageCodes(&registry, null);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact source declaration/template heading bytes; lexical markup below
+    // is source-instantiated from barn rev200895, not captured full expansion.
+    const raw = "{{=nb=}}\n{{-adj-}}\n{{IPA|baːɳ}}\n:{{H|kind}}\n{{=nn=}}\n{{IPA|baːrn}}\n:{{H|kind}}\n";
+    const expanded = "==[[Noors|Noors boekmaal (nb)]]==\n===Uitspraak===\n:[[Hulp:IPA|IPA]]: baːɳ\n===Betekenisse===\n:[[kind|Kind]]\n===Vorme===\n* børn\n" ++
+        "==[[Noors|Nieu-Noors (nn)]]==\n===Uitspraak===\n:[[Hulp:IPA|IPA]]: baːrn\n===Betekenisse===\n:[[kind|Kind]]\n===Vorme===\n* born\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "barn", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    for ([_][]const u8{ "Boeknoors", "Nuwe Noors" }, 0..) |heading, which| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename(heading, &filename) }));
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(if (which == 0) "nb" else "nn", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("barn")).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var text: std.ArrayList(u8) = .empty;
+        var definition_links: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try text.appendSlice(a, span.text);
+            if (std.mem.eql(u8, span.target, "kind")) definition_links += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), definition_links);
+        try std.testing.expect(std.mem.indexOf(u8, text.items, if (which == 0) "baːɳ" else "baːrn") != null);
+        try std.testing.expect(std.mem.indexOf(u8, text.items, if (which == 0) "baːrn" else "baːɳ") == null);
+        try std.testing.expect(std.mem.indexOf(u8, text.items, if (which == 0) "børn" else "born") != null);
+        try std.testing.expect(std.mem.indexOf(u8, text.items, if (which == 0) "born" else "børn") == null);
+    }
+}
+
+test "AN source declared bilingual headings keep four lexical languages separate" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tanwiktionary\n# dump-date\t20261001\n# content-language\tan\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    // Actual preferred/code rows; finite alias is proven by -ast- rev32603,
+    // not inferred from the spelling of the entry or its lexical body.
+    try registry.addTsv("# content-language\tan\nan\taragonés\tAragonés\tan\n" ++
+        "es\tespanyol\tEspanyol\tEspañol\tes\n" ++
+        "gl\tgallego\tGallego\tGalego\tgl\n" ++
+        "ast\tasturiano\tAsturiano\tAsturianu\tast\tAstur-leyonés\n");
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact raw revision28570 and exact declaration template bytes. Lexical/POS
+    // expansion below is source-instantiated; no captured full-page claim.
+    const raw = "{{-an-}}\n{{Prenunziazión|/a.ɾa.γo'nes/}}\n{{Etimolochía}}\n\n{{-adj.masc-}}\n{{inflect.an.adj.masc.-s|aragones}} \n'''aragonés'''\n\n1. Que ye u fa referenzia á Aragón, á la Corona d'Aragón, á la luenga aragonesa, á la bariedat aragonesa d'o castellán, u á bela cosa u persona relazionata con iste territorio europeu.\n\n{{-noun.masc-}}\n{{inflect.sust.masc.-s|aragones|aragones|a|aragonesiello}}\n'''aragonés'''\n\n2. Persona naxita d'Aragón u que en ostenta la ziudadanía.\n\n3. ''Per estensión''  Persona natural de belún d'os territorios que conformaban l'antiga Corona d'Aragón.\n\n''m''\n\n4. Luenga romanica, orichinata en Nabarra e Aragón, charrata actualmén en l'Alto Aragón.\n\n* '''Sinonimos''': ''nabarroaragonés; altoaragonés; fabla aragonesa''\n\n5. Bariedat d'o español peninsular oriental u \"castellán aragonés\", con sustrato e influyenzia d'o nabarroaragonés, que se charra en buena part d'Aragón.\n\n{{-trans-}}\n* {{en}}: [1][2][3][4]{{trans|en|Aragonese|5}}\n* {{ast}}: [1][2][3][4]{{trans|ast|aragonés|5}}\n* {{eu}}: [1]{{trans|eu|aragoiar|2}}; {{trans|eu|aragoiko|4}}; [4]{{trans|eu|aragoiera|5}}\n* {{ca}}: [1][2]{{trans|ca|aragonès|3}} ''m'', -esa ''f''; [4]{{trans|ca|aragonès|5}} ''m''\n* {{es}}: [1][2]{{trans|es|aragonés|3}} ''m'', -esa ''f''; [4]{{trans|es|aragonés|5}} ''m''\n* {{fi}}: [4] {{trans|fi|aragonia}}\n|valign=\"top\"|\n* {{nds}}: [1] {{trans|nds|aragoneesch}}; [4] {{trans|nds|Aragoneesch}}\n* {{fr}}: [1][2]{{trans|fr|aragonais|3}}''m'', -e ''f'' [4]{{trans|fr|aragonais|5}} ''m''\n* {{gl}}: [1][2]{{trans|gl|aragonés|3}} ''m'', -esa ''f''; [4]{{trans|gl|aragonés|5}} ''m''\n* {{it}}: [1][2]{{trans|it|aragonese|3}} ''m'', -esa ''f''; [4]{{trans|it|aragonese|5}} ''m''\n* {{pt}}: [1][2]{{trans|pt|aragonês|3}} ''m'', -esa ''f''; [4]{{trans|pt|aragonês|5}} ''m''\n* {{scn}}: [1][2]{{trans|scn|aragunisi|3}} ''m'', -isa ''f''; [4]{{trans|scn|aragunisi|5}} ''m''\n|}\n\n{{-es-}}\n{{Prenunziazión|/a.ɾa.γo'nes/}}\n{{Etimolochía}}\n{{-adj.masc-}}[[Categoría:ES:Alchetibos masculins]]\n'''aragonés'''\n\n1. [[aragonés]]\n\n{{-noun.masc-}}[[Categoría:ES:Sustantibos masculins]]\n'''aragonés'''\n\n2. [[aragonés]]\n\n{{-gl-}}\n{{Prenunziazión}}\n{{Etimolochía}}\n\n{{-adj.masc-}}[[Categoría:GL:Alchetibos masculins]]\n'''aragonés'''\n\n1. [[aragonés]]\n\n{{-noun.masc-}}[[Categoría:GL:Sustantibos masculins]]\n'''aragonés'''\n\n2. [[aragonés]]\n\n{{-ast-}}\n{{Prenunziazión}}\n{{Etimolochía}}\n\n{{-adj.masc-}}[[Categoría:AST:Alchetibos masculins]]\n'''aragonés'''\n\n1. [[aragonés]]\n\n{{-noun.masc-}}[[Categoría:AST:Sustantibos masculins]]\n'''aragonés'''\n\n2. [[aragonés]]";
+    const expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Aragon.svg|40px]] '''''[[Wiktionary:Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div>=\n__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en aragonés]]\n==Adchectivo masculín==\n'''aragonés'''\n\n1. Que ye u fa referenzia á Aragón, á la Corona d'Aragón, á la luenga aragonesa, á la bariedat aragonesa d'o castellán, u á bela cosa u persona relazionata con iste territorio europeu.\n\n==Sustantivo masculín==\n'''aragonés'''\n\n2. Persona naxita d'Aragón u que en ostenta la ziudadanía.\n\n3. ''Per estensión'' Persona natural de belún d'os territorios que conformaban l'antiga Corona d'Aragón.\n\n4. Luenga romanica, orichinata en Nabarra e Aragón, charrata actualmén en l'Alto Aragón.\n\n5. Bariedat d'o español peninsular oriental u \"castellán aragonés\", con sustrato e influyenzia d'o nabarroaragonés, que se charra en buena part d'Aragón.\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Lang-es.gif|40px]] '''''[[espanyol|Espanyol]]''''' <small>- ''Español''</small></div>=\n__NOTOC__\n__NOEDITSECTION__\n\n[[Category:Parabras en español]]\n==Adchectivo masculín==\n'''aragonés'''\n\n1. [[aragonés]]\n\n==Sustantivo masculín==\n'''aragonés'''\n\n2. [[aragonés]]\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Galicia.svg|40px]] '''''[[Wiktionary:Gallego|Gallego]]''''' <small>- ''Galego''</small></div>=\n__NOTOC__\n__NOEDITSECTION__\n\n[[Category:Parabras en gallego]]\n==Adchectivo masculín==\n'''aragonés'''\n\n1. [[aragonés]]\n\n==Sustantivo masculín==\n'''aragonés'''\n\n2. [[aragonés]]\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag of Asturias (indoor).svg|40px]] '''''[[Wiktionary:Astur-leyonés|Astur-leyonés]]''''' <small>- ''Asturlleonés''</small></div>=\n__NOTOC__\n__NOEDITSECTION__\n\n[[Category:Parabras en asturlionés]]\n==Adchectivo masculín==\n'''aragonés'''\n\n1. [[aragonés]]\n\n==Sustantivo masculín==\n'''aragonés'''\n\n2. [[aragonés]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "aragonés", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    const headings = [_][]const u8{ "aragonés", "espanyol", "gallego", "asturiano" };
+    const expected_codes = [_][]const u8{ "an", "es", "gl", "ast" };
+    const declaration_titles = [_][]const u8{ "Aragonés - Aragonés", "Espanyol - Español", "Gallego - Galego", "Astur-leyonés - Asturlleonés" };
+    for (headings, 0..) |heading, which| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename(heading, &filename) }));
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(expected_codes[which], metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("aragonés")).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var language_sections: usize = 0;
+        var numbered_bodies: usize = 0;
+        var lexical_links: usize = 0;
+        var visible: std.ArrayList(u8) = .empty;
+        for (decoded.entry.sections) |section| {
+            if (section.level == 1) {
+                language_sections += 1;
+                try std.testing.expectEqualStrings(declaration_titles[which], section.title);
+            }
+            for (section.blocks) |block| {
+                if (block.spans.len > 0 and block.spans[0].text.len >= 3 and
+                    std.ascii.isDigit(block.spans[0].text[0]) and std.mem.startsWith(u8, block.spans[0].text[1..], ". ")) numbered_bodies += 1;
+                for (block.spans) |span| {
+                    try visible.appendSlice(a, span.text);
+                    if (std.mem.eql(u8, span.target, "aragonés")) lexical_links += 1;
+                }
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), language_sections);
+        try std.testing.expectEqual(@as(usize, if (which == 0) 5 else 2), numbered_bodies);
+        try std.testing.expectEqual(@as(usize, if (which == 0) 0 else 2), lexical_links);
+        for ([_][]const u8{ "Que ye u fa referenzia", "Persona naxita d'Aragón", "Persona natural de belún", "Luenga romanica", "Bariedat d'o español" }) |body|
+            try std.testing.expect((std.mem.indexOf(u8, visible.items, body) != null) == (which == 0));
+    }
+}

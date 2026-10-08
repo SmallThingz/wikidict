@@ -707,7 +707,27 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
                 return true;
             }
         }.accepts,
+        .accepts_equals = struct {
+            fn accepts(raw: ?*const anyopaque, value: []const u8) bool {
+                const markers: *const LanguageMarkers = @ptrCast(@alignCast(raw.?));
+                // Equals-style declarations cannot be erased by their generic
+                // display target. Hyphen/POS markers keep represented filtering.
+                return markers.codes.resolve(value) != null;
+            }
+        }.accepts,
     });
+    iterator.control_matcher = .{
+        .ctx = context,
+        .match = struct {
+            fn match(raw: ?*const anyopaque, line: []const u8, at: usize) ?usize {
+                const markers: *const LanguageMarkers = @ptrCast(@alignCast(raw.?));
+                // Registry matching uses fixed scratch storage; no allocation.
+                if (markers.codes.behavior_switches) |registry|
+                    return registry.matchAt(std.heap.page_allocator, line, at) catch null;
+                return blobs.wikitext_syntax.behaviorSwitchEnd(line, at);
+            }
+        }.match,
+    };
     iterator.heading_filter = .{
         .ctx = context,
         .accepts = struct {
@@ -788,6 +808,30 @@ fn groupIndex(groups: []PageLanguageGroup, language: ResolvedLanguage) ?usize {
         if (std.mem.eql(u8, group.language.code, language.code)) return index;
     }
     return null;
+}
+
+// The captured AF =nb=/=nn= declarations display a Norwegian umbrella
+// link but explicitly retain their own ISO code in the visible label. Only
+// this proven umbrella relationship can override a raw/rendered disagreement.
+fn corroboratedNorwegianDeclaration(raw: language_source.Section, rendered: language_source.Section, raw_code: []const u8, rendered_code: []const u8) bool {
+    if (!std.mem.eql(u8, rendered_code, "no") or
+        !(std.mem.eql(u8, raw_code, "nb") or std.mem.eql(u8, raw_code, "nn"))) return false;
+    const first_line = std.mem.trim(u8, raw.source[0..(std.mem.indexOfScalar(u8, raw.source, '\n') orelse raw.source.len)], " \t\r");
+    if (!std.mem.startsWith(u8, first_line, "{{") or !std.mem.endsWith(u8, first_line, "}}")) return false;
+    const marker_body = std.mem.trim(u8, first_line[2 .. first_line.len - 2], " \t");
+    if (marker_body.len < 3 or marker_body[0] != '=' or marker_body[marker_body.len - 1] != '=') return false;
+    if (!std.mem.eql(u8, std.mem.trim(u8, marker_body[1 .. marker_body.len - 1], " \t"), raw_code)) return false;
+    const heading = std.mem.trim(u8, rendered.heading, " \t\r\n");
+    if (!std.mem.startsWith(u8, heading, "[[") or !std.mem.endsWith(u8, heading, "]]")) return false;
+    const body = heading[2 .. heading.len - 2];
+    if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null) return false;
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return false;
+    if (std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null) return false;
+    const label = std.mem.trim(u8, body[pipe + 1 ..], " \t");
+    if (label.len < raw_code.len + 3 or label[label.len - 1] != ')') return false;
+    const open = label.len - raw_code.len - 2;
+    return label[open] == '(' and open > 0 and std.ascii.isWhitespace(label[open - 1]) and
+        std.mem.eql(u8, label[open + 1 .. label.len - 1], raw_code);
 }
 
 fn processMain(
@@ -911,7 +955,9 @@ fn processMain(
         var resolved: ?ResolvedLanguage = null;
         if (raw_aligned) resolved = resolveSection(codes, raw_sections.items[index]);
         if (resolved) |raw_language| if (boundaryLanguage(codes, section)) |rendered_language| {
-            if (!std.mem.eql(u8, raw_language.code, rendered_language.code)) {
+            if (!std.mem.eql(u8, raw_language.code, rendered_language.code) and
+                !corroboratedNorwegianDeclaration(raw_sections.items[index], section, raw_language.code, rendered_language.code))
+            {
                 resolved = null;
                 fallbacks.unresolved_language_heading = true;
             }
@@ -954,7 +1000,29 @@ fn processMain(
         else
             null;
         if (explicit == null) fallbacks.missing_language_heading = true;
-        const language = explicit orelse codes.content() orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
+        // Unknown candidate headings cannot inherit the edition's language.
+        // The captured AY -ay- banner has no heading: its noun/adjective
+        // templates instead emit these exact POS headings. Preserve only that
+        // corroborated native convention, never an arbitrary AY boundary.
+        const native_default: ?ResolvedLanguage = native: {
+            const language = codes.content() orelse break :native null;
+            if (page_sections.items.len == 0) break :native language;
+            if (!std.mem.eql(u8, language.code, "ay") or raw_sections.items.len == 0 or
+                !raw_sections.items[0].hyphen_marker or
+                !std.mem.eql(u8, raw_sections.items[0].heading, "ay")) break :native null;
+            for (raw_sections.items) |section| {
+                if (!section.hyphen_marker or
+                    !(std.mem.eql(u8, section.heading, "ay") or
+                        std.mem.eql(u8, section.heading, "adj"))) break :native null;
+            }
+            for (page_sections.items) |section| {
+                const heading = std.mem.trim(u8, section.heading, " \t\r\n");
+                if (!std.mem.eql(u8, heading, "<div><big><big>[[suti|Suti]]</big></big></div>") and
+                    !std.mem.eql(u8, heading, "<big><big>[[mayjachiri|Mayjachiri]]</big></big>")) break :native null;
+            }
+            break :native language;
+        };
+        const language = explicit orelse native_default orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
         const payload = try presentation_document.compileReportedWithOptionsAlloc(
             page_allocator,
             title,
@@ -1574,10 +1642,14 @@ test "standalone POS markers cannot align by count with unrecognized rendered he
         const expanded = try std.fmt.allocPrint(a, "<div>'''[[Aymara aru|AYMARA ARU]]'''</div>\n==<div><big><big>[[suti|Suti]]</big></big></div>==\n# {s}\n==<big><big>[[mayjachiri|Mayjachiri]]</big></big>==\n# {s}\n", .{ entry[1], entry[2] });
         try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, entry[0], expanded, raw, null);
     }
+    // A native banner cannot adopt a genuinely unknown heading or another
+    // explicit language declaration merely because both use local POS markup.
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ay-unknown", "<div>'''[[Aymara aru|AYMARA ARU]]'''</div>\n==Unknown language==\n# unknown definition\n", "{{-ay-}}\n==Unknown language==\n# unknown definition\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ay-foreign", "<div>'''[[Aymara aru|AYMARA ARU]]'''</div>\n==<div><big><big>[[suti|Suti]]</big></big></div>==\n# native part\n==<div><big><big>[[suti|Suti]]</big></big></div>==\n# foreign part\n", "{{-ay-}}\n{{-noun-}}\n# native part\n{{-fr-}}\n{{-noun-}}\n# foreign part\n", null);
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
-    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
-    try std.testing.expectEqual(@as(usize, 2), stats.fallback_pages);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 4), stats.fallback_pages);
     const path = try languageBlobPathAlloc(a, root, "Aymar aru");
     var mapped = try mmapPath(std.testing.io, path);
     defer mapped.deinit();
@@ -1593,6 +1665,19 @@ test "standalone POS markers cannot align by count with unrecognized rendered he
         try std.testing.expect(std.mem.indexOf(u8, record.payload, entry[1]) != null);
         try std.testing.expect(std.mem.indexOf(u8, record.payload, entry[2]) != null);
     }
+    try std.testing.expect((try index.find("ay-unknown")) == null);
+    try std.testing.expect((try index.find("ay-foreign")) == null);
+    var unknown_mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Unclassified"));
+    defer unknown_mapped.deinit();
+    const unknown_blob = try blob_format.inspect(unknown_mapped.bytes);
+    try std.testing.expectEqualStrings("", (try unknown_blob.languageMetadata()).code);
+    var unknown_index = try unknown_blob.buildTrustedIndexAlloc(a);
+    defer unknown_index.deinit(a);
+    const unknown_record = (try unknown_index.find("ay-unknown")).?;
+    try std.testing.expect(std.mem.indexOf(u8, unknown_record.payload, "unknown definition") != null);
+    const foreign_record = (try unknown_index.find("ay-foreign")).?;
+    try std.testing.expect(std.mem.indexOf(u8, foreign_record.payload, "native part") != null);
+    try std.testing.expect(std.mem.indexOf(u8, foreign_record.payload, "foreign part") != null);
 }
 
 test "preferred foreign names resolve while unconfirmed ISO names remain guarded" {
@@ -1869,6 +1954,103 @@ test "explicit unresolved Arabic language sections retain unverified ownership" 
     try std.testing.expectEqual(@as(usize, 5), isolated_pages);
 }
 
+test "unresolved plain language headings preserve bodies without claiming edition language" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Local = struct {
+        fn am(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "am", .heading = "አማርኛ" };
+        }
+        fn af(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "af", .heading = "Afrikaans" };
+        }
+    };
+    var codes = TestLanguages.codes();
+    codes.content_fn = Local.am;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+
+    // Labels deliberately absent from the fixture registry. Definitions
+    // follow AM revisions21797/22112, without inferring a language code.
+    const pali = "==ፓሊኛ==\n===ስም===\n'''aggi'''\n# [[እሳት]]\n";
+    const russian = "== ሩሲያኛ ==\n=== ስም ===\n'''Максим'''\n# የሩሲያ ወንድ ስም\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "aggi", pali, pali, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Максим", russian, russian, null);
+    // A support heading alone is not evidence of a particular language.
+    const support = "==Noun==\n# Unresolved support-only body [[lemma]].\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "support-only", support, support, null);
+    // Existing language-field convention must still identify English.
+    const network = "==ቋንቋ==\n* እንግሊዝኛ\n===ገለፃ/ትርጉም===\n# የሰዎች ማኅበራዊ ቅጥጥሎሽ\n# [[አውታር]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "network", network, network, null);
+    // Source-instantiated unsectioned AF beginde body, not a captured expansion.
+    writer.language_codes.content_fn = Local.af;
+    const beginde = "''Byvoeglike voltooide deelwoord'' van [[begin]].\n::wat mens begin het\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "beginde", beginde, beginde, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 5), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 4), stats.fallback_pages);
+
+    const Expected = struct {
+        title: []const u8,
+        heading: []const u8,
+        code: []const u8,
+        body: []const u8,
+        later_body: ?[]const u8 = null,
+        link: ?[]const u8 = null,
+    };
+    const expected = [_]Expected{
+        .{ .title = "aggi", .heading = "Unclassified", .code = "", .body = "እሳት", .link = "እሳት" },
+        .{ .title = "Максим", .heading = "Unclassified", .code = "", .body = "የሩሲያ ወንድ ስም" },
+        .{ .title = "support-only", .heading = "Unclassified", .code = "", .body = "Unresolved support-only body", .link = "lemma" },
+        .{ .title = "network", .heading = "English", .code = "en", .body = "የሰዎች ማኅበራዊ ቅጥጥሎሽ", .later_body = "አውታር", .link = "አውታር" },
+        .{ .title = "beginde", .heading = "Afrikaans", .code = "af", .body = "wat mens begin het", .link = "begin" },
+    };
+    for (expected) |item| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, item.heading));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(item.code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(item.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(item.code, decoded.entry.language_code);
+        var visible: std.ArrayList(u8) = .empty;
+        for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.append(a, '\n');
+        };
+        const first = std.mem.indexOf(u8, visible.items, item.body) orelse return error.MissingDefinition;
+        if (item.later_body) |later| {
+            const next = std.mem.indexOf(u8, visible.items, later) orelse return error.MissingSecondDefinition;
+            try std.testing.expect(next > first);
+        }
+        if (item.link) |target| {
+            var found = false;
+            for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+                found = found or (span.kind == .link and std.mem.eql(u8, span.target, target));
+            };
+            try std.testing.expect(found);
+        }
+        if (!std.mem.eql(u8, item.heading, "Unclassified")) {
+            inline for (.{ "aggi", "Максим", "support-only" }) |title|
+                try std.testing.expect((try index.find(title)) == null);
+        } else {
+            try std.testing.expect((try index.find("network")) == null);
+            try std.testing.expect((try index.find("beginde")) == null);
+        }
+    }
+    const manifest = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, blob_catalog.manifest_filename }), a, .unlimited);
+    try std.testing.expect(std.mem.indexOf(u8, manifest, "አማርኛ") == null);
+}
+
 test "language resolution rejects fake top-level headings and uses real fallback language" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1929,7 +2111,7 @@ test "language resolution rejects fake top-level headings and uses real fallback
     );
 
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 6), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 7), stats.language_blobs);
 
     inline for (.{
         .{ "Nederlands", "nl" },
@@ -1938,6 +2120,7 @@ test "language resolution rejects fake top-level headings and uses real fallback
         .{ "Middle English", "enm" },
         .{ "Aari", "aiw" },
         .{ "Latyn", "la" },
+        .{ "Unclassified", "" },
     }) |expected| {
         const path = try languageBlobPathAlloc(a, root, expected[0]);
         var mapped = try mmapPath(std.testing.io, path);
@@ -1949,7 +2132,7 @@ test "language resolution rejects fake top-level headings and uses real fallback
     const manifest_path = try std.fs.path.join(a, &.{ root, blob_catalog.manifest_filename });
     const manifest = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, manifest_path, a, .unlimited);
     try std.testing.expect(std.mem.indexOf(u8, manifest, "Nederlandse vervoeging") == null);
-    try std.testing.expect(std.mem.indexOf(u8, manifest, "Unclassified") == null);
+    try std.testing.expect(std.mem.indexOf(u8, manifest, "Unclassified") != null);
     try std.testing.expect(std.mem.indexOf(u8, manifest, "\nAk\n") == null);
 }
 
@@ -2546,4 +2729,19 @@ test "AZ source proven English declaration retains separate lexical audio and un
         try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, row[1], "en")) 1 else 0), page.entry.media.len);
         if (page.entry.media.len != 0) try std.testing.expectEqualStrings("En-us-it.ogg", page.entry.media[0].file);
     }
+}
+
+test "equals language declarations require exact Norwegian umbrella corroboration" {
+    const nb: language_source.Section = .{ .heading = "nb", .source = "{{=nb=}}\n# body\n" };
+    const nn: language_source.Section = .{ .heading = "nn", .source = "{{=nn=}}\n# body\n" };
+    const bokmal: language_source.Section = .{ .heading = "[[Noors|Noors boekmaal (nb)]]", .source = "" };
+    const nynorsk: language_source.Section = .{ .heading = "[[Noors|Nieu-Noors (nn)]]", .source = "" };
+    try std.testing.expect(corroboratedNorwegianDeclaration(nb, bokmal, "nb", "no"));
+    try std.testing.expect(corroboratedNorwegianDeclaration(.{ .heading = "nb", .source = "  {{ = nb = }}\n# body\n" }, bokmal, "nb", "no"));
+    try std.testing.expect(corroboratedNorwegianDeclaration(nn, nynorsk, "nn", "no"));
+    try std.testing.expect(!corroboratedNorwegianDeclaration(nb, nynorsk, "nb", "no"));
+    try std.testing.expect(!corroboratedNorwegianDeclaration(nb, bokmal, "nb", "en"));
+    try std.testing.expect(!corroboratedNorwegianDeclaration(.{ .heading = "nb", .source = "{{-nb-}}\n# body\n", .hyphen_marker = true }, bokmal, "nb", "no"));
+    try std.testing.expect(!corroboratedNorwegianDeclaration(nb, .{ .heading = "[[Noors|Noors boekmaal (nb)]] trailing", .source = "" }, "nb", "no"));
+    try std.testing.expect(!corroboratedNorwegianDeclaration(nb, .{ .heading = "[[Noors|Noors (nb)|extra]]", .source = "" }, "nb", "no"));
 }
