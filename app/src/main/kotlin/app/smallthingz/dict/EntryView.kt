@@ -275,9 +275,9 @@ private fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight
                 val start = length
                 if (span.direction == "rtl") append('\u2067') else if (span.direction == "ltr") append('\u2066')
                 append(if (span.kind == "line_break") "\n" else span.text)
+                append(span.trail)
                 if (span.direction in listOf("rtl", "ltr")) append('\u2069')
                 val end = length
-                append(span.trail)
                 if (end > start) {
                     if (weight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
                         fontWeight = if (span.bold) FontWeight.Bold else weight,
