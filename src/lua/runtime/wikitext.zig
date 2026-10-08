@@ -173,6 +173,7 @@ pub const Expander = struct {
     page_heading_count: usize = 0,
     fake_heading_count: usize = 0,
     display_title: ?[]const u8 = null,
+    unsupported_parser_function: bool = false,
     strip_counter: u32 = 0,
     strip_values: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
     page_line: std.ArrayList(u8) = .empty,
@@ -234,6 +235,7 @@ pub const Expander = struct {
         self.page_heading_count = 0;
         self.fake_heading_count = 0;
         self.display_title = null;
+        self.unsupported_parser_function = false;
         self.strip_counter = 0;
         self.strip_values = .empty;
         self.page_line = .empty;
@@ -1036,6 +1038,103 @@ pub const Expander = struct {
         defer rt.freeResults(result);
         if (result.len == 0 or result[0] != .string) return error.StringExpected;
         return result[0].string;
+    }
+
+    // CoreParserFunctions::language at MediaWiki 0d3b507d19ae860ed8a1d22c73fa4bc5abf8dfcc:
+    // empty code uses the parser target; empty display means autonym. A missing
+    // captured profile remains an error, distinct from an unknown code in a
+    // complete profile. Only the latter uses LanguageCode::bcp47 fallback.
+    fn languageName(self: *Expander, raw_code: []const u8, raw_display: ?[]const u8) anyerror![]const u8 {
+        const trimmed = std.mem.trim(u8, raw_code, " \t\r\n");
+        const code = try std.ascii.allocLowerString(self.runtime.allocator, if (trimmed.len == 0)
+            (self.runtime.namespace_catalog orelse return error.NamespaceRegistryRequired).content_language
+        else
+            trimmed);
+        const display: ?[]const u8 = if (raw_display) |raw| blk: {
+            const value = std.mem.trim(u8, raw, " \t\r\n");
+            break :blk if (value.len == 0) null else try std.ascii.allocLowerString(self.runtime.allocator, value);
+        } else null;
+        const get = self.provider.language_name orelse {
+            language_lib.languageNameMissing(code, display, "single");
+            return error.LanguageNameSnapshotMissing;
+        };
+        const name = get(self.provider.ctx, code, display) catch |err| {
+            if (err == error.LanguageNameSnapshotMissing) language_lib.languageNameMissing(code, display, "single");
+            return err;
+        };
+        return if (name.len != 0) name else self.languageCodeBcp47(code);
+    }
+
+    // Exact deprecated/nonstandard maps and casing from retained LanguageCode.php
+    // (17962f89468aa25369f126cc7a4edd8c074cb73497c8d4de77e8cbb04858d60d).
+    fn languageCodeBcp47(self: *Expander, raw: []const u8) ![]const u8 {
+        var code: []const u8 = raw;
+        const deprecated = [_][2][]const u8{
+            .{ "als", "gsw" },
+            .{ "bat-smg", "sgs" },
+            .{ "be-x-old", "be-tarask" },
+            .{ "fiu-vro", "vro" },
+            .{ "roa-rup", "rup" },
+            .{ "zh-classical", "lzh" },
+            .{ "zh-min-nan", "nan" },
+            .{ "zh-yue", "yue" },
+        };
+        for (deprecated) |entry| if (std.mem.eql(u8, code, entry[0])) {
+            code = entry[1];
+            break;
+        };
+        const nonstandard = [_][2][]const u8{
+            .{ "cbk-zam", "cbk" },
+            .{ "de-formal", "de-x-formal" },
+            .{ "eml", "egl" },
+            .{ "en-rtl", "en-x-rtl" },
+            .{ "es-formal", "es-x-formal" },
+            .{ "hu-formal", "hu-x-formal" },
+            .{ "map-bms", "jv-x-bms" },
+            .{ "mo", "ro-Cyrl-MD" },
+            .{ "nrm", "nrf" },
+            .{ "nl-informal", "nl-x-informal" },
+            .{ "roa-tara", "nap-x-tara" },
+            .{ "simple", "en-simple" },
+            .{ "sr-ec", "sr-Cyrl" },
+            .{ "sr-el", "sr-Latn" },
+            .{ "crh-ro", "crh-Latn-RO" },
+            .{ "kk-cn", "kk-Arab-CN" },
+            .{ "kk-tr", "kk-Latn-TR" },
+            .{ "zh-cn", "zh-Hans-CN" },
+            .{ "zh-sg", "zh-Hans-SG" },
+            .{ "zh-my", "zh-Hans-MY" },
+            .{ "zh-tw", "zh-Hant-TW" },
+            .{ "zh-hk", "zh-Hant-HK" },
+            .{ "zh-mo", "zh-Hant-MO" },
+        };
+        for (nonstandard) |entry| if (std.mem.eql(u8, code, entry[0])) {
+            code = entry[1];
+            break;
+        };
+        const out = try std.ascii.allocLowerString(self.runtime.allocator, code);
+        var segments = std.mem.splitScalar(u8, out, '-');
+        var index: usize = 0;
+        var previous_private = false;
+        while (segments.next()) |segment| : (index += 1) {
+            const offset = @intFromPtr(segment.ptr) - @intFromPtr(out.ptr);
+            const value = out[offset .. offset + segment.len];
+            if (index != 0 and !previous_private) {
+                if (value.len == 2) {
+                    for (value) |*byte| byte.* = std.ascii.toUpper(byte.*);
+                } else if (value.len == 4) {
+                    value[0] = std.ascii.toUpper(value[0]);
+                }
+            }
+            previous_private = std.ascii.eqlIgnoreCase(value, "x");
+        }
+        return out;
+    }
+
+    fn expandLanguageParser(self: *Expander, raw_code: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        const code = try self.expandWikitext(raw_code, params, host_title, depth + 1);
+        const display = if (args.len != 0) try self.expandWikitext(args[0], params, host_title, depth + 1) else null;
+        return self.languageName(code, display);
     }
 
     fn expandCaseParser(self: *Expander, raw: []const u8, params: *rt.Table, host_title: []const u8, depth: usize, upper: bool, first_only: bool) anyerror![]const u8 {
@@ -1854,6 +1953,7 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "lcfirst")) return try self.expandCaseParser(first, params, host_title, depth + 1, false, true);
             if (std.ascii.eqlIgnoreCase(name, "formatnum")) return try self.expandFormatNum(first, raw_args, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "plural")) return try self.expandPlural(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "language")) return try self.expandLanguageParser(first, raw_args, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "anchorencode")) return try self.expandAnchorEncode(first, raw_args, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "fullurl")) return try self.expandUrlParser(first, raw_args, params, host_title, depth + 1, .full, false);
             if (std.ascii.eqlIgnoreCase(name, "fullurle")) return try self.expandUrlParser(first, raw_args, params, host_title, depth + 1, .full, true);
@@ -1948,8 +2048,10 @@ pub const Expander = struct {
         if (raw_head.len == 0)
             return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
         if (try self.expandParserHead(raw_head, parts.items[1..], params, host_title, depth)) |value| return value;
-        if (raw_head[0] == '#')
+        if (raw_head[0] == '#') {
+            self.unsupported_parser_function = true;
             return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
+        }
         switch (try self.classifyInterwikiTransclusion(raw_head)) {
             .normal => {},
             .current_wiki => |local_name| raw_head = local_name,
@@ -1971,8 +2073,10 @@ pub const Expander = struct {
         if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
             if (try self.expandParserHead(title, parts.items[1..], params, host_title, depth)) |value| return value;
         }
-        if (title.len != 0 and title[0] == '#')
+        if (title.len != 0 and title[0] == '#') {
+            self.unsupported_parser_function = true;
             return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
+        }
         if (invalidTransclusionTitle(title)) {
             if (invalidTransclusionNeedsProtection(title))
                 return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
@@ -2597,6 +2701,19 @@ pub const Expander = struct {
                 else => return error.StringExpected,
             } else null;
             return (try self.revisionMagic(name, page)) orelse unreachable;
+        }
+        if (std.ascii.eqlIgnoreCase(name, "language")) {
+            const code: []const u8 = if (first) |value| switch (value) {
+                .nil => "",
+                .string => |text| text,
+                else => return error.StringExpected,
+            } else "";
+            const display: ?[]const u8 = if (second) |value| switch (value) {
+                .nil => null,
+                .string => |text| text,
+                else => return error.StringExpected,
+            } else null;
+            return self.languageName(code, display);
         }
         if (std.ascii.eqlIgnoreCase(name, "#invoke")) return self.frameParserInvoke(args);
         if (std.ascii.eqlIgnoreCase(name, "#categorytree")) return self.expandCategoryTree(args);
@@ -4394,4 +4511,183 @@ test "int parser uses captured aliases and messages with child-frame expansion" 
     try std.testing.expectEqualStrings("⧼known-absent⧽", try expander.expandFragment("Page", "{{int:known-absent}}", 1_670_803_200));
     try std.testing.expectError(error.InterfaceMessageSnapshotMissing, expander.expandFragment("Page", "{{int:uncaptured}}", 1_670_803_200));
     try std.testing.expectEqualStrings("<nowiki>{{</nowiki>int:<nowiki>}}</nowiki>", try expander.expandFragment("Page", "{{int:}}", 1_670_803_200));
+}
+
+// A native test module reproduces the captured legal string.sub call using the
+// actual mw.ustring.sub API. It is not an alternate parser or heading cleanup.
+const LanguageParserTestModule = struct {
+    fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+        return if (std.mem.eql(u8, raw_name, "Module:string")) 0 else null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id == 0) "Module:string" else null;
+    }
+    fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const exports = try ctx.newTable();
+        try exports.rawSet(ctx.allocator, .{ .string = "sub" }, try ctx.makeFunctionKnown(1, sub, &.{}));
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .table = exports };
+        return out;
+    }
+    fn sub(ctx: *rt.Context, _: rt.Captures, values: []const Value) ![]const Value {
+        if (values.len == 0 or values[0] != .table) return error.FrameExpected;
+        const args = try ctx.getIndex(values[0], .{ .string = "args" });
+        const source = try ctx.getIndex(args, .{ .number = 1 });
+        const first = try ctx.getIndex(args, .{ .number = 2 });
+        if (source != .string or first != .string) return error.StringExpected;
+        const index = try std.fmt.parseFloat(f64, first.string);
+        const mw = ctx.getGlobal(23);
+        const ustring = try ctx.getIndex(mw, .{ .string = "ustring" });
+        const callable = try ctx.getIndex(ustring, .{ .string = "sub" });
+        return ctx.callValue(callable, &.{ source, .{ .number = index } });
+    }
+};
+
+const LanguageParserTestSource = struct {
+    words: *const rt.namespace_registry.magic_words.Registry,
+    fn parser(raw: ?*anyopaque, alias: []const u8) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        return self.words.resolve(alias, .parser_function);
+    }
+    fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        // Frozen Template:ل revision1072084 (4f04b777), and the include-only
+        // body of Template:اللغة revision1048305 (e45750b7).
+        if (std.mem.eql(u8, title, "Template:ل"))
+            return "== {{اللغة|{{#invoke:string|sub|{{#language:{{{1|}}}|ar}}|3}}}} ==";
+        if (std.mem.eql(u8, title, "Template:اللغة"))
+            return "{{{1}}}<includeonly>[[تصنيف:{{{1}}}]]</includeonly><noinclude>{{توثيق}}[[تصنيف:قوالب تصنيفات علمية]]\n</noinclude>";
+        if (std.mem.eql(u8, title, "Template:Code")) return " EN ";
+        if (std.mem.eql(u8, title, "Template:Display")) return " AR ";
+        if (std.mem.eql(u8, title, "Template:NestedLanguage")) return "{{#language:{{{1|}}}|{{{2|}}}}}";
+        return null;
+    }
+    fn languageName(_: ?*anyopaque, code: []const u8, display: ?[]const u8) ![]const u8 {
+        if (std.mem.eql(u8, code, "oom")) return error.OutOfMemory;
+        if (std.mem.eql(u8, code, "denied")) return error.AccessDenied;
+        if (display) |shown| {
+            if (std.mem.eql(u8, shown, "ar")) {
+                if (std.mem.eql(u8, code, "en")) return "الإنجليزية";
+                if (std.mem.eql(u8, code, "ar")) return "العربية";
+            } else if (std.mem.eql(u8, shown, "fr")) {
+                if (std.mem.eql(u8, code, "en")) return "anglais";
+            } else return error.LanguageNameSnapshotMissing;
+        } else {
+            if (std.mem.eql(u8, code, "en")) return "English";
+            if (std.mem.eql(u8, code, "ar")) return "العربية";
+            if (std.mem.eql(u8, code, "de")) return "Deutsch";
+        }
+        return "";
+    }
+};
+
+// Includes nested parameter expansion, actual captured hash aliases, and a
+// Unicode substring from the complete language name rather than a literal
+// fallback wrapper. The fixtures are scoped test data, not production names.
+test "language parser expands defaults autonyms nested arguments and the frozen Arabic template chain" {
+    const aliases = rt.namespace_registry.magic_words;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var words = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "language\t0\t#لغة\nlanguage\t0\t#LANGUAGE\ninvoke\t0\tinvoke\n", "enwiktionary", "20261001", "en");
+    defer words.deinit();
+    var source: LanguageParserTestSource = .{ .words = &words };
+    var runtime = try rt.Context.initProgram(a, 24, 1);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(LanguageParserTestModule.root), rt.stabilize(LanguageParserTestModule.sub) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, LanguageParserTestModule.lookup, LanguageParserTestModule.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .ctx = &source, .get = LanguageParserTestSource.get, .exists = TestProvider.exists,
+            .language_name = LanguageParserTestSource.languageName, .resolve_parser_function = LanguageParserTestSource.parser },
+        .install_scribunto = installTestInvoke };
+    const cases = [_][2][]const u8{
+        .{ "{{#language:}}", "English" },
+        .{ "{{#language: |ar}}", "الإنجليزية" },
+        .{ "{{#language:de}}", "Deutsch" },
+        .{ "{{#language:ar|}}", "العربية" },
+        .{ "{{#لغة: EN | FR }}", "anglais" },
+        .{ "{{#language:{{Code}}|{{Display}}}}", "الإنجليزية" },
+        .{ "{{NestedLanguage|EN|AR}}", "الإنجليزية" },
+        .{ "{{#language:ZZ-latn-us-x-FOO}}", "zz-Latn-US-x-foo" },
+        .{ "{{#language:ALS}}", "gsw" },
+        .{ "{{#language:ZH-cn}}", "zh-Hans-CN" },
+        .{ "{{#language:EN-rtl}}", "en-x-rtl" },
+    };
+    for (cases) |case| try std.testing.expectEqualStrings(case[1], try expander.expandFragment("Page", case[0], 1_670_803_200));
+    const chain = try expander.expandFragment("-ability", "{{ل|en}}\n# suffix definition\n", 1_670_803_200);
+    try std.testing.expectEqualStrings("== إنجليزية[[تصنيف:إنجليزية]] ==\n# suffix definition\n", chain);
+    try std.testing.expect(std.mem.indexOf(u8, chain, "nowiki") == null);
+    try std.testing.expect(std.mem.indexOf(u8, chain, "{{{") == null);
+    const args = try runtime.newTable();
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = " EN " });
+    try args.rawSet(a, .{ .number = 2 }, .{ .string = " AR " });
+    try std.testing.expectEqualStrings("الإنجليزية", try Expander.hostFrameParserFunction(&expander, a, "#لغة", args));
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = "" });
+    try args.rawSet(a, .{ .number = 2 }, .{ .string = "" });
+    try std.testing.expectEqualStrings("English", try Expander.hostFrameParserFunction(&expander, a, "#language", args));
+}
+
+test "language parser preserves authoritative nonmatches and missing profile operational errors" {
+    const aliases = rt.namespace_registry.magic_words;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var words = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\nlanguage\t0\t#LANGUAGE\n", "enwiktionary", "20261001", "en");
+    defer words.deinit();
+    var source: LanguageParserTestSource = .{ .words = &words };
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .ctx = &source, .get = LanguageParserTestSource.get, .exists = TestProvider.exists,
+            .language_name = LanguageParserTestSource.languageName, .resolve_parser_function = LanguageParserTestSource.parser } };
+    try std.testing.expectEqualStrings("<nowiki>{{#لغة:en}}</nowiki>", try expander.expandFragment("Page", "{{#لغة:en}}", 1_670_803_200));
+    try std.testing.expectError(error.LanguageNameSnapshotMissing, expander.expandFragment("Page", "{{#language:en|missing}}", 1_670_803_200));
+    try std.testing.expectError(error.LanguageNameSnapshotMissing, expander.expandFragment("Page", "{{#language:en|-}}", 1_670_803_200));
+    try std.testing.expectError(error.OutOfMemory, expander.expandFragment("Page", "{{#language:oom|ar}}", 1_670_803_200));
+    try std.testing.expectError(error.AccessDenied, expander.expandFragment("Page", "{{#language:denied|ar}}", 1_670_803_200));
+    expander.provider.language_name = null;
+    try std.testing.expectError(error.LanguageNameSnapshotMissing, expander.expandFragment("Page", "{{#language:en}}", 1_670_803_200));
+}
+
+test "unsupported parser diagnostics preserve literals and reset per page" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TranslationReuseProbe.root), rt.stabilize(TranslationReuseProbe.root) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TranslationReuseProbe.lookup, TranslationReuseProbe.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+        .install_scribunto = installTestInvoke,
+    };
+    const unsupported = try expander.expandFragment("Page", "before {{#unsupported_probe:x}} after", 1_670_803_200);
+    try std.testing.expectEqualStrings("before <nowiki>{{#unsupported_probe:x}}</nowiki> after", unsupported);
+    try std.testing.expect(expander.unsupported_parser_function);
+    _ = try expander.expandFragment("Next", "<nowiki>{{#unsupported_probe:x}}</nowiki>", 1_670_803_200);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    const computed_source = "{{{{#if:x|#unsupported_probe}}:x}}";
+    const computed = try expander.expandFragment("Computed", computed_source, 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{{{#if:x|#unsupported_probe}}:x}}</nowiki>", computed);
+    try std.testing.expect(expander.unsupported_parser_function);
+    _ = try expander.expandFragment("Protected pre", "<pre>{{#unsupported_probe:x}}</pre>", 1_670_803_200);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    try std.testing.expectEqualStrings("yes", try expander.expandFragment("Known", "{{#if:x|yes|no}}", 1_670_803_200));
+    try std.testing.expect(!expander.unsupported_parser_function);
 }

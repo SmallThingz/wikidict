@@ -23,7 +23,7 @@ pub const title_ids = [_][]const u8{
 };
 const function_ids = [_][]const u8{
     "ns",              "urlencode",        "lcfirst",       "ucfirst",      "lc",              "uc",            "localurl",
-    "fullurl",         "fullurle",         "canonicalurl",  "formatnum",    "plural",          "padleft",       "padright",
+    "fullurl",         "fullurle",         "canonicalurl",  "formatnum",    "plural",          "language",      "padleft",       "padright",
     "anchorencode",    "defaultsort",      "pagename",      "pagenamee",    "fullpagename",    "fullpagenamee", "subpagename",
     "subpagenamee",    "rootpagename",     "rootpagenamee", "basepagename", "basepagenamee",   "talkpagename",  "talkpagenamee",
     "subjectpagename", "subjectpagenamee", "namespace",     "namespacee",   "namespacenumber", "talkspace",     "talkspacee",
@@ -45,7 +45,7 @@ fn hashFunction(id: []const u8) bool {
 pub fn knownHashFunctionHead(head: []const u8) bool {
     if (head.len == 0 or head[0] != '#') return false;
     for (hash_function_ids) |id| if (std.ascii.eqlIgnoreCase(head[1..], id)) return true;
-    return std.ascii.eqlIgnoreCase(head, "#dateformat");
+    return std.ascii.eqlIgnoreCase(head, "#dateformat") or std.ascii.eqlIgnoreCase(head, "#language");
 }
 
 fn functionHead(id: []const u8) []const u8 {
@@ -254,4 +254,19 @@ test "exact case aliases precede folded collisions in both contexts" {
         try std.testing.expectEqualStrings("pagename", registry.resolve("COLLISION", .variable).?);
         try std.testing.expectEqualStrings("basepagename", registry.resolve("collision", .parser_function).?);
     }
+}
+
+// Core language is registered without SFH_HASH; the captured alias includes '#'.
+test "language parser aliases retain their captured hash and registration order" {
+    const raw = parser_header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "language\t0\t#لغة\nlanguage\t0\t#LANGUAGE\nlanguage\t0\tCOLLISION\nplural\t0\tCOLLISION\n";
+    var registry = try Registry.init(std.testing.allocator, raw, "arwiktionary", "20261001", "ar");
+    defer registry.deinit();
+    try std.testing.expectEqualStrings("language", registry.resolve("#language", .parser_function).?);
+    try std.testing.expectEqualStrings("language", registry.resolve("#لغة", .parser_function).?);
+    try std.testing.expectEqualStrings("language", registry.resolve("COLLISION", .parser_function).?);
+    try std.testing.expect(registry.resolve("##language", .parser_function) == null);
+    try std.testing.expect(registry.resolve("language", .parser_function) == null);
+    try std.testing.expect(knownHashFunctionHead("#LANGUAGE"));
+    try std.testing.expect(!knownHashFunctionHead("##language"));
 }

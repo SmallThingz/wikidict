@@ -208,8 +208,15 @@ class AffinityAdmissionTests(unittest.TestCase):
             with self.subTest(cpus=cpus),self.envelope(cpus):
                 with self.assertRaisesRegex(ValueError,'one through four allowed CPUs'):
                     b.safe_worker_budget(cpu_admission='affinity')
-        with self.envelope(nice=0),self.assertRaisesRegex(limits.ContainmentUnavailable,'nice priority'):
-            b.safe_worker_budget(cpu_admission='affinity')
+        for nice in [-1,20]:
+            with self.subTest(nice=nice),self.envelope(nice=nice),self.assertRaisesRegex(limits.ContainmentUnavailable,'nice priority'):
+                b.safe_worker_budget(cpu_admission='affinity')
+
+    def test_affinity_accepts_authenticated_normal_and_lower_priorities(self):
+        for nice in [0,15,19]:
+            with self.subTest(nice=nice),self.envelope(nice=nice),patch.object(b.os,'cpu_count',return_value=8),patch.object(b,'load_average',side_effect=AssertionError('affinity must not consult global load')):
+                self.assertEqual(4,b.safe_worker_budget(cpu_admission='affinity'))
+
 
     def test_affinity_retains_lower_child_cgroup_cap_and_fails_closed(self):
         with self.envelope(),patch.dict(os.environ,{limits.CHILD_CGROUP:'/private/build'}):

@@ -256,7 +256,7 @@ def _process_table():
             fields = raw[raw.rfind(')') + 2:].split()
             table[int(entry.name)] = {
                 'state': fields[0], 'ppid': int(fields[1]), 'pgrp': int(fields[2]),
-                'session': int(fields[3]), 'threads': int(fields[17]),
+                'session': int(fields[3]), 'nice': int(fields[16]), 'threads': int(fields[17]),
                 'start': int(fields[19]), 'vsize': int(fields[20]),
                 'rss': int(fields[21]) * page_bytes,
             }
@@ -516,11 +516,24 @@ def _watchdog_cpu_set(max_cpus, available):
     return available[:slots]
 
 
+def _watchdog_child_nice(requested, inherited):
+    """Preserve legacy relative +15, or require an explicit nonnegative target."""
+    if requested is None:
+        return min(19, inherited + 15)
+    if type(requested) is not int or not 0 <= requested <= 19:
+        raise ContainmentUnavailable('Watchdog child nice priority must be an integer from 0 through 19')
+    if requested < inherited:
+        raise ContainmentUnavailable('Watchdog child nice priority cannot raise inherited priority')
+    return requested
+
+
 def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WALL_SECONDS,
                        memory_limit_bytes=MAX_BUILD_MEMORY, max_tasks=MAX_BUILD_PIDS, max_cpus=4,
                        address_space_limit_bytes=None, disk_paths=None,
-                       disk_floor_bytes=BUILD_DISK_RESERVE_BYTES):
+                       disk_floor_bytes=BUILD_DISK_RESERVE_BYTES, child_nice=None):
     """Opt-in sampled fallback. Its aggregate cap is best effort, not a cgroup."""
+    inherited_nice = os.getpriority(os.PRIO_PROCESS, 0)
+    expected_child_nice = _watchdog_child_nice(child_nice, inherited_nice)
     if type(wall_seconds) not in (int, float) or not 0 < wall_seconds <= MAX_WATCHDOG_WALL_SECONDS:
         raise ContainmentUnavailable('Invalid watchdog wall limit')
     if not 0 < memory_limit_bytes <= MAX_BUILD_MEMORY or not 0 < max_tasks <= MAX_BUILD_PIDS:
@@ -553,6 +566,8 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
     report = {'mode': 'watchdog', 'aggregate_limit': 'sampled best effort, not kernel hard cap',
               'memory_limit_bytes': memory_limit_bytes, 'address_space_limit_bytes': address_space_limit_bytes, 'max_tasks': max_tasks,
               'cpus': cpus, 'max_cpus': max_cpus,
+              'requested_child_nice': child_nice, 'inherited_nice': inherited_nice,
+              'expected_child_nice': expected_child_nice, 'child_nice': None,
               'disk_floor_bytes': disk_floor_bytes, 'disk_space': disk_roots,
               'disk_sample_interval_seconds': WATCHDOG_POLL_SECONDS,
               'disk_limit': 'sampled free-space reserve; expansion and concurrent writes are not bounded',
@@ -626,7 +641,11 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             if os.getppid() != int(env[WATCHDOG_PARENT_PID]):
                 os._exit(125)
             os.sched_setaffinity(0, cpus)
-            os.nice(15)
+            inherited = os.getpriority(os.PRIO_PROCESS, 0)
+            target_nice = _watchdog_child_nice(child_nice, inherited)
+            adjustment = 15 if child_nice is None else target_nice - inherited
+            if os.nice(adjustment) != target_nice:
+                os._exit(125)
             def bound_rlimit(name, requested):
                 inherited_hard = resource.getrlimit(name)[1]
                 bounded = requested if inherited_hard == resource.RLIM_INFINITY else min(requested, inherited_hard)
@@ -668,6 +687,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             raise ContainmentUnavailable('Cannot identify watchdog child')
         child_start = first['start']
         report['child_start_time_ticks'] = child_start
+        report['child_nice'] = first['nice']
         known[child.pid] = child_start
         last_report = 0.0
         while True:

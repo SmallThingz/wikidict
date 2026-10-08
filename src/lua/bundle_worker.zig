@@ -29,6 +29,7 @@ pub const Request = protocol.Request;
 const Expansion = struct {
     output: []const u8,
     display_title: []const u8,
+    unsupported_parser_function: bool,
 };
 
 fn limit(resource: std.posix.rlimit_resource, value: u64) !void {
@@ -212,7 +213,7 @@ const Engine = struct {
             return err;
         };
         page_work.expand_ns +|= work_stats.elapsed(expand_start);
-        return .{ .output = output, .display_title = expander.display_title orelse "" };
+        return .{ .output = output, .display_title = expander.display_title orelse "", .unsupported_parser_function = expander.unsupported_parser_function };
     }
 };
 
@@ -297,7 +298,7 @@ pub fn run(io: std.Io, persistent: A) !void {
                 try protocol.writeError(&output.interface, stage, "ExpandedSourceTooLarge", "");
                 continue;
             }
-            try protocol.writeSuccess(&output.interface, value.output, value.display_title);
+            try protocol.writeSuccess(&output.interface, value.output, value.display_title, value.unsupported_parser_function);
         } else {
             try protocol.writeSkip(&output.interface);
         }

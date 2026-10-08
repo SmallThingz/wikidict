@@ -399,12 +399,13 @@ const ExpansionSlot = struct {
             return true;
         }
         if (self.expansion) |expanded| {
+            const extra_reasons: []const []const u8 = if (expanded.unsupported_parser_function) &.{"unsupported_parser_function"} else &.{};
             if (self.job.alias_record) |alias| {
-                try writer.addAliasExpanded(self.arena.allocator(), alias, expanded.source, expanded.display_title, .{}, &.{});
+                try writer.addAliasExpanded(self.arena.allocator(), alias, expanded.source, expanded.display_title, .{}, extra_reasons);
                 return true;
             }
             const fallback_before = writer.stats.fallback_pages;
-            writer.addExpandedPage(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title) catch |err| {
+            writer.addExpandedPageWithReasons(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title, extra_reasons) catch |err| {
                 diagnostics.printLine(
                     "blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n",
                     .{ self.job.title, self.job.ordinal, self.job.ns.id, self.job.source.len, expanded.source.len, @errorName(err) },
@@ -1579,4 +1580,182 @@ test "AN source declared bilingual headings keep four lexical languages separate
         for ([_][]const u8{ "Que ye u fa referenzia", "Persona naxita d'Aragón", "Persona natural de belún", "Luenga romanica", "Bariedat d'o español" }) |body|
             try std.testing.expect((std.mem.indexOf(u8, visible.items, body) != null) == (which == 0));
     }
+}
+
+test "AF explicit ln declaration preserves loba ownership and lexical body through codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv("ln\tLingaals\nnud\tNgala\n");
+    const codes = languageCodes(&registry, null);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact raw revision185929; heading from =ln= revision175727. Lexical
+    // markup is source-instantiated, not a captured full-page expansion.
+    const raw = "{{=ln=}}\n\n{{-ln-werkw-|\n1 = loba\n}}\n\n{{-uitspraak-}}\n:[[Hulp:IPA|IPA]]: {{IPA|ˈlo˨ba˨}}\n\n{{-ww.-}}\n\n{{betekenisse}} \n#{{H|praat}}\n#{{H|sê}}\n\n[[Kategorie:Woorde in Ngala|loba-]]";
+    const expanded = "==[[Ngala|Ngala (ln)]]==\n===Uitspraak===\n:[[Hulp:IPA|IPA]]: ˈlo˨ba˨\n===Betekenisse===\n#[[praat|Praat]]\n#[[sê|Sê]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "-loba", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename("Lingaals", &filename) }));
+    defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("ln", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("-loba")).?;
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    var text: std.ArrayList(u8) = .empty;
+    var praat: usize = 0;
+    var se: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.target, "praat")) praat += 1;
+        if (std.mem.eql(u8, span.target, "sê")) se += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), praat);
+    try std.testing.expectEqual(@as(usize, 1), se);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "ˈlo˨ba˨") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "Praat") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "Sê") != null);
+}
+
+test "Arabic vocalized linked declaration preserves Belcika Kurdish body through codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv("ku\tالكردية\n");
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact source revision1118625; no template expansion is required.
+    const raw = "== [[فِي]] [[لُغَة|ٱللُّغَةِ]] [[كردي|ٱلْكُرْدِيَّةِ]]: ==\n=== اَلْمَعْنَى: ===\n* [[بلجيكا|بلْجِيكَا]]، وَهِيَ دَوْلَةٌ أُورُبِيَّةٌ.\n\n[[تصنيف:B]]";
+    const expanded = raw;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Belçîka", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename("الكردية", &filename) }));
+    defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("ku", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("Belçîka")).?;
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    var text: std.ArrayList(u8) = .empty;
+    var links: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.target, "بلجيكا")) links += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "بِلْ") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "بلْجِيكَا") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "وَهِيَ دَوْلَةٌ أُورُبِيَّةٌ") != null);
+
+}
+
+test "AN artiga source headers and exact Occitan alias preserve four owned definitions" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tanwiktionary\n# dump-date\t20261001\n# content-language\tan\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv("# content-language\tan\nan\taragonés\tAragonés\tan\tAragonese\targ\nca\tcatalán\tCatalán\tCatalà\tcatalà\tca\tCatalan\tcat\nes\tespanyol\tEspanyol\tEspañol\tespañol\tes\tSpanish\tspa\noc\toccitano\tOccitano\tOccitan\toccitan\toc\tOccitan (post 1500)\toci\tOccitán\n");
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/artiga", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Raw artiga rev28602 is exact. Declaration templates are frozen bytes.
+    // POS/inflection/translation expansion is source-instantiated, not a runtime replay.
+    // Preserve original raw |}; instantiated translation table owns its matching opener.
+    const raw = "{{-an-}}\n{{Prenunziazión|/arˈti.ga/}}\n:*'''Etimolochía''': Parola prerromana frecuent eno lecsico d'as rechions que embironan o Perineu.\n\n{{-noun.fem-}}\n{{inflect.sust.fem|artig|artigu|a|artiguiella}}\n'''artiga'''\n# Terreno [[artigar|artigato]], ixo ye, que s'ha [[rancar|rancato]] u [[cremar|cremato]] la [[broza|broza]] e dimpués s'ha [[aladrar|aladrato]] ta poner-lo de cautibo.\n{{-trans-}} \n* {{ca}}: {{trans|ca|artiga}} \n* {{es}}: {{trans|es|artiga}}\n* {{en}}: {{trans|en|slash-and-burn}}\n* {{fr}}: {{trans|fr|brûlis}}\n* {{oc}}: {{trans|oc|artiga}}\n|}\n===Bariant dialeutal===\n*[[xartica]]\n*[[artica]]\n\n{{-ca-}}\n{{-noun-}}\n'''artiga'''\n# [[artica]]\n\n{{-es-}}\n{{-noun-}}\n'''artiga'''\n# [[artica]]\n\n{{-oc-}}\n{{-noun-}}\n'''artiga'''\n# [[artica]]";
+    const expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Aragon.svg|40px]] '''''[[Wiktionary:Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div>=\n__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en aragonés]]\n:*Prenunciación: /arˈti.ga/ (AFI)\n:*'''Etimolochía''': Parola prerromana frecuent eno lecsico d'as rechions que embironan o Perineu.\n\n==Sustantivo femenín==\n{|\n| artiga || artigas\n|}\n'''artiga'''\n# Terreno [[artigar|artigato]], ixo ye, que s'ha [[rancar|rancato]] u [[cremar|cremato]] la [[broza|broza]] e dimpués s'ha [[aladrar|aladrato]] ta poner-lo de cautibo.\n==Traduccions==\n{|\n| \n* ca: <span lang=\"ca\">[[artiga]]</span> \n* es: <span lang=\"es\">[[artiga]]</span>\n* en: <span lang=\"en\">[[slash-and-burn]]</span>\n* fr: <span lang=\"fr\">[[brûlis]]</span>\n* oc: <span lang=\"oc\">[[artiga]]</span>\n|}\n===Bariant dialeutal===\n*[[xartica]]\n*[[artica]]\n\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Catalonia.svg|40px]] '''''[[Wiktionary:Catalán|Catalán]]''''' <small>- ''Català''</small></div>=\n__NOTOC__\n__NOEDITSECTION__\n[[Category:Parabras en catalán]]\n==Sustantivo==\n'''artiga'''\n# [[artica]]\n\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Lang-es.gif|40px]] '''''[[espanyol|Espanyol]]''''' <small>- ''Español''</small></div>=\n__NOTOC__\n__NOEDITSECTION__\n\n[[Category:Parabras en español]]\n==Sustantivo==\n'''artiga'''\n# [[artica]]\n\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Occitania.svg|40px]] '''''[[Wiktionary:Occitán|Occitán]]''''' <small>- ''Occitan''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en oczitán]]\n==Sustantivo==\n'''artiga'''\n# [[artica]]";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "artiga", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    const headings = [_][]const u8{ "aragonés", "catalán", "espanyol", "occitano" };
+    const expected_codes = [_][]const u8{ "an", "ca", "es", "oc" };
+    for (headings, 0..) |heading, which| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename(heading, &filename) }));
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(expected_codes[which], metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("artiga")).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var definitions: usize = 0;
+        var native_links: usize = 0;
+        var foreign_links: usize = 0;
+        var native_body = false;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| {
+            if (block.kind != .definition) continue;
+            definitions += 1;
+            for (block.spans) |span| {
+                if (std.mem.indexOf(u8, span.text, "Terreno ") != null) native_body = true;
+                for ([_][]const u8{ "artigar", "rancar", "cremar", "broza", "aladrar" }) |target|
+                    if (std.mem.eql(u8, span.target, target)) { native_links += 1; };
+                if (std.mem.eql(u8, span.target, "artica")) foreign_links += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(which == 0, native_body);
+        try std.testing.expectEqual(@as(usize, if (which == 0) 5 else 0), native_links);
+        try std.testing.expectEqual(@as(usize, if (which == 0) 0 else 1), foreign_links);
+    }
+    // A registered POS-shaped ISO code still cannot turn an uncorroborated
+    // hyphen template into a language boundary. No generic trust expansion.
+    try registry.addTsv("adj\tAdioukrou\tadj\n");
+    const negative_codes = languageCodes(&registry, &namespaces);
+    const negative_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/pos", .{tmp.sub_path});
+    var negative = try encoder.blob_builder.Writer.init(std.testing.io, a, negative_root);
+    defer negative.deinit();
+    negative.language_codes = negative_codes;
+    try negative.addExpandedPage(a, .{ .id = 0, .kind = .language }, "pos-control", "=Adjective=\n# preserved lexical control\n", "{{-adj-}}\n# preserved lexical control\n", null);
+    const negative_stats = try negative.finish(negative_codes);
+    try std.testing.expectEqual(@as(usize, 1), negative_stats.language_records);
+    var negative_filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    var negative_mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ negative_root, "languages", encoder.blob_catalog.languageBlobFilename("Unclassified", &negative_filename) }));
+    defer negative_mapped.deinit();
+    const negative_blob = try encoder.blob_format.inspect(negative_mapped.bytes);
+    try std.testing.expectEqualStrings("", (try negative_blob.languageMetadata()).code);
 }

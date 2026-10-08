@@ -276,6 +276,7 @@ const fixture = "# wikidict-namespace-registry-v1\n# wiki\tdewiktionary\n# dump-
     "828\tModul\tModule\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\tMÓD\n";
 
 test "edition namespace aliases and title identity" {
+    _ = magic_words; // Keep the captured parser registry tests in this existing artifact.
     var registry = try Registry.init(std.testing.allocator, fixture);
     defer registry.deinit();
     try std.testing.expectEqual(@as(i32, 828), registry.byName("mód").?.id);

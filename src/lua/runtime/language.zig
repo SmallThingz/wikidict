@@ -1168,7 +1168,7 @@ fn displayLanguage(runtime: *rt.Context, args: []const Value, index: usize) !?[]
     if (args[index] != .string) return error.StringExpected;
     return try std.ascii.allocLowerString(runtime.allocator, args[index].string);
 }
-fn languageNameMissing(code: []const u8, display: ?[]const u8, scope: []const u8) void {
+pub fn languageNameMissing(code: []const u8, display: ?[]const u8, scope: []const u8) void {
     const shown = display orelse "<autonym>";
     rt.work_stats.logLine("warning: language name snapshot missing: language={s} display={s} scope={s}\n", .{
         code[0..@min(code.len, 128)], shown[0..@min(shown.len, 128)], scope,

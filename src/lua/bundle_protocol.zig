@@ -7,7 +7,7 @@ pub const max_path_bytes: usize = 4096;
 pub const max_title_bytes: usize = 4096;
 const request_version: u8 = 2;
 const request_header_len: usize = 1 + 8 + 8 + 4 * 4;
-const success_header_len: usize = 1 + 4 * 2;
+const success_header_len: usize = 1 + 4 * 2 + 1;
 const error_header_len: usize = 1 + 4 * 3;
 
 pub const Request = struct {
@@ -22,6 +22,7 @@ pub const Request = struct {
 pub const SuccessReply = struct {
     output: []const u8,
     display_title: []const u8,
+    unsupported_parser_function: bool = false,
 };
 
 pub const ErrorReply = struct {
@@ -111,7 +112,7 @@ pub fn decodeRequest(bytes: []const u8) !Request {
     return request;
 }
 
-pub fn writeSuccess(w: *std.Io.Writer, output: []const u8, display_title: []const u8) !void {
+pub fn writeSuccess(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool) !void {
     if (output.len > max_source_bytes or display_title.len > max_display_title_bytes) return error.FrameTooLarge;
     const payload_len = try checkedFramePayload(&.{ success_header_len, output.len, display_title.len });
     var outer: [4]u8 = undefined;
@@ -120,6 +121,7 @@ pub fn writeSuccess(w: *std.Io.Writer, output: []const u8, display_title: []cons
     header[0] = 0;
     try putU32(header[1..5], output.len);
     try putU32(header[5..9], display_title.len);
+    header[9] = @intFromBool(unsupported_parser_function);
     try w.writeAll(&outer);
     try w.writeAll(&header);
     try w.writeAll(output);
@@ -160,7 +162,10 @@ pub fn decodeReply(bytes: []const u8) !Reply {
         const output_len = try takeU32(bytes, &cursor);
         const display_title_len = try takeU32(bytes, &cursor);
         if (output_len > max_source_bytes or display_title_len > max_display_title_bytes) return error.InvalidFrame;
+        const diagnostic = (try take(bytes, &cursor, 1))[0];
+        if (diagnostic > 1) return error.InvalidFrame;
         const success: SuccessReply = .{
+            .unsupported_parser_function = diagnostic == 1,
             .output = try take(bytes, &cursor, output_len),
             .display_title = try take(bytes, &cursor, display_title_len),
         };
@@ -204,9 +209,10 @@ test "binary bundle request round trips without copying fields" {
 test "binary bundle replies preserve output and errors" {
     var success: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer success.deinit();
-    try writeSuccess(&success.writer, "expanded {{literal}}", "''display''");
+    try writeSuccess(&success.writer, "expanded {{literal}}", "''display''", true);
     const success_bytes = success.written();
     const success_reply = try decodeReply(success_bytes[4..]);
+    try std.testing.expect(success_reply.output.unsupported_parser_function);
     try std.testing.expectEqualStrings("expanded {{literal}}", success_reply.output.output);
     try std.testing.expectEqualStrings("''display''", success_reply.output.display_title);
 
@@ -242,4 +248,16 @@ test "binary bundle protocol rejects malformed framing" {
     try writeError(&error_bytes.writer, "expand", "Failure", "detail");
     const error_payload = error_bytes.written()[4..];
     try std.testing.expectError(error.InvalidFrame, decodeReply(error_payload[0 .. error_payload.len - 1]));
+}
+
+test "bundle success diagnostics reject unknown bits and truncated flags" {
+    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer bytes.deinit();
+    try writeSuccess(&bytes.writer, "body", "", false);
+    try std.testing.expect(!(try decodeReply(bytes.written()[4..])).output.unsupported_parser_function);
+    const bad = try std.testing.allocator.dupe(u8, bytes.written()[4..]);
+    defer std.testing.allocator.free(bad);
+    bad[9] = 2;
+    try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
+    try std.testing.expectError(error.InvalidFrame, decodeReply(bad[0..9]));
 }

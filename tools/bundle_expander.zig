@@ -8,6 +8,7 @@ const expansion_deadline = @import("expansion_deadline.zig");
 pub const Expansion = struct {
     source: []const u8,
     display_title: ?[]const u8 = null,
+    unsupported_parser_function: bool = false,
 };
 
 pub const Failure = protocol.ErrorReply;
@@ -243,6 +244,7 @@ pub const Worker = struct {
         switch (reply) {
             .output => |success| return .{
                 .source = success.output,
+                .unsupported_parser_function = success.unsupported_parser_function,
                 .display_title = if (success.display_title.len == 0) null else success.display_title,
             },
             .skip => return null,

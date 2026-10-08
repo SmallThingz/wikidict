@@ -512,6 +512,35 @@ fn resolveLinkedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLangua
 // The Arabic declaration form links the words "in language" before the
 // language itself. Require the whole declaration, rather than treating any
 // language link inside an arbitrary heading as attribution evidence.
+// Orthographic matching is confined to the complete Arabic declaration.
+// Original source bytes remain the renderer's input; never normalize lemmas.
+fn arabicDeclarationToken(value: []const u8, scratch: []u8) ?[]const u8 {
+    var i: usize = 0;
+    var n: usize = 0;
+    while (i < value.len) {
+        if (i + 1 < value.len and value[i] == 0xd9) {
+            const next = value[i + 1];
+            if ((next >= 0x8b and next <= 0x92) or next == 0xb0) {
+                i += 2;
+                continue;
+            }
+            if (next == 0xb1) {
+                if (n + 2 > scratch.len) return null;
+                scratch[n] = 0xd8;
+                scratch[n + 1] = 0xa7;
+                n += 2;
+                i += 2;
+                continue;
+            }
+        }
+        if (n == scratch.len) return null;
+        scratch[n] = value[i];
+        n += 1;
+        i += 1;
+    }
+    return scratch[0..n];
+}
+
 fn resolveLinkedDeclaration(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
     const namespaces = codes.namespace_catalog orelse return null;
     if (!std.mem.eql(u8, namespaces.content_language, "ar")) return null;
@@ -521,11 +550,31 @@ fn resolveLinkedDeclaration(codes: LanguageCodes, value: []const u8) ?ResolvedLa
         const close = std.mem.indexOf(u8, rest, "]]") orelse return null;
         const body = rest[2..close];
         const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
-        if (!std.mem.eql(u8, body[0..pipe], target) or std.mem.indexOfAny(u8, body, "[]{}<>") != null) return null;
+        var token_buffer: [256]u8 = undefined;
+        const token = arabicDeclarationToken(body[0..pipe], &token_buffer) orelse return null;
+        if (!std.mem.eql(u8, token, target)) return null;
+        if (std.mem.indexOfAny(u8, body, "[]{}<>") != null or (pipe < body.len and std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null)) return null;
         rest = std.mem.trimStart(u8, rest[close + 2 ..], " \t");
     }
     if (!std.mem.endsWith(u8, rest, ":")) return null;
-    return resolveLinkedHeading(codes, std.mem.trimEnd(u8, rest[0 .. rest.len - 1], " \t"));
+    const final_link = std.mem.trimEnd(u8, rest[0 .. rest.len - 1], " \t");
+    if (!std.mem.startsWith(u8, final_link, "[[") or !std.mem.endsWith(u8, final_link, "]]")) return null;
+    const body = final_link[2 .. final_link.len - 2];
+    if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null) return null;
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+    if (pipe < body.len and std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null) return null;
+    var target_buffer: [256]u8 = undefined;
+    var label_buffer: [256]u8 = undefined;
+    var raw_target = std.mem.trim(u8, body[0..pipe], " \t");
+    if (std.mem.startsWith(u8, raw_target, ":")) raw_target = std.mem.trim(u8, raw_target[1..], " \t");
+    const target = arabicDeclarationToken(raw_target, &target_buffer) orelse return null;
+    const target_language = codes.resolveStrong(target) orelse codes.resolveTrusted(target);
+    const label_language = if (pipe < body.len) blk: {
+        const label = arabicDeclarationToken(std.mem.trim(u8, body[pipe + 1 ..], " \t"), &label_buffer) orelse return null;
+        break :blk codes.resolveStrong(label) orelse codes.resolveTrusted(label);
+    } else null;
+    if (target_language != null and label_language != null and !std.mem.eql(u8, target_language.?.code, label_language.?.code)) return null;
+    return target_language orelse label_language;
 }
 
 // Language templates can append invisible category links inside a heading.
@@ -810,12 +859,12 @@ fn groupIndex(groups: []PageLanguageGroup, language: ResolvedLanguage) ?usize {
     return null;
 }
 
-// The captured AF =nb=/=nn= declarations display a Norwegian umbrella
-// link but explicitly retain their own ISO code in the visible label. Only
-// this proven umbrella relationship can override a raw/rendered disagreement.
-fn corroboratedNorwegianDeclaration(raw: language_source.Section, rendered: language_source.Section, raw_code: []const u8, rendered_code: []const u8) bool {
-    if (!std.mem.eql(u8, rendered_code, "no") or
-        !(std.mem.eql(u8, raw_code, "nb") or std.mem.eql(u8, raw_code, "nn"))) return false;
+// An exact equals declaration and its expanded heading independently repeat
+// the registered canonical code. Display names can collide across languages;
+// neither arbitrary raw text nor a hyphen/POS marker supplies this evidence.
+fn corroboratedEqualsDeclaration(codes: LanguageCodes, raw: language_source.Section, rendered: language_source.Section, raw_code: []const u8, rendered_code: []const u8) bool {
+    const canonical = codes.resolve(raw_code) orelse return false;
+    if (!std.mem.eql(u8, canonical.code, raw_code) or raw.hyphen_marker) return false;
     const first_line = std.mem.trim(u8, raw.source[0..(std.mem.indexOfScalar(u8, raw.source, '\n') orelse raw.source.len)], " \t\r");
     if (!std.mem.startsWith(u8, first_line, "{{") or !std.mem.endsWith(u8, first_line, "}}")) return false;
     const marker_body = std.mem.trim(u8, first_line[2 .. first_line.len - 2], " \t");
@@ -827,12 +876,15 @@ fn corroboratedNorwegianDeclaration(raw: language_source.Section, rendered: lang
     if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null) return false;
     const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return false;
     if (std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null) return false;
+    const target_language = codes.resolve(std.mem.trim(u8, body[0..pipe], " \t")) orelse return false;
+    if (!std.mem.eql(u8, target_language.code, rendered_code)) return false;
     const label = std.mem.trim(u8, body[pipe + 1 ..], " \t");
     if (label.len < raw_code.len + 3 or label[label.len - 1] != ')') return false;
     const open = label.len - raw_code.len - 2;
     return label[open] == '(' and open > 0 and std.ascii.isWhitespace(label[open - 1]) and
         std.mem.eql(u8, label[open + 1 .. label.len - 1], raw_code);
 }
+
 
 fn processMain(
     page_allocator: std.mem.Allocator,
@@ -956,7 +1008,7 @@ fn processMain(
         if (raw_aligned) resolved = resolveSection(codes, raw_sections.items[index]);
         if (resolved) |raw_language| if (boundaryLanguage(codes, section)) |rendered_language| {
             if (!std.mem.eql(u8, raw_language.code, rendered_language.code) and
-                !corroboratedNorwegianDeclaration(raw_sections.items[index], section, raw_language.code, rendered_language.code))
+                !corroboratedEqualsDeclaration(codes, raw_sections.items[index], section, raw_language.code, rendered_language.code))
             {
                 resolved = null;
                 fallbacks.unresolved_language_heading = true;
@@ -1229,6 +1281,10 @@ pub const Writer = struct {
 
     pub fn addExpandedPage(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8) !void {
         return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, &.{});
+    }
+
+    pub fn addExpandedPageWithReasons(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8, extra_reasons: []const []const u8) !void {
+        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, extra_reasons);
     }
 
     pub fn addPageWithFallback(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks) !void {
@@ -2732,16 +2788,129 @@ test "AZ source proven English declaration retains separate lexical audio and un
 }
 
 test "equals language declarations require exact Norwegian umbrella corroboration" {
+    const Codes = struct {
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            if (std.mem.eql(u8, value, "nb") or std.mem.eql(u8, value, "nn")) return value;
+            if (std.mem.eql(u8, value, "Noors")) return "no";
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .get_fn = Codes.get };
     const nb: language_source.Section = .{ .heading = "nb", .source = "{{=nb=}}\n# body\n" };
     const nn: language_source.Section = .{ .heading = "nn", .source = "{{=nn=}}\n# body\n" };
     const bokmal: language_source.Section = .{ .heading = "[[Noors|Noors boekmaal (nb)]]", .source = "" };
     const nynorsk: language_source.Section = .{ .heading = "[[Noors|Nieu-Noors (nn)]]", .source = "" };
-    try std.testing.expect(corroboratedNorwegianDeclaration(nb, bokmal, "nb", "no"));
-    try std.testing.expect(corroboratedNorwegianDeclaration(.{ .heading = "nb", .source = "  {{ = nb = }}\n# body\n" }, bokmal, "nb", "no"));
-    try std.testing.expect(corroboratedNorwegianDeclaration(nn, nynorsk, "nn", "no"));
-    try std.testing.expect(!corroboratedNorwegianDeclaration(nb, nynorsk, "nb", "no"));
-    try std.testing.expect(!corroboratedNorwegianDeclaration(nb, bokmal, "nb", "en"));
-    try std.testing.expect(!corroboratedNorwegianDeclaration(.{ .heading = "nb", .source = "{{-nb-}}\n# body\n", .hyphen_marker = true }, bokmal, "nb", "no"));
-    try std.testing.expect(!corroboratedNorwegianDeclaration(nb, .{ .heading = "[[Noors|Noors boekmaal (nb)]] trailing", .source = "" }, "nb", "no"));
-    try std.testing.expect(!corroboratedNorwegianDeclaration(nb, .{ .heading = "[[Noors|Noors (nb)|extra]]", .source = "" }, "nb", "no"));
+    try std.testing.expect(corroboratedEqualsDeclaration(codes, nb, bokmal, "nb", "no"));
+    try std.testing.expect(corroboratedEqualsDeclaration(codes, .{ .heading = "nb", .source = "  {{ = nb = }}\n# body\n" }, bokmal, "nb", "no"));
+    try std.testing.expect(corroboratedEqualsDeclaration(codes, nn, nynorsk, "nn", "no"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, nb, nynorsk, "nb", "no"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, nb, bokmal, "nb", "en"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, .{ .heading = "nb", .source = "{{-nb-}}\n# body\n", .hyphen_marker = true }, bokmal, "nb", "no"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, nb, .{ .heading = "[[Noors|Noors boekmaal (nb)]] trailing", .source = "" }, "nb", "no"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, nb, .{ .heading = "[[Noors|Noors (nb)|extra]]", .source = "" }, "nb", "no"));
+}
+
+test "equals declarations corroborate canonical codes despite colliding display names" {
+    const Codes = struct {
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            if (std.mem.eql(u8, value, "ln") or std.mem.eql(u8, value, "Lingaals")) return "ln";
+            if (std.mem.eql(u8, value, "Ngala")) return "nud";
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .get_fn = Codes.get };
+    const raw: language_source.Section = .{ .heading = "ln", .source = "{{=ln=}}\n# Praat; Sê.\n" };
+    const rendered: language_source.Section = .{ .heading = "[[Ngala|Ngala (ln)]]", .source = "" };
+    try std.testing.expect(corroboratedEqualsDeclaration(codes, raw, rendered, "ln", "nud"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, raw, rendered, "nud", "nud"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, raw, .{ .heading = "[[Ngala|Ngala (nud)]]", .source = "" }, "ln", "nud"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, .{ .heading = "ln", .source = "{{-ln-}}\n# body\n", .hyphen_marker = true }, rendered, "ln", "nud"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, raw, .{ .heading = "[[Ngala|Ngala (ln)]] trailing", .source = "" }, "ln", "nud"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, raw, .{ .heading = "[[Ngala|Ngala (ln)|extra]]", .source = "" }, "ln", "nud"));
+    try std.testing.expect(!corroboratedEqualsDeclaration(codes, .{ .heading = "ln", .source = "{{=ln=}} trailing\n# body\n" }, rendered, "ln", "nud"));
+}
+
+test "Arabic whole linked declarations match vocalized language labels without guessing lemmas" {
+    const a = std.testing.allocator;
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "الكردية")) return .{ .code = "ku", .heading = "الكردية" };
+            if (std.mem.eql(u8, value, "الإنجليزية")) return .{ .code = "en", .heading = "الإنجليزية" };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .trusted_fn = Local.resolve };
+    const exact = "[[فِي]] [[لُغَة|ٱللُّغَةِ]] [[كردي|ٱلْكُرْدِيَّةِ]]:";
+    const resolved = resolveLinkedDeclaration(codes, exact).?;
+    try std.testing.expectEqualStrings("ku", resolved.code);
+    try std.testing.expectEqualStrings("الكردية", resolved.heading);
+    try std.testing.expectEqualStrings("ku", resolveLinkedDeclaration(codes, "[[في]] [[لغة]] [[:الكردية]]:").?.code);
+    for ([_][]const u8{
+        "[[في]] [[لغة]] [[الكردية|الإنجليزية]]:",
+        "[[في]] [[لغة]] [[كردي|مجهولة]]:",
+        "[[في]] [[لغة]] [[كردي|ٱلْكُرْدِيَّةِ|extra]]:",
+        "[[في]] [[لغة]] [[كردي|ٱلْكُرْدِيَّةِ]]: trailing",
+        "[[في]] [[لغة]] [[كردي|ٱلْكُرْدِيَّةِ]] [[الإنجليزية]]:",
+        "<nowiki>[[في]] [[لغة]] [[الكردية]]:</nowiki>",
+        "aal",
+        "اَلْمَعَانِي",
+    }) |negative| try std.testing.expect(resolveLinkedDeclaration(codes, negative) == null);
+    var tiny: [1]u8 = undefined;
+    try std.testing.expect(arabicDeclarationToken("الكردية", &tiny) == null);
+}
+
+test "unsupported parser reason retains normal raw ownership and alias body" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/unsupported", .{tmp.sub_path});
+    var writer = try Writer.init(io, a, root);
+    defer writer.deinit();
+    const codes = TestLanguages.codes();
+    writer.language_codes = codes;
+    const reasons: []const []const u8 = &.{ "unsupported_parser_function", "unsupported_parser_function" };
+    try writer.namespace_coverage.input(a, 0, "", .language, true);
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "word", "== Hallo ([[:Template:Sprache]]) ==\n# [[retained]] <nowiki>{{#unknown:x}}</nowiki>\n", "== Hallo ({{Sprache|Deutsch}}) ==\n# [[retained]] {{#unknown:x}}\n", null, reasons);
+    try writer.namespace_coverage.outcome(0, .fallback);
+    const alias: blobs.alias_codec.Record = .{ .source_namespace = 0, .source_kind = .language, .source_title = "alias", .source_key = "alias", .xml_target = "word", .target_title = "word", .target_namespace = null, .target_kind = null, .target_key = "", .fragment = "", .presentation = "" };
+    try writer.namespace_coverage.input(a, 0, "", .language, true);
+    try writer.addAliasExpanded(a, alias, "Tail [[retained]] <nowiki>{{#unknown:x}}</nowiki>", null, .{}, reasons);
+    writer.stats.pages_seen = 2;
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.fallback_pages);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.alias_records);
+    const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    var count: usize = 0;
+    var lines = std.mem.tokenizeScalar(u8, report, '\n');
+    while (lines.next()) |line| {
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        defer parsed.deinit();
+        const actual = parsed.value.object.get("reasons").?.array.items;
+        var reason_count: usize = 0;
+        for (actual) |reason| if (std.mem.eql(u8, reason.string, "unsupported_parser_function")) { reason_count += 1; };
+        try std.testing.expectEqual(@as(usize, 1), reason_count);
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
+    var english = try mmapPath(io, try languageBlobPathAlloc(a, root, "Deutsch"));
+    defer english.deinit();
+    try std.testing.expectEqualStrings("de", (try (try blob_format.inspect(english.bytes)).languageMetadata()).code);
+    try std.testing.expect(std.mem.indexOf(u8, english.bytes, "retained") != null);
+    try std.testing.expect(std.mem.indexOf(u8, english.bytes, "{{#unknown:x}}") != null);
+    var aliases = try mmapPath(io, try std.fs.path.join(a, &.{ root, "aliases.wikblb" }));
+    defer aliases.deinit();
+    const view = try blob_format.inspect(aliases.bytes);
+    var rows = view.iterator();
+    const decoded = try blobs.alias_codec.decode((try rows.next()).?.payload);
+    try std.testing.expect(std.mem.indexOf(u8, decoded.presentation, "Tail") != null);
+    try std.testing.expect(std.mem.indexOf(u8, decoded.presentation, "{{#unknown:x}}") != null);
 }

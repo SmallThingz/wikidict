@@ -94,8 +94,8 @@ def affinity_worker_budget():
     if (soft==resource.RLIM_INFINITY or hard==resource.RLIM_INFINITY or
             not 0 < soft <= hard <= MAX_BUILD_MEMORY):
         raise ContainmentUnavailable('Affinity admission requires finite watchdog address-space limits of at most 8 GiB')
-    if os.getpriority(os.PRIO_PROCESS,0)<15:
-        raise ContainmentUnavailable('Affinity admission requires watchdog nice priority of at least 15')
+    if not 0 <= os.getpriority(os.PRIO_PROCESS,0) <= 19:
+        raise ContainmentUnavailable('Affinity admission requires watchdog nice priority from 0 through 19')
     address_space_budget=soft
     if CHILD_CGROUP in os.environ:
         try:group_limit=child_memory_limit_bytes()
@@ -278,6 +278,9 @@ def auxiliary_capture_helper(name, path):
         return prepare_date_numbering
     if name=='language-names':
         record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
+        if isinstance(record,dict) and record.get('schema')=='wikidict.language-names-autonym-capture.v1':
+            import prepare_language_names_autonyms
+            return prepare_language_names_autonyms
         if isinstance(record,dict) and record.get('schema')=='wikidict.language-names-translate-capture.v1':
             import prepare_language_names_translate
             return prepare_language_names_translate
@@ -293,8 +296,8 @@ def auxiliary_capture_helper(name, path):
         import prepare_behavior_switches
         return prepare_behavior_switches
     if name=='magic-words':
-        import prepare_magic_words_int
-        return prepare_magic_words_int
+        import prepare_magic_words_language
+        return prepare_magic_words_language
     if name in ('wikibase-entities','wikibase-entity-terms'):
         import prepare_wikibase_entities
         return prepare_wikibase_entities
@@ -607,6 +610,8 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
     helper=auxiliary_capture_helper(names[0],snapshots[names[0]])
     if directory=='site-info' and helper.__name__!='prepare_site_info':
         raise ValueError('Preferred site-info requires its versioned capture profile')
+    if directory=='language-names-autonyms-v1' and helper.__name__!='prepare_language_names_autonyms':
+        raise ValueError('Preferred autonym names require their versioned capture profile')
     for path in snapshots.values():helper.validate_snapshot(path,edition,date)
     return snapshots
 
@@ -649,8 +654,12 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 ('language-fallbacks','interface-messages'),edition,date))
             preferred.update(discover_auxiliary_generation(root,'commons-data',
                 ('commons-data',),edition,date))
-            preferred.update(discover_auxiliary_generation(root,'language-names',
-                ('language-names',),edition,date))
+            names_generation=discover_auxiliary_generation(root,'language-names-autonyms-v1',
+                ('language-names',),edition,date)
+            if not names_generation:
+                names_generation=discover_auxiliary_generation(root,'language-names',
+                    ('language-names',),edition,date)
+            preferred.update(names_generation)
             preferred.update(discover_auxiliary_generation(root,'date-numbering',
                 ('date-numbering',),edition,date))
             preferred.update(discover_auxiliary_generation(root,'wikibase-page-links',
@@ -665,12 +674,12 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
                 if all(present):snapshots[name]=path
             snapshots.update(preferred)
-            from prepare_magic_words_int import selected_snapshot_root
+            from prepare_magic_words_language import selected_snapshot_root
             magic_root=selected_snapshot_root(root)
             if magic_root.exists() or magic_root.is_symlink():
                 if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
                 path=magic_root/'magic-words.tsv'
-                from prepare_magic_words_int import validate_snapshot
+                from prepare_magic_words_language import validate_snapshot
                 validate_snapshot(path,edition,date)
                 snapshots['magic-words']=path
         elif (downloads/edition/date/'namespace-registry.tsv').is_file():

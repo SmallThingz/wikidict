@@ -80,7 +80,7 @@ pub const Registry = struct {
                     if (self.direction_count != null) return error.DuplicateLanguageNameProfile;
                     self.direction_count = count;
                 } else {
-                    if (!codeValid(display) or !kindValid(kind) or self.profiles.count() >= 64) return error.InvalidLanguageNameSnapshot;
+                    if ((!codeValid(display) and !(std.mem.eql(u8, display, "-") and std.mem.eql(u8, kind, "single"))) or !kindValid(kind) or self.profiles.count() >= 64) return error.InvalidLanguageNameSnapshot;
                     const key = try std.fmt.allocPrint(a, "{s}\t{s}", .{ display, kind });
                     const entry = try self.profiles.getOrPut(a, key);
                     if (entry.found_existing) return error.DuplicateLanguageNameProfile;
@@ -91,7 +91,7 @@ pub const Registry = struct {
                 const kind = fields.next() orelse return error.InvalidLanguageNameSnapshot;
                 const code = fields.next() orelse return error.InvalidLanguageNameSnapshot;
                 const raw_name = fields.next() orelse return error.InvalidLanguageNameSnapshot;
-                if (fields.next() != null or !codeValid(display) or !kindValid(kind) or !codeValid(code)) return error.InvalidLanguageNameSnapshot;
+                if (fields.next() != null or (!codeValid(display) and !(std.mem.eql(u8, display, "-") and std.mem.eql(u8, kind, "single"))) or !kindValid(kind) or !codeValid(code)) return error.InvalidLanguageNameSnapshot;
                 var key_buffer: [144]u8 = undefined;
                 const key = try std.fmt.bufPrint(&key_buffer, "{s}\t{s}", .{ display, kind });
                 const profile = self.profiles.getPtr(key) orelse return error.IncompleteLanguageNameProfile;
@@ -121,7 +121,12 @@ pub const Registry = struct {
         self.arena.deinit();
     }
     fn lookupProfile(self: *const Registry, display: ?[]const u8, kind: []const u8) !Profile {
-        const language = display orelse return error.LanguageNameSnapshotMissing;
+        // The reserved stored '-' profile represents only a null/autonym request.
+        // Explicit '-' remains invalid and must never select that profile.
+        const language = if (display) |requested| blk: {
+            if (std.mem.eql(u8, requested, "-")) return error.LanguageNameSnapshotMissing;
+            break :blk requested;
+        } else "-";
         if (language.len > 128) return error.LanguageNameSnapshotMissing;
         var key_buffer: [144]u8 = undefined;
         const key = try std.fmt.bufPrint(&key_buffer, "{s}\t{s}", .{ language, kind });
@@ -164,4 +169,22 @@ test "captured language profiles reject incomplete duplicate and foreign identit
     try std.testing.expectError(error.DuplicateLanguageNameProfile, Registry.init(std.testing.allocator, fixture ++ "C\tar\tall\t0\n", "arwiktionary", "20261001", "ar"));
     try std.testing.expectError(error.InvalidLanguageNameSnapshot, Registry.init(std.testing.allocator, fixture, "enwiktionary", "20261001", "en"));
     try std.testing.expectError(error.DuplicateLanguageDirection, Registry.init(std.testing.allocator, fixture ++ "D\tar\trtl\n", "arwiktionary", "20261001", "ar"));
+}
+
+
+test "reserved singular autonyms distinguish null explicit display and absent profiles" {
+    var registry = try Registry.init(std.testing.allocator, fixture ++
+        "C\t-\tsingle\t3\nN\t-\tsingle\ten\tEnglish\nN\t-\tsingle\tde\tDeutsch\nN\t-\tsingle\tzz\t\n", "arwiktionary", "20261001", "ar");
+    defer registry.deinit();
+    try std.testing.expectEqualStrings("Deutsch", try registry.name("de", null));
+    try std.testing.expectEqualStrings("", try registry.name("zz", null));
+    try std.testing.expectEqualStrings("", try registry.name("unknown", null));
+    try std.testing.expectEqualStrings("الألمانية السويسرية", try registry.name("als", "ar"));
+    try std.testing.expectError(error.LanguageNameSnapshotMissing, registry.name("en", "-"));
+    try std.testing.expectError(error.LanguageNameSnapshotMissing, registry.name("en", "fr"));
+    try std.testing.expectError(error.LanguageNameSnapshotMissing, registry.names(null, .all));
+    var old = try Registry.init(std.testing.allocator, fixture, "arwiktionary", "20261001", "ar");
+    defer old.deinit();
+    try std.testing.expectError(error.LanguageNameSnapshotMissing, old.name("en", null));
+    try std.testing.expectError(error.InvalidLanguageNameSnapshot, Registry.init(std.testing.allocator, fixture ++ "C\t-\tall\t0\n", "arwiktionary", "20261001", "ar"));
 }

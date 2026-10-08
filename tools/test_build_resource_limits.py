@@ -518,5 +518,49 @@ class ResourceLimitsTest(unittest.TestCase):
                 limits.supervise_watchdog(argv=['-c','raise SystemExit(99)'],memory_limit_bytes=64*1024**2,address_space_limit_bytes=value)
 
 
+    def test_watchdog_child_nice_preserves_default_and_absolute_targets(self):
+        for requested,inherited,expected in [(None,0,15),(None,15,19),(None,19,19),(0,0,0),(15,0,15),(15,15,15),(19,15,19)]:
+            with self.subTest(requested=requested,inherited=inherited):
+                self.assertEqual(expected,limits._watchdog_child_nice(requested,inherited))
+        with self.assertRaises(limits.ContainmentUnavailable):
+            limits._watchdog_child_nice(0,15)
+
+    def test_watchdog_child_nice_rejects_invalid_requests_before_launch(self):
+        for value in [-1,20,True,False,0.0,15.0,'0']:
+            with self.subTest(value=value),patch.object(limits.subprocess,'Popen') as launch:
+                with self.assertRaises(limits.ContainmentUnavailable):
+                    limits.supervise_watchdog(argv=['-c','raise SystemExit(99)'],child_nice=value)
+                launch.assert_not_called()
+        with patch.object(limits.os,'getpriority',return_value=15),patch.object(limits.subprocess,'Popen') as launch:
+            with self.assertRaises(limits.ContainmentUnavailable):
+                limits.supervise_watchdog(argv=['-c','raise SystemExit(99)'],child_nice=0)
+            launch.assert_not_called()
+
+    def test_watchdog_reports_actual_default_child_priority_without_weakening_limits(self):
+        inherited=os.getpriority(os.PRIO_PROCESS,0)
+        expected=min(19,inherited+15)
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path=Path(tmp)/'watchdog.json'
+            code='import os,resource,build_resource_limits as l; assert l.inside_watchdog(); assert os.getpriority(os.PRIO_PROCESS,0)=='+str(expected)+'; assert resource.getrlimit(resource.RLIMIT_AS)[0]==128*1024**2'
+            status=limits.supervise_watchdog(argv=['-c',code],report_path=report_path,wall_seconds=60,memory_limit_bytes=64*1024**2,address_space_limit_bytes=128*1024**2,max_tasks=4)
+            self.assertEqual(status,0)
+            report=json.loads(report_path.read_text())
+            self.assertIsNone(report['requested_child_nice'])
+            self.assertEqual(expected,report['child_nice'])
+            self.assertEqual(64*1024**2,report['memory_limit_bytes'])
+            self.assertLessEqual(report['peak_pss_bytes'],64*1024**2)
+
+    def test_watchdog_absolute_child_priority_retains_inherited_priority(self):
+        inherited=os.getpriority(os.PRIO_PROCESS,0)
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path=Path(tmp)/'watchdog.json'
+            code='import os,build_resource_limits as l; assert l.inside_watchdog(); assert os.getpriority(os.PRIO_PROCESS,0)=='+str(inherited)
+            status=limits.supervise_watchdog(argv=['-c',code],child_nice=inherited,report_path=report_path,wall_seconds=60,memory_limit_bytes=64*1024**2,address_space_limit_bytes=128*1024**2,max_tasks=4)
+            self.assertEqual(status,0)
+            report=json.loads(report_path.read_text())
+            self.assertEqual(inherited,report['requested_child_nice'])
+            self.assertEqual(inherited,report['child_nice'])
+
+
 if __name__ == '__main__':
     unittest.main()
