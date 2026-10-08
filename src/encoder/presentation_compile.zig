@@ -2229,7 +2229,10 @@ pub const Renderer = struct {
                     try rows.appendSlice(self.a, table.rows);
                 }
             } else if (current != null) {
-                if (cell_source.items.len != 0) try cell_source.append(self.a, '\n');
+                // A marker after an empty cell opener starts a block list;
+                // the same marker on the opener's own line stays inline text.
+                if (cell_source.items.len != 0 or (line.len != 0 and std.mem.indexOfScalar(u8, "#*:;", line[0]) != null))
+                    try cell_source.append(self.a, '\n');
                 try cell_source.appendSlice(self.a, line);
             }
         }
@@ -2254,11 +2257,27 @@ pub const Renderer = struct {
     }
 
     fn cellSpans(self: *Renderer, source: []const u8) Error![]const Span {
-        if (std.mem.indexOf(u8, source, "{|") == null) return self.parseSpans(source, .{});
+        var has_list = false;
+        var pos: usize = 0;
+        while (pos < source.len) {
+            const end = syntax.logicalEnd(source, pos);
+            if (pos != 0 and end != pos and std.mem.indexOfScalar(u8, "#*:;", source[pos]) != null) has_list = true;
+            pos = if (end < source.len) end + 1 else end;
+        }
+        if (!has_list and std.mem.indexOf(u8, source, "{|") == null) return self.parseSpans(source, .{});
         const parent = self.spans;
         self.spans = .empty;
         defer self.spans = parent;
-        try self.blocksInline(try self.renderBody(source), .{});
+        var body = source;
+        // The first line belongs to the cell opener, so its marker is literal
+        // even when later lines contain a list or nested table.
+        if (source.len != 0 and std.mem.indexOfScalar(u8, "#*:;", source[0]) != null) {
+            const end = syntax.logicalEnd(source, 0);
+            try self.spans.appendSlice(self.a, try self.parseSpans(source[0..end], .{}));
+            body = source[if (end < source.len) end + 1 else end ..];
+            if (body.len != 0) try self.lineBreak(.{});
+        }
+        try self.blocksInline(try self.renderBody(body), .{});
         return self.spans.toOwnedSlice(self.a);
     }
 
@@ -2285,6 +2304,16 @@ pub const Renderer = struct {
     fn blocksInline(self: *Renderer, blocks: []const Block, style: Style) Error!void {
         for (blocks, 0..) |b, index| {
             if (index != 0) try self.lineBreak(style);
+            // List labels live on blocks, while DPR2 table cells hold spans.
+            // Continuation paths (ending in ':') carry no repeated label.
+            if (b.list_path.len != 0) switch (b.list_path[b.list_path.len - 1]) {
+                '*' => try self.text("• ", style),
+                '#' => if (b.number.len != 0) {
+                    try self.text(b.number, style);
+                    try self.text(". ", style);
+                },
+                else => {},
+            };
             try self.spans.appendSlice(self.a, b.spans);
             if (b.table) |table| {
                 try self.spans.appendSlice(self.a, table.caption);
@@ -4349,4 +4378,70 @@ test "heading control suffix renders headings through exact profile and preserve
         try std.testing.expectEqual(Kind.paragraph, retained[0].kind);
         try std.testing.expect(std.mem.startsWith(u8, try flattened(a, retained[0].spans), "=English="));
     }
+}
+
+
+test "ordinary table cells preserve list labels links and literal markers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{| class=\"wikitable\"\n|\n* [[first]]\n* second\n|-\n|\n# [[first]]\n## [[second]]\n# third\n|-\n| * literal\n|-\n| <nowiki>\n* protected\n</nowiki>\n|}\n");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const rows = blocks[0].table.?.rows;
+    try std.testing.expectEqual(@as(usize, 4), rows.len);
+    try std.testing.expectEqualStrings("• first\n• second", try flattened(a, rows[0].cells[0].spans));
+    try std.testing.expectEqualStrings("1. first\n1.1. second\n2. third", try flattened(a, rows[1].cells[0].spans));
+    try std.testing.expectEqualStrings("* literal", try flattened(a, rows[2].cells[0].spans));
+    const protected = try flattened(a, rows[3].cells[0].spans);
+    try std.testing.expect(std.mem.indexOf(u8, protected, "* protected") != null);
+    try std.testing.expect(std.mem.indexOf(u8, protected, "• ") == null);
+    var links: usize = 0;
+    for (rows[1].cells[0].spans) |span| if (span.kind == .link) {
+        try std.testing.expectEqualStrings(if (links == 0) "first" else "second", span.target);
+        links += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), links);
+    const mixed = try r.renderBody("{|\n| * [[literal]]\n* [[listed]]\n|}\n");
+    try std.testing.expectEqualStrings("* literal\n• listed", try flattened(a, mixed[0].table.?.rows[0].cells[0].spans));
+}
+
+test "span-only block flattening labels lists without repeating continuations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("* first\n*: detail\n** [[nested]]\n# numbered\nplain");
+    try r.blocksInline(blocks, .{});
+    try std.testing.expectEqualStrings("• first\ndetail\n• nested\n1. numbered\nplain", try flattened(a, r.spans.items));
+    const wrapped = try r.parseSpans("<li>outer\n{|\n|\n* inner\n|}\n</li>", .{});
+    try std.testing.expectEqualStrings("• outer\n• inner\n", try flattened(a, wrapped));
+}
+
+test "mixed apostrophe transitions preserve component styles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const Case = struct { source: []const u8, a_bold: bool, a_italic: bool, b_bold: bool, b_italic: bool };
+    for ([_]Case{
+        .{ .source = "''a'''''b'''", .a_bold = false, .a_italic = true, .b_bold = true, .b_italic = false },
+        .{ .source = "'''a'''''b''", .a_bold = true, .a_italic = false, .b_bold = false, .b_italic = true },
+        .{ .source = "'''''a'''b''", .a_bold = true, .a_italic = true, .b_bold = false, .b_italic = true },
+    }) |case| {
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings("ab", try flattened(a, spans));
+        try std.testing.expectEqual(@as(usize, 2), spans.len);
+        try std.testing.expectEqualStrings("a", spans[0].text);
+        try std.testing.expectEqualStrings("b", spans[1].text);
+        try std.testing.expectEqual(case.a_bold, spans[0].flags.bold);
+        try std.testing.expectEqual(case.a_italic, spans[0].flags.italic);
+        try std.testing.expectEqual(case.b_bold, spans[1].flags.bold);
+        try std.testing.expectEqual(case.b_italic, spans[1].flags.italic);
+    }
+    const protected = try r.parseSpans("<nowiki>''a'''''b'''</nowiki>", .{});
+    try std.testing.expectEqualStrings("''a'''''b'''", try flattened(a, protected));
+    for (protected) |span| try std.testing.expect(!span.flags.bold and !span.flags.italic);
+    const malformed = try r.parseSpans("''unclosed", .{});
+    try std.testing.expectEqualStrings("''unclosed", try flattened(a, malformed));
 }

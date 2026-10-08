@@ -454,7 +454,23 @@ fn valueConfirmsLanguage(codes: LanguageCodes, value_source: []const u8, wanted:
 fn sourceConfirmsLanguage(codes: LanguageCodes, source: []const u8, wanted: []const u8) bool {
     const limit = @min(source.len, 4096);
     var search: usize = 0;
-    while (std.mem.indexOfPos(u8, source[0..limit], search, "{{")) |open| {
+    const bounded = source[0..limit];
+    while (search < bounded.len) {
+        const open = if (std.mem.indexOfAny(u8, bounded[search..], "<{")) |relative| search + relative else break;
+        if (bounded[open] == '<') {
+            if (blobs.wikitext_syntax.protectedEnd(bounded, open)) |end| {
+                search = end;
+                continue;
+            }
+            if (blobs.wikitext_syntax.tagAt(bounded, open)) |tag| {
+                search = tag.end;
+                continue;
+            }
+        }
+        if (!std.mem.startsWith(u8, bounded[open..], "{{")) {
+            search = open + 1;
+            continue;
+        }
         const close = std.mem.indexOfPos(u8, source[0..limit], open + 2, "}}") orelse break;
         const body = source[open + 2 .. close];
         if (std.mem.indexOf(u8, body, "{{") == null) {
@@ -2913,4 +2929,23 @@ test "unsupported parser reason retains normal raw ownership and alias body" {
     const decoded = try blobs.alias_codec.decode((try rows.next()).?.payload);
     try std.testing.expect(std.mem.indexOf(u8, decoded.presentation, "Tail") != null);
     try std.testing.expect(std.mem.indexOf(u8, decoded.presentation, "{{#unknown:x}}") != null);
+}
+
+test "protected template arguments cannot corroborate an untrusted language alias" {
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Example alias") or std.mem.eql(u8, value, "en"))
+                return .{ .code = "en", .heading = "English" };
+            return null;
+        }
+        fn untrusted(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage { return null; }
+    };
+    const codes: LanguageCodes = .{ .resolve_fn = Local.resolve, .strong_fn = Local.untrusted, .trusted_fn = Local.untrusted };
+    inline for (.{ "<nowiki>{{x|lang=en}}</nowiki>", "<!--{{x|lang=en}}-->", "<pre>{{x|lang=en}}</pre>", "<span title=\"{{x|lang=en}}\">plain</span>" }) |source| {
+        try std.testing.expect(!sourceConfirmsLanguage(codes, source, "en"));
+        try std.testing.expect(resolveSection(codes, .{ .heading = "Example alias", .source = source }) == null);
+    }
+    const active = "<nowiki>{{x|lang=fr}}</nowiki>{{x|lang=en}}";
+    try std.testing.expect(sourceConfirmsLanguage(codes, active, "en"));
+    try std.testing.expectEqualStrings("en", resolveSection(codes, .{ .heading = "Example alias", .source = active }).?.code);
 }

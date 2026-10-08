@@ -182,9 +182,12 @@ def decode_reply(payload):
     if not payload or payload[0] not in (0, 1):
         raise ValueError('Invalid native reply')
     count = 2 if payload[0] == 0 else 3
-    header = 1 + 4 * count
+    header = 10 if payload[0] == 0 else 13
     if len(payload) < header:
         raise ValueError('Truncated native reply')
+    diagnostic = payload[9] if payload[0] == 0 else 0
+    if diagnostic not in (0, 1):
+        raise ValueError('Invalid native expansion diagnostic')
     lengths = struct.unpack_from('<' + 'I' * count, payload, 1)
     if header + sum(lengths) != len(payload):
         raise ValueError('Invalid native reply fields')
@@ -194,6 +197,8 @@ def decode_reply(payload):
         pos += length
     if payload[0] == 1:
         raise RuntimeError(': '.join(fields))
+    if diagnostic:
+        raise RuntimeError('Native expansion unverified: unsupported parser function')
     return fields[0], fields[1]
 
 

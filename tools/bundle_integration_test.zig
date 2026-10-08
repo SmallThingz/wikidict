@@ -697,7 +697,7 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
         \\    elif mode=='timeout': time.sleep(5);break
         \\    else:
         \\        output=b'==English==\n# recovered\n'; title=b'Recovered' if mode=='output' else b''
-        \\        reply=b'\x00'+struct.pack('<II',len(output),len(title))+output+title
+        \\        reply=b'\x00'+struct.pack('<II',len(output),len(title))+b'\x00'+output+title
         \\    sys.stdout.buffer.write(struct.pack('<I',len(reply))+reply);sys.stdout.buffer.flush()
         \\    if mode!='output-initial' and mode!='semantic-initial' and attempt==1: break
         \\

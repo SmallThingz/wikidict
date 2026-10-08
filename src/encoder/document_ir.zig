@@ -836,8 +836,9 @@ fn emphasisMarkerAt(input: []const u8, start: usize, bold: bool, italic: bool) ?
         5 => .{ .len = 5, .bold = true, .italic = true },
         else => return null,
     };
-    const closes_active = (!marker.bold or bold) and (!marker.italic or italic);
-    if (!closes_active and !hasMatchingEmphasis(input, start + marker.len, marker.len)) return null;
+    const opens_bold = marker.bold and !bold;
+    const opens_italic = marker.italic and !italic;
+    if ((opens_bold or opens_italic) and !hasMatchingEmphasis(input, start + marker.len, opens_bold, opens_italic)) return null;
     return marker;
 }
 
@@ -848,11 +849,25 @@ fn quoteRunLength(input: []const u8, start: usize) usize {
     return end - start;
 }
 
-fn hasMatchingEmphasis(input: []const u8, start: usize, marker_len: usize) bool {
+fn hasMatchingEmphasis(input: []const u8, start: usize, opens_bold: bool, opens_italic: bool) bool {
+    var needs_bold = opens_bold;
+    var needs_italic = opens_italic;
     var cursor = start;
     while (cursor < input.len) {
+        if (input[cursor] == '<') {
+            if (syntax.protectedEnd(input, cursor)) |end| {
+                cursor = end;
+                continue;
+            }
+            if (syntax.tagAt(input, cursor)) |tag| {
+                cursor = tag.end;
+                continue;
+            }
+        }
         const run = quoteRunLength(input, cursor);
-        if (run == marker_len) return true;
+        if (run == 3 or run == 5) needs_bold = false;
+        if (run == 2 or run == 5) needs_italic = false;
+        if (!needs_bold and !needs_italic) return true;
         cursor += if (run == 0) 1 else run;
     }
     return false;

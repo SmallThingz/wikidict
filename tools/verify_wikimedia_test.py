@@ -19,11 +19,15 @@ class VerifyWikimediaTest(unittest.TestCase):
 
     def test_protocol_lengths_errors_and_utf8(self):
         source, title = 'école'.encode(), '字'.encode()
-        payload = b'\0' + struct.pack('<II', len(source), len(title)) + source + title
+        payload = b'\0' + struct.pack('<II', len(source), len(title)) + b'\0' + source + title
         self.assertEqual(decode_reply(payload), ('école', '字'))
-        for bad in (b'', b'\2x', payload[:-1], payload + b'x'):
+        for bad in (b'', b'\2x', payload[:-1], payload + b'x',
+                    payload[:9], payload[:9] + payload[10:],
+                    payload[:9] + b'\2' + payload[10:]):
             with self.assertRaises(ValueError):
                 decode_reply(bad)
+        with self.assertRaisesRegex(RuntimeError, 'Native expansion unverified'):
+            decode_reply(payload[:9] + b'\1' + payload[10:])
         with self.assertRaisesRegex(ValueError, 'noncanonical'):
             decode_reply(b'\2')
         with self.assertRaisesRegex(RuntimeError, 'expand: bad: detail'):
