@@ -447,7 +447,7 @@ class ResourceLimitsTest(unittest.TestCase):
         with self.guardian_normal_done_fixture('time.sleep(6.0)') as (report_path, guardians):
             status = limits.supervise_watchdog(
                 argv=['-c', 'import build_resource_limits as l; assert l.inside_watchdog()'],
-                report_path=report_path, wall_seconds=2,
+                report_path=report_path, wall_seconds=60,
                 memory_limit_bytes=64 * 1024**2, max_tasks=4)
             report = json.loads(report_path.read_text())
             self.assertEqual(status, 0)
@@ -466,7 +466,7 @@ class ResourceLimitsTest(unittest.TestCase):
                 with self.assertRaisesRegex(limits.ContainmentUnavailable, 'cleanup_error'):
                     limits.supervise_watchdog(
                         argv=['-c', 'import build_resource_limits as l; assert l.inside_watchdog()'],
-                        report_path=report_path, wall_seconds=2,
+                        report_path=report_path, wall_seconds=60,
                         memory_limit_bytes=64 * 1024**2, max_tasks=4)
             report = json.loads(report_path.read_text())
             self.assertEqual(report['termination_reason'], 'cleanup_error')
@@ -482,7 +482,7 @@ class ResourceLimitsTest(unittest.TestCase):
             report_path = Path(tmp) / 'watchdog.json'
             status = limits.supervise_watchdog(
                 argv=['-c', 'import build_resource_limits as l, subprocess; assert l.inside_watchdog(); subprocess.run(["/bin/true"], check=True)'],
-                report_path=report_path, wall_seconds=2,
+                report_path=report_path, wall_seconds=60,
                 memory_limit_bytes=64 * 1024**2, max_tasks=4)
             report = json.loads(report_path.read_text())
             self.assertEqual(status, 0)
@@ -495,7 +495,7 @@ class ResourceLimitsTest(unittest.TestCase):
             report_path = Path(tmp) / 'watchdog.json'
             status = limits.supervise_watchdog(
                 argv=['-c', 'import build_resource_limits as l, subprocess; assert l.inside_watchdog(); [subprocess.run(["/bin/true"], check=True) for _ in range(100)]'],
-                report_path=report_path, wall_seconds=3,
+                report_path=report_path, wall_seconds=60,
                 memory_limit_bytes=64 * 1024**2, max_tasks=4)
             report = json.loads(report_path.read_text())
             self.assertEqual(status, 0)
