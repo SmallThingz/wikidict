@@ -24,6 +24,14 @@ MAX_RESPONSE = 2 * 1024 * 1024
 MAX_ROWS = 20000
 MAX_PREVIOUS_BYTES = 64 * 1024 * 1024
 CORE = '18344669b5e5bd97a08905f87d4317edc7411396'
+LEGACY_GENERATOR_SHA256 = 'ee28f69fab94d1e24e4ba17914ea024a77054206477da93aaf7e5534d4c65419'
+SOURCE_PATHS = {
+    'ApiQueryLanguageinfo.php': 'includes/Api/ApiQueryLanguageinfo.php',
+    'ApiQuerySiteinfo.php': 'includes/Api/ApiQuerySiteinfo.php',
+    'LanguageNameUtils.php': 'includes/Language/LanguageNameUtils.php',
+    'LanguageCode.php': 'includes/Language/LanguageCode.php',
+    'Names.php': 'includes/Languages/Data/Names.php',
+}
 SOURCE_PINS = {
     'ApiQueryLanguageinfo.php': '3f37142b0d676c68b1cac50fd510ac039ff52de186388b92083428e445fe3e96',
     'ApiQuerySiteinfo.php': 'a318da6f2cae4275a15595a93aa324bcbeb433381b29bd356fc577f72d5c2ced',
@@ -91,7 +99,7 @@ def parse_response(data, wiki, content, core=CORE):
         raise ValueError('Unsuccessful autonym response')
     q = data.get('query')
     general = q.get('general') if isinstance(q, dict) else None
-    if core != CORE or not isinstance(general, dict) or (
+    if not isinstance(core, str) or not re.fullmatch('[0-9a-f]{40}', core) or not isinstance(general, dict) or (
             general.get('wikiid'), general.get('lang'), general.get('git-hash')) != (wiki, content, core):
         raise ValueError('Exact API wiki/content/core identity changed')
     rows, mw_rows = q.get('languageinfo'), q.get('languages')
@@ -166,7 +174,55 @@ def render_profile(single):
 
 
 
-def accepted_receipt(root, record, receipt):
+def accepted_producer(record):
+    current = producer()
+    return (record.get('dependency_sha256') == current['dependency_sha256'] and
+            (record.get('generator_sha256') == current['generator_sha256'] or
+             record.get('generator_sha256') == LEGACY_GENERATOR_SHA256 and record.get('core', record.get('config', {}).get('core')) == CORE))
+
+
+def validate_source_contract(root, core):
+    """Authenticate the fixed five-file API contract at its observed revision."""
+    root = Path(root)
+    if not isinstance(core, str) or not re.fullmatch('[0-9a-f]{40}', core):
+        raise ValueError('Invalid observed core revision')
+    aliases = source_aliases(root)
+    comparison_path = root / (PREFIX + 'source-comparison.json')
+    if not comparison_path.exists():
+        if core != CORE:
+            raise ValueError('Observed core requires exact source comparison')
+        return aliases
+    comparison = evidence.decode(regular(comparison_path, MAX_MANIFEST))
+    if (comparison.get('schema') != 'wikidict.observed-core-source-comparison.v1' or
+            comparison.get('outcome') != 'completed-source-comparison' or
+            comparison.get('core') != core or comparison.get('all_five_byte_identical') is not True or
+            comparison.get('source_requests') != len(SOURCE_PINS) or comparison.get('api_requests') != 0 or
+            not isinstance(comparison.get('previous_core'), str) or
+            not re.fullmatch('[0-9a-f]{40}', comparison['previous_core'])):
+        raise ValueError('Source comparison identity differs')
+    rows = comparison.get('files')
+    if not isinstance(rows, list) or len(rows) != len(SOURCE_PINS):
+        raise ValueError('Incomplete compared source set')
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError('Invalid compared source row')
+        name = row.get('url', '').rsplit('/', 1)[-1]
+        if name in seen or name not in SOURCE_PINS:
+            raise ValueError('Duplicate or unreviewed compared source')
+        raw = regular(root / (PREFIX + 'source-' + name))
+        expected_url = 'https://raw.githubusercontent.com/wikimedia/mediawiki/' + core + '/' + SOURCE_PATHS[name]
+        if (row.get('url') != expected_url or row.get('status') != 200 or row.get('core') != core or
+                row.get('bytes') != len(raw) or row.get('sha256') != SOURCE_PINS[name] or
+                row.get('previous_sha256') != SOURCE_PINS[name] or row.get('byte_identical_to_previous') is not True):
+            raise ValueError('Changed compared source')
+        seen.add(name)
+    if seen != set(SOURCE_PINS):
+        raise ValueError('Incomplete compared source set')
+    return aliases
+
+
+def accepted_receipt(root, record, receipt, core=CORE):
     if receipt.get('accepted') is True:
         if set(record) != {'request', 'accepted_receipt'}:
             raise ValueError('Unexpected normal observation record')
@@ -178,56 +234,69 @@ def accepted_receipt(root, record, receipt):
     receipt_raw = regular(root / safe_name(record['accepted_receipt']), MAX_MANIFEST)
     comparison_raw = regular(root / (PREFIX + 'source-comparison.json'), MAX_MANIFEST)
     comparison = evidence.decode(comparison_raw)
-    if proof != dict(schema='wikidict.autonym-old-core-revalidation.v1',
-                     original_receipt_sha256=evidence.digest(receipt_raw),
-                     source_comparison_sha256=evidence.digest(comparison_raw),
-                     previous_core='0d3b507d19ae860ed8a1d22c73fa4bc5abf8dfcc', core=CORE,
-                     original_receipt_accepted=False):
+    if proof.get('schema') == 'wikidict.autonym-old-core-revalidation.v1':
+        expected = dict(schema='wikidict.autonym-old-core-revalidation.v1',
+                        original_receipt_sha256=evidence.digest(receipt_raw),
+                        source_comparison_sha256=evidence.digest(comparison_raw),
+                        previous_core='0d3b507d19ae860ed8a1d22c73fa4bc5abf8dfcc', core=CORE,
+                        original_receipt_accepted=False)
+        if core != CORE:
+            raise ValueError('Legacy revalidation core differs')
+    else:
+        requested_raw = regular(root / (PREFIX + 'original-requested.json'), MAX_MANIFEST)
+        requested = evidence.decode(requested_raw)
+        expected = dict(schema='wikidict.autonym-core-revalidation.v2',
+                        original_receipt_sha256=evidence.digest(receipt_raw),
+                        original_requested_sha256=evidence.digest(requested_raw),
+                        source_comparison_sha256=evidence.digest(comparison_raw),
+                        previous_core=requested.get('core'), core=core, original_receipt_accepted=False)
+    if proof != expected or comparison.get('previous_core') != proof['previous_core']:
         raise ValueError('Invalid retained-core revalidation')
-    if comparison.get('core') != CORE or comparison.get('previous_core') != proof['previous_core']:
-        raise ValueError('Source comparison identity differs')
-    rows = comparison.get('files')
-    if not isinstance(rows, list) or len(rows) != len(SOURCE_PINS):
-        raise ValueError('Incomplete compared source set')
-    seen = set()
-    for row in rows:
-        name = row.get('url', '').rsplit('/', 1)[-1]
-        if name in seen or name not in SOURCE_PINS or row.get('status') != 200 or row.get('core') != CORE or row.get('sha256') != SOURCE_PINS[name] or row.get('previous_sha256') != SOURCE_PINS[name] or '/'+CORE+'/' not in row.get('url',''):
-            raise ValueError('Changed compared source')
-        seen.add(name)
+    validate_source_contract(root, core)
 
 
 def adopt_observation(wiki, date, saved, sources, comparison, output):
-    """Keep a rejected old-core receipt unchanged; record separate offline evidence."""
+    """Keep the failed request/receipt/body unchanged and revalidate offline."""
     saved, sources, output = map(Path, (saved, sources, output))
     output.mkdir(parents=True, exist_ok=False)
-    namespace = regular(saved / 'language-names.namespace-registry.tsv')
+    prefixes = [prefix for prefix in ('language-names.', PREFIX) if (saved / (prefix + 'namespace-registry.tsv')).exists()]
+    if len(prefixes) != 1:
+        raise ValueError('Ambiguous retained observation layout')
+    prefix = prefixes[0]
+    namespace = regular(saved / (prefix + 'namespace-registry.tsv'))
     content = legacy.namespace_identity(namespace, wiki, date)
-    config = dict(wiki=wiki, date=date, content_language=content, core=CORE,
+    requested_raw = regular(saved / (prefix + 'requested.json'), MAX_MANIFEST)
+    requested = evidence.decode(requested_raw)
+    comparison_raw = regular(comparison, MAX_MANIFEST)
+    compared = evidence.decode(comparison_raw)
+    core = compared.get('core')
+    config = dict(wiki=wiki, date=date, content_language=content, core=core,
                   namespace_registry_sha256=evidence.digest(namespace))
+    if any(requested.get(k) != v for k, v in config.items() if k != 'core') or requested.get('core') != compared.get('previous_core'):
+        raise ValueError('Original requested identity differs')
     evidence.document(output / (PREFIX + 'requested.json'), config)
+    evidence.put(output / (PREFIX + 'original-requested.json'), requested_raw)
     evidence.put(output / (PREFIX + 'namespace-registry.tsv'), namespace)
     for name, expected in SOURCE_PINS.items():
         raw = regular(sources / name)
         if evidence.digest(raw) != expected:
             raise ValueError('Unreviewed adoption source')
         evidence.put(output / (PREFIX + 'source-' + name), raw)
-    comparison_raw = regular(comparison, MAX_MANIFEST)
     evidence.put(output / (PREFIX + 'source-comparison.json'), comparison_raw)
-    request_name = 'language-names.0001.request.json'
-    receipt_name = 'language-names.0001-01.receipt.json'
+    validate_source_contract(output, core)
+    request_name = prefix + '0001.request.json'
+    receipt_name = prefix + '0001-01.receipt.json'
     receipt_raw = regular(saved / receipt_name, MAX_MANIFEST)
     receipt = evidence.decode(receipt_raw)
-    if receipt.get('request') != request_name or receipt.get('response') != 'language-names.0001-01.raw.json':
+    if receipt.get('request') != request_name or receipt.get('response') != prefix + '0001-01.raw.json':
         raise ValueError('Unexpected retained observation layout')
     for name in (request_name, receipt_name, receipt['response']):
         evidence.put(output / name, regular(saved / name))
     revalidation_name = PREFIX + 'offline-revalidation.json'
-    evidence.document(output / revalidation_name, dict(schema='wikidict.autonym-old-core-revalidation.v1',
-        original_receipt_sha256=evidence.digest(receipt_raw),
+    evidence.document(output / revalidation_name, dict(schema='wikidict.autonym-core-revalidation.v2',
+        original_receipt_sha256=evidence.digest(receipt_raw), original_requested_sha256=evidence.digest(requested_raw),
         source_comparison_sha256=evidence.digest(comparison_raw),
-        previous_core='0d3b507d19ae860ed8a1d22c73fa4bc5abf8dfcc', core=CORE,
-        original_receipt_accepted=False))
+        previous_core=requested['core'], core=core, original_receipt_accepted=False))
     observation = dict(schema=OBSERVATION_SCHEMA, config=config, requests=[
         dict(request=request_name, accepted_receipt=receipt_name, offline_revalidation=revalidation_name)],
         retrieved_utc=receipt['ended_utc'], offline_derived_utc=evidence.utc(), **producer())
@@ -241,8 +310,9 @@ def adopt_observation(wiki, date, saved, sources, comparison, output):
 
 def replay_observation(root, observation):
     config = observation['config']
-    if set(config) != {'wiki', 'date', 'content_language', 'core', 'namespace_registry_sha256'} or config['core'] != CORE:
+    if set(config) != {'wiki', 'date', 'content_language', 'core', 'namespace_registry_sha256'}:
         raise ValueError('Invalid autonym configuration')
+    aliases = validate_source_contract(root, config['core'])
     namespace = regular(Path(root) / (PREFIX + 'namespace-registry.tsv'))
     if legacy.namespace_identity(namespace, config['wiki'], config['date']) != config['content_language'] or evidence.digest(namespace) != config['namespace_registry_sha256']:
         raise ValueError('Autonym namespace identity differs')
@@ -256,7 +326,7 @@ def replay_observation(root, observation):
         if request['query'] != query(continuation) or request['url'] != evidence.wiktionary_api(config['wiki']) + '?' + urllib.parse.urlencode(sorted(request['query'].items())):
             raise ValueError('Unrequested autonym query')
         raw = regular(Path(root) / safe_name(receipt['response']), MAX_RESPONSE)
-        accepted_receipt(root, record, receipt)
+        accepted_receipt(root, record, receipt, config['core'])
         if receipt.get('status') != 200 or receipt.get('request') != record['request'] or receipt.get('response_bytes') != len(raw) or receipt.get('response_sha256') != evidence.digest(raw):
             raise ValueError('Unaccepted or changed autonym HTTP evidence')
         part, current, _, continuation = parse_response(evidence.decode(raw), config['wiki'], config['content_language'], config['core'])
@@ -272,7 +342,7 @@ def replay_observation(root, observation):
             raise ValueError('Excess autonym responses')
     if continuation:
         raise ValueError('Incomplete continuation')
-    return names, finish(names, mw, *source_aliases(root))
+    return names, finish(names, mw, *aliases)
 
 
 def capture_observation(wiki, date, namespace_path, sources, output, wall_seconds=90, transport=None, sleep=time.sleep):
@@ -282,7 +352,10 @@ def capture_observation(wiki, date, namespace_path, sources, output, wall_second
     namespace = regular(namespace_path)
     content = legacy.namespace_identity(namespace, wiki, date)
     output = Path(output); output.mkdir(parents=True, exist_ok=False)
-    config = dict(wiki=wiki, date=date, content_language=content, core=CORE,
+    comparison_path = Path(sources) / 'comparison.json'
+    comparison_raw = regular(comparison_path, MAX_MANIFEST) if comparison_path.exists() else None
+    core = evidence.decode(comparison_raw).get('core') if comparison_raw is not None else CORE
+    config = dict(wiki=wiki, date=date, content_language=content, core=core,
                   namespace_registry_sha256=evidence.digest(namespace))
     evidence.document(output / (PREFIX + 'requested.json'), config)
     evidence.put(output / (PREFIX + 'namespace-registry.tsv'), namespace)
@@ -291,12 +364,15 @@ def capture_observation(wiki, date, namespace_path, sources, output, wall_second
         if evidence.digest(raw) != expected:
             raise ValueError('Unreviewed capture source')
         evidence.put(output / (PREFIX + 'source-' + name), raw)
+    if comparison_raw is not None:
+        evidence.put(output / (PREFIX + 'source-comparison.json'), comparison_raw)
+    validate_source_contract(output, core)
     # Isolated existing transport/retry implementation; no shared-module mutation.
     path = Path(legacy.__file__)
     spec = importlib.util.spec_from_file_location('_autonym_transport', path)
     runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
     runner.PREFIX = PREFIX
-    runner.parse_response = lambda data, wiki, content, include_dir: parse_response(data, wiki, content)
+    runner.parse_response = lambda data, wiki, content, include_dir: parse_response(data, wiki, content, core)
     deadline = time.monotonic() + wall_seconds
     records, continuation, seen = [], {}, set()
     try:
@@ -365,7 +441,7 @@ def augment(previous, observation_root, output):
     old_manifest = evidence.decode(regular(previous / (KIND + '.manifest.json'), MAX_MANIFEST))
     old = previous_helper(old_manifest.get('schema')).validate_snapshot(previous / (KIND + '.tsv'))
     observation = evidence.decode(regular(observation_root / (PREFIX + 'observation.json'), MAX_MANIFEST))
-    if observation.get('schema') != OBSERVATION_SCHEMA or any(observation.get(k) != v for k, v in producer().items()):
+    if observation.get('schema') != OBSERVATION_SCHEMA or not accepted_producer(observation):
         raise ValueError('Unreviewed observation producer')
     names, single = replay_observation(observation_root, observation)
     config = observation['config']
@@ -407,7 +483,7 @@ def validate_snapshot(path, wiki=None, date=None, require_complete=True):
         raise ValueError('Unsafe autonym capture')
     raw = regular(root / (KIND + '.manifest.json'), MAX_MANIFEST)
     manifest = evidence.decode(raw)
-    if (manifest.get('schema') != SCHEMA or manifest.get('kind') != KIND or manifest.get('header_version') != 1 or manifest.get('native_resolution_proven') is not False or manifest.get('corpus_query_closure_proven') is not False or manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('observation') != PREFIX + 'observation.json' or any(manifest.get(k) != v for k, v in producer().items())):
+    if (manifest.get('schema') != SCHEMA or manifest.get('kind') != KIND or manifest.get('header_version') != 1 or manifest.get('native_resolution_proven') is not False or manifest.get('corpus_query_closure_proven') is not False or manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('observation') != PREFIX + 'observation.json' or not accepted_producer(manifest)):
         raise ValueError('Unreviewed autonym capture')
     if (wiki is not None and manifest['wiki'] != wiki or date is not None and manifest['date'] != date):
         raise ValueError('Autonym edition/date mismatch')
@@ -417,7 +493,7 @@ def validate_snapshot(path, wiki=None, date=None, require_complete=True):
         raise ValueError('Autonym artifact inventory differs')
     old_tsv, old = replay_previous(root, manifest)
     observation = evidence.decode(regular(root / manifest['observation'], MAX_MANIFEST))
-    if observation.get('schema') != OBSERVATION_SCHEMA or any(observation.get(k) != v for k, v in producer().items()):
+    if observation.get('schema') != OBSERVATION_SCHEMA or not accepted_producer(observation):
         raise ValueError('Unreviewed observation')
     config = observation['config']
     if any(manifest.get(k) != v for k, v in config.items()) or any(old.get(k) != config[k] for k in ('wiki', 'date', 'content_language')):

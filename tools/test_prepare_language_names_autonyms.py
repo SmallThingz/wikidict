@@ -33,6 +33,20 @@ class AutonymCaptureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 m.parse_response(data, 'arwiktionary', 'ar')
 
+        second = '1' * 40
+        data = response(); data['query']['general']['git-hash'] = second
+        self.assertEqual(m.parse_response(data, 'arwiktionary', 'ar', core=second)[0]['en'], 'English')
+        with self.assertRaises(ValueError):
+            m.parse_response(data, 'arwiktionary', 'ar', core='2' * 40)
+        with self.assertRaises(ValueError):
+            m.parse_response(data, 'arwiktionary', 'ar', core='not-a-revision')
+        current = m.producer()
+        legacy = dict(current, generator_sha256=m.LEGACY_GENERATOR_SHA256, core=m.CORE)
+        self.assertTrue(m.accepted_producer(legacy))
+        self.assertFalse(m.accepted_producer(dict(legacy, core=second)))
+        self.assertFalse(m.accepted_producer(dict(legacy, dependency_sha256={})))
+        self.assertFalse(m.accepted_producer(dict(legacy, generator_sha256='0' * 64)))
+
     def test_warning_and_duplicate_mw_code_refused(self):
         data = response(); data['warnings'] = {}
         with self.assertRaises(ValueError):
@@ -111,6 +125,62 @@ class AutonymCaptureTests(unittest.TestCase):
                 self.assertEqual(observed['observed_codes'], 3)
                 self.assertEqual(observed['observed_empty'], 1)
                 self.assertEqual(m.replay_observation(root / 'out', observed)[1]['ar'], 'العربية')
+                second = '1' * 40
+                second_data = response(); second_data['query']['general']['git-hash'] = second
+                second_raw = json.dumps(second_data, ensure_ascii=False).encode()
+                comparison = dict(schema='wikidict.observed-core-source-comparison.v1',
+                    outcome='completed-source-comparison', core=second, previous_core=m.CORE,
+                    all_five_byte_identical=True, source_requests=len(m.SOURCE_PINS), api_requests=0,
+                    files=[dict(url='https://raw.githubusercontent.com/wikimedia/mediawiki/' + second + '/' + m.SOURCE_PATHS[name],
+                        core=second, status=200, bytes=(sources/name).stat().st_size, sha256=pin,
+                        previous_sha256=pin, byte_identical_to_previous=True) for name,pin in m.SOURCE_PINS.items()])
+                # A mismatched live observation remains genuinely rejected; offline adoption must retain it.
+                saved = root/'rejected'
+                with self.assertRaises(Exception):
+                    m.capture_observation('arwiktionary', '20261001', namespace, sources, saved,
+                        transport=lambda url,timeout:(200,{},second_raw), sleep=lambda delay:None)
+                receipt_name=m.PREFIX+'0001-01.receipt.json'
+                original_receipt=(saved/receipt_name).read_bytes()
+                self.assertIs(json.loads(original_receipt)['accepted'], False)
+                (sources/'comparison.json').write_text(json.dumps(comparison))
+                fresh=m.capture_observation('arwiktionary','20261001',namespace,sources,root/'second',
+                    transport=lambda url,timeout:(200,{},second_raw))
+                self.assertEqual(fresh['config']['core'],second)
+                with mock.patch.object(m.evidence,'get_response',side_effect=AssertionError('offline replay called network')):
+                    self.assertEqual(m.replay_observation(root/'second',fresh)[1]['ar'],'العربية')
+                for layout in (m.PREFIX,'language-names.'):
+                    retained=root/('saved-'+layout);retained.mkdir()
+                    for item in saved.iterdir():
+                        if item.name.startswith(m.PREFIX):
+                            name=layout+item.name[len(m.PREFIX):]
+                            value=item.read_bytes()
+                            if item.name==receipt_name:
+                                doc=json.loads(value);doc['request']=layout+'0001.request.json';doc['response']=layout+'0001-01.raw.json'
+                                value=json.dumps(doc).encode()
+                            (retained/name).write_bytes(value)
+                    before_receipt=(retained/(layout+'0001-01.receipt.json')).read_bytes()
+                    before_request=(retained/(layout+'requested.json')).read_bytes()
+                    adopted_root=root/('adopted-'+layout)
+                    adopted=m.adopt_observation('arwiktionary','20261001',retained,sources,sources/'comparison.json',adopted_root)
+                    self.assertEqual((adopted_root/(layout+'0001-01.receipt.json')).read_bytes(),before_receipt)
+                    self.assertIs(json.loads(before_receipt)['accepted'],False)
+                    self.assertEqual((adopted_root/(m.PREFIX+'original-requested.json')).read_bytes(),before_request)
+                    self.assertEqual((adopted_root/(layout+'0001-01.raw.json')).read_bytes(),second_raw)
+                    self.assertEqual(m.replay_observation(adopted_root,adopted)[1]['en'],'English')
+                proof=root/'second'/(m.PREFIX+'source-comparison.json')
+                proof.unlink()
+                with self.assertRaises(ValueError):m.replay_observation(root/'second',fresh)
+                mutations=[]
+                bad=copy.deepcopy(comparison);bad['files'].pop();mutations.append(bad)
+                bad=copy.deepcopy(comparison);bad['files'][1]=copy.deepcopy(bad['files'][0]);mutations.append(bad)
+                for field,value in [('sha256','0'*64),('previous_sha256','0'*64),('url','https://invalid/Names.php'),('status',404)]:
+                    bad=copy.deepcopy(comparison);bad['files'][0][field]=value;mutations.append(bad)
+                for bad in mutations:
+                    proof.write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError):m.replay_observation(root/'second',fresh)
+                proof.write_text(json.dumps(comparison))
+                source_file=root/'second'/(m.PREFIX+'source-Names.php');source_file.write_bytes(names_source+b' ')
+                with self.assertRaises(ValueError):m.replay_observation(root/'second',fresh)
                 record = observed['requests'][0]
                 receipt_path = root / 'out' / record['accepted_receipt']
                 receipt = json.loads(receipt_path.read_text())
