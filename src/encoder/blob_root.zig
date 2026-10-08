@@ -7,6 +7,7 @@ pub const presentation_types = @import("presentation_types.zig");
 pub const presentation_codec = @import("presentation_codec.zig");
 
 test "blob encoder root imports data-only presentation codecs" {
+    _ = document_ir;
     _ = blob_format;
     _ = blob_catalog;
     _ = alias_codec;
