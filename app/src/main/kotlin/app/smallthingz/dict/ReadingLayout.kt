@@ -80,6 +80,13 @@ internal fun blockPrefix(block: Block): String = when (block.kind) {
 /** Shared nesting indentation for tables and ordinary text/list blocks. */
 internal fun blockIndentDp(block: Block): Int = (block.depth - 1).coerceIn(0, 8) * 7
 
+/** Same-entry section links match compiled headings, with the usual underscore spelling. */
+internal fun sectionScrollKey(entry: Entry, target: String): String? {
+    if (!target.startsWith("#") || target.length == 1) return null
+    val heading = target.substring(1).replace('_', ' ')
+    return entry.readingRows.firstOrNull { it.heading?.title == heading }?.key
+}
+
 /** Match only actual compiled reference identities; no source or fragment interpretation. */
 internal fun referenceScrollIndex(entry: Entry, target: String, folded: Set<String>): Int? {
     val referenceIndex = entry.references.indexOfFirst { target == "#reference-${it.number}" }

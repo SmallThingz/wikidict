@@ -95,10 +95,16 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         val visibleRows = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
         val readerLink: (String) -> Unit = { target ->
             val referenceIndex = referenceScrollIndex(entry, target, folded.filterValues { it }.keys)
+            val sectionKey = if (referenceIndex == null) sectionScrollKey(entry, target) else null
             if (referenceIndex != null) {
                 folded["references"] = false
                 // Apply the destination in the next remeasure, after References opens.
                 scroll.requestScrollToItem(referenceIndex)
+            } else if (sectionKey != null) {
+                folded[sectionKey] = false
+                val sectionIndex = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
+                    .indexOfFirst { it.key == sectionKey }
+                scroll.requestScrollToItem(sectionIndex + 1 + if (entry.preamble.isNotEmpty()) 1 else 0)
             } else onLink(target)
         }
         val currentLink = rememberUpdatedState(readerLink)

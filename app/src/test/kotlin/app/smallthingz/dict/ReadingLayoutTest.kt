@@ -72,6 +72,20 @@ class ReadingLayoutTest {
         assertEquals("Actual dictionary meaning", entry.clue())
     }
 
+    @Test fun sameEntryFragmentsMatchCompiledHeadingsWithoutChangingWordLinks() {
+        val entry = Entry("cat", emptyList(), "language", "English", "en", listOf(
+            Section(3, "Noun", emptyList()),
+            Section(3, "Usage notes", listOf(Block("paragraph", 0, listOf(Span("text", "Usage body"))))),
+            Section(4, "日本語", emptyList())
+        ), emptyList())
+        assertEquals("heading-1", sectionScrollKey(entry, "#Usage_notes"))
+        assertEquals("heading-1", sectionScrollKey(entry, "#Usage notes"))
+        assertEquals("heading-2", sectionScrollKey(entry, "#日本語"))
+        listOf("cat", "cat#Usage_notes", "#", "#Missing", "#usage_notes").forEach {
+            assertNull(sectionScrollKey(entry, it))
+        }
+    }
+
     @Test fun compiledReferenceTargetsUseGlobalIdentityAndGroupedDisplayLabels() {
         val references = listOf(
             Reference(1, 1, "notes", listOf(Span("text", "Grouped note"))),
