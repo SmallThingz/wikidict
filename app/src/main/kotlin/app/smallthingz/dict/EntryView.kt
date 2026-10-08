@@ -211,7 +211,7 @@ private fun BlockView(block: Block, onLink: (String) -> Unit) {
             val prefix = blockPrefix(block)
             Row(Modifier.padding(start = blockIndentDp(block).dp)) {
                 if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                StyledText(block.spans, Modifier.weight(1f), onLink = onLink)
+                StyledText(block.spans, Modifier.weight(1f), weight = if (block.kind == "term") FontWeight.Bold else null, onLink = onLink)
             }
         }
     }
