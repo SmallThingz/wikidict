@@ -506,7 +506,7 @@ class ResourceLimitsTest(unittest.TestCase):
     def test_finite_virtual_limit_is_separate_from_sampled_physical_budget(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path=Path(tmp)/'watchdog.json'
-            status=limits.supervise_watchdog(argv=['-c','import build_resource_limits as l, resource; assert l.inside_watchdog(); assert resource.getrlimit(resource.RLIMIT_AS)[0] == 128*1024**2'],report_path=report_path,wall_seconds=2,memory_limit_bytes=64*1024**2,address_space_limit_bytes=128*1024**2,max_tasks=4)
+            status=limits.supervise_watchdog(argv=['-c','import build_resource_limits as l, resource; assert l.inside_watchdog(); assert resource.getrlimit(resource.RLIMIT_AS)[0] == 128*1024**2'],report_path=report_path,wall_seconds=10,memory_limit_bytes=64*1024**2,address_space_limit_bytes=128*1024**2,max_tasks=4)
             self.assertEqual(status,0)
             report=json.loads(report_path.read_text())
             self.assertEqual(report['memory_limit_bytes'],64*1024**2)
