@@ -570,6 +570,7 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
             inputs=(('wikibase-namespace-siteinfo.raw.json','namespace-siteinfo.raw.json'),
                     ('wikibase-namespace-capture.complete.json','capture.complete.json')) if name.startswith('wikibase-') else (
                     ('commons-namespace-registry.tsv','namespace-registry.tsv'),) if name=='commons-data' else (
+                    ('language-autonyms.namespace-registry.tsv','namespace-registry.tsv'),) if name=='language-names' and bound[0].get('schema')=='wikidict.language-names-autonym-capture.v1' else (
                     ('language-names.namespace-registry.tsv','namespace-registry.tsv'),) if name=='language-names' else (
                     ('date-numbering.namespace-registry.tsv','namespace-registry.tsv'),) if name=='date-numbering' else (
                     ('file-metadata.namespace-registry.tsv','namespace-registry.tsv'),) if name=='file-metadata' else (

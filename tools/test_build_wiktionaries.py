@@ -409,6 +409,24 @@ class ProvenanceBindingTests(unittest.TestCase):
             self.assertFalse((root/'rejected').exists())
 
     def test_preferred_capture_generations_fail_closed_and_bind_outer_namespace(self):
+        # The validated collector inventory uses its schema-specific copied namespace key.
+        for schema,key,other_key in (
+                ('wikidict.language-names-autonym-capture.v1','language-autonyms.namespace-registry.tsv','language-names.namespace-registry.tsv'),
+                ('wikidict.language-names-capture.v2','language-names.namespace-registry.tsv','language-autonyms.namespace-registry.tsv')):
+            with self.subTest(language_names_schema=schema),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);namespace=root/'namespace-registry.tsv';namespace.write_bytes(b'exact selected namespace')
+                digest=b.sha256_file(namespace);capture={'wiki':'arwiktionary','date':'20261001'}
+                path=root/'language-names.tsv';path.write_bytes(b'validated collector payload')
+                with patch.object(b,'validated_auxiliary_capture',return_value=({'schema':schema},{key:digest})):
+                    b.validate_captured_snapshot('language-names',path,capture,[],root)
+                for inventory in ({}, {other_key:digest}, {key:'0'*64}, {key:'0'*64,other_key:digest}):
+                    with self.subTest(inventory=inventory),patch.object(b,'validated_auxiliary_capture',return_value=({'schema':schema},inventory)):
+                        with self.assertRaisesRegex(ValueError,'namespace source differs'):
+                            b.validate_captured_snapshot('language-names',path,capture,[],root)
+                namespace.write_bytes(b'different selected namespace')
+                with patch.object(b,'validated_auxiliary_capture',return_value=({'schema':schema},{key:digest})):
+                    with self.assertRaisesRegex(ValueError,'namespace source differs'):
+                        b.validate_captured_snapshot('language-names',path,capture,[],root)
         for fixture,directory,names in (
                 (write_wikibase_capture_fixture,'wikibase-entities',('wikibase-entities','wikibase-entity-terms')),
                 (write_language_messages_fixture,'language-messages',('language-fallbacks','interface-messages'))):
