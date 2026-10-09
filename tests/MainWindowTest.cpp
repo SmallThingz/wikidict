@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QDialog>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -34,8 +35,17 @@
 #include <QTextFragment>
 #include <QTextTable>
 #include <QTimer>
+#include <QUrl>
 #include <QtTest>
 #include <algorithm>
+
+class ExternalUrlReceiver final : public QObject {
+    Q_OBJECT
+public:
+    QList<QUrl> opened;
+public slots:
+    void capture(const QUrl &url) { opened.append(url); }
+};
 
 class MainWindowTest final : public QObject {
     Q_OBJECT
@@ -57,10 +67,12 @@ private:
                 cursor.setPosition(fragment.position());
                 browser->setTextCursor(cursor);
                 browser->ensureCursorVisible();
-                const QPoint point = browser->cursorRect(cursor).center() + QPoint(2, 0);
-                if (browser->anchorAt(point) != href) continue;
-                QTest::mouseClick(browser->viewport(), Qt::LeftButton, Qt::NoModifier, point);
-                return true;
+                for (const int offset : {2, -2}) {
+                    const QPoint point = browser->cursorRect(cursor).center() + QPoint(offset, 0);
+                    if (browser->anchorAt(point) != href) continue;
+                    QTest::mouseClick(browser->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+                    return true;
+                }
             }
         }
         return false;
@@ -155,6 +167,49 @@ private slots:
         QCOMPARE(reopened.api_->root(), fixture_);
         QVERIFY(reopened.search_->isEnabled());
         QTRY_COMPARE(title(reopened), QStringLiteral("cat"));
+    }
+
+    void protocolRelativeExternalLinksOpenWithHttps() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const QString target = QStringLiteral("//en.wiktionary.org/w/index.php?title=%D9%82%D8%A7%D9%84%D8%A8:%D8%AD_%D8%B1_%D8%B1&action=edit");
+        const QString resolved = QStringLiteral("https:") + target;
+        const auto span = [](const QString &kind, const QString &url) {
+            return QJsonArray{QJsonObject{{QStringLiteral("kind"), kind},
+                {QStringLiteral("target"), url}, {QStringLiteral("text"), QStringLiteral("ت")}}};
+        };
+        window.reading_->setHtml(window.spansHtml(span(QStringLiteral("external_link"), target)));
+        QCOMPARE(window.reading_->toPlainText(), QStringLiteral("ت"));
+        QCOMPARE(window.reading_->document()->find(QStringLiteral("ت")).charFormat().anchorHref(), resolved);
+        ExternalUrlReceiver receiver;
+        QDesktopServices::setUrlHandler(QStringLiteral("https"), &receiver, "capture");
+        const auto restore = qScopeGuard([] { QDesktopServices::unsetUrlHandler(QStringLiteral("https")); });
+        QVERIFY(clickAnchor(window.reading_, resolved));
+        QCOMPARE(receiver.opened, QList<QUrl>{QUrl(resolved)});
+
+        for (const QString &url : {QStringLiteral("http://example.org/path?q=1&v=2"),
+                                  QStringLiteral("https://example.org/path#fragment"),
+                                  QStringLiteral("https://example.org/?q='\"<b>word</b>&next=1"),
+                                  QStringLiteral("https://example.org/?q=&quot;&next=1"),
+                                  QStringLiteral("https://例え.テスト/辞書?q=字&n=1")}) {
+            QTextDocument document;
+            document.setHtml(window.spansHtml(span(QStringLiteral("external_link"), url)));
+            QCOMPARE(document.toPlainText(), QStringLiteral("ت"));
+            QCOMPARE(QUrl(document.find(QStringLiteral("ت")).charFormat().anchorHref()), QUrl(url));
+        }
+        for (const QString &url : {QStringLiteral("//"), QStringLiteral("///path"),
+                                  QStringLiteral("//[invalid/path"), QStringLiteral("https:///path"),
+                                  QStringLiteral("javascript:alert(1)"), QStringLiteral("file:///local")}) {
+            QTextDocument document;
+            document.setHtml(window.spansHtml(span(QStringLiteral("external_link"), url)));
+            QCOMPARE(document.toPlainText(), QStringLiteral("ت"));
+            QVERIFY(document.find(QStringLiteral("ت")).charFormat().anchorHref().isEmpty());
+        }
+        QTextDocument literal;
+        literal.setHtml(window.spansHtml(span(QStringLiteral("text"), target)));
+        QVERIFY(literal.find(QStringLiteral("ت")).charFormat().anchorHref().isEmpty());
     }
 
     void cancellationKeepsLastWorkingDictionary() {

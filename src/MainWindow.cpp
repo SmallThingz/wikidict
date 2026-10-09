@@ -809,9 +809,14 @@ QString MainWindow::spansHtml(const QJsonArray &spans) const {
             const QByteArray encoded = QUrl::toPercentEncoding(span.value(QStringLiteral("target")).toString());
             text = QStringLiteral("<a href='dict:%1'>%2</a>").arg(QString::fromLatin1(encoded), text);
         } else if (kind == QStringLiteral("external_link")) {
-            const QUrl url(span.value(QStringLiteral("target")).toString());
-            if (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https"))
-                text = QStringLiteral("<a href='%1'>%2</a>").arg(url.toString(QUrl::FullyEncoded).toHtmlEscaped(), text);
+            const QString target = span.value(QStringLiteral("target")).toString();
+            QUrl url(target);
+            if (target.startsWith(QStringLiteral("//")) && url.scheme().isEmpty())
+                url.setScheme(QStringLiteral("https"));
+            if (url.isValid() && !url.host().isEmpty() &&
+                (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https")))
+                // QTextDocument decodes attribute entities only inside double quotes.
+                text = QStringLiteral("<a href=\"%1\">%2</a>").arg(url.toString(QUrl::FullyEncoded).toHtmlEscaped(), text);
         }
         if (span.value(QStringLiteral("code")).toBool()) text = QStringLiteral("<code>%1</code>").arg(text);
         if (span.value(QStringLiteral("small")).toBool()) text = QStringLiteral("<small>%1</small>").arg(text);
