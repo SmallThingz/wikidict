@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 #include "LibraryStore.hpp"
 
+#include <QAbstractTextDocumentLayout>
 #include <QApplication>
 #include <QComboBox>
 #include <QDialog>
@@ -10,6 +11,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QGlyphRun>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
@@ -33,6 +35,7 @@
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextFragment>
+#include <QTextLayout>
 #include <QTextTable>
 #include <QTimer>
 #include <QUrl>
@@ -210,6 +213,125 @@ private slots:
         QTextDocument literal;
         literal.setHtml(window.spansHtml(span(QStringLiteral("text"), target)));
         QVERIFY(literal.find(QStringLiteral("ت")).charFormat().anchorHref().isEmpty());
+    }
+
+    void typedDirectionsIsolateLinkedTextAndTrail_data() {
+        QTest::addColumn<QString>("direction");
+        QTest::addColumn<QString>("parentDirection");
+        QTest::addColumn<QString>("label");
+        QTest::addColumn<QString>("trail");
+        QTest::addColumn<QString>("tokenA");
+        QTest::addColumn<QString>("tokenB");
+        QTest::addColumn<ushort>("isolate");
+        QTest::addColumn<bool>("aBeforeB");
+        QTest::newRow("auto-arabic-in-ltr") << QStringLiteral("auto") << QStringLiteral("ltr") << QString::fromUtf8("العربية") << QStringLiteral(" XYZ") << QString::fromUtf8("العربية") << QStringLiteral("XYZ") << ushort(0x2068) << false;
+        QTest::newRow("auto-hebrew-in-ltr") << QStringLiteral("auto") << QStringLiteral("ltr") << QString::fromUtf8("אבג") << QStringLiteral(" abc") << QString::fromUtf8("אבג") << QStringLiteral("abc") << ushort(0x2068) << false;
+        QTest::newRow("rtl-arabic-in-ltr") << QStringLiteral("rtl") << QStringLiteral("ltr") << QString::fromUtf8("العربية") << QStringLiteral(" XYZ") << QString::fromUtf8("العربية") << QStringLiteral("XYZ") << ushort(0x2067) << false;
+        QTest::newRow("ltr-english-in-rtl") << QStringLiteral("ltr") << QStringLiteral("rtl") << QStringLiteral("English") << QString::fromUtf8(" אבג") << QStringLiteral("English") << QString::fromUtf8("אבג") << ushort(0x2066) << true;
+        QTest::newRow("auto-english-in-rtl") << QStringLiteral("auto") << QStringLiteral("rtl") << QStringLiteral("English") << QStringLiteral(" XYZ") << QStringLiteral("English") << QStringLiteral("XYZ") << ushort(0x2068) << true;
+        QTest::newRow("auto-neutral-in-ltr") << QStringLiteral("auto") << QStringLiteral("ltr") << QStringLiteral("123") << QStringLiteral(" 456") << QStringLiteral("123") << QStringLiteral("456") << ushort(0x2068) << true;
+        QTest::newRow("unknown-preserves-inheritance") << QStringLiteral("unknown") << QStringLiteral("ltr") << QString::fromUtf8("العربية") << QStringLiteral(" XYZ") << QString::fromUtf8("العربية") << QStringLiteral("XYZ") << ushort(0) << true;
+        QTest::newRow("empty-preserves-inheritance") << QStringLiteral("") << QStringLiteral("ltr") << QString::fromUtf8("العربية") << QStringLiteral(" XYZ") << QString::fromUtf8("العربية") << QStringLiteral("XYZ") << ushort(0) << true;
+    }
+
+    void typedDirectionsIsolateLinkedTextAndTrail() {
+        QFETCH(QString, direction);
+        QFETCH(QString, parentDirection);
+        QFETCH(QString, label);
+        QFETCH(QString, trail);
+        QFETCH(QString, tokenA);
+        QFETCH(QString, tokenB);
+        QFETCH(ushort, isolate);
+        QFETCH(bool, aBeforeB);
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const QString href = QStringLiteral("https://example.org/direction?q=1&v=2");
+        const QJsonArray spans{QJsonObject{{QStringLiteral("kind"), QStringLiteral("external_link")},
+            {QStringLiteral("target"), QStringLiteral("//example.org/direction?q=1&v=2")},
+            {QStringLiteral("text"), label}, {QStringLiteral("trail"), trail},
+            {QStringLiteral("direction"), direction}, {QStringLiteral("bold"), true},
+            {QStringLiteral("italic"), true}, {QStringLiteral("strike"), true}}};
+        const QString beforeToken = parentDirection == QStringLiteral("rtl") ? QString::fromUtf8("ראש") : QStringLiteral("LEFT");
+        const QString afterToken = parentDirection == QStringLiteral("rtl") ? QString::fromUtf8("סוף") : QStringLiteral("RIGHT");
+        const auto paragraph = [&](const QString &content) {
+            return QStringLiteral("<p dir=\"%1\">%2| %3 |%4</p>").arg(parentDirection, beforeToken, content, afterToken);
+        };
+        window.reading_->setHtml(paragraph(window.spansHtml(spans)));
+        QTextDocument *actual = window.reading_->document();
+        actual->setTextWidth(1000);
+        actual->documentLayout()->documentSize();
+
+        // Independent Unicode-isolate reference; compare shaped glyph origins,
+        // not ambiguous cursor positions at a bidi-run boundary.
+        QString expectedLink = QStringLiteral("<b><i><s><a href=\"%1\">%2</a></s></i></b>")
+            .arg(href.toHtmlEscaped(), (label + trail).toHtmlEscaped());
+        if (isolate) expectedLink = QString(QChar(isolate)) + expectedLink + QChar(0x2069);
+        QTextDocument reference;
+        reference.setDefaultFont(actual->defaultFont());
+        reference.setDefaultStyleSheet(actual->defaultStyleSheet());
+        reference.setDefaultTextOption(actual->defaultTextOption());
+        reference.setDocumentMargin(actual->documentMargin());
+        reference.setHtml(paragraph(expectedLink));
+        reference.setTextWidth(actual->textWidth());
+        reference.documentLayout()->documentSize();
+        const auto origins = [](const QTextDocument *document, const QString &token) {
+            QList<qreal> xs;
+            const QTextBlock block = document->begin();
+            const int at = block.text().indexOf(token);
+            if (at < 0 || !block.layout() || block.layout()->lineCount() != 1) return xs;
+            for (const QGlyphRun &run : block.layout()->glyphRuns(at, token.size()))
+                for (const QPointF &point : run.positions()) xs.append(point.x());
+            std::sort(xs.begin(), xs.end());
+            return xs;
+        };
+        const QList<qreal> a = origins(actual, tokenA), b = origins(actual, tokenB);
+        QVERIFY(!a.isEmpty() && !b.isEmpty());
+        QVERIFY2(aBeforeB ? a.last() < b.first() : b.last() < a.first(),
+                 "The typed span did not preserve the intended mixed-text group order.");
+        const QList<qreal> before = origins(actual, beforeToken), after = origins(actual, afterToken);
+        QVERIFY(!before.isEmpty() && !after.isEmpty());
+        QVERIFY(parentDirection == QStringLiteral("ltr") ? before.last() < after.first() : after.last() < before.first());
+        for (const QString &token : {beforeToken, tokenA, tokenB, afterToken}) {
+            const QList<qreal> got = origins(actual, token), expected = origins(&reference, token);
+            QCOMPARE(got.size(), expected.size());
+            QVERIFY(!got.isEmpty());
+            for (qsizetype i = 0; i < got.size(); ++i)
+                QVERIFY2(qAbs(got[i] - expected[i]) < 0.05, qPrintable(QStringLiteral("Glyph layout differs for %1 at %2").arg(token).arg(i)));
+        }
+        QCOMPARE(actual->toRawText(), reference.toRawText());
+        const QTextCursor linked = actual->find(label + trail);
+        QVERIFY(!linked.isNull());
+        for (int pos = linked.selectionStart(); pos < linked.selectionEnd(); ++pos) {
+            QTextCursor character(actual);
+            character.setPosition(pos);
+            character.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+            const QTextCharFormat format = character.charFormat();
+            QCOMPARE(format.anchorHref(), href);
+            QVERIFY(format.fontWeight() >= QFont::Bold);
+            QVERIFY(format.fontItalic());
+            QVERIFY(format.fontStrikeOut());
+        }
+        QVERIFY(actual->find(beforeToken).charFormat().anchorHref().isEmpty());
+        QVERIFY(actual->find(afterToken).charFormat().anchorHref().isEmpty());
+        ExternalUrlReceiver receiver;
+        QDesktopServices::setUrlHandler(QStringLiteral("https"), &receiver, "capture");
+        const auto restore = qScopeGuard([] { QDesktopServices::unsetUrlHandler(QStringLiteral("https")); });
+        QTextCursor insideTrail(actual);
+        insideTrail.setPosition(linked.selectionEnd() - 2);
+        window.reading_->setTextCursor(insideTrail);
+        window.reading_->ensureCursorVisible();
+        bool clicked = false;
+        for (const int offset : {2, -2}) {
+            const QPoint point = window.reading_->cursorRect(insideTrail).center() + QPoint(offset, 0);
+            if (window.reading_->anchorAt(point) != href) continue;
+            QTest::mouseClick(window.reading_->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+            clicked = true;
+            break;
+        }
+        QVERIFY2(clicked, "The linked trail was not clickable.");
+        QCOMPARE(receiver.opened, QList<QUrl>{QUrl(href)});
     }
 
     void cancellationKeepsLastWorkingDictionary() {

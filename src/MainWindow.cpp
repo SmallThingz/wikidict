@@ -829,6 +829,13 @@ QString MainWindow::spansHtml(const QJsonArray &spans) const {
         const QString classes = span.value(QStringLiteral("classes")).toString();
         const QString language = span.value(QStringLiteral("language")).toString();
         const QString direction = span.value(QStringLiteral("direction")).toString();
+        // QTextDocument does not isolate inline HTML direction attributes.
+        // Keep the complete styled link/text and its trail in one bidi isolate.
+        ushort isolate = 0;
+        if (direction == QStringLiteral("auto")) isolate = 0x2068; // FSI
+        else if (direction == QStringLiteral("rtl")) isolate = 0x2067; // RLI
+        else if (direction == QStringLiteral("ltr")) isolate = 0x2066; // LRI
+        if (isolate) text = QString(QChar(isolate)) + text + QChar(0x2069); // PDI
         if (!classes.isEmpty() || !language.isEmpty() || !direction.isEmpty()) {
             QString attrs;
             if (!classes.isEmpty()) attrs += QStringLiteral(" class=\"%1\"").arg(classes.toHtmlEscaped());
