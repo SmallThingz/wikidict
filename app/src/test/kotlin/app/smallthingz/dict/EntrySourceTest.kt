@@ -29,4 +29,32 @@ class EntrySourceTest {
         assertNotEquals(mediaKey(media,""),mediaKey(media,"arwiktionary-20261001"))
         assertNotEquals(mediaKey(media,""),mediaKey(media.copy(kind="audio"),""))
     }
+
+    @Test fun compiledExternalLinksResolveNetworkPathsAndPreserveHttpUrls() {
+        // Exact Navbar target from the source-backed Arabic حُرّ record.
+        val navbar = "//en.wiktionary.org/w/index.php?title=%D9%82%D8%A7%D9%84%D8%A8:%D8%AD_%D8%B1_%D8%B1&action=edit"
+        for (target in listOf(navbar, "//example.test", "//[2001:db8::1]:8443/path?q=%26#part",
+            "//例え.テスト/辞書?語=%E8%AA%9E#章", "//example.test/辞書?語=自由&x=%26#章")) {
+            assertEquals("https:$target", externalLinkUrl(Span("external_link", "ت", target = target)))
+        }
+        for (target in listOf("https://example.test/a?x=%26#part", "http://example.test:8080/path",
+            "https://例え.テスト/辞書?x=%26#章", "HTTP://EXAMPLE.TEST/path?x=%2F")) {
+            assertEquals(target, externalLinkUrl(Span("external_link", "visible", target = target)))
+        }
+    }
+
+    @Test fun compiledExternalLinksRejectMalformedNetworkPathsAndUnrelatedKinds() {
+        for (target in listOf("", "//", "///path", "//:443/path", "//exa mple.test/path", "//example.test/%", "//example.test\\path",
+            "http://", "https:///path", "http://:443/path", "https://exa mple.test/", "https://example.test/%",
+            "https://example.test:65536/", "https://example.test:bad/", "https://-invalid.test/", "https://.test/",
+            "//example.test:65536/path", "//[bad-ipv6]/",
+            "javascript:alert(1)", "data:text/html,test", "file:///tmp/file", "mailto:test@example.test", "/relative")) {
+            assertNull(target, externalLinkUrl(Span("external_link", "visible", target = target)))
+        }
+        for (kind in listOf("text", "link", "line_break", "unknown")) {
+            for (target in listOf("//example.test/path", "https://example.test/path")) {
+                assertNull(kind, externalLinkUrl(Span(kind, "visible", target = target)))
+            }
+        }
+    }
 }

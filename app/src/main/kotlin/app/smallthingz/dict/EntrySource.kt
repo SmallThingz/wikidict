@@ -31,3 +31,20 @@ internal fun attributionUrl(entry: Entry): String {
     }
     return wiki + "w/index.php?title=" + java.net.URLEncoder.encode(fullTitle,"UTF-8") + "&action=history"
 }
+
+/** Validate compiled web links, resolving network paths to HTTPS without rewriting their text. */
+internal fun externalLinkUrl(span: Span): String? {
+    if (span.kind != "external_link") return null
+    val target = if (span.target.startsWith("//")) "https:${span.target}" else span.target
+    val uri = runCatching { java.net.URI(target) }.getOrNull() ?: return null
+    if (!"http".equals(uri.scheme, ignoreCase = true) && !"https".equals(uri.scheme, ignoreCase = true)) return null
+    if (uri.rawAuthority.isNullOrBlank()) return null
+    // URL parsing does not open a connection; it also exposes Unicode DNS authorities.
+    val parsed = runCatching { uri.toURL() }.getOrNull() ?: return null
+    val host = parsed.host
+    if (host.isNullOrBlank() || parsed.port !in -1..65535) return null
+    val validHost = if (host.startsWith("[")) !uri.host.isNullOrBlank() else
+        runCatching { java.net.IDN.toASCII(host, java.net.IDN.USE_STD3_ASCII_RULES) }
+            .getOrNull()?.trimEnd('.')?.isNotEmpty() == true
+    return if (validHost) target else null
+}

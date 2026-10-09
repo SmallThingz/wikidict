@@ -300,8 +300,10 @@ private fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight
                         },
                     ), start, end)
                     if (span.kind == "link" && span.target.isNotBlank()) addLink(LinkAnnotation.Clickable(span.target, linkStyle) { (cache?.link?.value ?: currentLink.value)(span.target) }, start, end)
-                    else if (span.kind == "external_link" && (span.target.startsWith("https://") || span.target.startsWith("http://")))
-                        addLink(LinkAnnotation.Url(span.target, linkStyle), start, end)
+                    else {
+                        val external = externalLinkUrl(span)
+                        if (external != null) addLink(LinkAnnotation.Url(external, linkStyle), start, end)
+                    }
                 }
             }
         }.also { cache?.values?.getOrPut(spans) { mutableMapOf() }?.put(weight, it) }
