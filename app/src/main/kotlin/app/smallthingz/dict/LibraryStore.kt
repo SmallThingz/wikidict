@@ -92,7 +92,7 @@ class LibraryStore private constructor(private val context: Context) {
     }
     private suspend fun watchDownload(item: CatalogItem) {
         val id = prefs.getLong("downloadId", -1)
-        while (true) {
+        try { while (true) {
             currentCoroutineContext().ensureActive()
             val state = manager.query(DownloadManager.Query().setFilterById(id)).use { c ->
                 if (!c.moveToFirst()) { clearDownload(); error("Download was removed. Tap download to try again.") }
@@ -137,6 +137,10 @@ class LibraryStore private constructor(private val context: Context) {
                 DownloadManager.STATUS_FAILED -> { manager.remove(id); clearDownload(); error("Download failed (${state[3]}). Tap download to retry.") }
             }
             delay(400)
+        } } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            try { manager.remove(id) } finally { clearDownload() }
+            throw e
         }
     }
     private fun operation(label: String, action: suspend () -> Unit): Job = scope.launch {

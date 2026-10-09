@@ -116,6 +116,78 @@ class RendererDeviceTest {
         assertEquals(before,library.dictionaries.map{it.id})
         assertEquals("cat",library.read(library.exact("cat")!!).title)
     }
+    @Suppress("DEPRECATION")
+    @Test fun failedSystemDownloadVerificationAllowsCompletedRowRecovery() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val manager = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+        val prefs = context.getSharedPreferences("library", android.content.Context.MODE_PRIVATE)
+        val keys = listOf("downloadId", "downloadUrl", "downloadLabel", "downloadBytes", "downloadHash")
+        val saved = prefs.all.filterKeys { it in keys }
+        assertEquals("A genuine retained download must not be replaced", -1L, prefs.getLong("downloadId", -1))
+        assertTrue(saved.values.all { it is String || it is Long })
+        val fixture = library.catalog.first()
+        assertTrue(fixture.url.startsWith("asset://"))
+        val bytes = requireNotNull(fixture.bytes)
+        val hash = requireNotNull(fixture.sha256)
+        val item = CatalogItem("https://example.invalid/recovery/English.wikblb", "Local completed download", bytes, hash)
+        val before = library.dictionaries.map { it.id }.toSet()
+        val ids = mutableListOf<Long>()
+        val files = mutableListOf<java.io.File>()
+        val directory = requireNotNull(context.getExternalFilesDir("downloads"))
+        val parts = java.io.File(context.filesDir, "dictionaries")
+        val oldParts = parts.listFiles().orEmpty().filter { it.extension == "part" }.map { it.name }.toSet()
+        fun completed(value: CatalogItem): Long {
+            val file = java.io.File(directory, "recovery-${java.util.UUID.randomUUID()}.wikblb")
+            files.add(file)
+            context.assets.open(fixture.url.removePrefix("asset://")).use { input -> file.outputStream().use { input.copyTo(it) } }
+            assertEquals(bytes, file.length())
+            val id = manager.addCompletedDownload("Wikidict recovery fixture", value.label, false, "application/octet-stream", file.absolutePath, file.length(), true)
+            assertTrue(id >= 0)
+            ids.add(id)
+            manager.query(android.app.DownloadManager.Query().setFilterById(id)).use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals(android.app.DownloadManager.STATUS_SUCCESSFUL, c.getInt(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_STATUS)))
+            }
+            assertTrue(prefs.edit().putLong("downloadId", id).putString("downloadUrl", value.url).putString("downloadLabel", value.label)
+                .putLong("downloadBytes", value.bytes ?: -1).putString("downloadHash", value.sha256).commit())
+            return id
+        }
+        fun cleared(id: Long) {
+            manager.query(android.app.DownloadManager.Query().setFilterById(id)).use { assertFalse(it.moveToFirst()) }
+            keys.forEach { assertFalse("Stale download field: $it", prefs.contains(it)) }
+            assertNull(library.busy)
+            assertEquals(oldParts, parts.listFiles().orEmpty().filter { it.extension == "part" }.map { it.name }.toSet())
+        }
+        try {
+            for ((bad, message) in listOf(item.copy(sha256 = "0".repeat(64)) to "checksum", item.copy(bytes = bytes + 1) to "Incomplete download")) {
+                val id = completed(bad)
+                library.download(bad).join()
+                assertTrue("Expected $message verification failure; observed library.error=${library.error}",
+                    library.error.orEmpty().contains(message, ignoreCase = true))
+                cleared(id)
+                assertEquals(before, library.dictionaries.map { it.id }.toSet())
+                assertEquals("cat", library.read(library.exact("cat")!!).title)
+            }
+            // Re-enter the real completed-row verifier with the same URL, then another URL.
+            // Every row is local and pre-completed; this is not a network/enqueue assertion.
+            for (valid in listOf(item, item.copy(url = "https://example.invalid/another/English.wikblb"))) {
+                val id = completed(valid)
+                library.download(valid).join()
+                assertNull(library.error)
+                cleared(id)
+                assertEquals(before, library.dictionaries.map { it.id }.toSet())
+                assertEquals("cat", library.read(library.exact("cat")!!).title)
+            }
+        } finally {
+            ids.forEach { runCatching { manager.remove(it) } }
+            files.forEach { it.delete() }
+            library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
+            val editor = prefs.edit()
+            keys.forEach { editor.remove(it) }
+            saved.forEach { (key, value) -> when (value) { is String -> editor.putString(key, value); is Long -> editor.putLong(key, value) } }
+            assertTrue(editor.commit())
+        }
+    }
     @Test fun liveMediaDownloadsAndCacheHonorsLimits() = runBlocking {
         org.junit.Assume.assumeTrue("Opt in with -Pandroid.testInstrumentationRunnerArguments.liveMedia=true", InstrumentationRegistry.getArguments().getString("liveMedia") == "true")
         val context=InstrumentationRegistry.getInstrumentation().targetContext
