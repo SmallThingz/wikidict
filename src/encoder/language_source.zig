@@ -52,19 +52,43 @@ pub fn classificationHeading(raw: []const u8) []const u8 {
 }
 
 fn hebrewLanguageCategory(source: []const u8) ?[]const u8 {
-    inline for (&.{ "[[קטגוריה:שפה ", "[[קטגוריה: שפה " }) |marker| {
-        var search: usize = 0;
-        while (std.mem.indexOfPos(u8, source, search, marker)) |at| {
-            const start = at + marker.len;
-            const close = std.mem.indexOfPos(u8, source, start, "]]") orelse return null;
-            const pipe = std.mem.indexOfScalarPos(u8, source, start, '|');
-            const end = if (pipe != null and pipe.? < close) pipe.? else close;
-            const language = std.mem.trim(u8, source[start..end], " \t\r\n");
-            if (language.len != 0 and std.mem.indexOfAny(u8, language, "{}[]") == null) return language;
-            search = close + 2;
+    var categories: CategoryIterator = .{ .source = source };
+    while (categories.next()) |target| {
+        inline for (&.{ "קטגוריה:שפה ", "קטגוריה: שפה " }) |marker| {
+            if (std.mem.startsWith(u8, target, marker)) {
+                const language = std.mem.trim(u8, target[marker.len..], " \t\r\n");
+                if (language.len != 0 and std.mem.indexOfAny(u8, language, "{}[]") == null) return language;
+            }
         }
     }
     return null;
+}
+
+fn hebrewGrammarTemplate(source: []const u8) bool {
+    var cursor: usize = 0;
+    while (cursor < source.len) {
+        const rest = source[cursor..];
+        if (syntax.protectedEnd(source, cursor)) |end| {
+            cursor = end;
+            continue;
+        }
+        if (rest[0] == '<') if (syntax.tagAt(source, cursor)) |tag| {
+            cursor = tag.end;
+            continue;
+        };
+        if (std.mem.startsWith(u8, rest, "{{") or std.mem.startsWith(u8, rest, "[[")) {
+            const pair = syntax.balanced(source, cursor) orelse return false;
+            if (std.mem.startsWith(u8, rest, "{{") and !std.mem.startsWith(u8, rest, "{{{")) {
+                const body = source[cursor + 2 .. pair.inner_end];
+                const end = syntax.delimiter(body, "|", 0) orelse body.len;
+                if (std.mem.eql(u8, std.mem.trim(u8, body[0..end], " \t\r\n"), "ניתוח דקדוקי")) return true;
+            }
+            cursor = pair.end;
+            continue;
+        }
+        cursor += 1;
+    }
+    return false;
 }
 
 pub fn classificationSection(section: Section) []const u8 {
@@ -88,7 +112,7 @@ pub fn classificationSection(section: Section) []const u8 {
         }
     }
     if (hebrewLanguageCategory(section.source)) |language| return language;
-    if (std.mem.indexOf(u8, section.source, "{{ניתוח דקדוקי") != null) return "עברית";
+    if (hebrewGrammarTemplate(section.source)) return "עברית";
     return section.heading;
 }
 
@@ -188,6 +212,46 @@ pub const Iterator = struct {
         return null;
     }
 };
+
+/// Exact noun declarations within one L2 lemma. English is an explicit alias
+/// in frozen names.lua en.codes; German is a source-specific known declaration
+/// from Aal rev1429569, not a generic imported alias or morphology algorithm.
+pub const ArabicNounSubtree = struct { present: bool = false, code: ?[]const u8 = null };
+
+pub fn arabicNounSubtree(section: Section, matcher: ?syntax.ControlMatcher) ArabicNounSubtree {
+    const newline = std.mem.indexOfScalar(u8, section.source, '\n') orelse return .{};
+    const outer = parseHeading(syntax.headingControlPrefix(section.source[0..newline], matcher)) orelse return .{};
+    if (outer.level != 2 or !std.mem.eql(u8, outer.title, section.heading)) return .{};
+    var balance: Balance = .{};
+    var cursor = newline + 1;
+    var declarations: usize = 0;
+    var code: ?[]const u8 = null;
+    var saw_heading = false;
+    var invalid = false;
+    while (cursor < section.source.len) {
+        const end = std.mem.indexOfScalarPos(u8, section.source, cursor, '\n') orelse section.source.len;
+        const line = section.source[cursor..end];
+        if (!balance.isOpen() and cursor >= balance.protected_until) {
+            if (parseHeading(syntax.headingControlPrefix(line, matcher))) |heading| {
+                if (heading.level <= 2) return .{};
+                if (heading.level == 3) {
+                    const label = std.mem.trim(u8, heading.title, " \t\r");
+                    if (std.mem.startsWith(u8, label, "اسم ")) {
+                        declarations += 1;
+                        if (saw_heading or declarations != 1) invalid = true;
+                        const adjective = std.mem.trim(u8, label["اسم ".len..], " \t");
+                        code = if (std.mem.eql(u8, adjective, "إنجليزي")) "en" else if (std.mem.eql(u8, adjective, "ألماني")) "de" else null;
+                        if (code == null) invalid = true;
+                    }
+                    saw_heading = true;
+                }
+            }
+        }
+        balance.update(section.source, cursor, end);
+        cursor = if (end == section.source.len) end else end + 1;
+    }
+    return .{ .present = declarations != 0, .code = if (declarations == 1 and !invalid) code else null };
+}
 
 const Balance = struct {
     templates: usize = 0,
@@ -317,6 +381,10 @@ pub const CategoryIterator = struct {
                 continue;
             }
             if (rest[0] == '<') {
+                if (syntax.protectedEnd(self.source, start)) |end| {
+                    self.cursor = end;
+                    continue;
+                }
                 for ([_][]const u8{ "nowiki", "pre", "source", "syntaxhighlight", "math", "includeonly" }) |name| {
                     if (tagMatches(rest, name, false)) {
                         const opening_end = std.mem.indexOfScalar(u8, rest, '>') orelse {
@@ -578,4 +646,44 @@ test "language headings accept active control suffix without consuming literal s
     try std.testing.expect(it.next() == null);
     var literal = Iterator.init("=English=__UNKNOWN__\n# retained\n");
     try std.testing.expect(literal.next() == null);
+}
+
+
+test "Hebrew raw conventions ignore protected category and grammar literals" {
+    const negative = [_][]const u8{
+        "==lemma==\n<nowiki>[[קטגוריה:שפה ספרדית]]</nowiki>\n",
+        "==lemma==\n<pre>[[קטגוריה:שפה ספרדית]]</pre>\n",
+        "==lemma==\n<!-- [[קטגוריה:שפה ספרדית]] -->\n",
+        "==lemma==\n{{example|[[קטגוריה:שפה ספרדית]]}}\n",
+        "==lemma==\n<span data-note=\"[[קטגוריה:שפה ספרדית]]\">text</span>\n",
+        "==lemma==\n<nowiki>{{ניתוח דקדוקי|x}}</nowiki>\n",
+        "==lemma==\n<pre>{{ניתוח דקדוקי|x}}</pre>\n",
+        "==lemma==\n<!-- {{ניתוח דקדוקי|x}} -->\n",
+        "==lemma==\n{{example|{{ניתוח דקדוקי|x}}}}\n",
+        "==lemma==\n<span data-note=\"{{ניתוח דקדוקי|x}}\">text</span>\n",
+        "==lemma==\n{{ניתוח דקדוקי lookalike|x}}\n",
+        "==lemma==\n{{ניתוח דקדוקי|unclosed\n",
+        "==lemma==\n{{ניתוח דקדוקי|{{{x}}}}\n",
+        "==lemma==\n{{ניתוח דקדוקי {{x}} }}\n",
+        "==lemma==\n<ref>[[קטגוריה:שפה ספרדית]]</ref>\n",
+        "==lemma==\n<ref>{{ניתוח דקדוקי|x}}</ref>\n",
+    };
+    for (negative) |source|
+        try std.testing.expectEqualStrings("lemma", classificationSection(.{ .heading = "lemma", .source = source }));
+    try std.testing.expectEqualStrings("ספרדית", classificationSection(.{
+        .heading = "lemma",
+        .source = "==lemma==\n<nowiki>[[קטגוריה:שפה עברית]]</nowiki>\n[[קטגוריה:שפה ספרדית|sort]]\n",
+    }));
+    try std.testing.expectEqualStrings("עברית", classificationSection(.{
+        .heading = "lemma",
+        .source = "==lemma==\n<!-- {{ניתוח דקדוקי|fake}} -->\n{{ניתוח דקדוקי|real}}\n",
+    }));
+    try std.testing.expectEqualStrings("עברית", classificationSection(.{
+        .heading = "lemma",
+        .source = "==lemma==\n{{ ניתוח דקדוקי | nested={{x|value}} }}\n",
+    }));
+    try std.testing.expectEqualStrings("עברית", classificationSection(.{
+        .heading = "lemma",
+        .source = "==lemma==\n{{ניתוח דקדוקי|{{{x}}}}}\n",
+    }));
 }

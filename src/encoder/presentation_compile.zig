@@ -4445,3 +4445,41 @@ test "mixed apostrophe transitions preserve component styles" {
     const malformed = try r.parseSpans("''unclosed", .{});
     try std.testing.expectEqualStrings("''unclosed", try flattened(a, malformed));
 }
+
+
+test "normalized closing apostrophes retain literal extras and emphasis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const Case = struct { source: []const u8, plain: []const u8, bold: bool, italic: bool };
+    var all_balanced = true;
+    for ([_]Case{
+        .{ .source = "'''word''''", .plain = "word'", .bold = true, .italic = false },
+        .{ .source = "'''''word''''''", .plain = "word'", .bold = true, .italic = true },
+        .{ .source = "'''''word'''''''", .plain = "word''", .bold = true, .italic = true },
+        .{ .source = "'''word'''", .plain = "word", .bold = true, .italic = false },
+        .{ .source = "'''''word'''''", .plain = "word", .bold = true, .italic = true },
+    }) |case| {
+        const spans = try r.parseSpans(case.source, .{});
+        const plain = try flattened(a, spans);
+        var matched = spans.len > 0 and std.mem.eql(u8, case.plain, plain);
+        for (spans) |span| {
+            if (span.flags.bold != case.bold or span.flags.italic != case.italic) matched = false;
+        }
+        std.debug.print("QUOTE_CLOSE source={s} plain={s} styles={s}\n", .{ case.source, plain, if (matched) "matched" else "mismatched" });
+        all_balanced = all_balanced and matched;
+    }
+    const leading = try r.parseSpans("''''n'''", .{});
+    try std.testing.expectEqualStrings("'n", try flattened(a, leading));
+    try std.testing.expectEqual(@as(usize, 2), leading.len);
+    try std.testing.expect(!leading[0].flags.bold and !leading[0].flags.italic);
+    try std.testing.expect(leading[1].flags.bold and !leading[1].flags.italic);
+    const protected = try r.parseSpans("'''word<nowiki>''''</nowiki>", .{});
+    try std.testing.expectEqualStrings("'''word''''", try flattened(a, protected));
+    for (protected) |span| try std.testing.expect(!span.flags.bold and !span.flags.italic);
+    const unclosed = try r.parseSpans("'''word", .{});
+    try std.testing.expectEqualStrings("'''word", try flattened(a, unclosed));
+    for (unclosed) |span| try std.testing.expect(!span.flags.bold and !span.flags.italic);
+    try std.testing.expect(all_balanced);
+}

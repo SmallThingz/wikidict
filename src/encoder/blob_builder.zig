@@ -654,7 +654,21 @@ fn declarationLabel(codes: LanguageCodes, heading: []const u8) ?[]const u8 {
         azDecoratedDeclaration(codes, heading);
 }
 
+fn arabicLemmaDeclaration(codes: LanguageCodes, section: language_source.Section) language_source.ArabicNounSubtree {
+    const namespaces = codes.namespace_catalog orelse return .{};
+    if (!std.mem.eql(u8, namespaces.content_language, "ar")) return .{};
+    const heading = std.mem.trim(u8, section.heading, " \t\r\n");
+    // A trusted L2 language declaration must not be reassigned by nested POS.
+    if (codes.resolveStrong(heading) != null or codes.resolveTrusted(heading) != null or
+        resolveLinkedHeading(codes, heading) != null or resolveLinkedDeclaration(codes, heading) != null or
+        hasExplicitLanguageDeclaration(codes, section)) return .{};
+    const markers: LanguageMarkers = .{ .codes = &codes };
+    return language_source.arabicNounSubtree(section, languageSections(section.source, &markers).control_matcher);
+}
+
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    const noun = arabicLemmaDeclaration(codes, section);
+    if (noun.present) return if (noun.code) |code| codes.resolve(code) else null;
     if (codes.namespace_catalog) |namespaces| if (std.mem.eql(u8, namespaces.content_language, "az")) {
         if (declarationLabel(codes, section.heading)) |label| return codes.resolve(label);
     };
@@ -687,6 +701,8 @@ fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source
 }
 
 fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    const noun = arabicLemmaDeclaration(codes, section);
+    if (noun.present) return if (noun.code) |code| codes.resolve(code) else null;
     const heading = language_source.classificationSection(section);
     if (resolveCategorizedHeading(codes, heading)) |resolved| return resolved;
     if (codes.resolve(std.mem.trim(u8, heading, " \t\r\n\'\""))) |resolved| return resolved;
@@ -1017,7 +1033,14 @@ fn processMain(
     // Mixed-depth language boundaries can reveal an uncertain region even
     // when raw and expanded section counts agree. Keep it separate; pages
     // with only one boundary depth retain their support-heading policy.
-    const isolate_mixed = sections.mixed_levels;
+    var isolate_arabic_lemmas = false;
+    for (page_sections.items) |section| if (arabicLemmaDeclaration(codes, section).present) {
+        isolate_arabic_lemmas = true;
+        break;
+    };
+    // Once this convention is present, later unresolved L2 lemmas must not
+    // inherit a previous noun owner. Other pages retain their existing policy.
+    const isolate_mixed = sections.mixed_levels or isolate_arabic_lemmas;
 
     for (page_sections.items, 0..) |section, index| {
         var resolved: ?ResolvedLanguage = null;
@@ -2948,4 +2971,58 @@ test "protected template arguments cannot corroborate an untrusted language alia
     const active = "<nowiki>{{x|lang=fr}}</nowiki>{{x|lang=en}}";
     try std.testing.expect(sourceConfirmsLanguage(codes, active, "en"));
     try std.testing.expectEqualStrings("en", resolveSection(codes, .{ .heading = "Example alias", .source = active }).?.code);
+}
+
+test "Arabic exact nested noun declarations classify only one untrusted L2 lemma subtree" {
+    const a = std.testing.allocator;
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "en") or std.mem.eql(u8, value, "الإنجليزية")) return .{ .code = "en", .heading = "الإنجليزية" };
+            if (std.mem.eql(u8, value, "de") or std.mem.eql(u8, value, "الألمانية")) return .{ .code = "de", .heading = "الألمانية" };
+            if (std.mem.eql(u8, value, "aal")) return .{ .code = "aal", .heading = "Afade" };
+            return null;
+        }
+        fn trusted(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "الإنجليزية") or std.mem.eql(u8, value, "الألمانية")) return resolve(ctx, value);
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .resolve_fn = Local.resolve, .trusted_fn = Local.trusted, .strong_fn = Local.trusted };
+    const english: language_source.Section = .{ .heading = "aal", .source = "== aal ==\n=== اسم إنجليزي ===\nآل - شجيرة من [[الهند]]\n" };
+    const german: language_source.Section = .{ .heading = "der Aal", .source = "== der Aal ==\n=== اسم ألماني ===\nاسم مذكر\n=== المعنى ===\nثعبان الماء\n=== الجمع ===\ndie Aale\n" };
+    try std.testing.expect(resolveSection(codes, english) != null);
+    try std.testing.expectEqualStrings("en", resolveSection(codes, english).?.code);
+    try std.testing.expectEqualStrings("en", boundaryLanguage(codes, english).?.code);
+    try std.testing.expectEqualStrings("de", resolveSection(codes, german).?.code);
+    inline for (.{
+        "== lemma ==\n=== اسم مجهول ===\n# unknown",
+        "== lemma ==\n=== اسم إنجليزي وألماني ===\n# multiple",
+        "== lemma ==\n=== اسم إنجليزي ===\n# first\n=== اسم ألماني ===\n# second",
+        "== lemma ==\n=== المعنى ===\n# first\n=== اسم إنجليزي ===\n# late",
+        "== lemma ==\n<nowiki>\n=== اسم ألماني ===\n</nowiki>\n# literal",
+        "== lemma ==\n<pre>\n=== اسم ألماني ===\n</pre>\n# literal",
+        "== lemma ==\n<!--\n=== اسم ألماني ===\n-->\n# literal",
+        "== lemma ==\n{{x|\n=== اسم ألماني ===\n}}\n# literal",
+        "== lemma ==\n<span title=\"\n=== اسم ألماني ===\n\">visible</span>\n",
+    }) |raw| try std.testing.expect(resolveSection(codes, .{ .heading = "lemma", .source = raw }) == null);
+    try std.testing.expect(resolveSection(codes, .{ .heading = "aal", .source = "== aal ==\n=== اسم ===\n# no language" }) == null);
+    try std.testing.expect(resolveSection(codes, .{ .heading = "اَلْمَعَانِي", .source = "== اَلْمَعَانِي ==\n# role-only" }) == null);
+    try std.testing.expectEqualStrings("en", resolveSection(codes, .{ .heading = "الإنجليزية", .source = "== الإنجليزية ==\n=== اسم ألماني ===\n# trusted outer owner" }).?.code);
+    var other = codes;
+    other.namespace_catalog = null;
+    try std.testing.expect(resolveSection(other, english) == null);
+    var non_arabic = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer non_arabic.deinit();
+    other.namespace_catalog = &non_arabic;
+    try std.testing.expect(resolveSection(other, english) == null);
+    try std.testing.expectEqualStrings("en", resolveSection(codes, .{ .heading = "aal", .source = "== aal ==__NOEDITSECTION__\n=== اسم إنجليزي === __NOEDITSECTION__\n# controlled body" }).?.code);
+    try std.testing.expect(resolveSection(codes, .{ .heading = "aal", .source = "== aal ==\n=== اسم إنجليزي === __UNKNOWN_SWITCH__\n# unknown suffix" }) == null);
 }

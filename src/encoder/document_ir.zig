@@ -865,8 +865,10 @@ fn hasMatchingEmphasis(input: []const u8, start: usize, opens_bold: bool, opens_
             }
         }
         const run = quoteRunLength(input, cursor);
-        if (run == 3 or run == 5) needs_bold = false;
-        if (run == 2 or run == 5) needs_italic = false;
+        // Match the same literal-extra normalization used by InlineIterator.next.
+        const normalized_run: usize = if (run == 4) 3 else if (run > 5) 5 else run;
+        if (normalized_run == 3 or normalized_run == 5) needs_bold = false;
+        if (normalized_run == 2 or normalized_run == 5) needs_italic = false;
         if (!needs_bold and !needs_italic) return true;
         cursor += if (run == 0) 1 else run;
     }

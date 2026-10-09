@@ -1759,3 +1759,69 @@ test "AN artiga source headers and exact Occitan alias preserve four owned defin
     const negative_blob = try encoder.blob_format.inspect(negative_mapped.bytes);
     try std.testing.expectEqualStrings("", (try negative_blob.languageMetadata()).code);
 }
+
+test "Aal exact Arabic noun subtrees preserve exclusive English German bodies and unknown reset" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv("# content-language\tar\nen\tالإنجليزية\nde\tالألمانية\nar\tالعربية\naal\tAfade\n");
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/aal", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Aal rev1429569 exact source; no expansion is needed for these headings.
+    const raw = "== aal ==\n=== اسم إنجليزي ===\nآل - شجيرة من [[الهند]]\n\n== der Aal ==\n=== اسم ألماني ===\nاسم مذكر (der Aal (m\n\n=== المعنى ===\nحيوان مائي يعيش في البحار والأنهار ، وله شكل الثعبان وجلده زلق (ثعبان الماء) .\n\n=== الجمع ===\ndie Aale\n\n=== تطبيقات أخرى ===\nمثال : glatt wie ein Aal\nيعني : مراوغ مثل الثعبان .\n\n=== المراجع ===\n# http://www.duden.de/rechtschreibung/Aal\n\n[[تصنيف:إنجليزية]]";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Aal", raw, raw, null);
+    const scopes = "== lemma ==\n=== اسم إنجليزي ===\n# EN_SENTINEL\n== en ==\n=== اسم ===\n# UNDECLARED_SENTINEL\n== foreign ==\n=== اسم مجهول ===\n# UNKNOWN_SENTINEL\n== conflict ==\n=== اسم إنجليزي ===\n# CONFLICT_FIRST\n=== اسم ألماني ===\n# CONFLICT_SECOND\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "scopes", scopes, scopes, null);
+    const native = "# NATIVE_UNSECTIONED_SENTINEL";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "native", native, native, null);
+    const role = "== اَلْمَعَانِي ==\n# ROLE_ONLY_SENTINEL";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "role", role, role, null);
+    _ = try writer.finish(codes);
+    const Expected = struct { heading: []const u8, code: []const u8, title: []const u8, required: []const []const u8, excluded: []const []const u8 };
+    const cases = [_]Expected{
+        .{ .heading = "الإنجليزية", .code = "en", .title = "Aal", .required = &.{ "شجيرة", "الهند" }, .excluded = &.{ "die Aale", "glatt wie ein Aal", "ثعبان الماء" } },
+        .{ .heading = "الألمانية", .code = "de", .title = "Aal", .required = &.{ "اسم مذكر", "ثعبان الماء", "die Aale", "glatt wie ein Aal", "مراوغ مثل الثعبان" }, .excluded = &.{ "شجيرة", "الهند" } },
+        .{ .heading = "الإنجليزية", .code = "en", .title = "scopes", .required = &.{ "EN_SENTINEL" }, .excluded = &.{ "UNDECLARED_SENTINEL", "UNKNOWN_SENTINEL", "CONFLICT_FIRST", "CONFLICT_SECOND" } },
+        .{ .heading = "Unclassified", .code = "", .title = "scopes", .required = &.{ "UNDECLARED_SENTINEL", "UNKNOWN_SENTINEL", "CONFLICT_FIRST", "CONFLICT_SECOND" }, .excluded = &.{ "EN_SENTINEL" } },
+        .{ .heading = "Unclassified", .code = "", .title = "role", .required = &.{ "ROLE_ONLY_SENTINEL" }, .excluded = &.{} },
+        .{ .heading = "العربية", .code = "ar", .title = "native", .required = &.{ "NATIVE_UNSECTIONED_SENTINEL" }, .excluded = &.{} },
+    };
+    for (cases) |expected| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename(expected.heading, &filename) }));
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(expected.code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(expected.title)).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var text: std.ArrayList(u8) = .empty;
+        var india: usize = 0;
+        var duden: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try text.appendSlice(a, span.text);
+            if (std.mem.eql(u8, span.target, "الهند")) india += 1;
+            if (std.mem.eql(u8, span.target, "http://www.duden.de/rechtschreibung/Aal")) duden += 1;
+        };
+        for (expected.required) |value| try std.testing.expect(std.mem.indexOf(u8, text.items, value) != null);
+        for (expected.excluded) |value| try std.testing.expect(std.mem.indexOf(u8, text.items, value) == null);
+        if (std.mem.eql(u8, expected.title, "Aal")) {
+            try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, expected.code, "en")) 1 else 0), india);
+            try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, expected.code, "de")) 1 else 0), duden);
+        }
+    }
+}
