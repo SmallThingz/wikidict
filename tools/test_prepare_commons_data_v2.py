@@ -137,7 +137,10 @@ class CommonsCaptureV2Tests(unittest.TestCase):
             with self.subTest(count=count):
                 self.args.output = self.root / f'capture-{count}'
                 self.calls = []
-                manifest = self.capture(count)
+                # Local receipt writes must not consume this synthetic capture budget.
+                with mock.patch.object(helper, 'time') as clock:
+                    clock.monotonic.return_value = 0.0
+                    manifest = self.capture(count)
                 path = self.args.output / 'commons-data.tsv'
                 self.assertEqual(helper.SCHEMA, manifest['schema'])
                 self.assertEqual(count, manifest['rows'])
