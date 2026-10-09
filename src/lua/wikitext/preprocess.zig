@@ -17,13 +17,33 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     var pos: usize = 0;
-    while (findCiPos(text, pos, "<!--")) |open| {
+    while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |open| {
         try out.appendSlice(a, text[pos..open]);
-        const close = findCiPos(text, open + 4, "-->") orelse {
-            pos = text.len;
-            break;
-        };
-        pos = close + 3;
+        if (std.mem.startsWith(u8, text[open..], "<!--")) {
+            const close = findCiPos(text, open + 4, "-->") orelse {
+                pos = text.len;
+                break;
+            };
+            pos = close + 3;
+            continue;
+        }
+        // Raw nowiki text must reach the renderer intact. Reuse the existing
+        // quoted opener and first-closing-tag rules; nested nowiki is literal.
+        if (inclusionTagAt(text, open)) |tag| {
+            if (std.ascii.eqlIgnoreCase(tag.name, "nowiki")) {
+                if (rawTagEnd(text, open)) |opening_end| {
+                    var before_gt = opening_end - 1;
+                    while (before_gt > open and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
+                    const end = if (before_gt > open and text[before_gt - 1] == '/') opening_end else
+                        inclusionCloseEnd(text, opening_end, tag.name) orelse text.len;
+                    try out.appendSlice(a, text[open..end]);
+                    pos = end;
+                    continue;
+                }
+            }
+        }
+        try out.append(a, '<');
+        pos = open + 1;
     }
     try out.appendSlice(a, text[pos..]);
     return out.toOwnedSlice(a);

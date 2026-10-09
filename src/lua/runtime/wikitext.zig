@@ -4045,6 +4045,26 @@ test "native AOT nowiki strip markers share page host state" {
     try std.testing.expectError(error.AotCallFailed, runtime.callValue(unstrip, &.{.{ .string = "x\x7fy" }}));
     try std.testing.expectEqualStrings("NotImplemented", runtime.aotErrorName().?);
     runtime.clearAotErrorName();
+
+    // Exercise both real producer entry points, beyond transclusion alone.
+    const comment_cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "outside<!--hide--><nowiki>A<!--D-->B</nowiki>tail", .expected = "outside<nowiki>A<!--D-->B</nowiki>tail" },
+        .{ .source = "<nowiki title='>'>A<!--D-->B</nowiki>", .expected = "<nowiki title='>'>A<!--D-->B</nowiki>" },
+        .{ .source = "<nowiki><nowiki>A<!--D--></nowiki><!--hide-->tail", .expected = "<nowiki><nowiki>A<!--D--></nowiki>tail" },
+        .{ .source = "<nowiki/><!--hide-->tail", .expected = "<nowiki/>tail" },
+        .{ .source = "<nowiki / ><!--hide-->tail", .expected = "<nowiki / >tail" },
+        .{ .source = "<nowiki>A<!--D-->B", .expected = "<nowiki>A<!--D-->B" },
+        .{ .source = "<ref>A<!--D-->B</ref>", .expected = "<ref>AB</ref>" },
+    };
+    for (comment_cases) |case| {
+        try std.testing.expectEqualStrings(case.expected, try expander.expandFragment("Page", case.source, 1_670_803_200));
+        const comment_frame_args = try runtime.newTable();
+        const comment_frame = try frame_lib.makeFrameFromTable(&runtime, "Module:Probe", comment_frame_args, null);
+        const comment_preprocess = try runtime.getIndex(comment_frame, .{ .string = "preprocess" });
+        const comment_result = try runtime.callValue(comment_preprocess, &.{ comment_frame, .{ .string = case.source } });
+        defer rt.freeResults(comment_result);
+        try std.testing.expectEqualStrings(case.expected, comment_result[0].string);
+    }
 }
 
 test "ordinary template arguments inside frame preprocess remain charged" {
