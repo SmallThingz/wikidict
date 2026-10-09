@@ -296,6 +296,38 @@ class AffinityAdmissionTests(unittest.TestCase):
 
 
 class ProvenanceBindingTests(unittest.TestCase):
+    def test_autonym_capture_pin_isolates_strict_inventory_and_preserves_checkpoint(self):
+        import prepare_language_names_autonyms as autonyms
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'capture';source.mkdir()
+            for name in ('language-names.tsv','language-autonyms.namespace-registry.tsv',
+                         'language-names.manifest.json','language-names.complete.json'):
+                (source/name).write_text('fixture '+name+'\n')
+            destination=root/'workspace';destination.mkdir()
+            checkpoint=destination/'state.json';checkpoint.write_text('{"now_unix":222}\n')
+            (destination/'input').mkdir();(destination/'input/pages.xml').write_text('<mediawiki/>')
+            record={'schema':'wikidict.language-names-autonym-capture.v1'}
+            def validated(name,path):
+                self.assertEqual(name,'language-names')
+                # Exercise the real strict whole-directory inventory; replay itself is not mocked as acceptance.
+                inventory={key:row['sha256'] for key,row in autonyms.inventory(Path(path).parent).items()}
+                for key in ('language-names.manifest.json','language-names.complete.json'):
+                    inventory[key]=b.sha256_file(Path(path).parent/key)
+                return record,inventory
+            snapshots={'language-names':source/'language-names.tsv'}
+            with patch.object(b,'validated_auxiliary_capture',side_effect=validated):
+                capture=validated('language-names',snapshots['language-names'])
+                pinned=b.pinned_auxiliary_snapshots(snapshots,{'language-names':b.sha256_file(snapshots['language-names'])},destination,
+                    {'language-names':capture[1]['language-names.manifest.json']},
+                    {'language-names':b.auxiliary_artifact_digest(capture[1])})
+                self.assertEqual(destination/'language-names/language-names.tsv',pinned['language-names'])
+                self.assertEqual(capture,validated('language-names',pinned['language-names']))
+            self.assertEqual('{"now_unix":222}\n',checkpoint.read_text())
+            self.assertEqual('<mediawiki/>',(destination/'input/pages.xml').read_text())
+            (pinned['language-names'].parent/'unexpected.json').write_text('{}')
+            with self.assertRaisesRegex(ValueError,'Unexpected capture artifact'):
+                autonyms.inventory(pinned['language-names'].parent)
+
     def test_commons_pin_isolates_inventory_from_other_captures_and_staged_input(self):
         import prepare_commons_data as commons
         import prepare_language_messages as messages

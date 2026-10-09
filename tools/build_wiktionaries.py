@@ -734,15 +734,17 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         copies.setdefault(key,(source,digest))
     for name,source in sorted((snapshots or {}).items()):
         source=Path(source)
+        capture=validated_auxiliary_capture(name,source)
+        autonym_capture=(name=='language-names' and capture is not None and
+                         capture[0].get('schema')=='wikidict.language-names-autonym-capture.v1')
         # Keep complete directory-provenance captures separate from other
         # snapshots so strict replay sees only their own recorded payloads.
-        folder=destination/name if name in ('commons-data','date-numbering') else (
+        folder=destination/name if name in ('commons-data','date-numbering') or autonym_capture else (
             destination/'site-info' if name=='site-info' and
             auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
         if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
         pinned[name]=folder/(auxiliary_snapshot_filename(name))
         add_copy(source,folder,auxiliary_snapshot_filename(name),hashes[name])
-        capture=validated_auxiliary_capture(name,source)
         if capture is None:
             if name in (capture_hashes or {}) or name in (capture_artifact_hashes or {}):
                 raise ValueError('Auxiliary capture disappeared before pinning: '+name)
