@@ -1005,13 +1005,36 @@ pub const Renderer = struct {
         }
         return image_seen;
     }
+    // This is a complete, deliberately small TeX subset. An unbraced
+    // superscript consumes one token: 10^12 must not become 10^{12}.
+    fn numericPower(self: *Renderer, content: []const u8, style: Style) Error!bool {
+        var base_end: usize = 0;
+        while (base_end < content.len and std.ascii.isDigit(content[base_end])) : (base_end += 1) {}
+        if (base_end == 0 or base_end == content.len or content[base_end] != '^') return false;
+        const suffix = content[base_end + 1 ..];
+        var exponent = suffix;
+        if (suffix.len >= 2 and suffix[0] == '{' and suffix[suffix.len - 1] == '}') {
+            exponent = suffix[1 .. suffix.len - 1];
+            if (exponent.len == 0) return false;
+            for (exponent) |digit| if (!std.ascii.isDigit(digit)) return false;
+        } else if (suffix.len != 1 or !std.ascii.isDigit(suffix[0])) return false;
+
+        // No output is emitted until the entire input has matched.
+        try self.protectedLiteral(content[0..base_end], style);
+        var power_style = style;
+        power_style.superscript = true;
+        try self.protectedLiteral(exponent, power_style);
+        return true;
+    }
     fn opaqueExtension(self: *Renderer, input: []const u8, tag: syntax.Tag, style: Style, depth: usize) Error!usize {
         if (tag.self_closing) return tag.end;
-        const pair = syntax.matchingTag(input, tag) orelse blk: {
+        const matched_pair = syntax.matchingTag(input, tag);
+        const pair = matched_pair orelse blk: {
             self.fallbacks.unclosed_formatting = true;
             break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
         };
         const content = input[tag.end..pair.inner_end];
+        if (tag.is("math") and matched_pair != null and trim(tag.attrs).len == 0 and try self.numericPower(content, style)) return pair.end;
         if (tag.is("gallery")) {
             try self.gallery(content, style, depth + 1);
         } else if (tag.is("imagemap")) {
@@ -1022,6 +1045,8 @@ pub const Renderer = struct {
             var literal_style = style;
             literal_style.code = true;
             try self.protectedLiteral(content, literal_style);
+            // Readable source is not rendered formula, score or diagram output.
+            if (oneOf(tag.name, &.{ "math", "ce", "chem", "score", "timeline", "hiero" })) self.fallbacks.unsupported_element = true;
         } else if (!oneOf(tag.name, &.{ "indicator", "references", "templatestyles", "section", "charinsert" })) {
             // Registered extensions can render data-backed UI that this data-only
             // compiler cannot reproduce. Do not invent substitute prose; report
@@ -1649,7 +1674,25 @@ pub const Renderer = struct {
         if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) return .{ .code = true };
         return null;
     }
+    fn endsAfterLaterWikiListLine(input: []const u8) bool {
+        // Reuse logical lines so markers inside comments, nowiki or balanced
+        // template/link payloads cannot create a new block boundary.
+        var at = syntax.logicalEnd(input, 0);
+        if (at == input.len) return false;
+        at += 1;
+        var ends_with_list = false;
+        while (at < input.len) {
+            const end = syntax.logicalEnd(input, at);
+            if (trim(input[at..end]).len != 0)
+                ends_with_list = end > at and std.mem.indexOfScalar(u8, "#*:;", input[at]) != null;
+            at = if (end < input.len) end + 1 else end;
+        }
+        return ends_with_list;
+    }
     pub fn renderBody(self: *Renderer, input: []const u8) Error![]const Block {
+        return self.renderBodyWithInlineStart(input, false);
+    }
+    fn renderBodyWithInlineStart(self: *Renderer, input: []const u8, initial_inline: bool) Error![]const Block {
         if (self.body_depth >= max_depth) {
             self.fallbacks.render_limit = true;
             var fallback: std.ArrayList(Block) = .empty;
@@ -1660,6 +1703,7 @@ pub const Renderer = struct {
         defer self.body_depth -= 1;
         const line_capacity = std.mem.count(u8, input, "\n") + @intFromBool(input.len != 0 and input[input.len - 1] != '\n');
         var blocks: std.ArrayList(Block) = try .initCapacity(self.a, line_capacity);
+        const initial_line_end = if (initial_inline) (std.mem.indexOfScalar(u8, input, '\n') orelse input.len) else 0;
         var pos: usize = 0;
         var para: ?usize = null;
         var counts: [32]usize = @splat(0);
@@ -1678,28 +1722,32 @@ pub const Renderer = struct {
             // rendering the enclosed blocks; never repair unmatched markup.
             if (clean.ptr == line.ptr) if (syntax.tagAt(clean, 0)) |tag| {
                 if (blockFormattingFlags(tag)) |flags| {
-                    if (trim(clean[tag.end..]).len == 0) {
-                        const offset = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr);
-                        const rest = input[offset..];
-                        if (syntax.matchingTag(rest, tag)) |pair| {
-                            const closing_line_end = std.mem.indexOfScalarPos(u8, rest, pair.end, '\n') orelse rest.len;
-                            // A same-line suffix belongs to its existing inline
-                            // block and must not be split off by this path.
-                            if (trim(rest[pair.end..closing_line_end]).len == 0) {
-                                if (para) |p| {
-                                    try self.paragraph(&blocks, input[p..start]);
-                                    para = null;
-                                }
-                                const parent_formatting = self.block_formatting;
-                                self.block_formatting = @bitCast(@as(u8, @bitCast(parent_formatting)) | @as(u8, @bitCast(flags)));
-                                defer self.block_formatting = parent_formatting;
-                                try blocks.appendSlice(self.a, try self.renderBody(rest[tag.end..pair.inner_end]));
-                                pos = offset + closing_line_end;
-                                if (pos < input.len) pos += 1;
-                                @memset(&counts, 0);
-                                list_root = 0;
-                                continue;
+                    const offset = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr);
+                    const rest = input[offset..];
+                    if (syntax.matchingTag(rest, tag)) |pair| {
+                        const closing_line_end = std.mem.indexOfScalarPos(u8, rest, pair.end, '\n') orelse rest.len;
+                        // A same-line suffix belongs to its existing inline
+                        // block and must not be split off by this path.
+                        const first_line_inline = trim(clean[tag.end..]).len != 0;
+                        if ((!first_line_inline or (para == null and endsAfterLaterWikiListLine(rest[tag.end..pair.inner_end]))) and
+                            trim(rest[pair.end..closing_line_end]).len == 0)
+                        {
+                            if (para) |p| {
+                                try self.paragraph(&blocks, input[p..start]);
+                                para = null;
                             }
+                            const parent_formatting = self.block_formatting;
+                            self.block_formatting = @bitCast(@as(u8, @bitCast(parent_formatting)) | @as(u8, @bitCast(flags)));
+                            defer self.block_formatting = parent_formatting;
+                            // Removing an inline opener must not move its same-line
+                            // text to a wiki line start. Later physical lines retain
+                            // normal list/heading/preformatted interpretation.
+                            try blocks.appendSlice(self.a, try self.renderBodyWithInlineStart(rest[tag.end..pair.inner_end], first_line_inline));
+                            pos = offset + closing_line_end;
+                            if (pos < input.len) pos += 1;
+                            @memset(&counts, 0);
+                            list_root = 0;
+                            continue;
                         }
                     }
                 }
@@ -1728,7 +1776,8 @@ pub const Renderer = struct {
                     }
                 }.match,
             } else null;
-            const heading = headingLine(syntax.headingControlPrefix(line, control_matcher));
+            const anchored_inline = initial_inline and start < initial_line_end;
+            const heading = if (anchored_inline) null else headingLine(syntax.headingControlPrefix(line, control_matcher));
             var multiline_data: ?[]const u8 = null;
             if (starts(clean, "{{multitrans|")) if (syntax.balanced(clean, 0)) |pair| {
                 if (pair.end == clean.len) {
@@ -1741,11 +1790,11 @@ pub const Renderer = struct {
                 }
             };
             var prefix: usize = 0;
-            while (prefix < line.len and std.mem.indexOfScalar(u8, "#*:;", line[prefix]) != null) : (prefix += 1) {}
+            while (!anchored_inline and prefix < line.len and std.mem.indexOfScalar(u8, "#*:;", line[prefix]) != null) : (prefix += 1) {}
             const html_tag = if (syntax.tagAt(clean, 0)) |tag| (if (!tag.closing and
                 oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) and
                 syntax.matchingTag(clean, tag) != null) tag else null) else null;
-            const special = html_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or starts(line, " ") or starts(clean, "{|") or starts(clean, "----") or starts(clean, "<pre") or starts(clean, "<syntaxhighlight");
+            const special = html_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or (!anchored_inline and (starts(line, " ") or starts(clean, "{|") or starts(clean, "----"))) or starts(clean, "<pre") or starts(clean, "<syntaxhighlight");
             if (!special) {
                 if (para == null) {
                     para = start;
@@ -2726,6 +2775,74 @@ test "opaque extensions render safely without leaking parser delimiters" {
     try std.testing.expect(std.mem.indexOf(u8, text_value, "<gallery") == null);
     try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
     try std.testing.expectEqualStrings("A cat", r.media.items[0].caption);
+
+    // Authored witnesses: billion revision 1153469 uses 10^{12}; or revision
+    // 1139764 uses the hiero body below. Other numeric forms are controls.
+    // The supported subset does not implement general TeX or hieroglyphs.
+    const power_cases = [_]struct { source: []const u8, base: []const u8, exponent: []const u8 }{
+        .{ .source = "<math>10^{12}</math>", .base = "10", .exponent = "12" },
+        .{ .source = "<math>10^3</math>", .base = "10", .exponent = "3" },
+        .{ .source = "<math>2^{0}</math>", .base = "2", .exponent = "0" },
+    };
+    for (power_cases) |case| {
+        var power: Renderer = .{ .a = a, .context = .{} };
+        const power_spans = try power.parseSpans(case.source, .{});
+        try std.testing.expectEqual(@as(usize, 2), power_spans.len);
+        try std.testing.expectEqualStrings(case.base, power_spans[0].text);
+        try std.testing.expectEqualStrings(case.exponent, power_spans[1].text);
+        try std.testing.expect(!power_spans[0].flags.superscript and power_spans[1].flags.superscript);
+        try std.testing.expect(!power_spans[0].flags.code and !power_spans[1].flags.code);
+        try std.testing.expect(!power.fallbacks.any());
+    }
+    const opaque_cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "<math>10^12</math>", .visible = "10^12" },
+        .{ .source = "<math>10^</math>", .visible = "10^" },
+        .{ .source = "<math>10^{}</math>", .visible = "10^{}" },
+        .{ .source = "<math>10^{{12}}</math>", .visible = "10^{{12}}" },
+        .{ .source = "<math>10^{1+2}</math>", .visible = "10^{1+2}" },
+        .{ .source = "<math>10^{-2}</math>", .visible = "10^{-2}" },
+        .{ .source = "<math>10^{12}+1</math>", .visible = "10^{12}+1" },
+        .{ .source = "<math>prefix10^3</math>", .visible = "prefix10^3" },
+        .{ .source = "<math>10^3tail</math>", .visible = "10^3tail" },
+        .{ .source = "<math> 10^3 </math>", .visible = " 10^3 " },
+        .{ .source = "<math>10^{٣}</math>", .visible = "10^{٣}" },
+        .{ .source = "<math>\\frac{1}{2}</math>", .visible = "\\frac{1}{2}" },
+        .{ .source = "<math>10^{\\alpha}</math>", .visible = "10^{\\alpha}" },
+        .{ .source = "<math display='block'>10^{12}</math>", .visible = "10^{12}" },
+        .{ .source = "<hiero>r: Z1-p-w</hiero>", .visible = "r: Z1-p-w" },
+        .{ .source = "<ce>H2O</ce>", .visible = "H2O" },
+        .{ .source = "<chem>CO2</chem>", .visible = "CO2" },
+        .{ .source = "<score>{ c'4 d' }</score>", .visible = "{ c'4 d' }" },
+        .{ .source = "<timeline>ImageSize = width:100 height:50</timeline>", .visible = "ImageSize = width:100 height:50" },
+    };
+    for (opaque_cases) |case| {
+        var opaque_renderer: Renderer = .{ .a = a, .context = .{} };
+        const literal_spans = try opaque_renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, literal_spans));
+        try std.testing.expect(opaque_renderer.fallbacks.unsupported_element);
+        try std.testing.expect(!opaque_renderer.fallbacks.unclosed_formatting);
+        for (literal_spans) |span| {
+            try std.testing.expect(span.flags.code);
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        }
+    }
+    var unclosed_math: Renderer = .{ .a = a, .context = .{} };
+    const unclosed_spans = try unclosed_math.parseSpans("<math>10^{12}", .{});
+    try std.testing.expectEqualStrings("10^{12}", try flattened(a, unclosed_spans));
+    try std.testing.expect(unclosed_math.fallbacks.unclosed_formatting and unclosed_math.fallbacks.unsupported_element);
+    for (unclosed_spans) |span| try std.testing.expect(span.flags.code and !span.flags.superscript);
+    const literal_cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "<pre>[[literal]]</pre>", .visible = "[[literal]]" },
+        .{ .source = "<source>{{literal}}</source>", .visible = "{{literal}}" },
+        .{ .source = "<syntaxhighlight>x &amp; y</syntaxhighlight>", .visible = "x & y" },
+        .{ .source = "<nowiki><math>10^{12}</math></nowiki>", .visible = "<math>10^{12}</math>" },
+    };
+    for (literal_cases) |case| {
+        var literal_renderer: Renderer = .{ .a = a, .context = .{} };
+        const literal_spans = try literal_renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, literal_spans));
+        try std.testing.expect(!literal_renderer.fallbacks.any());
+    }
 }
 
 test "reference identity includes group and decodes attribute entities" {
@@ -3748,6 +3865,12 @@ test "balanced formatting wrapper preserves implicit block newline and list styl
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+    // Trailing paragraph continuity is deliberately outside the new list-only path.
+    var trailing: Renderer = .{ .a = a, .context = .{} };
+    const trailing_blocks = try trailing.renderBody("<s>one\n* later\nlast paragraph\n</s>\nafter");
+    try std.testing.expectEqualStrings("last paragraph  after", try flattened(a, trailing_blocks[trailing_blocks.len - 1].spans));
+    try std.testing.expect(trailing.fallbacks.unclosed_formatting);
+
     var r: Renderer = .{ .a = a, .context = .{} };
     const blocks = try r.renderBody("<small>\n* هذه الصفحة معتمدة على [[مرجع|كتاب]]\n* <b>notice</b></small>\nAfter");
     try std.testing.expectEqual(@as(usize, 3), blocks.len);
@@ -3770,6 +3893,62 @@ test "balanced formatting wrapper preserves implicit block newline and list styl
     try std.testing.expectEqualStrings("After", try flattened(a, blocks[2].spans));
     for (blocks[2].spans) |span| try std.testing.expect(!span.flags.small);
     try std.testing.expect(!r.fallbacks.unclosed_formatting);
+    // Authored clinometer rev1115142 pairs s across later line-start list
+    // markers. The first # follows an inline opener and stays literal text.
+    var clinical: Renderer = .{ .a = a, .context = .{} };
+    const clinical_blocks = try clinical.renderBody("<s># مقياس الميل\n2222231\n23154+6\n*\n*\n</s>");
+    try std.testing.expect(!clinical.fallbacks.unclosed_formatting);
+    try std.testing.expectEqual(Kind.paragraph, clinical_blocks[0].kind);
+    try std.testing.expectEqualStrings("# مقياس الميل 2222231 23154+6", try flattened(a, clinical_blocks[0].spans));
+    for (clinical_blocks[0].spans) |span| try std.testing.expect(span.flags.strike);
+    // Nonempty controlled list proves scope retention, not corpus incidence.
+    var scoped: Renderer = .{ .a = a, .context = .{} };
+    const scoped_blocks = try scoped.renderBody("<s># literal\ncontinuation\n* later [[target|item]]\n</s>\nAfter");
+    try std.testing.expectEqual(@as(usize, 3), scoped_blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, scoped_blocks[0].kind);
+    try std.testing.expectEqualStrings("# literal continuation", try flattened(a, scoped_blocks[0].spans));
+    try std.testing.expectEqual(Kind.list_item, scoped_blocks[1].kind);
+    try std.testing.expectEqualStrings("*", scoped_blocks[1].list_path);
+    try std.testing.expectEqualStrings("later item", try flattened(a, scoped_blocks[1].spans));
+    for (scoped_blocks[0..2]) |part| for (part.spans) |span| try std.testing.expect(span.flags.strike);
+    try std.testing.expectEqualStrings("After", try flattened(a, scoped_blocks[2].spans));
+    for (scoped_blocks[2].spans) |span| try std.testing.expect(!span.flags.strike);
+    try std.testing.expect(!scoped.fallbacks.unclosed_formatting);
+
+    // Ordinary soft-newline wrappers must remain in their original paragraph.
+    for ([_]struct { source: []const u8, text: []const u8 }{
+        .{ .source = "<s>one\ntwo</s>\nthree", .text = "one two three" },
+        .{ .source = "before\n<s>one\ntwo</s>", .text = "before one two" },
+    }) |case| {
+        var continuous: Renderer = .{ .a = a, .context = .{} };
+        const continuous_blocks = try continuous.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), continuous_blocks.len);
+        try std.testing.expectEqual(Kind.paragraph, continuous_blocks[0].kind);
+        try std.testing.expectEqualStrings(case.text, try flattened(a, continuous_blocks[0].spans));
+        try std.testing.expect(!continuous.fallbacks.unclosed_formatting);
+    }
+
+    // Consuming an extension on that same physical line must not re-anchor #.
+    var rescanned: Renderer = .{ .a = a, .context = .{} };
+    const rescanned_blocks = try rescanned.renderBody("<s><templatestyles src=\"x\"/># literal\n* later\n</s>\nAfter");
+    try std.testing.expectEqual(@as(usize, 3), rescanned_blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, rescanned_blocks[0].kind);
+    try std.testing.expectEqualStrings("# literal", try flattened(a, rescanned_blocks[0].spans));
+    try std.testing.expectEqual(Kind.list_item, rescanned_blocks[1].kind);
+    try std.testing.expect(!rescanned.fallbacks.unclosed_formatting);
+
+    // An already active paragraph keeps its old continuity and limitation;
+    // this narrow repair does not promote or claim to repair that path.
+    var preceding: Renderer = .{ .a = a, .context = .{} };
+    const preceding_blocks = try preceding.renderBody("before\n<s># inline\n* later\n</s>");
+    try std.testing.expectEqual(@as(usize, 2), preceding_blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, preceding_blocks[0].kind);
+    try std.testing.expectEqualStrings("before # inline", try flattened(a, preceding_blocks[0].spans));
+    try std.testing.expectEqual(Kind.list_item, preceding_blocks[1].kind);
+    try std.testing.expect(preceding.fallbacks.unclosed_formatting);
+    for (preceding_blocks[1].spans) |span| try std.testing.expect(!span.flags.strike);
+
+
 }
 
 test "nested block formatting restores parent flags and keeps unclosed reports" {
