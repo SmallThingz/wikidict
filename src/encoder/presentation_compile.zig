@@ -1377,6 +1377,19 @@ pub const Renderer = struct {
         if (tag.is("span")) if (tag.attr("data-phonos-audio")) |raw_file| {
             try self.mediaFileKind(try self.entityText(raw_file), content, .audio);
         };
+        if (tag.is("ol") or tag.is("ul") or tag.is("dl")) {
+            // Span-only containers, including ordinary table cells, still need
+            // the same list counters and nesting as block HTML. Flatten those
+            // semantic blocks instead of converting every li to a bullet.
+            var list_blocks: std.ArrayList(Block) = .empty;
+            try self.htmlList(&list_blocks, content, tag, "", depth + 1, s);
+            if (list_blocks.items.len == 0) return pair.end;
+            if (self.spans.items.len != 0 and self.spans.items[self.spans.items.len - 1].kind != .line_break)
+                try self.lineBreak(s);
+            try self.blocksInline(list_blocks.items, s);
+            try self.lineBreak(s);
+            return pair.end;
+        }
         if (tag.is("li")) try self.text("• ", style);
         const annotation = tag.is("rt") or tag.is("rtc");
         const parenthetical = annotation and style.ruby_parentheses;
@@ -1784,7 +1797,7 @@ pub const Renderer = struct {
                         } else try self.block(&blocks, .preformatted, clean[0..pair.end], "", "", 0);
                     }
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
-                    try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0);
+                    try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, .{});
                 } else try blocks.appendSlice(self.a, try self.renderBody(clean[tag.end..pair.inner_end]));
                 pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
                 if (pos < input.len and input[pos] == '\n') pos += 1;
@@ -1881,7 +1894,7 @@ pub const Renderer = struct {
         if (para) |p| try self.paragraph(&blocks, input[p..]);
         return try blocks.toOwnedSlice(self.a);
     }
-    fn htmlList(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, list_tag: syntax.Tag, parent_path: []const u8, depth: usize) Error!void {
+    fn htmlList(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, list_tag: syntax.Tag, parent_path: []const u8, depth: usize, style: Style) Error!void {
         if (depth >= max_depth) {
             self.fallbacks.render_limit = true;
             try self.block(blocks, .preformatted, input, parent_path, "", 0);
@@ -1924,7 +1937,7 @@ pub const Renderer = struct {
                 if (reversed) ordinal -|= 1 else ordinal +|= 1;
             }
             const kind: Kind = if (mark == '#' or mark == '*') .list_item else if (mark == ';') .term else .list_detail;
-            try self.htmlListItem(blocks, input[item.end..pair.inner_end], kind, path, number, item, depth);
+            try self.htmlListItem(blocks, input[item.end..pair.inner_end], kind, path, number, item, depth, style);
             cursor = pair.end;
             preceding = cursor;
         }
@@ -1957,7 +1970,7 @@ pub const Renderer = struct {
         };
         return result.toOwnedSlice(self.a);
     }
-    fn htmlListItem(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, depth: usize) Error!void {
+    fn htmlListItem(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, depth: usize, style: Style) Error!void {
         var cursor: usize = 0;
         var preceding: usize = 0;
         var emitted = false;
@@ -1974,7 +1987,7 @@ pub const Renderer = struct {
             cursor = tag.end;
             if (tag.closing or !(tag.is("ul") or tag.is("ol") or tag.is("dl") or tag.is("table"))) continue;
             const pair = syntax.matchingTag(input, tag) orelse continue;
-            try self.htmlListItemPart(blocks, input[preceding..at], if (emitted) .list_detail else kind, path, if (emitted) "" else number, item, !emitted);
+            try self.htmlListItemPart(blocks, input[preceding..at], if (emitted) .list_detail else kind, path, if (emitted) "" else number, item, !emitted, style);
             emitted = true;
             if (tag.is("table")) {
                 const nested = try self.renderBody(input[at..pair.end]);
@@ -1985,17 +1998,17 @@ pub const Renderer = struct {
                     if (child.kind == .paragraph) child.kind = .list_detail;
                     try self.appendBlockBudgeted(blocks, child);
                 }
-            } else try self.htmlList(blocks, input[tag.end..pair.inner_end], tag, path, depth + 1);
+            } else try self.htmlList(blocks, input[tag.end..pair.inner_end], tag, path, depth + 1, style);
             cursor = pair.end;
             preceding = cursor;
         }
-        try self.htmlListItemPart(blocks, input[preceding..], if (emitted) .list_detail else kind, path, if (emitted) "" else number, item, !emitted);
+        try self.htmlListItemPart(blocks, input[preceding..], if (emitted) .list_detail else kind, path, if (emitted) "" else number, item, !emitted, style);
     }
-    fn htmlListItemPart(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, keep_empty: bool) Error!void {
+    fn htmlListItemPart(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, keep_empty: bool, style: Style) Error!void {
         // Reuse semantic attribute/style handling while removing only the list
         // marker tag. Its li identity must not reach the inline bullet path.
         const styled = try std.fmt.allocPrint(self.a, "<span{s}>{s}</span>", .{ item.attrs, input });
-        const spans = try self.parseSpans(styled, .{});
+        const spans = try self.parseSpans(styled, style);
         if (!keep_empty and trim(try plainText(self.a, spans)).len == 0) return;
         const effective_path = if (kind == .list_detail and (path[path.len - 1] == '*' or path[path.len - 1] == '#')) try std.fmt.allocPrint(self.a, "{s}:", .{path}) else path;
         try self.appendBlockBudgeted(blocks, .{ .kind = kind, .spans = spans, .depth = @intCast(@min(effective_path.len, 255)), .list_path = effective_path, .number = number });
@@ -4482,4 +4495,63 @@ test "normalized closing apostrophes retain literal extras and emphasis" {
     try std.testing.expectEqualStrings("'''word", try flattened(a, unclosed));
     for (unclosed) |span| try std.testing.expect(!span.flags.bold and !span.flags.italic);
     try std.testing.expect(all_balanced);
+}
+
+
+test "HTML ordered lists in ordinary table cells retain numbering and links" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_][]const u8{
+        "<table><tr><td><ol start='3'><li>[[first]]</li><li value='7'>second</li></ol></td></tr></table>",
+        "{|\n| <ol start='3'><li>[[first]]</li><li value='7'>second</li></ol>\n|}\n",
+    };
+    for (cases) |input| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(input);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqual(Kind.table, blocks[0].kind);
+        const rows = blocks[0].table.?.rows;
+        try std.testing.expectEqual(@as(usize, 1), rows.len);
+        try std.testing.expectEqual(@as(usize, 1), rows[0].cells.len);
+        const spans = rows[0].cells[0].spans;
+        try std.testing.expectEqualStrings("3. first\n7. second\n", try flattened(a, spans));
+        var links: usize = 0;
+        for (spans) |span| if (span.kind == .link) {
+            try std.testing.expectEqualStrings("first", span.text);
+            try std.testing.expectEqualStrings("first", span.target);
+            links += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
+    }
+    var empty: Renderer = .{ .a = a, .context = .{} };
+    const no_items = try empty.renderBody("<table><tr><td>before<ol></ol>after</td></tr></table>");
+    try std.testing.expectEqualStrings("beforeafter", try flattened(a, no_items[0].table.?.rows[0].cells[0].spans));
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const literal = try protected.renderBody("{|\n| <nowiki><ol><li>literal</li></ol></nowiki>\n|}\n");
+    try std.testing.expectEqualStrings("<ol><li>literal</li></ol>", try flattened(a, literal[0].table.?.rows[0].cells[0].spans));
+}
+
+
+test "HTML table cell lists retain nested counters surrounding text and inline style" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<table><tr><td>before<ol start='3'><li>outer<ol type='i' start='4'><li>[[inner]]</li><li value='9'>next</li></ol>tail</li><li value='7'><b>last</b></li></ol>after</td></tr></table>");
+    const spans = blocks[0].table.?.rows[0].cells[0].spans;
+    try std.testing.expectEqualStrings("before\n3. outer\niv. inner\nix. next\ntail\n7. last\nafter", try flattened(a, spans));
+    var inner_link = false;
+    var bold_last = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "inner")) inner_link = span.kind == .link and std.mem.eql(u8, span.target, "inner");
+        if (std.mem.eql(u8, span.text, "last")) bold_last = span.flags.bold;
+    }
+    try std.testing.expect(inner_link and bold_last);
+    const styled = try r.renderBody("{|\n| <small lang='an'><ol><li>[[word]]</li></ol></small>\n|}\n");
+    var inherited_style = false;
+    for (styled[0].table.?.rows[0].cells[0].spans) |span| {
+        if (span.kind == .link) inherited_style = span.flags.small and std.mem.eql(u8, span.language, "an");
+    }
+    try std.testing.expect(inherited_style);
 }

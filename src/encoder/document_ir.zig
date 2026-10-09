@@ -748,7 +748,11 @@ fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
     const body = input[body_start..close];
     var separator: ?usize = null;
     for (body, 0..) |byte, index| {
-        if (byte == ' ' or byte == '\t') {
+        // MediaWiki ends the URL before an HTML label even without whitespace.
+        // Reuse the existing tag parser; malformed angle text is not a new URL rule.
+        if (byte == ' ' or byte == '\t' or
+            (byte == '<' and syntax.tagAt(body, index) != null))
+        {
             separator = index;
             break;
         }
@@ -756,7 +760,7 @@ fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
     const raw_target = if (separator) |index| body[0..index] else body;
     const target = std.mem.trim(u8, raw_target, " \t");
     if (target.len == 0 or !validExternalUrl(target)) return null;
-    const raw_label = if (separator) |index| std.mem.trimStart(u8, body[index + 1 ..], " \t") else target;
+    const raw_label = if (separator) |index| std.mem.trimStart(u8, body[index..], " \t") else target;
     const label = if (raw_label.len == 0) target else raw_label;
     return .{ .end = close + 1, .target = target, .label = label };
 }
@@ -1083,4 +1087,35 @@ test "external link closure ignores quoted HTML attributes outside nested templa
 test "external sequential closing bracket leaves the second bracket outside the link" {
     const source = "[https://example.test visible]]";
     try std.testing.expectEqual(source.len - 2, findExternalLinkClose(source, 0).?);
+}
+
+
+test "external HTML-label boundary preserves URL, attribute and bracket controls" {
+    // Arabic Navbar rev1008819 concatenates its URL directly with an abbr tag.
+    // MediaWiki Parser::EXT_LINK_URL_CLASS excludes '<'; label spacing is optional.
+    const cases = [_]struct { source: []const u8, target: []const u8, label: []const u8 }{
+        .{ .source = "[//example.test/w/index.php?title=%D8%AD&action=edit<abbr title=\"عدل هذا القالب\">ت</abbr>]", .target = "//example.test/w/index.php?title=%D8%AD&action=edit", .label = "<abbr title=\"عدل هذا القالب\">ت</abbr>" },
+        .{ .source = "[https://example.test/a<span title=\"] [[ ]]\">visible</span>]", .target = "https://example.test/a", .label = "<span title=\"] [[ ]]\">visible</span>" },
+        .{ .source = "[https://example.test/a<nowiki>]</nowiki> visible]", .target = "https://example.test/a", .label = "<nowiki>]</nowiki> visible" },
+        .{ .source = "[https://example.test/a <abbr>spaced</abbr>]", .target = "https://example.test/a", .label = "<abbr>spaced</abbr>" },
+        .{ .source = "[https://example.test/%3Cabbr%3E?q=a%3Eb]", .target = "https://example.test/%3Cabbr%3E?q=a%3Eb", .label = "https://example.test/%3Cabbr%3E?q=a%3Eb" },
+        .{ .source = "[https://example.test/a(b)!? plain label]", .target = "https://example.test/a(b)!?", .label = "plain label" },
+    };
+    for (cases) |case| {
+        const link = parseExternalLinkAt(case.source, 0) orelse return error.ExpectedExternalLink;
+        try std.testing.expectEqual(case.source.len, link.end);
+        try std.testing.expectEqualStrings(case.target, link.target);
+        try std.testing.expectEqualStrings(case.label, link.label);
+    }
+    const trailing = "[https://example.test/a<abbr title=\"]\">visible</abbr>]]";
+    const link = parseExternalLinkAt(trailing, 0) orelse return error.ExpectedExternalLink;
+    try std.testing.expectEqual(trailing.len - 1, link.end);
+    try std.testing.expectEqualStrings("]", trailing[link.end..]);
+    for ([_][]const u8{
+        "[https://<abbr>no address</abbr>]",
+        "[javascript:alert(1)<abbr>unsafe</abbr>]",
+        "[https://example.test<broken]",
+        "[https://example.test<abbr title=\"]\">no outer close</abbr>",
+        "[https://example.test<abbr title=\"broken]",
+    }) |source| try std.testing.expect(parseExternalLinkAt(source, 0) == null);
 }

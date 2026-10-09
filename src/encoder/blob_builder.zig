@@ -516,13 +516,73 @@ fn resolveLinkedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLangua
         if (title.id == 14 and std.mem.eql(u8, namespaces.content_language, "am"))
             target = std.mem.trim(u8, title.text, " \t\r\n");
     }
-    const resolved = codes.resolveStrong(target) orelse codes.resolveTrusted(target) orelse return null;
+    const arabic = if (codes.namespace_catalog) |namespaces| std.mem.eql(u8, namespaces.content_language, "ar") else false;
+    const exact_target = codes.resolveStrong(target) orelse codes.resolveTrusted(target);
+    var target_buffer: [256]u8 = undefined;
+    const resolved = exact_target orelse blk: {
+        if (!arabic) return null;
+        const normalized = arabicDeclarationToken(target, &target_buffer) orelse return null;
+        break :blk codes.resolveStrong(normalized) orelse codes.resolveTrusted(normalized) orelse return null;
+    };
     if (pipe < body.len) {
         const label = std.mem.trim(u8, body[pipe + 1 ..], " \t\r\n");
-        if (codes.resolveStrong(label) orelse codes.resolveTrusted(label)) |displayed|
-            if (!std.mem.eql(u8, resolved.code, displayed.code)) return null;
+        if (arabic and std.mem.indexOfScalar(u8, label, '|') != null) return null;
+        var displayed = codes.resolveStrong(label) orelse codes.resolveTrusted(label);
+        var label_buffer: [256]u8 = undefined;
+        if (arabic and displayed == null) {
+            if (arabicDeclarationToken(label, &label_buffer)) |normalized| {
+                displayed = codes.resolveStrong(normalized) orelse codes.resolveTrusted(normalized);
+            }
+        }
+        if (displayed) |language| {
+            if (!std.mem.eql(u8, resolved.code, language.code)) return null;
+        } else if (exact_target == null) return null;
     }
     return resolved;
+}
+
+// Frozen AN language templates emit this complete toc declaration. Resolve the
+// banner itself; raw support headings can legitimately change boundary counts.
+fn resolveAnBannerHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "an") or value.len > 4096) return null;
+    const syntax = blobs.wikitext_syntax;
+    const heading = std.mem.trim(u8, value, " \t\r\n");
+    const outer = syntax.tagAt(heading, 0) orelse return null;
+    if (!outer.is("div") or outer.closing or outer.self_closing or
+        !std.mem.eql(u8, outer.attr("id") orelse "", "toc") or
+        !std.mem.eql(u8, outer.attr("class") orelse "", "toccolours") or
+        !std.mem.endsWith(u8, heading, "</div>") or outer.end + 6 > heading.len) return null;
+    var rest = std.mem.trim(u8, heading[outer.end .. heading.len - 6], " \t");
+    if (std.mem.startsWith(u8, rest, "[[")) {
+        const image = syntax.balanced(rest, 0) orelse return null;
+        const body = rest[2..image.inner_end];
+        const pipe = syntax.delimiter(body, "|", 0) orelse return null;
+        if (namespaces.ofTitle(body[0..pipe]).id != 6 or
+            !std.mem.eql(u8, std.mem.trim(u8, body[pipe + 1 ..], " \t"), "40px")) return null;
+        rest = std.mem.trimStart(u8, rest[image.end..], " \t");
+    }
+    if (!std.mem.startsWith(u8, rest, "'''''[[")) return null;
+    rest = rest[5..];
+    const link = syntax.balanced(rest, 0) orelse return null;
+    const body = rest[2..link.inner_end];
+    const pipe = syntax.delimiter(body, "|", 0) orelse return null;
+    if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null or
+        std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null) return null;
+    var target = std.mem.trim(u8, body[0..pipe], " \t");
+    if (std.mem.startsWith(u8, target, "Wiktionary:")) target = target[11..];
+    const label = std.mem.trim(u8, body[pipe + 1 ..], " \t");
+    const language = codes.resolve(label) orelse return null;
+    const target_language = codes.resolve(target) orelse return null;
+    if (!std.mem.eql(u8, language.code, target_language.code)) return null;
+    rest = std.mem.trimStart(u8, rest[link.end..], " \t");
+    if (!std.mem.startsWith(u8, rest, "'''''")) return null;
+    rest = std.mem.trimStart(u8, rest[5..], " \t");
+    if (rest.len < 21 or !std.mem.startsWith(u8, rest, "<small>- ''") or !std.mem.endsWith(u8, rest, "''</small>")) return null;
+    const suffix = rest[11 .. rest.len - 10];
+    const suffix_language = codes.resolve(suffix) orelse return null;
+    if (!std.mem.eql(u8, language.code, suffix_language.code)) return null;
+    return language;
 }
 
 // The Arabic declaration form links the words "in language" before the
@@ -555,6 +615,20 @@ fn arabicDeclarationToken(value: []const u8, scratch: []u8) ?[]const u8 {
         i += 1;
     }
     return scratch[0..n];
+}
+
+// A complete Arabic "language <name>" heading is an explicit declaration.
+// Resolve only an authenticated whole label; never derive ownership from a lemma.
+fn resolveArabicLanguageHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "ar")) return null;
+    const heading = std.mem.trim(u8, value, " \t\r\n");
+    const prefix = "لغة";
+    if (!std.mem.startsWith(u8, heading, prefix) or heading.len <= prefix.len or
+        (heading[prefix.len] != ' ' and heading[prefix.len] != '\t')) return null;
+    const label = std.mem.trim(u8, heading[prefix.len..], " \t");
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "[]{}<>|=\r\n") != null) return null;
+    return codes.resolveStrong(label) orelse codes.resolveTrusted(label);
 }
 
 fn resolveLinkedDeclaration(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
@@ -661,6 +735,7 @@ fn arabicLemmaDeclaration(codes: LanguageCodes, section: language_source.Section
     // A trusted L2 language declaration must not be reassigned by nested POS.
     if (codes.resolveStrong(heading) != null or codes.resolveTrusted(heading) != null or
         resolveLinkedHeading(codes, heading) != null or resolveLinkedDeclaration(codes, heading) != null or
+        resolveArabicLanguageHeading(codes, heading) != null or
         hasExplicitLanguageDeclaration(codes, section)) return .{};
     const markers: LanguageMarkers = .{ .codes = &codes };
     return language_source.arabicNounSubtree(section, languageSections(section.source, &markers).control_matcher);
@@ -672,12 +747,14 @@ fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?Resol
     if (codes.namespace_catalog) |namespaces| if (std.mem.eql(u8, namespaces.content_language, "az")) {
         if (declarationLabel(codes, section.heading)) |label| return codes.resolve(label);
     };
+    if (resolveAnBannerHeading(codes, section.heading)) |resolved| return resolved;
     const classified = language_source.classificationSection(section);
     if (resolveCategorizedHeading(codes, classified)) |resolved| return resolved;
 
     if (!std.mem.eql(u8, classified, section.heading))
         if (resolveTrimmed(codes, classified)) |resolved| return resolved;
 
+    if (resolveArabicLanguageHeading(codes, classified)) |resolved| return resolved;
     if (resolveLinkedHeading(codes, classified)) |resolved| return resolved;
     if (resolveLinkedDeclaration(codes, classified)) |resolved| return resolved;
 
@@ -705,6 +782,7 @@ fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?Res
     if (noun.present) return if (noun.code) |code| codes.resolve(code) else null;
     const heading = language_source.classificationSection(section);
     if (resolveCategorizedHeading(codes, heading)) |resolved| return resolved;
+    if (resolveArabicLanguageHeading(codes, heading)) |resolved| return resolved;
     if (codes.resolve(std.mem.trim(u8, heading, " \t\r\n\'\""))) |resolved| return resolved;
     if (resolveLinkedHeading(codes, heading)) |resolved| return resolved;
     var cursor: usize = 0;
@@ -918,6 +996,40 @@ fn corroboratedEqualsDeclaration(codes: LanguageCodes, raw: language_source.Sect
 }
 
 
+// ANG constitution rev54826 uses the noun role Nama at language depth.
+// Its exact en-nama headword template invokes the English noun module. Only
+// this aligned continuation of an explicit English section disambiguates the
+// homographic Nama language name; ordinary Nama declarations keep their owner.
+fn angEnglishNounContinuation(
+    codes: LanguageCodes,
+    previous_raw: language_source.Section,
+    raw: language_source.Section,
+    rendered: language_source.Section,
+    current_code: []const u8,
+) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "ang") or
+        !std.mem.eql(u8, current_code, "en") or
+        previous_raw.hyphen_marker or raw.hyphen_marker or rendered.hyphen_marker) return null;
+    if (!std.mem.eql(u8, std.mem.trim(u8, previous_raw.heading, " \t\r\n"), "{{sprǣc|en}}") or
+        !std.mem.eql(u8, std.mem.trim(u8, raw.heading, " \t\r\n"), "Nama") or
+        !std.mem.eql(u8, std.mem.trim(u8, rendered.heading, " \t\r\n"), "Nama")) return null;
+    const previous_end = std.mem.indexOfScalar(u8, previous_raw.source, '\n') orelse return null;
+    const raw_end = std.mem.indexOfScalar(u8, raw.source, '\n') orelse return null;
+    const rendered_end = std.mem.indexOfScalar(u8, rendered.source, '\n') orelse return null;
+    if (!std.mem.eql(u8, std.mem.trim(u8, previous_raw.source[0..previous_end], " \t\r"), "=={{sprǣc|en}}==") or
+        !std.mem.eql(u8, std.mem.trim(u8, raw.source[0..raw_end], " \t\r"), "==Nama==") or
+        !std.mem.eql(u8, std.mem.trim(u8, rendered.source[0..rendered_end], " \t\r"), "==Nama==")) return null;
+    // Require the literal first non-whitespace token, not a template inside a
+    // comment, protected span, nested template, example or later translation.
+    const body = std.mem.trimStart(u8, raw.source[raw_end + 1 ..], " \t\r\n");
+    const headword = "{{en-nama}}";
+    if (!std.mem.startsWith(u8, body, headword) or
+        (body.len > headword.len and !std.ascii.isWhitespace(body[headword.len]))) return null;
+    const language = codes.resolve("en") orelse return null;
+    return if (std.mem.eql(u8, language.code, "en")) language else null;
+}
+
 fn processMain(
     page_allocator: std.mem.Allocator,
     spools: *Spools,
@@ -1043,9 +1155,13 @@ fn processMain(
     const isolate_mixed = sections.mixed_levels or isolate_arabic_lemmas;
 
     for (page_sections.items, 0..) |section, index| {
-        var resolved: ?ResolvedLanguage = null;
-        if (raw_aligned) resolved = resolveSection(codes, raw_sections.items[index]);
-        if (resolved) |raw_language| if (boundaryLanguage(codes, section)) |rendered_language| {
+        const ang_continuation = if (raw_aligned and index > 0 and current != null)
+            angEnglishNounContinuation(codes, raw_sections.items[index - 1], raw_sections.items[index], section, groups.items[current.?].language.code)
+        else
+            null;
+        var resolved: ?ResolvedLanguage = ang_continuation;
+        if (resolved == null and raw_aligned) resolved = resolveSection(codes, raw_sections.items[index]);
+        if (ang_continuation == null) if (resolved) |raw_language| if (boundaryLanguage(codes, section)) |rendered_language| {
             if (!std.mem.eql(u8, raw_language.code, rendered_language.code) and
                 !corroboratedEqualsDeclaration(codes, raw_sections.items[index], section, raw_language.code, rendered_language.code))
             {
@@ -1639,6 +1755,38 @@ test "raw language markers canonicalize templated headings" {
     defer arena.deinit();
     const a = arena.allocator();
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var banner_namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tanwiktionary\n# dump-date\t20261001\n# content-language\tan\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer banner_namespaces.deinit();
+    var banner_codes = TestLanguages.codes();
+    banner_codes.namespace_catalog = &banner_namespaces;
+    const banner = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Aragon.svg|40px]] '''''[[Wiktionary:Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div>";
+    try std.testing.expect(resolveSection(banner_codes, .{ .heading = banner, .source = "" }) != null);
+    try std.testing.expectEqualStrings("an", resolveSection(banner_codes, .{ .heading = banner, .source = "" }).?.code);
+    for ([_][]const u8{
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Catalán|Aragonés]]''''' <small>- ''Aragonés''</small></div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Aragonés|Aragonés]]''''' <small>- ''Catalán''</small></div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Unknown|Unknown]]''''' <small>- ''Unknown''</small></div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Aragonés|Aragonés]]''''' <small>- ''</small></div>",
+        "<nowiki><div id=\"toc\" class=\"toccolours\" >'''''[[Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div></nowiki>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Aragonés|Aragonés]]''''' extra <small>- ''Aragonés''</small></div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Aragonés|Aragonés]]''''' '''''[[Catalán|Catalán]]''''' <small>- ''Aragonés''</small></div>",
+    }) |bad_banner| try std.testing.expect(resolveSection(banner_codes, .{ .heading = bad_banner, .source = "" }) == null);
+    try std.testing.expect(resolveSection(TestLanguages.codes(), .{ .heading = banner, .source = "" }) == null);
+    var foreign_namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer foreign_namespaces.deinit();
+    var foreign_codes = TestLanguages.codes();
+    foreign_codes.namespace_catalog = &foreign_namespaces;
+    try std.testing.expect(resolveSection(foreign_codes, .{ .heading = banner, .source = "" }) == null);
     const codes = TestLanguages.codes();
     var writer = try Writer.init(std.testing.io, a, root);
     defer writer.deinit();
@@ -2880,6 +3028,9 @@ test "Arabic whole linked declarations match vocalized language labels without g
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             if (std.mem.eql(u8, value, "الكردية")) return .{ .code = "ku", .heading = "الكردية" };
             if (std.mem.eql(u8, value, "الإنجليزية")) return .{ .code = "en", .heading = "الإنجليزية" };
+            if (std.mem.eql(u8, value, "ألمانية")) return .{ .code = "de", .heading = "الألمانية" };
+            if (std.mem.eql(u8, value, "إنجليزية")) return .{ .code = "en", .heading = "الإنجليزية" };
+            if (std.mem.eql(u8, value, "عربية")) return .{ .code = "ar", .heading = "العربية" };
             return null;
         }
     };
@@ -2899,6 +3050,26 @@ test "Arabic whole linked declarations match vocalized language labels without g
         "aal",
         "اَلْمَعَانِي",
     }) |negative| try std.testing.expect(resolveLinkedDeclaration(codes, negative) == null);
+    // aalen revision 1135343: the whole L2 is an explicit German declaration.
+    const aalen_source = "== لغة ألمانية ==\n=== المعنى ===\nاستلقى أو تمدد ليرتاح .\n";
+    try std.testing.expect(resolveSection(codes, .{ .heading = "لغة ألمانية", .source = aalen_source }) != null);
+    try std.testing.expectEqualStrings("de", resolveSection(codes, .{ .heading = "لغة ألمانية", .source = aalen_source }).?.code);
+    for ([_][]const u8{
+        "لغة مجهولة", "لغة ألمانية الإنجليزية", "لغة [[ألمانية|الإنجليزية]]",
+        "لغة ألمانية [[الإنجليزية]]", "لغة ألمانية|الإنجليزية", "لغة", "لغةألمانية",
+        "اسم ألماني", "اسم عَلَم", "اَلْمَعَانِي", "<nowiki>لغة ألمانية</nowiki>",
+    }) |heading| try std.testing.expect(resolveSection(codes, .{ .heading = heading, .source = "" }) == null);
+    var other_codes = codes;
+    other_codes.namespace_catalog = null;
+    try std.testing.expect(resolveSection(other_codes, .{ .heading = "لغة ألمانية", .source = aalen_source }) == null);
+    try std.testing.expectEqualStrings("en", resolveSection(codes, .{ .heading = "[[إِنْجْلِيزِيَّة|إِنْجِلِيْزِيَّة]]", .source = "" }).?.code);
+    try std.testing.expectEqualStrings("ar", resolveSection(codes, .{ .heading = "[[عَرَبِيَّة]]", .source = "" }).?.code);
+    for ([_][]const u8{ "[[أَلْمَانِيَّة|إِنْجِلِيزِيَّة]]", "[[عَرَبِيَّة|مجهولة]]", "[[عَرَبِيَّة|عَرَبِيَّة|extra]]", "[[عَرَبِيَّة]] [[إنجليزية]]" }) |heading|
+        try std.testing.expect(resolveSection(codes, .{ .heading = heading, .source = "" }) == null);
+    try std.testing.expect(!language_source.arabicNounSubtree(.{ .heading = "إنجليزي", .source = "== إنجليزي ==\n=== اسم عَلَم ===\n# هيئة الإذاعة البريطانية\n" }, null).present);
+    try std.testing.expect(!language_source.arabicNounSubtree(.{ .heading = "إنجليزي", .source = "== إنجليزي ==\n=== اسم علم ===\n# proper noun\n" }, null).present);
+    try std.testing.expectEqualStrings("de", resolveSection(codes, .{ .heading = "[[ألمانية|arbitrary display text]]", .source = "" }).?.code);
+    try std.testing.expect(resolveSection(codes, .{ .heading = "[[ألمانية|إِنْجِلِيزِيَّة]]", .source = "" }) == null);
     var tiny: [1]u8 = undefined;
     try std.testing.expect(arabicDeclarationToken("الكردية", &tiny) == null);
 }
@@ -3025,4 +3196,122 @@ test "Arabic exact nested noun declarations classify only one untrusted L2 lemma
     try std.testing.expect(resolveSection(other, english) == null);
     try std.testing.expectEqualStrings("en", resolveSection(codes, .{ .heading = "aal", .source = "== aal ==__NOEDITSECTION__\n=== اسم إنجليزي === __NOEDITSECTION__\n# controlled body" }).?.code);
     try std.testing.expect(resolveSection(codes, .{ .heading = "aal", .source = "== aal ==\n=== اسم إنجليزي === __UNKNOWN_SWITCH__\n# unknown suffix" }) == null);
+}
+
+
+test "ANG explicit English noun continuation does not steal genuine Nama" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Local = struct {
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |language| language.code else null;
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Nama") or std.mem.eql(u8, value, "nmx"))
+                return .{ .code = "nmx", .heading = "Nama" };
+            if (std.mem.eql(u8, value, "Nīwenglisc") or std.mem.eql(u8, value, "en"))
+                return .{ .code = "en", .heading = "Nīwenglisc" };
+            return TestLanguages.resolve(null, value);
+        }
+        fn trusted(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Nama") or std.mem.eql(u8, value, "Nīwenglisc")) return resolve(null, value);
+            return TestLanguages.trusted(null, value);
+        }
+        fn strong(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Nama") or std.mem.eql(u8, value, "Nīwenglisc")) return resolve(null, value);
+            return TestLanguages.strong(null, value);
+        }
+    };
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tangwiktionary\n# dump-date\t20261001\n# content-language\tang\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tBysen\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tFlocc\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var other_namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tafwiktionary\n# dump-date\t20261001\n# content-language\taf\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tSjabloon\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tKategorie\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer other_namespaces.deinit();
+    var codes = TestLanguages.codes();
+    codes.get_fn = Local.get;
+    codes.resolve_fn = Local.resolve;
+    codes.trusted_fn = Local.trusted;
+    codes.strong_fn = Local.strong;
+    codes.namespace_catalog = &namespaces;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ang-nama", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact raw constitution rev54826; the representative expanded fixture
+    // retains its observed visible Lua error, noun body and typed link. The
+    // ownership repair must not claim to repair the absent Module:spraeca.
+    const constitution_raw = "=={{sprǣc|en}}==\n===Rihtstefn===\n* IPA: /ˌkɒn.stɪˈtjuː.ʃ(ə)n/\n===Wordstǣr===\nOf {{ier|en|enm|constitucioun}}\n==Nama==\n{{en-nama}} (mnf. constitutions)\n# [[gesetnes]]\n====Wendunga====\nEnglisc: [[gesetnes]]";
+    const error_text = "Lua error in Module:en-hēafodword: ModuleNotFound";
+    const constitution_expanded = "==Nīwenglisc==\n===Rihtstefn===\n* IPA: /ˌkɒn.stɪˈtjuː.ʃ(ə)n/\n===Wordstǣr===\nOf constitucioun\n==Nama==\n<strong class=\"error scribunto-error\">" ++ error_text ++ "</strong> (mnf. constitutions)\n# [[gesetnes]]\n====Wendunga====\nEnglisc: [[gesetnes]]";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "constitution", constitution_expanded, constitution_raw, null);
+    const prefix_raw = "=={{sprǣc|en}}==\n# EN_PREFIX\n";
+    const prefix_expanded = "==Nīwenglisc==\n# EN_PREFIX\n";
+    const cases = .{
+        .{ "genuine-nama", "==Nama==\n# NAMA_BODY\n", "==Nama==\n# NAMA_BODY\n" },
+        .{ "missing-cue", prefix_raw ++ "==Nama==\n# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n# NAMA_BODY\n" },
+        .{ "wrong-cue", prefix_raw ++ "==Nama==\n{{en-verb}}\n# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n# NAMA_BODY\n" },
+        .{ "protected-cue", prefix_raw ++ "==Nama==\n<nowiki>{{en-nama}}</nowiki>\n# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n<nowiki>{{en-nama}}</nowiki>\n# NAMA_BODY\n" },
+        .{ "comment-cue", prefix_raw ++ "==Nama==\n<!--{{en-nama}}-->\n# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n# NAMA_BODY\n" },
+        .{ "nested-cue", prefix_raw ++ "==Nama==\n{{quote|{{en-nama}}}}\n# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n# NAMA_BODY\n" },
+        .{ "current-nama", "=={{sprǣc|nmx}}==\n# NAMA_PREFIX\n==Nama==\n{{en-nama}}\n# NAMA_BODY\n", "==Nama==\n# NAMA_PREFIX\n==Nama==\n# NAMA_BODY\n" },
+        .{ "explicit-nama", prefix_raw ++ "=={{sprǣc|nmx}}==\n{{en-nama}}\n# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n# NAMA_BODY\n" },
+        .{ "intervening-owner", prefix_raw ++ "==French==\n# FR_PREFIX\n==Nama==\n{{en-nama}}\n# NAMA_BODY\n", prefix_expanded ++ "==French==\n# FR_PREFIX\n==Nama==\n# NAMA_BODY\n" },
+        .{ "unaligned", prefix_raw ++ "==Nama==\n{{en-nama}}\n# NAMA_BODY\n", prefix_expanded ++ "==French==\n# FR_PREFIX\n==Nama==\n# NAMA_BODY\n" },
+        .{ "later-cue", prefix_raw ++ "==Nama==\n# NAMA_BODY\n{{en-nama}}\n", prefix_expanded ++ "==Nama==\n# NAMA_BODY\n" },
+    };
+    inline for (cases) |row|
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row[0], row[2], row[1], null);
+    var other_codes = codes;
+    other_codes.namespace_catalog = &other_namespaces;
+    writer.language_codes = other_codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "other-edition", prefix_expanded ++ "==Nama==\n# NAMA_BODY\n", prefix_raw ++ "==Nama==\n{{en-nama}}\n# NAMA_BODY\n", null);
+    writer.language_codes = codes;
+    _ = try writer.finish(codes);
+
+    var english_map = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Nīwenglisc"));
+    defer english_map.deinit();
+    const english = try blob_format.inspect(english_map.bytes);
+    const english_metadata = try english.languageMetadata();
+    try std.testing.expectEqualStrings("en", english_metadata.code);
+    var english_index = try english.buildTrustedIndexAlloc(a);
+    defer english_index.deinit(a);
+    const record = (try english_index.find("constitution")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, english_metadata);
+    var visible: std.ArrayList(u8) = .empty;
+    var noun_heading = false;
+    var links: usize = 0;
+    for (decoded.entry.sections) |section| {
+        noun_heading = noun_heading or std.mem.eql(u8, section.title, "Nama");
+        for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (std.mem.eql(u8, span.target, "gesetnes")) links += 1;
+        };
+    }
+    try std.testing.expect(noun_heading);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, error_text) != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "constitutions") != null);
+    try std.testing.expectEqual(@as(usize, 2), links);
+    var nama_map = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Nama"));
+    defer nama_map.deinit();
+    const nama = try blob_format.inspect(nama_map.bytes);
+    try std.testing.expectEqualStrings("nmx", (try nama.languageMetadata()).code);
+    var nama_index = try nama.buildTrustedIndexAlloc(a);
+    defer nama_index.deinit(a);
+    try std.testing.expect((try nama_index.find("constitution")) == null);
+    inline for (cases) |row| {
+        const native_record = (try nama_index.find(row[0])).?;
+        try std.testing.expect(std.mem.indexOf(u8, native_record.payload, "NAMA_BODY") != null);
+        if (try english_index.find(row[0])) |foreign_record|
+            try std.testing.expect(std.mem.indexOf(u8, foreign_record.payload, "NAMA_BODY") == null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, (try nama_index.find("other-edition")).?.payload, "NAMA_BODY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, (try english_index.find("other-edition")).?.payload, "NAMA_BODY") == null);
 }

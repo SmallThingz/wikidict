@@ -795,3 +795,45 @@ test "AM source malformed style preserves both pronunciations and typed hiragana
     const protected = try workAlloc(a, "literal", "ጃፓንኛ", "<nowiki>" ++ literal ++ "</nowiki>", .{}, null, null, null, .{});
     try std.testing.expectEqualStrings(literal, try compiler.plainText(a, protected.sections[0].blocks[0].spans));
 }
+
+
+test "external HTML-label boundary compiles the Arabic Navbar witness as data-only links" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact literal span in closed AR228 حُرّ, emitted by Navbar rev1008819.
+    const target = "//en.wiktionary.org/w/index.php?title=%D9%82%D8%A7%D9%84%D8%A8:%D8%AD_%D8%B1_%D8%B1&action=edit";
+    const witness = "[" ++ target ++ "<abbr title=\"عدل هذا القالب\">ت</abbr>]";
+    for ([_][]const u8{ witness, "{|\n| " ++ witness ++ "\n|}\n" }) |source| {
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "حُرّ", .language, "Unclassified", "", source, null, &report);
+        const decoded = try codec.decodeAlloc(a, bytes, "حُرّ", .language, .{ .code = "", .heading = "Unclassified" });
+        const block = decoded.entry.sections[0].blocks[0];
+        const spans = if (block.table) |table| table.rows[0].cells[0].spans else block.spans;
+        try std.testing.expectEqual(@as(usize, 1), spans.len);
+        try std.testing.expectEqual(types.InlineKind.external_link, spans[0].kind);
+        try std.testing.expectEqualStrings(target, spans[0].target);
+        try std.testing.expectEqualStrings("ت", spans[0].text);
+        try std.testing.expect(!report.any());
+    }
+    const protected_source = "<nowiki>" ++ witness ++ "</nowiki>";
+    var protected_report: Fallbacks = .{};
+    const protected_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", protected_source, null, &protected_report);
+    const protected = try codec.decodeAlloc(a, protected_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var protected_text: std.ArrayList(u8) = .empty;
+    for (protected.entry.sections[0].blocks[0].spans) |span| {
+        try std.testing.expect(span.kind != .external_link);
+        try protected_text.appendSlice(a, span.text);
+    }
+    try std.testing.expectEqualStrings(witness, protected_text.items);
+    try std.testing.expect(!protected_report.any());
+    const attribute_source = "<span title=\"[https://example.test/x<abbr>hidden</abbr>]\">visible</span>";
+    var attribute_report: Fallbacks = .{};
+    const attribute_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", attribute_source, null, &attribute_report);
+    const attribute = try codec.decodeAlloc(a, attribute_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    const spans = attribute.entry.sections[0].blocks[0].spans;
+    try std.testing.expectEqual(@as(usize, 1), spans.len);
+    try std.testing.expect(spans[0].kind != .external_link);
+    try std.testing.expectEqualStrings("visible", spans[0].text);
+    try std.testing.expect(!attribute_report.any());
+}

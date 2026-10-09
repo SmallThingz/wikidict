@@ -17,6 +17,13 @@ pub const Section = struct {
 pub fn explicitLanguageDeclaration(raw: []const u8, content_language: []const u8) ?[]const u8 {
     const declaration = if (std.mem.eql(u8, content_language, "ar")) "اللغة" else if (std.mem.eql(u8, content_language, "az")) "Dil" else return null;
     const heading = std.mem.trim(u8, raw, " \t");
+    if (std.mem.eql(u8, content_language, "ar") and std.mem.startsWith(u8, heading, "لغة") and
+        heading.len > "لغة".len and (heading["لغة".len] == ' ' or heading["لغة".len] == '\t'))
+    {
+        const label = std.mem.trim(u8, heading["لغة".len..], " \t");
+        if (label.len == 0 or std.mem.indexOfAny(u8, label, "{}[]<>|=\r\n") != null) return null;
+        return label;
+    }
     if (!std.mem.startsWith(u8, heading, "{{") or !std.mem.endsWith(u8, heading, "}}")) return null;
     const body = heading[2 .. heading.len - 2];
     const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return null;
@@ -236,7 +243,9 @@ pub fn arabicNounSubtree(section: Section, matcher: ?syntax.ControlMatcher) Arab
                 if (heading.level <= 2) return .{};
                 if (heading.level == 3) {
                     const label = std.mem.trim(u8, heading.title, " \t\r");
-                    if (std.mem.startsWith(u8, label, "اسم ")) {
+                    // Beeb rev1430527 uses this ordinary proper-noun POS, not a language adjective.
+                    const proper_noun = std.mem.eql(u8, label, "اسم عَلَم") or std.mem.eql(u8, label, "اسم علم");
+                    if (!proper_noun and std.mem.startsWith(u8, label, "اسم ")) {
                         declarations += 1;
                         if (saw_heading or declarations != 1) invalid = true;
                         const adjective = std.mem.trim(u8, label["اسم ".len..], " \t");
@@ -450,6 +459,13 @@ pub const CategoryIterator = struct {
 };
 
 test "explicit Arabic language declarations do not depend on known labels" {
+    try std.testing.expect(explicitLanguageDeclaration("لغة ألمانية", "ar") != null);
+    try std.testing.expectEqualStrings("ألمانية", explicitLanguageDeclaration("لغة ألمانية", "ar").?);
+    try std.testing.expectEqualStrings("مجهولة", explicitLanguageDeclaration("لغة مجهولة", "ar").?);
+    try std.testing.expect(explicitLanguageDeclaration("لغة ألمانية", "en") == null);
+    try std.testing.expect(explicitLanguageDeclaration("لغة [[ألمانية|الإنجليزية]]", "ar") == null);
+    try std.testing.expect(explicitLanguageDeclaration("اسم عَلَم", "ar") == null);
+
     try std.testing.expectEqualStrings("دانماركية", explicitLanguageDeclaration("{{اللغة|دانماركية}}", "ar").?);
     try std.testing.expectEqualStrings("كتالونية", explicitLanguageDeclaration(" {{ اللغة | كتالونية }} ", "ar").?);
     try std.testing.expect(explicitLanguageDeclaration("{{اللغة|دانماركية}}", "en") == null);

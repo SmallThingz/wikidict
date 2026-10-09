@@ -1706,8 +1706,14 @@ test "AN artiga source headers and exact Occitan alias preserve four owned defin
     const raw = "{{-an-}}\n{{Prenunziazión|/arˈti.ga/}}\n:*'''Etimolochía''': Parola prerromana frecuent eno lecsico d'as rechions que embironan o Perineu.\n\n{{-noun.fem-}}\n{{inflect.sust.fem|artig|artigu|a|artiguiella}}\n'''artiga'''\n# Terreno [[artigar|artigato]], ixo ye, que s'ha [[rancar|rancato]] u [[cremar|cremato]] la [[broza|broza]] e dimpués s'ha [[aladrar|aladrato]] ta poner-lo de cautibo.\n{{-trans-}} \n* {{ca}}: {{trans|ca|artiga}} \n* {{es}}: {{trans|es|artiga}}\n* {{en}}: {{trans|en|slash-and-burn}}\n* {{fr}}: {{trans|fr|brûlis}}\n* {{oc}}: {{trans|oc|artiga}}\n|}\n===Bariant dialeutal===\n*[[xartica]]\n*[[artica]]\n\n{{-ca-}}\n{{-noun-}}\n'''artiga'''\n# [[artica]]\n\n{{-es-}}\n{{-noun-}}\n'''artiga'''\n# [[artica]]\n\n{{-oc-}}\n{{-noun-}}\n'''artiga'''\n# [[artica]]";
     const expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Aragon.svg|40px]] '''''[[Wiktionary:Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div>=\n__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en aragonés]]\n:*Prenunciación: /arˈti.ga/ (AFI)\n:*'''Etimolochía''': Parola prerromana frecuent eno lecsico d'as rechions que embironan o Perineu.\n\n==Sustantivo femenín==\n{|\n| artiga || artigas\n|}\n'''artiga'''\n# Terreno [[artigar|artigato]], ixo ye, que s'ha [[rancar|rancato]] u [[cremar|cremato]] la [[broza|broza]] e dimpués s'ha [[aladrar|aladrato]] ta poner-lo de cautibo.\n==Traduccions==\n{|\n| \n* ca: <span lang=\"ca\">[[artiga]]</span> \n* es: <span lang=\"es\">[[artiga]]</span>\n* en: <span lang=\"en\">[[slash-and-burn]]</span>\n* fr: <span lang=\"fr\">[[brûlis]]</span>\n* oc: <span lang=\"oc\">[[artiga]]</span>\n|}\n===Bariant dialeutal===\n*[[xartica]]\n*[[artica]]\n\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Catalonia.svg|40px]] '''''[[Wiktionary:Catalán|Catalán]]''''' <small>- ''Català''</small></div>=\n__NOTOC__\n__NOEDITSECTION__\n[[Category:Parabras en catalán]]\n==Sustantivo==\n'''artiga'''\n# [[artica]]\n\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Lang-es.gif|40px]] '''''[[espanyol|Espanyol]]''''' <small>- ''Español''</small></div>=\n__NOTOC__\n__NOEDITSECTION__\n\n[[Category:Parabras en español]]\n==Sustantivo==\n'''artiga'''\n# [[artica]]\n\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Occitania.svg|40px]] '''''[[Wiktionary:Occitán|Occitán]]''''' <small>- ''Occitan''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en oczitán]]\n==Sustantivo==\n'''artiga'''\n# [[artica]]";
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "artiga", expanded, raw, null);
+    // templar rev30170 has an ordinary L2 support heading between raw an/es
+    // markers. Reduced expansion below uses frozen declaration-template bytes;
+    // it is source-instantiated, not a retained expanded-output capture.
+    const templar_raw = "{{-an-}}\n# Aragonese templar meaning\n==Se beiga tamién==\n*[[templato|Templato]]\n{{-es-}}\n# Spanish templar meaning\n";
+    const templar_expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Aragon.svg|40px]] '''''[[Wiktionary:Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div>=\n==Verbo transitivo==\n# Aragonese templar meaning\n==Se beiga tamién==\n*[[templato|Templato]]\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Lang-es.gif|40px]] '''''[[espanyol|Espanyol]]''''' <small>- ''Español''</small></div>=\n==Verbo transitivo==\n# Spanish templar meaning\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "templar", templar_expanded, templar_raw, null);
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 6), stats.language_records);
     try std.testing.expectEqual(@as(usize, 4), stats.language_blobs);
     try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
     const headings = [_][]const u8{ "aragonés", "catalán", "espanyol", "occitano" };
@@ -1721,6 +1727,13 @@ test "AN artiga source headers and exact Occitan alias preserve four owned defin
         try std.testing.expectEqualStrings(expected_codes[which], metadata.code);
         var index = try blob.buildTrustedIndexAlloc(a);
         defer index.deinit(a);
+        if (which == 0 or which == 2) {
+            try std.testing.expect((try index.find("templar")) != null);
+            const templar_record = (try index.find("templar")).?;
+            try std.testing.expect(std.mem.indexOf(u8, templar_record.payload, if (which == 0) "Aragonese templar meaning" else "Spanish templar meaning") != null);
+            try std.testing.expect(std.mem.indexOf(u8, templar_record.payload, if (which == 0) "Spanish templar meaning" else "Aragonese templar meaning") == null);
+            try std.testing.expectEqual(which == 0, std.mem.indexOf(u8, templar_record.payload, "templato") != null);
+        } else try std.testing.expect((try index.find("templar")) == null);
         const record = (try index.find("artiga")).?;
         const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
         var definitions: usize = 0;
@@ -1773,7 +1786,7 @@ test "Aal exact Arabic noun subtrees preserve exclusive English German bodies an
     defer namespaces.deinit();
     var registry = language_registry.Registry.empty(a);
     defer registry.deinit();
-    try registry.addTsv("# content-language\tar\nen\tالإنجليزية\nde\tالألمانية\nar\tالعربية\naal\tAfade\n");
+    try registry.addTsv("# content-language\tar\nen\tالإنجليزية\tإنجليزي\nde\tالألمانية\nar\tالعربية\naal\tAfade\n");
     const codes = languageCodes(&registry, &namespaces);
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/aal", .{tmp.sub_path});
     var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
@@ -1788,6 +1801,17 @@ test "Aal exact Arabic noun subtrees preserve exclusive English German bodies an
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "native", native, native, null);
     const role = "== اَلْمَعَانِي ==\n# ROLE_ONLY_SENTINEL";
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "role", role, role, null);
+    // Beeb rev1430527 exact authored source: proper-noun POS is not a language adjective.
+    // No templates require expansion; retain the real linked English boundary and ordinary alias.
+    const beeb = "== [[إنجليزية]] ==\n== إنجليزي ==\n\n=== اسم عَلَم ===\n\n# هيئة الإذاعة البريطانية\n\n[[تصنيف:إنجليزية]]";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Beeb", beeb, beeb, null);
+    // aalen rev1135343 supplies the whole literal German-language heading.
+    // The conflicting nested declaration is a controlled precedence negative.
+    const prefix_conflict = "== لغة ألمانية ==\n=== اسم إنجليزي ===\n# DE_PREFIX_OWNER_SENTINEL\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "aalen-prefix-conflict", prefix_conflict, prefix_conflict, null);
+    // An explicit unknown whole-label declaration resets a previous valid owner.
+    const prefix_reset = "== لغة ألمانية ==\n# KNOWN_PREFIX_SENTINEL\n== لغة مجهولة ==\n# UNKNOWN_PREFIX_RESET_SENTINEL\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "prefix-reset", prefix_reset, prefix_reset, null);
     _ = try writer.finish(codes);
     const Expected = struct { heading: []const u8, code: []const u8, title: []const u8, required: []const []const u8, excluded: []const []const u8 };
     const cases = [_]Expected{
@@ -1797,6 +1821,10 @@ test "Aal exact Arabic noun subtrees preserve exclusive English German bodies an
         .{ .heading = "Unclassified", .code = "", .title = "scopes", .required = &.{ "UNDECLARED_SENTINEL", "UNKNOWN_SENTINEL", "CONFLICT_FIRST", "CONFLICT_SECOND" }, .excluded = &.{ "EN_SENTINEL" } },
         .{ .heading = "Unclassified", .code = "", .title = "role", .required = &.{ "ROLE_ONLY_SENTINEL" }, .excluded = &.{} },
         .{ .heading = "العربية", .code = "ar", .title = "native", .required = &.{ "NATIVE_UNSECTIONED_SENTINEL" }, .excluded = &.{} },
+        .{ .heading = "الإنجليزية", .code = "en", .title = "Beeb", .required = &.{ "هيئة الإذاعة البريطانية" }, .excluded = &.{ "DE_PREFIX_OWNER_SENTINEL", "die Aale", "UNKNOWN_SENTINEL" } },
+        .{ .heading = "الألمانية", .code = "de", .title = "aalen-prefix-conflict", .required = &.{ "DE_PREFIX_OWNER_SENTINEL" }, .excluded = &.{ "هيئة الإذاعة البريطانية", "شجيرة", "UNKNOWN_SENTINEL" } },
+        .{ .heading = "الألمانية", .code = "de", .title = "prefix-reset", .required = &.{ "KNOWN_PREFIX_SENTINEL" }, .excluded = &.{ "UNKNOWN_PREFIX_RESET_SENTINEL" } },
+        .{ .heading = "Unclassified", .code = "", .title = "prefix-reset", .required = &.{ "UNKNOWN_PREFIX_RESET_SENTINEL" }, .excluded = &.{ "KNOWN_PREFIX_SENTINEL" } },
     };
     for (cases) |expected| {
         var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
@@ -1807,7 +1835,9 @@ test "Aal exact Arabic noun subtrees preserve exclusive English German bodies an
         try std.testing.expectEqualStrings(expected.code, metadata.code);
         var index = try blob.buildTrustedIndexAlloc(a);
         defer index.deinit(a);
-        const record = (try index.find(expected.title)).?;
+        const found = try index.find(expected.title);
+        try std.testing.expect(found != null);
+        const record = found.?;
         const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
         var text: std.ArrayList(u8) = .empty;
         var india: usize = 0;
@@ -1823,5 +1853,17 @@ test "Aal exact Arabic noun subtrees preserve exclusive English German bodies an
             try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, expected.code, "en")) 1 else 0), india);
             try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, expected.code, "de")) 1 else 0), duden);
         }
+    }
+    // Every decoded positive is exclusive: no fallback or second owner can duplicate it.
+    inline for (.{ "الإنجليزية", "الألمانية", "العربية", "Unclassified" }) |heading| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename(heading, &filename) }));
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        if (!std.mem.eql(u8, heading, "الإنجليزية")) try std.testing.expect((try index.find("Beeb")) == null);
+        if (!std.mem.eql(u8, heading, "الألمانية")) try std.testing.expect((try index.find("aalen-prefix-conflict")) == null);
+        if (std.mem.eql(u8, heading, "الإنجليزية") or std.mem.eql(u8, heading, "العربية")) try std.testing.expect((try index.find("prefix-reset")) == null);
     }
 }

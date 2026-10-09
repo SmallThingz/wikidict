@@ -29,12 +29,12 @@ const function_ids = [_][]const u8{
     "subjectpagename", "subjectpagenamee", "namespace",     "namespacee",   "namespacenumber", "talkspace",     "talkspacee",
     "subjectspace",    "subjectspacee",    "int",           "special",      "tag",             "formatdate",    "displaytitle",
     "expr",            "if",               "ifeq",          "ifexpr",       "iferror",         "switch",        "ifexist",
-    "time",            "titleparts",       "len",           "sub",          "categorytree",    "invoke",
+    "time",            "titleparts",       "len",           "sub",          "categorytree",    "invoke",       "lst",
 };
 
 pub const hash_function_ids = [_][]const u8{
     "special", "tag",     "formatdate", "expr",       "if",  "ifeq", "ifexpr",       "iferror",
-    "switch",  "ifexist", "time",       "titleparts", "len", "sub",  "categorytree", "invoke",
+    "switch",  "ifexist", "time",       "titleparts", "len", "sub",  "categorytree", "invoke", "lst",
 };
 
 fn hashFunction(id: []const u8) bool {

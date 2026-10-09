@@ -296,6 +296,10 @@ def auxiliary_capture_helper(name, path):
         import prepare_behavior_switches
         return prepare_behavior_switches
     if name=='magic-words':
+        record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
+        if isinstance(record,dict) and type(record.get('version')) is int and record['version']==5:
+            import prepare_magic_words_lst
+            return prepare_magic_words_lst
         import prepare_magic_words_language
         return prepare_magic_words_language
     if name in ('wikibase-entities','wikibase-entity-terms'):
@@ -675,12 +679,12 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
                 if all(present):snapshots[name]=path
             snapshots.update(preferred)
-            from prepare_magic_words_language import selected_snapshot_root
+            from prepare_magic_words_lst import selected_snapshot_root
             magic_root=selected_snapshot_root(root)
             if magic_root.exists() or magic_root.is_symlink():
                 if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
                 path=magic_root/'magic-words.tsv'
-                from prepare_magic_words_language import validate_snapshot
+                from prepare_magic_words_lst import validate_snapshot
                 validate_snapshot(path,edition,date)
                 snapshots['magic-words']=path
         elif (downloads/edition/date/'namespace-registry.tsv').is_file():

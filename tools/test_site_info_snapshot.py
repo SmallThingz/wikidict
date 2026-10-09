@@ -178,6 +178,23 @@ class SiteInfoSnapshotTests(unittest.TestCase):
 
     def test_discovery_binds_selected_capture_and_cannot_invent_missing_siteinfo(self):
         root = self.fixture()
+        import prepare_magic_words as magic_base
+        import prepare_magic_words_int as magic_int
+        import prepare_magic_words_language as magic_language
+        import prepare_magic_words_lst as magic_lst
+        raw = magic_base.document({'query': {
+            'general': {'wikiid': 'testwiktionary', 'lang': 'en'},
+            'magicwords': [dict(name=name, aliases=[name], **{'case-sensitive': False})
+                for name in sorted(magic_base.SUPPORTED | magic_base.PARSER_FUNCTIONS | {'int', 'language', 'lst'})]}})
+        def fetch(url):
+            return raw, dict(source_url=url, response_url=url, status=200,
+                started_utc='2026-10-05T06:00:00+00:00', retrieved_utc='2026-10-05T06:00:01+00:00',
+                raw_sha256=digest(raw), raw_bytes=len(raw))
+        with patch.object(magic_base, 'fetch_response', side_effect=AssertionError('Network forbidden')):
+            magic_base.capture_snapshot(root, 'testwiktionary', '20261001', fetcher=fetch)
+            magic_int.derive_snapshot(root / 'magic-words', root / magic_int.DERIVED_DIRECTORY)
+            magic_language.derive_snapshot(root / magic_int.DERIVED_DIRECTORY, root / magic_language.DERIVED_DIRECTORY)
+            magic_lst.derive_snapshot(root / magic_language.DERIVED_DIRECTORY, root / magic_lst.DERIVED_DIRECTORY)
         capture = json.loads((root / 'capture.complete.json').read_bytes())
         source = capture['source_xml']
         downloads = self.root / 'downloads'
@@ -192,6 +209,7 @@ class SiteInfoSnapshotTests(unittest.TestCase):
         with patch.object(b, 'PROJECT', self.root):
             options = b.resolve_edition_snapshot_options(manifest, {key: [source]}, downloads)[key]
         self.assertEqual(options['auxiliary_snapshots']['site-info'], root / s.SNAPSHOT_NAME)
+        self.assertEqual(options['auxiliary_snapshots']['magic-words'], root / magic_lst.DERIVED_DIRECTORY / 'magic-words.tsv')
         b.validate_captured_snapshot('site-info', root / s.SNAPSHOT_NAME, capture, [source], root)
         other = self.fixture('other')
         (other / 'capture.complete.json').write_bytes((other / 'capture.complete.json').read_bytes() + b' ')

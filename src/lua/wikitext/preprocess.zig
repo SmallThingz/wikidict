@@ -279,7 +279,7 @@ fn isTagNameBoundary(s: []const u8, pos: usize) bool {
     return s[pos] == '>' or s[pos] == '/' or std.ascii.isWhitespace(s[pos]);
 }
 
-fn rawTagEnd(s: []const u8, start: usize) ?usize {
+pub fn rawTagEnd(s: []const u8, start: usize) ?usize {
     var quote: u8 = 0;
     var i = start + 1;
     while (i < s.len) : (i += 1) {
@@ -345,7 +345,7 @@ pub fn findTemplateOpenOutsideLiteralTags(s: []const u8, start: usize) ?usize {
     return if (findNextConstructOutsideLiteralTags(s, start)) |construct| construct.open else null;
 }
 
-fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
+pub fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
     if (start >= s.len or s[start] != '<') return null;
     if (std.mem.startsWith(u8, s[start..], "<!--")) {
         const close = std.mem.indexOfPos(u8, s, start + 4, "-->") orelse return s.len;

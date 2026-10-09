@@ -181,6 +181,7 @@ pub const Expander = struct {
     max_template_depth: usize = 128,
     template_depth: usize = 0,
     lazy_template_args: std.ArrayList(LazyTemplateArgs) = .empty,
+    transclusion_frame: ?*const TransclusionFrame = null,
 
     pub fn attach(self: *Expander) void {
         self.host.ctx = self;
@@ -241,6 +242,7 @@ pub const Expander = struct {
         self.page_line = .empty;
         self.template_depth = 0;
         self.lazy_template_args = .empty;
+        self.transclusion_frame = null;
         self.attach();
     }
 
@@ -581,6 +583,15 @@ pub const Expander = struct {
         return .normal;
     }
 
+    // Ordinary template frames participate in the same LST loopCheck ancestry.
+    // The parser title remains unchanged; only child-frame title/args are replaced.
+    fn expandTransclusionText(self: *Expander, title: []const u8, text: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
+        const frame: TransclusionFrame = .{ .title = title, .parent = self.transclusion_frame };
+        self.transclusion_frame = &frame;
+        defer self.transclusion_frame = frame.parent;
+        return self.expandWikitext(text, args, title, depth);
+    }
+
     fn expandTemplateSource(self: *Expander, title: []const u8, raw: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
         if (work_stats.current()) |work| {
             work.template_preprocess_calls +|= 1;
@@ -590,7 +601,7 @@ pub const Expander = struct {
         const body = try preprocess.transcludeDecodedAlloc(self.runtime.allocator, raw);
         if (work_stats.current()) |work| work.template_preprocess_ns +|= work_stats.elapsed(preprocess_start);
         defer self.runtime.allocator.free(body);
-        return self.expandWikitext(body, args, title, depth + 1);
+        return self.expandTransclusionText(title, body, args, depth + 1);
     }
 
     fn missingTemplateMarkup(self: *Expander, title: []const u8) ![]const u8 {
@@ -623,7 +634,7 @@ pub const Expander = struct {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
                 return self.missingTemplateResult(raw_name, title, missing);
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
-            return self.expandWikitext(body.text, args, body.title, depth + 1);
+            return self.expandTransclusionText(body.title, body.text, args, depth + 1);
         }
         const raw = if (self.provider.get_transclusion) |get|
             (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
@@ -643,7 +654,7 @@ pub const Expander = struct {
         if (self.provider.get_template_symbol == null) if (self.provider.get_transclusion_body) |get| {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return self.missingTemplateMarkup(title);
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
-            return self.expandWikitext(body.text, args, body.title, depth + 1);
+            return self.expandTransclusionText(body.title, body.text, args, depth + 1);
         };
         const raw = if (self.provider.get_template_symbol) |get|
             (try get(self.provider.ctx, self.runtime.allocator, symbol.id)) orelse return self.missingTemplateMarkup(title)
@@ -1907,6 +1918,188 @@ pub const Expander = struct {
         return self.expandWikitext(plain, child_args, host_title, depth + 1);
     }
 
+
+    // LabeledSectionTransclusion::setupPfunc12 / pfuncIncludeObj, upstream
+    // 090442c1117b712be1c08582712da802b9da46aa. Select preprocessor-level
+    // source nodes before expansion: excluded templates cannot supply markers.
+    const TransclusionFrame = struct { title: []const u8, parent: ?*const TransclusionFrame };
+    const LstSection = struct { open: usize, attrs: []const u8, inner: []const u8, end: usize };
+
+    fn lstLocalName(self: *Expander, key: []const u8) []const u8 {
+        const lang = (self.runtime.namespace_catalog orelse return key).content_language;
+        if (std.mem.eql(u8, lang, "de")) {
+            if (std.mem.eql(u8, key, "section")) return "Abschnitt";
+            return if (std.mem.eql(u8, key, "begin")) "Anfang" else "Ende";
+        }
+        if (std.mem.eql(u8, lang, "he")) {
+            if (std.mem.eql(u8, key, "section")) return "קטע";
+            return if (std.mem.eql(u8, key, "begin")) "התחלה" else "סוף";
+        }
+        if (std.mem.eql(u8, lang, "pt")) {
+            if (std.mem.eql(u8, key, "section")) return "trecho";
+            return if (std.mem.eql(u8, key, "begin")) "começo" else "fim";
+        }
+        return key;
+    }
+
+    fn lstSectionAt(self: *Expander, text: []const u8, open: usize) ?LstSection {
+        if (text[open] != '<' or open + 1 >= text.len or text[open + 1] == '/') return null;
+        var p = open + 1;
+        const name_start = p;
+        while (p < text.len and text[p] != '>' and text[p] != '/' and !std.ascii.isWhitespace(text[p])) : (p += 1) {}
+        const name = text[name_start..p];
+        if (!std.ascii.eqlIgnoreCase(name, "section") and !std.ascii.eqlIgnoreCase(name, self.lstLocalName("section"))) return null;
+        const opening_end = preprocess.rawTagEnd(text, open) orelse return null;
+        var attrs_end = opening_end - 1;
+        while (attrs_end > p and std.ascii.isWhitespace(text[attrs_end - 1])) : (attrs_end -= 1) {}
+        const self_closing = attrs_end > p and text[attrs_end - 1] == '/';
+        if (self_closing) attrs_end -= 1;
+        var end = opening_end;
+        var inner: []const u8 = "";
+        if (!self_closing) {
+            var search = opening_end;
+            while (std.mem.indexOfScalarPos(u8, text, search, '<')) |lt| {
+                if (lt + name.len + 2 < text.len and text[lt + 1] == '/' and std.ascii.eqlIgnoreCase(text[lt + 2 .. lt + 2 + name.len], name)) {
+                    const boundary = lt + 2 + name.len;
+                    if (text[boundary] == '>' or std.ascii.isWhitespace(text[boundary])) {
+                        end = preprocess.rawTagEnd(text, lt) orelse text.len;
+                        inner = text[opening_end..lt];
+                        break;
+                    }
+                }
+                search = lt + 1;
+            }
+        }
+        return .{ .open = open, .attrs = text[p..attrs_end], .inner = inner, .end = end };
+    }
+
+    fn nextLstSection(self: *Expander, text: []const u8, start: usize) ?LstSection {
+        var p = start;
+        while (p < text.len) {
+            if (text[p] == '<') {
+                if (self.lstSectionAt(text, p)) |section| return section;
+                if (preprocess.opaqueParserRegionEnd(text, p)) |end| {
+                    p = end;
+                    continue;
+                }
+            }
+            if (p + 1 < text.len and text[p] == '{' and text[p + 1] == '{') {
+                if (preprocess.findNextConstructOutsideLiteralTags(text, p)) |construct| {
+                    if (construct.open == p) {
+                        p = construct.close + @as(usize, if (construct.kind == .parameter) 3 else 2);
+                        continue;
+                    }
+                }
+            }
+            p += 1;
+        }
+        return null;
+    }
+
+    fn lstAttributeMatches(self: *Expander, attrs: []const u8, kind: []const u8, label: []const u8) bool {
+        var p: usize = 0;
+        while (p < attrs.len) {
+            while (p < attrs.len and std.ascii.isWhitespace(attrs[p])) : (p += 1) {}
+            const start = p;
+            while (p < attrs.len and !std.ascii.isWhitespace(attrs[p]) and attrs[p] != '=') : (p += 1) {}
+            const name = attrs[start..p];
+            while (p < attrs.len and std.ascii.isWhitespace(attrs[p])) : (p += 1) {}
+            if (p == attrs.len or attrs[p] != '=') {
+                if (p == start) p += 1;
+                continue;
+            }
+            p += 1;
+            while (p < attrs.len and std.ascii.isWhitespace(attrs[p])) : (p += 1) {}
+            var value_start = p;
+            var value_end = p;
+            if (p < attrs.len and (attrs[p] == '\'' or attrs[p] == '"')) {
+                const quote = attrs[p];
+                p += 1;
+                value_start = p;
+                while (p < attrs.len and attrs[p] != quote) : (p += 1) {}
+                if (p == attrs.len) return false;
+                value_end = p;
+                p += 1;
+            } else {
+                while (p < attrs.len and !std.ascii.isWhitespace(attrs[p])) : (p += 1) {}
+                value_end = p;
+            }
+            if ((std.ascii.eqlIgnoreCase(name, kind) or std.ascii.eqlIgnoreCase(name, self.lstLocalName(kind))) and
+                std.mem.eql(u8, attrs[value_start..value_end], label)) return true;
+        }
+        return false;
+    }
+
+    fn expandLstInclude(self: *Expander, page_expr: []const u8, raw_args: []const []const u8, caller: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        if (depth > self.max_depth or self.template_depth >= self.max_template_depth) return error.TemplateDepth;
+        const a = self.runtime.allocator;
+        const page = std.mem.trim(u8, try self.expandWikitext(page_expr, caller, host_title, depth + 1), " \t\r\n");
+        if (page.len == 0 or invalidTransclusionTitle(page)) return "";
+        const local_page = switch (try self.classifyInterwikiTransclusion(page)) {
+            .normal => page,
+            .current_wiki => |name| name,
+            .literal, .external => return "",
+        };
+        const page_without_fragment = local_page[0 .. (std.mem.indexOfScalar(u8, local_page, '#') orelse local_page.len)];
+        if (page_without_fragment.len == 0) return "";
+        const title = namespace_lib.canonicalizeTitle(a, self.runtime, page_without_fragment) catch |err| switch (err) {
+            error.InvalidPageTitle => return "",
+            else => return err,
+        };
+        // Upstream checks the requested title against all caller frames BEFORE fetch.
+        var ancestor = self.transclusion_frame;
+        while (ancestor) |ancestor_frame| {
+            if (std.mem.eql(u8, ancestor_frame.title, title)) {
+                const warning = try message_lib.interfaceMessagePlain(self.runtime, "parser-template-loop-warning", &.{.{ .string = title }});
+                return std.fmt.allocPrint(a, "<span class=\"error\">{s}</span>", .{warning});
+            }
+            ancestor = ancestor_frame.parent;
+        }
+        var body: []const u8 = undefined;
+        var final_title = title;
+        var release_body = false;
+        if (self.provider.get_transclusion_body) |get| {
+            const fetched = (try get(self.provider.ctx, a, title)) orelse return std.fmt.allocPrint(a, "[[{s}]]", .{title});
+            body = fetched.text;
+            final_title = fetched.title;
+            release_body = !fetched.borrowed;
+        } else {
+            const raw = if (self.provider.get_transclusion) |get| try get(self.provider.ctx, a, title) else try hostPageContent(self, a, title);
+            body = try preprocess.transcludeDecodedAlloc(a, raw orelse return std.fmt.allocPrint(a, "[[{s}]]", .{title}));
+            release_body = true;
+        }
+        defer if (release_body) a.free(body);
+        // Arguments expand in the caller before entering a fresh target frame.
+        const begin = if (raw_args.len == 0) "" else std.mem.trim(u8, try self.expandWikitext(raw_args[0], caller, host_title, depth + 1), " \t\r\n");
+        const end = if (raw_args.len < 2) begin else std.mem.trim(u8, try self.expandWikitext(raw_args[1], caller, host_title, depth + 1), " \t\r\n");
+        const frame: TransclusionFrame = .{ .title = final_title, .parent = self.transclusion_frame };
+        self.transclusion_frame = &frame;
+        defer self.transclusion_frame = frame.parent;
+        self.template_depth += 1;
+        defer self.template_depth -= 1;
+        const args = try self.runtime.newTable();
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        var active = raw_args.len == 0 or begin.len == 0;
+        var pos: usize = 0;
+        while (self.nextLstSection(body, pos)) |section| {
+            if (active) try out.appendSlice(a, try self.expandWikitext(body[pos..section.open], args, final_title, depth + 1));
+            const attrs = try self.expandWikitext(section.attrs, args, final_title, depth + 1);
+            if (!active and self.lstAttributeMatches(attrs, "begin", begin)) active = true;
+            if (active and raw_args.len != 0 and self.lstAttributeMatches(attrs, "end", end)) {
+                active = false;
+                if (begin.len == 0) return out.toOwnedSlice(a);
+            } else if (active and raw_args.len != 0) {
+                // Selected-region traversal expands section inner source. The no-label
+                // whole-page path instead uses the noop hook and drops paired inner.
+                try out.appendSlice(a, try self.expandWikitext(section.inner, args, final_title, depth + 1));
+            }
+            pos = section.end;
+        }
+        if (active) try out.appendSlice(a, try self.expandWikitext(body[pos..], args, final_title, depth + 1));
+        return out.toOwnedSlice(a);
+    }
+
     fn expandParserHead(
         self: *Expander,
         head: []const u8,
@@ -1976,6 +2169,7 @@ pub const Expander = struct {
             if (std.ascii.eqlIgnoreCase(name, "#titleparts")) return try self.expandTitleParts(first, raw_args, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#iferror")) return try self.expandIfError(first, raw_args, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#invoke")) return try self.expandInvoke(first, raw_args, params, host_title, depth + 1);
+            if (std.ascii.eqlIgnoreCase(name, "#lst") or (self.provider.resolve_parser_function == null and std.ascii.eqlIgnoreCase(name, "#section"))) return try self.expandLstInclude(first, raw_args, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#categorytree"))
                 return try self.expandCategoryTreeParser(first, raw_args, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "#if")) {
@@ -4710,4 +4904,156 @@ test "unsupported parser diagnostics preserve literals and reset per page" {
     try std.testing.expect(!expander.unsupported_parser_function);
     try std.testing.expectEqualStrings("yes", try expander.expandFragment("Known", "{{#if:x|yes|no}}", 1_670_803_200));
     try std.testing.expect(!expander.unsupported_parser_function);
+}
+
+
+test "labelled section inclusion expands captured Arabic self toc regions with authoritative aliases" {
+    const aliases = rt.namespace_registry.magic_words;
+    const Source = struct {
+        words: ?*const aliases.Registry = null,
+        title: []const u8 = "",
+        text: []const u8 = "",
+        fn get(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            return if (std.mem.eql(u8, title, self.title)) self.text else null;
+        }
+        fn parser(raw: ?*anyopaque, name: []const u8) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            return (self.words orelse return null).resolve(name, .parser_function);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: Source = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = Source.get, .exists = TestProvider.exists } };
+    // Exact source-backed toc slices: a1 rev1136637 (516 B), a2 rev1136638 (521 B).
+    // Surrounding excluded text is a controlled fixture; neither source toc contains recursion.
+    const Fixture = struct { title: []const u8, region: []const u8 };
+    const fixtures = [_]Fixture{
+        .{ .title = "فهرس:إنجليزية/a1", .region = "\n<div style=\"width:100%;clear:both;border-top:1px solid #AAAAAA;border-bottom:1px solid #AAAAAA\">\n[[فهرس:إنجليزية/a1#globalWrapper|↑]] [[#a|a]] [[#aa|aa]] [[#ab|ab]] [[#ac|ac]] [[#ad|ad]] [[#ae|ae]] [[#af|af]] [[#ag|ag]] [[#ah|ah]] [[#ai|ai]] [[#aj|aj]] [[#ak|ak]] [[#al|al]] [[#am|am]] [[../a2#an|an]] [[../a2#ao|ao]] [[../a2#ap|ap]] [[../a2#aq|aq]] [[../a2#ar|ar]] [[../a2#as|as]] [[../a2#at|at]] [[../a2#au|au]] [[../a2#av|av]] [[../a2#aw|aw]] [[../a2#ax|ax]] [[../a2#ay|ay]] [[../a2#az|az]] </div>\n" },
+        .{ .title = "فهرس:إنجليزية/a2", .region = "\n<div style=\"width:100%;clear:both;border-top:1px solid #AAAAAA;border-bottom:1px solid #AAAAAA\">\n[[فهرس:إنجليزية/a2#globalWrapper|↑]] [[../a1#a|a]] [[../a1#aa|aa]] [[../a1#ab|ab]] [[../a1#ac|ac]] [[../a1#ad|ad]] [[../a1#ae|ae]] [[../a1#af|af]] [[../a1#ag|ag]] [[../a1#ah|ah]] [[../a1#ai|ai]] [[../a1#aj|aj]] [[../a1#ak|ak]] [[../a1#al|al]] [[../a1#am|am]] [[#an|an]] [[#ao|ao]] [[#ap|ap]] [[#aq|aq]] [[#ar|ar]] [[#as|as]] [[#at|at]] [[#au|au]] [[#av|av]] [[#aw|aw]] [[#ax|ax]] [[#ay|ay]] [[#az|az]] </div>\n" },
+    };
+    for (fixtures) |fixture| {
+        source.title = fixture.title;
+        source.text = try std.fmt.allocPrint(a, "OUTSIDE{{{{Loop}}}}<section begin=\"toc\" />{s}<section end=\"toc\" />OUTSIDE", .{fixture.region});
+        var calls: std.ArrayList(u8) = .empty;
+        var expected: std.ArrayList(u8) = .empty;
+        for (0..13) |_| {
+            try calls.appendSlice(a, try std.fmt.allocPrint(a, "{{{{#section:{s}|toc}}}}", .{fixture.title}));
+            try expected.appendSlice(a, fixture.region);
+        }
+        inline for (.{ false, true }) |authoritative| {
+            expander.provider.authoritative_page_source = authoritative;
+            expander.beginPage(fixture.title, if (authoritative) "PARTIAL CURRENT FRAGMENT" else source.text, 1_670_803_200);
+            const args = try runtime.newTable();
+            const actual = try expander.expandWikitext(calls.items, args, fixture.title, 0);
+            try std.testing.expectEqualStrings(expected.items, actual);
+            try std.testing.expect(!expander.unsupported_parser_function);
+            try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
+        }
+    }
+    // The unchanged baseline reaches the public source-backed inclusion assertion above.
+    // The candidate then also exercises the real strict captured alias registry.
+    var words = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\nlst\t0\tlst\nlst\t0\tsection\n", "arwiktionary", "20261001", "ar");
+    defer words.deinit();
+    source.words = &words;
+    expander.provider.resolve_parser_function = Source.parser;
+    const captured = try expander.expandFragment(source.title, try std.fmt.allocPrint(a, "{{{{#SeCtIoN:{s}|toc}}}}", .{source.title}), 1_670_803_200);
+    try std.testing.expectEqualStrings(fixtures[1].region, captured);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    // Captured aliases remain authoritative; unsupported sibling functions stay literal/diagnosed.
+    const unsupported = try expander.expandFragment("Page", "{{#lstx:Missing|toc}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, unsupported, "#lstx") != null);
+    try std.testing.expect(expander.unsupported_parser_function);
+}
+
+test "labelled section inclusion preserves upstream ranges protected nodes target frames redirects and cycles" {
+    const Source = struct {
+        fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "Sections")) return "before<section begin='a'/>A<section end='a'/>between<section begin=\"b\"/>B<section end=\"b\"/>after<section begin=a/>C<section end=a/>";
+            if (std.mem.eql(u8, title, "Protected")) return "<!--<section begin=x/>COMMENT<section end=x/>--><nowiki><section begin=x/>NOWIKI<section end=x/></nowiki><pre><section begin=x/>PRE<section end=x/></pre><ref><section begin=x/>REF<section end=x/></ref>{{Unused|<section begin=x/>ARG<section end=x/>}}<section other='>' BEGIN = 'x' extra=ok/>REAL<section END=x/>";
+            if (std.mem.eql(u8, title, "Target")) return "<section begin=x/>{{PAGENAME}}:{{{1|default}}}<section end=x/>";
+            if (std.mem.eql(u8, title, "Paired")) return "before<section begin=x>HIDDEN</section>after";
+            if (std.mem.eql(u8, title, "Template:A")) return "<section begin=x/>{{#lst:Template:A|x}}<section end=x/>";
+            if (std.mem.eql(u8, title, "Template:Forward")) return "{{#lst:Target|x}}";
+            if (std.mem.eql(u8, title, "Template:Parent")) return "<section begin=x/>{{/Child}}<section end=x/>|{{#lst:Alias|x}}";
+            if (std.mem.eql(u8, title, "Template:Parent/Child")) return "FRAME_CHILD";
+            if (std.mem.eql(u8, title, "Cycle")) return "<section begin=x/>{{#lst:Cycle|x}}<section end=x/>";
+            if (std.mem.eql(u8, title, "Local")) return "<Abschnitt Anfang=x/>LOCAL<Abschnitt Ende=x/>";
+            return null;
+        }
+        // Controlled captured-message fixture; production keeps its strict snapshot API.
+        fn message(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8, key: []const u8) !?Provider.InterfaceMessage {
+            if (std.mem.eql(u8, key, "parser-template-loop-warning")) return .{ .source = "Fixture loop warning: $1" };
+            return null;
+        }
+        fn body(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?Provider.TransclusionBody {
+            if (std.mem.eql(u8, title, "Alias"))
+                return .{ .text = (try get(raw, a, "Template:Parent")).?, .title = "Template:Parent", .borrowed = true };
+            return .{ .text = (try get(raw, a, title)) orelse return null, .title = title, .borrowed = true };
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = Source.get, .exists = TestProvider.exists, .interface_message = Source.message } };
+    const Case = struct { call: []const u8, expected: []const u8 };
+    const cases = [_]Case{
+        .{ .call = "{{#lst:Sections|a}}", .expected = "AC" },
+        .{ .call = "{{#section:Sections|a|b}}", .expected = "AbetweenBC" },
+        .{ .call = "{{#lst:Sections||b}}", .expected = "beforeAbetweenB" },
+        .{ .call = "{{#lst:Sections|b|}}", .expected = "BafterC" },
+        .{ .call = "{{#lst:Sections}}", .expected = "beforeAbetweenBafterC" },
+        .{ .call = "{{#lst:Sections|absent}}", .expected = "" },
+        .{ .call = "{{#lst:Paired}}", .expected = "beforeafter" },
+        .{ .call = "{{#lst:Paired|x}}", .expected = "HIDDENafter" },
+        .{ .call = "{{#lst:Missing|a}}", .expected = "[[Missing]]" },
+        .{ .call = "{{#lst:|a}}", .expected = "" },
+        .{ .call = "{{#lst:Protected|x}}", .expected = "REAL" },
+        .{ .call = "{{#lst:Target|x}}", .expected = "Caller:default" },
+        .{ .call = "{{#lst:Sections|a}}{{#lst:Sections|a}}", .expected = "ACAC" },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqualStrings(case.expected, try expander.expandFragment("Caller", case.call, 1_670_803_200));
+        try std.testing.expect(!expander.unsupported_parser_function);
+        try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
+    }
+    // PAGENAME uses the unchanged parser title, while target-frame relative templates
+    // use final_title. CoreParserFunctions::makeTitle / pagename, wmf1.47 lines809/920.
+    try std.testing.expectEqualStrings("Caller:default", try expander.expandFragment("Caller", "{{Forward|CALLER ARG MUST NOT LEAK}}", 1_670_803_200));
+    expander.provider.get_transclusion_body = Source.body;
+    try std.testing.expectEqualStrings("FRAME_CHILD", try expander.expandFragment("Caller", "{{#lst:Alias|x}}", 1_670_803_200));
+    // Requested Alias is allowed even when its fetched final title equals an ancestor.
+    // The selected region excludes the recursive outside invocation.
+    try std.testing.expectEqualStrings("<section begin=x/>FRAME_CHILD<section end=x/>|FRAME_CHILD", try expander.expandFragment("Caller", "{{Parent}}", 1_670_803_200));
+    expander.provider.get_transclusion_body = null;
+    const cycle = try expander.expandFragment("Caller", "{{#lst:Cycle|x}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, cycle, "<span class=\"error\">") != null);
+    const ordinary_cycle = try expander.expandFragment("Caller", "{{A}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, ordinary_cycle, "<span class=\"error\">") != null);
+    try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
+    try std.testing.expectEqualStrings("AC", try expander.expandFragment("Caller", "{{#lst:Sections|a}}", 1_670_803_200));
+    expander.max_depth = 3;
+    try std.testing.expectError(error.TemplateDepth, expander.expandFragment("Caller", "{{Forward}}", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
+    expander.max_depth = 512;
+    try std.testing.expectEqualStrings("AC", try expander.expandFragment("Caller", "{{#lst:Sections|a}}", 1_670_803_200));
+    var german = try rt.namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tdewiktionary\n# dump-date\t20261001\n# content-language\tde\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n" ++
+        "10\tVorlage\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tinput\n" ++
+        "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n");
+    defer german.deinit();
+    runtime.namespace_catalog = &german;
+    try std.testing.expectEqualStrings("LOCAL", try expander.expandFragment("Caller", "{{#lst:Local|x}}", 1_670_803_200));
 }
