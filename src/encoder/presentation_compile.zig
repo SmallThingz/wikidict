@@ -235,7 +235,21 @@ fn listRoot(mark: u8) u8 {
     return if (mark == ';' or mark == ':') ';' else mark;
 }
 pub fn inlineDefinitionSplit(text: []const u8) ?struct { term: []const u8, definition: []const u8 } {
-    const colon = syntax.delimiter(text, ":", 0) orelse return null;
+    var colon = syntax.delimiter(text, ":", 0) orelse return null;
+    // Links become anchors before MediaWiki's definition-list pass. Reuse the
+    // accepted bracketed/free-link extents without changing template delimiters.
+    var tokens: ir.InlineIterator = .{ .input = text };
+    while (true) {
+        const before = tokens.cursor;
+        const token = tokens.next() orelse break;
+        if (tokens.cursor <= before) break;
+        if (tokens.cursor <= colon) continue;
+        if (token.kind == .external_link and before <= colon) {
+            colon = syntax.delimiter(text, ":", tokens.cursor) orelse return null;
+            continue;
+        }
+        break;
+    }
     const term = std.mem.trim(u8, text[0..colon], " \t");
     const definition = std.mem.trim(u8, text[colon + 1 ..], " \t");
     if (term.len == 0 or definition.len == 0) return null;
@@ -1391,11 +1405,7 @@ pub const Renderer = struct {
                     try std.fmt.allocPrint(self.a, "{s} {s}", .{ s.classes, safe_classes.items });
             }
         }
-        if (tag.attr("lang")) |lang| s.language = try self.entityText(lang);
-        if (tag.attr("dir")) |dir| {
-            const decoded_dir = try self.entityText(dir);
-            if (std.ascii.eqlIgnoreCase(decoded_dir, "ltr")) s.direction = "ltr" else if (std.ascii.eqlIgnoreCase(decoded_dir, "rtl")) s.direction = "rtl" else if (std.ascii.eqlIgnoreCase(decoded_dir, "auto")) s.direction = "auto";
-        }
+        s = try self.htmlLanguageDirection(tag, s);
         const content = input[tag.end..pair.inner_end];
         // This attribute is emitted only after the runtime validates captured
         // AUDIO metadata. Keep canonical file, caption and language independent.
@@ -1542,7 +1552,15 @@ pub const Renderer = struct {
                     } else {
                         if (label_value.len == 0) label_value = pipeTrickLabel(target);
                         if (safeInternalTarget(target)) {
-                            try self.link(label_value, target, s, depth + 1, false);
+                            if (!token.link_has_pipe) {
+                                // The decoded default label is title text, not another wikitext input.
+                                var link_style = s;
+                                link_style.kind = .link;
+                                link_style.target = target;
+                                try self.text(label_value, link_style);
+                            } else {
+                                try self.link(label_value, target, s, depth + 1, false);
+                            }
                             if (trail.len != 0) {
                                 var trail_style = s;
                                 trail_style.kind = .link;
@@ -1943,12 +1961,23 @@ pub const Renderer = struct {
         if (para) |p| try self.paragraph(&blocks, input[p..]);
         return try blocks.toOwnedSlice(self.a);
     }
+    fn htmlLanguageDirection(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
+        var result = inherited;
+        if (tag.attr("lang")) |lang| result.language = try self.entityText(lang);
+        if (tag.attr("dir")) |dir| {
+            const decoded_dir = try self.entityText(dir);
+            if (std.ascii.eqlIgnoreCase(decoded_dir, "ltr")) result.direction = "ltr" else if (std.ascii.eqlIgnoreCase(decoded_dir, "rtl")) result.direction = "rtl" else if (std.ascii.eqlIgnoreCase(decoded_dir, "auto")) result.direction = "auto";
+        }
+        return result;
+    }
     fn htmlList(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, list_tag: syntax.Tag, parent_path: []const u8, depth: usize, style: Style) Error!void {
         if (depth >= max_depth) {
             self.fallbacks.render_limit = true;
             try self.block(blocks, .preformatted, input, parent_path, "", 0);
             return;
         }
+        // Apply explicit container fields after inherited parent-item fields.
+        const list_style = try self.htmlLanguageDirection(list_tag, style);
         const reversed = list_tag.is("ol") and htmlAttributePresent(list_tag, "reversed");
         const default_start: i32 = if (reversed) htmlListItemCount(input) else 1;
         var ordinal: i32 = if (list_tag.attr("start")) |value| std.fmt.parseInt(i32, trim(try self.entityText(value)), 10) catch default_start else default_start;
@@ -1986,7 +2015,7 @@ pub const Renderer = struct {
                 if (reversed) ordinal -|= 1 else ordinal +|= 1;
             }
             const kind: Kind = if (mark == '#' or mark == '*') .list_item else if (mark == ';') .term else .list_detail;
-            try self.htmlListItem(blocks, input[item.end..pair.inner_end], kind, path, number, item, depth, style);
+            try self.htmlListItem(blocks, input[item.end..pair.inner_end], kind, path, number, item, depth, list_style);
             cursor = pair.end;
             preceding = cursor;
         }
@@ -2047,7 +2076,7 @@ pub const Renderer = struct {
                     if (child.kind == .paragraph) child.kind = .list_detail;
                     try self.appendBlockBudgeted(blocks, child);
                 }
-            } else try self.htmlList(blocks, input[tag.end..pair.inner_end], tag, path, depth + 1, style);
+            } else try self.htmlList(blocks, input[tag.end..pair.inner_end], tag, path, depth + 1, try self.htmlLanguageDirection(item, style));
             cursor = pair.end;
             preceding = cursor;
         }
@@ -2336,7 +2365,7 @@ pub const Renderer = struct {
         if (source.len != 0 and std.mem.indexOfScalar(u8, "#*:;", source[0]) != null) {
             const end = syntax.logicalEnd(source, 0);
             try self.spans.appendSlice(self.a, try self.parseSpans(source[0..end], .{}));
-            body = source[if (end < source.len) end + 1 else end ..];
+            body = source[if (end < source.len) end + 1 else end..];
             if (body.len != 0) try self.lineBreak(.{});
         }
         try self.blocksInline(try self.renderBody(body), .{});
@@ -3341,6 +3370,28 @@ test "pipe trick strips syntactic colon prefixes and final disambiguators" {
     var r: Renderer = .{ .a = a, .context = .{} };
     const spans = try r.parseSpans("[[Thesaurus:cat|]] | [[MOD:test|]] | [[Foo (bar)|]] | [[Boston, Massachusetts|]] | [[Music: My life|]] | [[Help:Links#Pipe trick|]]", .{});
     try std.testing.expectEqualStrings("cat | test | Foo | Boston | My life | Help:Links#Pipe trick", try flattened(a, spans));
+
+    // Entity-generated quotes stay literal in both default and explicit labels.
+    const quote_labels = try r.parseSpans("[[&#39;&#39;word&#39;&#39;]] | [[&#39;&#39;word&#39;&#39;|&#39;&#39;word&#39;&#39;]]", .{});
+    try std.testing.expectEqualStrings("''word'' | ''word''", try flattened(a, quote_labels));
+    for (quote_labels) |span| if (span.kind == .link) {
+        try std.testing.expectEqualStrings("''word''", span.target);
+        try std.testing.expect(!span.flags.italic and !span.flags.bold);
+    };
+    const raw_quotes = try r.parseSpans("[[Lista d''e paise d''o munno]]", .{});
+    try std.testing.expectEqualStrings("Lista d''e paise d''o munno", try flattened(a, raw_quotes));
+    for (raw_quotes) |span| try std.testing.expect(!span.flags.italic);
+    // Authored rich alternate labels and outer formatting remain active.
+    const rich = try r.parseSpans("[[Title|''rich'']]", .{});
+    try std.testing.expectEqualStrings("rich", try flattened(a, rich));
+    try std.testing.expect(rich[0].flags.italic);
+    try std.testing.expectEqualStrings("Title", rich[0].target);
+    const outer = try r.parseSpans("''[[plain]]''", .{});
+    try std.testing.expectEqualStrings("plain", try flattened(a, outer));
+    try std.testing.expect(outer[0].flags.italic);
+    const literal_entities = try r.parseSpans("A&amp;amp;B &#39;&#39;word&#39;&#39; <nowiki>&#39;&#39;word&#39;&#39;</nowiki>", .{});
+    try std.testing.expectEqualStrings("A&amp;B ''word'' ''word''", try flattened(a, literal_entities));
+    for (literal_entities) |span| try std.testing.expect(!span.flags.italic);
 }
 
 test "same-line definition lists split term and definition without splitting nested colons" {
@@ -3356,6 +3407,60 @@ test "same-line definition lists split term and definition without splitting nes
     try std.testing.expectEqualStrings("a definition", try flattened(a, blocks[1].spans));
     try std.testing.expectEqualStrings("plain term", try flattened(a, blocks[2].spans));
     try std.testing.expectEqualStrings("another", try flattened(a, blocks[3].spans));
+
+    // Same upstream rule as the observed scheme-colon loss, including a colon
+    // in the label and a later real separator. Preserve the typed link target.
+    const external_cases = [_]struct { source: []const u8, label: []const u8, target: []const u8 }{
+        .{ .source = "[https://example.org label] : definition", .label = "label", .target = "https://example.org" },
+        .{ .source = "https://example.org : definition", .label = "https://example.org", .target = "https://example.org" },
+        .{ .source = "https://example.org:8443/a:b?q=c:d : definition", .label = "https://example.org:8443/a:b?q=c:d", .target = "https://example.org:8443/a:b?q=c:d" },
+        .{ .source = "[https://example.org:8443/a:b?q=c:d label: detail] : definition", .label = "label: detail", .target = "https://example.org:8443/a:b?q=c:d" },
+        .{ .source = "[//example.org/a:b relative: label] : definition", .label = "relative: label", .target = "//example.org/a:b" },
+        .{ .source = "[https://example.org <nowiki>]:</nowiki> label] : definition", .label = "]: label", .target = "https://example.org" },
+        .{ .source = "[https://example.org<span title=']:'>label: detail</span>] : definition", .label = "label: detail", .target = "https://example.org" },
+    };
+    for (external_cases) |case| {
+        var linked_renderer: Renderer = .{ .a = a, .context = .{} };
+        const body = try std.fmt.allocPrint(a, "; {s}\n", .{case.source});
+        const linked_blocks = try linked_renderer.renderBody(body);
+        try std.testing.expectEqual(@as(usize, 2), linked_blocks.len);
+        try std.testing.expectEqual(Kind.term, linked_blocks[0].kind);
+        try std.testing.expectEqual(Kind.list_detail, linked_blocks[1].kind);
+        try std.testing.expectEqualStrings(";", linked_blocks[0].list_path);
+        try std.testing.expectEqualStrings(":", linked_blocks[1].list_path);
+        try std.testing.expectEqualStrings(case.label, try flattened(a, linked_blocks[0].spans));
+        try std.testing.expectEqualStrings("definition", try flattened(a, linked_blocks[1].spans));
+        var linked_text: std.ArrayList(u8) = .empty;
+        for (linked_blocks[0].spans) |span| {
+            try std.testing.expect(span.kind == .external_link);
+            try std.testing.expectEqualStrings(case.target, span.target);
+            try linked_text.appendSlice(a, span.text);
+        }
+        try std.testing.expectEqualStrings(case.label, linked_text.items);
+        try std.testing.expect(!linked_renderer.fallbacks.any());
+    }
+    try std.testing.expect(inlineDefinitionSplit("[https://example.org label: detail]") == null);
+    try std.testing.expect(inlineDefinitionSplit("https://example.org") == null);
+    const successive = inlineDefinitionSplit("https://one.example [https://two.example two: label] : definition") orelse return error.ExpectedSuccessiveLinkSplit;
+    try std.testing.expectEqualStrings("https://one.example [https://two.example two: label]", successive.term);
+    try std.testing.expectEqualStrings("definition", successive.definition);
+    const unchanged_cases = [_]struct { source: []const u8, term: []const u8, definition: []const u8 }{
+        .{ .source = "[https://example.org unclosed : definition", .term = "[https", .definition = "//example.org unclosed : definition" },
+        .{ .source = "[javascript:bad label] : definition", .term = "[javascript", .definition = "bad label] : definition" },
+        .{ .source = "[ordinary : bracket] : definition", .term = "[ordinary", .definition = "bracket] : definition" },
+        .{ .source = "{{x|a:b}} : definition", .term = "{{x|a:b}}", .definition = "definition" },
+        .{ .source = "<nowiki>a:b</nowiki> : definition", .term = "<nowiki>a:b</nowiki>", .definition = "definition" },
+        .{ .source = "<span title='a:b'>term</span> : definition", .term = "<span title='a:b'>term</span>", .definition = "definition" },
+    };
+    for (unchanged_cases) |case| {
+        const pair = inlineDefinitionSplit(case.source) orelse return error.ExpectedDefinitionSplit;
+        try std.testing.expectEqualStrings(case.term, pair.term);
+        try std.testing.expectEqualStrings(case.definition, pair.definition);
+    }
+    try std.testing.expect(inlineDefinitionSplit("[[unclosed:link : definition") == null);
+    try std.testing.expect(inlineDefinitionSplit("{{unclosed:template : definition") == null);
+    try std.testing.expect(inlineDefinitionSplit(": empty term") == null);
+    try std.testing.expect(inlineDefinitionSplit("empty definition :") == null);
 }
 
 test "nested same-line definition lists retain their parent list paths" {
@@ -3947,8 +4052,6 @@ test "balanced formatting wrapper preserves implicit block newline and list styl
     try std.testing.expectEqual(Kind.list_item, preceding_blocks[1].kind);
     try std.testing.expect(preceding.fallbacks.unclosed_formatting);
     for (preceding_blocks[1].spans) |span| try std.testing.expect(!span.flags.strike);
-
-
 }
 
 test "nested block formatting restores parent flags and keeps unclosed reports" {
@@ -4178,6 +4281,94 @@ test "HTML lists preserve nested order explicit ordinals attributes and trailing
     }
     try std.testing.expectEqualStrings("en", blocks[0].spans[0].language);
     try std.testing.expectEqual(Role.pronunciation, blocks[0].spans[0].role);
+    // The existing fixture's child and grandchild inherit the explicit li language.
+    try std.testing.expectEqualStrings("en", blocks[1].spans[0].language);
+    try std.testing.expectEqualStrings("en", blocks[2].spans[0].language);
+    try std.testing.expectEqualStrings("en", blocks[3].spans[0].language);
+    try std.testing.expectEqualStrings("", blocks[4].spans[0].language);
+    try std.testing.expectEqualStrings("", blocks[5].spans[0].language);
+
+    const language_direction_cases = [_]struct {
+        source: []const u8,
+        language: []const u8,
+        direction: []const u8,
+    }{
+        .{ .source = "<ul><li lang='ar' dir='rtl'>parent<ol><li>child</li></ol></li></ul>", .language = "ar", .direction = "rtl" },
+        .{ .source = "<ul><li lang='ar' dir='auto'>parent<ol><li>child</li></ol></li></ul>", .language = "ar", .direction = "auto" },
+        .{ .source = "<ul lang='ar' dir='rtl'><li>parent<ol><li>child</li></ol></li></ul>", .language = "ar", .direction = "rtl" },
+        .{ .source = "<ol lang='ar' dir='rtl'><li>parent<ul><li>child</li></ul></li></ol>", .language = "ar", .direction = "rtl" },
+        .{ .source = "<ul lang='a&#114;' dir='R&#84;L'><li>parent<ol><li>child</li></ol></li></ul>", .language = "ar", .direction = "rtl" },
+        .{ .source = "<ul><li>parent<ol><li>child</li></ol></li></ul>", .language = "", .direction = "" },
+    };
+    for (language_direction_cases) |case| {
+        var list_renderer: Renderer = .{ .a = a, .context = .{} };
+        const list_blocks = try list_renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 2), list_blocks.len);
+        for (list_blocks, [_][]const u8{ "parent", "child" }) |list_block, expected_text| {
+            try std.testing.expectEqualStrings(expected_text, try flattened(a, list_block.spans));
+            for (list_block.spans) |span| {
+                try std.testing.expectEqualStrings(case.language, span.language);
+                try std.testing.expectEqualStrings(case.direction, span.direction);
+            }
+        }
+        try std.testing.expect(!list_renderer.fallbacks.any());
+        // Inline HTML list rendering keeps the same explicit-field contract.
+        var inline_renderer: Renderer = .{ .a = a, .context = .{} };
+        const inline_spans = try inline_renderer.parseSpans(case.source, .{});
+        var saw_parent = false;
+        var saw_child = false;
+        for (inline_spans) |span| {
+            const has_parent = std.mem.indexOf(u8, span.text, "parent") != null;
+            const has_child = std.mem.indexOf(u8, span.text, "child") != null;
+            if (has_parent or has_child) {
+                saw_parent = saw_parent or has_parent;
+                saw_child = saw_child or has_child;
+                try std.testing.expectEqualStrings(case.language, span.language);
+                try std.testing.expectEqualStrings(case.direction, span.direction);
+            }
+        }
+        try std.testing.expect(saw_parent and saw_child);
+    }
+
+    var override_renderer: Renderer = .{ .a = a, .context = .{} };
+    const override_blocks = try override_renderer.renderBody("<ul><li lang='en' dir='ltr'>parent<ol lang='ar' dir='rtl'><li lang='de' dir='ltr'>override</li><li>sibling</li></ol>tail</li><li>outside</li></ul>");
+    try std.testing.expectEqual(@as(usize, 5), override_blocks.len);
+    const expected_texts = [_][]const u8{ "parent", "override", "sibling", "tail", "outside" };
+    const expected_languages = [_][]const u8{ "en", "de", "ar", "en", "" };
+    const expected_directions = [_][]const u8{ "ltr", "ltr", "rtl", "ltr", "" };
+    const expected_paths = [_][]const u8{ "*", "*#", "*#", "*:", "*" };
+    const expected_numbers = [_][]const u8{ "", "1", "2", "", "" };
+    for (override_blocks, expected_texts, expected_languages, expected_directions, expected_paths, expected_numbers) |list_block, expected_text, language, direction, expected_path, expected_number| {
+        try std.testing.expectEqualStrings(expected_text, try flattened(a, list_block.spans));
+        try std.testing.expectEqualStrings(expected_path, list_block.list_path);
+        try std.testing.expectEqualStrings(expected_number, list_block.number);
+        for (list_block.spans) |span| {
+            try std.testing.expectEqualStrings(language, span.language);
+            try std.testing.expectEqualStrings(direction, span.direction);
+        }
+    }
+    try std.testing.expect(!override_renderer.fallbacks.any());
+
+    var definition_renderer: Renderer = .{ .a = a, .context = .{} };
+    const definition_blocks = try definition_renderer.renderBody("<dl lang='ar' dir='rtl'><dt>term</dt><dd>detail<ul><li>child</li></ul></dd></dl>");
+    try std.testing.expectEqual(@as(usize, 3), definition_blocks.len);
+    for (definition_blocks, [_][]const u8{ "term", "detail", "child" }, [_][]const u8{ ";", ":", ":*" }) |list_block, expected_text, expected_path| {
+        try std.testing.expectEqualStrings(expected_text, try flattened(a, list_block.spans));
+        try std.testing.expectEqualStrings(expected_path, list_block.list_path);
+        for (list_block.spans) |span| {
+            try std.testing.expectEqualStrings("ar", span.language);
+            try std.testing.expectEqualStrings("rtl", span.direction);
+        }
+    }
+    try std.testing.expect(!definition_renderer.fallbacks.any());
+
+    var empty_invalid_renderer: Renderer = .{ .a = a, .context = .{} };
+    const empty_invalid = try empty_invalid_renderer.renderBody("<ul lang='ar' dir='rtl'><li lang='' dir='invalid'>cleared</li><li>inherited</li></ul>");
+    try std.testing.expectEqual(@as(usize, 2), empty_invalid.len);
+    try std.testing.expectEqualStrings("", empty_invalid[0].spans[0].language);
+    try std.testing.expectEqualStrings("rtl", empty_invalid[0].spans[0].direction);
+    try std.testing.expectEqualStrings("ar", empty_invalid[1].spans[0].language);
+    try std.testing.expectEqualStrings("rtl", empty_invalid[1].spans[0].direction);
 }
 
 test "HTML definition lists optional closures retain protected item-looking text" {
@@ -4572,7 +4763,6 @@ test "heading control suffix renders headings through exact profile and preserve
     }
 }
 
-
 test "ordinary table cells preserve list labels links and literal markers" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -4638,7 +4828,6 @@ test "mixed apostrophe transitions preserve component styles" {
     try std.testing.expectEqualStrings("''unclosed", try flattened(a, malformed));
 }
 
-
 test "normalized closing apostrophes retain literal extras and emphasis" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -4676,7 +4865,6 @@ test "normalized closing apostrophes retain literal extras and emphasis" {
     try std.testing.expect(all_balanced);
 }
 
-
 test "HTML ordered lists in ordinary table cells retain numbering and links" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -4710,7 +4898,6 @@ test "HTML ordered lists in ordinary table cells retain numbering and links" {
     const literal = try protected.renderBody("{|\n| <nowiki><ol><li>literal</li></ol></nowiki>\n|}\n");
     try std.testing.expectEqualStrings("<ol><li>literal</li></ol>", try flattened(a, literal[0].table.?.rows[0].cells[0].spans));
 }
-
 
 test "HTML table cell lists retain nested counters surrounding text and inline style" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
