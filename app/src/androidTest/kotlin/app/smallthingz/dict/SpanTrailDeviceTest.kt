@@ -63,4 +63,28 @@ class SpanTrailDeviceTest {
         assertTrue(text.getLinkAnnotations(5, 6).isEmpty())
     }
 
+    @Test fun automaticAndExplicitDirectionKeepTheCompleteLinkedSuffixIsolated() {
+        val before = "LTR before "
+        val after = " after"
+        for ((direction, opener) in listOf(
+            "auto" to "\u2068", "rtl" to "\u2067", "ltr" to "\u2066", "" to "", "unknown" to ""
+        )) {
+            show(listOf(Span("text", before), Span("link", "אב", target = "אב", trail = "ג", direction = direction), Span("text", after)))
+            val isolated = opener + "אבג" + if (opener.isEmpty()) "" else "\u2069"
+            val expected = before + isolated + after
+            val text = compose.onNodeWithText(before, substring = true, useUnmergedTree = true)
+                .fetchSemanticsNode().config[SemanticsProperties.Text].single()
+            assertEquals("direction=$direction", expected, text.text)
+            val link = text.getLinkAnnotations(0, text.length).single()
+            assertEquals("direction=$direction", "אב", (link.item as LinkAnnotation.Clickable).tag)
+            assertEquals("direction=$direction", before.length, link.start)
+            assertEquals("direction=$direction", before.length + isolated.length, link.end)
+            val trailOffset = before.length + opener.length + 2
+            assertEquals("direction=$direction", 'ג', text.text[trailOffset])
+            assertEquals(listOf(link), text.getLinkAnnotations(trailOffset, trailOffset + 1))
+            assertTrue("direction=$direction", text.getLinkAnnotations(0, before.length).isEmpty())
+            assertTrue("direction=$direction", text.getLinkAnnotations(link.end, text.length).isEmpty())
+        }
+    }
+
 }

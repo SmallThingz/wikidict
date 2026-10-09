@@ -279,10 +279,14 @@ private fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight
             val linkStyle = TextLinkStyles(style = SpanStyle(color = linkColor), pressedStyle = SpanStyle(textDecoration = TextDecoration.Underline))
             spans.forEach { span ->
                 val start = length
-                if (span.direction == "rtl") append('\u2067') else if (span.direction == "ltr") append('\u2066')
+                when (span.direction) {
+                    "rtl" -> append('\u2067')
+                    "ltr" -> append('\u2066')
+                    "auto" -> append('\u2068')
+                }
                 append(if (span.kind == "line_break") "\n" else span.text)
                 append(span.trail)
-                if (span.direction in listOf("rtl", "ltr")) append('\u2069')
+                if (span.direction in listOf("rtl", "ltr", "auto")) append('\u2069')
                 val end = length
                 if (end > start) {
                     if (weight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
