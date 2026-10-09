@@ -17,6 +17,7 @@ pub const page_redirects = @import("page_redirects.zig");
 test {
     // Retain discovery of both original registry and redirect parser tests.
     _ = registry;
+    _ = magic_words; // Retain parser registry tests in this ordinary wrapper artifact.
     _ = page_redirects;
     _ = behavior_switches;
     _ = image_options;
