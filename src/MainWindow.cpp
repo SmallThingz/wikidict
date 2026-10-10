@@ -16,6 +16,7 @@
 #include <QFutureWatcher>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -30,6 +31,7 @@
 #include <QRandomGenerator>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSet>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -892,6 +894,10 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
     if (kind == QStringLiteral("list_detail") || kind == QStringLiteral("indent"))
         return QStringLiteral("<p style='margin-left:%1px'>%2</p>").arg(30 + indent).arg(body);
     if (kind == QStringLiteral("heading")) return QStringLiteral("<h3>%1</h3>").arg(body);
+    const int depth = block.value(QStringLiteral("depth")).toInt();
+    if (depth > 0)
+        return QStringLiteral("<p style='margin-left:%1px'>%2</p>")
+            .arg(30 + std::clamp(depth - 1, 0, 20) * 16).arg(body);
     return QStringLiteral("<p>%1</p>").arg(body);
 }
 
@@ -905,7 +911,33 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
     const QJsonObject redirect = entry.value(QStringLiteral("redirect")).toObject();
     if (redirect.value(QStringLiteral("followed")).toBool())
         out += QStringLiteral("<p><small>Redirected from %1</small></p>").arg(redirect.value(QStringLiteral("source_title")).toString().toHtmlEscaped());
+    QHash<QString, QSet<QString>> embeddedCaptions;
+    const auto collectEmbeddedMedia = [&](const QJsonArray &spans) {
+        QString file, text;
+        const auto finishCaption = [&] {
+            if (!file.isEmpty() && !text.simplified().isEmpty()) embeddedCaptions[file].insert(text.simplified());
+            file.clear();
+            text.clear();
+        };
+        for (const QJsonValue &value : spans) {
+            const QJsonObject span = value.toObject();
+            const QStringList classes = span.value(QStringLiteral("classes")).toString().simplified().split(QChar(' '), Qt::SkipEmptyParts);
+            const QString target = span.value(QStringLiteral("target")).toString();
+            QString captionFile;
+            if (span.value(QStringLiteral("kind")).toString() == QStringLiteral("link") &&
+                classes.contains(QStringLiteral("wikidict-media")) &&
+                (target.startsWith(QStringLiteral("File:"), Qt::CaseInsensitive) || target.startsWith(QStringLiteral("Image:"), Qt::CaseInsensitive)))
+                captionFile = target.mid(target.indexOf(QChar(':')) + 1).replace(QChar('_'), QChar(' '));
+            if (captionFile != file || captionFile.isEmpty()) finishCaption();
+            if (!captionFile.isEmpty()) {
+                file = captionFile;
+                text += span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString();
+            }
+        }
+        finishCaption();
+    };
     const QJsonArray preamble = entry.value(QStringLiteral("preamble_spans")).toArray();
+    collectEmbeddedMedia(preamble);
     if (!preamble.isEmpty()) out += QStringLiteral("<p>%1</p>").arg(spansHtml(preamble));
     int index = -1;
     for (const QJsonValue &sectionValue : entry.value(QStringLiteral("sections")).toArray()) {
@@ -919,13 +951,28 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                 .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), title.toHtmlEscaped());
         }
         if (collapsedSections_.contains(index)) continue;
-        for (const QJsonValue &block : section.value(QStringLiteral("blocks")).toArray()) out += blockHtml(block.toObject());
+        for (const QJsonValue &value : section.value(QStringLiteral("blocks")).toArray()) {
+            const QJsonObject block = value.toObject();
+            const QString kind = block.value(QStringLiteral("kind")).toString();
+            if (kind != QStringLiteral("blank") && kind != QStringLiteral("rule")) {
+                const QJsonValue table = block.value(QStringLiteral("table"));
+                if (table.isObject()) {
+                    const QJsonObject object = table.toObject();
+                    collectEmbeddedMedia(object.value(QStringLiteral("caption")).toArray());
+                    for (const QJsonValue &row : object.value(QStringLiteral("rows")).toArray())
+                        for (const QJsonValue &cell : row.toObject().value(QStringLiteral("cells")).toArray())
+                            collectEmbeddedMedia(cell.toObject().value(QStringLiteral("spans")).toArray());
+                } else collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
+            }
+            out += blockHtml(block);
+        }
     }
     const QJsonArray references = entry.value(QStringLiteral("references")).toArray();
     if (!references.isEmpty()) {
         out += QStringLiteral("<h2>References</h2>");
         for (const QJsonValue &reference : references) {
             const QJsonObject ref = reference.toObject();
+            collectEmbeddedMedia(ref.value(QStringLiteral("spans")).toArray());
             const QString group = ref.value(QStringLiteral("group")).toString();
             const int groupNumber = ref.value(QStringLiteral("group_number")).toInt();
             const QString label = group.isEmpty() ? QStringLiteral("[%1]").arg(groupNumber)
@@ -945,7 +992,8 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
             const QString url = QStringLiteral("https://commons.wikimedia.org/wiki/File:%1").arg(QString::fromLatin1(QUrl::toPercentEncoding(file)));
             out += QStringLiteral("<li>%1: <a href='%2'>%3</a>%4</li>")
                 .arg(item.value(QStringLiteral("kind")).toString().toHtmlEscaped(), url.toHtmlEscaped(), file.toHtmlEscaped(),
-                    caption.isEmpty() ? QString() : QStringLiteral(" · %1").arg(caption.toHtmlEscaped()));
+                    caption.isEmpty() || embeddedCaptions.value(QString(file).replace(QChar('_'), QChar(' '))).contains(caption.simplified())
+                        ? QString() : QStringLiteral(" · %1").arg(caption.toHtmlEscaped()));
         }
         out += QStringLiteral("</ul><p><small>Media links open online in your browser.</small></p>");
     }

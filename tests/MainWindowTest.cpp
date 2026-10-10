@@ -83,6 +83,7 @@ private:
 
     static bool hasAnchor(const QTextDocument *document, const QString &name) {
         for (QTextBlock block = document->begin(); block.isValid(); block = block.next()) {
+            if (block.charFormat().anchorNames().contains(name)) return true;
             for (auto it = block.begin(); !it.atEnd(); ++it) {
                 const QTextFragment fragment = it.fragment();
                 if (fragment.isValid() && fragment.charFormat().anchorNames().contains(name)) return true;
@@ -921,6 +922,160 @@ private slots:
         QVERIFY(text.contains(QStringLiteral("[2] Later ordinary citation")));
         QVERIFY(hasAnchor(&document, QStringLiteral("reference-2")));
         QVERIFY(hasAnchor(&document, QStringLiteral("reference-3")));
+    }
+
+    void embeddedMediaCaptionKeepsTypedPresentationWithoutPlainDuplicate() {
+        MainWindow window{QString()};
+        const QString caption = QStringLiteral("Styled caption");
+        const QJsonObject span{{QStringLiteral("kind"), QStringLiteral("link")},
+            {QStringLiteral("text"), caption}, {QStringLiteral("target"), QStringLiteral("File:Caption_image.svg")},
+            {QStringLiteral("classes"), QStringLiteral("note\twikidict-media")},
+            {QStringLiteral("bold"), true}, {QStringLiteral("italic"), true},
+            {QStringLiteral("language"), QStringLiteral("fr")}, {QStringLiteral("direction"), QStringLiteral("rtl")}};
+        const QJsonObject block{{QStringLiteral("kind"), QStringLiteral("paragraph")}, {QStringLiteral("spans"), QJsonArray{span}}};
+        QJsonObject entry{{QStringLiteral("title"), QStringLiteral("Media fixture")}, {QStringLiteral("kind"), QStringLiteral("supplemental")},
+            {QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), QStringLiteral("Gallery")},
+                {QStringLiteral("level"), 3}, {QStringLiteral("blocks"), QJsonArray{block}}}}},
+            {QStringLiteral("media"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("image")},
+                {QStringLiteral("file"), QStringLiteral("Caption image.svg")}, {QStringLiteral("caption"), caption}}}}};
+        const QJsonObject original = entry;
+        const auto visibleText = [](const QTextDocument &document) {
+            QString text = document.toPlainText();
+            for (ushort control = 0x2066; control <= 0x2069; ++control) text.remove(QChar(control));
+            return text;
+        };
+        const QString html = window.entryHtml(entry);
+        QVERIFY(html.contains(QStringLiteral("lang=\"fr\"")));
+        QVERIFY(html.contains(QStringLiteral("dir=\"rtl\"")));
+        QTextDocument document;
+        document.setHtml(html);
+        QCOMPARE(visibleText(document).count(caption), 1);
+        const QTextCursor styled = document.find(caption);
+        QVERIFY(!styled.isNull());
+        QVERIFY(styled.charFormat().fontWeight() >= QFont::Bold);
+        QVERIFY(styled.charFormat().fontItalic());
+        QCOMPARE(styled.charFormat().anchorHref(), QStringLiteral("dict:File%3ACaption_image.svg"));
+        QVERIFY(document.toRawText().contains(QString(QChar(0x2067)) + caption + QChar(0x2069)));
+        QVERIFY(document.toPlainText().contains(QStringLiteral("Caption image.svg"))); // Metadata link remains available.
+        QCOMPARE(entry, original);
+
+        window.collapsedSections_.insert(0);
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(visibleText(document).count(caption), 1); // Hidden body needs its metadata fallback.
+        QVERIFY(!document.find(caption).charFormat().fontItalic());
+        window.collapsedSections_.clear();
+        entry.insert(QStringLiteral("sections"), QJsonArray{});
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(visibleText(document).count(caption), 1); // Metadata-only legacy entry.
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{span});
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(visibleText(document).count(caption), 1); // Preamble captions also retain their typed owner.
+        QJsonObject first = span, second = span;
+        first.insert(QStringLiteral("text"), QStringLiteral("Styled "));
+        second.insert(QStringLiteral("text"), QStringLiteral("caption"));
+        second.insert(QStringLiteral("bold"), false);
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{first, second});
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(visibleText(document).count(caption), 1); // Styled pieces share one caption owner.
+        QJsonObject otherCaption = span;
+        otherCaption.insert(QStringLiteral("text"), QStringLiteral("Different authored label"));
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{otherCaption});
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(visibleText(document).count(caption), 1); // A different same-file label does not own this caption.
+        QVERIFY(document.toPlainText().contains(QStringLiteral("Different authored label")));
+        QJsonObject unrelated = span;
+        unrelated.insert(QStringLiteral("classes"), QStringLiteral("not-wikidict-media"));
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{unrelated});
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(visibleText(document).count(caption), 2); // Ordinary prose is not a media caption owner.
+        entry.remove(QStringLiteral("preamble_spans"));
+        for (const QString &kind : {QStringLiteral("blank"), QStringLiteral("rule")}) {
+            QJsonObject hidden = block;
+            hidden.insert(QStringLiteral("kind"), kind);
+            entry.insert(QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), QStringLiteral("Ignored")},
+                {QStringLiteral("blocks"), QJsonArray{hidden}}}});
+            document.setHtml(window.entryHtml(entry));
+            QCOMPARE(visibleText(document).count(caption), 1);
+            QVERIFY(!document.find(caption).charFormat().fontItalic()); // Ignored fields cannot own the caption.
+        }
+        QJsonObject table = block;
+        table.insert(QStringLiteral("table"), QJsonObject{{QStringLiteral("caption"), QJsonArray{}}, {QStringLiteral("rows"), QJsonArray{}}});
+        entry.insert(QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), QStringLiteral("Table")},
+            {QStringLiteral("blocks"), QJsonArray{table}}}});
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(visibleText(document).count(caption), 1);
+        QVERIFY(!document.find(caption).charFormat().fontItalic()); // tableHtml ignores the adjacent block.spans.
+        table.insert(QStringLiteral("table"), QJsonObject{{QStringLiteral("rows"), QJsonArray{QJsonObject{
+            {QStringLiteral("cells"), QJsonArray{QJsonObject{{QStringLiteral("spans"), QJsonArray{span}}}}}}}}});
+        entry.insert(QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), QStringLiteral("Table")},
+            {QStringLiteral("blocks"), QJsonArray{table}}}});
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(visibleText(document).count(caption), 1);
+        QVERIFY(document.find(caption).charFormat().fontItalic()); // An actual rendered cell does own it.
+    }
+
+    void crossEntrySectionLinkKeepsFragmentThroughRealLookup() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(780, 480);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object();
+        QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")},
+            {QStringLiteral("text"), QStringLiteral("Dog noun section")}, {QStringLiteral("target"), QStringLiteral("dog#Noun")}}});
+        response.insert(QStringLiteral("entries"), QJsonArray{entry});
+        window.renderResponse(QJsonDocument(response).toJson());
+        QCOMPARE(window.reading_->verticalScrollBar()->value(), 0); // Known initial destination position.
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:dog%23Noun")));
+        QCOMPARE(title(window), QStringLiteral("dog"));
+        QCOMPARE(window.search_->text(), QStringLiteral("dog"));
+        const QJsonObject realDog = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("dog"))).object()
+            .value(QStringLiteral("entries")).toArray().first().toObject();
+        QCOMPARE(window.currentEntry_, realDog);
+        const QJsonArray realSections = realDog.value(QStringLiteral("sections")).toArray();
+        int nounSection = -1;
+        for (qsizetype i = 0; i < realSections.size(); ++i) {
+            if (realSections[i].toObject().value(QStringLiteral("title")).toString() == QStringLiteral("Noun")) {
+                nounSection = static_cast<int>(i);
+                break;
+            }
+        }
+        qInfo() << "Real dog Noun section index" << nounSection << "section count" << realSections.size();
+        QVERIFY(nounSection >= 0);
+        const int nounChoice = window.sections_->findText(QStringLiteral("Noun"));
+        QVERIFY(nounChoice >= 0);
+        QCOMPARE(window.sections_->itemData(nounChoice).toInt(), nounSection);
+        // Qt imports the empty section anchor onto the block's character format.
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("section-%1").arg(nounSection)));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("Noun")));
+        QVERIFY(window.reading_->verticalScrollBar()->value() > 0);
+    }
+
+    void captionOnlyTablesAndFosteredParagraphsKeepVisibleDepth() {
+        MainWindow window{QString()};
+        const auto spans = [](const QString &text) { return QJsonArray{QJsonObject{
+            {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), text}}}; };
+        const QJsonObject table{{QStringLiteral("caption"), spans(QStringLiteral("Only caption"))},
+            {QStringLiteral("rows"), QJsonArray{}}};
+        QTextDocument caption;
+        caption.setHtml(window.blockHtml(QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")},
+            {QStringLiteral("depth"), 2}, {QStringLiteral("list_path"), QStringLiteral("::")},
+            {QStringLiteral("table"), table}}));
+        const QTextCursor captionCursor = caption.find(QStringLiteral("Only caption"));
+        QVERIFY(!captionCursor.isNull());
+        QCOMPARE(caption.toPlainText().count(QStringLiteral("Only caption")), 1);
+        QCOMPARE(captionCursor.block().blockFormat().leftMargin(), qreal(46));
+        for (const int depth : {0, 1, 2}) {
+            QTextDocument paragraph;
+            paragraph.setHtml(window.blockHtml(QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                {QStringLiteral("depth"), depth}, {QStringLiteral("list_path"), depth ? QStringLiteral("::") : QString()},
+                {QStringLiteral("spans"), spans(QStringLiteral("Fostered paragraph"))}}));
+            const QTextCursor cursor = paragraph.find(QStringLiteral("Fostered paragraph"));
+            QVERIFY(!cursor.isNull());
+            QCOMPARE(paragraph.toPlainText(), QStringLiteral("Fostered paragraph"));
+            QCOMPARE(cursor.block().blockFormat().leftMargin(), qreal(depth == 0 ? 0 : 30 + (depth - 1) * 16));
+        }
     }
 
     void nestedTablesKeepTheirCompiledDepth() {
