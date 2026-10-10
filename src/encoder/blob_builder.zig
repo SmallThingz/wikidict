@@ -1129,10 +1129,11 @@ fn processMain(
         return;
     };
 
-    const shared_prefix = if (page_sections.items.len != 0)
-        try sharedImagePrefix(page_allocator, codes, source[0 .. @intFromPtr(page_sections.items[0].source.ptr) - @intFromPtr(source.ptr)])
+    const page_prefix = if (page_sections.items.len != 0)
+        source[0 .. @intFromPtr(page_sections.items[0].source.ptr) - @intFromPtr(source.ptr)]
     else
-        null;
+        "";
+    const shared_prefix = try sharedImagePrefix(page_allocator, codes, page_prefix);
 
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
     defer {
@@ -1256,15 +1257,25 @@ fn processMain(
         pending.clearRetainingCapacity();
     }
 
+    // Preserve ordinary page context only for one unambiguous language.
+    // Repeated resolved sections may share that group; inherited unknown
+    // sections and pending unresolved regions must not gain attribution.
+    const preserve_prefix = shared_prefix == null and page_prefix.len != 0 and
+        groups.items.len == 1 and groups.items[0].language.code.len != 0 and
+        !fallbacks.unresolved_language_heading;
     const reference_context = try presentation_document.referenceDefinitionsAlloc(page_allocator, source);
     for (groups.items) |group| {
+        const group_source = if (preserve_prefix)
+            try std.mem.concat(page_allocator, u8, &.{ page_prefix, group.source.items })
+        else
+            group.source.items;
         const payload = try presentation_document.compileReportedWithReferencesAlloc(
             page_allocator,
             title,
             .language,
             group.language.heading,
             group.language.code,
-            group.source.items,
+            group_source,
             if (display_title) |value| .{ .source = value, .page_title = title } else null,
             codes.link_trail,
             codes.namespace_catalog,
@@ -3314,4 +3325,100 @@ test "ANG explicit English noun continuation does not steal genuine Nama" {
     }
     try std.testing.expect(std.mem.indexOf(u8, (try nama_index.find("other-edition")).?.payload, "NAMA_BODY") != null);
     try std.testing.expect(std.mem.indexOf(u8, (try english_index.find("other-edition")).?.payload, "NAMA_BODY") == null);
+}
+
+test "single resolved language preserves structured prefix without ambiguous attribution" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tملف\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn resolve(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "عربية") or std.mem.eql(u8, value, "عَرَبِيَّة") or std.mem.eql(u8, value, "العربية")) return .{ .code = "ar", .heading = "العربية" };
+            return TestLanguages.resolve(ctx, value);
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |language| language.code else null;
+        }
+        fn entry(allocator: std.mem.Allocator, root_path: []const u8, language: []const u8, title: []const u8) !blobs.presentation_types.Entry {
+            var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(allocator, root_path, language));
+            defer mapped.deinit();
+            const owned_bytes = try allocator.dupe(u8, mapped.bytes);
+            const blob = try blob_format.inspect(owned_bytes);
+            var index = try blob.buildTrustedIndexAlloc(allocator);
+            defer index.deinit(allocator);
+            const found = try index.find(title);
+            try std.testing.expect(found != null);
+            const rec = found.?;
+            return (try blobs.presentation_codec.decodeAlloc(allocator, rec.payload, rec.title, .language, try blob.languageMetadata())).entry;
+        }
+        fn text(allocator: std.mem.Allocator, entry_value: blobs.presentation_types.Entry) ![]const u8 {
+            var result: std.ArrayList(u8) = .empty;
+            for (entry_value.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                try result.appendSlice(allocator, span.text);
+                try result.appendSlice(allocator, span.trail);
+            };
+            return result.items;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve };
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root_path);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact retained Qatar revision1430987; raw equals rendered (no templates).
+    const qatar = "قطار جمعه قطارات.\n\n== [[عَرَبِيَّة]] ==\nالقطار هو المركبة المعروفة التي تسير على سكة من الحديد لنقل البضائع أو المسافرين.\n\n[[تصنيف:ق ط ر]]\n[[تصنيف:فِعَال]]\n[[تصنيف:وسائل نقل]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "قِطَار", qatar, qatar, null);
+    const structured = "<b>bold prefix</b>\nsecond line\n\n* prefix item\n==English==\n# first body\n==English==\n# repeated body\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "structured", structured, structured, null);
+    inline for (.{
+        .{ "multilingual", "unscoped prefix\n==English==\n# english\n==French==\n# french\n" },
+        .{ "unknown-group", "unscoped prefix\n==English==\n# english\n==لغة مجهولة==\n# unknown\n" },
+        .{ "inherited-unknown", "unscoped prefix\n==English==\n# english\n==Unknown topic==\n# unknown\n" },
+        .{ "pending-unknown", "unscoped prefix\n==Unknown topic==\n# unknown\n==English==\n# english\n" },
+        .{ "only-unknown", "unscoped prefix\n==[[Unknown language]]==\n# unknown\n" },
+    }) |row| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row[0], row[1], row[1], null);
+    _ = try writer.finish(codes);
+    std.debug.print("QATAR_STAGE actual prefix\n", .{});
+    const qatar_entry = try Local.entry(a, root_path, "العربية", "قِطَار");
+    try std.testing.expectEqualStrings("ar", qatar_entry.language_code);
+    const qatar_text = try Local.text(a, qatar_entry);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, qatar_text, "قطار جمعه قطارات."));
+    try std.testing.expect(std.mem.indexOf(u8, qatar_text, "القطار هو المركبة المعروفة التي تسير على سكة من الحديد لنقل البضائع أو المسافرين.") != null);
+    std.debug.print("QATAR_STAGE structured prefix\n", .{});
+    const structured_entry = try Local.entry(a, root_path, "English", "structured");
+    const structured_text = try Local.text(a, structured_entry);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, structured_text, "bold prefix"));
+    inline for (.{ "second line", "first body", "repeated body" }) |value| try std.testing.expect(std.mem.indexOf(u8, structured_text, value) != null);
+    var paragraph_prefix = false;
+    var bold_prefix = false;
+    var list_prefix = false;
+    for (structured_entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.text, "bold prefix") and span.bold) {
+            bold_prefix = true;
+            if (block.kind == .paragraph) paragraph_prefix = true;
+        }
+        if (std.mem.eql(u8, span.text, "prefix item") and std.mem.eql(u8, block.list_path, "*")) list_prefix = true;
+    };
+    std.debug.print("QATAR_STRUCTURE paragraph={any} bold={any} list={any}\n", .{ paragraph_prefix, bold_prefix, list_prefix });
+    try std.testing.expect(paragraph_prefix and bold_prefix and list_prefix);
+    inline for (.{ .{ "English", "multilingual" }, .{ "French", "multilingual" }, .{ "English", "unknown-group" }, .{ "Unclassified", "unknown-group" }, .{ "English", "inherited-unknown" }, .{ "English", "pending-unknown" } }) |row| {
+        std.debug.print("QATAR_NEGATIVE owner={s} title={s}\n", .{ row[0], row[1] });
+        const entry_value = try Local.entry(a, root_path, row[0], row[1]);
+        try std.testing.expect(std.mem.indexOf(u8, try Local.text(a, entry_value), "unscoped prefix") == null);
+    }
+    // A page without any resolved boundary retains its whole source as Unclassified.
+    std.debug.print("QATAR_STAGE whole-source unknown preservation\n", .{});
+    const unknown_entry = try Local.entry(a, root_path, "Unclassified", "only-unknown");
+    try std.testing.expectEqualStrings("", unknown_entry.language_code);
+    const unknown_text = try Local.text(a, unknown_entry);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, unknown_text, "unscoped prefix"));
+    try std.testing.expect(std.mem.indexOf(u8, unknown_text, "unknown") != null);
 }

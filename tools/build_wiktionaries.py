@@ -87,10 +87,20 @@ def affinity_worker_capacity(cpu_count, address_space_bytes):
 
 def affinity_worker_budget():
     from build_resource_limits import (ContainmentUnavailable, inside_watchdog, MAX_BUILD_MEMORY,
-                                       CHILD_CGROUP, child_memory_limit_bytes)
+                                       CHILD_CGROUP, child_memory_limit_bytes, watchdog_physical_memory_limit_bytes)
     if not inside_watchdog():
         raise ContainmentUnavailable('Affinity admission requires a verified watchdog child')
     soft,hard=resource.getrlimit(resource.RLIMIT_AS)
+    if soft == hard == resource.RLIM_INFINITY:
+        physical_budget = watchdog_physical_memory_limit_bytes()
+        if type(physical_budget) is not int or not 0 < physical_budget <= MAX_BUILD_MEMORY:
+            raise ContainmentUnavailable('Invalid authenticated physical watchdog budget')
+        if not 0 <= os.getpriority(os.PRIO_PROCESS, 0) <= 19:
+            raise ContainmentUnavailable('Affinity admission requires watchdog nice priority from 0 through 19')
+        cpus = len(os.sched_getaffinity(0))
+        if not 1 <= cpus <= MAX_PIPELINE_WORKERS:
+            raise ContainmentUnavailable('Affinity admission requires one through four allowed CPUs')
+        return cpus
     if (soft==resource.RLIM_INFINITY or hard==resource.RLIM_INFINITY or
             not 0 < soft <= hard <= MAX_BUILD_MEMORY):
         raise ContainmentUnavailable('Affinity admission requires finite watchdog address-space limits of at most 8 GiB')

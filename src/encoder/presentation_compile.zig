@@ -533,7 +533,7 @@ fn magicLinkStart(input: []const u8, start: usize) ?usize {
 fn safeInternalTarget(target: []const u8) bool {
     var has_non_ascii = false;
     for (target) |ch| {
-        if (ch < 32 or ch == 127) return false;
+        if (ch < 32 or ch == 127 or std.mem.indexOfScalar(u8, "[]{}", ch) != null) return false;
         has_non_ascii = has_non_ascii or ch >= 128;
     }
     if (!has_non_ascii) return true;
@@ -550,6 +550,10 @@ test "safe internal target ASCII fast path preserves Unicode and control checks"
     try std.testing.expect(!safeInternalTarget("cat\x7f"));
     try std.testing.expect(!safeInternalTarget("cat\xc2\x85"));
     try std.testing.expect(!safeInternalTarget("cat\xff"));
+    try std.testing.expect(safeInternalTarget("Tom''s"));
+    try std.testing.expect(!safeInternalTarget("[[taking]]"));
+    try std.testing.expect(!safeInternalTarget("{{{7}}}"));
+    try std.testing.expect(!safeInternalTarget("taking#x[y]"));
 }
 
 /// The caller uses an arena for a page; returned arrays/text share its lifetime.
@@ -1509,6 +1513,7 @@ pub const Renderer = struct {
                 it.cursor = pair.end;
                 continue;
             }
+            const token_start = it.cursor;
             const token = it.next() orelse break;
             s.bold = token.bold;
             s.italic = token.italic;
@@ -1522,7 +1527,34 @@ pub const Renderer = struct {
                     var target = token.target;
                     var label_value = if (token.link_empty_label) "" else token.text;
                     const trail = token.trail;
+                    // An authored inner opener is a separate link. Keep the
+                    // malformed outer prefix/suffix visible; never navigate to
+                    // a bracket-bearing target or reparse decoded entities.
+                    if (std.mem.indexOf(u8, target, "[[") != null) {
+                        if (syntax.delimiter(target, "[[", 0)) |nested| {
+                            const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
+                            const nested_start = @intFromPtr(token.target.ptr) - @intFromPtr(input.ptr) + nested;
+                            var literal_style = s;
+                            literal_style.kind = .text;
+                            literal_style.target = "";
+                            self.fallbacks.literal_markup = true;
+                            try self.plain(try self.entityText(input[raw_start..nested_start]), literal_style);
+                            try self.inlineText(input[nested_start..it.cursor], literal_style, depth + 1);
+                            continue;
+                        }
+                    }
                     target = try self.entityText(target);
+                    if (std.mem.indexOfAny(u8, target, "[]{}") != null) {
+                        const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
+                        var literal_style = s;
+                        literal_style.kind = .text;
+                        literal_style.target = "";
+                        self.fallbacks.literal_markup = true;
+                        // Undefined parameters and encoded invalid targets are
+                        // literal output, not another expansion/label input.
+                        try self.plain(try self.entityText(input[raw_start..it.cursor]), literal_style);
+                        continue;
+                    }
                     if (std.mem.indexOfScalar(u8, target, '_') != null) {
                         const normalized = try self.a.dupe(u8, target);
                         std.mem.replaceScalar(u8, normalized, '_', ' ');
@@ -3392,6 +3424,70 @@ test "pipe trick strips syntactic colon prefixes and final disambiguators" {
     const literal_entities = try r.parseSpans("A&amp;amp;B &#39;&#39;word&#39;&#39; <nowiki>&#39;&#39;word&#39;&#39;</nowiki>", .{});
     try std.testing.expectEqualStrings("A&amp;B ''word'' ''word''", try flattened(a, literal_entities));
     for (literal_entities) |span| try std.testing.expect(!span.flags.italic);
+
+    // Retained Arabic plural expansion wraps an already linked argument.
+    // The live MediaWiki oracle preserves the outer brackets as text and
+    // navigates only the inner link. Invalid parameter targets remain literal.
+    const invalid_links = [_]struct { source: []const u8, visible: []const u8, target: []const u8 = "", label: []const u8 = "", bold: bool = false, italic: bool = false, link_spans: usize = 1 }{
+        .{ .source = "[[[[taking]]]]", .visible = "[[taking]]", .target = "taking", .label = "taking" },
+        .{ .source = "'''[[[[taking]]s]]'''", .visible = "[[takings]]", .target = "taking", .label = "takings", .bold = true, .link_spans = 2 },
+        .{ .source = "[[[[bacterium]]]]", .visible = "[[bacterium]]", .target = "bacterium", .label = "bacterium" },
+        .{ .source = "[[[[planer]]]]", .visible = "[[planer]]", .target = "planer", .label = "planer" },
+        .{ .source = "[[[[smithy]]]]", .visible = "[[smithy]]", .target = "smithy", .label = "smithy" },
+        .{ .source = "[[prefix [[taking]] suffix]]", .visible = "[[prefix taking suffix]]", .target = "taking", .label = "taking" },
+        .{ .source = "[[[[taking]]|label]]", .visible = "[[taking|label]]", .target = "taking", .label = "taking" },
+        .{ .source = "[[[[Tom&#39;&#39;s]]]]", .visible = "[[Tom''s]]", .target = "Tom''s", .label = "Tom''s" },
+        .{ .source = "[[{{{7}}}]]", .visible = "[[{{{7}}}]]" },
+        .{ .source = "[[{{{7}}}|label]]", .visible = "[[{{{7}}}|label]]" },
+        .{ .source = "[[a[b]c]]", .visible = "[[a[b]c]]" },
+        .{ .source = "[[a{b}c]]", .visible = "[[a{b}c]]" },
+        .{ .source = "[[taking#x[y]]]", .visible = "[[taking#x[y]]]" },
+        .{ .source = "[[a&#91;b&#93;c|label]]", .visible = "[[a[b]c|label]]" },
+        .{ .source = "[[&#91;&#91;taking&#93;&#93;]]", .visible = "[[[[taking]]]]" },
+    };
+    for (invalid_links) |case| {
+        var invalid_renderer: Renderer = .{ .a = a, .context = .{} };
+        const invalid_spans = try invalid_renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, invalid_spans));
+        try std.testing.expect(invalid_renderer.fallbacks.literal_markup);
+        var link_count: usize = 0;
+        var linked_text: std.ArrayList(u8) = .empty;
+        defer linked_text.deinit(a);
+        for (invalid_spans) |span| {
+            try std.testing.expectEqual(case.bold, span.flags.bold);
+            try std.testing.expectEqual(case.italic, span.flags.italic);
+            if (span.kind == .link) {
+                link_count += 1;
+                try std.testing.expect(case.target.len != 0);
+                try std.testing.expectEqualStrings(case.target, span.target);
+                try linked_text.appendSlice(a, span.text);
+                try std.testing.expect(safeInternalTarget(span.target));
+            } else {
+                try std.testing.expect(span.kind == .text);
+                try std.testing.expectEqualStrings("", span.target);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, if (case.target.len == 0) 0 else case.link_spans), link_count);
+        try std.testing.expectEqualStrings(case.label, linked_text.items);
+    }
+    const valid_links = [_]struct { source: []const u8, visible: []const u8, target: []const u8 }{
+        .{ .source = "[[Tom&#39;&#39;s]]", .visible = "Tom''s", .target = "Tom''s" },
+        .{ .source = "[[x|&#91;&#91;literal&#93;&#93;]]", .visible = "[[literal]]", .target = "x" },
+        .{ .source = "[[x|<nowiki>[[literal]]</nowiki>]]", .visible = "[[literal]]", .target = "x" },
+    };
+    for (valid_links) |case| {
+        var valid_renderer: Renderer = .{ .a = a, .context = .{} };
+        const valid_spans = try valid_renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, valid_spans));
+        try std.testing.expect(!valid_renderer.fallbacks.any());
+        var link_count: usize = 0;
+        for (valid_spans) |span| if (span.kind == .link) {
+            link_count += 1;
+            try std.testing.expectEqualStrings(case.target, span.target);
+            try std.testing.expect(!span.flags.bold and !span.flags.italic);
+        };
+        try std.testing.expect(link_count != 0);
+    }
 }
 
 test "same-line definition lists split term and definition without splitting nested colons" {

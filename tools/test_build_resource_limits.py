@@ -516,6 +516,10 @@ class ResourceLimitsTest(unittest.TestCase):
         for value in [0,1,True,limits.MAX_BUILD_MEMORY+1,float('inf')]:
             with self.subTest(value=value),self.assertRaises(limits.ContainmentUnavailable):
                 limits.supervise_watchdog(argv=['-c','raise SystemExit(99)'],memory_limit_bytes=64*1024**2,address_space_limit_bytes=value)
+        with patch.object(limits.resource,'getrlimit',return_value=(limits.MAX_BUILD_MEMORY,limits.MAX_BUILD_MEMORY)),patch.object(limits.subprocess,'Popen') as popen:
+            with self.assertRaisesRegex(limits.ContainmentUnavailable,'unlimited inherited hard limit'):
+                limits.supervise_watchdog(address_space_limit_bytes='unlimited')
+            popen.assert_not_called()
 
 
     def test_watchdog_child_nice_preserves_default_and_absolute_targets(self):

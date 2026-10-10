@@ -212,9 +212,16 @@ def supervise(*, root=CGROUP_ROOT, argv=None, affinity_cpus=None):
         raise ContainmentUnavailable(f'Cannot enforce build process-tree limits: {error}') from error
 
 
+_verified_watchdog_physical_limit = None
+
+def watchdog_physical_memory_limit_bytes():
+    if not inside_watchdog() or _verified_watchdog_physical_limit is None:
+        raise ContainmentUnavailable('Unlimited affinity admission requires an authenticated physical watchdog budget')
+    return _verified_watchdog_physical_limit
+
 def inside_watchdog():
     """Validate a one-use parent proof and the child's private session."""
-    global _verified_watchdog_pid
+    global _verified_watchdog_pid, _verified_watchdog_physical_limit
     if _verified_watchdog_pid == os.getpid():
         return True
     values = [os.environ.get(name) for name in
@@ -232,8 +239,15 @@ def inside_watchdog():
         if os.getsid(0) != os.getpid() or os.getpgrp() != os.getpid():
             raise ContainmentUnavailable('Watchdog child is outside its private session')
         proof = os.read(fd, 64)
+        _verified_watchdog_physical_limit = None
         if proof != token.encode('ascii'):
-            raise ContainmentUnavailable('Invalid watchdog child proof')
+            pieces = proof.split(b':')
+            if len(pieces) != 3 or pieces[0] != token.encode('ascii') or pieces[2] != b'unlimited':
+                raise ContainmentUnavailable('Invalid watchdog child proof')
+            physical_limit = int(pieces[1])
+            if not 0 < physical_limit <= MAX_BUILD_MEMORY:
+                raise ContainmentUnavailable('Invalid watchdog physical budget proof')
+            _verified_watchdog_physical_limit = physical_limit
         _verified_watchdog_pid = os.getpid()
         return True
     except (OSError, ValueError, UnicodeError) as error:
@@ -539,7 +553,11 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
     if not 0 < memory_limit_bytes <= MAX_BUILD_MEMORY or not 0 < max_tasks <= MAX_BUILD_PIDS:
         raise ContainmentUnavailable('Invalid watchdog resource limit')
     address_space_limit_bytes = memory_limit_bytes if address_space_limit_bytes is None else address_space_limit_bytes
-    if type(address_space_limit_bytes) is not int or not memory_limit_bytes <= address_space_limit_bytes <= MAX_BUILD_MEMORY:
+    unlimited_address_space = address_space_limit_bytes == 'unlimited'
+    if unlimited_address_space:
+        if resource.getrlimit(resource.RLIMIT_AS)[1] != resource.RLIM_INFINITY:
+            raise ContainmentUnavailable('Unlimited watchdog address space requires an unlimited inherited hard limit')
+    elif type(address_space_limit_bytes) is not int or not memory_limit_bytes <= address_space_limit_bytes <= MAX_BUILD_MEMORY:
         raise ContainmentUnavailable('Invalid finite watchdog address-space limit')
     if type(disk_floor_bytes) is not int or disk_floor_bytes <= 0:
         raise ContainmentUnavailable('Invalid watchdog disk reserve')
@@ -583,7 +601,10 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
            libc.prctl(36, 1, 0, 0, 0) != 0:
             raise ContainmentUnavailable('Cannot enable watchdog child reaping')
         subreaper_set = True
-        os.write(proof_write, token.encode('ascii'))
+        proof = token.encode('ascii')
+        if unlimited_address_space:
+            proof += b':' + str(memory_limit_bytes).encode('ascii') + b':unlimited'
+        os.write(proof_write, proof)
         os.close(proof_write)
         proof_write = None
         env = os.environ.copy()
@@ -650,7 +671,10 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                 inherited_hard = resource.getrlimit(name)[1]
                 bounded = requested if inherited_hard == resource.RLIM_INFINITY else min(requested, inherited_hard)
                 resource.setrlimit(name, (bounded, bounded))
-            bound_rlimit(resource.RLIMIT_AS, address_space_limit_bytes)
+            if unlimited_address_space:
+                resource.setrlimit(resource.RLIMIT_AS, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
+            else:
+                bound_rlimit(resource.RLIMIT_AS, address_space_limit_bytes)
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
             bound_rlimit(resource.RLIMIT_NOFILE, 512)
             cpu_limit = max(1, min(MAX_WATCHDOG_WALL_SECONDS, int(wall_seconds)))

@@ -199,7 +199,7 @@ class AffinityAdmissionTests(unittest.TestCase):
                 b.safe_worker_budget(cpu_admission='affinity')
 
     def test_affinity_requires_finite_actual_address_space_and_narrow_allowed_affinity(self):
-        for soft,hard in [(b.resource.RLIM_INFINITY,b.resource.RLIM_INFINITY),(0,limits.MAX_BUILD_MEMORY),
+        for soft,hard in [(0,limits.MAX_BUILD_MEMORY),
                           (limits.MAX_BUILD_MEMORY,limits.MAX_BUILD_MEMORY+1),(limits.MAX_BUILD_MEMORY,1024**3)]:
             with self.subTest(limits=(soft,hard)),self.envelope(),patch.object(b.resource,'getrlimit',return_value=(soft,hard)):
                 with self.assertRaisesRegex(limits.ContainmentUnavailable,'finite watchdog address-space'):
@@ -211,6 +211,21 @@ class AffinityAdmissionTests(unittest.TestCase):
         for nice in [-1,20]:
             with self.subTest(nice=nice),self.envelope(nice=nice),self.assertRaisesRegex(limits.ContainmentUnavailable,'nice priority'):
                 b.safe_worker_budget(cpu_admission='affinity')
+
+    def test_unlimited_affinity_requires_authenticated_physical_budget_and_bounded_workers(self):
+        with self.envelope(cpus=(0,2),address_space=b.resource.RLIM_INFINITY):
+            with patch.object(limits,'watchdog_physical_memory_limit_bytes',side_effect=limits.ContainmentUnavailable('no physical proof')):
+                with self.assertRaises(limits.ContainmentUnavailable):
+                    b.affinity_worker_budget()
+            with patch.object(limits,'watchdog_physical_memory_limit_bytes',return_value=4*1024**3),patch.object(b.os,'cpu_count',side_effect=AssertionError('must not use host CPU count')):
+                self.assertEqual(b.validate_affinity_workers(2,1),2)
+                with self.assertRaises(ValueError):
+                    b.validate_affinity_workers(3,1)
+                with self.assertRaises(ValueError):
+                    b.validate_affinity_workers(2,2)
+            with patch.object(limits,'watchdog_physical_memory_limit_bytes',return_value=limits.MAX_BUILD_MEMORY+1):
+                with self.assertRaises(limits.ContainmentUnavailable):
+                    b.affinity_worker_budget()
 
     def test_affinity_accepts_authenticated_normal_and_lower_priorities(self):
         for nice in [0,15,19]:
