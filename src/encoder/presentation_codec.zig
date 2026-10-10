@@ -595,6 +595,7 @@ test "binary presentation codec preserves composite semantic fields" {
             .table = .{ .caption = &spans, .rows = &rows },
         },
         .{ .kind = .example, .spans = &spans },
+        .{ .kind = .table, .depth = 2, .list_path = "::", .table = .{ .caption = &spans } },
     };
     const sections = [_]types.Section{
         .{ .level = 3, .title = "Etymology" },
@@ -645,6 +646,18 @@ test "binary presentation codec preserves composite semantic fields" {
     try std.testing.expectEqualStrings("cats", decoded.entry.organization.lexemes[0].definitions[0].form.?.target);
     try std.testing.expectEqual(@as(usize, 2), decoded.entry.references[0].group_number);
     try std.testing.expectEqual(types.MediaKind.audio, decoded.entry.media[1].kind);
+    const caption_only = decoded.entry.sections[1].blocks[2];
+    try std.testing.expectEqual(types.BlockKind.table, caption_only.kind);
+    try std.testing.expectEqual(@as(u8, 2), caption_only.depth);
+    try std.testing.expectEqualStrings("::", caption_only.list_path);
+    try std.testing.expectEqual(@as(usize, 0), caption_only.table.?.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), caption_only.table.?.caption.len);
+    const caption_span = caption_only.table.?.caption[0];
+    try std.testing.expectEqual(types.InlineKind.external_link, caption_span.kind);
+    try std.testing.expectEqualStrings("quoted", caption_span.text);
+    try std.testing.expectEqualStrings("https://example.invalid", caption_span.target);
+    try std.testing.expectEqualStrings("en", caption_span.language);
+    try std.testing.expect(caption_span.bold and caption_span.italic);
 
     const expected_json = try std.json.Stringify.valueAlloc(a, stored, .{});
     const decoded_json = try std.json.Stringify.valueAlloc(a, decoded, .{});

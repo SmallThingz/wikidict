@@ -2080,12 +2080,13 @@ pub const Renderer = struct {
             };
             var prefix: usize = 0;
             while (!anchored_inline and prefix < line.len and std.mem.indexOfScalar(u8, "#*:;", line[prefix]) != null) : (prefix += 1) {}
+            const table_indent: ?[]const u8 = if (anchored_inline) null else wikiTableIndent(clean);
             const html_tag = if (syntax.tagAt(clean, 0)) |tag| (if (!tag.closing and
                 oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) and
                 syntax.matchingTag(clean, tag) != null) tag else null) else null;
             const protected_tag = if (syntax.tagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("syntaxhighlight"))) tag else null) else null;
-            const special = html_tag != null or protected_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or (!anchored_inline and (starts(line, " ") or starts(clean, "{|") or starts(clean, "----")));
+            const special = html_tag != null or protected_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or (!anchored_inline and (starts(line, " ") or table_indent != null or starts(clean, "----")));
             if (!special) {
                 if (para == null) {
                     para = start;
@@ -2161,7 +2162,12 @@ pub const Renderer = struct {
                 try self.block(&blocks, .rule, "", "", "", 0);
                 continue;
             }
-            if (starts(clean, "{|")) {
+            if (table_indent) |table_path| {
+                if (table_path.len != 0) {
+                    const root = listRoot(':');
+                    if (list_root != 0 and list_root != root) @memset(&counts, 0);
+                    list_root = root;
+                }
                 const body_start = pos;
                 const table = try self.parseTable(input, pos);
                 pos = table.end;
@@ -2169,13 +2175,13 @@ pub const Renderer = struct {
                 // it cannot introduce a new wiki list, heading or leading-space block.
                 if (pos != 0 and pos < input.len and input[pos - 1] != '\n')
                     inline_line_end = syntax.logicalEnd(input, pos);
-                if (table.table.rows.len != 0) {
-                    try blocks.appendSlice(self.a, table.fostered);
-                    try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table.table });
+                if (table.table.rows.len != 0 or table.has_caption) {
+                    try blocks.appendSlice(self.a, try self.indentTableBlocks(table.fostered, table_path));
+                    try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table.table, .depth = @intCast(@min(table_path.len, 255)), .list_path = table_path[0..@min(table_path.len, 255)] });
                 } else {
                     self.fallbacks.malformed_table = true;
                     // Rowless layout tables still contain ordinary lists/text.
-                    for (try self.renderBody(input[body_start..table.body_end])) |block_value|
+                    for (try self.indentTableBlocks(try self.renderBody(input[body_start..table.body_end]), table_path)) |block_value|
                         try self.appendBlockBudgeted(&blocks, block_value);
                 }
                 continue;
@@ -2556,13 +2562,38 @@ pub const Renderer = struct {
         try self.htmlTableFostered(fostered, input[processed..], &foster_joinable, &foster_formatting);
         return .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) };
     }
-    const TableResult = struct { table: Table, end: usize, body_end: usize, fostered: []const Block };
+    const TableResult = struct { table: Table, end: usize, body_end: usize, fostered: []const Block, has_caption: bool };
     fn flushWikiTableFostered(self: *Renderer, blocks: *std.ArrayList(Block), source: *std.ArrayList(u8)) Error!void {
         if (source.items.len == 0) return;
         // Rendered spans may borrow their input; release the accumulated
         // slice from the mutable buffer before another fostered segment.
         const body = try source.toOwnedSlice(self.a);
         try blocks.appendSlice(self.a, try self.renderBody(body));
+    }
+    fn wikiTableIndent(line: []const u8) ?[]const u8 {
+        var indent: usize = 0;
+        while (indent < line.len and line[indent] == ':') : (indent += 1) {}
+        var content = indent;
+        while (content < line.len and std.ascii.isWhitespace(line[content])) : (content += 1) {}
+        if (!starts(line[content..], "{|")) return null;
+        return line[0..indent];
+    }
+    fn indentTableBlocks(self: *Renderer, blocks: []const Block, path: []const u8) Error![]const Block {
+        if (path.len == 0 or blocks.len == 0) return blocks;
+        const indented = try self.a.dupe(Block, blocks);
+        for (indented) |*b| {
+            const composed = try std.fmt.allocPrint(self.a, "{s}{s}", .{ path, b.list_path });
+            b.list_path = composed[0..@min(composed.len, 255)];
+            b.depth = @intCast(b.list_path.len);
+        }
+        return indented;
+    }
+    fn finishWikiTableCaption(self: *Renderer, caption: *[]const Span, source: *std.ArrayList(u8), pending: *bool) Error!void {
+        if (!pending.*) return;
+        // Parsed spans can borrow source bytes; detach the completed caption.
+        const body = try source.toOwnedSlice(self.a);
+        caption.* = try self.parseSpans(body, .{});
+        pending.* = false;
     }
     fn parseTable(self: *Renderer, input: []const u8, start: usize) Error!TableResult {
         var rows: std.ArrayList(Row) = .empty;
@@ -2573,6 +2604,9 @@ pub const Renderer = struct {
         defer outside_source.deinit(self.a);
         var current: ?Cell = null;
         var caption: []const Span = &.{};
+        var caption_source: std.ArrayList(u8) = .empty;
+        var caption_pending = false;
+        var has_caption = false;
         var pos = start;
         var body_end = input.len;
         var nested_tables: usize = 0;
@@ -2583,7 +2617,8 @@ pub const Renderer = struct {
             const raw_line = std.mem.trimEnd(u8, input[pos..end], "\r");
             const line = trim(raw_line);
             pos = if (end < input.len) end + 1 else end;
-            if (starts(line, "{|")) {
+            if (wikiTableIndent(line) != null) {
+                try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
                 if (cell_source.items.len != 0) try cell_source.append(self.a, '\n');
                 try cell_source.appendSlice(self.a, raw_line);
                 nested_tables += 1;
@@ -2596,6 +2631,7 @@ pub const Renderer = struct {
                 continue;
             }
             if (starts(line, "|}") or starts(line, "|-")) {
+                try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
                 try self.finishCell(&cells, &cell_source, &current);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
                 if (starts(line, "|}")) {
@@ -2607,8 +2643,15 @@ pub const Renderer = struct {
                     break;
                 }
             } else if (starts(line, "|+")) {
-                caption = try self.parseSpans((try self.cellContent(line[2..])).text, .{});
+                try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
+                try self.finishCell(&cells, &cell_source, &current);
+                // Preceding outside text registers references before the caption.
+                try self.flushWikiTableFostered(&fostered, &outside_source);
+                try caption_source.appendSlice(self.a, (try self.cellContent(line[2..])).text);
+                caption_pending = true;
+                has_caption = true;
             } else if (line.len != 0 and (line[0] == '!' or line[0] == '|')) {
+                try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
                 try self.flushWikiTableFostered(&fostered, &outside_source);
                 const header = line[0] == '!';
                 const separator = if (header) "!!" else "||";
@@ -2623,6 +2666,7 @@ pub const Renderer = struct {
                     offset = split_at + 2;
                 }
             } else if (starts(line, "<tr")) {
+                try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
                 if (syntax.tagAt(line, 0)) |tag| {
                     if (tag.is("tr") and !tag.closing) {
                         const pair = optionalTableEnd(line, tag);
@@ -2643,6 +2687,9 @@ pub const Renderer = struct {
                 if (try self.htmlTable(line, &fostered)) |table| {
                     try rows.appendSlice(self.a, table.rows);
                 }
+            } else if (caption_pending) {
+                if (caption_source.items.len != 0) try caption_source.append(self.a, '\n');
+                try caption_source.appendSlice(self.a, raw_line);
             } else if (current != null) {
                 // A marker after an empty cell opener starts a block list;
                 // the same marker on the opener's own line stays inline text.
@@ -2656,14 +2703,15 @@ pub const Renderer = struct {
                 try outside_source.appendSlice(self.a, raw_line);
             }
         }
+        try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
         try self.finishCell(&cells, &cell_source, &current);
         // Rowless recovery already renders the full body; avoid rendering its
         // outside text twice (including reference-registration side effects).
-        if (rows.items.len != 0 or cells.items.len != 0)
+        if (has_caption or rows.items.len != 0 or cells.items.len != 0)
             try self.flushWikiTableFostered(&fostered, &outside_source);
         if (body_end == input.len) self.fallbacks.malformed_table = true;
         if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
-        return .{ .table = .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .body_end = body_end, .fostered = try fostered.toOwnedSlice(self.a) };
+        return .{ .table = .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .body_end = body_end, .fostered = try fostered.toOwnedSlice(self.a), .has_caption = has_caption };
     }
     fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *std.ArrayList(u8), current: *?Cell) Error!void {
         if (current.*) |value| {
@@ -5907,4 +5955,176 @@ test "visible preservation oracle wiki-table outside text retains blocks without
     const normal = try ordinary.renderBody("{|\n| loose\n|}");
     try std.testing.expectEqual(@as(usize, 1), normal.len);
     try std.testing.expectEqualStrings("loose", try flattened(a, normal[0].table.?.rows[0].cells[0].spans));
+}
+
+
+test "wiki table boundary: colon-indented retain typed indentation and close-line suffix" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, path: []const u8 }{
+        .{ .source = ": {|\n| ''cell''\n|} #tail", .path = ":" },
+        .{ .source = "::{|\n| ''cell''\n|} #tail", .path = "::" },
+        .{ .source = " : {|\n| ''cell''\n|} #tail", .path = ":" },
+    };
+    for (cases) |c| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(c.source);
+        try std.testing.expectEqual(@as(usize, 2), blocks.len);
+        try std.testing.expectEqual(Kind.table, blocks[0].kind);
+        try std.testing.expectEqualStrings(c.path, blocks[0].list_path);
+        try std.testing.expectEqual(@as(u8, @intCast(c.path.len)), blocks[0].depth);
+        const table = blocks[0].table.?;
+        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+        try std.testing.expectEqualStrings("cell", try flattened(a, table.rows[0].cells[0].spans));
+        try std.testing.expect(table.rows[0].cells[0].spans[0].flags.italic);
+        try std.testing.expectEqual(Kind.paragraph, blocks[1].kind);
+        try std.testing.expectEqualStrings("#tail", try flattened(a, blocks[1].spans));
+        try std.testing.expect(!r.fallbacks.malformed_table);
+    }
+    var ordinary: Renderer = .{ .a = a, .context = .{} };
+    const normal = try ordinary.renderBody("{|\n| cell\n|}\n# after");
+    try std.testing.expectEqual(Kind.table, normal[0].kind);
+    try std.testing.expectEqualStrings("", normal[0].list_path);
+    try std.testing.expectEqual(@as(u8, 0), normal[0].depth);
+    try std.testing.expectEqual(Kind.definition, normal[1].kind);
+    var fostered: Renderer = .{ .a = a, .context = .{} };
+    const loose = try fostered.renderBody(": {|\nloose\n|+ Forms\n| cell\n|}");
+    try std.testing.expectEqual(@as(usize, 2), loose.len);
+    try std.testing.expectEqualStrings("loose", try flattened(a, loose[0].spans));
+    try std.testing.expectEqualStrings(":", loose[0].list_path);
+    try std.testing.expectEqual(@as(u8, 1), loose[0].depth);
+    try std.testing.expectEqual(Kind.table, loose[1].kind);
+    try std.testing.expectEqualStrings(":", loose[1].list_path);
+    try std.testing.expectEqualStrings("Forms", try flattened(a, loose[1].table.?.caption));
+}
+
+test "wiki table boundary: colon-indented preserve literal and non-table controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "<nowiki>: {|\n| cell\n|}</nowiki>",
+        "<nowiki>: {|\n| cell\n|}",
+        "*: {|\n| cell\n|}",
+        "<pre>code</pre>: {|\n| cell\n|}",
+    }) |source| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(source);
+        var visible: std.ArrayList(u8) = .empty;
+        for (blocks) |b| {
+            try std.testing.expect(b.table == null);
+            try visible.appendSlice(a, try flattened(a, b.spans));
+        }
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "{|") != null);
+    }
+    var indented: Renderer = .{ .a = a, .context = .{} };
+    const text = try indented.renderBody(": ordinary");
+    try std.testing.expectEqual(Kind.indent, text[0].kind);
+    try std.testing.expectEqualStrings(":", text[0].list_path);
+    try std.testing.expectEqualStrings("ordinary", try flattened(a, text[0].spans));
+    var pre: Renderer = .{ .a = a, .context = .{} };
+    const spaced = try pre.renderBody(" : ordinary");
+    try std.testing.expectEqual(Kind.preformatted, spaced[0].kind);
+    try std.testing.expectEqualStrings(": ordinary", try flattened(a, spaced[0].spans));
+    try std.testing.expect(spaced[0].spans[0].flags.code);
+}
+
+test "wiki table boundary: colon-indented retain nested and unterminated content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var nested: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try nested.renderBody(": {|\n| outer\n:: {|\n| inner\n|}\ntail\n|} after");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.table, blocks[0].kind);
+    try std.testing.expectEqualStrings(":", blocks[0].list_path);
+    const content = try flattened(a, blocks[0].table.?.rows[0].cells[0].spans);
+    try std.testing.expect(std.mem.indexOf(u8, content, "outer") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, content, "inner"));
+    try std.testing.expect(std.mem.indexOf(u8, content, "tail") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "{|") == null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "|}") == null);
+    try std.testing.expectEqualStrings("after", try flattened(a, blocks[1].spans));
+    try std.testing.expect(!nested.fallbacks.malformed_table);
+    // Preserve the existing ordinary-table recovery diagnostic; this control
+    // makes no fresh malformed-wikitext parity claim against MediaWiki.
+    var unclosed: Renderer = .{ .a = a, .context = .{} };
+    const recovered = try unclosed.renderBody(": {|\n| cell");
+    try std.testing.expectEqual(Kind.table, recovered[0].kind);
+    try std.testing.expectEqualStrings(":", recovered[0].list_path);
+    try std.testing.expectEqualStrings("cell", try flattened(a, recovered[0].table.?.rows[0].cells[0].spans));
+    try std.testing.expect(unclosed.fallbacks.malformed_table);
+}
+
+
+test "wiki table boundary: caption-only tables retain links and continuation references" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var plain: Renderer = .{ .a = a, .context = .{} };
+    const simple = try plain.renderBody("{|\n|+ Caption [[word]]\n|-\n|}");
+    try std.testing.expectEqual(@as(usize, 1), simple.len);
+    try std.testing.expectEqual(Kind.table, simple[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), simple[0].table.?.rows.len);
+    try std.testing.expectEqualStrings("Caption word", try flattened(a, simple[0].table.?.caption));
+    var word_link = false;
+    for (simple[0].table.?.caption) |s| if (std.mem.eql(u8, s.text, "word")) {
+        word_link = s.kind == .link and std.mem.eql(u8, s.target, "word");
+    };
+    try std.testing.expect(word_link);
+    try std.testing.expect(!plain.fallbacks.malformed_table);
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody(": {|\nbefore <ref name=b>Before</ref>\n|+ Caption <ref name=c>Caption</ref>\nafter <ref name=a>After</ref>\n|-\n|}");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqualStrings(":", blocks[0].list_path);
+    try std.testing.expectEqual(Kind.table, blocks[1].kind);
+    try std.testing.expectEqualStrings(":", blocks[1].list_path);
+    const before_text = try flattened(a, blocks[0].spans);
+    const caption_text = try flattened(a, blocks[1].table.?.caption);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, before_text, "before"));
+    try std.testing.expect(std.mem.indexOf(u8, before_text, "after") == null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, caption_text, "Caption"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, caption_text, "after"));
+    try std.testing.expect(std.mem.indexOf(u8, caption_text, "|+") == null);
+    try std.testing.expect(std.mem.indexOf(u8, caption_text, "|-") == null);
+    const refs = try r.finishReferences();
+    try std.testing.expectEqual(@as(usize, 3), refs.len);
+    for ([_][]const u8{ "b", "c", "a" }, 0..) |name, i| {
+        try std.testing.expectEqualStrings(name, refs[i].name);
+        try std.testing.expectEqual(i + 1, refs[i].number);
+    }
+    try std.testing.expect(!r.fallbacks.malformed_table);
+    var empty: Renderer = .{ .a = a, .context = .{} };
+    const empty_blocks = try empty.renderBody("{|\n|+\n|}");
+    try std.testing.expectEqual(Kind.table, empty_blocks[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), empty_blocks[0].table.?.caption.len);
+    try std.testing.expect(!empty.fallbacks.malformed_table);
+    var rowless: Renderer = .{ .a = a, .context = .{} };
+    const recovery = try rowless.renderBody("{|\nloose\n|}");
+    try std.testing.expectEqualStrings("loose", try flattened(a, recovery[0].spans));
+    try std.testing.expect(rowless.fallbacks.malformed_table);
+}
+
+test "wiki table boundary: fostered list ancestry and numbered-list transitions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody(": {|\n* notice\n| cell\n|}");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.list_item, blocks[0].kind);
+    try std.testing.expectEqualStrings(":*", blocks[0].list_path);
+    try std.testing.expectEqual(@as(u8, 2), blocks[0].depth);
+    try std.testing.expectEqualStrings("notice", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.table, blocks[1].kind);
+    var numbered: Renderer = .{ .a = a, .context = .{} };
+    const ordered = try numbered.renderBody("# before\n: {|\n| cell\n|}\n# after");
+    try std.testing.expectEqual(@as(usize, 3), ordered.len);
+    try std.testing.expectEqual(Kind.definition, ordered[0].kind);
+    try std.testing.expectEqualStrings("1", ordered[0].number);
+    try std.testing.expectEqual(Kind.table, ordered[1].kind);
+    try std.testing.expectEqual(Kind.definition, ordered[2].kind);
+    try std.testing.expectEqualStrings("1", ordered[2].number);
 }
