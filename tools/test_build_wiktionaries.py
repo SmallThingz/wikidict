@@ -2144,6 +2144,134 @@ class ExpansionDeadlineTests(unittest.TestCase):
         for value in (0,-1,3600001,True,'600000'):
             with self.assertRaises(ValueError): b.expansion_deadline_args(value)
 
+
+
+class ExternalRawShardTests(unittest.TestCase):
+    def test_owned_resume_source_reset_and_path_mismatch_preserve_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);work=root/'output/enwiktionary/20261001.shards';raw=root/'other/enwiktionary/20261001.raw-shards'
+            expected={'source':'first'}
+            b.prepare_shard_workspace(work,expected,123,raw)
+            cache=work/'input';cache.mkdir();(cache/'keep').write_text('authenticated input')
+            native=work/'expander';native.mkdir();(native/'worker').write_text('old native')
+            shard=raw/'00000000';shard.mkdir();(shard/'blob').write_text('raw')
+            inode=(cache/'keep').stat().st_ino
+            self.assertEqual(b.prepare_shard_workspace(work,expected,None,raw),123)
+            self.assertTrue((shard/'blob').exists())
+            for different in (None,root/'third/enwiktionary/20261001.raw-shards'):
+                with self.assertRaisesRegex(ValueError,'location differs'):
+                    b.prepare_shard_workspace(work,expected,123,different)
+                self.assertTrue((shard/'blob').exists())
+            self.assertEqual(b.prepare_shard_workspace(work,{'source':'second'},456,raw),456)
+            self.assertEqual((cache/'keep').stat().st_ino,inode)
+            self.assertFalse(shard.exists());self.assertFalse(native.exists())
+            self.assertEqual(json.loads((work/'state.json').read_text())['raw_shards_path'],str(raw))
+            self.assertTrue((raw/b.RAW_SHARD_OWNER).is_file())
+
+    def test_foreign_symlink_overlapping_and_nested_paths_are_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);work=root/'output/enwiktionary/20261001.shards'
+            foreign=root/'foreign';foreign.mkdir();sentinel=foreign/'keep';sentinel.write_text('untouched')
+            with self.assertRaisesRegex(ValueError,'Unowned'):
+                b.prepare_shard_workspace(work,{'source':'x'},123,foreign)
+            self.assertEqual(sentinel.read_text(),'untouched');self.assertFalse((work/'state.json').exists())
+            owned=root/'owned';b.external_raw_shards(work,owned,create=True)
+            with self.assertRaisesRegex(ValueError,'owner differs'):
+                b.external_raw_shards(root/'different.shards',owned,create=True)
+            alias=root/'alias';alias.symlink_to(owned,target_is_directory=True)
+            with self.assertRaisesRegex(ValueError,'Unsafe'):
+                b.external_raw_shards(work,alias,create=True)
+            for overlap in (work/'input',work.parent,work.with_name('20261001')/'raw',work.with_name('20261001.building')/'raw'):
+                with self.assertRaisesRegex(ValueError,'overlap'):
+                    b.external_raw_shards(work,overlap,create=True)
+            with self.assertRaisesRegex(ValueError,'nested'):
+                b.external_raw_shards(root/'another.shards',owned/'nested',create=True)
+            marker=owned/b.RAW_SHARD_OWNER;marker.unlink();marker.symlink_to(sentinel)
+            with self.assertRaisesRegex(ValueError,'marker'):
+                b.external_raw_shards(work,owned,create=True)
+            self.assertEqual(sentinel.read_text(),'untouched')
+
+    def test_live_partial_and_changed_marker_block_reset_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);work=root/'work';raw=root/'raw'
+            b.prepare_shard_workspace(work,{'source':'first'},123,raw)
+            cache=work/'input';cache.mkdir();(cache/'keep').write_text('input')
+            partial=raw/f'.00000000.part-{os.getpid()}';partial.mkdir();(partial/'keep').write_text('active')
+            for action in (lambda:b.prepare_shard_workspace(work,{'source':'second'},456,raw),
+                           lambda:b.cleanup_shard_workspace(work)):
+                with self.assertRaisesRegex(ValueError,'PID still exists'):action()
+                self.assertEqual((partial/'keep').read_text(),'active')
+                self.assertTrue((cache/'keep').exists())
+            (partial/'keep').unlink();partial.rmdir()
+            marker=raw/b.RAW_SHARD_OWNER;record=marker.read_text()
+            marker.write_text(json.dumps({'workspace':'foreign'}))
+            with self.assertRaisesRegex(ValueError,'owner differs'):b.cleanup_shard_workspace(work)
+            self.assertTrue((cache/'keep').exists())
+            marker.write_text(record);b.cleanup_shard_workspace(work)
+            self.assertFalse(work.exists());self.assertFalse(raw.exists())
+
+    def test_external_merge_and_verification_failures_resume_without_repack(self):
+        for failure in ('merge','verify'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);folder=root/'testwiktionary/20260901';write_namespace_fixture(folder)
+                name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+                data=bz2.compress(b'<mediawiki><page>word</page><page>second</page></mediawiki>')
+                (folder/name).write_bytes(data)
+                item=dict(wiki='testwiktionary',date='20260901',name=name,
+                          url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                          size=len(data),sha1=hashlib.sha1(data).hexdigest())
+                work=root/'output/testwiktionary/20260901.shards';raw=root/'other/testwiktionary/20260901.raw-shards'
+                staging=root/'output/testwiktionary/20260901.building';merges=[];failed=False;builds=[]
+                def run(command):
+                    nonlocal failed
+                    if 'build-dictionary' in command:
+                        dest=Path(command[command.index('--')+2]);self.assertEqual(dest,work/'expander')
+                        exp=dest/'.bundle-expander';exp.mkdir(parents=True);(dest/'.incomplete').write_text('expander ready')
+                        (exp/'page-index.tsv').write_text('0\n1\n');(exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+                    elif 'build-blobs' in command:
+                        dest=Path(command[command.index('--')+2]);self.assertEqual(dest,raw)
+                        dest.mkdir(parents=True,exist_ok=True);write_coverage(dest,command);builds.append(command)
+                    elif 'merge-blobs' in command:
+                        merges.append(command);self.assertEqual(Path(command[command.index('--')+1]),staging)
+                        shards=[Path(x) for x in command[command.index('--')+2:]]
+                        self.assertTrue(all(x.parent==raw for x in shards))
+                        self.assertTrue((work/'input/.complete.json').exists());self.assertTrue(raw.exists())
+                        if failure=='merge' and not failed:failed=True;raise subprocess.CalledProcessError(1,command)
+                        staging.mkdir();(staging/'fallback-pages.jsonl').write_text('')
+                        write_namespace_coverage(staging,sum(json.loads((x/'page-coverage.json').read_text())['pages_seen'] for x in shards))
+                    elif 'verify-blobs' in command and Path(command[-1])==staging:
+                        self.assertTrue(raw.exists())
+                        if failure=='verify' and not failed:failed=True;raise subprocess.CalledProcessError(1,command)
+                with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_PAGES',1), \
+                     patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123), \
+                     patch.object(b,'run_checked',side_effect=run),patch.object(b,'stage_seekable_dump',wraps=b.stage_seekable_dump) as repack:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        b.build([item],root,root/'output','zig',1,raw_shard_root=root/'other')
+                    self.assertTrue((raw/'00000000/.verified').exists());self.assertTrue((work/'input/.complete.json').exists())
+                    b.build([item],root,root/'output','zig',1,raw_shard_root=root/'other')
+                    self.assertEqual(repack.call_count,1);self.assertEqual(len(builds),1);self.assertEqual(len(merges),2)
+                    self.assertFalse(raw.exists());self.assertFalse(work.exists())
+                    self.assertTrue((root/'output/testwiktionary/20260901/complete.json').is_file())
+
+    def test_cli_routes_optional_root_to_build_and_disk_watchdog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);raw=root/'other';output=root/'output'
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--output',str(output),'--raw-shard-root',str(raw)]
+            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
+                 patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
+                with self.assertRaises(SystemExit) as done:b.cli()
+                self.assertEqual(done.exception.code,0)
+            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',output,raw))
+            write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',
+                url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
+            with patch.object(sys,'argv',argv+['--downloads',str(root),'--threads','1','--jobs','1']), \
+                 patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.kwargs['raw_shard_root'],raw)
+            with patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'build',return_value='built') as build:
+                b.build_groups({('testwiktionary','20261001'):['item']},root,output,'zig',1,1,raw_shard_root=raw)
+            self.assertEqual(build.call_args.kwargs['raw_shard_root'],raw)
+
 if __name__=='__main__':unittest.main()
 
 class ReproducibleBuildTimeTest(unittest.TestCase):

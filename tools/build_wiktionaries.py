@@ -1286,24 +1286,88 @@ def validate_now_unix(value):
     return value
 
 
-def prepare_shard_workspace(workspace, expected, now_unix=None):
+RAW_SHARD_OWNER = '.wikidict-raw-shards.json'
+
+
+def external_raw_shards(workspace, path, create=False):
+    """Authenticate a private raw-shard directory before using or deleting it."""
+    raw=Path(path)
+    if not raw.is_absolute() or raw.resolve()!=raw or raw.is_symlink():
+        raise ValueError(f'Unsafe external raw shard path: {raw}')
+    work=workspace.resolve()
+    protected=[work]
+    if work.name.endswith('.shards'):
+        date=work.name[:-len('.shards')]
+        protected.extend((work.with_name(date),work.with_name(date+'.building')))
+    if any(raw.is_relative_to(p) or p.is_relative_to(raw) for p in protected):
+        raise ValueError(f'External raw shards overlap build paths: {raw}')
+    if any((parent/RAW_SHARD_OWNER).exists() or (parent/RAW_SHARD_OWNER).is_symlink()
+           for parent in raw.parents):
+        raise ValueError(f'External raw shards nested inside another owner: {raw}')
+    owner={'version':1,'workspace':str(work),'raw_shards':str(raw)}
+    if not raw.exists():
+        if not create: return raw
+        raw.mkdir(parents=True)
+    if not raw.is_dir(): raise ValueError(f'Unsafe external raw shard path: {raw}')
+    marker=raw/RAW_SHARD_OWNER
+    if marker.is_symlink(): raise ValueError(f'Unsafe raw shard owner marker: {marker}')
+    if not marker.exists():
+        if not create or any(raw.iterdir()):
+            raise ValueError(f'Unowned external raw shard directory: {raw}')
+        with marker.open('x') as out: out.write(json.dumps(owner,sort_keys=True)+'\n')
+    if not marker.is_file() or read_small_json(marker)!=owner:
+        raise ValueError(f'External raw shard owner differs: {raw}')
+    return raw
+
+
+def cleanup_shard_workspace(workspace):
+    """Remove only the external shards recorded by this workspace."""
+    if workspace.is_symlink() or (workspace.exists() and not workspace.is_dir()):
+        raise ValueError(f'Unsafe shard workspace: {workspace}')
+    if not workspace.exists(): return
+    state_path=workspace/'state.json'
+    if state_path.is_symlink(): raise ValueError(f'Unsafe shard state: {state_path}')
+    state=json.loads(state_path.read_text()) if state_path.is_file() else {}
+    if isinstance(state,dict) and state.get('raw_shards_path') is not None:
+        raw=external_raw_shards(workspace,state['raw_shards_path'])
+        if raw.exists():
+            cleanup_dead_private_shards(raw)
+            shutil.rmtree(raw)
+    shutil.rmtree(workspace)
+
+
+def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None):
     expected=dict(expected)
+    if 'raw_shards_path' in expected: raise ValueError('Raw shard path must be supplied explicitly')
+    selected=str(Path(raw_shards_path).absolute()) if raw_shards_path is not None else None
+    if selected is not None: expected['raw_shards_path']=selected
     embedded=expected.pop('now_unix',None)
     if now_unix is None: now_unix=embedded
     elif embedded is not None and embedded!=now_unix: raise ValueError('Conflicting build timestamps')
     validate_now_unix(now_unix)
     if workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
     state_path=workspace/'state.json'
+    if state_path.is_symlink(): raise ValueError(f'Unsafe shard state: {state_path}')
     if state_path.is_file():
         try: existing=json.loads(state_path.read_text())
         except (OSError,json.JSONDecodeError): existing=None
         comparable={k:v for k,v in existing.items() if k!='now_unix'} if isinstance(existing,dict) else None
+        if isinstance(existing,dict) and existing.get('raw_shards_path')!=selected:
+            previous=existing.get('raw_shards_path')
+            unchanged={k:v for k,v in comparable.items() if k!='raw_shards_path'}=={k:v for k,v in expected.items() if k!='raw_shards_path'}
+            if previous is not None or unchanged:
+                raise ValueError('Raw shard location differs from resumable workspace; preserve it or choose a new workspace')
         if comparable==expected and type(existing.get('now_unix')) is int and 0<existing['now_unix']<=(1<<63)-1 and (now_unix is None or existing['now_unix']==now_unix):
+            if selected is not None: external_raw_shards(workspace,selected,create=True)
             return existing['now_unix']
     if workspace.exists():
         if not workspace.is_dir() or workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
         cache=workspace/'input'
         if cache.is_symlink(): raise ValueError(f'Unsafe cached dump path: {cache}')
+        if selected is not None:
+            raw=external_raw_shards(workspace,selected,create=True)
+            cleanup_dead_private_shards(raw)
+            shutil.rmtree(raw)
         # Compiler/registry changes invalidate the expander and shards, but
         # the verified compressed XML repack has independent inputs.
         for child in workspace.iterdir():
@@ -1312,6 +1376,7 @@ def prepare_shard_workspace(workspace, expected, now_unix=None):
             else: child.unlink()
     else:
         workspace.mkdir(parents=True)
+    if selected is not None: external_raw_shards(workspace,selected,create=True)
     now_unix=now_unix if now_unix is not None else int(time.time())
     state=dict(expected,now_unix=now_unix)
     temp=state_path.with_suffix('.part')
@@ -1410,8 +1475,14 @@ def timed_run(command, edition, date, phase, **fields):
         run_checked(command)
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None):
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
+    if raw_shards_path is not None:
+        raw_shards_path=external_raw_shards(workspace,raw_shards_path,create=True)
+        state=json.loads((workspace/'state.json').read_text())
+        if state.get('raw_shards_path')!=str(raw_shards_path):
+            raise ValueError('Raw shard location does not match workspace state')
+        cleanup_dead_private_shards(raw_shards_path)
     edition,date=items[0]['wiki'],items[0]['date']
     workers=min(workers,MAX_PIPELINE_WORKERS)
     expansion_workers=workers if expansion_workers is None else expansion_workers
@@ -1446,7 +1517,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if indexed_pages!=cache_record['source_pages']:
         raise ValueError('Page index count differs from staged source pages')
 
-    shards_root=workspace/'shards';shards_root.mkdir(exist_ok=True)
+    shards_root=raw_shards_path if raw_shards_path is not None else workspace/'shards'
+    shards_root.mkdir(exist_ok=True)
     cleanup_dead_private_shards(shards_root)
     shard_paths=[]
     # A verified or complete-but-unmarked contiguous prefix is reusable after
@@ -1590,10 +1662,10 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
     # disk usage is not shards + merged raw + compressed output simultaneously.
-    if workspace.exists(): shutil.rmtree(workspace)
+    cleanup_shard_workspace(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None):
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None):
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     for item in items:
@@ -1608,7 +1680,7 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise ValueError(f'Build already running: {parent / date}') from None
-            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}))
+            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}))
             result['execution_mode']=mode
             return mode
 
@@ -1802,7 +1874,7 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot)
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None):
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None):
     validate_now_unix(now_unix)
     for item in items:validate_item(item)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
@@ -1877,8 +1949,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             raise ValueError('Existing output blob inventory differs from completion metadata')
         workspace=target.with_name(date+'.shards')
         if workspace.exists():
-            if not workspace.is_dir() or workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
-            shutil.rmtree(workspace)
+            cleanup_shard_workspace(workspace)
         (target/VERIFIED_MARKER).unlink(missing_ok=True)
         print(f'Already built: {target}', flush=True)
         return 'existing_output'
@@ -1893,13 +1964,15 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
                 raise ValueError('Verified staging uses a different or unrecorded build time')
             print(f'Resuming verified publication: {staging}', flush=True)
             publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace)
+            cleanup_shard_workspace(target.with_name(date+'.shards'))
             return 'resumed_publication'
         print(f'Retrying incomplete build: {staging}', flush=True)
         shutil.rmtree(staging)
     workers = min(compression_workers or default_build_threads(),MAX_PIPELINE_WORKERS)
     workspace=target.with_name(date+'.shards')
     expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots)
-    now_unix=prepare_shard_workspace(workspace,expected,now_unix)
+    raw_shards_path=(Path(raw_shard_root).absolute()/edition/(date+'.raw-shards')) if raw_shard_root is not None else None
+    now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}))
     dump=cached_shard_dump(xml,downloads,workspace)
     source_metadata=read_small_json(workspace/'input/.complete.json')
     if not isinstance(source_metadata,dict) or type(source_metadata.get('source_pages')) is not int or source_metadata['source_pages']<0:
@@ -1922,7 +1995,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     # Reuse the verified repack for either path, retaining it after failures.
     if source_pages>SHARD_PAGES:
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}))
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}))
     else:
         timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
@@ -1950,13 +2023,13 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         persist_build_identity(staging,build_identity)
         (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
         # Verified staging can now resume publication without the input cache.
-        shutil.rmtree(workspace)
+        cleanup_shard_workspace(workspace)
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
     publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace)
-    if workspace.exists(): shutil.rmtree(workspace)
+    cleanup_shard_workspace(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load'):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None):
     from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
@@ -1984,6 +2057,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 if expansion_workers is not None: options['expansion_workers']=expansion_workers
                 if expansion_timeout_ms is not None: options['expansion_timeout_ms']=expansion_timeout_ms
                 if now_unix is not None: options['now_unix']=now_unix
+                if raw_shard_root is not None: options['raw_shard_root']=raw_shard_root
                 if interwiki_snapshot is not None: options['interwiki_snapshot']=interwiki_snapshot
                 if auxiliary_snapshots: options['auxiliary_snapshots']=auxiliary_snapshots
                 if edition_options is not None:
@@ -2024,6 +2098,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
     p.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries',metavar='DIR')
+    p.add_argument('--raw-shard-root',type=Path,metavar='DIR',help='Optional raw shard volume; input/native caches and merged publication remain under --output')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
     p.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup',
                    help='Resource supervisor: strict cgroup (default), or explicit best-effort 8 GiB process-tree watchdog with a two-hour deadline')
@@ -2105,6 +2180,7 @@ def main():
         options['admission_wait_seconds']=a.build_timeout_seconds or WATCHDOG_WALL_SECONDS
     if a.expansion_timeout_ms is not None: options['expansion_timeout_ms']=a.expansion_timeout_ms
     if a.now_unix is not None: options['now_unix']=a.now_unix
+    if a.raw_shard_root is not None: options['raw_shard_root']=a.raw_shard_root.absolute()
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
     try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary)
     except (ValueError,OSError) as error:p.error(str(error))
@@ -2124,6 +2200,7 @@ def cli():
         route.add_argument('--expansion-workers',type=int)
         route.add_argument('--build-timeout-seconds',type=int)
         route.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries')
+        route.add_argument('--raw-shard-root',type=Path)
         routing=route.parse_known_args()[0]
         mode=routing.resource_mode
         if routing.cpu_admission=='affinity':
@@ -2148,6 +2225,7 @@ def cli():
                     with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
                         options={'wall_seconds':routing.build_timeout_seconds if routing.build_timeout_seconds is not None else 7200,
                                  'disk_paths':(PROJECT/'.tmp', routing.output)}
+                        if routing.raw_shard_root is not None: options['disk_paths']+=(routing.raw_shard_root,)
                         if routing.expansion_workers is not None and routing.expansion_workers>MAX_PIPELINE_WORKERS:
                             options['max_cpus']=8
                         raise SystemExit(supervise_watchdog(**options))

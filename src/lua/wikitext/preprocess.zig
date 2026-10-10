@@ -17,14 +17,33 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     var pos: usize = 0;
+    var line_start: usize = 0;
+    var line_has_content = false;
     while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |open| {
-        try out.appendSlice(a, text[pos..open]);
+        const prefix = text[pos..open];
+        for (prefix, 0..) |byte, at| {
+            if (byte == '\n') {
+                line_start = out.items.len + at + 1;
+                line_has_content = false;
+            } else if (byte != ' ' and byte != '\t' and byte != '\r') line_has_content = true;
+        }
+        try out.appendSlice(a, prefix);
         if (std.mem.startsWith(u8, text[open..], "<!--")) {
             const close = findCiPos(text, open + 4, "-->") orelse {
                 pos = text.len;
                 break;
             };
             pos = close + 3;
+            // Remove only comment-only lines and their terminating newline.
+            // Keep the preceding newline, authored blanks and protected bodies.
+            if (!line_has_content) {
+                var line_end = pos;
+                while (line_end < text.len and (text[line_end] == ' ' or text[line_end] == '\t' or text[line_end] == '\r')) : (line_end += 1) {}
+                if (line_end == text.len or text[line_end] == '\n') {
+                    out.items.len = line_start;
+                    pos = if (line_end < text.len) line_end + 1 else line_end;
+                }
+            }
             continue;
         }
         // Raw nowiki text must reach the renderer intact. Reuse the existing
@@ -36,13 +55,21 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
                     while (before_gt > open and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
                     const end = if (before_gt > open and text[before_gt - 1] == '/') opening_end else
                         inclusionCloseEnd(text, opening_end, tag.name) orelse text.len;
-                    try out.appendSlice(a, text[open..end]);
+                    const protected = text[open..end];
+                    for (protected, 0..) |byte, at| {
+                        if (byte == '\n') {
+                            line_start = out.items.len + at + 1;
+                            line_has_content = false;
+                        } else if (byte != ' ' and byte != '\t' and byte != '\r') line_has_content = true;
+                    }
+                    try out.appendSlice(a, protected);
                     pos = end;
                     continue;
                 }
             }
         }
         try out.append(a, '<');
+        line_has_content = true;
         pos = open + 1;
     }
     try out.appendSlice(a, text[pos..]);
@@ -612,4 +639,58 @@ test "transclusion preserves first opened literal regions" {
         defer std.testing.allocator.free(actual);
         try std.testing.expectEqualStrings(case.expected, actual);
     }
+}
+
+
+test "grammar syntax oracle comment only line preserves list adjacency and authored blanks" {
+    const a = std.testing.allocator;
+    // A comment occupying its entire physical line vanishes upstream, including
+    // the redundant newline; authored blank lines must still remain blank.
+    const joined = try stripDecodedComments(a, "# first\n<!--hidden-->\n# second");
+    defer a.free(joined);
+    const blank = try stripDecodedComments(a, "# first\n\n# second");
+    defer a.free(blank);
+    try std.testing.expectEqualStrings("# first\n\n# second", blank);
+    const inline_comment = try stripDecodedComments(a, "before<!--hidden-->after");
+    defer a.free(inline_comment);
+    try std.testing.expectEqualStrings("beforeafter", inline_comment);
+    const protected = try stripDecodedComments(a, "<nowiki><!--hidden--></nowiki>");
+    defer a.free(protected);
+    try std.testing.expectEqualStrings("<nowiki><!--hidden--></nowiki>", protected);
+    try std.testing.expectEqualStrings("# first\n# second", joined);
+}
+
+
+test "grammar syntax oracle standalone comment variants retain list adjacency" {
+    const a = std.testing.allocator;
+    for ([_][]const u8{
+        "# first\n  <!-- hidden --> \t\n# second",
+        "# first\n<!-- hidden\nmore hidden -->\n# second",
+        "# first\n<!-- one -->\n<!-- two -->\n# second",
+    }) |source| {
+        const result = try stripDecodedComments(a, source);
+        defer a.free(result);
+        try std.testing.expectEqualStrings("# first\n# second", result);
+    }
+    const source = "# first\n<nowiki><!--hidden--></nowiki>\n# second";
+    const protected = try stripDecodedComments(a, source);
+    defer a.free(protected);
+    try std.testing.expectEqualStrings(source, protected);
+    const blanks = try stripDecodedComments(a, "# first\n\n<!--hidden-->\n\n# second");
+    defer a.free(blanks);
+    try std.testing.expectEqualStrings("# first\n\n\n# second", blanks);
+}
+
+
+test "grammar syntax oracle multiple comments on a line preserve visible content" {
+    const a = std.testing.allocator;
+    const standalone = try stripDecodedComments(a, "# first\n<!--one--> <!--two-->\n# second");
+    defer a.free(standalone);
+    try std.testing.expectEqualStrings("# first\n# second", standalone);
+    const inline_comments = try stripDecodedComments(a, "before<!--one--> <!--two-->after");
+    defer a.free(inline_comments);
+    try std.testing.expectEqualStrings("before after", inline_comments);
+    const protected = try stripDecodedComments(a, "<nowiki>first\n<!--one--></nowiki>\n<!--two-->\nafter");
+    defer a.free(protected);
+    try std.testing.expectEqualStrings("<nowiki>first\n<!--one--></nowiki>\nafter", protected);
 }

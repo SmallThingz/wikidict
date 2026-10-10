@@ -167,12 +167,22 @@ pub const InlineIterator = struct {
     bold: bool = false,
     italic: bool = false,
     renderer_boundaries: bool = false,
+    internal_close_scanned: bool = false,
+    last_internal_close: ?usize = null,
     link_trail: LinkTrail = .{},
     pending_link_start: usize = 0,
     pending_link_inner_end: usize = 0,
     pending_link_end: usize = 0,
     next_free_external: usize = 0,
     free_external_scanned: bool = false,
+
+    fn hasRemainingInternalClose(self: *InlineIterator) bool {
+        if (!self.internal_close_scanned) {
+            self.last_internal_close = std.mem.lastIndexOf(u8, self.input, "]]");
+            self.internal_close_scanned = true;
+        }
+        return if (self.last_internal_close) |at| at > self.cursor else false;
+    }
 
     fn nextFreeExternal(self: *InlineIterator) usize {
         if (!self.free_external_scanned or self.next_free_external < self.cursor) {
@@ -222,10 +232,18 @@ pub const InlineIterator = struct {
                     .italic = self.italic,
                 };
             }
-            switch (parseInlineLinkAtDetailed(self.input, self.cursor, self.link_trail)) {
+            const link_parse: InlineLinkParse = if (self.renderer_boundaries and
+                std.mem.startsWith(u8, self.input[self.cursor..], "[[") and !self.hasRemainingInternalClose())
+                .unbalanced
+            else parseInlineLinkAtDetailed(self.input, self.cursor, self.link_trail);
+            switch (link_parse) {
                 .link => |link| return self.inlineLink(link),
                 .unbalanced => {
                     const start = self.cursor;
+                    if (self.renderer_boundaries) {
+                        self.cursor += 2;
+                        return .{ .kind = .text, .text = self.input[start..self.cursor], .literal_tail = true, .bold = self.bold, .italic = self.italic };
+                    }
                     self.cursor = self.input.len;
                     return .{
                         .kind = .text,
@@ -330,8 +348,9 @@ pub const InlineIterator = struct {
                 }
                 if (std.mem.startsWith(u8, rest, "[[")) {
                     if (self.pending_link_end != 0 and self.pending_link_start == self.cursor) break :scan;
+                    if (self.renderer_boundaries and !self.hasRemainingInternalClose()) break :scan;
                     const pair = syntax.balanced(self.input, self.cursor) orelse {
-                        self.cursor = self.input.len;
+                        if (!self.renderer_boundaries) self.cursor = self.input.len;
                         break :scan;
                     };
                     switch (parseInlineLinkAtPair(self.input, self.cursor, pair, self.link_trail)) {

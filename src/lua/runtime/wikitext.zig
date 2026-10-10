@@ -2244,7 +2244,11 @@ pub const Expander = struct {
         if (try self.expandParserHead(raw_head, parts.items[1..], params, host_title, depth)) |value| return value;
         if (raw_head[0] == '#') {
             self.unsupported_parser_function = true;
-            return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
+            // Unknown calls remain literal, but MediaWiki expands their child
+            // nodes. Valid parser functions already returned above, preserving
+            // lazy branch selection. Protect only the recovered outer braces.
+            const expanded_head = try self.expandWikitext(raw_head, params, host_title, depth + 1);
+            return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth);
         }
         switch (try self.classifyInterwikiTransclusion(raw_head)) {
             .normal => {},
@@ -2269,7 +2273,7 @@ pub const Expander = struct {
         }
         if (title.len != 0 and title[0] == '#') {
             self.unsupported_parser_function = true;
-            return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
+            return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth);
         }
         if (invalidTransclusionTitle(title)) {
             if (invalidTransclusionNeedsProtection(title))
@@ -3542,7 +3546,7 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     const urlencode_path = try expander.expandFragment("Page", "{{urlencode:a b/c*|PATH}}", 1_670_803_200);
     try std.testing.expectEqualStrings("a%20b%2Fc%2A", urlencode_path);
     const inert_hash_urlencode = try expander.expandFragment("Page", "{{#urlencode:जलाना|PATH}}", 1_670_803_200);
-    try std.testing.expectEqualStrings("<nowiki>{{#urlencode:जलाना|PATH}}</nowiki>", inert_hash_urlencode);
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#urlencode:जलाना|PATH<nowiki>}}</nowiki>", inert_hash_urlencode);
     const inert_empty_template = try expander.expandFragment("Page", "{{|yue|洛陽}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{|yue|洛陽}}</nowiki>", inert_empty_template);
     // Afrikaans Sjabloon:S computes this empty name when woordklank receives
@@ -3989,7 +3993,7 @@ test "captured parser aliases expand lazy wrappers and native frame invokes" {
     var english = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\nif\t0\tif\ninvoke\t0\tinvoke\n", "enwiktionary", "20261001", "en");
     defer english.deinit();
     source.words = &english;
-    try std.testing.expectEqualStrings("<nowiki>{{#لو:yes|Y|N}}</nowiki>", try expander.expandFragment("Page", "{{#لو:yes|Y|N}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#لو:yes|Y|N<nowiki>}}</nowiki>", try expander.expandFragment("Page", "{{#لو:yes|Y|N}}", 1_670_803_200));
 }
 
 test "bundle parser functions cover corpus time date sub and iferror forms" {
@@ -4862,7 +4866,7 @@ test "language parser preserves authoritative nonmatches and missing profile ope
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
         .provider = .{ .ctx = &source, .get = LanguageParserTestSource.get, .exists = TestProvider.exists,
             .language_name = LanguageParserTestSource.languageName, .resolve_parser_function = LanguageParserTestSource.parser } };
-    try std.testing.expectEqualStrings("<nowiki>{{#لغة:en}}</nowiki>", try expander.expandFragment("Page", "{{#لغة:en}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#لغة:en<nowiki>}}</nowiki>", try expander.expandFragment("Page", "{{#لغة:en}}", 1_670_803_200));
     try std.testing.expectError(error.LanguageNameSnapshotMissing, expander.expandFragment("Page", "{{#language:en|missing}}", 1_670_803_200));
     try std.testing.expectError(error.LanguageNameSnapshotMissing, expander.expandFragment("Page", "{{#language:en|-}}", 1_670_803_200));
     try std.testing.expectError(error.OutOfMemory, expander.expandFragment("Page", "{{#language:oom|ar}}", 1_670_803_200));
@@ -4892,13 +4896,13 @@ test "unsupported parser diagnostics preserve literals and reset per page" {
         .install_scribunto = installTestInvoke,
     };
     const unsupported = try expander.expandFragment("Page", "before {{#unsupported_probe:x}} after", 1_670_803_200);
-    try std.testing.expectEqualStrings("before <nowiki>{{#unsupported_probe:x}}</nowiki> after", unsupported);
+    try std.testing.expectEqualStrings("before <nowiki>{{</nowiki>#unsupported_probe:x<nowiki>}}</nowiki> after", unsupported);
     try std.testing.expect(expander.unsupported_parser_function);
     _ = try expander.expandFragment("Next", "<nowiki>{{#unsupported_probe:x}}</nowiki>", 1_670_803_200);
     try std.testing.expect(!expander.unsupported_parser_function);
     const computed_source = "{{{{#if:x|#unsupported_probe}}:x}}";
     const computed = try expander.expandFragment("Computed", computed_source, 1_670_803_200);
-    try std.testing.expectEqualStrings("<nowiki>{{{{#if:x|#unsupported_probe}}:x}}</nowiki>", computed);
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>\n#unsupported_probe:x<nowiki>}}</nowiki>", computed);
     try std.testing.expect(expander.unsupported_parser_function);
     _ = try expander.expandFragment("Protected pre", "<pre>{{#unsupported_probe:x}}</pre>", 1_670_803_200);
     try std.testing.expect(!expander.unsupported_parser_function);
@@ -5056,4 +5060,70 @@ test "labelled section inclusion preserves upstream ranges protected nodes targe
     defer german.deinit();
     runtime.namespace_catalog = &german;
     try std.testing.expectEqualStrings("LOCAL", try expander.expandFragment("Caller", "{{#lst:Local|x}}", 1_670_803_200));
+}
+
+
+test "unknown parser oracle expands children while preserving unsupported invocation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TranslationReuseProbe.root), rt.stabilize(TranslationReuseProbe.root) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TranslationReuseProbe.lookup, TranslationReuseProbe.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+        .install_scribunto = installTestInvoke,
+    };
+
+    const child = try expander.expandFragment("शारदा", "{{#unsupported_probe:{{PAGENAME}}|x={{uc:cat}}}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#unsupported_probe:शारदा|x=CAT<nowiki>}}</nowiki>", child);
+    try std.testing.expect(expander.unsupported_parser_function);
+    const fallback = try expander.expandFragment("शारदा", "{{#urlencode:{{{1|{{PAGENAME}}}}}}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#urlencode:शारदा<nowiki>}}</nowiki>", fallback);
+    try std.testing.expect(expander.unsupported_parser_function);
+    const markup = try expander.expandFragment("शारदा", "{{#unsupported_probe:<b>bold</b>|[[cat|label]]}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#unsupported_probe:<b>bold</b>|[[cat|label]]<nowiki>}}</nowiki>", markup);
+    try std.testing.expect(expander.unsupported_parser_function);
+}
+
+
+test "unknown parser oracle preserves protected source and valid lazy branches" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TranslationReuseProbe.root), rt.stabilize(TranslationReuseProbe.root) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TranslationReuseProbe.lookup, TranslationReuseProbe.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+        .install_scribunto = installTestInvoke,
+    };
+
+    const protected = try expander.expandFragment("शारदा", "<nowiki>{{#unsupported_probe:{{PAGENAME}}}}</nowiki>", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{#unsupported_probe:{{PAGENAME}}}}</nowiki>", protected);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    const lazy = try expander.expandFragment("शारदा", "{{#if:x|yes|{{#unsupported_probe:{{#expr:1/0}}}}}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("yes", lazy);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    const known = try expander.expandFragment("शारदा", "{{urlencode:{{PAGENAME}}}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("%E0%A4%B6%E0%A4%BE%E0%A4%B0%E0%A4%A6%E0%A4%BE", known);
+    try std.testing.expect(!expander.unsupported_parser_function);
 }
