@@ -75,7 +75,7 @@ object MediaPlayback {
     }
 }
 @Composable
-fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition:String="") {
+fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition:String="",showCaption:Boolean=true) {
     val cache=MediaCache.get(LocalContext.current);val scope=rememberCoroutineScope();val uri=LocalUriHandler.current
     val key=remember(media.kind,media.file,edition){mediaKey(media,edition)}
     var resource by remember(key){mutableStateOf<MediaFile?>(null)}
@@ -104,7 +104,7 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
             }) { if(busy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Icon(if(media.kind=="image")Icons.Outlined.Image else if(MediaPlayback.playing==key)Icons.Outlined.Stop else Icons.Outlined.PlayArrow,if(media.kind=="image"){if(error!=null) "Retry image" else "Image source"} else if(MediaPlayback.playing==key) "Stop pronunciation" else "Play pronunciation") }
             Column(Modifier.weight(1f)) {
                 val caption=media.caption.takeUnless{it==media.file}.orEmpty()
-                if(caption.isNotBlank() || showFileName) Text(caption.ifBlank{media.file.substringBeforeLast('.').replace('_',' ')},style=MaterialTheme.typography.bodyMedium)
+                if(showCaption && (caption.isNotBlank() || showFileName)) Text(caption.ifBlank{media.file.substringBeforeLast('.').replace('_',' ')},style=MaterialTheme.typography.bodyMedium)
                 error?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)}
                 resource?.credit?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
             }

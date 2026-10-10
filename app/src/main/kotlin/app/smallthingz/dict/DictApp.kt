@@ -34,6 +34,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
     var dockHidden by remember { mutableStateOf(false) }
     var searching by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Entry?>(null) }
+    var anchorRequest by remember { mutableStateOf<EntryAnchorRequest?>(null) }
     var selectedDictionary by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     var selectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -41,18 +42,25 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
     val scope = rememberCoroutineScope()
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
-    fun open(hit: WordHit) {
+    fun openDestination(hit: WordHit, target: String = "") {
         selectionJob?.cancel()
         selectionJob = scope.launch {
             loading = true
-            try { selected = library.read(hit); selectedDictionary = hit.dictionary; library.rememberWord(hit); selected?.let(learning::record); query = ""; searching = false; screen = AppScreen.Dictionary; keyboard?.hide() }
+            try {
+                val entry = library.read(hit)
+                selected = entry
+                anchorRequest = target.substringAfter('#', "").takeIf { it.isNotEmpty() }?.let { EntryAnchorRequest(entry.key, "#$it") }
+                selectedDictionary = hit.dictionary; library.rememberWord(hit); learning.record(entry)
+                query = ""; searching = false; screen = AppScreen.Dictionary; keyboard?.hide()
+            }
             catch(e: kotlinx.coroutines.CancellationException) { throw e }
             catch(e: Exception) { snackbar.showSnackbar(e.message ?: "Unable to read this word") }
             finally { loading = false }
         }
     }
+    fun open(hit: WordHit) = openDestination(hit)
     LaunchedEffect(library.revision) {
-        if (library.dictionaries.none { it.id == selectedDictionary }) selected = null
+        if (library.dictionaries.none { it.id == selectedDictionary }) { selected = null; anchorRequest = null }
         if (library.dictionaries.isEmpty()) { selected = null; screen = AppScreen.Library }
         else if (selected == null) (library.lastWord() ?: library.search("", 1).firstOrNull())?.let(::open)
     }
@@ -101,10 +109,10 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                         if (searching) {
                             val matches by produceState<List<WordHit>>(emptyList(), library.revision, query) { value = library.search(query) }
                             WordMatches(matches, ::open)
-                        } else selected?.let { entry -> EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, settings = learning.data.settings, onScrollDirection = { dockHidden = it }, onLink = { target ->
+                        } else selected?.let { entry -> EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, settings = learning.data.settings, onScrollDirection = { dockHidden = it }, anchorRequest = anchorRequest, onAnchorConsumed = { if (anchorRequest === it) anchorRequest = null }, onLink = { target ->
                             if (target.startsWith("File:",true) || target.startsWith("Image:",true)) {
                                 uri.openUri(sourcePage(entry,target))
-                            } else scope.launch { library.link(target,entry)?.let(::open) ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
+                            } else scope.launch { library.link(target,entry)?.let { openDestination(it, target) } ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
                         }) } ?: LibraryScreen(library,onImport)
                     }
                     AppScreen.Saved -> SavedScreen(learning, false, ::openWord)

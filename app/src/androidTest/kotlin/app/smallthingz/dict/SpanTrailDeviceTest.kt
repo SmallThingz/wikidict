@@ -134,4 +134,47 @@ class SpanTrailDeviceTest {
         }
     }
 
+    @Test fun embeddedMediaCaptionKeepsStyleLinkAndPreformattedWhitespace() {
+        val before = "  "
+        val isolated = "\u2066字形\u2069"
+        val after = "\n\n tail  "
+        val spans = listOf(
+            Span("text", before),
+            Span("link", "字", target = "File:Cat.jpg", trail = "形", language = "ja", classes = "wikidict-media", direction = "ltr", bold = true, italic = true, code = true),
+            Span("line_break", ""), Span("line_break", ""), Span("text", " tail  ")
+        )
+        val entry = Entry("Caption fixture", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Noun", listOf(Block("preformatted", 0, spans)))), emptyList(),
+            media = listOf(Media("Cat.jpg", "image", "字形")))
+        val clicked = mutableListOf<String>()
+        compose.runOnUiThread {
+            compose.activity.setContent { MaterialTheme {
+                EntryView(entry, false, {}, onLink = { clicked.add(it) }, settings = AppSettings(collapseOtherSections = false, allowImages = false, allowAudio = false))
+            } }
+        }
+        val node = compose.onNodeWithText(before + isolated + after, useUnmergedTree = true)
+        val text = node.fetchSemanticsNode().config[SemanticsProperties.Text].single()
+        assertEquals(before + isolated + after, text.text)
+        compose.onAllNodesWithText("字形", useUnmergedTree = true).assertCountEquals(0)
+        compose.onAllNodesWithContentDescription("Image source").assertCountEquals(1)
+        val start = before.length
+        val end = start + isolated.length
+        val style = text.spanStyles.single { it.start == start && it.end == end && it.item.fontWeight == FontWeight.Bold }
+        assertEquals(androidx.compose.ui.text.font.FontStyle.Italic, style.item.fontStyle)
+        assertEquals(FontFamily.Monospace, style.item.fontFamily)
+        assertEquals("ja", style.item.localeList!![0].toLanguageTag())
+        assertFalse(text.spanStyles.any { it.start < start || it.end > end })
+        val link = text.getLinkAnnotations(0, text.length).single()
+        assertEquals("File:Cat.jpg", (link.item as LinkAnnotation.Clickable).tag)
+        assertEquals(start, link.start)
+        assertEquals(end, link.end)
+        assertEquals(listOf(link), text.getLinkAnnotations(start + 2, start + 3))
+        assertTrue(text.getLinkAnnotations(0, start).isEmpty())
+        assertTrue(text.getLinkAnnotations(end, text.length).isEmpty())
+        val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        node.performTouchInput { click(layouts.single().getBoundingBox(start + 2).center) }
+        compose.runOnIdle { assertEquals(listOf("File:Cat.jpg"), clicked) }
+    }
+
 }

@@ -52,8 +52,11 @@ private val LocalEntryEdition = staticCompositionLocalOf { "" }
 private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
 private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
 
+/** A distinct request also permits repeated navigation to the same compiled anchor. */
+class EntryAnchorRequest(val entryKey: String, val target: String)
+
 @Composable
-fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings(), onScrollDirection: (Boolean) -> Unit = {}) {
+fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings(), onScrollDirection: (Boolean) -> Unit = {}, anchorRequest: EntryAnchorRequest? = null, onAnchorConsumed: (EntryAnchorRequest) -> Unit = {}) {
     val uri = LocalUriHandler.current
     val context = LocalContext.current
     DisposableEffect(entry.key) { onDispose { SpeechPlayback.stop() } }
@@ -95,7 +98,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
         }
         val visibleRows = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
-        val readerLink: (String) -> Unit = { target ->
+        fun jumpToAnchor(target: String): Boolean {
             val referenceIndex = referenceScrollIndex(entry, target, folded.filterValues { it }.keys)
             val sectionKey = if (referenceIndex == null) sectionScrollKey(entry, target) else null
             if (referenceIndex != null) {
@@ -107,7 +110,16 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 val sectionIndex = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
                     .indexOfFirst { it.key == sectionKey }
                 scroll.requestScrollToItem(sectionIndex + 1 + if (entry.preamble.isNotEmpty()) 1 else 0)
-            } else onLink(target)
+            } else return false
+            return true
+        }
+        val readerLink: (String) -> Unit = { target -> if (!jumpToAnchor(target)) onLink(target) }
+        LaunchedEffect(entry.key, anchorRequest) {
+            anchorRequest?.takeIf { it.entryKey == entry.key }?.let {
+                jumpToAnchor(it.target)
+                // A missing fragment still opens the word; it is not a second lookup.
+                onAnchorConsumed(it)
+            }
         }
         val currentLink = rememberUpdatedState(readerLink)
         val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
@@ -266,9 +278,10 @@ private fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight
     val embedded = spans.filter { it.classes == "wikidict-media" && it.target.startsWith("File:") }.mapNotNull { span -> availableMedia.firstOrNull { it.file == span.target.removePrefix("File:").replace('_',' ') } }.distinctBy { it.file }
     if (embedded.isNotEmpty()) {
         Column(modifier) {
-            val text = spans.filter { it.classes != "wikidict-media" }.dropLastWhile { it.text.isBlank() && it.trail.isBlank() }
-            if (text.any { it.text.isNotBlank() }) StyledText(text, weight = weight, style = style, onLink = onLink)
-            embedded.forEach { MediaView(it, LocalReaderSettings.current, showFileName = false, edition=LocalEntryEdition.current) }
+            // Captions are compiled spans; the media record contains only a plain summary.
+            val text = remember(spans) { spans.map { if (it.classes == "wikidict-media") it.copy(classes = "") else it } }
+            StyledText(text, weight = weight, style = style, onLink = onLink, preserveWhitespace = preserveWhitespace)
+            embedded.forEach { MediaView(it, LocalReaderSettings.current, showFileName = false, edition=LocalEntryEdition.current, showCaption = false) }
         }
         return
     }
