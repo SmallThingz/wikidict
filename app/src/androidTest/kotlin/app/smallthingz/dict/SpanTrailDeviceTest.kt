@@ -87,4 +87,51 @@ class SpanTrailDeviceTest {
         }
     }
 
+    @Test fun languageTagsStyleCompleteSpansAndLinkedTrailsWithoutChangingText() {
+        val before = "plain before "
+        val separator = " / "
+        val plainLocalized = "abc"
+        val after = " plain after"
+        for ((language, expectedTag) in listOf(
+            "ja" to "ja", "zh-Hant-TW" to "zh-Hant-TW", "de-DE-x-goethe" to "de-DE-x-goethe",
+            "und" to "und", "und-Latn" to "und-Latn", "x-private" to "x-private",
+            "" to null, "en_US" to null
+        )) {
+            show(listOf(
+                Span("text", before),
+                Span("link", "字", target = "語", trail = "形", language = language, direction = "auto", bold = true, italic = true),
+                Span("text", separator),
+                Span("text", plainLocalized, language = "sr-Latn-RS"),
+                Span("text", after)
+            ))
+            val isolated = "\u2068字形\u2069"
+            val expected = before + isolated + separator + plainLocalized + after
+            val text = compose.onNodeWithText(before, substring = true, useUnmergedTree = true)
+                .fetchSemanticsNode().config[SemanticsProperties.Text].single()
+            assertEquals("language=$language", expected, text.text)
+            val linkStart = before.length
+            val linkEnd = linkStart + isolated.length
+            val link = text.getLinkAnnotations(0, text.length).single()
+            assertEquals("語", (link.item as LinkAnnotation.Clickable).tag)
+            assertEquals(linkStart, link.start)
+            assertEquals(linkEnd, link.end)
+            assertEquals(listOf(link), text.getLinkAnnotations(linkStart + 2, linkStart + 3))
+            assertTrue(text.getLinkAnnotations(0, linkStart).isEmpty())
+            assertTrue(text.getLinkAnnotations(linkEnd, text.length).isEmpty())
+            val linkedStyle = text.spanStyles.single { it.start == linkStart && it.end == linkEnd && it.item.fontWeight == FontWeight.Bold }
+            assertEquals(androidx.compose.ui.text.font.FontStyle.Italic, linkedStyle.item.fontStyle)
+            assertEquals("language=$language", expectedTag, linkedStyle.item.localeList?.get(0)?.toLanguageTag())
+            val localStart = linkEnd + separator.length
+            val localEnd = localStart + plainLocalized.length
+            val localizedStyles = text.spanStyles.filter { it.item.localeList != null }
+            assertEquals(if (expectedTag == null) 1 else 2, localizedStyles.size)
+            val standaloneStyle = localizedStyles.single { it.start == localStart && it.end == localEnd }
+            assertEquals("sr-Latn-RS", standaloneStyle.item.localeList!![0].toLanguageTag())
+            assertNull(standaloneStyle.item.fontWeight)
+            assertNull(standaloneStyle.item.fontStyle)
+            assertTrue(localizedStyles.none { it.start < linkStart || it.end > localEnd })
+            assertTrue(localizedStyles.none { it.start < localStart && it.end > linkEnd })
+        }
+    }
+
 }

@@ -108,4 +108,19 @@ class ReadingLayoutTest {
         }
     }
 
+    @Test fun spanLanguageTagsPreserveExplicitScriptRegionAndExtensions() {
+        for ((raw, expected) in listOf(
+            "ja" to "ja", "EN-us" to "en-US", "zh-Hant-TW" to "zh-Hant-TW",
+            "sr-Latn-RS" to "sr-Latn-RS", "de-DE-x-goethe" to "de-DE-x-goethe",
+            "en-US-u-nu-latn" to "en-US-u-nu-latn",
+            "und" to "und", "und-Latn" to "und-Latn", "x-private" to "x-private"
+        )) assertEquals(raw, expected, spanLanguageTag(raw))
+    }
+
+    @Test fun absentOrMalformedLanguageTagsAreIgnored() {
+        for (raw in listOf("", " ", "en_US", "en--US", "en,fr", "1en", "en-US-", " en", "en ")) {
+            assertNull(raw, spanLanguageTag(raw))
+        }
+    }
+
 }

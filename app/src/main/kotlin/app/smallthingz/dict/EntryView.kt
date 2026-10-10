@@ -32,6 +32,8 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.*
+import androidx.compose.ui.text.intl.Locale
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -289,7 +291,9 @@ private fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight
                 if (span.direction in listOf("rtl", "ltr", "auto")) append('\u2069')
                 val end = length
                 if (end > start) {
-                    if (weight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
+                    val languageTag = spanLanguageTag(span.language)
+                    if (languageTag != null || weight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
+                        localeList = languageTag?.let { LocaleList(Locale(it)) },
                         fontWeight = if (span.bold) FontWeight.Bold else weight,
                         fontStyle = if (span.italic) FontStyle.Italic else null,
                         fontFamily = if (span.code) FontFamily.Monospace else null,

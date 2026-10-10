@@ -97,3 +97,13 @@ internal fun referenceScrollIndex(entry: Entry, target: String, folded: Set<Stri
 
 internal fun referenceLabel(reference: Reference): String =
     if (reference.group.isBlank()) "[${reference.groupNumber}]" else "[${reference.group} ${reference.groupNumber}]"
+
+/** Apply only an explicit, well-formed language tag; never infer a device locale. */
+internal fun spanLanguageTag(language: String): String? {
+    if (language.isEmpty()) return null
+    return try {
+        java.util.Locale.Builder().setLanguageTag(language).build().toLanguageTag()
+    } catch (_: java.util.IllformedLocaleException) {
+        null
+    }
+}
