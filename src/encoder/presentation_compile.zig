@@ -2223,7 +2223,13 @@ pub const Renderer = struct {
                     try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, .{});
                 } else try blocks.appendSlice(self.a, try self.renderBody(clean[tag.end..pair.inner_end]));
                 pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
-                if (pos < input.len and input[pos] == '\n') pos += 1;
+                if (pos < input.len and input[pos] == '\n') {
+                    pos += 1;
+                } else if (pos < input.len) {
+                    // A balanced block wrapper does not create a physical line
+                    // boundary for following heading/list/table syntax.
+                    inline_line_end = syntax.logicalEnd(input, pos);
+                }
                 continue;
             }
             if (multiline_data) |data| {
@@ -6669,4 +6675,35 @@ test "behavior target fixture localized aliases use captured matching policy" {
         try std.testing.expect(spans.len != 0);
         for (spans) |span| try std.testing.expectEqualStrings(case.target, span.target);
     }
+}
+
+test "block HTML suffix fixture preserves literal same-line list marker" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<div>lead</div># following lexical text\n# real definition");
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqualStrings("lead", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.paragraph, blocks[1].kind);
+    try std.testing.expectEqualStrings("# following lexical text", trim(try flattened(a, blocks[1].spans)));
+    try std.testing.expectEqual(Kind.definition, blocks[2].kind);
+    try std.testing.expectEqualStrings("real definition", try flattened(a, blocks[2].spans));
+}
+
+test "block HTML suffix fixture retains real next-line block ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<div>lead</div>\n# real definition\n== Real heading ==\n{|\n| real cell\n|}");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqual(Kind.definition, blocks[1].kind);
+    try std.testing.expectEqualStrings("real definition", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqual(Kind.heading, blocks[2].kind);
+    try std.testing.expectEqualStrings("Real heading", try flattened(a, blocks[2].spans));
+    try std.testing.expectEqual(Kind.table, blocks[3].kind);
+    try std.testing.expectEqualStrings("real cell", try flattened(a, blocks[3].table.?.rows[0].cells[0].spans));
 }
