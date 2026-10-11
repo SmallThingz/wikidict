@@ -1800,6 +1800,24 @@ pub const Renderer = struct {
                         target = target[1..];
                         if (!token.link_has_pipe) label_value = target;
                     }
+                    // Ordinary links cannot contain another link in their label.
+                    // Preserve malformed outer text even when it would not navigate.
+                    // Non-explicit File namespace links intentionally allow captions.
+                    if (token.link_has_pipe and (explicit or self.namespaceOfTarget(target) != 6)) {
+                        if (syntax.delimiter(label_value, "[[", 0) != null) {
+                            const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
+                            const label_start = @intFromPtr(label_value.ptr) - @intFromPtr(input.ptr);
+                            var literal_style = s;
+                            literal_style.kind = .text;
+                            literal_style.target = "";
+                            self.fallbacks.literal_markup = true;
+                            // Only the outer opener is literal. Parse the entire label
+                            // together so emphasis and HTML can span the inner link.
+                            try self.plain(try self.entityText(input[raw_start..label_start]), literal_style);
+                            try self.inlineText(input[label_start..it.cursor], literal_style, depth + 1);
+                            continue;
+                        }
+                    }
                     if (!explicit and self.namespaceOfTarget(target) == 14) {
                         try self.text(trail, s);
                         continue;
@@ -6388,4 +6406,106 @@ test "external delimiter fixture protected literals and existing URLs" {
     try externalDelimiterCheck("https://example.test&lt;word", "https://example.test<word", null);
     try externalDelimiterCheck("[https://example.test&#60;word label]", "label", null);
     try externalDelimiterCheck("[https://example.test&LT;word label]", "label", null);
+}
+
+test "nested label fixture ordinary link recovery preserves outer text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").french_test_fixture);
+    defer registry.deinit();
+    const cases = [_]struct { source: []const u8, visible: []const u8, linked: []const u8, target: []const u8 }{
+        .{ .source = "[[A|[[B]]]]", .visible = "[[A|B]]", .linked = "B", .target = "B" },
+        .{ .source = "[[A|before [[B|inside]] after]]", .visible = "[[A|before inside after]]", .linked = "inside", .target = "B" },
+        .{ .source = "[[:|[[B]]]]", .visible = "[[:|B]]", .linked = "B", .target = "B" },
+        .{ .source = "[[Category:A|[[B]]]]", .visible = "[[Category:A|B]]", .linked = "B", .target = "B" },
+        .{ .source = "[[Catégorie:A|[[B]]]]", .visible = "[[Catégorie:A|B]]", .linked = "B", .target = "B" },
+        .{ .source = "[[:Fichier:Cat.jpg|[[B]]]]", .visible = "[[:Fichier:Cat.jpg|B]]", .linked = "B", .target = "B" },
+        .{ .source = "[[broken [[cat|inside]] tail", .visible = "[[broken inside tail", .linked = "inside", .target = "cat" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var links: usize = 0;
+        for (spans) |span| {
+            if (span.kind == .link) {
+                links += 1;
+                try std.testing.expectEqualStrings(case.linked, span.text);
+                try std.testing.expectEqualStrings(case.target, span.target);
+            } else {
+                try std.testing.expectEqualStrings("", span.target);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), links);
+    }
+    const formatted = [_]struct { source: []const u8, prefix_bold: bool = false, prefix_italic: bool = false, link_bold: bool = false, link_italic: bool = false }{
+        .{ .source = "[[A|''before'' [[B]] after]]", .prefix_italic = true },
+        .{ .source = "[[A|<b>before</b> [[B]] after]]", .prefix_bold = true },
+        .{ .source = "[[A|''before [[B]] after'']]", .prefix_italic = true, .link_italic = true },
+        .{ .source = "[[A|<b>before [[B]] after</b>]]", .prefix_bold = true, .link_bold = true },
+    };
+    for (formatted) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings("[[A|before B after]]", try flattened(a, spans));
+        var saw_prefix = false;
+        var links: usize = 0;
+        for (spans) |span| {
+            if (std.mem.indexOf(u8, span.text, "before") != null) {
+                saw_prefix = true;
+                try std.testing.expectEqual(case.prefix_bold, span.flags.bold);
+                try std.testing.expectEqual(case.prefix_italic, span.flags.italic);
+            }
+            if (span.kind == .link) {
+                links += 1;
+                try std.testing.expectEqualStrings("B", span.text);
+                try std.testing.expectEqualStrings("B", span.target);
+                try std.testing.expectEqual(case.link_bold, span.flags.bold);
+                try std.testing.expectEqual(case.link_italic, span.flags.italic);
+            }
+        }
+        try std.testing.expect(saw_prefix);
+        try std.testing.expectEqual(@as(usize, 1), links);
+    }
+}
+
+test "nested label fixture protected literal content stays literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var literal: Renderer = .{ .a = a, .context = .{} };
+    const literal_spans = try literal.parseSpans("<nowiki>[[A|[[B]]]]</nowiki>", .{});
+    try std.testing.expectEqualStrings("[[A|[[B]]]]", try flattened(a, literal_spans));
+    for (literal_spans) |span| try std.testing.expect(span.kind != .link);
+    var label: Renderer = .{ .a = a, .context = .{} };
+    const label_spans = try label.parseSpans("[[A|<nowiki>[[B]]</nowiki>]]", .{});
+    try std.testing.expectEqualStrings("[[B]]", try flattened(a, label_spans));
+    for (label_spans) |span| {
+        try std.testing.expect(span.kind == .link);
+        try std.testing.expectEqualStrings("A", span.target);
+    }
+    var attribute: Renderer = .{ .a = a, .context = .{} };
+    const attribute_spans = try attribute.parseSpans("[[A|<span title=\"[[B]]\">label</span>]]", .{});
+    try std.testing.expectEqualStrings("label", try flattened(a, attribute_spans));
+    for (attribute_spans) |span| try std.testing.expectEqualStrings("A", span.target);
+}
+
+test "nested label fixture valid File caption keeps its nested link" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").french_test_fixture);
+    defer registry.deinit();
+    for ([_][]const u8{
+        "[[File:Cat.jpg|thumb|A [[domestic cat]]]]",
+        "[[Image:Cat.jpg|thumb|A [[domestic cat]]]]",
+        "[[Fichier:Cat.jpg|thumb|A [[domestic cat]]]]",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("A domestic cat", try flattened(a, spans));
+        try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+        try std.testing.expect(!renderer.fallbacks.literal_markup);
+    }
 }
