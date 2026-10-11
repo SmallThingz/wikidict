@@ -253,8 +253,13 @@ fn quoteTransition(out: *std.ArrayList(u8), buffer: *std.ArrayList(u8), a: A, st
         .{ .{ .prefix = "</b></i><b>", .state = .b }, .{ .prefix = "</b>", .state = .i }, .{ .prefix = "</b></i>", .state = .none } },
         .{ .{ .prefix = "<b><i>", .suffix = "</i>", .state = .b }, .{ .prefix = "<i><b>", .suffix = "</b>", .state = .i }, .{ .prefix = "<i><b>", .suffix = "</b></i>", .state = .none } },
     };
-    const index: usize = switch (run) { 2 => 0, 3 => 1, 5 => 2, else => unreachable };
-    const transition = transitions[@intFromEnum(state.*)][index];
+    const index: usize = switch (run) {
+        2 => 0,
+        3 => 1,
+        5 => 2,
+        else => unreachable,
+    };
+    const transition = transitions[@backingInt(state.*)][index];
     try out.appendSlice(a, transition.prefix);
     if (state.* == .both) {
         try out.appendSlice(a, buffer.items);
@@ -264,7 +269,14 @@ fn quoteTransition(out: *std.ArrayList(u8), buffer: *std.ArrayList(u8), a: A, st
     state.* = transition.state;
 }
 fn quoteFinish(out: *std.ArrayList(u8), buffer: *std.ArrayList(u8), a: A, state: QuoteState) Error!void {
-    const close: []const u8 = switch (state) { .none => "", .b => "</b>", .i => "</i>", .bi => "</i></b>", .ib => "</b></i>", .both => "" };
+    const close: []const u8 = switch (state) {
+        .none => "",
+        .b => "</b>",
+        .i => "</i>",
+        .bi => "</i></b>",
+        .ib => "</b></i>",
+        .both => "",
+    };
     if (state == .both and buffer.items.len != 0) {
         try out.appendSlice(a, "<b><i>");
         try out.appendSlice(a, buffer.items);
@@ -328,7 +340,8 @@ fn normalizeWikiQuotes(a: A, input: []const u8, depth: usize, label_scope: bool)
         }
         const correction: ?usize = if (bold_count % 2 == 1 and italic_count % 2 == 1)
             (if (single) |at| at else if (multi) |at| at else space)
-        else null;
+        else
+            null;
         var cursor = line_start;
         var state: QuoteState = .none;
         while (cursor < end) {
@@ -430,7 +443,6 @@ fn normalizableHtmlTag(name: []const u8) bool {
         "dt",   "dd",
     });
 }
-
 
 const HtmlNormalizationFrame = struct {
     name: []const u8,
@@ -2225,7 +2237,7 @@ pub const Renderer = struct {
                     }
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
                     try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, .{});
-                } else try blocks.appendSlice(self.a, try self.renderBody(clean[tag.end..pair.inner_end]));
+                } else try blocks.appendSlice(self.a, try self.renderBodyWithInlineStart(clean[tag.end..pair.inner_end], true));
                 pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
                 if (pos < input.len and input[pos] == '\n') {
                     pos += 1;
@@ -5503,7 +5515,6 @@ test "HTML table cell lists retain nested counters surrounding text and inline s
     try std.testing.expect(inherited_style);
 }
 
-
 test "media labels preserve authored caption styles and plain alt fallbacks" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -5581,7 +5592,6 @@ test "grammar syntax oracle invalid numeric wikitext entities stay literal" {
     try std.testing.expectEqualStrings(invalid, try flattened(a, spans));
 }
 
-
 test "grammar syntax oracle numeric references follow MediaWiki accepted ranges" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -5598,7 +5608,6 @@ test "grammar syntax oracle numeric references follow MediaWiki accepted ranges"
         try std.testing.expectEqualStrings(source, try flattened(a, try r.parseSpans(source, .{})));
     }
 }
-
 
 test "grammar syntax oracle empty wiki cell opener preserves preformatted continuation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -5621,7 +5630,6 @@ test "grammar syntax oracle empty wiki cell opener preserves preformatted contin
     try std.testing.expectEqualStrings("* literal", try flattened(a, rows[1].cells[1].spans));
     for (rows[1].cells) |cell| for (cell.spans) |span| try std.testing.expect(!span.flags.code);
 }
-
 
 test "quote scope oracle unmatched and excess markers autoclose on their line" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -5717,7 +5725,6 @@ test "quote scope oracle HTML nesting line resets protection and odd counts" {
     const malformed = try r.parseSpans("[[broken ''word", .{});
     try std.testing.expectEqualStrings("[[broken word", try flattened(a, malformed));
 }
-
 
 test "quote scope oracle authored HTML crossing retains text and scoped metadata" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -5823,7 +5830,6 @@ test "quote scope oracle malformed opener retains parsed HTML and nested targets
     try std.testing.expect(inside);
 }
 
-
 test "quote scope oracle deferred both preserves transition styles and metadata" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -5855,7 +5861,6 @@ test "quote scope oracle deferred both preserves transition styles and metadata"
         try std.testing.expectEqualStrings("rtl", span.direction);
     }
 }
-
 
 test "quote scope oracle multiline internal label retains its whole label scope" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -5897,7 +5902,6 @@ test "quote scope oracle empty reopened external fragment has no URL label" {
     for (authored) |span| try std.testing.expectEqualStrings("https://example.test", span.target);
 }
 
-
 test "quote scope oracle unchanged label retains existing HTML repair" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -5920,7 +5924,6 @@ test "quote scope oracle unchanged label retains existing HTML repair" {
     const normalized = try normalizeMisnestedHtml(a, try normalizeWikiQuotes(a, borrowed, 0, false));
     try std.testing.expect(normalized.ptr == borrowed.ptr);
 }
-
 
 test "table closing oracle suffix stays visible without new line semantics" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -5962,7 +5965,10 @@ test "table closing oracle inline HTML and wrapper suffix retain text and style"
     try std.testing.expectEqualStrings("tail after", try flattened(a, blocks[1].spans));
     var italic_found = false;
     for (blocks[1].spans) |span| {
-        if (std.mem.indexOf(u8, span.text, "tail") != null) { italic_found = true; try std.testing.expect(span.flags.italic); }
+        if (std.mem.indexOf(u8, span.text, "tail") != null) {
+            italic_found = true;
+            try std.testing.expect(span.flags.italic);
+        }
         if (std.mem.indexOf(u8, span.text, "after") != null) try std.testing.expect(!span.flags.italic);
     }
     try std.testing.expect(italic_found);
@@ -5972,10 +5978,16 @@ test "table closing oracle inline HTML and wrapper suffix retain text and style"
     var table_found = false;
     var tail_found = false;
     for (wrapped) |block_value| {
-        if (block_value.kind == .table) { table_found = true; try std.testing.expectEqualStrings("cell", try flattened(a, block_value.table.?.rows[0].cells[0].spans)); }
+        if (block_value.kind == .table) {
+            table_found = true;
+            try std.testing.expectEqualStrings("cell", try flattened(a, block_value.table.?.rows[0].cells[0].spans));
+        }
         for (block_value.spans) |span| {
             if (std.mem.indexOf(u8, span.text, "before") != null) before_found = true;
-            if (std.mem.indexOf(u8, span.text, "tail") != null) { tail_found = true; try std.testing.expect(span.flags.bold); }
+            if (std.mem.indexOf(u8, span.text, "tail") != null) {
+                tail_found = true;
+                try std.testing.expect(span.flags.bold);
+            }
             if (std.mem.indexOf(u8, span.text, "after") != null) try std.testing.expect(!span.flags.bold);
             try std.testing.expect(std.mem.indexOf(u8, span.text, "|}") == null);
             try std.testing.expect(std.mem.indexOf(u8, span.text, "</div>") == null);
@@ -6004,7 +6016,6 @@ test "table closing oracle nested tails and protected markers preserve cell owne
     try std.testing.expectEqualStrings("|}literal", try flattened(a, literal[0].table.?.rows[0].cells[0].spans));
     try std.testing.expectEqualStrings("tail", try flattened(a, literal[1].spans));
 }
-
 
 test "visible preservation oracle protected blocks retain same-line suffix and newline ownership" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -6084,7 +6095,6 @@ test "visible preservation oracle wiki-table outside text retains blocks without
     try std.testing.expectEqual(@as(usize, 1), normal.len);
     try std.testing.expectEqualStrings("loose", try flattened(a, normal[0].table.?.rows[0].cells[0].spans));
 }
-
 
 test "wiki table boundary: colon-indented retain typed indentation and close-line suffix" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -6185,7 +6195,6 @@ test "wiki table boundary: colon-indented retain nested and unterminated content
     try std.testing.expectEqualStrings("cell", try flattened(a, recovered[0].table.?.rows[0].cells[0].spans));
     try std.testing.expect(unclosed.fallbacks.malformed_table);
 }
-
 
 test "wiki table boundary: caption-only tables retain links and continuation references" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -6325,7 +6334,6 @@ test "wiki cell attribute pipes inside quotes remain attribute values" {
     try std.testing.expectEqualStrings(unmatched, (try r.cellContent(unmatched)).text);
 }
 
-
 test "unknown parser entity braces keep complete external target and intended label" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -6356,7 +6364,6 @@ test "unknown parser entity braces keep complete external target and intended la
     }
 }
 
-
 test "unclosed div attribute Greek headwords retain lexical links without markup" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -6368,7 +6375,9 @@ test "unclosed div attribute Greek headwords retain lexical links without markup
     try std.testing.expect(std.mem.indexOf(u8, visible, "caw idem, page 120.") != null);
     try std.testing.expect(std.mem.indexOf(u8, visible, "croak idem, page 185.") != null);
     var links: usize = 0;
-    for (spans) |span| if (span.kind == .link) { links += 1; };
+    for (spans) |span| if (span.kind == .link) {
+        links += 1;
+    };
     try std.testing.expectEqual(@as(usize, 2), links);
     const ordinary = syntax.tagAt("<div title=\"ordinary title>body</div>", 0).?;
     try std.testing.expectEqualStrings("ordinary title", ordinary.attr("title").?);
@@ -6381,8 +6390,8 @@ test "unclosed div attribute Marathi NavFrame retains heading and table cells" {
     var r: Renderer = .{ .a = a, .context = .{} };
     const blocks = try r.renderBody(
         "<div class=\"NavFrame\" style=\"display: table;>\n" ++
-        "<div class=\"NavHead\">Personal forms of पाघळणे</div>\n<div class=\"NavContent\">\n" ++
-        "{| class=\"inflection-table\"\n! colspan=\"2\" | future\n|-\n| [[पाघळणे]] || [[पाघळ-]]\n|}\n</div></div>\nAfter",
+            "<div class=\"NavHead\">Personal forms of पाघळणे</div>\n<div class=\"NavContent\">\n" ++
+            "{| class=\"inflection-table\"\n! colspan=\"2\" | future\n|-\n| [[पाघळणे]] || [[पाघळ-]]\n|}\n</div></div>\nAfter",
     );
     try std.testing.expectEqual(@as(usize, 3), blocks.len);
     try std.testing.expectEqualStrings("Personal forms of पाघळणे", try flattened(a, blocks[0].spans));
@@ -6610,7 +6619,9 @@ test "behavior target fixture active switches normalize link navigation" {
         if (case.target == null) try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
         if (case.italic_label) {
             var italic_caption = false;
-            for (spans) |span| if (std.mem.indexOf(u8, span.text, "caption") != null) { italic_caption = span.flags.italic; };
+            for (spans) |span| if (std.mem.indexOf(u8, span.text, "caption") != null) {
+                italic_caption = span.flags.italic;
+            };
             try std.testing.expect(italic_caption);
         }
     }
@@ -6786,4 +6797,55 @@ test "numeric entity spelling fixture preserves protected literal content" {
     const spans = try renderer.parseSpans("<nowiki>&#+65; &#x+41; &#6_5; &#x4_1; &#65; &#x41; &amp;#65; [[B]]</nowiki>", .{});
     try std.testing.expectEqualStrings("&#+65; &#x+41; &#6_5; &#x4_1; A A &#65; [[B]]", try flattened(a, spans));
     for (spans) |span| try std.testing.expect(span.kind != .link);
+}
+
+test "block opener boundary fixture keeps same-line wiki list punctuation literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<div># same-line lexical text</div>\n<div>\n# physical-line definition\n</div>");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqualStrings("# same-line lexical text", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.definition, blocks[1].kind);
+    try std.testing.expectEqualStrings("physical-line definition", try flattened(a, blocks[1].spans));
+}
+
+test "block opener boundary fixture retains definition-list punctuation and protected controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<blockquote>; term : lexical detail</blockquote>\n<blockquote>\n; real term : real detail\n</blockquote>\n<div><nowiki># protected literal</nowiki></div>");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqualStrings("; term : lexical detail", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.term, blocks[1].kind);
+    try std.testing.expectEqualStrings("real term", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqual(Kind.list_detail, blocks[2].kind);
+    try std.testing.expectEqualStrings("real detail", try flattened(a, blocks[2].spans));
+    try std.testing.expectEqual(Kind.paragraph, blocks[3].kind);
+    try std.testing.expectEqualStrings("# protected literal", try flattened(a, blocks[3].spans));
+}
+
+test "block opener boundary fixture retains later physical headings tables and closing tails" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<div># literal opener\n== True heading ==\n{|\n| real cell\n|}\n# true definition\n</div># same-line tail\n# outside definition");
+    try std.testing.expectEqual(@as(usize, 6), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqualStrings("# literal opener", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.heading, blocks[1].kind);
+    try std.testing.expectEqualStrings("True heading", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqual(Kind.table, blocks[2].kind);
+    try std.testing.expectEqualStrings("real cell", try flattened(a, blocks[2].table.?.rows[0].cells[0].spans));
+    try std.testing.expectEqual(Kind.definition, blocks[3].kind);
+    try std.testing.expectEqualStrings("true definition", try flattened(a, blocks[3].spans));
+    try std.testing.expectEqual(Kind.paragraph, blocks[4].kind);
+    try std.testing.expectEqualStrings("# same-line tail", try flattened(a, blocks[4].spans));
+    try std.testing.expectEqual(Kind.definition, blocks[5].kind);
+    try std.testing.expectEqualStrings("outside definition", try flattened(a, blocks[5].spans));
 }
