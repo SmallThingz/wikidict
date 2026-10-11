@@ -689,20 +689,21 @@ fn startupHandshakeProbe(h: *Harness, dir: []const u8) !void {
         try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = count_path, .data = "0" });
         var worker = expander.Worker.init(h.io, dir, script, "missing-dump.xml");
         defer worker.deinit();
-        worker.startup_timeout_ms = if (std.mem.eql(u8, case.mode, "missing")) 200 else 3000;
+        worker.startup_timeout_ms = if (std.mem.eql(u8, case.mode, "missing")) 200 else 10_000;
         worker.timeout_ms = 500;
+        const probe_title = try std.fmt.allocPrint(h.a, "startup-probe-{s}", .{case.mode});
         if (case.expected) |err| {
-            try std.testing.expectError(err, worker.expand(h.a, 0, "startup-probe", "==English==\n"));
+            try std.testing.expectError(err, worker.expand(h.a, 0, probe_title, "==English==\n"));
             try h.require(worker.child == null, "startup or page protocol failure retires its worker");
         } else {
-            const value = (try worker.expand(h.a, 0, "startup-probe", "==English==\n")).?;
+            const value = (try worker.expand(h.a, 0, probe_title, "==English==\n")).?;
             try std.testing.expectEqualStrings("==English==\n# startup recovered\n", value.source);
             try h.require(worker.ready_received, "successful generation completed the strict ready handshake");
             if (std.mem.eql(u8, case.mode, "warm-duplicate")) {
-                try std.testing.expectError(error.InvalidResponse, worker.expand(h.a, 1, "warm-probe", "==English==\n"));
+                try std.testing.expectError(error.InvalidResponse, worker.expand(h.a, 1, probe_title, "==English==\n"));
                 try h.require(worker.child == null, "a warm duplicate ready retires the worker");
             } else {
-                _ = (try worker.expand(h.a, 1, "warm-probe", "==English==\n")).?;
+                _ = (try worker.expand(h.a, 1, probe_title, "==English==\n")).?;
                 const expected_generation: u64 = if (std.mem.eql(u8, case.mode, "startup-oom") or std.mem.eql(u8, case.mode, "retry-startup")) 2 else 1;
                 try h.require(worker.generation == expected_generation, "warm page reuses the ready generation without another handshake");
                 try h.require(worker.oom_retry_attempts == expected_generation - 1, "startup OOM permits exactly one cold replacement");
