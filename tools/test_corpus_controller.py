@@ -360,5 +360,132 @@ class ControllerAdmissionTests(unittest.TestCase):
                 self.assertFalse(controller.publication_present(accepted))
 
 
+
+class ControllerPreparationTests(unittest.TestCase):
+    def config(self, root):
+        root.mkdir(parents=True, exist_ok=True)
+        cfg = dict(date='20261001', now_unix=1791731560, expansion_timeout_ms=60000)
+        for name in ['source', 'manifest', 'compiler']:
+            path = root / (name + '.json')
+            write_json(path, {'toy_context': name})
+            cfg[name] = controller.descriptor(path)
+        return cfg
+
+    def preparation(self, root, cfg, identity, outcome='passed', seconds=2,
+                    edition='enwiktionary', result_changes=None, closure_changes=None):
+        root.mkdir(parents=True, exist_ok=True)
+        result = dict(schema='wikidict.corpus-production-preparation-result.v1',
+                      preparation_id=identity, edition=edition, outcome=outcome,
+                      accounting_scope='production-preparation', elapsed_seconds=seconds,
+                      **{key: cfg[key] for key in ['source', 'manifest', 'compiler', 'date', 'now_unix', 'expansion_timeout_ms']})
+        result.update(result_changes or {})
+        result_path = root / 'result.json'
+        write_json(result_path, result)
+        result_ref = controller.descriptor(result_path)
+        closed = dict(schema='wikidict.corpus-production-preparation-closure.v1',
+                      result=result_ref, outcome=outcome + '-closed', cleanup_proven=True,
+                      source_guard=True, remaining_owned_processes=[])
+        closed.update(closure_changes or {})
+        closure_path = root / 'closure.json'
+        write_json(closure_path, closed)
+        receipt_path = root / 'accounting.json'
+        write_json(receipt_path, dict(schema='wikidict.corpus-production-preparation.v1',
+                                     result=result_ref, closure=controller.descriptor(closure_path)))
+        return controller.descriptor(receipt_path)
+
+    def test_all_production_outcomes_count_once_across_duplicate_load_and_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg = self.config(root / 'context')
+            self.assertEqual([], controller.load_preparations(cfg))
+            refs = [self.preparation(root / status, cfg, status, status, seconds)
+                    for status, seconds in [('passed', 2), ('failed', 3), ('superseded', 5)]]
+            cfg['production_preparations'] = refs + [copy.deepcopy(refs[0])]
+            before = [Path(ref['path']).read_bytes() for ref in refs]
+            first = controller.load_preparations(cfg)
+            second = controller.load_preparations(cfg)
+            self.assertEqual(first, second)
+            self.assertEqual(3, len(first))
+            self.assertEqual({'passed', 'failed', 'superseded'}, {row['outcome'] for row in first})
+            self.assertEqual(before, [Path(ref['path']).read_bytes() for ref in refs])
+            summary = controller.summarize([attempt('build', 1, seconds=20)], ['enwiktionary'], first + second)
+            row = summary['editions'][0]
+            self.assertEqual(20, row['observed_build_seconds'])
+            self.assertEqual(10, row['observed_preparation_seconds'])
+            self.assertEqual(30, row['observed_total_seconds'])
+            self.assertEqual(3, len(row['production_preparations']))
+            self.assertEqual(30, summary['observed_cohort_seconds'])
+
+    def test_preparation_identity_conflicts_and_attempt_overlap_are_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg = self.config(root / 'context')
+            first = self.preparation(root / 'first', cfg, 'same-id', seconds=2)
+            other = self.preparation(root / 'other', cfg, 'same-id', seconds=3)
+            cfg['production_preparations'] = [first, other]
+            with self.assertRaisesRegex(ValueError, 'Conflicting preparation identity'):
+                controller.load_preparations(cfg)
+            cfg['production_preparations'] = [first]
+            prep = controller.load_preparations(cfg)[0]
+            with self.assertRaisesRegex(ValueError, 'Conflicting preparation identity'):
+                controller.summarize([], ['enwiktionary'], [prep, dict(prep, elapsed_seconds=3)])
+            with self.assertRaisesRegex(ValueError, 'also an attempt'):
+                controller.summarize([attempt('same-id', 1)], ['enwiktionary'], [prep])
+
+    def test_diagnostic_scope_and_wrong_current_context_are_refused(self):
+        changes = [{'accounting_scope': scope} for scope in ['diagnostic', 'canary', 'trial']]
+        changes += [{key: 'different-current-value'} for key in
+                    ['source', 'manifest', 'compiler', 'date', 'now_unix', 'expansion_timeout_ms']]
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                cfg = self.config(root / 'context')
+                cfg['production_preparations'] = [self.preparation(root / 'prep', cfg, 'p', result_changes=change)]
+                with self.assertRaises(ValueError):
+                    controller.load_preparations(cfg)
+
+    def test_unclosed_or_invalid_measured_preparations_are_refused(self):
+        cases = [(dict(elapsed_seconds=value), None) for value in [None, -1, float('nan'), float('inf'), True]]
+        cases += [(None, change) for change in [dict(cleanup_proven=False), dict(source_guard=False),
+                  dict(remaining_owned_processes=[{'pid': 999999}]), dict(outcome='failed-closed'),
+                  dict(result={'path': '/not-the-recorded-result', 'bytes': 0, 'sha256': '0' * 64})]]
+        for result_change, closure_change in cases:
+            with self.subTest(result=result_change, closure=closure_change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                cfg = self.config(root / 'context')
+                cfg['production_preparations'] = [self.preparation(root / 'prep', cfg, 'p',
+                    result_changes=result_change, closure_changes=closure_change)]
+                with self.assertRaises(ValueError):
+                    controller.load_preparations(cfg)
+
+    def test_preparation_denominator_excludes_original_seven_and_cannot_mask_unknown_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg = self.config(root / 'context')
+            cfg['production_preparations'] = [
+                self.preparation(root / 'passed', cfg, 'p1', 'passed', 2),
+                self.preparation(root / 'failed', cfg, 'p2', 'failed', 3),
+                self.preparation(root / 'superseded', cfg, 'p3', 'superseded', 5),
+                self.preparation(root / 'excluded', cfg, 'p4', 'passed', 999, controller.PILOT[0])]
+            preparations = controller.load_preparations(cfg)
+            editions = all_editions()
+            rows = [attempt(str(i), i, edition=edition) for i, edition in enumerate(editions)]
+            summary = controller.summarize(rows, editions, preparations + copy.deepcopy(preparations))
+            self.assertTrue(summary['final_cohort_complete'])
+            self.assertEqual(382, summary['observed_cohort_build_seconds'])
+            self.assertEqual(10, summary['observed_cohort_preparation_seconds'])
+            self.assertEqual(392, summary['observed_cohort_seconds'])
+            self.assertAlmostEqual(1910 / 392, summary['final_observed_pages_per_second'])
+            excluded = next(row for row in summary['editions'] if row['edition'] == controller.PILOT[0])
+            self.assertIsNone(excluded['observed_preparation_seconds'])
+            self.assertIsNone(excluded['observed_total_seconds'])
+            self.assertEqual(1, len(excluded['production_preparations']))
+            rows[8]['elapsed_seconds'] = None
+            unknown = controller.summarize(rows, editions, preparations)
+            self.assertEqual(10, unknown['observed_cohort_preparation_seconds'])
+            self.assertIsNone(unknown['final_observed_pages_per_second'])
+            self.assertEqual(['enwiktionary'], unknown['unknown_timing_editions'])
+
+
 if __name__ == '__main__':
     unittest.main()

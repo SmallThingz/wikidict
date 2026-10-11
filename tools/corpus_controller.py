@@ -118,12 +118,54 @@ def phase_end(log_path, edition, date):
     return found[0] if found else None
 
 
-def summarize(attempt_results, editions):
+def load_preparations(cfg):
+    """Authenticate measured current-source production work, never diagnostics.
+
+    Optional cfg.production_preparations contains accounting receipt descriptors.
+    Each receipt pins an immutable actual result and independent owned closure;
+    all production outcomes count, whether their artifacts were later reused.
+    """
+    unique = {}
+    for ref in cfg.get('production_preparations', []):
+        receipt = read_ref(ref)
+        require(receipt['schema'] == 'wikidict.corpus-production-preparation.v1', 'Wrong preparation receipt')
+        result, closed = read_ref(receipt['result']), read_ref(receipt['closure'])
+        require(result['schema'] == 'wikidict.corpus-production-preparation-result.v1'
+                and closed['schema'] == 'wikidict.corpus-production-preparation-closure.v1', 'Wrong preparation authority')
+        require(result['accounting_scope'] == 'production-preparation', 'Diagnostics are not corpus preparation')
+        require(result['outcome'] in ('passed', 'failed', 'superseded'), 'Preparation is not terminal')
+        require(isinstance(result['preparation_id'], str) and result['preparation_id'], 'Missing preparation identity')
+        for key in ('source', 'manifest', 'compiler', 'date', 'now_unix', 'expansion_timeout_ms'):
+            require(result[key] == cfg[key], f'Preparation {key} differs from this run')
+        seconds = result['elapsed_seconds']
+        require(type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0, 'Invalid preparation interval')
+        require(closed['result'] == receipt['result']
+                and closed['outcome'] == result['outcome'] + '-closed'
+                and closed['cleanup_proven'] is True and closed['source_guard'] is True
+                and closed['remaining_owned_processes'] == [], 'Preparation is not independently closed')
+        row = dict(preparation_id=result['preparation_id'], edition=result['edition'],
+            outcome=result['outcome'], elapsed_seconds=seconds, receipt=ref)
+        key = row['preparation_id']
+        require(key not in unique or unique[key] == row, 'Conflicting preparation identity')
+        unique[key] = row
+    return list(unique.values())
+
+
+def summarize(attempt_results, editions, preparations=()):
     unique = {}
     for row in attempt_results:
         key = row['attempt_id']
         require(key not in unique or unique[key] == row, 'Conflicting attempt identity')
         unique[key] = row
+    preparation_by_id = {}
+    for prep in preparations:
+        key = prep['preparation_id']
+        require(key not in unique, 'Preparation interval is also an attempt')
+        require(key not in preparation_by_id or preparation_by_id[key] == prep, 'Conflicting preparation identity')
+        require(prep['edition'] in editions and prep['outcome'] in ('passed', 'failed', 'superseded'), 'Preparation outside configured corpus')
+        seconds = prep['elapsed_seconds']
+        require(type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0, 'Invalid preparation interval')
+        preparation_by_id[key] = prep
     latest, accepted = {}, {}
     for row in sorted(unique.values(), key=lambda x: x['sequence']):
         require(row['edition'] in editions, 'Attempt outside configured corpus')
@@ -138,6 +180,8 @@ def summarize(attempt_results, editions):
         for seconds in measured:
             require(seconds is None or (type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0), 'Invalid interval')
         timing_unknown = any(x is None for x in measured)
+        own_preparations = [x for x in preparation_by_id.values() if x['edition'] == edition]
+        preparation_seconds = sum(x['elapsed_seconds'] for x in own_preparations)
         accepted_value = accepted.get(edition)
         # A later failed revalidation cannot export an old acceptance as current.
         current = accepted_value if latest.get(edition, {}).get('accepted') is not None else None
@@ -147,16 +191,22 @@ def summarize(attempt_results, editions):
         rows.append(dict(edition=edition, timing_excluded=edition in EXCLUDED,
             attempt_count=len(history), accepted=current,
             observed_build_seconds=None if edition in EXCLUDED or timing_unknown else sum(measured),
+            production_preparations=own_preparations,
+            observed_preparation_seconds=None if edition in EXCLUDED else preparation_seconds,
+            observed_total_seconds=None if edition in EXCLUDED or timing_unknown else sum(measured) + preparation_seconds,
             verification_seconds=None if edition in EXCLUDED else sum(x['elapsed_seconds'] or 0 for x in history if x.get('execution_mode') == 'existing_output'),
             original_build_time_unknown=original_unknown, latest_outcome=latest.get(edition, {}).get('outcome')))
     cohort = [x for x in rows if not x['timing_excluded']]
     complete = len(rows) == 198 and len(cohort) == 191 and all(x['accepted'] is not None for x in rows)
     pages = sum(x['accepted']['input_pages'] for x in cohort if x['accepted'])
-    elapsed = sum(x['observed_build_seconds'] or 0 for x in cohort)
+    build_elapsed = sum(x['observed_build_seconds'] or 0 for x in cohort)
+    preparation_elapsed = sum(x['observed_preparation_seconds'] or 0 for x in cohort)
+    elapsed = build_elapsed + preparation_elapsed
     return dict(schema='wikidict.corpus-controller-summary.v1', editions=rows,
         required_editions=len(editions), timing_cohort_editions=191, accepted_cohort_editions=sum(x['accepted'] is not None for x in cohort),
         final_cohort_complete=complete, accepted_cohort_input_pages=pages,
-        observed_cohort_seconds=elapsed, unknown_timing_editions=unknown,
+        observed_cohort_seconds=elapsed, observed_cohort_build_seconds=build_elapsed,
+        observed_cohort_preparation_seconds=preparation_elapsed, unknown_timing_editions=unknown,
         final_observed_pages_per_second=pages / elapsed if complete and not unknown and elapsed > 0 else None,
         lost_historical_seconds=None, historical_timings_reconstructed=False,
         timing_scope='observed fresh-run intervals only; excludes lost historical work and seven original editions',
@@ -424,7 +474,8 @@ def main(argv=None):
         locks = [stack.enter_context(Lock(ROOT / 'data/build-resources/corpus-controller.lock', True)),
                  stack.enter_context(Lock(ROOT / '.tmp/build-resources.lock', False))]
         rows = history(state, context)
-        current = summarize(rows, editions)
+        preparations = load_preparations(cfg)
+        current = summarize(rows, editions, preparations)
         if args.phase == 'remaining':
             review = gate(cfg['pilot_review'], cfg, ('passed', 'passed-closed'))
             expected = {x['edition']: x['accepted']['complete']['sha256'] for x in current['editions'] if x['edition'] in PILOT and x['accepted']}
@@ -448,14 +499,14 @@ def main(argv=None):
                 folder = state / 'attempts' / f'{sequence:06d}-{edition}-w{workers}-{uuid.uuid4().hex[:12]}'
                 row, wd = execute(cfg, edition, workers, folder, sequence, context, locks)
                 rows.append(row)
-                write_json(state / 'summary.json', summarize(rows, editions), replace=True)
+                write_json(state / 'summary.json', summarize(rows, editions, preparations), replace=True)
                 if row['controller_interrupted']:
                     return 130
                 require(row['cleanup_proven'], 'Owned cleanup is unproven; no next edition admitted')
                 if row['accepted']:
                     break
                 workers = next_workers(workers, wd)
-        summary = summarize(rows, editions)
+        summary = summarize(rows, editions, preparations)
         write_json(state / 'summary.json', summary, replace=True)
         print(json.dumps(dict(summary=str(state / 'summary.json'), remaining=[x['edition'] for x in summary['editions'] if not x['accepted']])))
     return 0 if all(x['accepted'] for x in summary['editions'] if x['edition'] in selected) else 1
