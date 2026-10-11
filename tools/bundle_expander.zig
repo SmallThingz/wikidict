@@ -26,6 +26,20 @@ pub fn operationalFailure(failure: Failure) ?anyerror {
     return null;
 }
 
+fn validateReplyPhase(reply: protocol.Reply, awaiting_ready: bool) !void {
+    if (!awaiting_ready) {
+        if (reply == .ready) return error.InvalidResponse;
+        return;
+    }
+    switch (reply) {
+        .ready => {},
+        .failure => |failure| {
+            if (!std.mem.eql(u8, failure.stage, "assets") and !std.mem.eql(u8, failure.stage, "request")) return error.InvalidResponse;
+        },
+        .output, .skip => return error.InvalidResponse,
+    }
+}
+
 pub const Worker = struct {
     io: std.Io,
     root: []const u8,
@@ -33,6 +47,10 @@ pub const Worker = struct {
     dump: []const u8,
     now_unix: i64,
     timeout_ms: u32 = expansion_deadline.default_ms,
+    // Response bound includes spawn/send elapsed if blocking transmission returns;
+    // a pipe stuck in writeRequest remains bounded by the outer watchdog.
+    startup_timeout_ms: u32 = 900_000,
+    ready_received: bool = false,
     child: ?std.process.Child = null,
     last_failure: ?Failure = null,
     generation: u64 = 0,
@@ -87,6 +105,7 @@ pub const Worker = struct {
     fn reset(self: *Worker) void {
         if (self.child) |*child| child.kill(self.io);
         self.child = null;
+        self.ready_received = false;
     }
 
     fn reportClosed(self: *Worker, ordinal: u64, title: []const u8) void {
@@ -121,6 +140,7 @@ pub const Worker = struct {
                 .stdout = .pipe,
                 .stderr = .inherit,
             });
+            self.ready_received = false;
             self.generation +|= 1;
         }
         return &self.child.?;
@@ -162,12 +182,12 @@ pub const Worker = struct {
     pub fn expand(self: *Worker, a: A, page_ordinal: u64, title: []const u8, source: []const u8) !?Expansion {
         self.last_failure = null;
         if (source.len > protocol.max_source_bytes) return error.RequestTooLarge;
-        // Both attempts share one response budget. Request transmission is
-        // still the existing blocking pipe path; the outer build watchdog also
-        // remains mandatory for a stuck/non-reading child.
-        const deadline = std.Io.Clock.awake.now(self.io).toNanoseconds() + @as(i128, self.timeout_ms) * std.time.ns_per_ms;
+        // Both attempts share the page budget; each new generation has a
+        // separately bounded startup response. Blocking request transmission
+        // still requires the outer watchdog for a stuck/non-reading child.
+        var remaining_page_ns = @as(i128, self.timeout_ms) * std.time.ns_per_ms;
         var remote_oom = false;
-        return self.expandOnce(a, page_ordinal, title, source, deadline, &remote_oom) catch |err| {
+        return self.expandOnce(a, page_ordinal, title, source, &remaining_page_ns, &remote_oom) catch |err| {
             if (!remote_oom) return err;
             // Only a fully decoded remote OOM reaches here. Local allocator,
             // transport, semantic and deadline failures never authorize replay.
@@ -178,7 +198,7 @@ pub const Worker = struct {
             });
             self.last_failure = null;
             remote_oom = false;
-            const recovered = self.expandOnce(a, page_ordinal, title, source, deadline, &remote_oom) catch |cold_err| {
+            const recovered = self.expandOnce(a, page_ordinal, title, source, &remaining_page_ns, &remote_oom) catch |cold_err| {
                 self.reset();
                 self.oom_retry_failed +|= 1;
                 diagnostics.printLine("bundle OOM recovery failed ordinal={d} generation={d} error={s}\n", .{ page_ordinal, self.generation, @errorName(cold_err) });
@@ -202,70 +222,93 @@ pub const Worker = struct {
         };
     }
 
-    fn expandOnce(self: *Worker, a: A, page_ordinal: u64, title: []const u8, source: []const u8, deadline: i128, remote_oom: *bool) !?Expansion {
-        if (std.Io.Clock.awake.now(self.io).toNanoseconds() >= deadline) return error.Timeout;
+    fn expandOnce(self: *Worker, a: A, page_ordinal: u64, title: []const u8, source: []const u8, remaining_page_ns: *i128, remote_oom: *bool) !?Expansion {
+        if (remaining_page_ns.* <= 0) return error.Timeout;
+        const start = std.Io.Clock.awake.now(self.io).toNanoseconds();
+        var page_started: ?i128 = if (self.child != null and self.ready_received) start else null;
+        defer if (page_started) |began| {
+            const elapsed = std.Io.Clock.awake.now(self.io).toNanoseconds() - began;
+            remaining_page_ns.* = @max(0, remaining_page_ns.* - elapsed);
+        };
+        var deadline = start + if (page_started != null) remaining_page_ns.* else @as(i128, self.startup_timeout_ms) * std.time.ns_per_ms;
         const child = try self.ensure();
         self.writeRequest(child, page_ordinal, title, source) catch |err| {
             self.reset();
             return err;
         };
-        var raw_length: [4]u8 = undefined;
-        self.readExact(child.stdout.?, &raw_length, deadline) catch |err| {
-            if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
-            if (err == error.Timeout) diagnostics.printLine(
-                "bundle expansion timed out title={s} ordinal={d} source_bytes={d} timeout_ms={d}\n",
-                .{ title, page_ordinal, source.len, self.timeout_ms },
-            );
-            self.reset();
-            return err;
-        };
-        const response_len = std.mem.readInt(u32, &raw_length, .little);
-        if (response_len == 0 or response_len > protocol.max_frame_bytes) {
-            self.reset();
-            return error.InvalidResponse;
-        }
-        const response = a.alloc(u8, response_len) catch |err| {
-            self.reset();
-            return err;
-        };
-        self.readExact(child.stdout.?, response, deadline) catch |err| {
-            if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
-            if (err == error.Timeout) diagnostics.printLine(
-                "bundle expansion response timed out title={s} ordinal={d} source_bytes={d} response_bytes={d} timeout_ms={d}\n",
-                .{ title, page_ordinal, source.len, response_len, self.timeout_ms },
-            );
-            self.reset();
-            return err;
-        };
-        const reply = protocol.decodeReply(response) catch {
-            self.reset();
-            return error.InvalidResponse;
-        };
-        switch (reply) {
-            .output => |success| return .{
-                .source = success.output,
-                .unsupported_parser_function = success.unsupported_parser_function,
-                .display_title = if (success.display_title.len == 0) null else success.display_title,
-            },
-            .skip => return null,
-            .failure => |failure| {
-                self.last_failure = failure;
-                diagnostics.printLine("bundle expansion failed title={s} stage={s} error={s}{s}{s}\n", .{
-                    title,
-                    failure.stage,
-                    failure.error_name,
-                    if (failure.detail.len != 0) ": " else "",
-                    failure.detail,
-                });
-                if (operationalFailure(failure)) |err| {
-                    // Persistent promotion may have failed partway through.
-                    // Never reuse that process after an operational failure.
-                    remote_oom.* = err == error.OutOfMemory;
-                    self.reset();
-                    return err;
-                }
-                return error.ExpansionFailed;
-            },
+        while (true) {
+            var raw_length: [4]u8 = undefined;
+            self.readExact(child.stdout.?, &raw_length, deadline) catch |err| {
+                if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
+                if (err == error.Timeout) diagnostics.printLine(
+                    "bundle {s} timed out title={s} ordinal={d} source_bytes={d} timeout_ms={d}\n",
+                    .{ if (self.ready_received) "expansion" else "startup", title, page_ordinal, source.len, if (self.ready_received) self.timeout_ms else self.startup_timeout_ms },
+                );
+                const startup_timeout = !self.ready_received and err == error.Timeout;
+                self.reset();
+                return if (startup_timeout) error.StartupTimeout else err;
+            };
+            const response_len = std.mem.readInt(u32, &raw_length, .little);
+            if (response_len == 0 or response_len > protocol.max_frame_bytes) {
+                self.reset();
+                return error.InvalidResponse;
+            }
+            var ready_storage: [1]u8 = undefined;
+            const response: []u8 = if (!self.ready_received and response_len == 1) &ready_storage else a.alloc(u8, response_len) catch |err| {
+                self.reset();
+                return err;
+            };
+            self.readExact(child.stdout.?, response, deadline) catch |err| {
+                if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
+                if (err == error.Timeout) diagnostics.printLine(
+                    "bundle {s} response timed out title={s} ordinal={d} source_bytes={d} response_bytes={d} timeout_ms={d}\n",
+                    .{ if (self.ready_received) "expansion" else "startup", title, page_ordinal, source.len, response_len, if (self.ready_received) self.timeout_ms else self.startup_timeout_ms },
+                );
+                const startup_timeout = !self.ready_received and err == error.Timeout;
+                self.reset();
+                return if (startup_timeout) error.StartupTimeout else err;
+            };
+            const reply = protocol.decodeReply(response) catch {
+                self.reset();
+                return error.InvalidResponse;
+            };
+            validateReplyPhase(reply, !self.ready_received) catch |err| {
+                self.reset();
+                return err;
+            };
+            switch (reply) {
+                .ready => {
+                    self.ready_received = true;
+                    page_started = std.Io.Clock.awake.now(self.io).toNanoseconds();
+                    deadline = page_started.? + remaining_page_ns.*;
+                    diagnostics.printLine("bundle worker ready generation={d} startup_ms={d} page_budget_ms={d}\n", .{ self.generation, @divTrunc(page_started.? - start, std.time.ns_per_ms), @divTrunc(remaining_page_ns.*, std.time.ns_per_ms) });
+                    continue;
+                },
+                .output => |success| return .{
+                    .source = success.output,
+                    .unsupported_parser_function = success.unsupported_parser_function,
+                    .display_title = if (success.display_title.len == 0) null else success.display_title,
+                },
+                .skip => return null,
+                .failure => |failure| {
+                    self.last_failure = failure;
+                    diagnostics.printLine("bundle expansion failed title={s} stage={s} error={s}{s}{s}\n", .{
+                        title,
+                        failure.stage,
+                        failure.error_name,
+                        if (failure.detail.len != 0) ": " else "",
+                        failure.detail,
+                    });
+                    if (operationalFailure(failure)) |err| {
+                        // Persistent promotion may have failed partway through.
+                        // Never reuse that process after an operational failure.
+                        remote_oom.* = err == error.OutOfMemory;
+                        self.reset();
+                        return err;
+                    }
+                    return error.ExpansionFailed;
+                },
+            }
         }
     }
 };
@@ -281,6 +324,18 @@ test "remote operational failures retain their error identity" {
 test "worker restart preserves the pinned bundle timestamp" {
     var worker = Worker.init(std.testing.io, "root", "unused", "dump.xml");
     const pinned = worker.now_unix;
+    worker.ready_received = true;
     worker.reset();
     try std.testing.expectEqual(pinned, worker.now_unix);
+    try std.testing.expect(!worker.ready_received);
+}
+
+test "startup accepts readiness or bootstrap failure and rejects page output" {
+    try validateReplyPhase(.ready, true);
+    try validateReplyPhase(.{ .failure = .{ .stage = "assets", .error_name = "OutOfMemory", .detail = "" } }, true);
+    try std.testing.expectError(error.InvalidResponse, validateReplyPhase(.skip, true));
+    try std.testing.expectError(error.InvalidResponse, validateReplyPhase(.{ .output = .{ .output = "x", .display_title = "" } }, true));
+    try std.testing.expectError(error.InvalidResponse, validateReplyPhase(.{ .failure = .{ .stage = "expand", .error_name = "OutOfMemory", .detail = "" } }, true));
+    try std.testing.expectError(error.InvalidResponse, validateReplyPhase(.ready, false));
+    try validateReplyPhase(.skip, false);
 }

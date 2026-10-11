@@ -254,6 +254,7 @@ pub fn run(io: std.Io, persistent: A) !void {
             // Inherit address-space policy from the supervisor. The corpus
             // watchdog limits aggregate resident memory; mapped or swapped
             // memory must not acquire a separate per-worker virtual limit.
+            try protocol.writeReady(&output.interface);
         }
         var stage: []const u8 = "request";
         var detail: ?[]const u8 = null;

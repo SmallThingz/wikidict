@@ -35,6 +35,7 @@ pub const Reply = union(enum) {
     output: SuccessReply,
     failure: ErrorReply,
     skip,
+    ready,
 };
 
 fn checkedFramePayload(parts: []const usize) !u32 {
@@ -129,6 +130,12 @@ pub fn writeSuccess(w: *std.Io.Writer, output: []const u8, display_title: []cons
     try w.flush();
 }
 
+pub fn writeReady(w: *std.Io.Writer) !void {
+    const frame = [_]u8{ 1, 0, 0, 0, 3 };
+    try w.writeAll(&frame);
+    try w.flush();
+}
+
 pub fn writeSkip(w: *std.Io.Writer) !void {
     var outer: [4]u8 = undefined;
     std.mem.writeInt(u32, &outer, 1, .little);
@@ -171,6 +178,10 @@ pub fn decodeReply(bytes: []const u8) !Reply {
         };
         if (cursor != bytes.len) return error.InvalidFrame;
         return .{ .output = success };
+    }
+    if (bytes[0] == 3) {
+        if (bytes.len != 1) return error.InvalidFrame;
+        return .ready;
     }
     if (bytes[0] == 2) {
         if (bytes.len != 1) return error.InvalidFrame;
@@ -260,4 +271,14 @@ test "bundle success diagnostics reject unknown bits and truncated flags" {
     bad[9] = 2;
     try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
     try std.testing.expectError(error.InvalidFrame, decodeReply(bad[0..9]));
+}
+
+test "ready reply has one explicit strictly decoded payload" {
+    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer bytes.deinit();
+    try writeReady(&bytes.writer);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 0, 0, 0, 3 }, bytes.written());
+    try std.testing.expect((try decodeReply(bytes.written()[4..])) == .ready);
+    try std.testing.expectError(error.InvalidFrame, decodeReply(&.{ 3, 0 }));
+    try std.testing.expectError(error.InvalidFrame, decodeReply(&.{4}));
 }

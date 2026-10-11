@@ -618,14 +618,103 @@ fn exists(io: std.Io, path: []const u8) bool {
 
 fn deadlineProbe(io: std.Io, a: std.mem.Allocator, dir: []const u8) !void {
     var worker = expander.Worker.init(io, dir, "tail", "missing-dump.xml");
-    worker.timeout_ms = 100;
+    worker.startup_timeout_ms = 100;
     defer worker.deinit();
-    try std.testing.expectError(error.Timeout, worker.expand(a, 0, "probe", "==English==\n"));
+    try std.testing.expectError(error.StartupTimeout, worker.expand(a, 0, "probe", "==English==\n"));
+}
+
+fn startupHandshakeProbe(h: *Harness, dir: []const u8) !void {
+    const script = try std.fs.path.join(h.a, &.{ dir, "startup-expander.py" });
+    const mode_path = try std.fs.path.join(h.a, &.{ dir, "startup-mode" });
+    const count_path = try std.fs.path.join(h.a, &.{ dir, "startup-count" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data =
+        \\#!/usr/bin/env python3
+        \\import struct, sys, time
+        \\from pathlib import Path
+        \\root=Path(__file__).parent
+        \\mode=(root/'startup-mode').read_text().strip()
+        \\attempt=int((root/'startup-count').read_text())+1
+        \\(root/'startup-count').write_text(str(attempt))
+        \\def exact(n):
+        \\    out=bytearray()
+        \\    while len(out)<n:
+        \\        part=sys.stdin.buffer.read(n-len(out))
+        \\        if not part:return None
+        \\        out.extend(part)
+        \\    return bytes(out)
+        \\def send(body):
+        \\    sys.stdout.buffer.write(struct.pack('<I',len(body))+body);sys.stdout.buffer.flush()
+        \\output=b'==English==\n# startup recovered\n'
+        \\reply=b'\x00'+struct.pack('<II',len(output),0)+b'\x00'+output
+        \\first=True
+        \\while True:
+        \\    head=exact(4)
+        \\    if head is None:break
+        \\    if exact(struct.unpack('<I',head)[0]) is None:break
+        \\    if first:
+        \\        if mode=='missing':time.sleep(5);break
+        \\        if mode=='wrong':send(b'\x03\x00');break
+        \\        if mode=='before-ready':send(reply);break
+        \\        if mode=='startup-oom' and attempt==1:
+        \\            stage=b'assets';name=b'OutOfMemory'
+        \\            send(b'\x01'+struct.pack('<III',len(stage),len(name),0)+stage+name);break
+        \\        if mode in ('cold','startup-oom') or (mode in ('retry-startup','retry-budget') and attempt==2):time.sleep(0.8)
+        \\        send(b'\x03');first=False
+        \\        if mode=='duplicate':send(b'\x03');break
+        \\    elif mode=='warm-duplicate':send(b'\x03');break
+        \\    if mode=='page-stall':time.sleep(5);break
+        \\    if mode in ('retry-startup','retry-budget'):
+        \\        time.sleep(0.1 if mode=='retry-startup' else 0.3)
+        \\        if attempt==1:
+        \\            stage=b'expand';name=b'OutOfMemory'
+        \\            send(b'\x01'+struct.pack('<III',len(stage),len(name),0)+stage+name);break
+        \\    send(reply)
+        \\
+    });
+    _ = try h.run(&.{ "chmod", "755", script }, 0);
+    const cases = [_]struct { mode: []const u8, expected: ?anyerror }{
+        .{ .mode = "cold", .expected = null },
+        .{ .mode = "startup-oom", .expected = null },
+        .{ .mode = "retry-startup", .expected = null },
+        .{ .mode = "retry-budget", .expected = error.ColdRetryFailed },
+        .{ .mode = "page-stall", .expected = error.Timeout },
+        .{ .mode = "missing", .expected = error.StartupTimeout },
+        .{ .mode = "wrong", .expected = error.InvalidResponse },
+        .{ .mode = "before-ready", .expected = error.InvalidResponse },
+        .{ .mode = "duplicate", .expected = error.InvalidResponse },
+        .{ .mode = "warm-duplicate", .expected = null },
+    };
+    for (cases) |case| {
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = mode_path, .data = case.mode });
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = count_path, .data = "0" });
+        var worker = expander.Worker.init(h.io, dir, script, "missing-dump.xml");
+        defer worker.deinit();
+        worker.startup_timeout_ms = if (std.mem.eql(u8, case.mode, "missing")) 200 else 3000;
+        worker.timeout_ms = 500;
+        if (case.expected) |err| {
+            try std.testing.expectError(err, worker.expand(h.a, 0, "startup-probe", "==English==\n"));
+            try h.require(worker.child == null, "startup or page protocol failure retires its worker");
+        } else {
+            const value = (try worker.expand(h.a, 0, "startup-probe", "==English==\n")).?;
+            try std.testing.expectEqualStrings("==English==\n# startup recovered\n", value.source);
+            try h.require(worker.ready_received, "successful generation completed the strict ready handshake");
+            if (std.mem.eql(u8, case.mode, "warm-duplicate")) {
+                try std.testing.expectError(error.InvalidResponse, worker.expand(h.a, 1, "warm-probe", "==English==\n"));
+                try h.require(worker.child == null, "a warm duplicate ready retires the worker");
+            } else {
+                _ = (try worker.expand(h.a, 1, "warm-probe", "==English==\n")).?;
+                const expected_generation: u64 = if (std.mem.eql(u8, case.mode, "startup-oom") or std.mem.eql(u8, case.mode, "retry-startup")) 2 else 1;
+                try h.require(worker.generation == expected_generation, "warm page reuses the ready generation without another handshake");
+                try h.require(worker.oom_retry_attempts == expected_generation - 1, "startup OOM permits exactly one cold replacement");
+            }
+        }
+    }
 }
 
 fn writeFailureExpander(h: *Harness, script: []const u8, stage: []const u8) !void {
     var reply: std.Io.Writer.Allocating = .init(h.a);
     defer reply.deinit();
+    try @import("bundle_protocol").writeReady(&reply.writer);
     try @import("bundle_protocol").writeError(&reply.writer, stage, "E", "d");
     var text: std.Io.Writer.Allocating = .init(h.a);
     defer text.deinit();
@@ -679,12 +768,15 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
         \\def failure(name):
         \\    stage=b'expand'
         \\    return b'\x01'+struct.pack('<III',len(stage),len(name),0)+stage+name
+        \\ready=False
         \\while True:
         \\    head=exact(4)
         \\    if head is None: break
         \\    body=exact(struct.unpack('<I',head)[0])
         \\    if body is None: break
         \\    (root/('retry-request-'+str(attempt))).write_bytes(head+body)
+        \\    if not ready:
+        \\        sys.stdout.buffer.write(b'\x01\x00\x00\x00\x03');sys.stdout.buffer.flush();ready=True
         \\    if mode=='semantic-initial': reply=failure(b'ExpectedSemanticError')
         \\    elif mode!='output-initial' and attempt==1: reply=failure(b'OutOfMemory')
         \\    elif mode=='oom': reply=failure(b'OutOfMemory')
@@ -821,7 +913,7 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     // Real framed worker response, rather than a local allocator failure.
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = "#!/bin/sh\n" ++
         "dd bs=4096 count=1 of=/dev/null 2>/dev/null\n" ++
-        "printf '\\036\\000\\000\\000\\001\\006\\000\\000\\000\\013\\000\\000\\000\\000\\000\\000\\000expandOutOfMemory'\n" });
+        "printf '\\001\\000\\000\\000\\003\\036\\000\\000\\000\\001\\006\\000\\000\\000\\013\\000\\000\\000\\000\\000\\000\\000expandOutOfMemory'\n" });
     var exhausted = expander.Worker.init(h.io, root, script, dump);
     defer exhausted.deinit();
     try std.testing.expectError(error.OutOfMemory, exhausted.expand(h.a, 0, "probe", source_text));
@@ -836,7 +928,7 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
 
     try coldRetryProbe(h, blob_builder, verifier, root, dump, dir);
 
-    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = "#!/bin/sh\nexec tail -f /dev/null\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = "#!/bin/sh\ndd bs=4096 count=1 of=/dev/null 2>/dev/null\nprintf '\\001\\000\\000\\000\\003'\nexec tail -f /dev/null\n" });
     const timed_out = try std.fs.path.join(h.a, &.{ dir, "timeout-dictionary" });
     try h.requireTimeout(&.{ blob_builder, dump, timed_out, "--expander-root", root, "--workers", "1", "--expansion-timeout-ms", "100" });
     try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ timed_out, "page-coverage.json" })), "timed-out build cannot publish successful coverage");
@@ -1852,6 +1944,7 @@ pub fn main(init: std.process.Init) !void {
     try loadDataCacheProbe(&h, pipeline, verifier, bin, dir);
     try scriptCpuBudgetProbe(&h, pipeline, verifier, bin, dir);
     try deadlineProbe(init.io, a, dir);
+    try startupHandshakeProbe(&h, dir);
     try failureMetadataProbe(&h, dir);
     try expansionFallbackProbe(&h, argv[6], verifier, bin, dir);
     h.checks += 1;

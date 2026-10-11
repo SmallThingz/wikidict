@@ -1267,6 +1267,7 @@ test "blob expansion timeout is explicit bounded and rejects duplicates" {
 test "operational expansion timeouts cannot become successful empty pages" {
     const a = std.testing.allocator;
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.Timeout, null)) == null);
+    try std.testing.expect((try expansionFallbackReasonAlloc(a, error.StartupTimeout, null)) == null);
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.OutOfMemory, null)) == null);
     inline for (.{ "OutOfMemory", "Timeout" }) |name| {
         try std.testing.expect((try expansionFallbackReasonAlloc(a, error.ExpansionFailed, .{
