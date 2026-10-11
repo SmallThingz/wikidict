@@ -2102,6 +2102,8 @@ def main():
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
     p.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup',
                    help='Resource supervisor: strict cgroup (default), or explicit best-effort 8 GiB process-tree watchdog with a two-hour deadline')
+    p.add_argument('--watchdog-address-space',choices=('default','unlimited'),default='default',
+                   help='Watchdog virtual address-space policy; unlimited retains the 8 GiB aggregate resident-memory cap')
     p.add_argument('--build-timeout-seconds',type=int,help='Explicit watchdog build deadline, up to seven days; default two hours')
     p.add_argument('--cpu-admission',choices=('load','affinity'),default='load',
                    help='CPU admission: load headroom (default), or fixed affinity sharing within a verified watchdog and one edition job')
@@ -2117,6 +2119,8 @@ def main():
         p.add_argument('--'+name+'-snapshot',type=Path,
                        help='Optional '+name+' snapshot; its SHA-256 is part of the shard identity')
     a=p.parse_args()
+    if a.watchdog_address_space!='default' and a.resource_mode!='watchdog':
+        p.error('Unlimited address space requires explicit watchdog mode')
     try:
         expansion_deadline_args(a.expansion_timeout_ms)
         validate_now_unix(a.now_unix)
@@ -2194,6 +2198,7 @@ def cli():
     try:
         route=argparse.ArgumentParser(add_help=False)
         route.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup')
+        route.add_argument('--watchdog-address-space',choices=('default','unlimited'),default='default')
         route.add_argument('--cpu-admission',choices=('load','affinity'),default='load')
         route.add_argument('--threads',type=int)
         route.add_argument('--jobs',type=int)
@@ -2203,6 +2208,8 @@ def cli():
         route.add_argument('--raw-shard-root',type=Path)
         routing=route.parse_known_args()[0]
         mode=routing.resource_mode
+        if routing.watchdog_address_space!='default' and mode!='watchdog':
+            raise ContainmentUnavailable('Unlimited address space requires explicit watchdog mode')
         if routing.cpu_admission=='affinity':
             if mode!='watchdog':raise ContainmentUnavailable('Affinity admission requires explicit watchdog mode')
             if routing.jobs not in (None,1):raise ContainmentUnavailable('Affinity admission requires exactly one edition job')
@@ -2225,6 +2232,7 @@ def cli():
                     with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
                         options={'wall_seconds':routing.build_timeout_seconds if routing.build_timeout_seconds is not None else 7200,
                                  'disk_paths':(PROJECT/'.tmp', routing.output)}
+                        if routing.watchdog_address_space=='unlimited': options['address_space_limit_bytes']='unlimited'
                         if routing.raw_shard_root is not None: options['disk_paths']+=(routing.raw_shard_root,)
                         if routing.expansion_workers is not None and routing.expansion_workers>MAX_PIPELINE_WORKERS:
                             options['max_cpus']=8

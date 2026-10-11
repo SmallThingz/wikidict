@@ -2272,6 +2272,81 @@ class ExternalRawShardTests(unittest.TestCase):
                 b.build_groups({('testwiktionary','20261001'):['item']},root,output,'zig',1,1,raw_shard_root=raw)
             self.assertEqual(build.call_args.kwargs['raw_shard_root'],raw)
 
+
+
+class WatchdogAddressSpaceCliTests(unittest.TestCase):
+    def test_unlimited_parent_route_preserves_lock_and_resident_envelope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);output=root/'output';raw=root/'raw'
+            def supervised(**kwargs):
+                self.assertEqual(kwargs,dict(wall_seconds=123,disk_paths=(root/'.tmp',output,raw),address_space_limit_bytes='unlimited'))
+                with self.assertRaises(limits.ContainmentUnavailable):
+                    b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
+                return 0
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--watchdog-address-space=unlimited',
+                  '--cpu-admission=affinity','--threads=4','--jobs=1','--expansion-workers=4',
+                  '--build-timeout-seconds=123','--output',str(output),'--raw-shard-root',str(raw)]
+            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
+                 patch.object(limits,'inside_watchdog',return_value=False), \
+                 patch.object(limits,'supervise_watchdog',side_effect=supervised) as watchdog, \
+                 patch.object(limits,'supervise') as cgroup,patch.object(b,'main') as main:
+                with self.assertRaises(SystemExit) as result:b.cli()
+                self.assertEqual(result.exception.code,0)
+            watchdog.assert_called_once();cgroup.assert_not_called();main.assert_not_called()
+
+    def test_omitted_and_explicit_default_preserve_existing_watchdog_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            for option in ([],['--watchdog-address-space=default']):
+                with self.subTest(option=option),patch.object(b,'PROJECT',root), \
+                     patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog',*option]), \
+                     patch.object(limits,'inside_watchdog',return_value=False), \
+                     patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
+                    with self.assertRaises(SystemExit) as result:b.cli()
+                    self.assertEqual(result.exception.code,0)
+                watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',root/'data/dictionaries'))
+
+    def test_verified_child_accepts_flag_without_resupervision(self):
+        with patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog','--watchdog-address-space=unlimited']), \
+             patch.object(limits,'inside_watchdog',return_value=True),patch.object(b,'main') as main, \
+             patch.object(limits,'supervise_watchdog') as watchdog,patch.object(limits,'supervise') as cgroup:
+            b.cli()
+        main.assert_called_once();watchdog.assert_not_called();cgroup.assert_not_called()
+
+    def test_main_parser_accepts_unlimited_and_keeps_build_options_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'manifest.json').write_text('{"files": []}')
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--watchdog-address-space=unlimited',
+                  '--downloads',str(root),'--threads=1','--jobs=1']
+            with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=1), \
+                 patch.object(b,'select_manifest_files',return_value=[]), \
+                 patch.object(b,'resolve_edition_snapshot_options',return_value={}), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            groups.assert_called_once()
+            self.assertNotIn('address_space_limit_bytes',groups.call_args.kwargs)
+            self.assertNotIn('watchdog_address_space',groups.call_args.kwargs)
+
+    def test_unlimited_requires_watchdog_in_both_parsers_before_work(self):
+        for mode in ([],['--resource-mode=cgroup']):
+            for entrypoint in (b.cli,b.main):
+                with self.subTest(mode=mode,entrypoint=entrypoint.__name__), \
+                     patch.object(sys,'argv',['build_wiktionaries.py','--watchdog-address-space=unlimited',*mode]), \
+                     patch.object(limits,'supervise_watchdog') as watchdog,patch.object(limits,'supervise') as cgroup, \
+                     patch.object(b,'safe_worker_budget') as budget,contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaisesRegex(SystemExit,'watchdog mode|2'):entrypoint()
+                    watchdog.assert_not_called();cgroup.assert_not_called();budget.assert_not_called()
+
+    def test_unsupported_address_space_value_is_rejected_in_both_parsers(self):
+        for entrypoint in (b.cli,b.main):
+            with self.subTest(entrypoint=entrypoint.__name__), \
+                 patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog','--watchdog-address-space=8589934592']), \
+                 patch.object(limits,'supervise_watchdog') as watchdog,patch.object(b,'safe_worker_budget') as budget, \
+                 contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as result:entrypoint()
+                self.assertEqual(result.exception.code,2)
+                watchdog.assert_not_called();budget.assert_not_called()
+
 if __name__=='__main__':unittest.main()
 
 class ReproducibleBuildTimeTest(unittest.TestCase):
