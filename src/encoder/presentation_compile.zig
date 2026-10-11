@@ -962,6 +962,10 @@ pub const Renderer = struct {
         if (name[0] == '#') {
             const hex = name.len > 1 and (name[1] == 'x' or name[1] == 'X');
             const digits = name[if (hex) @as(usize, 2) else 1..];
+            if (digits.len == 0) return null;
+            for (digits) |digit| {
+                if (!(if (hex) std.ascii.isHex(digit) else std.ascii.isDigit(digit))) return null;
+            }
             const cp = std.fmt.parseInt(u21, digits, if (hex) 16 else 10) catch return null;
             // Visible text normalizes references; attributes/URLs retain decoding policy.
             if (visible_text and !(cp == 0x09 or cp == 0x0a or
@@ -6752,4 +6756,34 @@ test "unclosed external recovery fixture preserves protected opener literally" {
     try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
     try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .link, "B"));
     try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "D"));
+}
+
+test "numeric entity spelling fixture rejects signs and separators in ordinary text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "&#+65; &#x+41; &#6_5; &#x4_1; &#-65; &#x-41; &# 65; &#x 41; &#; &#x;";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    try std.testing.expectEqualStrings(source, try flattened(a, spans));
+}
+
+test "numeric entity spelling fixture retains valid references and once-only decoding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("&#65; &#x41; &#X41; &#00065; &amp;#65; &#38;#65; &#91;&#91;B&#93;&#93;", .{});
+    try std.testing.expectEqualStrings("A A A A &#65; &#65; [[B]]", try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind != .link);
+}
+
+test "numeric entity spelling fixture preserves protected literal content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("<nowiki>&#+65; &#x+41; &#6_5; &#x4_1; &#65; &#x41; &amp;#65; [[B]]</nowiki>", .{});
+    try std.testing.expectEqualStrings("&#+65; &#x+41; &#6_5; &#x4_1; A A &#65; [[B]]", try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind != .link);
 }
