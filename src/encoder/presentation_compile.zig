@@ -6707,3 +6707,49 @@ test "block HTML suffix fixture retains real next-line block ownership" {
     try std.testing.expectEqual(Kind.table, blocks[3].kind);
     try std.testing.expectEqualStrings("real cell", try flattened(a, blocks[3].table.?.rows[0].cells[0].spans));
 }
+
+fn unclosedExternalRecoveryHasLink(spans: []const Span, kind: @TypeOf(@as(Span, undefined).kind), target: []const u8) bool {
+    for (spans) |span| {
+        if (span.kind == kind and std.mem.eql(u8, span.target, target)) return true;
+    }
+    return false;
+}
+
+test "unclosed external recovery fixture preserves following links emphasis and lexical text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("Before [https://example.test unfinished ''kept'' [[B]] tail", .{});
+    try std.testing.expectEqualStrings("Before [https://example.test unfinished kept B tail", try plainText(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+    var kept = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "kept") and span.flags.italic) kept = true;
+    }
+    try std.testing.expect(kept);
+}
+
+test "unclosed external recovery fixture retains closed link label and following navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("Closed: [https://example.test label] after [[C]]", .{});
+    try std.testing.expectEqualStrings("Closed: label after C", try plainText(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "C"));
+}
+
+test "unclosed external recovery fixture preserves protected opener literally" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("Protected: <nowiki>[https://example.test unfinished [[B]]</nowiki> after [[D]]", .{});
+    try std.testing.expectEqualStrings("Protected: [https://example.test unfinished [[B]] after D", try plainText(a, spans));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .link, "B"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "D"));
+}

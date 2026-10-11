@@ -380,6 +380,13 @@ pub const InlineIterator = struct {
                     hasExternalProtocol(rest[1..]))
                 {
                     if (parseExternalLinkAt(self.input, self.cursor) != null) break;
+                    if (self.renderer_boundaries) {
+                        // An invalid bracketed opener does not make following
+                        // URLs, links, entities or formatting literal text.
+                        if (self.cursor != start) break :scan;
+                        self.cursor += 1;
+                        continue :scan;
+                    }
                     self.cursor = self.input.len;
                     break;
                 }
