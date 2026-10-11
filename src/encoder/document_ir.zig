@@ -122,6 +122,7 @@ pub const InlineSpan = struct {
     trail: []const u8 = "",
     link_has_pipe: bool = false,
     link_empty_label: bool = false,
+    external_label_prefix: []const u8 = "",
     literal_tail: bool = false,
     bold: bool = false,
     italic: bool = false,
@@ -261,6 +262,7 @@ pub const InlineIterator = struct {
                     .kind = .external_link,
                     .text = link.label,
                     .target = link.target,
+                    .external_label_prefix = link.label_prefix,
                     .bold = self.bold,
                     .italic = self.italic,
                 };
@@ -534,6 +536,7 @@ const ParsedExternalLink = struct {
     end: usize,
     target: []const u8,
     label: []const u8,
+    label_prefix: []const u8 = "",
 };
 
 const EmphasisMarker = struct {
@@ -758,6 +761,23 @@ fn parseInlineLinkAtPair(input: []const u8, start: usize, pair: syntax.Pair, lin
     } };
 }
 
+fn externalLabelWhitespaceLen(input: []const u8, index: usize) usize {
+    if (input[index] < 0x80) return if (input[index] == ' ' or input[index] == '\t') 1 else 0;
+    const cp = codepointAt(input, index) orelse return 0;
+    if (!unicodeSpaceSeparator(cp)) return 0;
+    return std.unicode.utf8ByteSequenceLength(input[index]) catch 0;
+}
+
+fn externalLabelStart(input: []const u8, start: usize) usize {
+    var index = start;
+    while (index < input.len) {
+        const n = externalLabelWhitespaceLen(input, index);
+        if (n == 0) break;
+        index += n;
+    }
+    return index;
+}
+
 fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
     if (start + 3 > input.len or input[start] != '[' or input[start + 1] == '[') return null;
     const body_start = start + 1;
@@ -769,7 +789,7 @@ fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
     for (body, 0..) |byte, index| {
         // MediaWiki ends the URL before an HTML label even without whitespace.
         // Reuse the existing tag parser; malformed angle text is not a new URL rule.
-        if (byte == ' ' or byte == '\t' or
+        if (externalLabelWhitespaceLen(body, index) != 0 or
             (byte == '<' and syntax.tagAt(body, index) != null))
         {
             separator = index;
@@ -777,11 +797,18 @@ fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
         }
     }
     const raw_target = if (separator) |index| body[0..index] else body;
-    const target = std.mem.trim(u8, raw_target, " \t");
+    // MediaWiki moves the first lowercase escaped angle and the remaining URL
+    // suffix into its label before URL entity decoding. Carry that build-only
+    // suffix separately so the renderer can join it with one ASCII space.
+    const less = std.mem.indexOf(u8, raw_target, "&lt;") orelse raw_target.len;
+    const greater = std.mem.indexOf(u8, raw_target, "&gt;") orelse raw_target.len;
+    const angle = @min(less, greater);
+    const label_prefix = raw_target[angle..];
+    const target = std.mem.trim(u8, raw_target[0..angle], " \t");
     if (target.len == 0 or !validExternalUrl(target)) return null;
-    const raw_label = if (separator) |index| std.mem.trimStart(u8, body[index..], " \t") else target;
-    const label = if (raw_label.len == 0) target else raw_label;
-    return .{ .end = close + 1, .target = target, .label = label };
+    const raw_label = if (separator) |index| body[externalLabelStart(body, index)..] else if (label_prefix.len == 0) target else "";
+    const label = if (raw_label.len == 0 and label_prefix.len == 0) target else raw_label;
+    return .{ .end = close + 1, .target = target, .label = label, .label_prefix = label_prefix };
 }
 
 fn parseFreeExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {

@@ -1846,10 +1846,15 @@ pub const Renderer = struct {
                     }
                     try self.text(trail, s);
                 },
-                .external_link => if (inherited.kind == .link or inherited.kind == .external_link)
-                    try self.text(token.text, s)
-                else
-                    try self.link(token.text, token.target, s, depth + 1, true),
+                .external_link => {
+                    const label = if (token.external_label_prefix.len != 0)
+                        try std.fmt.allocPrint(self.a, "{s} {s}", .{ token.external_label_prefix, token.text })
+                    else
+                        token.text;
+                    if (inherited.kind == .link or inherited.kind == .external_link) {
+                        if (token.external_label_prefix.len != 0) try self.literal(label, s) else try self.text(label, s);
+                    } else try self.link(label, token.target, s, depth + 1, true);
+                },
                 .template => try self.resolveTemplate(token.text, s, depth),
             }
         }
@@ -6330,4 +6335,57 @@ test "unclosed div attribute recovery preserves quoted and protected literal con
     for (code_spans) |span| try std.testing.expect(span.flags.code);
     var editorial: Renderer = .{ .a = a, .context = .{} };
     try std.testing.expectEqualStrings("<re>ctis", try flattened(a, try editorial.parseSpans("<re>ctis", .{})));
+}
+
+fn externalDelimiterCheck(source: []const u8, visible: []const u8, target: ?[]const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    var out: std.ArrayList(u8) = .empty;
+    for (spans) |span| {
+        try out.appendSlice(a, span.text);
+        if (target) |url| {
+            try std.testing.expectEqual(.external_link, span.kind);
+            try std.testing.expectEqualStrings(url, span.target);
+        } else {
+            try std.testing.expectEqual(.text, span.kind);
+            try std.testing.expectEqualStrings("", span.target);
+        }
+    }
+    try std.testing.expectEqualStrings(visible, out.items);
+}
+test "external delimiter fixture raw Unicode Zs labels" {
+    for ([_]u21{ 0x00a0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x202f, 0x205f, 0x3000 }) |cp| {
+        var buf: [4]u8 = undefined;
+        const n = try std.unicode.utf8Encode(cp, &buf);
+        var source: [128]u8 = undefined;
+        const input = try std.fmt.bufPrint(&source, "[https://example.test{s}label]", .{buf[0..n]});
+        try externalDelimiterCheck(input, "label", "https://example.test");
+    }
+    try externalDelimiterCheck("[https://example.test \xc2\xa0\xe2\x80\x82\tlabel]", "label", "https://example.test");
+}
+test "external delimiter fixture encoded-angle URL suffix belongs to label" {
+    try externalDelimiterCheck("[https://example.test&lt;word label]", "<word label", "https://example.test");
+    try externalDelimiterCheck("[https://example.test&gt;word label]", ">word label", "https://example.test");
+    try externalDelimiterCheck("[https://example.test&lt;word&amp;x label]", "<word&x label", "https://example.test");
+    try externalDelimiterCheck("[https://example.test&lt;word&gt; label]", "<word> label", "https://example.test");
+    // Parser.php constructs a nonempty suffix plus one ASCII space even without
+    // an authored label. This checks that exact compiler label, not browser layout.
+    try externalDelimiterCheck("[https://example.test&lt;word]", "<word ", "https://example.test");
+    try externalDelimiterCheck("[https://example.test&gt;word]", ">word ", "https://example.test");
+    try externalDelimiterCheck("[https://example.test&lt;word \xc2\xa0\xe2\x80\x82label]", "<word label", "https://example.test");
+}
+test "external delimiter fixture protected literals and existing URLs" {
+    try externalDelimiterCheck("<nowiki>[https://example.test\xc2\xa0label]</nowiki>", "[https://example.test\xc2\xa0label]", null);
+    try externalDelimiterCheck("<pre>[https://example.test&lt;word label]</pre>", "[https://example.test<word label]", null);
+    try externalDelimiterCheck("<code><nowiki>[https://example.test&gt;word label]</nowiki></code>", "[https://example.test>word label]", null);
+    try externalDelimiterCheck("[https://example.test/?a=1&amp;b=2 label]", "label", "https://example.test/?a=1&b=2");
+    try externalDelimiterCheck("[https://example.test/?a=1&amp;b=2]", "https://example.test/?a=1&b=2", "https://example.test/?a=1&b=2");
+    try externalDelimiterCheck("https://example.test/?a=1&amp;b=2", "https://example.test/?a=1&b=2", "https://example.test/?a=1&b=2");
+    try externalDelimiterCheck("[https://example.test <nowiki>&lt;word</nowiki> label]", "<word label", "https://example.test");
+    try externalDelimiterCheck("https://example.test&lt;word", "https://example.test<word", null);
+    try externalDelimiterCheck("[https://example.test&#60;word label]", "label", null);
+    try externalDelimiterCheck("[https://example.test&LT;word label]", "label", null);
 }
