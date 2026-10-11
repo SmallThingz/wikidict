@@ -159,7 +159,53 @@ fn recoverTypographicStyleEnd(text: []const u8, name: []const u8, attr_start: us
     return false;
 }
 
+// The captured Greek Woodhouse and Marathi personal-form modules omit the
+// final quote of an ordinary div attribute value. MediaWiki closes those
+// values at the physical tag end. Prefer the strict tokenizer first, retaining
+// valid quoted greater-than characters and multiline attributes unchanged.
 pub fn tagAt(text: []const u8, start: usize) ?Tag {
+    return tagAtStrict(text, start) orelse recoverUnclosedDivAttribute(text, start);
+}
+fn recoverUnclosedDivAttribute(text: []const u8, start: usize) ?Tag {
+    if (start >= text.len or text[start] != '<') return null;
+    const name_end = start + 4;
+    if (name_end >= text.len or !std.ascii.eqlIgnoreCase(text[start + 1 .. name_end], "div") or
+        !std.ascii.isWhitespace(text[name_end])) return null;
+    const line_end = std.mem.indexOfScalarPos(u8, text, name_end, '\n') orelse text.len;
+    const end = std.mem.indexOfScalarPos(u8, text, name_end, '>') orelse return null;
+    if (end >= line_end) return null;
+    var at = name_end;
+    while (at < end) {
+        while (at < end and std.ascii.isWhitespace(text[at])) : (at += 1) {}
+        if (at == end) return null;
+        const key_start = at;
+        while (at < end and (std.ascii.isAlphanumeric(text[at]) or text[at] == '-' or text[at] == '_' or text[at] == ':')) : (at += 1) {}
+        if (at == key_start) return null;
+        while (at < end and std.ascii.isWhitespace(text[at])) : (at += 1) {}
+        if (at == end or text[at] != '=') continue;
+        at += 1;
+        while (at < end and std.ascii.isWhitespace(text[at])) : (at += 1) {}
+        if (at == end) return null;
+        const quote = text[at];
+        if (quote != '\'' and quote != '"') {
+            while (at < end and !std.ascii.isWhitespace(text[at])) : (at += 1) {}
+            continue;
+        }
+        at += 1;
+        if (std.mem.indexOfScalarPos(u8, text[0..line_end], at, quote)) |close| {
+            // A quote after this greater-than belongs to an authored quoted
+            // value, not the concrete missing-final-quote recovery.
+            if (close >= end) return null;
+            at = close + 1;
+            continue;
+        }
+        if (std.mem.indexOfScalar(u8, text[at..end], '<') != null) return null;
+        return .{ .name = text[start + 1 .. name_end], .attrs = text[name_end..end],
+            .end = end + 1, .closing = false, .self_closing = false };
+    }
+    return null;
+}
+fn tagAtStrict(text: []const u8, start: usize) ?Tag {
     if (start >= text.len or text[start] != '<') return null;
     var i = start + 1;
     const closing = i < text.len and text[i] == '/';

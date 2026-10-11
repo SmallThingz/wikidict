@@ -117,6 +117,16 @@ fn inclusionCloseEnd(text: []const u8, start: usize, name: []const u8) ?usize {
 }
 
 pub fn transcludeDecodedAlloc(a: std.mem.Allocator, text: []const u8) ![]u8 {
+    return transcludeDecodedWithBoundariesAlloc(a, text, false);
+}
+
+// Empty inclusion nodes must remain separate while parsing template arguments.
+// Their text is omitted only when expanding the already separated values.
+pub fn transcludeDecodedForParsingAlloc(a: std.mem.Allocator, text: []const u8) ![]u8 {
+    return transcludeDecodedWithBoundariesAlloc(a, text, true);
+}
+
+fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, preserve_empty_noinclude: bool) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     // MediaWiki Preprocessor_Hash selects exact onlyinclude delimiters on the
@@ -165,7 +175,8 @@ pub fn transcludeDecodedAlloc(a: std.mem.Allocator, text: []const u8) ![]u8 {
             continue;
         }
         if (text[open_end - 2] == '/') {
-            if (tag.mode == .preserved) try out.appendSlice(a, text[lt..open_end]);
+            if (tag.mode == .preserved or (preserve_empty_noinclude and tag.mode == .excluded))
+                try out.appendSlice(a, text[lt..open_end]);
             pos = open_end;
             continue;
         }
@@ -185,6 +196,34 @@ pub fn transcludeDecodedAlloc(a: std.mem.Allocator, text: []const u8) ![]u8 {
         }
     }
     return out.toOwnedSlice(a);
+}
+
+
+/// Append expanded plain text without leaking empty inclusion-node boundaries.
+/// Literal extension bodies keep their authored contents untouched.
+pub fn appendParsingText(a: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
+    var pos: usize = 0;
+    var copied: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |lt| {
+        if (opaqueParserRegionEnd(text, lt)) |end| {
+            pos = end;
+            continue;
+        }
+        if (inclusionTagAt(text, lt)) |tag| {
+            if (tag.mode == .excluded) {
+                if (decodedTagEnd(text, lt)) |end| {
+                    if (end >= 2 and text[end - 2] == '/') {
+                        try out.appendSlice(a, text[copied..lt]);
+                        copied = end;
+                        pos = end;
+                        continue;
+                    }
+                }
+            }
+        }
+        pos = lt + 1;
+    }
+    try out.appendSlice(a, text[copied..]);
 }
 
 pub const ConstructKind = enum { template, parameter };

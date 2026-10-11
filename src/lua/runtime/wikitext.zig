@@ -598,7 +598,7 @@ pub const Expander = struct {
             work.template_preprocess_bytes +|= raw.len;
         }
         const preprocess_start = work_stats.cpuNow();
-        const body = try preprocess.transcludeDecodedAlloc(self.runtime.allocator, raw);
+        const body = try preprocess.transcludeDecodedForParsingAlloc(self.runtime.allocator, raw);
         if (work_stats.current()) |work| work.template_preprocess_ns +|= work_stats.elapsed(preprocess_start);
         defer self.runtime.allocator.free(body);
         return self.expandTransclusionText(title, body, args, depth + 1);
@@ -675,7 +675,7 @@ pub const Expander = struct {
         var pos: usize = 0;
         while (preprocess.findNextConstructOutsideLiteralTags(text, pos)) |construct| {
             if (work_stats.current()) |work| work.constructs +|= 1;
-            try out.appendSlice(self.runtime.allocator, text[pos..construct.open]);
+            try preprocess.appendParsingText(self.runtime.allocator, &out, text[pos..construct.open]);
             switch (construct.kind) {
                 .parameter => {
                     const expanded = try self.expandParameter(text[construct.open + 3 .. construct.close], params, host_title, depth + 1);
@@ -691,7 +691,7 @@ pub const Expander = struct {
                 },
             }
         }
-        try out.appendSlice(self.runtime.allocator, text[pos..]);
+        try preprocess.appendParsingText(self.runtime.allocator, &out, text[pos..]);
         return out.toOwnedSlice(self.runtime.allocator);
     }
 
@@ -1907,7 +1907,7 @@ pub const Expander = struct {
         // CoreParserFunctions::intFunction uses plain() with expanded, trimmed
         // parameters; noparse=false then expands the message in a child frame.
         const key = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n\x00\x0b");
-        if (key.len == 0) return self.emptyComputedTransclusion(head, raw_args, params, host_title, depth);
+        if (key.len == 0) return self.emptyComputedTransclusion(head, raw_args, params, host_title, depth, false);
         const values = try self.runtime.allocator.alloc(Value, raw_args.len);
         defer self.runtime.allocator.free(values);
         for (raw_args, values) |raw, *value| {
@@ -2065,7 +2065,7 @@ pub const Expander = struct {
             release_body = !fetched.borrowed;
         } else {
             const raw = if (self.provider.get_transclusion) |get| try get(self.provider.ctx, a, title) else try hostPageContent(self, a, title);
-            body = try preprocess.transcludeDecodedAlloc(a, raw orelse return std.fmt.allocPrint(a, "[[{s}]]", .{title}));
+            body = try preprocess.transcludeDecodedForParsingAlloc(a, raw orelse return std.fmt.allocPrint(a, "[[{s}]]", .{title}));
             release_body = true;
         }
         defer if (release_body) a.free(body);
@@ -2215,19 +2215,21 @@ pub const Expander = struct {
         return false;
     }
 
-    fn emptyComputedTransclusion(self: *Expander, expanded_head: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+    fn emptyComputedTransclusion(self: *Expander, expanded_head: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize, entity_braces: bool) anyerror![]const u8 {
         // Parser::braceSubstitution recovers the expanded title and argument
         // nodes when no valid title exists. Protect only the literal braces so
         // links and other markup in the expanded arguments retain their meaning.
+        // Unknown-function synthetic braces use entities: generated HTML tags
+        // inside an external URL would become the URL/label separator.
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(self.runtime.allocator);
-        try out.appendSlice(self.runtime.allocator, "<nowiki>{{</nowiki>");
+        try out.appendSlice(self.runtime.allocator, if (entity_braces) "&#123;&#123;" else "<nowiki>{{</nowiki>");
         try out.appendSlice(self.runtime.allocator, expanded_head);
         for (raw_args) |raw| {
             try out.append(self.runtime.allocator, '|');
             try out.appendSlice(self.runtime.allocator, try self.expandWikitext(raw, params, host_title, depth + 1));
         }
-        try out.appendSlice(self.runtime.allocator, "<nowiki>}}</nowiki>");
+        try out.appendSlice(self.runtime.allocator, if (entity_braces) "&#125;&#125;" else "<nowiki>}}</nowiki>");
         return out.toOwnedSlice(self.runtime.allocator);
     }
 
@@ -2248,7 +2250,7 @@ pub const Expander = struct {
             // nodes. Valid parser functions already returned above, preserving
             // lazy branch selection. Protect only the recovered outer braces.
             const expanded_head = try self.expandWikitext(raw_head, params, host_title, depth + 1);
-            return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth);
+            return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, true);
         }
         switch (try self.classifyInterwikiTransclusion(raw_head)) {
             .normal => {},
@@ -2267,13 +2269,13 @@ pub const Expander = struct {
         const expanded_head = try self.expandWikitext(raw_head, params, host_title, depth + 1);
         const title = stripSubstPrefix(expanded_head);
         if (title.len == 0)
-            return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth);
+            return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, false);
         if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
             if (try self.expandParserHead(title, parts.items[1..], params, host_title, depth)) |value| return value;
         }
         if (title.len != 0 and title[0] == '#') {
             self.unsupported_parser_function = true;
-            return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth);
+            return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, true);
         }
         if (invalidTransclusionTitle(title)) {
             if (invalidTransclusionNeedsProtection(title))
@@ -3546,7 +3548,7 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     const urlencode_path = try expander.expandFragment("Page", "{{urlencode:a b/c*|PATH}}", 1_670_803_200);
     try std.testing.expectEqualStrings("a%20b%2Fc%2A", urlencode_path);
     const inert_hash_urlencode = try expander.expandFragment("Page", "{{#urlencode:जलाना|PATH}}", 1_670_803_200);
-    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#urlencode:जलाना|PATH<nowiki>}}</nowiki>", inert_hash_urlencode);
+    try std.testing.expectEqualStrings("&#123;&#123;#urlencode:जलाना|PATH&#125;&#125;", inert_hash_urlencode);
     const inert_empty_template = try expander.expandFragment("Page", "{{|yue|洛陽}}", 1_670_803_200);
     try std.testing.expectEqualStrings("<nowiki>{{|yue|洛陽}}</nowiki>", inert_empty_template);
     // Afrikaans Sjabloon:S computes this empty name when woordklank receives
@@ -3993,7 +3995,7 @@ test "captured parser aliases expand lazy wrappers and native frame invokes" {
     var english = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\nif\t0\tif\ninvoke\t0\tinvoke\n", "enwiktionary", "20261001", "en");
     defer english.deinit();
     source.words = &english;
-    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#لو:yes|Y|N<nowiki>}}</nowiki>", try expander.expandFragment("Page", "{{#لو:yes|Y|N}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("&#123;&#123;#لو:yes|Y|N&#125;&#125;", try expander.expandFragment("Page", "{{#لو:yes|Y|N}}", 1_670_803_200));
 }
 
 test "bundle parser functions cover corpus time date sub and iferror forms" {
@@ -4866,7 +4868,7 @@ test "language parser preserves authoritative nonmatches and missing profile ope
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
         .provider = .{ .ctx = &source, .get = LanguageParserTestSource.get, .exists = TestProvider.exists,
             .language_name = LanguageParserTestSource.languageName, .resolve_parser_function = LanguageParserTestSource.parser } };
-    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#لغة:en<nowiki>}}</nowiki>", try expander.expandFragment("Page", "{{#لغة:en}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("&#123;&#123;#لغة:en&#125;&#125;", try expander.expandFragment("Page", "{{#لغة:en}}", 1_670_803_200));
     try std.testing.expectError(error.LanguageNameSnapshotMissing, expander.expandFragment("Page", "{{#language:en|missing}}", 1_670_803_200));
     try std.testing.expectError(error.LanguageNameSnapshotMissing, expander.expandFragment("Page", "{{#language:en|-}}", 1_670_803_200));
     try std.testing.expectError(error.OutOfMemory, expander.expandFragment("Page", "{{#language:oom|ar}}", 1_670_803_200));
@@ -4896,13 +4898,13 @@ test "unsupported parser diagnostics preserve literals and reset per page" {
         .install_scribunto = installTestInvoke,
     };
     const unsupported = try expander.expandFragment("Page", "before {{#unsupported_probe:x}} after", 1_670_803_200);
-    try std.testing.expectEqualStrings("before <nowiki>{{</nowiki>#unsupported_probe:x<nowiki>}}</nowiki> after", unsupported);
+    try std.testing.expectEqualStrings("before &#123;&#123;#unsupported_probe:x&#125;&#125; after", unsupported);
     try std.testing.expect(expander.unsupported_parser_function);
     _ = try expander.expandFragment("Next", "<nowiki>{{#unsupported_probe:x}}</nowiki>", 1_670_803_200);
     try std.testing.expect(!expander.unsupported_parser_function);
     const computed_source = "{{{{#if:x|#unsupported_probe}}:x}}";
     const computed = try expander.expandFragment("Computed", computed_source, 1_670_803_200);
-    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>\n#unsupported_probe:x<nowiki>}}</nowiki>", computed);
+    try std.testing.expectEqualStrings("&#123;&#123;\n#unsupported_probe:x&#125;&#125;", computed);
     try std.testing.expect(expander.unsupported_parser_function);
     _ = try expander.expandFragment("Protected pre", "<pre>{{#unsupported_probe:x}}</pre>", 1_670_803_200);
     try std.testing.expect(!expander.unsupported_parser_function);
@@ -5085,13 +5087,13 @@ test "unknown parser oracle expands children while preserving unsupported invoca
     };
 
     const child = try expander.expandFragment("शारदा", "{{#unsupported_probe:{{PAGENAME}}|x={{uc:cat}}}}", 1_670_803_200);
-    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#unsupported_probe:शारदा|x=CAT<nowiki>}}</nowiki>", child);
+    try std.testing.expectEqualStrings("&#123;&#123;#unsupported_probe:शारदा|x=CAT&#125;&#125;", child);
     try std.testing.expect(expander.unsupported_parser_function);
     const fallback = try expander.expandFragment("शारदा", "{{#urlencode:{{{1|{{PAGENAME}}}}}}}", 1_670_803_200);
-    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#urlencode:शारदा<nowiki>}}</nowiki>", fallback);
+    try std.testing.expectEqualStrings("&#123;&#123;#urlencode:शारदा&#125;&#125;", fallback);
     try std.testing.expect(expander.unsupported_parser_function);
     const markup = try expander.expandFragment("शारदा", "{{#unsupported_probe:<b>bold</b>|[[cat|label]]}}", 1_670_803_200);
-    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>#unsupported_probe:<b>bold</b>|[[cat|label]]<nowiki>}}</nowiki>", markup);
+    try std.testing.expectEqualStrings("&#123;&#123;#unsupported_probe:<b>bold</b>|[[cat|label]]&#125;&#125;", markup);
     try std.testing.expect(expander.unsupported_parser_function);
 }
 
@@ -5126,4 +5128,108 @@ test "unknown parser oracle preserves protected source and valid lazy branches" 
     const known = try expander.expandFragment("शारदा", "{{urlencode:{{PAGENAME}}}}", 1_670_803_200);
     try std.testing.expectEqualStrings("%E0%A4%B6%E0%A4%BE%E0%A4%B0%E0%A4%A6%E0%A4%BE", known);
     try std.testing.expect(!expander.unsupported_parser_function);
+}
+
+
+test "unknown parser braces preserve external URL boundary after child expansion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(TranslationReuseProbe.root), rt.stabilize(TranslationReuseProbe.root) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TranslationReuseProbe.lookup, TranslationReuseProbe.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+        .install_scribunto = installTestInvoke,
+    };
+
+    const linked = try expander.expandFragment("शारदा", "[https://hindwidictionary.com/search?keyword={{#urlencode:{{PAGENAME}}}} शारदा]", 1_670_803_200);
+    try std.testing.expectEqualStrings("[https://hindwidictionary.com/search?keyword=&#123;&#123;#urlencode:शारदा&#125;&#125; शारदा]", linked);
+    try std.testing.expect(expander.unsupported_parser_function);
+    const spaces = try expander.expandFragment("Page", "[https://example.test/?q={{#urlencode:alpha beta}} label]", 1_670_803_200);
+    try std.testing.expectEqualStrings("[https://example.test/?q=&#123;&#123;#urlencode:alpha beta&#125;&#125; label]", spaces);
+    try std.testing.expect(expander.unsupported_parser_function);
+    const pipes = try expander.expandFragment("Page", "{{#unknown:alpha|beta}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("&#123;&#123;#unknown:alpha|beta&#125;&#125;", pipes);
+    try std.testing.expect(expander.unsupported_parser_function);
+    const html = try expander.expandFragment("Page", "{{#unknown:''alpha''}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("&#123;&#123;#unknown:''alpha''&#125;&#125;", html);
+    try std.testing.expect(expander.unsupported_parser_function);
+    const protected = try expander.expandFragment("Page", "<nowiki>{{#urlencode:x}}</nowiki>", 1_670_803_200);
+    try std.testing.expectEqualStrings("<nowiki>{{#urlencode:x}}</nowiki>", protected);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    const valid = try expander.expandFragment("Page", "[https://example.test/?q={{urlencode:a b}} label]", 1_670_803_200);
+    try std.testing.expectEqualStrings("[https://example.test/?q=a+b label]", valid);
+    try std.testing.expect(!expander.unsupported_parser_function);
+}
+
+
+const CopticInclusionBoundaryFixture = struct {
+    fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        if (std.mem.eql(u8, title, "Template:BoundaryBrokenA")) return "{{BoundaryProbe|earlier=]<noinclude/>] [<noinclude/>[prefix|fut=ⲛⲁ}}";
+        if (std.mem.eql(u8, title, "Template:BoundaryBrokenL")) return "{{BoundaryProbe|earlier=[<noinclude/>[one]<noinclude/>] [<noinclude/>[tail|fut=ⲛⲁ}}";
+        if (std.mem.eql(u8, title, "Template:BoundarySah")) return "{{BoundaryProbe|earlier=prefix|fut=ⲛⲁ}}";
+        if (std.mem.eql(u8, title, "Template:BoundaryBalanced")) return "{{BoundaryProbe|earlier=[[word|label]]|fut=ⲛⲁ}}";
+        if (std.mem.eql(u8, title, "Template:BoundaryNested")) return "{{BoundaryProbe|earlier={{BoundaryInner|x}}|fut=ⲛⲁ}}";
+        if (std.mem.eql(u8, title, "Template:BoundaryProtected")) return "{{BoundaryProbe|earlier=<nowiki>[<noinclude/>[literal</nowiki>|fut=ⲛⲁ}}";
+        if (std.mem.eql(u8, title, "Template:BoundaryEmptyNode")) return "{{BoundaryProbe|earlier=A<noinclude/>B|fut=ⲛⲁ}}";
+        if (std.mem.eql(u8, title, "Template:BoundaryProbe")) return "fut={{{fut|MISSING}}};earlier={{{earlier|}}}";
+        if (std.mem.eql(u8, title, "Template:BoundaryInner")) return "nested {{{1}}}";
+        return null;
+    }
+    fn exists(_: ?*anyopaque, title: []const u8) !bool {
+        return (try get(null, std.testing.allocator, title)) != null;
+    }
+    // Mirrors Provider.transclusionBody preprocessing and borrowed-body delivery.
+    fn body(_: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?Provider.TransclusionBody {
+        const raw = (try get(null, a, title)) orelse return null;
+        const text = if (@hasDecl(preprocess, "transcludeDecodedForParsingAlloc"))
+            try preprocess.transcludeDecodedForParsingAlloc(a, raw)
+        else
+            try preprocess.transcludeDecodedAlloc(a, raw);
+        return .{ .text = text, .title = title, .borrowed = true };
+    }
+    fn checkMode(source: []const u8, expected: []const u8, borrowed: bool) !void {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+        defer runtime.deinit();
+        try rt.bindGlobalTable(&runtime, null, 0);
+        try stdlib.install(&runtime);
+        try installTestHost(&runtime, 18, 23);
+        var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = get, .exists = exists }, .install_scribunto = installTestInvoke };
+        if (borrowed) expander.provider.get_transclusion_body = body;
+        const actual = try expander.expandFragment("Coptic boundary fixture", source, 1_670_803_200);
+        try std.testing.expectEqualStrings(expected, actual);
+        try std.testing.expect(!expander.unsupported_parser_function);
+    }
+    fn check(source: []const u8, expected: []const u8) !void {
+        try checkMode(source, expected, false);
+        try checkMode(source, expected, true);
+    }
+};
+
+test "Coptic inclusion boundaries preserve later future argument" {
+    try CopticInclusionBoundaryFixture.check("{{BoundaryBrokenA}}", "fut=ⲛⲁ;earlier=]] [[prefix");
+    try CopticInclusionBoundaryFixture.check("{{BoundaryBrokenL}}", "fut=ⲛⲁ;earlier=[[one]] [[tail");
+}
+
+test "Coptic inclusion boundaries retain balanced nested and literal controls" {
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "{{BoundarySah}}", .expected = "fut=ⲛⲁ;earlier=prefix" },
+        .{ .source = "{{BoundaryBalanced}}", .expected = "fut=ⲛⲁ;earlier=[[word|label]]" },
+        .{ .source = "{{BoundaryNested}}", .expected = "fut=ⲛⲁ;earlier=nested x" },
+        .{ .source = "{{BoundaryProtected}}", .expected = "fut=ⲛⲁ;earlier=<nowiki>[<noinclude/>[literal</nowiki>" },
+        .{ .source = "{{BoundaryEmptyNode}}", .expected = "fut=ⲛⲁ;earlier=AB" },
+    };
+    for (cases) |case| try CopticInclusionBoundaryFixture.check(case.source, case.expected);
 }

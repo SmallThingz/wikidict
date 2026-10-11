@@ -1206,7 +1206,7 @@ pub const Provider = struct {
 
         const raw = try self.readCorpusSource(a, page);
         defer if (wikimedia_dump.sourceLen(page.source) != 0) a.free(raw);
-        const body = preprocess.transcludeDecodedAlloc(a, raw) catch |err| {
+        const body = preprocess.transcludeDecodedForParsingAlloc(a, raw) catch |err| {
             lua_program.work_stats.logLine("warning: transclusion body failed: title={s} page_id={d} error={s}\n", .{ page.title, page.page_id, @errorName(err) });
             return err;
         };

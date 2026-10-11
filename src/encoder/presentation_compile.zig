@@ -2759,8 +2759,44 @@ pub const Renderer = struct {
         return @max(1, @min(100, std.fmt.parseInt(u16, decoded, 10) catch 1));
     }
 
+    fn cellAttributePipe(raw: []const u8) ?usize {
+        // logicalEnd can include a whole multiline HTML wrapper. Attributes
+        // belong only to the cell's opening physical line, not its nested body.
+        const end = std.mem.indexOfAny(u8, raw, "\r\n") orelse raw.len;
+        const line = raw[0..end];
+        const interesting = [_]u8{ '|', '<', '{', '[', '\'', '"' };
+        var i: usize = 0;
+        while (i < line.len) {
+            i += std.mem.indexOfAny(u8, line[i..], &interesting) orelse return null;
+            if (line[i] == '|') return i;
+            if (line[i] == '\'' or line[i] == '"') {
+                i = (std.mem.indexOfScalarPos(u8, line, i + 1, line[i]) orelse return null) + 1;
+                continue;
+            }
+            if (line[i] == '<') {
+                if (syntax.protectedEnd(line, i)) |protected_end| {
+                    i = protected_end;
+                    continue;
+                }
+                if (syntax.tagAt(line, i)) |tag| {
+                    i = tag.end;
+                    continue;
+                }
+            }
+            if (starts(line[i..], "{{") or starts(line[i..], "[[")) {
+                if (syntax.balanced(line, i)) |pair| {
+                    i = pair.end;
+                    continue;
+                }
+                return null;
+            }
+            i += 1;
+        }
+        return null;
+    }
+
     fn cellContent(self: *Renderer, raw: []const u8) Error!CellContent {
-        if (syntax.delimiter(raw, "|", 0)) |pipe| if (std.mem.indexOfScalar(u8, raw[0..pipe], '=') != null) {
+        if (cellAttributePipe(raw)) |pipe| if (std.mem.indexOfScalar(u8, raw[0..pipe], '=') != null) {
             const tag: syntax.Tag = .{ .name = "td", .attrs = raw[0..pipe], .end = 0, .closing = false, .self_closing = false };
             return .{
                 .text = trim(raw[pipe + 1 ..]),
@@ -6127,4 +6163,171 @@ test "wiki table boundary: fostered list ancestry and numbered-list transitions"
     try std.testing.expectEqual(Kind.table, ordered[1].kind);
     try std.testing.expectEqual(Kind.definition, ordered[2].kind);
     try std.testing.expectEqualStrings("1", ordered[2].number);
+}
+
+test "wiki cell attributes stop before a nested Finnish NavFrame table" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    // Reduced from YYA -> fi-decl-maa-dot -> fi-decl-internal -> fi-decl-table.
+    // The authored template puts this HTML-wrapped grid inside a layout cell.
+    const blocks = try r.renderBody(
+        "{| width=\"40%\"\n|-\n|<div class=\"NavFrame\">\n" ++
+            "<div class=\"NavHead fi-decl-header-row\">Inflection of YYA</div>\n" ++
+            "<div class=\"NavContent\">\n" ++
+            "{| class=\"inflection-table fi-decl fi-decl-old\" cellspacing=\"1\" cellpadding=\"2\"\n" ++
+            "|-\n! class=\"thnum\" |\n! class=\"thnum\" | singular\n! class=\"thnum\" | plural\n" ++
+            "|-\n! nominative\n| [[YYA]]\n| &ndash;\n" ++
+            "|-\n! genitive\n| [[YYA:n]]\n| &ndash;\n|-\n|}\n" ++
+            "</div>\n</div>\n|}\n",
+    );
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqual(Kind.table, blocks[0].kind);
+    const table = blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+    const text_value = try flattened(a, table.rows[0].cells[0].spans);
+    try std.testing.expect(std.mem.startsWith(u8, text_value, "Inflection of YYA\n"));
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "singular · plural") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "nominative · YYA · –") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "genitive · YYA:n · –") != null);
+    inline for (.{ "{|", "|-", "|}", "class=", "cellspacing=" }) |raw_control|
+        try std.testing.expect(std.mem.indexOf(u8, text_value, raw_control) == null);
+    try std.testing.expect(!r.fallbacks.malformed_table);
+}
+
+test "wiki cell attributes retain legitimate colspan rowspan and style" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const first = try r.cellContent(" colspan=2 style=\"color: red\" | kept");
+    try std.testing.expectEqualStrings("kept", first.text);
+    try std.testing.expectEqual(@as(u16, 2), first.colspan);
+    try std.testing.expectEqual(@as(u16, 1), first.rowspan);
+    const second = try r.cellContent(" style='text-align:center' rowspan='3' | other");
+    try std.testing.expectEqualStrings("other", second.text);
+    try std.testing.expectEqual(@as(u16, 1), second.colspan);
+    try std.testing.expectEqual(@as(u16, 3), second.rowspan);
+    const body = "<div class=\"NavFrame\">\n{| class=inflection\n| value\n|}\n</div>";
+    const unchanged = try r.cellContent(body);
+    try std.testing.expectEqualStrings(body, unchanged.text);
+}
+
+test "wiki cell attribute pipes inside quotes remain attribute values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody(
+        "{|\n|-\n| colspan=\"2\" style=\"font-family:'a|b'\" | [[kept]]\n" ++
+            "| rowspan='3' style='font-family:\"c|d\"' | other\n|}\n",
+    );
+    const cells = blocks[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 2), cells.len);
+    try std.testing.expectEqualStrings("kept", try flattened(a, cells[0].spans));
+    try std.testing.expectEqual(@as(u16, 2), cells[0].colspan);
+    try std.testing.expectEqualStrings("other", try flattened(a, cells[1].spans));
+    try std.testing.expectEqual(@as(u16, 3), cells[1].rowspan);
+    const unmatched = "style=\"unclosed | body";
+    try std.testing.expectEqualStrings(unmatched, (try r.cellContent(unmatched)).text);
+}
+
+
+test "unknown parser entity braces keep complete external target and intended label" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{ .title = "शारदा", .language = "Hindi" } };
+    const spans = try renderer.parseSpans("[https://hindwidictionary.com/search?keyword=&#123;&#123;#urlencode:शारदा&#125;&#125; शारदा]", .{});
+    try std.testing.expectEqualStrings("शारदा", try flattened(a, spans));
+    try std.testing.expect(spans.len != 0);
+    for (spans) |span| {
+        try std.testing.expectEqual(ir.InlineKind.external_link, span.kind);
+        try std.testing.expectEqualStrings("https://hindwidictionary.com/search?keyword={{#urlencode:शारदा}}", span.target);
+    }
+    const spaces = try renderer.parseSpans("[https://example.test/?q=&#123;&#123;#urlencode:alpha beta&#125;&#125; label]", .{});
+    try std.testing.expectEqualStrings("beta}} label", try flattened(a, spaces));
+    for (spaces) |span| try std.testing.expectEqualStrings("https://example.test/?q={{#urlencode:alpha", span.target);
+    const authored_nowiki = try renderer.parseSpans("[https://example.test/?q=<nowiki>{{alpha beta}}</nowiki> label]", .{});
+    try std.testing.expectEqualStrings("{{alpha beta}} label", try flattened(a, authored_nowiki));
+    for (authored_nowiki) |span| try std.testing.expectEqualStrings("https://example.test/?q=", span.target);
+    const html_label = try renderer.parseSpans("[https://example.test/?q=x <i>label</i>]", .{});
+    try std.testing.expectEqualStrings("label", try flattened(a, html_label));
+    for (html_label) |span| try std.testing.expectEqualStrings("https://example.test/?q=x", span.target);
+    var literal: Renderer = .{ .a = a, .context = .{} };
+    const protected = try literal.parseSpans("<nowiki>{{#urlencode:x}}</nowiki>", .{});
+    try std.testing.expectEqualStrings("{{#urlencode:x}}", try flattened(a, protected));
+    for (protected) |span| {
+        try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+    }
+}
+
+
+test "unclosed div attribute Greek headwords retain lexical links without markup" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("<div class='mw-collapsible mw-collapsed' style='display: inline' data-expandtext='2 headwords><ul><li>[[caw]] idem, page 120.</li><li>[[croak]] idem, page 185.</li></ul></div>", .{});
+    const visible = try flattened(a, spans);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "<div") == null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "caw idem, page 120.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "croak idem, page 185.") != null);
+    var links: usize = 0;
+    for (spans) |span| if (span.kind == .link) { links += 1; };
+    try std.testing.expectEqual(@as(usize, 2), links);
+    const ordinary = syntax.tagAt("<div title=\"ordinary title>body</div>", 0).?;
+    try std.testing.expectEqualStrings("ordinary title", ordinary.attr("title").?);
+}
+
+test "unclosed div attribute Marathi NavFrame retains heading and table cells" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody(
+        "<div class=\"NavFrame\" style=\"display: table;>\n" ++
+        "<div class=\"NavHead\">Personal forms of पाघळणे</div>\n<div class=\"NavContent\">\n" ++
+        "{| class=\"inflection-table\"\n! colspan=\"2\" | future\n|-\n| [[पाघळणे]] || [[पाघळ-]]\n|}\n</div></div>\nAfter",
+    );
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    try std.testing.expectEqualStrings("Personal forms of पाघळणे", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.table, blocks[1].kind);
+    const table = blocks[1].table.?;
+    try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+    try std.testing.expectEqual(@as(u16, 2), table.rows[0].cells[0].colspan);
+    try std.testing.expectEqualStrings("पाघळणे", try flattened(a, table.rows[1].cells[0].spans));
+    try std.testing.expectEqualStrings("पाघळ-", try flattened(a, table.rows[1].cells[1].spans));
+    try std.testing.expectEqualStrings("After", try flattened(a, blocks[2].spans));
+}
+
+test "unclosed div attribute recovery preserves quoted and protected literal controls" {
+    const quoted = syntax.tagAt("<div style=\"a>b\">body</div>", 0).?;
+    try std.testing.expectEqualStrings("a>b", quoted.attr("style").?);
+    const multiline = syntax.tagAt("<div style=\"a>b\nline two\">body</div>", 0).?;
+    try std.testing.expectEqualStrings("a>b\nline two", multiline.attr("style").?);
+    const angles = syntax.tagAt("<div title=\"a><b>foo\">body</div>", 0).?;
+    try std.testing.expectEqualStrings("a><b>foo", angles.attr("title").?);
+    const multiline_angles = syntax.tagAt("<div title=\"a>\n<b>foo\">body</div>", 0).?;
+    try std.testing.expectEqualStrings("a>\n<b>foo", multiline_angles.attr("title").?);
+    try std.testing.expect(syntax.tagAt("<widget title=\"literal>body</widget>", 0) == null);
+    try std.testing.expect(syntax.tagAt("<re>ctis", 0).?.is("re"));
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const literal = "<div class=\"NavFrame\" style=\"display: table;>";
+    inline for (&.{ "nowiki", "pre" }) |name| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const input = try std.fmt.allocPrint(a, "<{s}>{s}</{s}>", .{ name, literal, name });
+        const spans = try r.parseSpans(input, .{});
+        try std.testing.expectEqualStrings(literal, try flattened(a, spans));
+    }
+    var code: Renderer = .{ .a = a, .context = .{} };
+    const code_spans = try code.parseSpans("<code>&lt;div class=&quot;NavFrame&quot; style=&quot;display: table;&gt;</code>", .{});
+    try std.testing.expectEqualStrings(literal, try flattened(a, code_spans));
+    for (code_spans) |span| try std.testing.expect(span.flags.code);
+    var editorial: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("<re>ctis", try flattened(a, try editorial.parseSpans("<re>ctis", .{})));
 }
