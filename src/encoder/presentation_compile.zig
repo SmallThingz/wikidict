@@ -897,6 +897,37 @@ pub const Renderer = struct {
         }
         try self.plain(link_value.text, link_style);
     }
+    // Behavior switches act on authored source before link-title decoding.
+    // Preserve protected bodies/attributes and entity-authored spellings.
+    fn withoutBehaviorControls(self: *Renderer, value: []const u8) Error![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        var emitted: usize = 0;
+        var scan: usize = 0;
+        while (scan < value.len) {
+            if (value[scan] == '<') {
+                if (syntax.protectedEnd(value, scan)) |end| {
+                    scan = end;
+                    continue;
+                }
+                if (syntax.tagAt(value, scan)) |tag| {
+                    scan = tag.end;
+                    continue;
+                }
+            }
+            const matched = if (self.context.behavior_switches) |registry|
+                try registry.matchAt(self.a, value, scan)
+            else
+                syntax.behaviorSwitchEnd(value, scan);
+            if (matched) |end| {
+                try out.appendSlice(self.a, value[emitted..scan]);
+                emitted = end;
+                scan = end;
+            } else scan += 1;
+        }
+        if (emitted == 0) return value;
+        try out.appendSlice(self.a, value[emitted..]);
+        return try out.toOwnedSlice(self.a);
+    }
     fn plainWithMagicLinks(self: *Renderer, value: []const u8, style: Style) Error!void {
         var emitted: usize = 0;
         var scan: usize = 0;
@@ -1772,8 +1803,36 @@ pub const Renderer = struct {
                             literal_style.kind = .text;
                             literal_style.target = "";
                             self.fallbacks.literal_markup = true;
-                            try self.plain(try self.entityText(input[raw_start..nested_start]), literal_style);
+                            try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..nested_start])), literal_style);
                             try self.inlineText(input[nested_start..it.cursor], literal_style, depth + 1);
+                            continue;
+                        }
+                    }
+                    const authored_target = target;
+                    target = try self.withoutBehaviorControls(target);
+                    if (target.len != authored_target.len) {
+                        target = std.mem.trim(u8, target, " \t");
+                        const title_part = if (starts(target, ":")) std.mem.trim(u8, target[1..], " \t") else target;
+                        const namespace_only = if (self.namespaceOfTarget(title_part) != null)
+                            std.mem.trim(u8, title_part[std.mem.indexOfScalar(u8, title_part, ':').? + 1 ..], " \t").len == 0
+                        else
+                            false;
+                        if (title_part.len == 0 or namespace_only) {
+                            // A missing title (including an empty namespace title)
+                            // is literal syntax, not category membership or media.
+                            const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
+                            var literal_style = s;
+                            literal_style.kind = .text;
+                            literal_style.target = "";
+                            if (token.link_has_pipe) {
+                                const label_start = @intFromPtr(token.text.ptr) - @intFromPtr(input.ptr);
+                                try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..label_start])), literal_style);
+                                // Invalid outer syntax still leaves authored label
+                                // emphasis, HTML and inner links eligible for parsing.
+                                try self.inlineText(input[label_start..it.cursor], literal_style, depth + 1);
+                            } else {
+                                try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..it.cursor])), literal_style);
+                            }
                             continue;
                         }
                     }
@@ -1786,7 +1845,7 @@ pub const Renderer = struct {
                         self.fallbacks.literal_markup = true;
                         // Undefined parameters and encoded invalid targets are
                         // literal output, not another expansion/label input.
-                        try self.plain(try self.entityText(input[raw_start..it.cursor]), literal_style);
+                        try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..it.cursor])), literal_style);
                         continue;
                     }
                     if (std.mem.indexOfScalar(u8, target, '_') != null) {
@@ -1813,7 +1872,7 @@ pub const Renderer = struct {
                             self.fallbacks.literal_markup = true;
                             // Only the outer opener is literal. Parse the entire label
                             // together so emphasis and HTML can span the inner link.
-                            try self.plain(try self.entityText(input[raw_start..label_start]), literal_style);
+                            try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..label_start])), literal_style);
                             try self.inlineText(input[label_start..it.cursor], literal_style, depth + 1);
                             continue;
                         }
@@ -6507,5 +6566,107 @@ test "nested label fixture valid File caption keeps its nested link" {
         try std.testing.expectEqualStrings("A domestic cat", try flattened(a, spans));
         try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
         try std.testing.expect(!renderer.fallbacks.literal_markup);
+    }
+}
+
+test "behavior target fixture active switches normalize link navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, target: ?[]const u8, italic_label: bool = false }{
+        .{ .source = "[[A__NOTOC__]]", .visible = "A", .target = "A" },
+        .{ .source = "[[A&#91;__NOTOC__|label]]", .visible = "[[A[|label]]", .target = null },
+        .{ .source = "[[A__NOEDITSECTION__B|label]]", .visible = "label", .target = "AB" },
+        .{ .source = "[[__NOTOC__]]", .visible = "[[]]", .target = null },
+        .{ .source = "[[__NOTOC__|label]]", .visible = "[[|label]]", .target = null },
+        .{ .source = "[[:__NOTOC__]]", .visible = "[[:]]", .target = null },
+        .{ .source = "[[Category:__NOTOC__]]", .visible = "[[Category:]]", .target = null },
+        .{ .source = "[[File:__NOTOC__|caption]]", .visible = "[[File:|caption]]", .target = null },
+        .{ .source = "[[File:__NOTOC__|''caption'']]", .visible = "[[File:|caption]]", .target = null, .italic_label = true },
+        .{ .source = "[[:Category:A__NOTOC__|label]]", .visible = "label", .target = "Category:A" },
+        .{ .source = "[[A__NOTOC__|[[B]]]]", .visible = "[[A|B]]", .target = "B" },
+        .{ .source = "[[broken__NOTOC__ [[cat|inside]] tail", .visible = "[[broken inside tail", .target = "cat" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var links: usize = 0;
+        for (spans) |span| if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings(case.target orelse return error.UnexpectedNavigation, span.target);
+        };
+        try std.testing.expectEqual(@as(usize, if (case.target != null) 1 else 0), links);
+        if (case.target == null) try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
+        if (case.italic_label) {
+            var italic_caption = false;
+            for (spans) |span| if (std.mem.indexOf(u8, span.text, "caption") != null) { italic_caption = span.flags.italic; };
+            try std.testing.expect(italic_caption);
+        }
+    }
+    var media: Renderer = .{ .a = a, .context = .{} };
+    const caption = try media.parseSpans("[[File:A__NOTOC__.jpg|thumb|caption]]", .{});
+    try std.testing.expectEqualStrings("caption", try flattened(a, caption));
+    try std.testing.expectEqual(@as(usize, 1), media.media.items.len);
+    try std.testing.expectEqualStrings("A.jpg", media.media.items[0].file);
+}
+
+test "behavior target fixture protected encoded and unknown controls remain literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const literals = [_][]const u8{
+        "<nowiki>[[A__NOTOC__]]</nowiki>",
+        "<pre>[[A__NOTOC__]]</pre>",
+        "<code><nowiki>[[A__NOTOC__]]</nowiki></code>",
+    };
+    for (literals) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("[[A__NOTOC__]]", try flattened(a, spans));
+        for (spans) |span| try std.testing.expect(span.kind != .link);
+    }
+    var encoded: Renderer = .{ .a = a, .context = .{} };
+    const encoded_spans = try encoded.parseSpans("[[A&#95;&#95;NOTOC&#95;&#95;Z|encoded]]", .{});
+    try std.testing.expectEqualStrings("encoded", try flattened(a, encoded_spans));
+    for (encoded_spans) |span| {
+        try std.testing.expect(span.kind == .link);
+        // Entity-authored underscores use existing title normalization;
+        // they must not remove the NOTOC word as an active source control.
+        try std.testing.expectEqualStrings("A  NOTOC  Z", span.target);
+    }
+    var label: Renderer = .{ .a = a, .context = .{} };
+    const label_spans = try label.parseSpans("[[A|<nowiki>__NOTOC__</nowiki>]]", .{});
+    try std.testing.expectEqualStrings("__NOTOC__", try flattened(a, label_spans));
+    for (label_spans) |span| try std.testing.expectEqualStrings("A", span.target);
+    var attribute: Renderer = .{ .a = a, .context = .{} };
+    const attribute_spans = try attribute.parseSpans("[[A|<span title='__NOTOC__'>label</span>]]", .{});
+    try std.testing.expectEqualStrings("label", try flattened(a, attribute_spans));
+    for (attribute_spans) |span| try std.testing.expectEqualStrings("A", span.target);
+    var unknown: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("__UNKNOWN__ __NOTOC__", try flattened(a, try unknown.parseSpans("__UNKNOWN__ &#95;&#95;NOTOC&#95;&#95;", .{})));
+}
+
+test "behavior target fixture localized aliases use captured matching policy" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const registry_type = @import("namespace_registry").behavior_switches;
+    const raw = registry_type.header ++ "\n# wiki\tjawiktionary\n# dump-date\t20261001\n# content-language\tja\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nnotoc\t0\t＿＿目次非表示＿＿\nnoeditsection\t0\t__لاتحريرقسم__\nindex\t1\t__INDEX__\n";
+    var registry = try registry_type.Registry.init(a, raw, "jawiktionary", "20261001", "ja", @splat(0));
+    defer registry.deinit();
+    const cases = [_]struct { source: []const u8, target: []const u8 }{
+        .{ .source = "[[A＿＿目次非表示＿＿B|label]]", .target = "AB" },
+        .{ .source = "[[A__لاتحريرقسم__B|label]]", .target = "AB" },
+        .{ .source = "[[A__INDEX__B|label]]", .target = "AB" },
+        .{ .source = "[[A__index__B|label]]", .target = "A  index  B" },
+        .{ .source = "[[A__NOTOC__B|label]]", .target = "A  NOTOC  B" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .behavior_switches = &registry } };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings("label", try flattened(a, spans));
+        try std.testing.expect(spans.len != 0);
+        for (spans) |span| try std.testing.expectEqualStrings(case.target, span.target);
     }
 }
