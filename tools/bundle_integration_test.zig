@@ -1879,7 +1879,29 @@ pub fn main(init: std.process.Init) !void {
     const namespace_registry = try std.fs.path.join(a, &.{ dir, "namespace-registry.tsv" });
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = namespace_registry, .data = @import("namespace_registry").english_test_fixture });
     const plain_root = try std.fs.path.join(a, &.{ dir, "plain-dictionary" });
-    _ = try h.run(&.{ pipeline, plain_dump, plain_root, "--namespace-registry-snapshot", namespace_registry, "--language-registry-snapshot", language_registry }, 0);
+    _ = try h.run(&.{ pipeline, plain_dump, plain_root, "--namespace-registry-snapshot", namespace_registry, "--language-registry-snapshot", language_registry, "--expander-only", "--now-unix", "1791072000" }, 0);
+    const plain_expander_root = try std.fs.path.join(a, &.{ plain_root, ".bundle-expander" });
+    const plain_executable = try std.fs.path.join(a, &.{ plain_expander_root, "dict-bundle-expander" });
+    {
+        const inherited = try std.posix.getrlimit(.AS);
+        var worker = expander.Worker.init(init.io, plain_expander_root, plain_executable, plain_dump);
+        defer worker.deinit();
+        worker.now_unix = 1791072000;
+        const expanded = (try worker.expand(a, 0, "plain", "==English==\n===Noun===\n# A plain word.\n")) orelse return error.UnexpectedSkip;
+        try h.require(std.mem.indexOf(u8, expanded.source, "A plain word.") != null and worker.generation == 1 and worker.oom_retry_attempts == 0, "plain real worker completes its first request");
+        const child = worker.child orelse return error.MissingLiveWorker;
+        const pid = child.id orelse return error.MissingLivePid;
+        var observed: std.os.linux.rlimit = undefined;
+        // Engine.init has completed and the protocol keeps this child alive.
+        // Read its limits without changing either inherited value or allocating
+        // a large payload; virtual memory is not the resident watchdog budget.
+        try h.require(std.os.linux.errno(std.os.linux.prlimit(pid, .AS, null, &observed)) == .SUCCESS, "read live worker address-space limits after asset loading");
+        try h.require(observed.cur == inherited.cur and observed.max == inherited.max, "worker preserves inherited soft and hard address-space limits");
+    }
+    // Finish the same prepared fixture through the pipeline's encoding phase.
+    _ = try h.run(&.{ argv[6], plain_dump, plain_root, "--expander-root", plain_expander_root, "--workers", "1", "--expansion-timeout-ms", "60000", "--now-unix", "1791072000" }, 0);
+    try std.Io.Dir.cwd().deleteTree(init.io, plain_expander_root);
+    try std.Io.Dir.cwd().deleteFile(init.io, try std.fs.path.join(a, &.{ plain_root, ".incomplete" }));
     _ = try h.run(&.{ verifier, plain_root }, 0);
 
     const existing_root = try std.fs.path.join(a, &.{ dir, "existing-dictionary" });

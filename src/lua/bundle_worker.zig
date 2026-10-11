@@ -12,11 +12,6 @@ const InvokeReuseStats = lua_program.InvokeReuseStats;
 const work_stats = lua_program.work_stats;
 const A = std.mem.Allocator;
 const L = std.os.linux;
-// The compiled program, mapped corpus indexes and provider caches are already
-// resident before this limit is installed. Real first-100k pages need close to
-// 1 GiB of additional address-space growth; a 512 MiB cap turns otherwise
-// valid pages into OutOfMemory expansion fallbacks as early as ordinal 124.
-const expansion_memory_headroom_bytes: u64 = 1024 * 1024 * 1024;
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
 fn expansionProfileEnabled() !bool {
@@ -53,15 +48,6 @@ fn currentVirtualBytes(io: std.Io) !u64 {
         return std.math.mul(u64, kib, 1024) catch return error.AddressSpaceOverflow;
     }
     return error.MissingProcVmSize;
-}
-
-fn limitAddressSpaceAfterAssets(io: std.Io, headroom: u64) !void {
-    const used = try currentVirtualBytes(io);
-    const desired = std.math.add(u64, used, headroom) catch std.math.maxInt(u64);
-    const old = try std.posix.getrlimit(.AS);
-    const n = @min(desired, old.cur);
-    if (n == old.cur) return;
-    try std.posix.setrlimit(.AS, .{ .cur = @intCast(n), .max = old.max });
 }
 
 fn logOutOfMemory(io: std.Io, request: Request, stage: []const u8) void {
@@ -265,15 +251,9 @@ pub fn run(io: std.Io, persistent: A) !void {
                 if (err == error.OutOfMemory) return err;
                 continue;
             };
-            // Generated code and the corpus index are trusted build assets and can
-            // legitimately occupy several GiB of virtual address space. Cap only
-            // additional expansion growth after those assets are resident.
-            limitAddressSpaceAfterAssets(io, expansion_memory_headroom_bytes) catch |err| {
-                engine.?.deinit();
-                engine = null;
-                try protocol.writeError(&output.interface, "assets", @errorName(err), "");
-                continue;
-            };
+            // Inherit address-space policy from the supervisor. The corpus
+            // watchdog limits aggregate resident memory; mapped or swapped
+            // memory must not acquire a separate per-worker virtual limit.
         }
         var stage: []const u8 = "request";
         var detail: ?[]const u8 = null;
