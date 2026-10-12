@@ -236,7 +236,8 @@ pub const InlineIterator = struct {
             const link_parse: InlineLinkParse = if (self.renderer_boundaries and
                 std.mem.startsWith(u8, self.input[self.cursor..], "[[") and !self.hasRemainingInternalClose())
                 .unbalanced
-            else parseInlineLinkAtDetailed(self.input, self.cursor, self.link_trail);
+            else
+                parseInlineLinkAtDetailed(self.input, self.cursor, self.link_trail);
             switch (link_parse) {
                 .link => |link| return self.inlineLink(link),
                 .unbalanced => {
@@ -291,11 +292,11 @@ pub const InlineIterator = struct {
                 if (marker.italic) self.italic = !self.italic;
                 self.cursor += marker.len;
                 // Emphasis can expose markup owned by the presentation compiler.
-                // Yield after consuming the quotes so its HTML/entity/parameter
+                // Yield after consuming the quotes so its HTML/entity/template
                 // handlers see the new cursor and the updated style.
                 if (self.renderer_boundaries and self.cursor < self.input.len) {
                     const rest = self.input[self.cursor..];
-                    if (rest[0] == '<' or rest[0] == '&' or std.mem.startsWith(u8, rest, "{{{"))
+                    if (rest[0] == '<' or rest[0] == '&' or std.mem.startsWith(u8, rest, "{{"))
                         return .{ .kind = .text, .text = "", .bold = self.bold, .italic = self.italic };
                 }
                 continue;
@@ -329,7 +330,7 @@ pub const InlineIterator = struct {
                     break :scan;
                 }
                 if (self.renderer_boundaries and self.cursor != start and
-                    (rest[0] == '<' or rest[0] == '&' or std.mem.startsWith(u8, rest, "{{{")))
+                    (rest[0] == '<' or rest[0] == '&' or std.mem.startsWith(u8, rest, "{{")))
                 {
                     break :scan;
                 }
@@ -1141,7 +1142,6 @@ test "external sequential closing bracket leaves the second bracket outside the 
     const source = "[https://example.test visible]]";
     try std.testing.expectEqual(source.len - 2, findExternalLinkClose(source, 0).?);
 }
-
 
 test "external HTML-label boundary preserves URL, attribute and bracket controls" {
     // Arabic Navbar rev1008819 concatenates its URL directly with an abbr tag.

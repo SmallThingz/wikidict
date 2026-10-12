@@ -1781,8 +1781,10 @@ pub const Renderer = struct {
             };
             if (starts(input[it.cursor..], "{{")) {
                 const pair = syntax.balanced(input, it.cursor) orelse {
-                    try self.plain(input[it.cursor..], s);
-                    break;
+                    const opener_len: usize = if (starts(input[it.cursor..], "{{{")) 3 else 2;
+                    try self.plain(input[it.cursor .. it.cursor + opener_len], s);
+                    it.cursor += opener_len;
+                    continue;
                 };
                 const offset: usize = if (starts(input[it.cursor..], "{{{")) 3 else 2;
                 const body = input[it.cursor + offset .. pair.inner_end];
@@ -6848,4 +6850,60 @@ test "block opener boundary fixture retains later physical headings tables and c
     try std.testing.expectEqualStrings("# same-line tail", try flattened(a, blocks[4].spans));
     try std.testing.expectEqual(Kind.definition, blocks[5].kind);
     try std.testing.expectEqualStrings("outside definition", try flattened(a, blocks[5].spans));
+}
+
+test "unclosed template recovery fixture keeps following link and emphasis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("Before {{broken [[B]] ''kept'' tail", .{});
+    try std.testing.expectEqualStrings("Before {{broken B kept tail", try flattened(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+    var kept = false;
+    for (spans) |span| if (span.flags.italic and std.mem.eql(u8, span.text, "kept")) {
+        kept = true;
+    };
+    try std.testing.expect(kept);
+    var nested: Renderer = .{ .a = a, .context = .{} };
+    const nested_spans = try nested.parseSpans("Before {{broken {{!}} [[B]] tail", .{});
+    try std.testing.expectEqualStrings("Before {{broken | B tail", try flattened(a, nested_spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(nested_spans, .link, "B"));
+    var emphasized: Renderer = .{ .a = a, .context = .{} };
+    const emphasized_spans = try emphasized.parseSpans("Before ''{{broken [[B]] kept'' tail", .{});
+    try std.testing.expectEqualStrings("Before {{broken B kept tail", try flattened(a, emphasized_spans));
+    var italic_link = false;
+    var italic_text = false;
+    var plain_tail = false;
+    for (emphasized_spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "B") and span.flags.italic) italic_link = true;
+        if (span.flags.italic and std.mem.indexOf(u8, span.text, "kept") != null) italic_text = true;
+        if (!span.flags.italic and std.mem.indexOf(u8, span.text, "tail") != null) plain_tail = true;
+    }
+    try std.testing.expect(italic_link and italic_text and plain_tail);
+}
+
+test "unclosed template recovery fixture keeps parameter opener and following HTML" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("Before {{{broken [[B]] <i>kept</i> tail", .{});
+    try std.testing.expectEqualStrings("Before {{{broken B kept tail", try flattened(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+    var kept = false;
+    for (spans) |span| if (span.flags.italic and std.mem.eql(u8, span.text, "kept")) {
+        kept = true;
+    };
+    try std.testing.expect(kept);
+}
+
+test "unclosed template recovery fixture preserves protected and encoded braces and valid parameters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("<nowiki>{{broken [[B]] ''kept''</nowiki> &#123;&#123;encoded {{{p|default}}} tail", .{});
+    try std.testing.expectEqualStrings("{{broken [[B]] ''kept'' {{encoded default tail", try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind != .link);
 }
