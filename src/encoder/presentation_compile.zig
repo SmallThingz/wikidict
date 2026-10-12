@@ -1085,6 +1085,18 @@ pub const Renderer = struct {
                     try out.appendSlice(self.a, "%3C");
                 } else if (!delimiter and std.mem.eql(u8, decoded.bytes, ">")) {
                     try out.appendSlice(self.a, "%3E");
+                } else if (starts(value[i..], "&#") and std.mem.eql(u8, decoded.bytes, " ")) {
+                    try out.append(self.a, '+');
+                } else if (starts(value[i..], "&#") and std.mem.eql(u8, decoded.bytes, "\t")) {
+                    try out.appendSlice(self.a, "%09");
+                } else if (starts(value[i..], "&#") and std.mem.eql(u8, decoded.bytes, "\n")) {
+                    try out.appendSlice(self.a, "%0A");
+                } else if (starts(value[i..], "&#") and std.mem.eql(u8, decoded.bytes, "\r")) {
+                    try out.appendSlice(self.a, "%EF%BF%BD");
+                } else if (std.mem.eql(u8, decoded.bytes, "\"")) {
+                    try out.appendSlice(self.a, "%22");
+                } else if (std.mem.eql(u8, decoded.bytes, "\xc2\xa0")) {
+                    try out.appendSlice(self.a, "%C2%A0");
                 } else try out.appendSlice(self.a, decoded.bytes);
                 start = i + decoded.consumed;
             } else {
@@ -1103,7 +1115,12 @@ pub const Renderer = struct {
             s.target = resolved_target;
         }
         if (external and std.mem.eql(u8, label, target)) {
-            try self.text(try self.entityText(label), s);
+            const decoded_label = try self.entityText(label);
+            // URL text containing encoded controls/whitespace uses its escaped
+            // destination spelling, never raw navigation control characters.
+            const escaped_label = std.mem.indexOfAny(u8, decoded_label, " \t\n\r\"") != null or
+                std.mem.indexOf(u8, decoded_label, "\xc2\xa0") != null;
+            try self.text(if (escaped_label) resolved_target else decoded_label, s);
             return;
         }
         try self.inlineText(label, s, depth + 1);
@@ -6787,7 +6804,7 @@ test "external delimiter fixture protected literals and existing URLs" {
     try externalDelimiterCheck("[https://example.test/?a=1&amp;b=2]", "https://example.test/?a=1&b=2", "https://example.test/?a=1&b=2");
     try externalDelimiterCheck("https://example.test/?a=1&amp;b=2", "https://example.test/?a=1&b=2", "https://example.test/?a=1&b=2");
     try externalDelimiterCheck("[https://example.test <nowiki>&lt;word</nowiki> label]", "<word label", "https://example.test");
-    try externalDelimiterCheck("https://example.test&lt;word", "https://example.test<word", null);
+    try freeExternalBoundaryCheck("https://example.test&lt;word", "https://example.test<word", "https://example.test");
     try externalDelimiterCheck("[https://example.test&#60;word label]", "label", "https://example.test%3Cword");
     try externalDelimiterCheck("[https://example.test&LT;word label]", "label", "https://example.test%3Cword");
 }
@@ -7911,4 +7928,124 @@ test "wiki caption blocks preserve opener-line literals protected tables and DPR
     var cell: std.ArrayList(u8) = .empty;
     for (table.rows[0].cells[0].spans) |span| try cell.appendSlice(a, span.text);
     try std.testing.expectEqualStrings("outer cell", cell.items);
+}
+
+fn freeExternalBoundaryCheck(source: []const u8, visible: []const u8, target: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans(source, .{});
+    try std.testing.expectEqualStrings(visible, try plainText(a, spans));
+    var linked: usize = 0;
+    for (spans) |span| {
+        if (span.kind == .external_link) {
+            linked += 1;
+            try std.testing.expectEqualStrings(target, span.target);
+            try std.testing.expectEqualStrings(target, span.text);
+        } else {
+            try std.testing.expectEqual(.text, span.kind);
+            try std.testing.expectEqualStrings("", span.target);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), linked);
+}
+
+test "free URL angle boundaries retain linked prefix and visible suffix" {
+    for ([_][]const u8{ "&lt;", "&#60;", "&#x3C;", "&#X3c;", "&#00060;" }) |entity| {
+        var source: [160]u8 = undefined;
+        const input = try std.fmt.bufPrint(&source, "https://example.test/a{s}b tail", .{entity});
+        try freeExternalBoundaryCheck(input, "https://example.test/a<b tail", "https://example.test/a");
+    }
+    for ([_][]const u8{ "&gt;", "&#62;", "&#x3E;" }) |entity| {
+        var source: [160]u8 = undefined;
+        const input = try std.fmt.bufPrint(&source, "https://example.test/a{s}b", .{entity});
+        try freeExternalBoundaryCheck(input, "https://example.test/a>b", "https://example.test/a");
+    }
+    try freeExternalBoundaryCheck("https://example.test/a.&lt;b", "https://example.test/a.<b", "https://example.test/a");
+    try freeExternalBoundaryCheck("https://example.test/?a=1&amp;b=2&lt;tail", "https://example.test/?a=1&b=2<tail", "https://example.test/?a=1&b=2");
+    try freeExternalBoundaryCheck("https://example.test/a<tail", "https://example.test/a<tail", "https://example.test/a");
+}
+
+test "free URL boundary does not broaden schemes or bracketed angle admission" {
+    try externalDelimiterCheck("http://&lt;word", "http://<word", null);
+    try externalDelimiterCheck("javascript:alert(1)&lt;b", "javascript:alert(1)<b", null);
+    try externalDelimiterCheck("<nowiki>https://example.test/a&lt;b</nowiki>", "https://example.test/a<b", null);
+    try externalDelimiterCheck("https://example.test/?a=1&amp;b=2", "https://example.test/?a=1&b=2", "https://example.test/?a=1&b=2");
+    try externalDelimiterCheck("https://example.test/a&amp;lt;b", "https://example.test/a&lt;b", "https://example.test/a&lt;b");
+    try externalDelimiterCheck("https://example.test/a&LT;b", "https://example.test/a<b", "https://example.test/a%3Cb");
+    try externalDelimiterCheck("https://example.test/a&GT;b", "https://example.test/a>b", "https://example.test/a%3Eb");
+    try externalDelimiterCheck("[https://example.test/a&lt;b label]", "<b label", "https://example.test/a");
+    try externalDelimiterCheck("[https://example.test/a&#60;b label]", "label", "https://example.test/a%3Cb");
+    try externalDelimiterCheck("[https://example.test/a&LT;b label]", "label", "https://example.test/a%3Cb");
+}
+
+test "free URL boundary preserves following internal navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("Before https://example.test/a&lt;b [[B]] tail", .{});
+    try std.testing.expectEqualStrings("Before https://example.test/a<b B tail", try plainText(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test/a"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+}
+
+test "free NBSP references retain plain suffix while bracketed NBSP stays in target" {
+    try freeExternalBoundaryCheck("https://example.test/a&#160;b", "https://example.test/a\xc2\xa0b", "https://example.test/a");
+    try freeExternalBoundaryCheck("https://example.test/a&nbsp;b", "https://example.test/a\xc2\xa0b", "https://example.test/a");
+    try externalDelimiterCheck("[https://example.test/a&#160;b label]", "label", "https://example.test/a%C2%A0b");
+    try externalDelimiterCheck("[https://example.test/a&nbsp;b label]", "label", "https://example.test/a%C2%A0b");
+}
+
+test "encoded external URL controls quotes and ordinary references preserve targets once" {
+    const cases = [_]struct { entity: []const u8, suffix: []const u8 }{
+        .{ .entity = "&#32;", .suffix = "+" },
+        .{ .entity = "&#9;", .suffix = "%09" },
+        .{ .entity = "&#10;", .suffix = "%0A" },
+        .{ .entity = "&#13;", .suffix = "%EF%BF%BD" },
+        .{ .entity = "&#34;", .suffix = "%22" },
+        .{ .entity = "&quot;", .suffix = "%22" },
+        .{ .entity = "&QUOT;", .suffix = "%22" },
+        .{ .entity = "&#39;", .suffix = "'" },
+        .{ .entity = "&apos;", .suffix = "'" },
+        .{ .entity = "&#65;", .suffix = "A" },
+        .{ .entity = "&#38;", .suffix = "&" },
+    };
+    for (cases) |case| {
+        var source: [160]u8 = undefined;
+        var target_buf: [160]u8 = undefined;
+        const target = try std.fmt.bufPrint(&target_buf, "https://example.test/a{s}b", .{case.suffix});
+        const free = try std.fmt.bufPrint(&source, "https://example.test/a{s}b", .{case.entity});
+        try externalDelimiterCheck(free, target, target);
+        const bracket = try std.fmt.bufPrint(&source, "[https://example.test/a{s}b label]", .{case.entity});
+        try externalDelimiterCheck(bracket, "label", target);
+    }
+    try externalDelimiterCheck("https://example.test/a&amp;quot;b", "https://example.test/a&quot;b", "https://example.test/a&quot;b");
+    var digits: [64]u8 = undefined;
+    @memset(&digits, '0');
+    var long_buf: [192]u8 = undefined;
+    const unsupported = try std.fmt.bufPrint(&long_buf, "https://example.test/a&#{s}60;b", .{digits});
+    try externalDelimiterCheck(unsupported, unsupported, unsupported);
+}
+
+test "external URL entity normalization still refuses raw controls and unsafe schemes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "https://example.test/a\tb", "https://example.test/a\nb", "https://example.test/a\rb", "https://example.test/a b", "javascript&#58;alert&#9;1" }) |target| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        try r.link("label", target, .{}, 0, true);
+        for (r.spans.items) |span| {
+            try std.testing.expectEqual(.text, span.kind);
+            try std.testing.expectEqualStrings("", span.target);
+        }
+    }
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("https://example.test/a&#9;b https://example.test/a&#10;b https://example.test/a&#13;b", .{});
+    for (spans) |span| {
+        for (span.text) |ch| try std.testing.expect(ch >= 32);
+        for (span.target) |ch| try std.testing.expect(ch >= 32);
+        if (span.kind == .external_link) try std.testing.expect(safeUrl(span.target));
+    }
 }

@@ -661,11 +661,39 @@ fn entityEndsAt(input: []const u8, end: usize) bool {
     return true;
 }
 
+fn freeUrlBoundaryEntity(input: []const u8) bool {
+    if (std.mem.startsWith(u8, input, "&lt;") or std.mem.startsWith(u8, input, "&gt;") or std.mem.startsWith(u8, input, "&nbsp;")) return true;
+    if (!std.mem.startsWith(u8, input, "&#")) return false;
+    var pos: usize = 2;
+    var radix: u8 = 10;
+    if (pos < input.len and (input[pos] == 'x' or input[pos] == 'X')) {
+        radix = 16;
+        pos += 1;
+    }
+    const digits_start = pos;
+    const limit = @min(input.len, 64); // Match the renderer entity-token bound.
+    var value: u8 = 0;
+    while (pos < limit and input[pos] != ';') : (pos += 1) {
+        const ch = input[pos];
+        const lower = std.ascii.toLower(ch);
+        const digit: u8 = if (ch >= '0' and ch <= '9') ch - '0' else if (radix == 16 and lower >= 'a' and lower <= 'f') lower - 'a' + 10 else return false;
+        // Only observed boundary code points matter; refuse overflow and other references.
+        if (value > 160 / radix) return false;
+        const next = value * radix + digit;
+        if (next > 160) return false;
+        value = next;
+    }
+    return pos > digits_start and pos < limit and (value == 60 or value == 62 or value == 160);
+}
+
 fn externalUrlEnd(input: []const u8, start: usize, allow_relative: bool, trim_trailing: bool) ?usize {
     const protocol_len = externalProtocolLen(input[start..], allow_relative) orelse return null;
     var end = start + protocol_len;
     const address_start = end;
     while (end < input.len) {
+        // Free links terminate at lowercase/numeric angles and NBSP before
+        // entity decoding. Bracketed validation retains its separate rules.
+        if (trim_trailing and input[end] == '&' and freeUrlBoundaryEntity(input[end..])) break;
         if (!externalUrlByte(input[end])) break;
         if (input[end] < 0x80) {
             end += 1;
