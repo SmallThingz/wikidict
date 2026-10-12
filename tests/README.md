@@ -51,11 +51,11 @@ to validate a real dictionary; CTest supplies the committed fixture for the GUI.
 It tests the boundary between permission, downloading, caching and playback without
 accessing public media or depending on an installed voice or sound device.
 
-`fixtures/alias-cases/aliases.wikblb` contains five synthetic DAL1 redirect records
+`fixtures/alias-cases/aliases.wikblb` contains six synthetic DAL1 redirect records
 with presentation encoded by the same core generator. It covers an ordinary
 target, one-edge traversal through another alias, an absent target, a neutral
 alias-only library and a Unicode supplemental title. Its SHA-256 is
-`59b4cd82d3d410cbd141a207ec2d0e7a4c683a47ab57cea37a094ed2d873e97c`.
+`6a612c395d676f87e66a3f7bfe1f71156f081cef4440607e9add1a875a9af6f6`.
 The nested directory keeps these aliases out of the existing 182-entry fixture.
 Regenerate this fixture with the same Zig 0.17 command shown above.
 
@@ -69,3 +69,5 @@ Language-heading tests preserve an initial U+FEFF through import, SHA-256 naming
 the language manifest and installed metadata; it is part of the binary identity.
 The reader regression also searches and opens a BOM-prefixed title through the
 JSON API, which must preserve the same heading and title identities.
+
+`fixtures/fragment-cases/` contains one synthetic English `cat` record with Etymology after Noun. The alias search regression uses it to verify scrolling and unfolding a later destination; the original 182-entry fixture is unchanged.

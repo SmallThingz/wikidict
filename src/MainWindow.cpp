@@ -484,18 +484,11 @@ void MainWindow::setupUi() {
         if (url.scheme() == QStringLiteral("dict")) {
             const QString target = url.path(QUrl::FullyDecoded);
             const QString word = target.section(QChar('#'), 0, 0);
-            const QString section = target.section(QChar('#'), 1);
-            if (!word.isEmpty() && !openWord(word)) return;
-            if (!section.isEmpty()) {
-                if (section.startsWith(QStringLiteral("reference-"))) {
-                    reading_->scrollToAnchor(section);
-                    return;
-                }
-                QString heading = section;
-                heading.replace(QChar('_'), QChar(' '));
-                const int index = sections_->findText(heading);
-                if (index >= 0) jumpToSection(sections_->itemData(index).toInt());
-            }
+            const std::optional<QString> section = target.contains(QChar('#')) ?
+                std::optional<QString>(target.section(QChar('#'), 1)) : std::nullopt;
+            if (!word.isEmpty()) {
+                if (!openWord(word, section)) return;
+            } else if (section) jumpToFragment(*section);
         }
         else if (url.scheme() == QStringLiteral("section")) {
             const int index = url.path().toInt();
@@ -605,7 +598,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
     return QMainWindow::eventFilter(watched, event);
 }
 
-bool MainWindow::openWord(const QString &word) {
+bool MainWindow::openWord(const QString &word, const std::optional<QString> &fragment) {
     if (!api_ || loading_ || word.trimmed().isEmpty()) return false;
     try {
         QString exact = word.trimmed();
@@ -626,7 +619,7 @@ bool MainWindow::openWord(const QString &word) {
             return false;
         }
         search_->setText(exact);
-        renderResponse(response);
+        renderResponse(response, true, fragment);
         refreshSearch();
         return true;
     } catch (const std::exception &error) {
@@ -634,7 +627,7 @@ bool MainWindow::openWord(const QString &word) {
         return false;
     }
 }
-void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit) {
+void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const std::optional<QString> &fragment) {
     QJsonParseError parseError{};
     const QJsonDocument document = QJsonDocument::fromJson(bytes, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject())
@@ -681,6 +674,10 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit) {
         visitIndex_ = visits_.size() - 1;
         updateNavigation();
     }
+    const QJsonObject redirect = currentEntry_.value(QStringLiteral("redirect")).toObject();
+    const QString destination = fragment ? *fragment :
+        (redirect.value(QStringLiteral("followed")).toBool() ? redirect.value(QStringLiteral("fragment")).toString() : QString());
+    jumpToFragment(destination);
 }
 
 void MainWindow::refreshReading() {
@@ -699,6 +696,18 @@ void MainWindow::resetFolding() {
             (learning_.settings().collapseEtymology && title.startsWith(QStringLiteral("Etymology"), Qt::CaseInsensitive))) collapsedSections_.insert(i);
     }
     refreshReading();
+}
+
+void MainWindow::jumpToFragment(const QString &fragment) {
+    if (fragment.isEmpty()) return;
+    if (fragment.startsWith(QStringLiteral("reference-"))) {
+        reading_->scrollToAnchor(fragment);
+        return;
+    }
+    QString heading = fragment;
+    heading.replace(QChar('_'), QChar(' '));
+    const int index = sections_->findText(heading);
+    if (index >= 0) jumpToSection(sections_->itemData(index).toInt());
 }
 
 void MainWindow::jumpToSection(int section) {

@@ -5,6 +5,7 @@
 #include <QSet>
 #include <QVector>
 #include <memory>
+#include <optional>
 #include <atomic>
 
 #include "DictApi.hpp"
@@ -50,14 +51,15 @@ private:
     void submitSearch();
     bool eventFilter(QObject *watched, QEvent *event) override;
     void selectDataset();
-    bool openWord(const QString &word);
+    bool openWord(const QString &word, const std::optional<QString> &fragment = std::nullopt);
     void openSavedWord(const SavedWord &word);
     void showRandomWord();
     void showLearningDialog(int tab = 0);
     void applyTheme();
-    void renderResponse(const QByteArray &json, bool addVisit = true);
+    void renderResponse(const QByteArray &json, bool addVisit = true, const std::optional<QString> &fragment = std::nullopt);
     void refreshReading();
     void resetFolding();
+    void jumpToFragment(const QString &fragment);
     void jumpToSection(int section);
     void navigate(int direction);
     void saveVisit();

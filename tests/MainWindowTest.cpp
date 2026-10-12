@@ -438,6 +438,57 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("Annexe:école"));
     }
 
+    void searchAliasFragmentUnfoldsDestinationAndExplicitLinkWins() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-alias-fragment-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString root = QDir(directory.path()).absolutePath();
+        std::atomic_bool cancelled = false;
+        const auto progress = [](const QString &, qint64, qint64) {};
+        for (const QString &file : {
+                QStringLiteral("fragment-cases/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"),
+                QStringLiteral("alias-cases/aliases.wikblb")}) {
+            auto prepared = LibraryStorage::prepareImport(root, fixture_ + QChar('/') + file, {}, -1, cancelled, progress);
+            LibraryStorage::commitImport(root, *prepared);
+        }
+        MainWindow window(root); window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.learning_.setCollapseEtymology(true);
+        window.search_->setText(QStringLiteral("History of cat"));
+        QTRY_COMPARE(window.results_->count(), 1);
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const int etymologyChoice = window.sections_->findText(QStringLiteral("Etymology"));
+        QVERIFY(etymologyChoice >= 0);
+        const int etymologySection = window.sections_->itemData(etymologyChoice).toInt();
+        QCOMPARE(window.currentEntry_.value(QStringLiteral("redirect")).toObject().value(QStringLiteral("fragment")).toString(), QStringLiteral("Etymology"));
+        QVERIFY(!window.collapsedSections_.contains(etymologySection));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("Historical source.")));
+        QVERIFY(window.reading_->verticalScrollBar()->value() > 0);
+
+        QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object();
+        QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{QJsonObject{
+            {QStringLiteral("kind"), QStringLiteral("link")}, {QStringLiteral("text"), QStringLiteral("Alias noun destination")},
+            {QStringLiteral("target"), QStringLiteral("History of cat#Noun")}}});
+        response.insert(QStringLiteral("entries"), QJsonArray{entry});
+        window.renderResponse(QJsonDocument(response).toJson());
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:History%20of%20cat%23Noun")));
+        QCOMPARE(title(window), QStringLiteral("cat"));
+        QVERIFY(window.collapsedSections_.contains(etymologySection));
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("Historical source.")));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("A small animal.")));
+
+        QVERIFY(window.openWord(QStringLiteral("History of cat"), QStringLiteral("No such section")));
+        QVERIFY(window.collapsedSections_.contains(etymologySection)); // An explicit missing fragment never falls back to the alias fragment.
+        QVERIFY(window.openWord(QStringLiteral("History of cat"), QStringLiteral("")));
+        QVERIFY(window.collapsedSections_.contains(etymologySection)); // Explicit empty fragments also suppress alias fallback.
+        QVERIFY(window.openWord(QStringLiteral("Cats")));
+        QVERIFY(window.collapsedSections_.contains(etymologySection)); // Fragment-free aliases retain normal folding.
+        QVERIFY(window.openWord(QStringLiteral("Loop A")));
+        QCOMPARE(title(window), QStringLiteral("Loop B"));
+        QCOMPARE(window.currentEntry_.value(QStringLiteral("kind")).toString(), QStringLiteral("alias")); // Still one edge.
+    }
+
     void aliasOnlyFolderUsesNeutralCollection() {
         QTemporaryDir directory(QStringLiteral(".tmp/ui-neutral-aliases-XXXXXX"));
         QVERIFY(directory.isValid());

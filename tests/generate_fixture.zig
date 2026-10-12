@@ -97,8 +97,22 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
     const supplemental_blob = try enc.blob_format.buildAlloc(a, .supplemental, "", &supplemental_records);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "supplemental.wikblb" }), .data = supplemental_blob });
 
-    const alias_specs = [_]struct { source: []const u8, target: []const u8, kind: enc.blob_format.BlobKind = .language, namespace: u32 = 0 }{
+    // Isolated alias-navigation fixture: the folded target is below the noun body.
+    const fragment_sections = [_]enc.presentation_types.Section{ sections[0], sections[2], sections[1] };
+    var fragment_entry = stored;
+    fragment_entry.entry.sections = &fragment_sections;
+    const fragment_payload = try enc.presentation_codec.encodeAlloc(a, fragment_entry);
+    const fragment_blob = try enc.blob_format.buildAlloc(a, .language, metadata, &.{.{ .title = "cat", .payload = fragment_payload }});
+    const fragment_root = try std.fs.path.join(a, &.{ root, "fragment-cases" });
+    try std.Io.Dir.cwd().createDirPath(io, fragment_root);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = try std.fs.path.join(a, &.{ fragment_root, enc.blob_catalog.languageBlobFilename("English", &filename) }),
+        .data = fragment_blob,
+    });
+
+    const alias_specs = [_]struct { source: []const u8, target: []const u8, fragment: []const u8 = "", kind: enc.blob_format.BlobKind = .language, namespace: u32 = 0 }{
         .{ .source = "Cats", .target = "cat" },
+        .{ .source = "History of cat", .target = "cat", .fragment = "Etymology" },
         .{ .source = "Loop A", .target = "Loop B" },
         .{ .source = "Loop B", .target = "cat" },
         .{ .source = "Missing", .target = "not installed" },
@@ -106,14 +120,15 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
     };
     var alias_records: [alias_specs.len]enc.blob_format.RecordInput = undefined;
     for (alias_specs, 0..) |spec, at| {
-        const spans = [_]enc.presentation_types.Span{.{ .kind = .link, .text = spec.target, .target = spec.target }};
+        const destination = if (spec.fragment.len == 0) spec.target else try std.fmt.allocPrint(a, "{s}#{s}", .{ spec.target, spec.fragment });
+        const spans = [_]enc.presentation_types.Span{.{ .kind = .link, .text = destination, .target = destination }};
         const entry: enc.presentation_types.Stored = .{ .entry = .{ .title = spec.source, .kind = .alias, .preamble_spans = &spans } };
         alias_records[at] = .{
             .title = try enc.alias_codec.keyAlloc(a, spec.kind, spec.source),
             .payload = try enc.alias_codec.encodeAlloc(a, .{
                 .source_namespace = spec.namespace, .source_kind = spec.kind, .source_title = spec.source, .source_key = spec.source,
-                .xml_target = spec.target, .target_title = spec.target, .target_namespace = spec.namespace, .target_kind = spec.kind,
-                .target_key = spec.target, .fragment = "", .presentation = try enc.presentation_codec.encodeAlloc(a, entry),
+                .xml_target = destination, .target_title = spec.target, .target_namespace = spec.namespace, .target_kind = spec.kind,
+                .target_key = spec.target, .fragment = spec.fragment, .presentation = try enc.presentation_codec.encodeAlloc(a, entry),
             }),
         };
     }
