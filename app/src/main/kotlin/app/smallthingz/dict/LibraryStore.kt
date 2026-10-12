@@ -41,6 +41,27 @@ object Catalog {
         }.take(10001).toList().also { require(it.size <= 10000); require(it.map { x -> x.url }.distinct().size == it.size) }
     }
 }
+// A watcher owns the ID it started with, not whichever download is current later.
+internal fun removeOwnedDownload(id: Long, lock: Any, currentId: () -> Long, remove: (Long) -> Unit, clear: () -> Unit) {
+    remove(id)
+    synchronized(lock) { if (currentId() == id) clear() }
+}
+
+internal fun failOwnedDownload(failure: Exception, cleanup: () -> Unit): Nothing {
+    if (failure is CancellationException) throw failure
+    try { cleanup() }
+    catch (cancelled: CancellationException) { throw cancelled }
+    catch (cleanupFailure: Exception) { if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure) }
+    throw failure
+}
+
+internal fun cancelOwnedDownload(remove: () -> Unit, cancelOperation: () -> Unit): Exception? = try {
+    remove()
+    cancelOperation()
+    null
+} catch (cancelled: CancellationException) { throw cancelled }
+catch (failure: Exception) { failure }
+
 class LibraryStore private constructor(private val context: Context) {
     companion object {
         @Volatile private var instance: LibraryStore? = null
@@ -58,6 +79,8 @@ class LibraryStore private constructor(private val context: Context) {
     var revision by mutableIntStateOf(0); private set
     var catalog by mutableStateOf<List<CatalogItem>>(emptyList()); private set
     private val prefs = context.getSharedPreferences("library", Context.MODE_PRIVATE)
+    private val downloadLock = Any()
+    var hasRetainedDownload by mutableStateOf(prefs.getLong("downloadId", -1) >= 0); private set
     var sources by mutableStateOf(prefs.getStringSet("sources", setOf(Catalog.DEFAULT))!!.toList()); private set
     init { scope.launch { mutex.withLock {
         val installed=helper.readableDatabase.rawQuery("SELECT id FROM dictionaries",null).use{c->buildSet{while(c.moveToNext())add(c.getString(0)+".wikblb")}}
@@ -75,14 +98,24 @@ class LibraryStore private constructor(private val context: Context) {
         sources = (sources + uri.toString()).distinct(); prefs.edit().putStringSet("sources", sources.toSet()).apply()
     }
     fun removeSource(url: String) { sources = sources - url; prefs.edit().putStringSet("sources", sources.toSet()).apply(); refreshCatalogs() }
-    private var currentOperation: Job? = null
+    @Volatile private var currentOperation: Job? = null
     fun cancel() {
         val id = prefs.getLong("downloadId", -1)
-        if (id >= 0) { manager.remove(id); clearDownload() }
-        currentOperation?.cancel()
+        val operation = currentOperation
+        scope.launch {
+            val failure = cancelOwnedDownload({ if (id >= 0) removeDownload(id) }, { operation?.cancel() })
+            withContext(Dispatchers.Main) { error = failure?.let { "Could not cancel download: ${it.message ?: "Try again"}" } }
+        }
     }
     private val manager get() = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-    private fun clearDownload() { prefs.edit().remove("downloadId").remove("downloadUrl").remove("downloadLabel").remove("downloadBytes").remove("downloadHash").commit() }
+    private fun clearDownload(id: Long) = synchronized(downloadLock) {
+        if (prefs.getLong("downloadId", -1) == id) {
+            prefs.edit().remove("downloadId").remove("downloadUrl").remove("downloadLabel").remove("downloadBytes").remove("downloadHash").commit()
+            hasRetainedDownload = false
+        }
+    }
+    private fun removeDownload(id: Long) = removeOwnedDownload(id, downloadLock,
+        { prefs.getLong("downloadId", -1) }, { manager.remove(it) }, { clearDownload(id) })
     private fun resumeDownload() {
         if (prefs.getLong("downloadId", -1) >= 0) {
             val item = CatalogItem(prefs.getString("downloadUrl", "")!!, prefs.getString("downloadLabel", "Dictionary")!!,
@@ -95,7 +128,7 @@ class LibraryStore private constructor(private val context: Context) {
         try { while (true) {
             currentCoroutineContext().ensureActive()
             val state = manager.query(DownloadManager.Query().setFilterById(id)).use { c ->
-                if (!c.moveToFirst()) { clearDownload(); error("Download was removed. Tap download to try again.") }
+                if (!c.moveToFirst()) { clearDownload(id); error("Download was removed. Tap download to try again.") }
                 longArrayOf(c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)),
                     c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)),
                     c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)),
@@ -130,18 +163,15 @@ class LibraryStore private constructor(private val context: Context) {
                         require(item.sha256==null || hash==item.sha256) { "Dictionary checksum does not match" }
                         withContext(Dispatchers.Main) { busy="Indexing ${item.label}" }
                         install(temp,hash,URI(item.url).path.substringAfterLast('/'))
-                        manager.remove(id); clearDownload()
+                        removeDownload(id)
                     } finally { temp.delete() }
                     return
                 }
-                DownloadManager.STATUS_FAILED -> { manager.remove(id); clearDownload(); error("Download failed (${state[3]}). Tap download to retry.") }
+                DownloadManager.STATUS_FAILED -> { removeDownload(id); error("Download failed (${state[3]}). Tap download to retry.") }
             }
             delay(400)
         } } catch (e: CancellationException) { throw e }
-        catch (e: Exception) {
-            try { manager.remove(id) } finally { clearDownload() }
-            throw e
-        }
+        catch (e: Exception) { failOwnedDownload(e) { removeDownload(id) } }
     }
     private fun operation(label: String, action: suspend () -> Unit): Job = scope.launch {
         mutex.withLock {
@@ -180,9 +210,12 @@ class LibraryStore private constructor(private val context: Context) {
                     .setDescription("Wikidict dictionary")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                     .setDestinationInExternalFilesDir(context, "downloads", "${UUID.randomUUID()}.wikblb")
-                val id = manager.enqueue(request)
-                prefs.edit().putLong("downloadId",id).putString("downloadUrl",item.url).putString("downloadLabel",item.label)
-                    .putLong("downloadBytes",item.bytes ?: -1).putString("downloadHash",item.sha256).commit()
+                synchronized(downloadLock) {
+                    val id = manager.enqueue(request)
+                    prefs.edit().putLong("downloadId",id).putString("downloadUrl",item.url).putString("downloadLabel",item.label)
+                        .putLong("downloadBytes",item.bytes ?: -1).putString("downloadHash",item.sha256).commit()
+                    hasRetainedDownload = true
+                }
             }
             watchDownload(item)
             return@operation
