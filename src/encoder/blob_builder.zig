@@ -2115,6 +2115,7 @@ test "Amharic support attribution refuses ambiguous absent and conflicting evide
     try std.testing.expect(try AmharicSupportCategoryFixture.resolve(a, codes, source, AmharicSupportCategoryFixture.body ++ "[[መደብ:እንግሊዝኛ]]\n") == null);
     var foreign_namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
         "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
         "14\tመደብ\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
     defer foreign_namespaces.deinit();
     codes.namespace_catalog = &foreign_namespaces;
