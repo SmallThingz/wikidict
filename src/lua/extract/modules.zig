@@ -723,7 +723,11 @@ pub fn main(init: std.process.Init) !void {
     if (pw) |page_writer| try page_writer.flush();
     if (template_source_writer) |*template_writer| try template_writer.finish(page_index_path);
     if (emit_page_index) {
+        std.debug.print("PAGE_TITLE_INDEX start pages={d}\n", .{pages});
+        const title_index_started_ns = std.Io.Clock.awake.now(init.io).toNanoseconds();
         try wikimedia_dump.buildPageTitleIndex(init.io, std.heap.smp_allocator, page_index_path, title_index_path);
+        const title_index_elapsed_ms = @divTrunc(std.Io.Clock.awake.now(init.io).toNanoseconds() - title_index_started_ns, std.time.ns_per_ms);
+        std.debug.print("PAGE_TITLE_INDEX complete pages={d} elapsed_ms={d}\n", .{ pages, title_index_elapsed_ms });
         if (uw) |usage_out| {
             const closure = try usage_closure.complete(init.io, std.heap.smp_allocator, &registry, input_path, output_root, &root_template_usage, usage_out);
             dynamic_root_module = dynamic_root_module or closure.retain_all_modules;

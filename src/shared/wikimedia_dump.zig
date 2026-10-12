@@ -870,16 +870,15 @@ pub fn buildPageTitleIndex(
     const capacity = try titleIndexCapacity(row_count);
     const table_len = std.math.mul(usize, capacity, page_title_index_entry_len) catch return error.PageTitleIndexTooLarge;
     const total_len = std.math.add(usize, page_title_index_header_len, table_len) catch return error.PageTitleIndexTooLarge;
-    _ = allocator; // The potentially huge hash table is file-backed, not heap-backed.
+    _ = allocator; // The table uses one anonymous mapping, not the caller's heap.
 
     var out_file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .read = true, .truncate = true });
     defer out_file.close(io);
     errdefer std.Io.Dir.cwd().deleteFile(io, output_path) catch {};
-    try out_file.setLength(io, total_len);
-    var mapped_out = try std.posix.mmap(null, total_len, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, out_file.handle, 0);
+    var mapped_out = try std.posix.mmap(null, total_len, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
     var mapped_active = true;
     defer if (mapped_active) std.posix.munmap(mapped_out);
-    // A newly extended file is zero-filled, so untouched hash slots are already empty.
+    // Anonymous pages are zero-filled, including unused slots and header padding.
     const table = mapped_out[page_title_index_header_len..];
 
     var unique_count: usize = 0;
@@ -928,6 +927,8 @@ pub fn buildPageTitleIndex(
     std.mem.writeInt(u64, header[24..32], @intCast(row_count), .little);
     std.mem.writeInt(u64, header[32..40], @intCast(unique_count), .little);
     std.mem.writeInt(u64, header[40..48], @intCast(mapped.bytes.len), .little);
+    // Keep random probes in memory, then write the unchanged representation once.
+    try out_file.writeStreamingAll(io, mapped_out);
     std.posix.munmap(mapped_out);
     mapped_active = false;
     try out_file.sync(io);
@@ -1205,6 +1206,59 @@ test "bzip2 member rejects invalid headers and span bounds before reading" {
     for ([_][]const u8{ "BZh0", "BZh:", "junk" }) |invalid| {
         try std.testing.expectError(error.InvalidBzip2Member, testDecompressBytes(a, invalid, .{ .offset = 0, .len = invalid.len }, 1024));
     }
+}
+
+test "page title index collision preserves latest duplicate and packed row references" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try std.Io.Dir.cwd().createDirPath(io, root);
+    const page_index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(page_index_path);
+    const output_path = try std.fs.path.join(a, &.{ root, page_title_index_filename });
+    defer a.free(output_path);
+
+    // Nine fixed titles guarantee a same-slot collision in this eight-slot fixture.
+    // Select the fixture using the public hash; the reader supplies the test oracle.
+    const titles = [_][]const u8{ "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota" };
+    const collision: [2][]const u8 = found: {
+        for (titles, 0..) |first, i| {
+            for (titles[i + 1 ..]) |second| {
+                if ((std.hash.Wyhash.hash(0, first) & 7) == (std.hash.Wyhash.hash(0, second) & 7))
+                    break :found .{ first, second };
+            }
+        }
+        return error.TestExpectedHashCollision;
+    };
+    const page_index = try std.fmt.allocPrint(a, "{s}\n" ++
+        "0\t0\t1\t{s}\t\t1\t11\t2026-09-01T00:00:00Z\tA\twikitext\t0\t1\t0\n" ++
+        "0\t1\t1\t{s}\t\t2\t22\t2026-09-01T00:00:01Z\tB\twikitext\t0\t1\t0\n" ++
+        "0\t2\t1\t{s}\t\t3\t33\t2026-09-01T00:00:02Z\tC\twikitext\t0\t1\t0\n", .{ page_index_v3_header, collision[0], collision[1], collision[0] });
+    defer a.free(page_index);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = page_index_path, .data = page_index });
+    var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    try buildPageTitleIndex(io, failing.allocator(), page_index_path, output_path);
+    try std.testing.expect(!failing.has_induced_failure);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, output_path, a, .limited(4096));
+    defer a.free(bytes);
+    const index = try PageTitleIndex.init(bytes);
+    try std.testing.expectEqual(PageIndexKind.multistream_zstd, index.kind);
+    try std.testing.expectEqual(@as(usize, 8), index.capacity);
+    try std.testing.expectEqual(@as(usize, 3), index.row_count);
+    try std.testing.expectEqual(@as(usize, 2), index.unique_count);
+    try std.testing.expectEqual(@as(usize, 64 + 8 * 16), bytes.len);
+    const zero_padding: [16]u8 = @splat(0);
+    try std.testing.expectEqualSlices(u8, &zero_padding, bytes[48..64]);
+    const latest = (try index.lookup(page_index, collision[0])).?;
+    const other = (try index.lookup(page_index, collision[1])).?;
+    try std.testing.expectEqual(@as(usize, 2), pageRowRefOrdinal(latest));
+    try std.testing.expectEqual(@as(usize, 1), pageRowRefOrdinal(other));
+    try std.testing.expectEqual(std.mem.indexOf(u8, page_index, "0\t2\t1\t").?, pageRowRefOffset(latest));
+    try std.testing.expectEqual(std.mem.indexOf(u8, page_index, "0\t1\t1\t").?, pageRowRefOffset(other));
+    try std.testing.expect((try index.lookup(page_index, "absent-title")) == null);
 }
 
 test "page title index construction does not allocate the hash table on heap" {
