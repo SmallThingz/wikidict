@@ -7378,3 +7378,72 @@ test "zero row span fixture wiki and mixed rows retain positive spans protected 
     try std.testing.expectEqual(@as(u16, 3), explicit[0].table.?.rows[0].cells[0].rowspan);
     try std.testing.expectEqual(@as(u16, 1), explicit[0].table.?.rows[0].cells[0].colspan);
 }
+
+test "external line boundary fixture keeps opener URL following navigation and typed text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "\n", "\r\n" }) |ending| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const input = try std.fmt.allocPrint(a, "Before [https://example.test docs{s}Following [[B]] ] tail", .{ending});
+        const expected = try std.fmt.allocPrint(a, "Before [https://example.test docs{s}Following B ] tail", .{ending});
+        const spans = try r.parseSpans(input, .{});
+        try std.testing.expectEqualStrings(expected, try plainText(a, spans));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+        for (spans) |span| {
+            if (span.kind == .external_link) try std.testing.expectEqualStrings("https://example.test", span.text);
+        }
+        const blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = &blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "boundary fixture", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        var url = false;
+        var following = false;
+        for (decoded.entry.sections[0].blocks[0].spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://example.test") and std.mem.eql(u8, span.text, "https://example.test")) url = true;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "B")) following = true;
+        }
+        try std.testing.expectEqualStrings(expected, visible.items);
+        try std.testing.expect(url and following);
+    }
+}
+
+test "external line boundary fixture leaves protected multiline labels linked and literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("[https://example.test <nowiki>docs\n[[B]]</nowiki>] tail", .{});
+    try std.testing.expectEqualStrings("docs\n[[B]] tail", try plainText(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .link, "B"));
+    var protected = false;
+    for (spans) |span| {
+        if (span.provenance == .protected_literal and span.kind == .external_link) protected = true;
+    }
+    try std.testing.expect(protected);
+}
+
+test "external line boundary fixture retains multiline attributes and ordinary closed labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const attrs = try r.parseSpans("[https://example.test <span\nclass='label'>docs</span>] tail [[C]]", .{});
+    try std.testing.expectEqualStrings("docs tail C", try plainText(a, attrs));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(attrs, .external_link, "https://example.test"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(attrs, .link, "C"));
+    const closed = try r.parseSpans("[https://example.test ''docs''] tail [[C]]", .{});
+    try std.testing.expectEqualStrings("docs tail C", try plainText(a, closed));
+    var styled = false;
+    for (closed) |span| {
+        if (span.kind == .external_link and span.flags.italic and std.mem.eql(u8, span.text, "docs")) styled = true;
+    }
+    try std.testing.expect(styled);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(closed, .link, "C"));
+}
