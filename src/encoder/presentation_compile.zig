@@ -7386,7 +7386,8 @@ test "external line boundary fixture keeps opener URL following navigation and t
     for ([_][]const u8{ "\n", "\r\n" }) |ending| {
         var r: Renderer = .{ .a = a, .context = .{} };
         const input = try std.fmt.allocPrint(a, "Before [https://example.test docs{s}Following [[B]] ] tail", .{ending});
-        const expected = try std.fmt.allocPrint(a, "Before [https://example.test docs{s}Following B ] tail", .{ending});
+        // Ordinary paragraph line endings render as one space; link boundaries still use the raw input.
+        const expected = "Before [https://example.test docs Following B ] tail";
         const spans = try r.parseSpans(input, .{});
         try std.testing.expectEqualStrings(expected, try plainText(a, spans));
         try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));

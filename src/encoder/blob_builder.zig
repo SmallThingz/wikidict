@@ -928,6 +928,42 @@ fn unsectionedLanguage(codes: LanguageCodes, source: []const u8) ?ResolvedLangua
     return found;
 }
 
+// The captured Amharic translation entry uses these two L2 support headings,
+// not language declarations. Never extend category attribution to arbitrary
+// unknown boundaries or to expanded-only evidence.
+fn amharicSupportSections(codes: LanguageCodes, sections: []const language_source.Section) bool {
+    if (sections.len != 2) return false;
+    var seen: u8 = 0;
+    for (sections) |section| {
+        if (section.hyphen_marker or hasExplicitLanguageDeclaration(codes, section) or
+            resolveSection(codes, section) != null) return false;
+        const heading = std.mem.trim(u8, section.heading, " \t\r\n");
+        const bit: u8 = if (std.mem.eql(u8, heading, "ተመሳሳይ ቃላት")) 1 else if (std.mem.eql(u8, heading, "ትርጉሞች በየቋንቋው")) 2 else return false;
+        if ((seen & bit) != 0) return false;
+        seen |= bit;
+        const body = std.mem.trimStart(u8, section.source, " \t\r\n");
+        if (body.len < 3 or body[0] != '=' or body[1] != '=' or body[2] == '=') return false;
+    }
+    return seen == 3;
+}
+
+fn amharicSupportCategoryLanguage(
+    codes: LanguageCodes,
+    source: []const u8,
+    raw_source: ?[]const u8,
+    raw_sections: []const language_source.Section,
+    page_sections: []const language_source.Section,
+) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "am")) return null;
+    const raw = raw_source orelse return null;
+    if (!amharicSupportSections(codes, raw_sections) or !amharicSupportSections(codes, page_sections)) return null;
+    const raw_language = unsectionedLanguage(codes, raw) orelse return null;
+    const expanded_language = unsectionedLanguage(codes, source) orelse return null;
+    if (!std.mem.eql(u8, raw_language.code, expanded_language.code)) return null;
+    return raw_language;
+}
+
 // The pinned Bulgarian Noun/Verb/Adjective/Adverb templates have no language
 // heading. Their category uses the expanded language-name parameter. Resolve
 // only those exact edition-local wrappers through the trusted registry.
@@ -1153,6 +1189,7 @@ fn processMain(
     // Once this convention is present, later unresolved L2 lemmas must not
     // inherit a previous noun owner. Other pages retain their existing policy.
     const isolate_mixed = sections.mixed_levels or isolate_arabic_lemmas;
+    const unresolved_before_sections = fallbacks.unresolved_language_heading;
 
     for (page_sections.items, 0..) |section, index| {
         const ang_continuation = if (raw_aligned and index > 0 and current != null)
@@ -1200,12 +1237,15 @@ fn processMain(
     }
 
     if (groups.items.len == 0) {
-        // Only use page-wide attribution when no top-level section needs a
-        // language decision. Conflicting/unknown headings remain reported.
+        // Arbitrary unknown headings cannot inherit a page-wide category.
+        // The captured AM support-heading convention has separate, corroborated
+        // raw/expanded category authority and preserves the whole entry body.
+        const am_support = amharicSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items);
         const explicit = if (page_sections.items.len == 0)
             unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source)
         else
-            null;
+            am_support;
+        if (am_support != null) fallbacks.unresolved_language_heading = unresolved_before_sections;
         if (explicit == null) fallbacks.missing_language_heading = true;
         // Unknown candidate headings cannot inherit the edition's language.
         // The captured AY -ay- banner has no heading: its noun/adjective
@@ -1982,6 +2022,103 @@ test "unsectioned Amharic entries use unique explicit language categories" {
     const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
     try std.testing.expectEqualStrings("en", decoded.entry.language_code);
     try std.testing.expect(std.mem.indexOf(u8, record.payload, "door (noun)") != null);
+}
+
+// Archived amwiktionary page 1649 "መሬት", XML offset 547933:
+// raw text 1528 B / SHA256 6b8d0f5d5077ef010bd0604eea24b63180a7b428b69bba611c86771811986650.
+const AmharicSupportCategoryFixture = struct {
+    const body = "==ተመሳሳይ ቃላት==\n*[[🜨]]\n\n== ትርጉሞች በየቋንቋው ==\n* እንግሊዝኛ - Earth\n";
+    const source = body ++ "[[መደብ:አማርኛ]]\n";
+    fn namespaces(a: std.mem.Allocator) !@import("namespace_registry").Registry {
+        return @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tamwiktionary\n# dump-date\t20261001\n# content-language\tam\n" ++
+            "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+            "10\tመለጠፊያ\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+            "14\tመደብ\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    }
+    fn resolve(a: std.mem.Allocator, codes: LanguageCodes, raw: ?[]const u8, expanded: []const u8) !?ResolvedLanguage {
+        var raw_sections: std.ArrayList(language_source.Section) = .empty;
+        defer raw_sections.deinit(a);
+        var page_sections: std.ArrayList(language_source.Section) = .empty;
+        defer page_sections.deinit(a);
+        const markers: LanguageMarkers = .{ .codes = &codes };
+        if (raw) |text| {
+            var it = languageSections(text, &markers);
+            while (it.next()) |section| try raw_sections.append(a, section);
+        }
+        var it = languageSections(expanded, &markers);
+        while (it.next()) |section| try page_sections.append(a, section);
+        return amharicSupportCategoryLanguage(codes, expanded, raw, raw_sections.items, page_sections.items);
+    }
+};
+
+test "Amharic corroborated support headings retain language owner and lexical body" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try AmharicSupportCategoryFixture.namespaces(a);
+    defer namespaces.deinit();
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &namespaces;
+    const source = AmharicSupportCategoryFixture.source;
+    try std.testing.expectEqualStrings("am", (try AmharicSupportCategoryFixture.resolve(a, codes, source, source)).?.code);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "መሬት", source, source, null);
+    // Exercise the actual writer/report path: corroborated language ownership
+    // must not erase an independently supplied parser fallback reason.
+    try writer.addPageWithFallback(a, .{ .id = 0, .kind = .language }, "preserved-warning", source, null, .{ .malformed_table = true, .unresolved_language_heading = true });
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "አማርኛ"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("am", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("መሬት")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings("am", decoded.entry.language_code);
+    for ([_][]const u8{ "ተመሳሳይ ቃላት", "ትርጉሞች በየቋንቋው", "Earth" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, record.payload, text) != null);
+    try std.testing.expect((try index.find("preserved-warning")) != null);
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    try std.testing.expect(std.mem.indexOf(u8, report, "malformed_table") != null);
+    try std.testing.expect(std.mem.indexOf(u8, report, "unresolved_language_heading") != null);
+    try std.testing.expect(std.mem.indexOf(u8, report, "missing_language_heading") == null);
+}
+
+test "Amharic support attribution refuses ambiguous absent and conflicting evidence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try AmharicSupportCategoryFixture.namespaces(a);
+    defer namespaces.deinit();
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &namespaces;
+    const source = AmharicSupportCategoryFixture.source;
+    for ([_][]const u8{
+        AmharicSupportCategoryFixture.body,
+        AmharicSupportCategoryFixture.body ++ "<!--[[መደብ:አማርኛ]]-->[[:መደብ:አማርኛ]]\n",
+        source ++ "[[መደብ:እንግሊዝኛ]]\n",
+        source ++ "\n==Unknown language==\n# uncertain\n",
+        source ++ "\n==English==\n# foreign declaration\n",
+        "==English==\n# foreign declaration\n==ትርጉሞች በየቋንቋው==\n* Earth\n[[መደብ:አማርኛ]]\n",
+        "<nowiki>" ++ AmharicSupportCategoryFixture.body ++ "</nowiki>[[መደብ:አማርኛ]]\n",
+        "===ተመሳሳይ ቃላት===\n*word\n===ትርጉሞች በየቋንቋው===\n*Earth\n[[መደብ:አማርኛ]]\n",
+    }) |uncertain| try std.testing.expect(try AmharicSupportCategoryFixture.resolve(a, codes, uncertain, uncertain) == null);
+    try std.testing.expect(try AmharicSupportCategoryFixture.resolve(a, codes, null, source) == null);
+    try std.testing.expect(try AmharicSupportCategoryFixture.resolve(a, codes, source, AmharicSupportCategoryFixture.body ++ "[[መደብ:እንግሊዝኛ]]\n") == null);
+    var foreign_namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "14\tመደብ\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer foreign_namespaces.deinit();
+    codes.namespace_catalog = &foreign_namespaces;
+    try std.testing.expect(try AmharicSupportCategoryFixture.resolve(a, codes, source, source) == null);
 }
 
 test "unsectioned Bulgarian POS categories retain English identity and their whole body" {
