@@ -39,21 +39,34 @@ pub fn explicitLanguageDeclaration(raw: []const u8, content_language: []const u8
 /// expansion cannot erase the language argument.
 pub fn classificationHeading(raw: []const u8) []const u8 {
     var search: usize = 0;
-    while (std.mem.indexOfPos(u8, raw, search, "{{")) |open| {
-        const close = std.mem.indexOfPos(u8, raw, open + 2, "}}") orelse break;
-        const body = raw[open + 2 .. close];
-        const pipe = std.mem.indexOfScalar(u8, body, '|') orelse {
-            search = close + 2;
+    while (search < raw.len) {
+        if (syntax.protectedEnd(raw, search)) |end| {
+            search = end;
+            continue;
+        }
+        if (raw[search] == '<') if (syntax.tagAt(raw, search)) |tag| {
+            search = tag.end;
+            continue;
+        };
+        if (!std.mem.startsWith(u8, raw[search..], "{{")) {
+            search += 1;
+            continue;
+        }
+        const open = search;
+        const pair = syntax.balanced(raw, open) orelse break;
+        const body = raw[open + 2 .. pair.inner_end];
+        const pipe = syntax.delimiter(body, "|", 0) orelse {
+            search = pair.end;
             continue;
         };
         const name = std.mem.trim(u8, body[0..pipe], " \t");
         if (std.ascii.eqlIgnoreCase(name, "Sprache")) {
             const tail = body[pipe + 1 ..];
-            const next_pipe = std.mem.indexOfScalar(u8, tail, '|') orelse tail.len;
+            const next_pipe = syntax.delimiter(tail, "|", 0) orelse tail.len;
             const language = std.mem.trim(u8, tail[0..next_pipe], " \t");
             if (language.len != 0 and std.mem.indexOfAny(u8, language, "{}[]") == null) return language;
         }
-        search = close + 2;
+        search = pair.end;
     }
     return raw;
 }
@@ -708,4 +721,19 @@ test "language iterator recognizes active prefix controls without inventing prot
     try std.testing.expectEqualStrings("English", iterator.next().?.heading);
     try std.testing.expectEqualStrings("French", iterator.next().?.heading);
     try std.testing.expect(iterator.next() == null);
+}
+
+test "Sprache heading evidence ignores protected comments and tag attributes" {
+    inline for (.{ "Lemma <nowiki>{{Sprache|Deutsch}}</nowiki>", "Lemma <pre>{{Sprache|Deutsch}}</pre>", "Lemma <!--{{Sprache|Deutsch}}-->", "Lemma <span title=\"{{Sprache|Deutsch}}\">literal</span>" }) |heading|
+        try std.testing.expectEqualStrings(heading, classificationHeading(heading));
+    try std.testing.expectEqualStrings("Deutsch", classificationHeading("Lemma ({{Sprache|Deutsch}})"));
+    try std.testing.expectEqualStrings("Deutsch", classificationHeading("Lemma <nowiki>{{Sprache|French}}</nowiki> <!--{{Sprache|French}}--> ({{Sprache|Deutsch}})"));
+}
+
+test "Sprache argument boundaries cannot shorten protected or nested language text" {
+    inline for (.{ "Lemma ({{Sprache|Deutsch<nowiki>|French</nowiki>}})", "Lemma ({{Sprache|Deutsch<!--}}|French-->suffix}})", "Lemma ({{Sprache|{{Sprache|Deutsch}}}})" }) |heading|
+        try std.testing.expectEqualStrings(heading, classificationHeading(heading));
+    try std.testing.expectEqualStrings("Old English", classificationHeading("Lemma ({{Sprache|Old English|ignored}})"));
+    try std.testing.expectEqualStrings("العربية", classificationHeading("Lemma ({{Sprache|العربية}})"));
+    try std.testing.expectEqualStrings("Deutsch", classificationHeading("Lemma ({{Sprache|{{unknown}}}}) ({{Sprache|Deutsch}})"));
 }

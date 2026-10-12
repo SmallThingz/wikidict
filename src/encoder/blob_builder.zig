@@ -424,22 +424,38 @@ fn resolveTemplateName(codes: LanguageCodes, value: []const u8) ?ResolvedLanguag
 }
 
 fn resolveTemplateCandidates(codes: LanguageCodes, text: []const u8) ?ResolvedLanguage {
+    const syntax = blobs.wikitext_syntax;
     var search: usize = 0;
-    while (std.mem.indexOfPos(u8, text, search, "{{")) |open| {
-        const close = std.mem.indexOfPos(u8, text, open + 2, "}}") orelse return null;
-        const body = text[open + 2 .. close];
+    while (search < text.len) {
+        if (syntax.protectedEnd(text, search)) |end| {
+            search = end;
+            continue;
+        }
+        if (text[search] == '<') if (syntax.tagAt(text, search)) |tag| {
+            search = tag.end;
+            continue;
+        };
+        if (!std.mem.startsWith(u8, text[search..], "{{")) {
+            search += 1;
+            continue;
+        }
+        const pair = syntax.balanced(text, search) orelse return null;
+        const body = text[search + 2 .. pair.inner_end];
+        // Nested calls are not independent evidence that the outer call renders a language.
         if (std.mem.indexOf(u8, body, "{{") == null) {
-            var fields = std.mem.splitScalar(u8, body, '|');
-            if (fields.next()) |name| {
-                if (resolveTemplateName(codes, name)) |resolved| return resolved;
-                while (fields.next()) |field| {
-                    const eq = std.mem.indexOfScalar(u8, field, '=');
-                    const candidate = if (eq) |at| field[at + 1 ..] else field;
-                    if (resolveTrimmed(codes, candidate)) |resolved| return resolved;
-                }
+            const name_end = syntax.delimiter(body, "|", 0) orelse body.len;
+            if (resolveTemplateName(codes, body[0..name_end])) |resolved| return resolved;
+            var field_start = @min(name_end + 1, body.len);
+            while (field_start < body.len) {
+                const field_end = syntax.delimiter(body, "|", field_start) orelse body.len;
+                const field = body[field_start..field_end];
+                const eq = syntax.delimiter(field, "=", 0);
+                const candidate = if (eq) |at| field[at + 1 ..] else field;
+                if (resolveTrimmed(codes, candidate)) |resolved| return resolved;
+                field_start = @min(field_end + 1, body.len);
             }
         }
-        search = close + 2;
+        search = pair.end;
     }
     return null;
 }
@@ -3777,6 +3793,49 @@ test "protected and entity authored heading controls cannot manufacture an Engli
     defer index.deinit(a);
     inline for (.{ "protected", "entities" }) |title| {
         const record = (try index.find(title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var linked: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, "cat") and std.mem.eql(u8, span.text, "retained sense")) linked += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), linked);
+    }
+}
+
+test "protected Sprache headings retain content without inventing a language owner" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const rows = .{
+        .{ "protected", "Unclassified", "", "==Lemma <nowiki>{{Sprache|Deutsch}}</nowiki>==\n# [[cat|retained sense]]\n", "==Lemma <nowiki>{{Sprache|Deutsch}}</nowiki>==\n# [[cat|retained sense]]\n" },
+        .{ "comment", "Unclassified", "", "==Lemma <!--{{Sprache|Deutsch}}-->==\n# [[cat|retained sense]]\n", "==Lemma ==\n# [[cat|retained sense]]\n" },
+        .{ "attribute", "Unclassified", "", "==Lemma <span title=\"{{Sprache|Deutsch}}\">literal</span>==\n# [[cat|retained sense]]\n", "==Lemma <span title=\"{{Sprache|Deutsch}}\">literal</span>==\n# [[cat|retained sense]]\n" },
+        .{ "nested-hidden", "Unclassified", "", "==Lemma ({{unknown|{{Sprache|Deutsch}}}})==\n# [[cat|retained sense]]\n", "==Lemma==\n# [[cat|retained sense]]\n" },
+        .{ "protected-argument", "Unclassified", "", "==Lemma ({{unknown|<nowiki>x|Deutsch|y</nowiki>}})==\n# [[cat|retained sense]]\n", "==Lemma <nowiki>x|Deutsch|y</nowiki>==\n# [[cat|retained sense]]\n" },
+        .{ "active", "Deutsch", "de", "==Lemma ({{Sprache|Deutsch}})==\n# [[cat|retained sense]]\n", "==Lemma ([[:Template:Sprache]])==\n# [[cat|retained sense]]\n" },
+        .{ "later-active", "Deutsch", "de", "==Lemma <nowiki>{{Sprache|French}}</nowiki> ({{Sprache|Deutsch}})==\n# [[cat|retained sense]]\n", "==Lemma <nowiki>{{Sprache|French}}</nowiki> ([[:Template:Sprache]])==\n# [[cat|retained sense]]\n" },
+    };
+    inline for (rows) |row|
+        try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, row[0], row[4], row[3], null, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 7), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 5), stats.fallback_pages);
+    inline for (rows) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row[1]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(row[2], metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(row[0])).?;
         const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
         var linked: usize = 0;
         for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
