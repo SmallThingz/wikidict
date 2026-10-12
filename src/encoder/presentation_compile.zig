@@ -1947,7 +1947,10 @@ pub const Renderer = struct {
                     else
                         token.text;
                     if (inherited.kind == .link or inherited.kind == .external_link) {
-                        if (token.external_label_prefix.len != 0) try self.literal(label, s) else try self.text(label, s);
+                        if (token.external_label_prefix.len != 0 or std.mem.eql(u8, token.text, token.target))
+                            try self.literal(label, s)
+                        else
+                            try self.text(label, s);
                     } else try self.link(label, token.target, s, depth + 1, true);
                 },
                 .template => try self.resolveTemplate(token.text, s, depth),
@@ -6906,4 +6909,50 @@ test "unclosed template recovery fixture preserves protected and encoded braces 
     const spans = try r.parseSpans("<nowiki>{{broken [[B]] ''kept''</nowiki> &#123;&#123;encoded {{{p|default}}} tail", .{});
     try std.testing.expectEqualStrings("{{broken [[B]] ''kept'' {{encoded default tail", try flattened(a, spans));
     for (spans) |span| try std.testing.expect(span.kind != .link);
+}
+
+test "nested external URL label fixture decodes once and preserves outer navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, code: bool = false }{
+        .{ .source = "[[A|https://example.test/?x=%26&amp;y=2]]", .visible = "https://example.test/?x=%26&y=2" },
+        .{ .source = "[[A|https://example.test/?x=%26&amp;amp;y=2]]", .visible = "https://example.test/?x=%26&amp;y=2" },
+        .{ .source = "[[A|<code>https://example.test/?x=%26&amp;y=2</code>]]", .visible = "https://example.test/?x=%26&y=2", .code = true },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        try std.testing.expect(spans.len != 0);
+        for (spans) |span| {
+            try std.testing.expectEqual(ir.InlineKind.link, span.kind);
+            try std.testing.expectEqualStrings("A", span.target);
+            try std.testing.expectEqual(case.code, span.flags.code);
+        }
+    }
+}
+
+test "nested external URL label fixture retains protected literals and ordinary external URLs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "nowiki", "pre" }) |tag| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "[[A|<{s}>https://example.test/?x=%26&amp;amp;y=2</{s}>]]", .{ tag, tag });
+        const spans = try r.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("https://example.test/?x=%26&amp;y=2", try flattened(a, spans));
+        for (spans) |span| {
+            try std.testing.expectEqual(ir.InlineKind.link, span.kind);
+            try std.testing.expectEqualStrings("A", span.target);
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        }
+    }
+    var external: Renderer = .{ .a = a, .context = .{} };
+    const external_spans = try external.parseSpans("[https://example.test/?x=%26&amp;y=2 ordinary]", .{});
+    try std.testing.expectEqualStrings("ordinary", try flattened(a, external_spans));
+    for (external_spans) |span| {
+        try std.testing.expectEqual(ir.InlineKind.external_link, span.kind);
+        try std.testing.expectEqualStrings("https://example.test/?x=%26&y=2", span.target);
+    }
 }
