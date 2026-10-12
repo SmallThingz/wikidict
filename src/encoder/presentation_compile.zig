@@ -2920,15 +2920,11 @@ pub const Renderer = struct {
         // belong only to the cell's opening physical line, not its nested body.
         const end = std.mem.indexOfAny(u8, raw, "\r\n") orelse raw.len;
         const line = raw[0..end];
-        const interesting = [_]u8{ '|', '<', '{', '[', '\'', '"' };
+        const interesting = [_]u8{ '|', '<', '{', '[' };
         var i: usize = 0;
         while (i < line.len) {
             i += std.mem.indexOfAny(u8, line[i..], &interesting) orelse return null;
             if (line[i] == '|') return i;
-            if (line[i] == '\'' or line[i] == '"') {
-                i = (std.mem.indexOfScalarPos(u8, line, i + 1, line[i]) orelse return null) + 1;
-                continue;
-            }
             if (line[i] == '<') {
                 if (syntax.protectedEnd(line, i)) |protected_end| {
                     i = protected_end;
@@ -2952,14 +2948,14 @@ pub const Renderer = struct {
     }
 
     fn cellContent(self: *Renderer, raw: []const u8) Error!CellContent {
-        if (cellAttributePipe(raw)) |pipe| if (std.mem.indexOfScalar(u8, raw[0..pipe], '=') != null) {
+        if (cellAttributePipe(raw)) |pipe| {
             const tag: syntax.Tag = .{ .name = "td", .attrs = raw[0..pipe], .end = 0, .closing = false, .self_closing = false };
             return .{
                 .text = trim(raw[pipe + 1 ..]),
                 .colspan = try self.tableSpanAttr(tag, "colspan"),
                 .rowspan = try self.tableSpanAttr(tag, "rowspan"),
             };
-        };
+        }
         return .{ .text = trim(raw) };
     }
 
@@ -6371,23 +6367,31 @@ test "wiki cell attributes retain legitimate colspan rowspan and style" {
     try std.testing.expectEqualStrings(body, unchanged.text);
 }
 
-test "wiki cell attribute pipes inside quotes remain attribute values" {
+test "wiki cell attributes use first unprotected pipe regardless of quoting" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{} };
-    const blocks = try r.renderBody(
-        "{|\n|-\n| colspan=\"2\" style=\"font-family:'a|b'\" | [[kept]]\n" ++
-            "| rowspan='3' style='font-family:\"c|d\"' | other\n|}\n",
-    );
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    try std.testing.expectEqualStrings("Notes:", (try r.cellContent("class=\"grc-conj-notes-header | Notes:")).text);
+    try std.testing.expectEqualStrings("b\" | Notes:", (try r.cellContent("class=\"a|b\" | Notes:")).text);
+    try std.testing.expectEqualStrings("Notes:", (try r.cellContent("authored ordinary | Notes:")).text);
+    const valid = try r.cellContent("class=\"a\" colspan=\"2\" | Notes:");
+    try std.testing.expectEqualStrings("Notes:", valid.text);
+    try std.testing.expectEqual(@as(u16, 2), valid.colspan);
+    const protected = "<nowiki>a|b</nowiki> tail";
+    try std.testing.expectEqualStrings(protected, (try r.cellContent(protected)).text);
+    const linked = "[[A|label]] tail";
+    try std.testing.expectEqualStrings(linked, (try r.cellContent(linked)).text);
+    const html = "<span title=\"a|b\">kept</span> tail";
+    try std.testing.expectEqualStrings(html, (try r.cellContent(html)).text);
+    const blocks = try r.renderBody("{|\n! class=\"grc-conj-notes-header | Notes:\n| [[A|label]] tail\n|}\n");
     const cells = blocks[0].table.?.rows[0].cells;
-    try std.testing.expectEqual(@as(usize, 2), cells.len);
-    try std.testing.expectEqualStrings("kept", try flattened(a, cells[0].spans));
-    try std.testing.expectEqual(@as(u16, 2), cells[0].colspan);
-    try std.testing.expectEqualStrings("other", try flattened(a, cells[1].spans));
-    try std.testing.expectEqual(@as(u16, 3), cells[1].rowspan);
-    const unmatched = "style=\"unclosed | body";
-    try std.testing.expectEqualStrings(unmatched, (try r.cellContent(unmatched)).text);
+    try std.testing.expectEqualStrings("Notes:", try flattened(arena.allocator(), cells[0].spans));
+    try std.testing.expectEqualStrings("label tail", try flattened(arena.allocator(), cells[1].spans));
+    var found = false;
+    for (cells[1].spans) |span| if (std.mem.eql(u8, span.target, "A")) {
+        found = true;
+    };
+    try std.testing.expect(found);
 }
 
 test "unknown parser entity braces keep complete external target and intended label" {
