@@ -847,6 +847,51 @@ fn sharedImagePrefix(a: std.mem.Allocator, codes: LanguageCodes, prefix: []const
     return if (found) prefix else null;
 }
 
+// Project active controls only for language classification. The original section
+// source stays intact for rendering; protected bodies, attributes and entity-
+// authored spellings follow the same boundary rules as display compilation.
+fn classificationControlHeadingAlloc(a: std.mem.Allocator, codes: LanguageCodes, value: []const u8) !?[]u8 {
+    const syntax = blobs.wikitext_syntax;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(a);
+    var emitted: usize = 0;
+    var scan: usize = 0;
+    while (scan < value.len) {
+        if (value[scan] == '<') {
+            if (syntax.protectedEnd(value, scan)) |end| {
+                scan = end;
+                continue;
+            }
+            if (syntax.tagAt(value, scan)) |tag| {
+                scan = tag.end;
+                continue;
+            }
+        }
+        const matched = if (codes.behavior_switches) |registry|
+            try registry.matchAt(a, value, scan)
+        else
+            syntax.behaviorSwitchEnd(value, scan);
+        if (matched) |end| {
+            try out.appendSlice(a, value[emitted..scan]);
+            emitted = end;
+            scan = end;
+        } else scan += 1;
+    }
+    if (emitted == 0) return null;
+    try out.appendSlice(a, value[emitted..]);
+    return try out.toOwnedSlice(a);
+}
+
+fn appendClassifiedSection(a: std.mem.Allocator, codes: LanguageCodes, sections: *std.ArrayList(language_source.Section), owned_headings: *std.ArrayList([]u8), section: language_source.Section) !void {
+    var projected = section;
+    if (try classificationControlHeadingAlloc(a, codes, section.heading)) |heading| {
+        errdefer a.free(heading);
+        try owned_headings.append(a, heading);
+        projected.heading = heading;
+    }
+    try sections.append(a, projected);
+}
+
 const LanguageMarkers = struct {
     codes: *const LanguageCodes,
     represented: ?[]const []const u8 = null,
@@ -892,9 +937,12 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
         .accepts = struct {
             fn accepts(raw: ?*const anyopaque, heading: []const u8) bool {
                 const markers: *const LanguageMarkers = @ptrCast(@alignCast(raw.?));
-                const section: language_source.Section = .{ .heading = heading, .source = "" };
+                const normalized = classificationControlHeadingAlloc(std.heap.page_allocator, markers.codes.*, heading) catch return false;
+                defer if (normalized) |value| std.heap.page_allocator.free(value);
+                const projected = normalized orelse heading;
+                const section: language_source.Section = .{ .heading = projected, .source = "" };
                 if (hasExplicitLanguageDeclaration(markers.codes.*, section)) return true;
-                const classified = language_source.classificationHeading(heading);
+                const classified = language_source.classificationHeading(projected);
                 if (resolveCategorizedHeading(markers.codes.*, classified) != null) return true;
                 if (resolveLinkedHeading(markers.codes.*, classified) != null or
                     resolveLinkedDeclaration(markers.codes.*, classified) != null) return true;
@@ -1099,11 +1147,18 @@ fn processMain(
         return;
     }
 
+    // Resolvers may return the supplied heading slice. Keep projections alive
+    // through grouping/encoding, including failure paths with a non-arena caller.
+    var owned_headings: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned_headings.items) |heading| page_allocator.free(heading);
+        owned_headings.deinit(page_allocator);
+    }
     var page_sections: std.ArrayList(language_source.Section) = .empty;
     defer page_sections.deinit(page_allocator);
     const expanded_markers: LanguageMarkers = .{ .codes = &codes };
     var sections = languageSections(source, &expanded_markers);
-    while (sections.next()) |section| try page_sections.append(page_allocator, section);
+    while (sections.next()) |section| try appendClassifiedSection(page_allocator, codes, &page_sections, &owned_headings, section);
 
     var raw_sections: std.ArrayList(language_source.Section) = .empty;
     defer raw_sections.deinit(page_allocator);
@@ -1124,7 +1179,7 @@ fn processMain(
         // without banning a code that another edition uses as a language.
         const raw_markers: LanguageMarkers = .{ .codes = &codes, .represented = if (named_boundaries) represented.items else null };
         var raw_it = languageSections(raw, &raw_markers);
-        while (raw_it.next()) |section| try raw_sections.append(page_allocator, section);
+        while (raw_it.next()) |section| try appendClassifiedSection(page_allocator, codes, &raw_sections, &owned_headings, section);
     }
     var raw_aligned = raw_sections.items.len != 0 and raw_sections.items.len == page_sections.items.len;
     if (raw_aligned) for (raw_sections.items, page_sections.items) |raw_section, rendered_section| {
@@ -3616,4 +3671,117 @@ test "expanded behavior-prefix page retains English bucket and typed lexical blo
     };
     try std.testing.expectEqual(@as(usize, 1), definitions);
     try std.testing.expect(linked);
+}
+
+test "classification control projection follows the selected edition and protected source" {
+    const a = std.testing.allocator;
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tafwiktionary\n# dump-date\t20261001\n# content-language\taf\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tLêer\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tSjabloon\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const namespace_hex = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
+    const behavior_raw = try std.fmt.allocPrint(a, "# wikidict-behavior-switches-v1\n# wiki\tafwiktionary\n# dump-date\t20261001\n# content-language\taf\n# namespace-registry-sha256\t{s}\nnoeditsection\t0\t__GEENNUWEAFDELING__\nindex\t1\t__INDEX__\n", .{namespace_hex});
+    defer a.free(behavior_raw);
+    var behavior = try @import("namespace_registry").behavior_switches.Registry.init(a, behavior_raw, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256);
+    defer behavior.deinit();
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &namespaces;
+    codes.behavior_switches = &behavior;
+    inline for (.{ "__GEENNUWEAFDELING__English", "En__geennuweafdeling__glish", "English__INDEX__" }) |value| {
+        const projected = (try classificationControlHeadingAlloc(a, codes, value)).?;
+        defer a.free(projected);
+        try std.testing.expectEqualStrings("English", projected);
+    }
+    inline for (.{ "__index__English", "__NOTOC__English", "__UNKNOWN__English", "<nowiki>__GEENNUWEAFDELING__</nowiki>English", "<pre>__GEENNUWEAFDELING__</pre>English", "<span title=\"__GEENNUWEAFDELING__\">English</span>", "&#95;&#95;GEENNUWEAFDELING&#95;&#95;English" }) |value|
+        try std.testing.expect(try classificationControlHeadingAlloc(a, codes, value) == null);
+    codes.behavior_switches = null;
+    try std.testing.expect(try classificationControlHeadingAlloc(a, codes, "__GEENNUWEAFDELING__English") == null);
+    const builtin = (try classificationControlHeadingAlloc(a, codes, "En__NOGALLERY__glish")).?;
+    defer a.free(builtin);
+    try std.testing.expectEqualStrings("English", builtin);
+}
+
+test "active controls inside language headings preserve real blob ownership and mixed depth" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const out_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, out_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const first = "==__NOTOC__English==\n# [[cat|first lexical sense]]\n";
+    const second = "==En__NOGALLERY__glish==\n# [[cat|second lexical sense]]\n";
+    const mixed = "==French==\n# [[chat|French sense]]\n=En__NOGALLERY__glish=\n# [[cat|English sense]]\n";
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "first", first, first, null, &.{});
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "second", second, second, null, &.{});
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "mixed", mixed, mixed, null, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    inline for (.{ .{ "English", "en", "first", "first lexical sense", "cat" }, .{ "English", "en", "second", "second lexical sense", "cat" }, .{ "English", "en", "mixed", "English sense", "cat" }, .{ "French", "fr", "mixed", "French sense", "chat" } }) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, out_root, row[0]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(row[1], metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(row[2])).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var definitions: usize = 0;
+        var linked: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block_value| {
+            if (std.mem.eql(u8, block_value.list_path, "#")) {
+                definitions += 1;
+                try std.testing.expect(block_value.kind == .definition);
+                for (block_value.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, row[4]) and std.mem.eql(u8, span.text, row[3])) {
+                    linked += 1;
+                };
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(@as(usize, 1), linked);
+    }
+}
+
+test "protected and entity authored heading controls cannot manufacture an English owner" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const out_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, out_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const protected = "==<nowiki>__NOTOC__</nowiki>English==\n# [[cat|retained sense]]\n";
+    const entities = "==&#95;&#95;NOTOC&#95;&#95;English==\n# [[cat|retained sense]]\n";
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "protected", protected, protected, null, &.{});
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "entities", entities, entities, null, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 2), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, out_root, "Unclassified"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    inline for (.{ "protected", "entities" }) |title| {
+        const record = (try index.find(title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var linked: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, "cat") and std.mem.eql(u8, span.text, "retained sense")) linked += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), linked);
+    }
 }

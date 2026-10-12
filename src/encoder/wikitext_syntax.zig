@@ -272,11 +272,19 @@ fn opaquePair(text: []const u8, tag: Tag) ?Pair {
     if (tag.self_closing) return .{ .inner_end = tag.end, .end = tag.end };
     var i = tag.end;
     while (std.mem.indexOfScalarPos(u8, text, i, '<')) |open| {
-        if (tagAt(text, open)) |next| {
-            if (next.closing and std.ascii.eqlIgnoreCase(next.name, tag.name))
-                return .{ .inner_end = open, .end = next.end };
-            i = next.end;
-        } else i = open + 1;
+        // Opaque bodies do not contain HTML attributes: even a closer inside
+        // a literal quoted pseudo-tag terminates the region. Match only the
+        // closing name plus optional whitespace, as the source preprocessor does.
+        const name_end = open + 2 + tag.name.len;
+        if (name_end <= text.len and text[open + 1] == '/' and
+            std.ascii.eqlIgnoreCase(text[open + 2 .. name_end], tag.name))
+        {
+            var end = name_end;
+            while (end < text.len and std.ascii.isWhitespace(text[end])) : (end += 1) {}
+            if (end < text.len and text[end] == '>')
+                return .{ .inner_end = open, .end = end + 1 };
+        }
+        i = open + 1;
     }
     return null;
 }
@@ -748,5 +756,24 @@ test "leading active controls affect heading boundary and preserve protected spe
     for ([_][]const u8{ "__UNKNOWN__== English ==", "&#95;&#95;NOEDITSECTION&#95;&#95;== English ==", "<nowiki>__NOEDITSECTION__</nowiki>== English ==" }) |source| {
         try std.testing.expectEqual(@as(usize, 0), leadingBehaviorControlOffset(source, null));
         try std.testing.expectEqualStrings(source, headingControlPrefix(source, null));
+    }
+}
+
+test "opaque first closer is not hidden by literal pseudo-tag quotes" {
+    for ([_][]const u8{ "nowiki", "pre" }) |name| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "<{s}><span title=\"</{s}>\">[[B]]", .{ name, name });
+        defer std.testing.allocator.free(source);
+        const opening = tagAt(source, 0).?;
+        const pair = matchingTag(source, opening).?;
+        try std.testing.expectEqualStrings("<span title=\"", source[opening.end..pair.inner_end]);
+        try std.testing.expectEqualStrings("\">[[B]]", source[pair.end..]);
+    }
+    for ([_][]const u8{ "</nowiki x>", "</nowiki/>", "</nowikix>", "&lt;/nowiki&gt;" }) |literal| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "<nowiki>{s}[[B]]</NOWIKI \t>[[C]]", .{literal});
+        defer std.testing.allocator.free(source);
+        const opening = tagAt(source, 0).?;
+        const pair = matchingTag(source, opening).?;
+        try std.testing.expectEqualStrings("[[C]]", source[pair.end..]);
+        try std.testing.expect(std.mem.endsWith(u8, source[opening.end..pair.inner_end], "[[B]]"));
     }
 }

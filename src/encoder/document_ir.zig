@@ -832,7 +832,7 @@ fn findExternalLinkClose(input: []const u8, start: usize) ?usize {
     var cursor = start + 1;
     while (cursor < input.len) : (cursor += 1) {
         // A raw line ending cannot be part of a bracketed external label.
-        if (input[cursor] == '\n') return null;
+        if (input[cursor] == '\n' or input[cursor] == '\r') return null;
         if (input[cursor] == '<') {
             if (syntax.protectedEnd(input, cursor)) |end| {
                 cursor = end - 1;

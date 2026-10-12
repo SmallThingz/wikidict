@@ -46,15 +46,16 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
             }
             continue;
         }
-        // Raw nowiki text must reach the renderer intact. Reuse the existing
-        // quoted opener and first-closing-tag rules; nested nowiki is literal.
+        // Raw nowiki and closed pre bodies must reach the renderer intact.
+        // Their comments are visible text. An unclosed pre is ordinary HTML,
+        // so only nowiki protects the remaining input without a closing tag.
         if (inclusionTagAt(text, open)) |tag| {
-            if (std.ascii.eqlIgnoreCase(tag.name, "nowiki")) {
+            const nowiki = std.ascii.eqlIgnoreCase(tag.name, "nowiki");
+            if (nowiki or std.ascii.eqlIgnoreCase(tag.name, "pre")) {
                 if (rawTagEnd(text, open)) |opening_end| {
                     var before_gt = opening_end - 1;
                     while (before_gt > open and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
-                    const end = if (before_gt > open and text[before_gt - 1] == '/') opening_end else
-                        inclusionCloseEnd(text, opening_end, tag.name) orelse text.len;
+                    const end = if (before_gt > open and text[before_gt - 1] == '/') opening_end else inclusionCloseEnd(text, opening_end, tag.name) orelse (if (nowiki) text.len else opening_end);
                     const protected = text[open..end];
                     for (protected, 0..) |byte, at| {
                         if (byte == '\n') {
@@ -197,7 +198,6 @@ fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, 
     }
     return out.toOwnedSlice(a);
 }
-
 
 /// Append expanded plain text without leaking empty inclusion-node boundaries.
 /// Literal extension bodies keep their authored contents untouched.
@@ -680,7 +680,6 @@ test "transclusion preserves first opened literal regions" {
     }
 }
 
-
 test "grammar syntax oracle comment only line preserves list adjacency and authored blanks" {
     const a = std.testing.allocator;
     // A comment occupying its entire physical line vanishes upstream, including
@@ -698,7 +697,6 @@ test "grammar syntax oracle comment only line preserves list adjacency and autho
     try std.testing.expectEqualStrings("<nowiki><!--hidden--></nowiki>", protected);
     try std.testing.expectEqualStrings("# first\n# second", joined);
 }
-
 
 test "grammar syntax oracle standalone comment variants retain list adjacency" {
     const a = std.testing.allocator;
@@ -720,7 +718,6 @@ test "grammar syntax oracle standalone comment variants retain list adjacency" {
     try std.testing.expectEqualStrings("# first\n\n\n# second", blanks);
 }
 
-
 test "grammar syntax oracle multiple comments on a line preserve visible content" {
     const a = std.testing.allocator;
     const standalone = try stripDecodedComments(a, "# first\n<!--one--> <!--two-->\n# second");
@@ -732,4 +729,20 @@ test "grammar syntax oracle multiple comments on a line preserve visible content
     const protected = try stripDecodedComments(a, "<nowiki>first\n<!--one--></nowiki>\n<!--two-->\nafter");
     defer a.free(protected);
     try std.testing.expectEqualStrings("<nowiki>first\n<!--one--></nowiki>\nafter", protected);
+}
+
+test "protected comment boundary preserves closed pre and removes outside comments" {
+    const a = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "outside<!--hide--><pre title='>'><!--literal-->&lt;b&gt;&amp;lt;[[B]]</pre><!--hide-->tail", .expected = "outside<pre title='>'><!--literal-->&lt;b&gt;&amp;lt;[[B]]</pre>tail" },
+        .{ .source = "<PRE><!--literal--></PRE ><!--hide-->tail", .expected = "<PRE><!--literal--></PRE >tail" },
+        .{ .source = "<pre/><!--hide-->tail", .expected = "<pre/>tail" },
+        .{ .source = "A<pre>B<!--hidden-->&lt;i&gt;[[C]]", .expected = "A<pre>B&lt;i&gt;[[C]]" },
+        .{ .source = "<nowiki><!--literal-->&lt;/nowiki&gt;</nowiki><!--hide-->tail", .expected = "<nowiki><!--literal-->&lt;/nowiki&gt;</nowiki>tail" },
+    };
+    for (cases) |case| {
+        const actual = try stripDecodedComments(a, case.source);
+        defer a.free(actual);
+        try std.testing.expectEqualStrings(case.expected, actual);
+    }
 }

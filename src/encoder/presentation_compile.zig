@@ -170,6 +170,8 @@ pub const Style = struct {
     heading: bool = false,
     // Build-only annotation boundary; readers receive ordinary semantic spans.
     ruby_parentheses: bool = false,
+    // Unmatched pre is ordinary parsed HTML, with preformatted whitespace.
+    preserve_whitespace: bool = false,
 };
 pub const SpanFlags = packed struct(u8) {
     bold: bool = false,
@@ -411,8 +413,55 @@ fn resetChangedListCounters(counts: []usize, previous: []const u8, current: []co
     // A different nested list family closes that list, but keeps common parents.
     @memset(counts[common..], 0);
 }
+// MediaWiki chooses definition separators after quote/link rendering, outside
+// accepted HTML nesting. Keep the shared template delimiter rules unchanged.
+const DefinitionColonScanner = struct {
+    input: []const u8,
+    cursor: usize = 0,
+    html_depth: usize = 0,
+
+    fn next(self: *DefinitionColonScanner, after: usize) ?usize {
+        const text = self.input;
+        while (self.cursor < text.len) {
+            const colon = syntax.delimiter(text, ":", self.cursor) orelse return null;
+            while (self.cursor < colon) {
+                if (text[self.cursor] == '<') {
+                    if (syntax.protectedEnd(text, self.cursor)) |end| {
+                        self.cursor = end;
+                        continue;
+                    }
+                    if (syntax.tagAt(text, self.cursor)) |tag| {
+                        if (normalizableHtmlTag(tag.name) or oneOf(tag.name, &.{ "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption" })) {
+                            if (tag.closing) {
+                                self.html_depth -|= 1;
+                            } else {
+                                // A slash does not close a non-void HTML container.
+                                self.html_depth += 1;
+                            }
+                        }
+                        self.cursor = tag.end;
+                        continue;
+                    }
+                }
+                if (starts(text[self.cursor..], "[[") or starts(text[self.cursor..], "{{")) {
+                    if (syntax.balanced(text, self.cursor)) |pair| {
+                        self.cursor = pair.end;
+                        continue;
+                    }
+                }
+                self.cursor += 1;
+            }
+            self.cursor = colon + 1;
+            // A link-label opener can scope later text beyond the link itself.
+            // Advance through it once; rejecting a link's colon must not reset depth.
+            if (self.html_depth == 0 and colon >= after) return colon;
+        }
+        return null;
+    }
+};
 pub fn inlineDefinitionSplit(text: []const u8) ?struct { term: []const u8, definition: []const u8 } {
-    var colon = syntax.delimiter(text, ":", 0) orelse return null;
+    var scanner: DefinitionColonScanner = .{ .input = text };
+    var colon = scanner.next(0) orelse return null;
     // Links become anchors before MediaWiki's definition-list pass. Reuse the
     // accepted bracketed/free-link extents without changing template delimiters.
     var tokens: ir.InlineIterator = .{ .input = text };
@@ -422,7 +471,7 @@ pub fn inlineDefinitionSplit(text: []const u8) ?struct { term: []const u8, defin
         if (tokens.cursor <= before) break;
         if (tokens.cursor <= colon) continue;
         if (token.kind == .external_link and before <= colon) {
-            colon = syntax.delimiter(text, ":", tokens.cursor) orelse return null;
+            colon = scanner.next(tokens.cursor) orelse return null;
             continue;
         }
         break;
@@ -878,7 +927,7 @@ pub const Renderer = struct {
         return out.toOwnedSlice() catch return error.OutOfMemory;
     }
     fn plain(self: *Renderer, value: []const u8, style: Style) Error!void {
-        if (std.mem.indexOfAny(u8, value, "\r\n") == null) return self.text(value, style);
+        if (style.preserve_whitespace or std.mem.indexOfAny(u8, value, "\r\n") == null) return self.text(value, style);
         var out: std.ArrayList(u8) = .empty;
         var whitespace = false;
         for (value) |ch| {
@@ -1021,9 +1070,34 @@ pub const Renderer = struct {
         }
         try self.text(input[start..], style);
     }
+    fn externalUrlTarget(self: *Renderer, value: []const u8) Error![]const u8 {
+        if (std.mem.indexOfScalar(u8, value, '&') == null) return value;
+        var out: std.ArrayList(u8) = .empty;
+        var start: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, value, start, '&')) |i| {
+            try out.appendSlice(self.a, value[start..i]);
+            var buf: [4]u8 = undefined;
+            if (decodeEntity(value[i..], &buf, false)) |decoded| {
+                // Literal lowercase entities are source delimiters handled by
+                // DocIR. Other encoded angles belong to the URL, not its label.
+                const delimiter = starts(value[i..], "&lt;") or starts(value[i..], "&gt;");
+                if (!delimiter and std.mem.eql(u8, decoded.bytes, "<")) {
+                    try out.appendSlice(self.a, "%3C");
+                } else if (!delimiter and std.mem.eql(u8, decoded.bytes, ">")) {
+                    try out.appendSlice(self.a, "%3E");
+                } else try out.appendSlice(self.a, decoded.bytes);
+                start = i + decoded.consumed;
+            } else {
+                try out.append(self.a, '&');
+                start = i + 1;
+            }
+        }
+        try out.appendSlice(self.a, value[start..]);
+        return out.toOwnedSlice(self.a);
+    }
     pub fn link(self: *Renderer, label: []const u8, target: []const u8, style: Style, depth: usize, external: bool) Error!void {
         var s = style;
-        const resolved_target = if (external) try self.entityText(target) else target;
+        const resolved_target = if (external) try self.externalUrlTarget(target) else target;
         if (resolved_target.len != 0 and (!external or safeUrl(resolved_target))) {
             s.kind = if (external) .external_link else .link;
             s.target = resolved_target;
@@ -1317,6 +1391,13 @@ pub const Renderer = struct {
             break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
         };
         const content = input[tag.end..pair.inner_end];
+        if (tag.is("pre") and matched_pair == null) {
+            var parsed_style = style;
+            parsed_style.code = true;
+            parsed_style.preserve_whitespace = true;
+            try self.inlineText(content, parsed_style, depth + 1);
+            return pair.end;
+        }
         if (tag.is("math") and matched_pair != null and trim(tag.attrs).len == 0 and try self.numericPower(content, style)) return pair.end;
         if (tag.is("gallery")) {
             try self.gallery(content, style, depth + 1);
@@ -2318,7 +2399,15 @@ pub const Renderer = struct {
                 continue;
             }
             if (protected_tag) |tag| {
-                const pair = syntax.matchingTag(clean, tag) orelse syntax.Pair{ .inner_end = clean.len, .end = clean.len };
+                const matched_pair = syntax.matchingTag(clean, tag);
+                if (tag.is("pre") and matched_pair == null) {
+                    self.fallbacks.unclosed_formatting = true;
+                    const body_start = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + tag.end;
+                    try self.appendBlockBudgeted(&blocks, .{ .kind = .preformatted, .spans = try self.parseSpans(input[body_start..], .{ .code = true, .preserve_whitespace = true }) });
+                    pos = input.len;
+                    continue;
+                }
+                const pair = matched_pair orelse syntax.Pair{ .inner_end = clean.len, .end = clean.len };
                 try self.protectedBlock(&blocks, clean[tag.end..pair.inner_end]);
                 pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
                 if (pos < input.len and input[pos] == '\n') {
@@ -2341,7 +2430,7 @@ pub const Renderer = struct {
                 resetChangedListCounters(&counts, previous_list_path, path);
                 previous_list_path = path;
                 const body = std.mem.trimStart(u8, list_line[prefix..], " \t");
-                if (path[path.len - 1] == ';') if (inlineDefinitionSplit(body)) |pair| {
+                if (path[path.len - 1] == ';') if (inlineDefinitionSplit(try normalizeWikiQuotes(self.a, body, 0, false))) |pair| {
                     const detail_path = try self.a.dupe(u8, path);
                     detail_path[detail_path.len - 1] = ':';
                     try self.block(&blocks, .term, pair.term, path, "", 0);
@@ -2739,7 +2828,7 @@ pub const Renderer = struct {
         if (!pending.*) return;
         // Parsed spans can borrow source bytes; detach the completed caption.
         const body = try source.toOwnedSlice(self.a);
-        try self.appendTableCaption(caption, try self.parseSpans(body, .{}));
+        try self.appendTableCaption(caption, try self.cellSpans(body));
         pending.* = false;
     }
     fn parseTable(self: *Renderer, input: []const u8, start: usize) Error!TableResult {
@@ -2765,15 +2854,18 @@ pub const Renderer = struct {
             const line = trim(raw_line);
             pos = if (end < input.len) end + 1 else end;
             if (wikiTableIndent(line) != null) {
-                try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
-                if (cell_source.items.len != 0) try cell_source.append(self.a, '\n');
-                try cell_source.appendSlice(self.a, raw_line);
+                // A nested table belongs to the pending caption or current cell;
+                // keep its whole source there until the enclosing boundary.
+                const nested_source = if (caption_pending) &caption_source else &cell_source;
+                if (nested_source.items.len != 0) try nested_source.append(self.a, '\n');
+                try nested_source.appendSlice(self.a, raw_line);
                 nested_tables += 1;
                 continue;
             }
             if (nested_tables != 0) {
-                if (cell_source.items.len != 0) try cell_source.append(self.a, '\n');
-                try cell_source.appendSlice(self.a, raw_line);
+                const nested_source = if (caption_pending) &caption_source else &cell_source;
+                if (nested_source.items.len != 0) try nested_source.append(self.a, '\n');
+                try nested_source.appendSlice(self.a, raw_line);
                 if (starts(line, "|}")) nested_tables -= 1;
                 continue;
             }
@@ -4102,6 +4194,85 @@ test "same-line definition lists split term and definition without splitting nes
         try std.testing.expectEqualStrings(case.term, pair.term);
         try std.testing.expectEqualStrings(case.definition, pair.definition);
     }
+    // Official parse keeps inner colons in accepted HTML and quote formatting,
+    // while the first following top-level colon still owns the detail block.
+    const html_cases = [_]struct { source: []const u8, term: []const u8, bold: bool = false, italic: bool = false }{
+        .{ .source = "term <span>inner: text</span> : detail", .term = "term inner: text" },
+        .{ .source = "term <b>inner: text</b> : detail", .term = "term inner: text", .bold = true },
+        .{ .source = "term <span>first <i>inner: text</i> tail</span> : detail", .term = "term first inner: text tail", .italic = true },
+        .{ .source = "term '''inner: text''' : detail", .term = "term inner: text", .bold = true },
+        .{ .source = "term ''inner: text'' : detail", .term = "term inner: text", .italic = true },
+        .{ .source = "term <span>[[A|inner: text]]</span> : detail", .term = "term inner: text" },
+    };
+    for (html_cases) |case| {
+        var formatted: Renderer = .{ .a = a, .context = .{} };
+        const result = try formatted.renderBody(try std.fmt.allocPrint(a, "; {s}", .{case.source}));
+        try std.testing.expectEqual(@as(usize, 2), result.len);
+        try std.testing.expectEqual(Kind.term, result[0].kind);
+        try std.testing.expectEqual(Kind.list_detail, result[1].kind);
+        try std.testing.expectEqualStrings(case.term, try flattened(a, result[0].spans));
+        try std.testing.expectEqualStrings("detail", try flattened(a, result[1].spans));
+        var styled = !case.bold and !case.italic;
+        for (result[0].spans) |span| {
+            if (std.mem.indexOf(u8, span.text, "inner: text") != null and
+                span.flags.bold == case.bold and span.flags.italic == case.italic) styled = true;
+        }
+        try std.testing.expect(styled);
+        if (std.mem.indexOf(u8, case.source, "[[A|") != null)
+            try std.testing.expect(unclosedExternalRecoveryHasLink(result[0].spans, .link, "A"));
+        for (result[1].spans) |span| {
+            try std.testing.expect(!span.flags.bold and !span.flags.italic);
+        }
+    }
+    // HTML opened inside an accepted external label can remain active after
+    // that label ends; retrying past its scheme colon retains the same depth.
+    const crossing_cases = [_]struct { source: []const u8, bold_tail: bool = false }{
+        .{ .source = "[https://example.org <span>term] inner: text</span> : detail" },
+        .{ .source = "<span>[https://example.org term] inner: text</span> : detail" },
+        .{ .source = "[https://example.org <b>term] inner: text</b> : detail", .bold_tail = true },
+    };
+    for (crossing_cases) |case| {
+        var crossing: Renderer = .{ .a = a, .context = .{} };
+        const result = try crossing.renderBody(try std.fmt.allocPrint(a, "; {s}", .{case.source}));
+        try std.testing.expectEqual(@as(usize, 2), result.len);
+        try std.testing.expectEqual(Kind.term, result[0].kind);
+        try std.testing.expectEqual(Kind.list_detail, result[1].kind);
+        try std.testing.expectEqualStrings("term inner: text", try flattened(a, result[0].spans));
+        try std.testing.expectEqualStrings("detail", try flattened(a, result[1].spans));
+        var linked_text: std.ArrayList(u8) = .empty;
+        var tail_seen = false;
+        for (result[0].spans) |span| {
+            if (span.kind == .external_link) {
+                try std.testing.expectEqualStrings("https://example.org", span.target);
+                try linked_text.appendSlice(a, span.text);
+            }
+            if (std.mem.indexOf(u8, span.text, "inner: text") != null) {
+                tail_seen = true;
+                try std.testing.expect(span.kind != .external_link);
+                try std.testing.expectEqual(case.bold_tail, span.flags.bold);
+            }
+        }
+        try std.testing.expectEqualStrings("term", linked_text.items);
+        try std.testing.expect(tail_seen);
+        for (result[1].spans) |span| try std.testing.expect(!span.flags.bold and span.kind != .external_link);
+    }
+    for ([_][]const u8{
+        "term <span>inner: text</span>",
+        "term <span>inner: text : detail",
+        "term <span/>inner: text : detail",
+        "term <span><i>inner: text</span> tail : detail",
+    }) |source| try std.testing.expect(inlineDefinitionSplit(source) == null);
+    const unprotected_cases = [_]struct { source: []const u8, term: []const u8, detail: []const u8 }{
+        .{ .source = "term <br>inner: text : detail", .term = "term <br>inner", .detail = "text : detail" },
+        .{ .source = "term <bogus>inner: text</bogus> : detail", .term = "term <bogus>inner", .detail = "text</bogus> : detail" },
+        .{ .source = "term &lt;span&gt;inner: text&lt;/span&gt; : detail", .term = "term &lt;span&gt;inner", .detail = "text&lt;/span&gt; : detail" },
+        .{ .source = "term <span>first</span> inner: text", .term = "term <span>first</span> inner", .detail = "text" },
+    };
+    for (unprotected_cases) |case| {
+        const split = inlineDefinitionSplit(case.source) orelse return error.ExpectedOutsideHtmlDefinition;
+        try std.testing.expectEqualStrings(case.term, split.term);
+        try std.testing.expectEqualStrings(case.detail, split.definition);
+    }
     try std.testing.expect(inlineDefinitionSplit("[[unclosed:link : definition") == null);
     try std.testing.expect(inlineDefinitionSplit("{{unclosed:template : definition") == null);
     const empty_term = inlineDefinitionSplit(": empty term") orelse return error.ExpectedEmptyTerm;
@@ -4127,6 +4298,16 @@ test "nested same-line definition lists retain their parent list paths" {
         try std.testing.expectEqual(if (i % 2 == 0) Kind.term else Kind.list_detail, block_value.kind);
         try std.testing.expectEqualStrings(label, try flattened(a, block_value.spans));
     }
+    var nested: Renderer = .{ .a = a, .context = .{} };
+    const protected_blocks = try nested.renderBody("#; <b>[[A|inner: text]]</b> : detail\n*; <nowiki>literal: marker</nowiki> : protected detail");
+    try std.testing.expectEqual(@as(usize, 4), protected_blocks.len);
+    for (protected_blocks, [_][]const u8{ "#;", "#:", "*;", "*:" }, [_][]const u8{ "inner: text", "detail", "literal: marker", "protected detail" }) |block_value, path, label| {
+        try std.testing.expectEqualStrings(path, block_value.list_path);
+        try std.testing.expectEqualStrings(label, try flattened(a, block_value.spans));
+    }
+    try std.testing.expect(unclosedExternalRecoveryHasLink(protected_blocks[0].spans, .link, "A"));
+    for (protected_blocks[0].spans) |span| try std.testing.expect(span.flags.bold);
+    for (protected_blocks[2].spans) |span| try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
 }
 
 test "parameter defaults remain visible when preceded by ordinary text" {
@@ -6607,8 +6788,8 @@ test "external delimiter fixture protected literals and existing URLs" {
     try externalDelimiterCheck("https://example.test/?a=1&amp;b=2", "https://example.test/?a=1&b=2", "https://example.test/?a=1&b=2");
     try externalDelimiterCheck("[https://example.test <nowiki>&lt;word</nowiki> label]", "<word label", "https://example.test");
     try externalDelimiterCheck("https://example.test&lt;word", "https://example.test<word", null);
-    try externalDelimiterCheck("[https://example.test&#60;word label]", "label", null);
-    try externalDelimiterCheck("[https://example.test&LT;word label]", "label", null);
+    try externalDelimiterCheck("[https://example.test&#60;word label]", "label", "https://example.test%3Cword");
+    try externalDelimiterCheck("[https://example.test&LT;word label]", "label", "https://example.test%3Cword");
 }
 
 test "nested label fixture ordinary link recovery preserves outer text" {
@@ -7516,4 +7697,218 @@ test "external line boundary fixture retains multiline attributes and ordinary c
     }
     try std.testing.expect(styled);
     try std.testing.expect(unclosedExternalRecoveryHasLink(closed, .link, "C"));
+}
+
+test "protected comment boundary retains literal pre comments and once-only entities" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("<pre><!--literal-->&lt;b&gt;&amp;lt;[[B]]</pre>[[C]]");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.preformatted, blocks[0].kind);
+    try std.testing.expectEqualStrings("<!--literal--><b>&lt;[[B]]", try plainText(a, blocks[0].spans));
+    for (blocks[0].spans) |span| {
+        try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        try std.testing.expect(span.kind != .link);
+    }
+    try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[1].spans, .link, "C"));
+}
+
+test "protected first closer retains subsequent link and encoded visible text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "nowiki", "pre" }) |name| {
+        const source = try std.fmt.allocPrint(a, "<{s}><span title=\"</{s}>\">[[B]]<!--hide-->&lt;i&gt;", .{ name, name });
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("<span title=\"\">B<i>", try plainText(a, spans));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+        for (spans) |span| if (span.kind == .link) {
+            try std.testing.expectEqualStrings("B", span.target);
+            try std.testing.expectEqual(Provenance.parsed, span.provenance);
+        };
+    }
+    var encoded: Renderer = .{ .a = a, .context = .{} };
+    const spans = try encoded.parseSpans("<nowiki>&lt;/nowiki&gt;<!--literal-->&amp;lt;</nowiki>[[B]]", .{});
+    try std.testing.expectEqualStrings("</nowiki><!--literal-->&lt;B", try plainText(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+}
+
+test "unmatched pre parses ordinary links and entities on inline and block paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var inline_renderer: Renderer = .{ .a = a, .context = .{} };
+    const inline_spans = try inline_renderer.parseSpans("A<pre>B<!--hidden-->&lt;i&gt;[[C]]", .{});
+    try std.testing.expectEqualStrings("AB<i>C", try plainText(a, inline_spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(inline_spans, .link, "C"));
+    try std.testing.expect(inline_renderer.fallbacks.unclosed_formatting);
+    var block_renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try block_renderer.renderBody("<pre>B<!--hidden-->&lt;i&gt;[[C]]\n\tTAIL  ");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqual(Kind.preformatted, blocks[0].kind);
+    try std.testing.expectEqualStrings("B<i>C\n\tTAIL  ", try plainText(a, blocks[0].spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[0].spans, .link, "C"));
+    for (blocks[0].spans) |span| try std.testing.expect(span.flags.code);
+    try std.testing.expect(block_renderer.fallbacks.unclosed_formatting);
+}
+
+test "unmatched pre retains nested nowiki and closed pre remains literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var unmatched: Renderer = .{ .a = a, .context = .{} };
+    const spans = try unmatched.parseSpans("<pre>[[C]]<nowiki>\n[[D]]&amp;lt;</nowiki>", .{});
+    try std.testing.expectEqualStrings("C\n[[D]]&lt;", try plainText(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "C"));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .link, "D"));
+    var closed: Renderer = .{ .a = a, .context = .{} };
+    const literal = try closed.parseSpans("<pre><!--literal-->&lt;i&gt;[[C]]</pre>", .{});
+    try std.testing.expectEqualStrings("<!--literal--><i>[[C]]", try plainText(a, literal));
+    for (literal) |span| {
+        try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        try std.testing.expect(span.kind != .link);
+    }
+    try std.testing.expect(!closed.fallbacks.unclosed_formatting);
+}
+
+test "unmatched pre parsing keeps existing depth and output limits" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var depth_limited: Renderer = .{ .a = a, .context = .{} };
+    try depth_limited.inlineText("<pre>[[C]]", .{}, max_depth);
+    try std.testing.expect(depth_limited.fallbacks.render_limit);
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(depth_limited.spans.items, .link, "C"));
+    var output_limited: Renderer = .{ .a = a, .context = .{}, .nodes = max_nodes };
+    const truncated = try output_limited.parseSpans("<pre>before [[C]]", .{});
+    try std.testing.expect(output_limited.fallbacks.render_limit);
+    try std.testing.expectEqualStrings("[render output truncated]", try plainText(a, truncated));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(truncated, .link, "C"));
+}
+
+test "external angle entities preserve encoded navigation and decoded labels" {
+    for ([_][]const u8{ "&#60;", "&#x3C;", "&LT;" }) |entity| {
+        var buf: [160]u8 = undefined;
+        const source = try std.fmt.bufPrint(&buf, "[https://example.test/a{s}b label]", .{entity});
+        try externalDelimiterCheck(source, "label", "https://example.test/a%3Cb");
+    }
+    for ([_][]const u8{ "&#62;", "&#x3E;", "&GT;" }) |entity| {
+        var buf: [160]u8 = undefined;
+        const source = try std.fmt.bufPrint(&buf, "[https://example.test/a{s}b label]", .{entity});
+        try externalDelimiterCheck(source, "label", "https://example.test/a%3Eb");
+    }
+    try externalDelimiterCheck("[https://example.test/a&#60;b]", "https://example.test/a<b", "https://example.test/a%3Cb");
+    try externalDelimiterCheck("[https://example.test/a&#60;b A &amp; B]", "A & B", "https://example.test/a%3Cb");
+    try externalDelimiterCheck("<nowiki>[https://example.test/a&#60;b label]</nowiki>", "[https://example.test/a<b label]", null);
+}
+
+test "external angle target normalization preserves unsafe scheme refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    try r.link("label", "javascript&#58;alert&#60;x", .{}, 0, true);
+    try std.testing.expectEqualStrings("label", try plainText(a, r.spans.items));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(r.spans.items, .external_link, "javascript:alert%3Cx"));
+    for (r.spans.items) |span| try std.testing.expectEqualStrings("", span.target);
+}
+
+test "external raw CR boundary retains opener URL following navigation and tail" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "\r", "\r\n" }) |ending| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "Before [https://example.test docs{s}Following [[B]] ] tail", .{ending});
+        const spans = try r.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("Before [https://example.test docs Following B ] tail", try plainText(a, spans));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+    }
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const spans = try protected.parseSpans("[https://example.test <nowiki>docs\r[[B]]</nowiki>] tail", .{});
+    try std.testing.expectEqualStrings("docs\r[[B]] tail", try plainText(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .link, "B"));
+}
+
+test "wiki caption blocks retain nested lexical tables navigation and styles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n|+ Outer caption\n{|\n| [[A|''Inner lexical'']]\n|}\n|}");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const table = blocks[0].table.?;
+    try std.testing.expectEqualStrings("Outer caption\nInner lexical", try plainText(a, table.caption));
+    var linked = false;
+    for (table.caption) |span| if (span.kind == .link) {
+        try std.testing.expectEqualStrings("A", span.target);
+        try std.testing.expect(span.flags.italic);
+        linked = true;
+    };
+    try std.testing.expect(linked);
+    try std.testing.expect(!r.fallbacks.malformed_table);
+}
+
+test "wiki caption blocks do not steal later captions rows or ordinary nested cells" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n|+ Outer caption\n* [[A|listed lexical]]\n# [[B|numbered lexical]]\n|+ Following caption\n| Outer before\n{|\n| [[C|Inner cell]]\n|}\nOuter after\n|}");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const table = blocks[0].table.?;
+    try std.testing.expectEqualStrings("Outer caption\n• listed lexical\n1. numbered lexical\nFollowing caption", try plainText(a, table.caption));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(table.caption, .link, "A"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(table.caption, .link, "B"));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(table.caption, .link, "C"));
+    try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+    try std.testing.expectEqualStrings("Outer before\nInner cell\nOuter after", try plainText(a, table.rows[0].cells[0].spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(table.rows[0].cells[0].spans, .link, "C"));
+    try std.testing.expect(!r.fallbacks.malformed_table);
+}
+
+test "wiki caption blocks preserve opener-line literals protected tables and DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var protected_renderer: Renderer = .{ .a = a, .context = .{} };
+    const protected = try protected_renderer.renderBody("{|\n|+ * literal <nowiki>{| [[A|protected]] |}</nowiki>\n|}");
+    const literal = protected[0].table.?.caption;
+    try std.testing.expectEqualStrings("* literal {| [[A|protected]] |}", try plainText(a, literal));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(literal, .link, "A"));
+    var provenance = false;
+    for (literal) |span| if (std.mem.indexOf(u8, span.text, "[[A|protected]]") != null) {
+        try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        provenance = true;
+    };
+    try std.testing.expect(provenance);
+    const blob = @import("blob_encoder");
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n|+ Outer caption\n{|\n| [[A|''Inner lexical'']]\n|}\n|+ Following caption\n| outer cell\n|}");
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "caption blocks", .language, .{ .code = "en", .heading = "English" });
+    const table = decoded.entry.sections[0].blocks[0].table.?;
+    var visible: std.ArrayList(u8) = .empty;
+    var linked = false;
+    for (table.caption) |span| {
+        if (span.kind == .line_break) try visible.append(a, '\n') else try visible.appendSlice(a, span.text);
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("A", span.target);
+            try std.testing.expect(span.italic);
+            linked = true;
+        }
+    }
+    try std.testing.expectEqualStrings("Outer caption\nInner lexical\nFollowing caption", visible.items);
+    try std.testing.expect(linked);
+    var cell: std.ArrayList(u8) = .empty;
+    for (table.rows[0].cells[0].spans) |span| try cell.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("outer cell", cell.items);
 }

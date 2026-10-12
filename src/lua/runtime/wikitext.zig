@@ -4329,6 +4329,10 @@ test "native AOT nowiki strip markers share page host state" {
         .{ .source = "<nowiki / ><!--hide-->tail", .expected = "<nowiki / >tail" },
         .{ .source = "<nowiki>A<!--D-->B", .expected = "<nowiki>A<!--D-->B" },
         .{ .source = "<ref>A<!--D-->B</ref>", .expected = "<ref>AB</ref>" },
+        .{ .source = "<pre title='>'>A<!--D-->&lt;b&gt;&amp;lt;[[B]]</pre><!--hide-->tail", .expected = "<pre title='>'>A<!--D-->&lt;b&gt;&amp;lt;[[B]]</pre>tail" },
+        .{ .source = "<nowiki><span title=\"</nowiki>\">[[B]]<!--hide-->&lt;i&gt;", .expected = "<nowiki><span title=\"</nowiki>\">[[B]]&lt;i&gt;" },
+        .{ .source = "<pre><span title=\"</pre>\">[[B]]<!--hide-->&lt;i&gt;", .expected = "<pre><span title=\"</pre>\">[[B]]&lt;i&gt;" },
+        .{ .source = "A<pre>B<!--hidden-->&lt;i&gt;[[C]]", .expected = "A<pre>B&lt;i&gt;[[C]]" },
     };
     for (comment_cases) |case| {
         try std.testing.expectEqualStrings(case.expected, try expander.expandFragment("Page", case.source, 1_670_803_200));
