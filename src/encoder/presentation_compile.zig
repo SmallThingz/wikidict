@@ -2186,8 +2186,9 @@ pub const Renderer = struct {
                     }
                 }
             };
+            const list_line = line[if (anchored_inline) 0 else syntax.leadingBehaviorControlOffset(line, control_matcher)..];
             var prefix: usize = 0;
-            while (!anchored_inline and prefix < line.len and std.mem.indexOfScalar(u8, "#*:;", line[prefix]) != null) : (prefix += 1) {}
+            while (!anchored_inline and prefix < list_line.len and std.mem.indexOfScalar(u8, "#*:;", list_line[prefix]) != null) : (prefix += 1) {}
             const table_indent: ?[]const u8 = if (anchored_inline) null else wikiTableIndent(clean);
             const html_tag = if (syntax.tagAt(clean, 0)) |tag| (if (!tag.closing and
                 oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) and
@@ -2320,11 +2321,11 @@ pub const Renderer = struct {
                 continue;
             }
             if (prefix != 0) {
-                const path = line[0..prefix];
+                const path = list_line[0..prefix];
                 const root = listRoot(path[0]);
                 if (list_root != 0 and list_root != root) @memset(&counts, 0);
                 list_root = root;
-                const body = std.mem.trimStart(u8, line[prefix..], " \t");
+                const body = std.mem.trimStart(u8, list_line[prefix..], " \t");
                 if (path[path.len - 1] == ';') if (inlineDefinitionSplit(body)) |pair| {
                     const detail_path = try self.a.dupe(u8, path);
                     detail_path[detail_path.len - 1] = ':';
@@ -7113,4 +7114,56 @@ test "inline block opening fixture retains empty and adjacent block boundaries" 
     try std.testing.expectEqualStrings("alpha\ngamma", try flattened(a, try empty.parseSpans("alpha<div></div>gamma", .{})));
     var adjacent: Renderer = .{ .a = a, .context = .{} };
     try std.testing.expectEqualStrings("alpha\nbeta\ngamma\ntail", try flattened(a, try adjacent.parseSpans("alpha<div>beta</div><p>gamma</p>tail", .{})));
+}
+
+test "leading behavior switch preserves heading and numbered lexical roles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("__NOEDITSECTION__== English ==\n__NOEDITSECTION__# [[cat|lexical sense]]\n__NOTOC____NOEDITSECTION__# second");
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    try std.testing.expectEqual(Kind.heading, blocks[0].kind);
+    try std.testing.expectEqualStrings("English", try flattened(a, blocks[0].spans));
+    for (blocks[1..], [_][]const u8{ "1", "2" }) |block_value, number| {
+        try std.testing.expectEqual(Kind.definition, block_value.kind);
+        try std.testing.expectEqualStrings("#", block_value.list_path);
+        try std.testing.expectEqualStrings(number, block_value.number);
+    }
+    try std.testing.expectEqualStrings("lexical sense", try flattened(a, blocks[1].spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[1].spans, .link, "cat"));
+}
+
+test "leading behavior control preserves table protected and unknown literal boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "__NOEDITSECTION__{|\n| lexical cell\n|}", "<nowiki>__NOEDITSECTION__# literal</nowiki>", "__UNKNOWN__# literal", "&#95;&#95;NOEDITSECTION&#95;&#95;# literal" }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+        try std.testing.expect(blocks[0].table == null and blocks[0].list_path.len == 0);
+        const text = try flattened(a, blocks[0].spans);
+        if (std.mem.indexOf(u8, source, "lexical cell") != null) {
+            try std.testing.expect(std.mem.indexOf(u8, text, "{|") != null);
+            try std.testing.expect(std.mem.indexOf(u8, text, "lexical cell") != null);
+        } else try std.testing.expect(std.mem.indexOf(u8, text, "# literal") != null);
+    }
+}
+
+test "leading localized behavior controls use captured profile for heading and list" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const registry_type = @import("namespace_registry").behavior_switches;
+    const raw = registry_type.header ++ "\n# wiki\tjawiktionary\n# dump-date\t20261001\n# content-language\tja\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nnotoc\t0\t＿＿目次非表示＿＿\n";
+    var registry = try registry_type.Registry.init(a, raw, "jawiktionary", "20261001", "ja", @splat(0));
+    defer registry.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .behavior_switches = &registry } };
+    const blocks = try renderer.renderBody("＿＿目次非表示＿＿== English ==\n＿＿目次非表示＿＿# sense");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.heading, blocks[0].kind);
+    try std.testing.expectEqual(Kind.definition, blocks[1].kind);
+    try std.testing.expectEqualStrings("sense", try flattened(a, blocks[1].spans));
 }

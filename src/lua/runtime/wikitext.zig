@@ -5443,3 +5443,15 @@ test "plural count casting uses decimal prefix rather than Zig numeric syntax" {
 test "plural explicit forms use exact normalized count labels" {
     try PositionalPluralFixture.check("en", "{{PLURAL:1|01=EXPLICIT|ONE|OTHER}} / {{PLURAL:1|+1=EXPLICIT|ONE|OTHER}} / {{PLURAL:1|1.0=EXPLICIT|ONE|OTHER}} / {{PLURAL:1|1e0=EXPLICIT|ONE|OTHER}} / {{PLURAL:1|abc1=EXPLICIT|ONE|OTHER}}", "ONE / ONE / ONE / ONE / ONE", 0);
 }
+
+test "expanded authored behavior prefixes reach presentation without early stripping" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get } };
+    try std.testing.expectEqualStrings("__NOEDITSECTION__==English==\n__NOEDITSECTION__===Noun===\n__NOEDITSECTION__# [[cat|lexical sense]]\n", try expander.expandFragment("entry", "<!--hidden-->__NOEDITSECTION__==English==\n__NOEDITSECTION__===Noun===\n__NOEDITSECTION__# [[cat|lexical sense]]\n", 1_670_803_200));
+}

@@ -664,7 +664,6 @@ test "language headings accept active control suffix without consuming literal s
     try std.testing.expect(literal.next() == null);
 }
 
-
 test "Hebrew raw conventions ignore protected category and grammar literals" {
     const negative = [_][]const u8{
         "==lemma==\n<nowiki>[[קטגוריה:שפה ספרדית]]</nowiki>\n",
@@ -702,4 +701,11 @@ test "Hebrew raw conventions ignore protected category and grammar literals" {
         .heading = "lemma",
         .source = "==lemma==\n{{ניתוח דקדוקי|{{{x}}}}}\n",
     }));
+}
+
+test "language iterator recognizes active prefix controls without inventing protected headings" {
+    var iterator = Iterator.init("__NOEDITSECTION__==English==\n__NOEDITSECTION__# sense\n<nowiki>__NOEDITSECTION__==French==</nowiki>\n__NOTOC__==French==\n# autre");
+    try std.testing.expectEqualStrings("English", iterator.next().?.heading);
+    try std.testing.expectEqualStrings("French", iterator.next().?.heading);
+    try std.testing.expect(iterator.next() == null);
 }

@@ -25,10 +25,23 @@ pub const ControlMatcher = struct {
     }
 };
 
-/// Only an active, complete suffix after a heading delimiter is invisible.
+/// Leading active controls and a complete suffix after a heading delimiter are invisible.
 /// Scan original bytes, retaining protected bodies, attributes and entities.
+/// Skip only active controls at the physical start of a heading/list line.
+/// This is not table preprocessing: controls before {| leave it literal.
+pub fn leadingBehaviorControlOffset(raw: []const u8, matcher: ?ControlMatcher) usize {
+    var at: usize = 0;
+    while (at < raw.len) {
+        const end = if (matcher) |m| m.end(raw, at) else behaviorSwitchEnd(raw, at);
+        const next = end orelse break;
+        if (next <= at or next > raw.len) break;
+        at = next;
+    }
+    return at;
+}
+
 pub fn headingControlPrefix(raw: []const u8, matcher: ?ControlMatcher) []const u8 {
-    const line = std.mem.trimEnd(u8, raw, " \t");
+    const line = std.mem.trimEnd(u8, raw[leadingBehaviorControlOffset(raw, matcher)..], " \t");
     if (line.len == 0 or line[0] != '=') return line;
     var at: usize = 0;
     while (at < line.len) {
@@ -200,8 +213,7 @@ fn recoverUnclosedDivAttribute(text: []const u8, start: usize) ?Tag {
             continue;
         }
         if (std.mem.indexOfScalar(u8, text[at..end], '<') != null) return null;
-        return .{ .name = text[start + 1 .. name_end], .attrs = text[name_end..end],
-            .end = end + 1, .closing = false, .self_closing = false };
+        return .{ .name = text[start + 1 .. name_end], .attrs = text[name_end..end], .end = end + 1, .closing = false, .self_closing = false };
     }
     return null;
 }
@@ -728,4 +740,13 @@ test "heading control suffix keeps protected unknown and entity literals" {
     try std.testing.expectEqualStrings("=English=", headingControlPrefix("=English=__NOTOC__ __NOEDITSECTION__", null));
     for ([_][]const u8{ "=English=__UNKNOWN__", "=English=&#95;&#95;NOTOC__", "=English=<nowiki>__NOTOC__</nowiki>", "=English=<span title=\"__NOTOC__\">text</span>", "=English=__NOTOC__ tail" }) |line|
         try std.testing.expectEqualStrings(line, headingControlPrefix(line, null));
+}
+
+test "leading active controls affect heading boundary and preserve protected spelling" {
+    try std.testing.expectEqualStrings("== English ==", headingControlPrefix("__NOEDITSECTION__== English ==", null));
+    try std.testing.expectEqualStrings("== English ==", headingControlPrefix("__NOTOC____NOEDITSECTION__== English ==__NOTOC__", null));
+    for ([_][]const u8{ "__UNKNOWN__== English ==", "&#95;&#95;NOEDITSECTION&#95;&#95;== English ==", "<nowiki>__NOEDITSECTION__</nowiki>== English ==" }) |source| {
+        try std.testing.expectEqual(@as(usize, 0), leadingBehaviorControlOffset(source, null));
+        try std.testing.expectEqualStrings(source, headingControlPrefix(source, null));
+    }
 }

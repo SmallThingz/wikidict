@@ -373,10 +373,13 @@ class ResourceLimitsTest(unittest.TestCase):
             report_path = Path(tmp) / 'watchdog.json'
             native_pid_path = Path(tmp) / 'native.pid'
             child_code = (
-                'import build_resource_limits as l, subprocess, time; '
+                'import build_resource_limits as l, os, subprocess, time; '
                 'assert l.inside_watchdog(); '
                 'native=subprocess.Popen(["/bin/sleep", "5"]); '
-                f'open({str(native_pid_path)!r}, "w").write(str(native.pid)); '
+                f'pid_path={str(native_pid_path)!r}; '
+                'pid_file=open(pid_path + ".tmp", "w"); '
+                'pid_file.write(str(native.pid)); pid_file.close(); '
+                'os.replace(pid_path + ".tmp", pid_path); '
                 'time.sleep(5)'
             )
             # Allow interpreter startup and recording the native descendant under load.
@@ -391,7 +394,9 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertLessEqual(report['peak_pss_bytes'], 64 * 1024**2)
             self.assertLessEqual(report['peak_tasks'], 4)
             self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
-            self.assertFalse(Path('/proc', native_pid_path.read_text()).exists())
+            # Startup may exhaust the wall bound before a native child is created.
+            if native_pid_path.exists():
+                self.assertFalse(Path('/proc', native_pid_path.read_text()).exists())
 
 
     @contextlib.contextmanager
@@ -489,6 +494,30 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertEqual(report['termination_reason'], 'child_exit')
             self.assertEqual(report['child_exit_status'], 0)
             self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
+
+    def test_watchdog_controller_exit_reaps_orphan_native_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / 'watchdog.json'
+            native_pid_path = Path(tmp) / 'native.pid'
+            child_code = (
+                'import build_resource_limits as l, subprocess; '
+                'assert l.inside_watchdog(); '
+                'native=subprocess.Popen(["/bin/sleep", "60"]); '
+                f'with_file=open({str(native_pid_path)!r}, "w"); '
+                'with_file.write(str(native.pid)); with_file.close()'
+            )
+            with self.assertRaisesRegex(
+                    limits.ContainmentUnavailable, 'controller_exited_with_descendants'):
+                limits.supervise_watchdog(
+                    argv=['-c', child_code], report_path=report_path, wall_seconds=60,
+                    memory_limit_bytes=64 * 1024**2, max_tasks=4)
+            report = json.loads(report_path.read_text())
+            self.assertEqual(report['termination_reason'], 'controller_exited_with_descendants')
+            self.assertEqual(report['child_exit_status'], 0)
+            # This marker is mandatory: the child wrote it before its normal exit.
+            native_pid = int(native_pid_path.read_text())
+            self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
+            self.assertFalse(Path('/proc', str(native_pid)).exists())
 
     def test_watchdog_rapid_native_child_exit_churn(self):
         with tempfile.TemporaryDirectory() as tmp:

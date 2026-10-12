@@ -995,7 +995,6 @@ fn corroboratedEqualsDeclaration(codes: LanguageCodes, raw: language_source.Sect
         std.mem.eql(u8, label[open + 1 .. label.len - 1], raw_code);
 }
 
-
 // ANG constitution rev54826 uses the noun role Nama at language depth.
 // Its exact en-nama headword template invokes the English noun module. Only
 // this aligned continuation of an explicit English section disambiguates the
@@ -1766,8 +1765,7 @@ test "raw language markers canonicalize templated headings" {
     defer arena.deinit();
     const a = arena.allocator();
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
-    var banner_namespaces = try @import("namespace_registry").Registry.init(a,
-        "# wikidict-namespace-registry-v1\n# wiki\tanwiktionary\n# dump-date\t20261001\n# content-language\tan\n" ++
+    var banner_namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tanwiktionary\n# dump-date\t20261001\n# content-language\tan\n" ++
         "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
         "6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
         "10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
@@ -1788,8 +1786,7 @@ test "raw language markers canonicalize templated headings" {
         "<div id=\"toc\" class=\"toccolours\" >'''''[[Aragonés|Aragonés]]''''' '''''[[Catalán|Catalán]]''''' <small>- ''Aragonés''</small></div>",
     }) |bad_banner| try std.testing.expect(resolveSection(banner_codes, .{ .heading = bad_banner, .source = "" }) == null);
     try std.testing.expect(resolveSection(TestLanguages.codes(), .{ .heading = banner, .source = "" }) == null);
-    var foreign_namespaces = try @import("namespace_registry").Registry.init(a,
-        "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+    var foreign_namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
         "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
         "6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
         "10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
@@ -3066,9 +3063,17 @@ test "Arabic whole linked declarations match vocalized language labels without g
     try std.testing.expect(resolveSection(codes, .{ .heading = "لغة ألمانية", .source = aalen_source }) != null);
     try std.testing.expectEqualStrings("de", resolveSection(codes, .{ .heading = "لغة ألمانية", .source = aalen_source }).?.code);
     for ([_][]const u8{
-        "لغة مجهولة", "لغة ألمانية الإنجليزية", "لغة [[ألمانية|الإنجليزية]]",
-        "لغة ألمانية [[الإنجليزية]]", "لغة ألمانية|الإنجليزية", "لغة", "لغةألمانية",
-        "اسم ألماني", "اسم عَلَم", "اَلْمَعَانِي", "<nowiki>لغة ألمانية</nowiki>",
+        "لغة مجهولة",
+        "لغة ألمانية الإنجليزية",
+        "لغة [[ألمانية|الإنجليزية]]",
+        "لغة ألمانية [[الإنجليزية]]",
+        "لغة ألمانية|الإنجليزية",
+        "لغة",
+        "لغةألمانية",
+        "اسم ألماني",
+        "اسم عَلَم",
+        "اَلْمَعَانِي",
+        "<nowiki>لغة ألمانية</nowiki>",
     }) |heading| try std.testing.expect(resolveSection(codes, .{ .heading = heading, .source = "" }) == null);
     var other_codes = codes;
     other_codes.namespace_catalog = null;
@@ -3117,7 +3122,9 @@ test "unsupported parser reason retains normal raw ownership and alias body" {
         defer parsed.deinit();
         const actual = parsed.value.object.get("reasons").?.array.items;
         var reason_count: usize = 0;
-        for (actual) |reason| if (std.mem.eql(u8, reason.string, "unsupported_parser_function")) { reason_count += 1; };
+        for (actual) |reason| if (std.mem.eql(u8, reason.string, "unsupported_parser_function")) {
+            reason_count += 1;
+        };
         try std.testing.expectEqual(@as(usize, 1), reason_count);
         count += 1;
     }
@@ -3143,7 +3150,9 @@ test "protected template arguments cannot corroborate an untrusted language alia
                 return .{ .code = "en", .heading = "English" };
             return null;
         }
-        fn untrusted(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage { return null; }
+        fn untrusted(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage {
+            return null;
+        }
     };
     const codes: LanguageCodes = .{ .resolve_fn = Local.resolve, .strong_fn = Local.untrusted, .trusted_fn = Local.untrusted };
     inline for (.{ "<nowiki>{{x|lang=en}}</nowiki>", "<!--{{x|lang=en}}-->", "<pre>{{x|lang=en}}</pre>", "<span title=\"{{x|lang=en}}\">plain</span>" }) |source| {
@@ -3208,7 +3217,6 @@ test "Arabic exact nested noun declarations classify only one untrusted L2 lemma
     try std.testing.expectEqualStrings("en", resolveSection(codes, .{ .heading = "aal", .source = "== aal ==__NOEDITSECTION__\n=== اسم إنجليزي === __NOEDITSECTION__\n# controlled body" }).?.code);
     try std.testing.expect(resolveSection(codes, .{ .heading = "aal", .source = "== aal ==\n=== اسم إنجليزي === __UNKNOWN_SWITCH__\n# unknown suffix" }) == null);
 }
-
 
 test "ANG explicit English noun continuation does not steal genuine Nama" {
     var tmp = std.testing.tmpDir(.{});
@@ -3421,4 +3429,53 @@ test "single resolved language preserves structured prefix without ambiguous att
     const unknown_text = try Local.text(a, unknown_entry);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, unknown_text, "unscoped prefix"));
     try std.testing.expect(std.mem.indexOf(u8, unknown_text, "unknown") != null);
+}
+
+test "expanded behavior-prefix page retains English bucket and typed lexical blob record" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const out_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const Local = struct {
+        fn get(_: ?*const anyopaque, heading: []const u8) ?[]const u8 {
+            return if (std.mem.eql(u8, heading, "English")) "en" else null;
+        }
+        fn strong(_: ?*const anyopaque, heading: []const u8) ?ResolvedLanguage {
+            return if (std.mem.eql(u8, heading, "English")) .{ .code = "en", .heading = "English" } else null;
+        }
+    };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .strong_fn = Local.strong };
+    var writer = try Writer.init(std.testing.io, a, out_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact bytes asserted by runtime's expanded authored-prefix regression.
+    const expanded = "__NOEDITSECTION__==English==\n__NOEDITSECTION__===Noun===\n__NOEDITSECTION__# [[cat|lexical sense]]\n";
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "entry", expanded, "<!--hidden-->" ++ expanded, null, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, out_root, "English"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("en", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("entry")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, "entry", .language, metadata);
+    var definitions: usize = 0;
+    var linked = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block_value| {
+        if (std.mem.eql(u8, block_value.list_path, "#")) {
+            definitions += 1;
+            try std.testing.expect(block_value.kind == .definition);
+            for (block_value.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "cat") and std.mem.eql(u8, span.text, "lexical sense")) {
+                linked = true;
+            };
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), definitions);
+    try std.testing.expect(linked);
 }
