@@ -647,10 +647,15 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     const QJsonArray sections = currentEntry_.value(QStringLiteral("sections")).toArray();
     sections_->clear();
     sections_->addItem(QStringLiteral("Jump to section"), -1);
+    bool ownerLanguageListed = false;
     for (qsizetype i = 0; i < sections.size(); ++i) {
         const QJsonObject section = sections[i].toObject();
         const QString sectionTitle = section.value(QStringLiteral("title")).toString();
-        if (!sectionTitle.isEmpty()) sections_->addItem(sectionTitle, i);
+        const bool ownerLanguage = kind == QStringLiteral("language") &&
+            section.value(QStringLiteral("level")).toInt() == 2 && sectionTitle == language;
+        if (sectionTitle.isEmpty() || (ownerLanguage && ownerLanguageListed)) continue;
+        sections_->addItem(sectionTitle, i);
+        if (ownerLanguage) ownerLanguageListed = true;
     }
     sections_->setEnabled(sections_->count() > 1);
     resetFolding();

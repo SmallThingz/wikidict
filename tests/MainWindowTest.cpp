@@ -489,6 +489,51 @@ private slots:
         QCOMPARE(window.currentEntry_.value(QStringLiteral("kind")).toString(), QStringLiteral("alias")); // Still one edge.
     }
 
+    void repeatedOwnerLanguageSectionsKeepOneMenuChoiceAndOriginalAnchors() {
+        MainWindow window(fixture_); window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object();
+        QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+        entry.insert(QStringLiteral("title"), QStringLiteral("YYA"));
+        entry.insert(QStringLiteral("kind"), QStringLiteral("language"));
+        entry.insert(QStringLiteral("language"), QStringLiteral("Finnish"));
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{});
+        const QJsonArray overview{QJsonObject{
+            {QStringLiteral("kind"), QStringLiteral("paragraph")},
+            {QStringLiteral("spans"), QJsonArray{
+                QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), QStringLiteral("See also: ")}},
+                QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")}, {QStringLiteral("text"), QStringLiteral("yya")}, {QStringLiteral("target"), QStringLiteral("yya")}}
+            }}
+        }};
+        const auto section = [](int level, const QString &title, const QJsonArray &blocks = QJsonArray{}) {
+            return QJsonObject{{QStringLiteral("level"), level}, {QStringLiteral("title"), title}, {QStringLiteral("blocks"), blocks}};
+        };
+        // Current YYA has an owner-language overview, an empty owner heading, and these lexical sections.
+        entry.insert(QStringLiteral("sections"), QJsonArray{
+            section(2, QStringLiteral("Finnish"), overview), section(2, QStringLiteral("Finnish")),
+            section(3, QStringLiteral("Etymology")), section(3, QStringLiteral("Proper noun")), section(4, QStringLiteral("Declension")),
+            section(3, QStringLiteral("Etymology")), // Ordinary duplicate headings retain both original indices.
+            section(2, QStringLiteral("English")), section(2, QStringLiteral("English")) // Non-owner L2 duplicates also remain.
+        });
+        response.insert(QStringLiteral("entries"), QJsonArray{entry});
+        window.renderResponse(QJsonDocument(response).toJson());
+        QStringList choices; QList<int> indices;
+        for (int i = 1; i < window.sections_->count(); ++i) {
+            choices.append(window.sections_->itemText(i)); indices.append(window.sections_->itemData(i).toInt());
+        }
+        QCOMPARE(choices, QStringList({QStringLiteral("Finnish"), QStringLiteral("Etymology"), QStringLiteral("Proper noun"),
+            QStringLiteral("Declension"), QStringLiteral("Etymology"), QStringLiteral("English"), QStringLiteral("English")}));
+        QCOMPARE(indices, QList<int>({0, 2, 3, 4, 5, 6, 7}));
+        QCOMPARE(window.reading_->toPlainText().count(QStringLiteral("See also: yya")), 1);
+        QVERIFY(window.reading_->toHtml().contains(QStringLiteral("dict:yya")));
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("section-0")));
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("section-1")));
+        window.collapsedSections_.insert(0); window.refreshReading();
+        window.jumpToFragment(QStringLiteral("Finnish"));
+        QVERIFY(!window.collapsedSections_.contains(0));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("See also: yya")));
+    }
+
     void aliasOnlyFolderUsesNeutralCollection() {
         QTemporaryDir directory(QStringLiteral(".tmp/ui-neutral-aliases-XXXXXX"));
         QVERIFY(directory.isValid());
