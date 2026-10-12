@@ -422,7 +422,6 @@ pub fn inlineDefinitionSplit(text: []const u8) ?struct { term: []const u8, defin
     }
     const term = std.mem.trim(u8, text[0..colon], " \t");
     const definition = std.mem.trim(u8, text[colon + 1 ..], " \t");
-    if (term.len == 0 or definition.len == 0) return null;
     return .{ .term = term, .definition = definition };
 }
 fn oneOf(name: []const u8, names: []const []const u8) bool {
@@ -1710,6 +1709,12 @@ pub const Renderer = struct {
             try self.lineBreak(s);
             return pair.end;
         }
+        const block_boundary = oneOf(tag.name, &.{ "p", "div", "blockquote", "center", "li", "dt", "dd", "tr", "h1", "h2", "h3", "h4", "h5", "h6" });
+        // An inline block opener separates preceding lexical text from its body.
+        // Keep empty bodies and adjacent block boundaries on the existing path.
+        if (block_boundary and trim(content).len != 0 and self.spans.items.len != 0 and
+            self.spans.items[self.spans.items.len - 1].kind != .line_break)
+            try self.lineBreak(style);
         if (tag.is("li")) try self.text("• ", style);
         const annotation = tag.is("rt") or tag.is("rtc");
         const parenthetical = annotation and style.ruby_parentheses;
@@ -1732,7 +1737,7 @@ pub const Renderer = struct {
             }
             if (visible) try self.text("）", s) else _ = self.spans.orderedRemove(annotation_start);
         }
-        if (oneOf(tag.name, &.{ "p", "div", "blockquote", "center", "li", "dt", "dd", "tr", "h1", "h2", "h3", "h4", "h5", "h6" })) try self.lineBreak(style);
+        if (block_boundary) try self.lineBreak(style);
         return pair.end;
     }
     fn entityText(self: *Renderer, value: []const u8) Error![]const u8 {
@@ -2620,7 +2625,7 @@ pub const Renderer = struct {
     }
     fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block)) Error!?Table {
         var rows: std.ArrayList(Row) = .empty;
-        var caption: []const Span = &.{};
+        var caption: std.ArrayList(Span) = .empty;
         var pos: usize = 0;
         var processed: usize = 0;
         var foster_joinable = false;
@@ -2641,7 +2646,7 @@ pub const Renderer = struct {
             pos = pair.end;
             if (tag.is("caption")) {
                 try self.htmlTableFostered(fostered, input[processed..open], &foster_joinable, &foster_formatting);
-                caption = try self.parseSpans(input[tag.end..pair.inner_end], .{});
+                try self.appendTableCaption(&caption, try self.parseSpans(input[tag.end..pair.inner_end], .{}));
                 processed = pair.end;
                 continue;
             }
@@ -2669,7 +2674,7 @@ pub const Renderer = struct {
             if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
         }
         try self.htmlTableFostered(fostered, input[processed..], &foster_joinable, &foster_formatting);
-        return .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) };
+        return .{ .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) };
     }
     const TableResult = struct { table: Table, end: usize, body_end: usize, fostered: []const Block, has_caption: bool };
     fn flushWikiTableFostered(self: *Renderer, blocks: *std.ArrayList(Block), source: *std.ArrayList(u8)) Error!void {
@@ -2697,11 +2702,17 @@ pub const Renderer = struct {
         }
         return indented;
     }
-    fn finishWikiTableCaption(self: *Renderer, caption: *[]const Span, source: *std.ArrayList(u8), pending: *bool) Error!void {
+    fn appendTableCaption(self: *Renderer, caption: *std.ArrayList(Span), spans: []const Span) Error!void {
+        if (spans.len == 0) return;
+        if (caption.items.len != 0 and self.spend())
+            try caption.append(self.a, .{ .kind = .line_break, .text = "" });
+        try caption.appendSlice(self.a, spans);
+    }
+    fn finishWikiTableCaption(self: *Renderer, caption: *std.ArrayList(Span), source: *std.ArrayList(u8), pending: *bool) Error!void {
         if (!pending.*) return;
         // Parsed spans can borrow source bytes; detach the completed caption.
         const body = try source.toOwnedSlice(self.a);
-        caption.* = try self.parseSpans(body, .{});
+        try self.appendTableCaption(caption, try self.parseSpans(body, .{}));
         pending.* = false;
     }
     fn parseTable(self: *Renderer, input: []const u8, start: usize) Error!TableResult {
@@ -2712,7 +2723,7 @@ pub const Renderer = struct {
         var outside_source: std.ArrayList(u8) = .empty;
         defer outside_source.deinit(self.a);
         var current: ?Cell = null;
-        var caption: []const Span = &.{};
+        var caption: std.ArrayList(Span) = .empty;
         var caption_source: std.ArrayList(u8) = .empty;
         var caption_pending = false;
         var has_caption = false;
@@ -2820,7 +2831,7 @@ pub const Renderer = struct {
             try self.flushWikiTableFostered(&fostered, &outside_source);
         if (body_end == input.len) self.fallbacks.malformed_table = true;
         if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
-        return .{ .table = .{ .caption = caption, .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .body_end = body_end, .fostered = try fostered.toOwnedSlice(self.a), .has_caption = has_caption };
+        return .{ .table = .{ .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .body_end = body_end, .fostered = try fostered.toOwnedSlice(self.a), .has_caption = has_caption };
     }
     fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *std.ArrayList(u8), current: *?Cell) Error!void {
         if (current.*) |value| {
@@ -4049,8 +4060,12 @@ test "same-line definition lists split term and definition without splitting nes
     }
     try std.testing.expect(inlineDefinitionSplit("[[unclosed:link : definition") == null);
     try std.testing.expect(inlineDefinitionSplit("{{unclosed:template : definition") == null);
-    try std.testing.expect(inlineDefinitionSplit(": empty term") == null);
-    try std.testing.expect(inlineDefinitionSplit("empty definition :") == null);
+    const empty_term = inlineDefinitionSplit(": empty term") orelse return error.ExpectedEmptyTerm;
+    try std.testing.expectEqualStrings("", empty_term.term);
+    try std.testing.expectEqualStrings("empty term", empty_term.definition);
+    const empty_definition = inlineDefinitionSplit("empty definition :") orelse return error.ExpectedEmptyDefinition;
+    try std.testing.expectEqualStrings("empty definition", empty_definition.term);
+    try std.testing.expectEqualStrings("", empty_definition.definition);
 }
 
 test "nested same-line definition lists retain their parent list paths" {
@@ -6955,4 +6970,147 @@ test "nested external URL label fixture retains protected literals and ordinary 
         try std.testing.expectEqual(ir.InlineKind.external_link, span.kind);
         try std.testing.expectEqualStrings("https://example.test/?x=%26&y=2", span.target);
     }
+}
+
+test "repeated table caption fixture retains wiki lexical labels and cell content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n|+ First [[A|lexical label]]\n|+ Second caption\n| cell\n|}");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const table = blocks[0].table.?;
+    try std.testing.expectEqualStrings("First lexical label\nSecond caption", try flattened(a, table.caption));
+    var linked = false;
+    for (table.caption) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "A") and std.mem.eql(u8, span.text, "lexical label")) {
+        linked = true;
+    };
+    try std.testing.expect(linked);
+    try std.testing.expectEqualStrings("cell", try flattened(a, table.rows[0].cells[0].spans));
+}
+
+test "repeated table caption fixture retains HTML captions styles and navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<table><caption><b>First</b> [[A|lexical label]]</caption><caption><i>Second caption</i></caption><tr><td>cell</td></tr></table>");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const table = blocks[0].table.?;
+    try std.testing.expectEqualStrings("First lexical label\nSecond caption", try flattened(a, table.caption));
+    var first_bold = false;
+    var second_italic = false;
+    var linked = false;
+    for (table.caption) |span| {
+        if (std.mem.eql(u8, span.text, "First") and span.flags.bold) first_bold = true;
+        if (std.mem.eql(u8, span.text, "Second caption") and span.flags.italic) second_italic = true;
+        if (span.kind == .link and std.mem.eql(u8, span.target, "A")) linked = true;
+    }
+    try std.testing.expect(first_bold and second_italic and linked);
+    try std.testing.expectEqualStrings("cell", try flattened(a, table.rows[0].cells[0].spans));
+}
+
+test "repeated table caption fixture empty captions retain protected and single caption text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "{|\n|+ <nowiki>|+ literal &amp;</nowiki>\n|+\n| cell\n|}",
+        "<table><caption><nowiki>|+ literal &amp;</nowiki></caption><caption></caption><tr><td>cell</td></tr></table>",
+    }) |input| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(input);
+        const table = blocks[0].table.?;
+        try std.testing.expectEqualStrings("|+ literal &", try flattened(a, table.caption));
+        for (table.caption) |span| try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        try std.testing.expectEqualStrings("cell", try flattened(a, table.rows[0].cells[0].spans));
+    }
+    var single: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try single.renderBody("{|\n|+ Only caption\n| cell\n|}");
+    try std.testing.expectEqualStrings("Only caption", try flattened(a, blocks[0].table.?.caption));
+}
+
+test "empty definition boundary fixture keeps lexical content in term and detail roles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("; term :\n; : definition\n; plain term");
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    const kinds = [_]Kind{ .term, .list_detail, .term };
+    const texts = [_][]const u8{ "term", "definition", "plain term" };
+    for (blocks, kinds, texts) |block_value, kind, text| {
+        try std.testing.expectEqual(kind, block_value.kind);
+        try std.testing.expectEqualStrings(text, try flattened(a, block_value.spans));
+    }
+}
+
+test "empty definition boundary fixture retains parent paths protected and link colons" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("#; term :\n#; : definition\n; [[A|term: label]] : detail\n; <nowiki>literal : marker</nowiki>");
+    try std.testing.expectEqual(@as(usize, 5), blocks.len);
+    for (blocks[0..2], [_][]const u8{ "#;", "#:" }, [_]Kind{ .term, .list_detail }) |block_value, path, kind| {
+        try std.testing.expectEqualStrings(path, block_value.list_path);
+        try std.testing.expectEqual(kind, block_value.kind);
+    }
+    try std.testing.expectEqualStrings("term", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("definition", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqual(Kind.term, blocks[2].kind);
+    try std.testing.expectEqualStrings("term: label", try flattened(a, blocks[2].spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[2].spans, .link, "A"));
+    try std.testing.expectEqual(Kind.list_detail, blocks[3].kind);
+    try std.testing.expectEqualStrings("detail", try flattened(a, blocks[3].spans));
+    try std.testing.expectEqual(Kind.term, blocks[4].kind);
+    try std.testing.expectEqualStrings("literal : marker", try flattened(a, blocks[4].spans));
+    for (blocks[4].spans) |span| try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+}
+
+test "inline block opening fixture separates linked lexical text for div paragraph and heading" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "alpha<div>[[A|beta]]</div>gamma",
+        "alpha<p>[[A|beta]]</p>gamma",
+        "alpha<h3>[[A|beta]]</h3>gamma",
+    }) |input| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(input);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqualStrings("alpha\nbeta\ngamma", try flattened(a, blocks[0].spans));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[0].spans, .link, "A"));
+    }
+}
+
+test "inline block opening fixture preserves inline and protected literal controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var inline_renderer: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("alphabetagamma", try flattened(a, try inline_renderer.parseSpans("alpha<span>[[A|beta]]</span>gamma", .{})));
+    var protected_renderer: Renderer = .{ .a = a, .context = .{} };
+    const protected = try protected_renderer.parseSpans("alpha<nowiki><div>[[A|beta]]</div></nowiki>gamma", .{});
+    try std.testing.expectEqualStrings("alpha<div>[[A|beta]]</div>gamma", try flattened(a, protected));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(protected, .link, "A"));
+    var retained = false;
+    for (protected) |span| {
+        if (std.mem.indexOf(u8, span.text, "<div>") != null) {
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+            retained = true;
+        }
+    }
+    try std.testing.expect(retained);
+}
+
+test "inline block opening fixture retains empty and adjacent block boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var empty: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("alpha\ngamma", try flattened(a, try empty.parseSpans("alpha<div></div>gamma", .{})));
+    var adjacent: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("alpha\nbeta\ngamma\ntail", try flattened(a, try adjacent.parseSpans("alpha<div>beta</div><p>gamma</p>tail", .{})));
 }

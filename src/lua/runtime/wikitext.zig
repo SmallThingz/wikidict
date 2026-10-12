@@ -11,6 +11,7 @@ const namespace_lib = @import("namespaces.zig");
 const preprocess = @import("lua_wikitext_preprocess");
 const parser_expr = @import("lua_wikitext_expression");
 const language_lib = @import("language.zig");
+const plural_rules = @import("plural_rules.zig");
 const dateformat_lib = @import("dateformat.zig");
 const uri_lib = @import("uri.zig");
 const ustring_lib = @import("ustring.zig");
@@ -1153,7 +1154,29 @@ pub const Expander = struct {
         return if (first_only) self.contentLanguageFirstCase(expanded, upper) else self.unicodeCase(expanded, upper);
     }
 
+    // MediaWiki numeric comparison accepts decimal numeric strings, not Zig literals.
+    fn isDecimalNumericString(value: []const u8) bool {
+        var pos: usize = 0;
+        if (pos < value.len and (value[pos] == '+' or value[pos] == '-')) pos += 1;
+        var digits: usize = 0;
+        while (pos < value.len and std.ascii.isDigit(value[pos])) : (pos += 1) digits += 1;
+        if (pos < value.len and value[pos] == '.') {
+            pos += 1;
+            while (pos < value.len and std.ascii.isDigit(value[pos])) : (pos += 1) digits += 1;
+        }
+        if (digits == 0) return false;
+        if (pos < value.len and (value[pos] == 'e' or value[pos] == 'E')) {
+            pos += 1;
+            if (pos < value.len and (value[pos] == '+' or value[pos] == '-')) pos += 1;
+            const exponent_start = pos;
+            while (pos < value.len and std.ascii.isDigit(value[pos])) : (pos += 1) {}
+            if (pos == exponent_start) return false;
+        }
+        return pos == value.len;
+    }
+
     fn numericStringEqual(lhs: []const u8, rhs: []const u8) bool {
+        if (!isDecimalNumericString(lhs) or !isDecimalNumericString(rhs)) return false;
         if (std.fmt.parseInt(i128, lhs, 10)) |left| {
             if (std.fmt.parseInt(i128, rhs, 10)) |right| return left == right else |_| {}
         } else |_| {}
@@ -1181,9 +1204,44 @@ pub const Expander = struct {
         return self.expandTrimmedParserArgument(chosen, params, host_title, depth + 1);
     }
 
+    // PHP's float cast accepts a decimal prefix, unlike Zig parseFloat which
+    // accepts underscores and hexadecimal floats. An incomplete exponent is
+    // outside the prefix; a missing mantissa becomes the caller's zero.
+    fn decimalNumberPrefix(value: []const u8) []const u8 {
+        var pos: usize = 0;
+        if (pos < value.len and (value[pos] == '+' or value[pos] == '-')) pos += 1;
+        var digits: usize = 0;
+        while (pos < value.len and std.ascii.isDigit(value[pos])) : (pos += 1) digits += 1;
+        if (pos < value.len and value[pos] == '.') {
+            pos += 1;
+            while (pos < value.len and std.ascii.isDigit(value[pos])) : (pos += 1) digits += 1;
+        }
+        if (digits == 0) return "";
+        const mantissa_end = pos;
+        if (pos < value.len and (value[pos] == 'e' or value[pos] == 'E')) {
+            pos += 1;
+            if (pos < value.len and (value[pos] == '+' or value[pos] == '-')) pos += 1;
+            const exponent_start = pos;
+            while (pos < value.len and std.ascii.isDigit(value[pos])) : (pos += 1) {}
+            if (pos == exponent_start) pos = mantissa_end;
+        }
+        return value[0..pos];
+    }
+
     fn expandPlural(self: *Expander, number_raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const expanded_number = std.mem.trim(u8, try self.expandWikitext(number_raw, params, host_title, depth + 1), " \t\r\n");
         const number = try language_lib.parseFormattedNumberAlloc(self.runtime.allocator, expanded_number);
+
+        // CoreParserFunctions coerces digit-only counts to PHP integers and all
+        // other counts to floats before plural evaluation. Reuse the runtime's
+        // PHP-compatible 14-digit formatting so 1.0 and -1 select English one.
+        var digits_only = number.len != 0;
+        for (number) |byte| digits_only = digits_only and std.ascii.isDigit(byte);
+        const normalized = if (digits_only)
+            try std.fmt.allocPrint(self.runtime.allocator, "{d}", .{std.fmt.parseInt(i64, number, 10) catch std.math.maxInt(i64)})
+        else
+            try rt.numberToString(self.runtime.allocator, std.fmt.parseFloat(f64, decimalNumberPrefix(number)) catch 0);
+        defer self.runtime.allocator.free(normalized);
 
         var forms: std.ArrayList([]const u8) = .empty;
         defer forms.deinit(self.runtime.allocator);
@@ -1194,12 +1252,15 @@ pub const Expander = struct {
                     try self.expandWikitext(raw_form[0..eq], params, host_title, depth + 1),
                     " \t\r\n",
                 );
-                const label = try language_lib.parseFormattedNumberAlloc(self.runtime.allocator, label_expanded);
-                if (std.fmt.parseFloat(f64, label)) |_| {
-                    if (numericStringEqual(number, label))
+                // Deployed positional PLURAL marks a digit-suffixed label as
+                // explicit and compares its text exactly with the coerced count.
+                // Keep the existing top-level delimiter and lazy form boundary.
+                const label = label_expanded;
+                if (label.len != 0 and std.ascii.isDigit(label[label.len - 1])) {
+                    if (std.mem.eql(u8, normalized, label))
                         return self.expandTrimmedParserArgument(raw_form[eq + 1 ..], params, host_title, depth + 1);
                     continue;
-                } else |_| {}
+                }
             }
             try forms.append(self.runtime.allocator, raw_form);
         }
@@ -1208,9 +1269,23 @@ pub const Expander = struct {
         if (forms.items.len == 1)
             return self.expandTrimmedParserArgument(forms.items[0], params, host_title, depth + 1);
 
-        const parsed = std.fmt.parseFloat(f64, number) catch 0;
-        const singular = std.math.isFinite(parsed) and @abs(parsed) == 1;
-        return self.expandTrimmedParserArgument(forms.items[if (singular) 0 else 1], params, host_title, depth + 1);
+        var language = (self.runtime.namespace_catalog orelse return error.NamespaceRegistryMissing).content_language;
+        if (!plural_rules.hasRules(language)) {
+            // The snapshot stores MediaWiki STRICT fallbacks. Language's normal
+            // plural lookup uses MESSAGES: preserve that order, then append en.
+            // A missing captured row is an input error, never an empty chain.
+            const get_fallbacks = self.provider.language_fallbacks orelse return error.LanguageFallbackSnapshotMissing;
+            const fallbacks = try get_fallbacks(self.provider.ctx, language);
+            language = "en";
+            for (fallbacks) |fallback| {
+                if (plural_rules.hasRules(fallback)) {
+                    language = fallback;
+                    break;
+                }
+            }
+        }
+        const rule_index = plural_rules.index(language, normalized).?;
+        return self.expandTrimmedParserArgument(forms.items[@min(rule_index, forms.items.len - 1)], params, host_title, depth + 1);
     }
 
     fn expandSwitch(self: *Expander, key_raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
@@ -1228,7 +1303,7 @@ pub const Expander = struct {
                     continue;
                 }
                 const label = std.mem.trim(u8, try self.expandWikitext(label_raw, params, host_title, depth + 1), " \t\r\n");
-                if (pending or std.mem.eql(u8, key, label)) return self.expandTrimmedParserArgument(value_raw, params, host_title, depth + 1);
+                if (pending or ifEqEqual(key, label)) return self.expandTrimmedParserArgument(value_raw, params, host_title, depth + 1);
                 pending = false;
             } else {
                 if (index + 1 == args.len) {
@@ -1236,7 +1311,7 @@ pub const Expander = struct {
                     continue;
                 }
                 const label = std.mem.trim(u8, try self.expandWikitext(raw_case, params, host_title, depth + 1), " \t\r\n");
-                if (std.mem.eql(u8, key, label)) pending = true;
+                if (ifEqEqual(key, label)) pending = true;
             }
         }
         if (fallback) |value| return self.expandTrimmedParserArgument(value, params, host_title, depth + 1);
@@ -1918,7 +1993,6 @@ pub const Expander = struct {
         return self.expandWikitext(plain, child_args, host_title, depth + 1);
     }
 
-
     // LabeledSectionTransclusion::setupPfunc12 / pfuncIncludeObj, upstream
     // 090442c1117b712be1c08582712da802b9da46aa. Select preprocessor-level
     // source nodes before expansion: excluded templates cannot supply markers.
@@ -2040,7 +2114,7 @@ pub const Expander = struct {
             .current_wiki => |name| name,
             .literal, .external => return "",
         };
-        const page_without_fragment = local_page[0 .. (std.mem.indexOfScalar(u8, local_page, '#') orelse local_page.len)];
+        const page_without_fragment = local_page[0..(std.mem.indexOfScalar(u8, local_page, '#') orelse local_page.len)];
         if (page_without_fragment.len == 0) return "";
         const title = namespace_lib.canonicalizeTitle(a, self.runtime, page_without_fragment) catch |err| switch (err) {
             error.InvalidPageTitle => return "",
@@ -4821,10 +4895,7 @@ test "language parser expands defaults autonyms nested arguments and the frozen 
     try rt.bindGlobalTable(&runtime, null, 0);
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
-    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
-        .provider = .{ .ctx = &source, .get = LanguageParserTestSource.get, .exists = TestProvider.exists,
-            .language_name = LanguageParserTestSource.languageName, .resolve_parser_function = LanguageParserTestSource.parser },
-        .install_scribunto = installTestInvoke };
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = LanguageParserTestSource.get, .exists = TestProvider.exists, .language_name = LanguageParserTestSource.languageName, .resolve_parser_function = LanguageParserTestSource.parser }, .install_scribunto = installTestInvoke };
     const cases = [_][2][]const u8{
         .{ "{{#language:}}", "English" },
         .{ "{{#language: |ar}}", "الإنجليزية" },
@@ -4865,9 +4936,7 @@ test "language parser preserves authoritative nonmatches and missing profile ope
     runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
     try rt.bindGlobalTable(&runtime, null, 0);
     try stdlib.install(&runtime);
-    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
-        .provider = .{ .ctx = &source, .get = LanguageParserTestSource.get, .exists = TestProvider.exists,
-            .language_name = LanguageParserTestSource.languageName, .resolve_parser_function = LanguageParserTestSource.parser } };
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = LanguageParserTestSource.get, .exists = TestProvider.exists, .language_name = LanguageParserTestSource.languageName, .resolve_parser_function = LanguageParserTestSource.parser } };
     try std.testing.expectEqualStrings("&#123;&#123;#لغة:en&#125;&#125;", try expander.expandFragment("Page", "{{#لغة:en}}", 1_670_803_200));
     try std.testing.expectError(error.LanguageNameSnapshotMissing, expander.expandFragment("Page", "{{#language:en|missing}}", 1_670_803_200));
     try std.testing.expectError(error.LanguageNameSnapshotMissing, expander.expandFragment("Page", "{{#language:en|-}}", 1_670_803_200));
@@ -4911,7 +4980,6 @@ test "unsupported parser diagnostics preserve literals and reset per page" {
     try std.testing.expectEqualStrings("yes", try expander.expandFragment("Known", "{{#if:x|yes|no}}", 1_670_803_200));
     try std.testing.expect(!expander.unsupported_parser_function);
 }
-
 
 test "labelled section inclusion expands captured Arabic self toc regions with authoritative aliases" {
     const aliases = rt.namespace_registry.magic_words;
@@ -5064,7 +5132,6 @@ test "labelled section inclusion preserves upstream ranges protected nodes targe
     try std.testing.expectEqualStrings("LOCAL", try expander.expandFragment("Caller", "{{#lst:Local|x}}", 1_670_803_200));
 }
 
-
 test "unknown parser oracle expands children while preserving unsupported invocation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -5097,7 +5164,6 @@ test "unknown parser oracle expands children while preserving unsupported invoca
     try std.testing.expect(expander.unsupported_parser_function);
 }
 
-
 test "unknown parser oracle preserves protected source and valid lazy branches" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -5129,7 +5195,6 @@ test "unknown parser oracle preserves protected source and valid lazy branches" 
     try std.testing.expectEqualStrings("%E0%A4%B6%E0%A4%BE%E0%A4%B0%E0%A4%A6%E0%A4%BE", known);
     try std.testing.expect(!expander.unsupported_parser_function);
 }
-
 
 test "unknown parser braces preserve external URL boundary after child expansion" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -5171,7 +5236,6 @@ test "unknown parser braces preserve external URL boundary after child expansion
     try std.testing.expectEqualStrings("[https://example.test/?q=a+b label]", valid);
     try std.testing.expect(!expander.unsupported_parser_function);
 }
-
 
 const CopticInclusionBoundaryFixture = struct {
     fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
@@ -5232,4 +5296,150 @@ test "Coptic inclusion boundaries retain balanced nested and literal controls" {
         .{ .source = "{{BoundaryEmptyNode}}", .expected = "fut=ⲛⲁ;earlier=AB" },
     };
     for (cases) |case| try CopticInclusionBoundaryFixture.check(case.source, case.expected);
+}
+
+// Official en.wiktionary API parse: parser-switch-audit01/official-response.json
+// SHA256 2d033c95e5f12b699d8ab8a4e26acfbcf9447c29fda1f665dbfecfc080ca5555.
+const NumericSwitchFixture = struct {
+    fn forbiddenGet(_: ?*anyopaque, _: A, _: []const u8) anyerror!?[]const u8 {
+        return error.UnchosenSwitchBranchFetched;
+    }
+    fn check(source: []const u8, expected: []const u8) !void {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+        defer runtime.deinit();
+        try rt.bindGlobalTable(&runtime, null, 0);
+        try stdlib.install(&runtime);
+        try installTestHost(&runtime, 18, 23);
+        var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = forbiddenGet }, .install_scribunto = installTestInvoke };
+        try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", source, 1_670_803_200));
+    }
+};
+
+test "switch numeric named cases match the parser equality policy" {
+    try NumericSwitchFixture.check("{{#switch:01|1=matched|#default=unmatched}}", "matched");
+    try NumericSwitchFixture.check("{{#switch:+1.0|1=matched|#default=unmatched}}", "matched");
+    try NumericSwitchFixture.check("{{#switch:9007199254740993|9007199254740992=wrong|#default=distinct}}", "distinct");
+}
+
+test "switch numeric fallthrough retains literal and case-sensitive controls" {
+    try NumericSwitchFixture.check("{{#switch:01|1|2=fallthrough|#default=unmatched}}", "fallthrough");
+    try NumericSwitchFixture.check("{{#switch:+1.0|1|2=fallthrough|#default=unmatched}}", "fallthrough");
+    try NumericSwitchFixture.check("{{#switch:01x|1=bad|#default=literal-control}}", "literal-control");
+    try NumericSwitchFixture.check("{{#switch:A|a=bad|#default=case-control}}", "case-control");
+}
+
+test "switch numeric matches keep unselected branches lazy and defaults exact" {
+    try NumericSwitchFixture.check("{{#switch:01|1= matched |2={{MissingBranch}}|#default={{MissingDefault}}}}", "matched");
+    try NumericSwitchFixture.check("{{#switch:01|1|2=fallthrough|#default={{MissingDefault}}}}", "fallthrough");
+    try NumericSwitchFixture.check("{{#switch:01x|1={{MissingBranch}}|#default= default }}", "default");
+    try NumericSwitchFixture.check("{{#switch:01x|1={{MissingBranch}}| trailing }}", "trailing");
+}
+
+// Official Arabic oracle response02 SHA256 ee526543ecfce7e41a3142c56a68ee7aad9a00a083abe7b4dd3a40c80cd4b0bb.
+test "parser numeric equality rejects nondecimal Zig literals" {
+    try NumericSwitchFixture.check("{{#ifeq:1_0|10|bad|literal}}", "literal");
+    try NumericSwitchFixture.check("{{#switch:1_0|10=bad|#default=literal}}", "literal");
+    try NumericSwitchFixture.check("{{#switch:1_0|10|20=bad|#default=literal}}", "literal");
+    try NumericSwitchFixture.check("{{#ifeq:0x1p0|1|bad|literal}}", "literal");
+    try NumericSwitchFixture.check("{{#switch:0x1p0|1=bad|#default=literal}}", "literal");
+    try NumericSwitchFixture.check("{{#ifeq:+1.0e1|10|matched|bad}}", "matched");
+    try NumericSwitchFixture.check("{{#switch:+1.0e1|10=matched|#default=bad}}", "matched");
+    try NumericSwitchFixture.check("{{#ifeq:1_0|1_0|literal-equal|bad}}", "literal-equal");
+}
+
+test "decimal numeric grammar requires mantissa and complete exponent" {
+    for ([_][]const u8{ "0", "01", "+1.0e1", "-.5", "1.", "1E-2" }) |value| try std.testing.expect(Expander.isDecimalNumericString(value));
+    for ([_][]const u8{ "", "+", ".", "1e", "1e+", "1_0", "0x1p0", "nan", "inf", "1 0" }) |value| try std.testing.expect(!Expander.isDecimalNumericString(value));
+}
+
+// Captured official responses: Arabic six categories ee526543, short clamp43e58e13,
+// Japanese fallback9f12c7eb, English normalization0a567dcc and positional18f7ecc9.
+const PositionalPluralFixture = struct {
+    const State = struct { fallback_calls: usize = 0 };
+    fn get(_: ?*anyopaque, _: A, _: []const u8) anyerror!?[]const u8 {
+        return error.SelectedPluralProviderFetched;
+    }
+    fn fallbacks(raw: ?*anyopaque, code: []const u8) anyerror![]const []const u8 {
+        const state: *State = @ptrCast(@alignCast(raw.?));
+        state.fallback_calls += 1;
+        if (std.mem.eql(u8, code, "ja")) return &.{}; // Actual captured STRICT row; ALL appends English.
+        return error.UnexpectedPluralFallback;
+    }
+    fn check(language: []const u8, source: []const u8, expected: ?[]const u8, expected_fallback_calls: usize) !void {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const registry_text = try std.mem.concat(a, u8, &.{
+            "# wikidict-namespace-registry-v1\n# wiki\t",        language,                                                                   "wiktionary\n# dump-date\t20261001\n# content-language\t",                  language, "\n",
+            "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n", "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tinput\n", "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n",
+        });
+        var catalog = try rt.namespace_registry.Registry.init(a, registry_text);
+        defer catalog.deinit();
+        var runtime = try rt.Context.initProgram(a, 24, 1);
+        defer runtime.deinit();
+        try rt.bindGlobalTable(&runtime, null, 0);
+        try stdlib.install(&runtime);
+        try installTestHost(&runtime, 18, 23);
+        runtime.namespace_catalog = &catalog;
+        var state: State = .{};
+        var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &state, .get = get, .language_fallbacks = fallbacks }, .install_scribunto = installTestInvoke };
+        if (expected) |text| {
+            try std.testing.expectEqualStrings(text, try expander.expandFragment("Page", source, 1_670_803_200));
+        } else {
+            try std.testing.expectError(error.SelectedPluralProviderFetched, expander.expandFragment("Page", source, 1_670_803_200));
+        }
+        try std.testing.expectEqual(expected_fallback_calls, state.fallback_calls);
+    }
+};
+
+test "plural uses content language Arabic positional six categories" {
+    try PositionalPluralFixture.check("ar", "{{PLURAL:0|zero|one|two|few|many|other}} / {{PLURAL:1|zero|one|two|few|many|other}} / {{PLURAL:2|zero|one|two|few|many|other}} / {{PLURAL:3|zero|one|two|few|many|other}} / {{PLURAL:11|zero|one|two|few|many|other}} / {{PLURAL:100|zero|one|two|few|many|other}}", "zero / one / two / few / many / other", 0);
+}
+
+test "plural Arabic short positional lists clamp to final supplied form" {
+    const numbers = [_][]const u8{ "0", "1", "2", "3", "11", "100" };
+    for (2..6) |form_count| {
+        for (numbers, 0..) |number, category| {
+            const forms: []const u8 = switch (form_count) {
+                2 => "|F0|F1",
+                3 => "|F0|F1|F2",
+                4 => "|F0|F1|F2|F3",
+                5 => "|F0|F1|F2|F3|F4",
+                else => unreachable,
+            };
+            const source = try std.fmt.allocPrint(std.testing.allocator, "{{{{PLURAL:{s}{s}}}}}", .{ number, forms });
+            defer std.testing.allocator.free(source);
+            const expected = try std.fmt.allocPrint(std.testing.allocator, "F{d}", .{@min(category, form_count - 1)});
+            defer std.testing.allocator.free(expected);
+            try PositionalPluralFixture.check("ar", source, expected, 0);
+        }
+    }
+}
+
+test "plural Japanese captured empty strict fallback reaches English rules" {
+    try PositionalPluralFixture.check("ja", "{{PLURAL:0|FIRST|SECOND}}", "SECOND", 1);
+    try PositionalPluralFixture.check("ja", "{{PLURAL:1|FIRST|SECOND}}", "FIRST", 1);
+    try PositionalPluralFixture.check("ja", "{{PLURAL:2|FIRST|SECOND}}", "SECOND", 1);
+    try PositionalPluralFixture.check("ja", "{{PLURAL:1.5|FIRST|SECOND}}", "SECOND", 1);
+}
+
+test "plural English normalization explicit numbers and positional literals" {
+    try PositionalPluralFixture.check("en", "{{PLURAL:1.0|ONE|OTHER}} / {{PLURAL:-1|ONE|OTHER}} / {{PLURAL:1.5|ONE|OTHER}} / {{PLURAL:01|1=EXPLICIT|ONE|OTHER}} / {{PLURAL:2|one=ONE|other=OTHER}}", "ONE / ONE / OTHER / EXPLICIT / other=OTHER", 0);
+}
+
+test "plural expands only selected positional or explicit form" {
+    try PositionalPluralFixture.check("ar", "{{PLURAL:3|{{Unchosen}}|{{Unchosen}}|{{Unchosen}}|FEW|{{Unchosen}}|{{Unchosen}}}}", "FEW", 0);
+    try PositionalPluralFixture.check("en", "{{PLURAL:01|1=EXPLICIT|{{Unchosen}}|{{Unchosen}}}}", "EXPLICIT", 0);
+    try PositionalPluralFixture.check("en", "{{PLURAL:2|{{Unchosen}}|{{Selected}}}}", null, 0);
+}
+
+test "plural count casting uses decimal prefix rather than Zig numeric syntax" {
+    try PositionalPluralFixture.check("en", "{{PLURAL:1_0|ONE|OTHER}} / {{PLURAL:0x1p0|ONE|OTHER}} / {{PLURAL:+1.0e1|ONE|OTHER}}", "ONE / OTHER / OTHER", 0);
+}
+
+// Official exact-label response174 B SHA78e928eb44f844dd7561964fa87e918990193bd5154624a054b5f1565cc27ca5.
+test "plural explicit forms use exact normalized count labels" {
+    try PositionalPluralFixture.check("en", "{{PLURAL:1|01=EXPLICIT|ONE|OTHER}} / {{PLURAL:1|+1=EXPLICIT|ONE|OTHER}} / {{PLURAL:1|1.0=EXPLICIT|ONE|OTHER}} / {{PLURAL:1|1e0=EXPLICIT|ONE|OTHER}} / {{PLURAL:1|abc1=EXPLICIT|ONE|OTHER}}", "ONE / ONE / ONE / ONE / ONE", 0);
 }
