@@ -404,6 +404,13 @@ fn trim(text: []const u8) []const u8 {
 fn listRoot(mark: u8) u8 {
     return if (mark == ';' or mark == ':') ';' else mark;
 }
+fn resetChangedListCounters(counts: []usize, previous: []const u8, current: []const u8) void {
+    const limit = @min(counts.len, @min(previous.len, current.len));
+    var common: usize = 0;
+    while (common < limit and listRoot(previous[common]) == listRoot(current[common])) : (common += 1) {}
+    // A different nested list family closes that list, but keeps common parents.
+    @memset(counts[common..], 0);
+}
 pub fn inlineDefinitionSplit(text: []const u8) ?struct { term: []const u8, definition: []const u8 } {
     var colon = syntax.delimiter(text, ":", 0) orelse return null;
     // Links become anchors before MediaWiki's definition-list pass. Reuse the
@@ -2104,7 +2111,7 @@ pub const Renderer = struct {
         var pos: usize = 0;
         var para: ?usize = null;
         var counts: [32]usize = @splat(0);
-        var list_root: u8 = 0;
+        var previous_list_path: []const u8 = "";
         while (pos < input.len) {
             if (self.truncated) break;
             const start = pos;
@@ -2143,7 +2150,7 @@ pub const Renderer = struct {
                             pos = offset + closing_line_end;
                             if (pos < input.len) pos += 1;
                             @memset(&counts, 0);
-                            list_root = 0;
+                            previous_list_path = "";
                             continue;
                         }
                     }
@@ -2200,7 +2207,7 @@ pub const Renderer = struct {
                 if (para == null) {
                     para = start;
                     @memset(&counts, 0);
-                    list_root = 0;
+                    previous_list_path = "";
                 }
                 continue;
             }
@@ -2210,7 +2217,7 @@ pub const Renderer = struct {
             }
             if (prefix == 0) {
                 @memset(&counts, 0);
-                list_root = 0;
+                previous_list_path = "";
             }
             if (html_tag) |tag| {
                 const pair = syntax.matchingTag(clean, tag).?;
@@ -2279,9 +2286,8 @@ pub const Renderer = struct {
             }
             if (table_indent) |table_path| {
                 if (table_path.len != 0) {
-                    const root = listRoot(':');
-                    if (list_root != 0 and list_root != root) @memset(&counts, 0);
-                    list_root = root;
+                    resetChangedListCounters(&counts, previous_list_path, table_path);
+                    previous_list_path = table_path;
                 }
                 const body_start = pos;
                 const table = try self.parseTable(input, pos);
@@ -2322,9 +2328,8 @@ pub const Renderer = struct {
             }
             if (prefix != 0) {
                 const path = list_line[0..prefix];
-                const root = listRoot(path[0]);
-                if (list_root != 0 and list_root != root) @memset(&counts, 0);
-                list_root = root;
+                resetChangedListCounters(&counts, previous_list_path, path);
+                previous_list_path = path;
                 const body = std.mem.trimStart(u8, list_line[prefix..], " \t");
                 if (path[path.len - 1] == ';') if (inlineDefinitionSplit(body)) |pair| {
                     const detail_path = try self.a.dupe(u8, path);
@@ -7191,7 +7196,7 @@ test "repeated table caption fixture keeps its separator navigation and styles i
         var r: Renderer = .{ .a = a, .context = .{} };
         const blocks = try r.renderBody(input);
         const sections = [_]Section{.{ .blocks = blocks }};
-        const bytes = try codec.encodeBuildAlloc(a, &[_]Span{}, &sections, @import("presentation_types.zig").Layout{}, r.refs.items, r.media.items);
+        const bytes = try codec.encodeBuildAlloc(a, &[_]Span{}, &sections, @import("blob_encoder").presentation_types.Layout{}, r.refs.items, r.media.items);
         const decoded = try codec.decodeAlloc(a, bytes, "caption fixture", .language, .{ .code = "en", .heading = "English" });
         const table = decoded.entry.sections[0].blocks[0].table.?;
         var visible: std.ArrayList(u8) = .empty;
@@ -7216,4 +7221,69 @@ test "repeated table caption fixture keeps its separator navigation and styles i
         for (table.rows[0].cells[0].spans) |span| try cell.appendSlice(a, span.text);
         try std.testing.expectEqualStrings("cell", cell.items);
     }
+}
+
+test "nested list family switch restarts only changed ordered descendants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, paths: []const []const u8, numbers: []const []const u8 }{
+        .{ .source = "# outer\n## first\n#* bullet\n## restarted\n# next outer\n", .paths = &.{ "#", "##", "#*", "##", "#" }, .numbers = &.{ "1", "1.1", "", "1.1", "2" } },
+        .{ .source = "*# one\n** bullet\n*# restarted\n", .paths = &.{ "*#", "**", "*#" }, .numbers = &.{ "1", "", "1" } },
+        .{ .source = "# outer\n## child\n### first\n##* bullet\n### restarted\n## next child\n# next outer\n", .paths = &.{ "#", "##", "###", "##*", "###", "##", "#" }, .numbers = &.{ "1", "1.1", "1.1.1", "", "1.1.1", "1.2", "2" } },
+        .{ .source = "# outer\n## child\n### first\n#* bullet\n## new child\n### restarted\n# next outer\n", .paths = &.{ "#", "##", "###", "#*", "##", "###", "#" }, .numbers = &.{ "1", "1.1", "1.1.1", "", "1.1", "1.1.1", "2" } },
+        .{ .source = "# outer\n## first\n## next\n# next outer\n", .paths = &.{ "#", "##", "##", "#" }, .numbers = &.{ "1", "1.1", "1.2", "2" } },
+        .{ .source = "; term\n;# first\n:# continued\n", .paths = &.{ ";", ";#", ":#" }, .numbers = &.{ "", "1", "2" } },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(case.source);
+        try std.testing.expectEqual(case.paths.len, blocks.len);
+        for (blocks, case.paths, case.numbers) |block_value, path, number| {
+            try std.testing.expectEqualStrings(path, block_value.list_path);
+            try std.testing.expectEqualStrings(number, block_value.number);
+        }
+        try std.testing.expect(!r.fallbacks.any());
+    }
+}
+
+test "nested list counter state resets at blank heading and table boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, block_count: usize }{
+        .{ .source = "# first\n## child\n\n# restarted\n", .block_count = 3 },
+        .{ .source = "# first\n## child\n== Heading ==\n# restarted\n", .block_count = 4 },
+        .{ .source = "# first\n## child\n: {|\n| cell\n|}\n# restarted\n", .block_count = 4 },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(case.source);
+        try std.testing.expectEqual(case.block_count, blocks.len);
+        try std.testing.expectEqualStrings("1", blocks[0].number);
+        try std.testing.expectEqualStrings("1.1", blocks[1].number);
+        try std.testing.expectEqualStrings("1", blocks[blocks.len - 1].number);
+        try std.testing.expect(!r.fallbacks.any());
+    }
+}
+
+test "nested list transitions ignore protected body markers and bound long paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("# outer\n## first\n## <nowiki>#*</nowiki> literal\n## next\n");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqualStrings("1.1", blocks[1].number);
+    try std.testing.expectEqualStrings("1.2", blocks[2].number);
+    try std.testing.expectEqualStrings("#* literal", try plainText(a, blocks[2].spans));
+    try std.testing.expectEqualStrings("1.3", blocks[3].number);
+    try std.testing.expect(!r.fallbacks.any());
+    const long_path = "########################################";
+    var deep: Renderer = .{ .a = a, .context = .{} };
+    const long_blocks = try deep.renderBody(long_path ++ " deep\n# restarted\n");
+    try std.testing.expectEqual(@as(usize, 2), long_blocks.len);
+    try std.testing.expectEqualStrings(long_path, long_blocks[0].list_path);
+    try std.testing.expectEqualStrings("", long_blocks[0].number);
+    try std.testing.expectEqualStrings("1", long_blocks[1].number);
 }
