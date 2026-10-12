@@ -458,6 +458,69 @@ class ControllerPreparationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     controller.load_preparations(cfg)
 
+    def transition_receipt(self, root, ref, old_source, new_source, reason='renderer correction'):
+        receipt = controller.read_ref(ref)
+        receipt['source_transition'] = dict(from_source=old_source, to_source=new_source, reason=reason)
+        path = root / 'transition-accounting.json'
+        write_json(path, receipt)
+        return controller.descriptor(path)
+
+    def test_source_transition_preserves_actual_outcomes_and_counts_each_interval_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = self.config(root / 'old-context')
+            current = dict(old, source=self.config(root / 'new-context')['source'])
+            selected = []
+            originals = []
+            for status, seconds in [('passed', 2), ('failed', 3)]:
+                receipt = self.preparation(root / status, old, status, status, seconds)
+                authority = controller.read_ref(receipt)
+                originals.extend((Path(authority[key]['path']), Path(authority[key]['path']).read_bytes()) for key in ('result', 'closure'))
+                selected.append(self.transition_receipt(root / status, receipt, old['source'], current['source']))
+            selected.append(self.preparation(root / 'fresh', current, 'fresh', seconds=5))
+            current['production_preparations'] = selected + [selected[0]]
+            rows = controller.load_preparations(current)
+            summary = controller.summarize([attempt('build', 1, seconds=20)], ['enwiktionary'], rows + rows)
+            self.assertEqual(10, summary['observed_cohort_preparation_seconds'])
+            self.assertEqual(30, summary['observed_cohort_seconds'])
+            self.assertEqual(['passed', 'failed', 'passed'], [row['outcome'] for row in rows])
+            self.assertEqual(old['source'], rows[0]['original_source'])
+            self.assertEqual(current['source'], rows[0]['source_transition']['to_source'])
+            self.assertIsNone(rows[2]['source_transition'])
+            for path, before in originals:
+                self.assertEqual(before, path.read_bytes())
+
+    def test_unacknowledged_or_wrong_source_transitions_are_refused(self):
+        for change in [None, {'from_source': 'wrong'}, {'to_source': 'wrong'}, {'reason': ''}, {'reason': '   '}]:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old = self.config(root / 'old')
+                current = dict(old, source=self.config(root / 'new')['source'])
+                receipt = self.preparation(root / 'prep', old, 'p')
+                if change is not None:
+                    receipt = self.transition_receipt(root / 'prep', receipt, old['source'], current['source'])
+                    value = controller.read_ref(receipt); value['source_transition'].update(change)
+                    write_json(Path(receipt['path']), value, replace=True); receipt = controller.descriptor(receipt['path'])
+                current['production_preparations'] = [receipt]
+                with self.assertRaisesRegex(ValueError, 'explicit source transition'):
+                    controller.load_preparations(current)
+
+    def test_source_transition_cannot_change_other_context_or_bypass_closure(self):
+        changes = [{key: 'different'} for key in ['manifest', 'compiler', 'date', 'now_unix', 'expansion_timeout_ms']]
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); old = self.config(root / 'old')
+                current = dict(old, source=self.config(root / 'new')['source']); current.update(change)
+                receipt = self.preparation(root / 'prep', old, 'p')
+                current['production_preparations'] = [self.transition_receipt(root / 'prep', receipt, old['source'], current['source'])]
+                with self.assertRaises(ValueError):controller.load_preparations(current)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); old = self.config(root / 'old')
+            current = dict(old, source=self.config(root / 'new')['source'])
+            receipt = self.preparation(root / 'prep', old, 'p', closure_changes={'source_guard': False})
+            current['production_preparations'] = [self.transition_receipt(root / 'prep', receipt, old['source'], current['source'])]
+            with self.assertRaisesRegex(ValueError, 'independently closed'):controller.load_preparations(current)
+
     def test_preparation_denominator_excludes_original_seven_and_cannot_mask_unknown_time(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

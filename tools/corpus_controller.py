@@ -119,7 +119,7 @@ def phase_end(log_path, edition, date):
 
 
 def load_preparations(cfg):
-    """Authenticate measured current-source production work, never diagnostics.
+    """Authenticate explicitly selected production work, never diagnostics.
 
     Optional cfg.production_preparations contains accounting receipt descriptors.
     Each receipt pins an immutable actual result and independent owned closure;
@@ -135,7 +135,16 @@ def load_preparations(cfg):
         require(result['accounting_scope'] == 'production-preparation', 'Diagnostics are not corpus preparation')
         require(result['outcome'] in ('passed', 'failed', 'superseded'), 'Preparation is not terminal')
         require(isinstance(result['preparation_id'], str) and result['preparation_id'], 'Missing preparation identity')
-        for key in ('source', 'manifest', 'compiler', 'date', 'now_unix', 'expansion_timeout_ms'):
+        transition = receipt.get('source_transition')
+        if result['source'] != cfg['source']:
+            require(isinstance(transition, dict)
+                    and transition.get('from_source') == result['source']
+                    and transition.get('to_source') == cfg['source']
+                    and isinstance(transition.get('reason'), str) and transition['reason'].strip(),
+                    'Older-source preparation needs an explicit source transition')
+        elif transition is not None:
+            require(False, 'Source transition does not change source')
+        for key in ('manifest', 'compiler', 'date', 'now_unix', 'expansion_timeout_ms'):
             require(result[key] == cfg[key], f'Preparation {key} differs from this run')
         seconds = result['elapsed_seconds']
         require(type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0, 'Invalid preparation interval')
@@ -144,7 +153,8 @@ def load_preparations(cfg):
                 and closed['cleanup_proven'] is True and closed['source_guard'] is True
                 and closed['remaining_owned_processes'] == [], 'Preparation is not independently closed')
         row = dict(preparation_id=result['preparation_id'], edition=result['edition'],
-            outcome=result['outcome'], elapsed_seconds=seconds, receipt=ref)
+            outcome=result['outcome'], elapsed_seconds=seconds, receipt=ref,
+            original_source=result['source'], source_transition=transition)
         key = row['preparation_id']
         require(key not in unique or unique[key] == row, 'Conflicting preparation identity')
         unique[key] = row
