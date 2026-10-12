@@ -2248,7 +2248,7 @@ pub const Renderer = struct {
                         try blocks.appendSlice(self.a, try self.renderBody(body.items));
                     } else {
                         var fostered: std.ArrayList(Block) = .empty;
-                        if (try self.htmlTable(clean[tag.end..pair.inner_end], &fostered)) |table_value| {
+                        if (try self.htmlTable(clean[tag.end..pair.inner_end], &fostered, false)) |table_value| {
                             try blocks.appendSlice(self.a, fostered.items);
                             try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value });
                         } else try self.block(&blocks, .preformatted, clean[0..pair.end], "", "", 0);
@@ -2629,13 +2629,15 @@ pub const Renderer = struct {
         }
         return null;
     }
-    fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block)) Error!?Table {
+    fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block), defer_zero_rowspans: bool) Error!?Table {
         var rows: std.ArrayList(Row) = .empty;
         var caption: std.ArrayList(Span) = .empty;
         var pos: usize = 0;
         var processed: usize = 0;
         var foster_joinable = false;
         var foster_formatting: std.ArrayList([]const u8) = .empty;
+        var group_start: usize = 0;
+        var explicit_group: ?[]const u8 = null;
         while (std.mem.indexOfScalarPos(u8, input, pos, '<')) |open| {
             if (self.truncated) break;
             if (syntax.protectedEnd(input, open)) |end| {
@@ -2647,6 +2649,14 @@ pub const Renderer = struct {
                 continue;
             };
             pos = tag.end;
+            if (tag.is("thead") or tag.is("tbody") or tag.is("tfoot")) {
+                if (!tag.closing or (explicit_group != null and std.ascii.eqlIgnoreCase(explicit_group.?, tag.name))) {
+                    if (!defer_zero_rowspans) try self.resolveZeroRowspans(rows.items, group_start);
+                    group_start = rows.items.len;
+                    explicit_group = if (tag.closing) null else tag.name;
+                }
+                continue;
+            }
             if (tag.closing or !(tag.is("tr") or tag.is("caption"))) continue;
             const pair = if (tag.is("tr")) optionalTableEnd(input, tag) else syntax.matchingTag(input, tag) orelse return null;
             pos = pair.end;
@@ -2680,6 +2690,7 @@ pub const Renderer = struct {
             if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
         }
         try self.htmlTableFostered(fostered, input[processed..], &foster_joinable, &foster_formatting);
+        if (!defer_zero_rowspans) try self.resolveZeroRowspans(rows.items, group_start);
         return .{ .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) };
     }
     const TableResult = struct { table: Table, end: usize, body_end: usize, fostered: []const Block, has_caption: bool };
@@ -2810,7 +2821,7 @@ pub const Renderer = struct {
                 try self.flushWikiTableFostered(&fostered, &outside_source);
                 try self.finishCell(&cells, &cell_source, &current);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
-                if (try self.htmlTable(line, &fostered)) |table| {
+                if (try self.htmlTable(line, &fostered, true)) |table| {
                     try rows.appendSlice(self.a, table.rows);
                 }
             } else if (caption_pending) {
@@ -2837,6 +2848,7 @@ pub const Renderer = struct {
             try self.flushWikiTableFostered(&fostered, &outside_source);
         if (body_end == input.len) self.fallbacks.malformed_table = true;
         if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
+        try self.resolveZeroRowspans(rows.items, 0);
         return .{ .table = .{ .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .body_end = body_end, .fostered = try fostered.toOwnedSlice(self.a), .has_caption = has_caption };
     }
     fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *std.ArrayList(u8), current: *?Cell) Error!void {
@@ -2879,10 +2891,28 @@ pub const Renderer = struct {
         return self.spans.toOwnedSlice(self.a);
     }
 
+    fn resolveZeroRowspans(self: *Renderer, rows: []Row, group_start: usize) Error!void {
+        for (rows[group_start..], group_start..) |*row, index| {
+            var has_zero = false;
+            for (row.cells) |cell| {
+                if (cell.rowspan == 0) has_zero = true;
+            }
+            if (!has_zero) continue;
+            // Cells are const slices; copy only rows needing normalization.
+            const cells = try self.a.dupe(Cell, row.cells);
+            for (cells) |*cell| {
+                if (cell.rowspan == 0) cell.rowspan = @intCast(@min(rows.len - index, 100));
+            }
+            row.cells = cells;
+        }
+    }
     fn tableSpanAttr(self: *Renderer, tag: syntax.Tag, name: []const u8) Error!u16 {
         const raw = tag.attr(name) orelse return 1;
         const decoded = try self.entityText(raw);
-        return @max(1, @min(100, std.fmt.parseInt(u16, decoded, 10) catch 1));
+        const parsed = std.fmt.parseInt(u16, decoded, 10) catch 1;
+        // Zero is build-only: the completed row group resolves it before encoding.
+        if (parsed == 0 and std.mem.eql(u8, name, "rowspan")) return 0;
+        return @max(1, @min(100, parsed));
     }
 
     fn cellAttributePipe(raw: []const u8) ?usize {
@@ -7286,4 +7316,65 @@ test "nested list transitions ignore protected body markers and bound long paths
     try std.testing.expectEqualStrings(long_path, long_blocks[0].list_path);
     try std.testing.expectEqualStrings("", long_blocks[0].number);
     try std.testing.expectEqualStrings("1", long_blocks[1].number);
+}
+
+test "zero row span fixture resolves implicit HTML group and retains typed lexical content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<table><caption>Forms</caption><tr><th rowspan='0'><b>Singular</b></th><td>[[cat]]</td></tr><tr><td><i>cats</i></td></tr></table>");
+    const table = blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+    try std.testing.expectEqual(@as(u16, 2), table.rows[0].cells[0].rowspan);
+    try std.testing.expectEqualStrings("Singular", try plainText(a, table.rows[0].cells[0].spans));
+    try std.testing.expectEqualStrings("Forms", try plainText(a, table.caption));
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "cat", .language, .{ .code = "en", .heading = "English" });
+    const stored = decoded.entry.sections[0].blocks[0].table.?;
+    try std.testing.expectEqual(@as(u16, 2), stored.rows[0].cells[0].rowspan);
+    try std.testing.expect(stored.rows[0].cells[0].spans[0].bold);
+    try std.testing.expectEqualStrings("cat", stored.rows[0].cells[1].spans[0].target);
+    try std.testing.expect(stored.rows[1].cells[0].spans[0].italic);
+}
+
+test "zero row span fixture ends at each parsed HTML row group" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<table><thead><tr><th rowspan='0'>Heading</th></tr></thead><tbody><tr><th rowspan='0'>First group</th><td>one</td></tr><tr><td>two</td></tr></tbody><tbody><tr><th rowspan='0'>Second group</th><td>three</td></tr></tbody><tfoot><tr><td rowspan='0'>Foot</td></tr></tfoot></table>");
+    const rows = blocks[0].table.?.rows;
+    try std.testing.expectEqual(@as(usize, 5), rows.len);
+    const expected = [_]u16{ 1, 2, 1, 1, 1 };
+    for (rows, expected) |row, span| try std.testing.expectEqual(span, row.cells[0].rowspan);
+    try std.testing.expectEqualStrings("First group", try plainText(a, rows[1].cells[0].spans));
+    try std.testing.expectEqualStrings("two", try plainText(a, rows[2].cells[0].spans));
+}
+
+test "zero row span fixture wiki and mixed rows retain positive spans protected text and bounds" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n| rowspan='0' colspan='2' | [[A|label]]\n|-\n| <nowiki><td rowspan='0'>literal</td></nowiki>\n|-\n<tr><td rowspan='0'>mixed</td></tr>\n|-\n| last\n|}");
+    const rows = blocks[0].table.?.rows;
+    try std.testing.expectEqual(@as(usize, 4), rows.len);
+    try std.testing.expectEqual(@as(u16, 4), rows[0].cells[0].rowspan);
+    try std.testing.expectEqual(@as(u16, 2), rows[0].cells[0].colspan);
+    try std.testing.expectEqual(@as(u16, 2), rows[2].cells[0].rowspan);
+    try std.testing.expectEqualStrings("A", rows[0].cells[0].spans[0].target);
+    try std.testing.expectEqualStrings("<td rowspan='0'>literal</td>", try plainText(a, rows[1].cells[0].spans));
+    var source: std.ArrayList(u8) = .empty;
+    try source.appendSlice(a, "<table><tr><td rowspan='0'>bounded</td></tr>");
+    for (0..101) |_| try source.appendSlice(a, "<tr><td>tail</td></tr>");
+    try source.appendSlice(a, "</table>");
+    const bounded = try r.renderBody(source.items);
+    try std.testing.expectEqual(@as(u16, 100), bounded[0].table.?.rows[0].cells[0].rowspan);
+    const explicit = try r.renderBody("<table><tr><td rowspan='3' colspan='0'>positive</td></tr></table>");
+    try std.testing.expectEqual(@as(u16, 3), explicit[0].table.?.rows[0].cells[0].rowspan);
+    try std.testing.expectEqual(@as(u16, 1), explicit[0].table.?.rows[0].cells[0].colspan);
 }
