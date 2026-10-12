@@ -5301,8 +5301,11 @@ test "Coptic inclusion boundaries retain balanced nested and literal controls" {
 // Official en.wiktionary API parse: parser-switch-audit01/official-response.json
 // SHA256 2d033c95e5f12b699d8ab8a4e26acfbcf9447c29fda1f665dbfecfc080ca5555.
 const NumericSwitchFixture = struct {
-    fn forbiddenGet(_: ?*anyopaque, _: A, _: []const u8) anyerror!?[]const u8 {
+    fn forbiddenGet(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyerror!?[]const u8 {
         return error.UnchosenSwitchBranchFetched;
+    }
+    fn forbiddenExists(_: ?*anyopaque, _: []const u8) anyerror!bool {
+        return error.UnchosenSwitchExistenceChecked;
     }
     fn check(source: []const u8, expected: []const u8) !void {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -5312,7 +5315,7 @@ const NumericSwitchFixture = struct {
         try rt.bindGlobalTable(&runtime, null, 0);
         try stdlib.install(&runtime);
         try installTestHost(&runtime, 18, 23);
-        var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = forbiddenGet }, .install_scribunto = installTestInvoke };
+        var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = forbiddenGet, .exists = forbiddenExists }, .install_scribunto = installTestInvoke };
         try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", source, 1_670_803_200));
     }
 };
@@ -5358,8 +5361,11 @@ test "decimal numeric grammar requires mantissa and complete exponent" {
 // Japanese fallback9f12c7eb, English normalization0a567dcc and positional18f7ecc9.
 const PositionalPluralFixture = struct {
     const State = struct { fallback_calls: usize = 0 };
-    fn get(_: ?*anyopaque, _: A, _: []const u8) anyerror!?[]const u8 {
+    fn get(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyerror!?[]const u8 {
         return error.SelectedPluralProviderFetched;
+    }
+    fn forbiddenExists(_: ?*anyopaque, _: []const u8) anyerror!bool {
+        return error.UnexpectedPluralExistenceChecked;
     }
     fn fallbacks(raw: ?*anyopaque, code: []const u8) anyerror![]const []const u8 {
         const state: *State = @ptrCast(@alignCast(raw.?));
@@ -5384,7 +5390,7 @@ const PositionalPluralFixture = struct {
         try installTestHost(&runtime, 18, 23);
         runtime.namespace_catalog = &catalog;
         var state: State = .{};
-        var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &state, .get = get, .language_fallbacks = fallbacks }, .install_scribunto = installTestInvoke };
+        var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &state, .get = get, .exists = forbiddenExists, .language_fallbacks = fallbacks }, .install_scribunto = installTestInvoke };
         if (expected) |text| {
             try std.testing.expectEqualStrings(text, try expander.expandFragment("Page", source, 1_670_803_200));
         } else {
@@ -5452,6 +5458,6 @@ test "expanded authored behavior prefixes reach presentation without early strip
     try rt.bindGlobalTable(&runtime, null, 0);
     try stdlib.install(&runtime);
     try installTestHost(&runtime, 18, 23);
-    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get } };
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
     try std.testing.expectEqualStrings("__NOEDITSECTION__==English==\n__NOEDITSECTION__===Noun===\n__NOEDITSECTION__# [[cat|lexical sense]]\n", try expander.expandFragment("entry", "<!--hidden-->__NOEDITSECTION__==English==\n__NOEDITSECTION__===Noun===\n__NOEDITSECTION__# [[cat|lexical sense]]\n", 1_670_803_200));
 }

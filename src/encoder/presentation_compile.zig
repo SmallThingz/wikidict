@@ -6981,7 +6981,12 @@ test "repeated table caption fixture retains wiki lexical labels and cell conten
     const blocks = try r.renderBody("{|\n|+ First [[A|lexical label]]\n|+ Second caption\n| cell\n|}");
     try std.testing.expectEqual(@as(usize, 1), blocks.len);
     const table = blocks[0].table.?;
-    try std.testing.expectEqualStrings("First lexical label\nSecond caption", try flattened(a, table.caption));
+    try std.testing.expectEqualStrings("First lexical label\nSecond caption", try plainText(a, table.caption));
+    var caption_breaks: usize = 0;
+    for (table.caption) |span| if (span.kind == .line_break) {
+        caption_breaks += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), caption_breaks);
     var linked = false;
     for (table.caption) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "A") and std.mem.eql(u8, span.text, "lexical label")) {
         linked = true;
@@ -6998,7 +7003,12 @@ test "repeated table caption fixture retains HTML captions styles and navigation
     const blocks = try r.renderBody("<table><caption><b>First</b> [[A|lexical label]]</caption><caption><i>Second caption</i></caption><tr><td>cell</td></tr></table>");
     try std.testing.expectEqual(@as(usize, 1), blocks.len);
     const table = blocks[0].table.?;
-    try std.testing.expectEqualStrings("First lexical label\nSecond caption", try flattened(a, table.caption));
+    try std.testing.expectEqualStrings("First lexical label\nSecond caption", try plainText(a, table.caption));
+    var caption_breaks: usize = 0;
+    for (table.caption) |span| if (span.kind == .line_break) {
+        caption_breaks += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), caption_breaks);
     var first_bold = false;
     var second_italic = false;
     var linked = false;
@@ -7166,4 +7176,44 @@ test "leading localized behavior controls use captured profile for heading and l
     try std.testing.expectEqual(Kind.heading, blocks[0].kind);
     try std.testing.expectEqual(Kind.definition, blocks[1].kind);
     try std.testing.expectEqualStrings("sense", try flattened(a, blocks[1].spans));
+}
+
+test "repeated table caption fixture keeps its separator navigation and styles in DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codec = @import("blob_encoder").presentation_codec;
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    for ([_][]const u8{
+        "{|\n|+ First [[A|lexical label]]\n|+ Second caption\n| cell\n|}",
+        "<table><caption><b>First</b> [[A|lexical label]]</caption><caption><i>Second caption</i></caption><tr><td>cell</td></tr></table>",
+    }, 0..) |input, input_index| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(input);
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const bytes = try codec.encodeBuildAlloc(a, &[_]Span{}, &sections, @import("presentation_types.zig").Layout{}, r.refs.items, r.media.items);
+        const decoded = try codec.decodeAlloc(a, bytes, "caption fixture", .language, .{ .code = "en", .heading = "English" });
+        const table = decoded.entry.sections[0].blocks[0].table.?;
+        var visible: std.ArrayList(u8) = .empty;
+        var breaks: usize = 0;
+        var linked = false;
+        var bold = false;
+        var italic = false;
+        for (table.caption) |span| {
+            if (span.kind == .line_break) {
+                breaks += 1;
+                try visible.append(a, '\n');
+            } else try visible.appendSlice(a, span.text);
+            if (span.kind == .link and std.mem.eql(u8, span.target, "A") and std.mem.eql(u8, span.text, "lexical label")) linked = true;
+            if (std.mem.eql(u8, span.text, "First") and span.bold) bold = true;
+            if (std.mem.eql(u8, span.text, "Second caption") and span.italic) italic = true;
+        }
+        try std.testing.expectEqual(@as(usize, 1), breaks);
+        try std.testing.expectEqualStrings("First lexical label\nSecond caption", visible.items);
+        try std.testing.expect(linked);
+        if (input_index == 1) try std.testing.expect(bold and italic);
+        var cell: std.ArrayList(u8) = .empty;
+        for (table.rows[0].cells[0].spans) |span| try cell.appendSlice(a, span.text);
+        try std.testing.expectEqualStrings("cell", cell.items);
+    }
 }
