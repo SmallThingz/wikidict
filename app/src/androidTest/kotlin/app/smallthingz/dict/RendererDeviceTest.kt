@@ -246,7 +246,7 @@ class RendererDeviceTest {
     }
     @Test fun systemDownloadManagerFetchesAndVerifiesDictionary() = runBlocking {
         val item = CatalogItem(
-            InstrumentationRegistry.getArguments().getString("dictionaryUrl") ?: "https://github.com/SmallThingz/wikidict/releases/download/app-qa-fixtures-20261007/English.wikblb",
+            InstrumentationRegistry.getArguments().getString("dictionaryUrl") ?: "https://github.com/SmallThingz/wikidict/releases/download/applications-20261010/wikidict-app-qa-English-30words.wikblb",
             "English device transfer", 3365898,
             "1388760245fdfc7aaadebe1770415f44cf26e391811abae8d62b4044528b4ee3",
         )

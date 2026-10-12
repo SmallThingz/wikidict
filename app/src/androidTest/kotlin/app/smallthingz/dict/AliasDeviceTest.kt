@@ -174,13 +174,16 @@ class AliasDeviceTest {
                 override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) = Unit
             }
             old.writableDatabase;old.close()
-            LibraryDatabase(context,name).use { next ->
+            val next = LibraryDatabase(context,name)
+            try {
                 next.readableDatabase.rawQuery("SELECT dictionary,title,edition,record_key,kind FROM word_choices",null).use { c ->
                     assertTrue(c.moveToFirst());assertEquals("existing",c.getString(0));assertEquals("Word",c.getString(1))
                     assertEquals("",c.getString(2));assertEquals("Word",c.getString(3));assertEquals("language",c.getString(4))
                     assertFalse(c.moveToNext())
                 }
                 assertEquals(2,next.readableDatabase.version)
+            } finally {
+                next.close()
             }
         } finally { context.deleteDatabase(name) }
     }

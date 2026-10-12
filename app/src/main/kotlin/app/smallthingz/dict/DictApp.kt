@@ -49,7 +49,9 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
             try {
                 val entry = library.read(hit)
                 selected = entry
-                anchorRequest = target.substringAfter('#', "").takeIf { it.isNotEmpty() }?.let { EntryAnchorRequest(entry.key, "#$it") }
+                val fragment = if ('#' in target) target.substringAfter('#')
+                    else entry.redirect?.takeIf { it.followed }?.fragment.orEmpty()
+                anchorRequest = fragment.takeIf { it.isNotEmpty() }?.let { EntryAnchorRequest(entry.key, "#$it") }
                 selectedDictionary = hit.dictionary; library.rememberWord(hit); learning.record(entry)
                 query = ""; searching = false; screen = AppScreen.Dictionary; keyboard?.hide()
             }
