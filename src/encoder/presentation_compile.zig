@@ -1510,31 +1510,41 @@ pub const Renderer = struct {
     }
     fn mediaCaptionChoice(self: *Renderer, raw: []const u8, fallback: []const u8, mode: @import("namespace_registry").image_options.Mode) MediaLabelChoice {
         var candidate: []const u8 = "";
+        // Timed media has no visible caption without a thumbnail or frame.
+        // Unknown words such as noicon remain captions when that frame exists.
+        var caption_visible = mode != .timed;
         var seen_format = false;
         var pos: usize = 0;
         while (pos <= raw.len) {
             const end = syntax.delimiter(raw, "|", pos) orelse raw.len;
             const part = trim(raw[pos..end]);
-            if (self.mediaOption(part, mode, &seen_format) == null) candidate = part;
+            if (self.mediaOption(part, mode, &seen_format)) |matched| {
+                if (oneOf(matched.id, &.{ "img_thumbnail", "img_framed", "img_manualthumb" })) caption_visible = true;
+            } else candidate = part;
             if (end == raw.len) break;
             pos = end + 1;
         }
+        if (!caption_visible) candidate = "";
         return .{ .text = if (candidate.len == 0) fallback else candidate, .authored_caption = candidate.len != 0 };
     }
     fn mediaHeadingCaption(self: *Renderer, raw: []const u8, file: []const u8) MediaLabelChoice {
         var caption: []const u8 = "";
         var alt: []const u8 = "";
+        const mode = mediaOptionMode(file, false);
+        var caption_visible = mode != .timed;
         var seen_format = false;
         var pos: usize = 0;
         while (pos <= raw.len) {
             const end = syntax.delimiter(raw, "|", pos) orelse raw.len;
             const part = trim(raw[pos..end]);
-            if (self.mediaOption(part, mediaOptionMode(file, false), &seen_format)) |matched| {
+            if (self.mediaOption(part, mode, &seen_format)) |matched| {
+                if (oneOf(matched.id, &.{ "img_thumbnail", "img_framed", "img_manualthumb" })) caption_visible = true;
                 if (std.mem.eql(u8, matched.id, "img_alt")) alt = trim(matched.value orelse "");
             } else caption = part;
             if (end == raw.len) break;
             pos = end + 1;
         }
+        if (!caption_visible) return .{ .text = "", .authored_caption = false };
         return .{ .text = if (caption.len != 0) caption else alt, .authored_caption = caption.len != 0 };
     }
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize) Error!?usize {
@@ -3345,6 +3355,8 @@ test "generated audio layout is rendered and media stays typed rather than emitt
     try std.testing.expect(std.mem.indexOf(u8, text_value, "templatestyles") == null);
     try std.testing.expectEqual(@as(usize, 2), r.media.items.len);
     try std.testing.expectEqual(media_types.Kind.audio, r.media.items[0].kind);
+    try std.testing.expectEqualStrings("Voice.ogg", r.media.items[0].caption);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "noicon") == null);
     try std.testing.expectEqualStrings("A cat", r.media.items[1].caption);
 }
 
@@ -3475,7 +3487,7 @@ test "media options do not become captions" {
     try std.testing.expect(std.mem.indexOf(u8, text_value, "alt=cat") == null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "200px") == null);
 
-    const audio = try r.parseSpans("[[File:Voice.ogg|noicon|start=2|end=4|loop|Spoken example]]", .{});
+    const audio = try r.parseSpans("[[File:Voice.ogg|thumb|noicon|start=2|end=4|loop|Spoken example]]", .{});
     try std.testing.expect(std.mem.indexOf(u8, try flattened(a, audio), "start=2") == null);
     try std.testing.expectEqualStrings("Spoken example", r.media.items[r.media.items.len - 1].caption);
 }
@@ -5109,10 +5121,63 @@ test "image option timed audio handler validates values without hiding unsupport
     defer arena.deinit();
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
-    _ = try r.parseSpans("[[File:Audio.ogg|AudioCaption|LOOP|MUTED|START=-1: 2e1|disablecontrols=options,timedText]] [[File:Image.jpg|ImageCaption|loop]] [[File:Bad.ogg|AudioCaption|start=1:2:3:4]] [[File:BadControls.ogg|AudioCaption|disablecontrols=options, fullscreen]] [[File:Unsupported.ogg|AudioCaption|autoplay]] [[File:NoIcon.ogg|AudioCaption|noicon]] <gallery>\nFile:Gallery.ogg|GalleryAudioCaption|loop|muted\n</gallery>", .{});
+    _ = try r.parseSpans("[[File:Audio.ogg|thumb|AudioCaption|LOOP|MUTED|START=-1: 2e1|disablecontrols=options,timedText]] [[File:Image.jpg|ImageCaption|loop]] [[File:Bad.ogg|thumb|AudioCaption|start=1:2:3:4]] [[File:BadControls.ogg|thumb|AudioCaption|disablecontrols=options, fullscreen]] [[File:Unsupported.ogg|thumb|AudioCaption|autoplay]] [[File:NoIcon.ogg|thumb|AudioCaption|noicon]] <gallery>\nFile:Gallery.ogg|GalleryAudioCaption|loop|muted\n</gallery>", .{});
     const captions = [_][]const u8{ "AudioCaption", "loop", "start=1:2:3:4", "disablecontrols=options, fullscreen", "autoplay", "noicon", "GalleryAudioCaption" };
     try std.testing.expectEqual(captions.len, r.media.items.len);
     for (r.media.items, captions) |media, caption| try std.testing.expectEqualStrings(caption, media.caption);
+}
+
+test "timed media caption visibility preserves frames galleries and file navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { options: []const u8, expected: []const u8 }{
+        .{ .options = "noicon|175px", .expected = "Voice.ogg" },
+        .{ .options = "175px|Authored caption", .expected = "Voice.ogg" },
+        .{ .options = "frameless|175px|noicon", .expected = "Voice.ogg" },
+        .{ .options = "frameless|thumb|Authored caption", .expected = "Voice.ogg" },
+        .{ .options = "thumb|175px|Authored caption", .expected = "Authored caption" },
+        .{ .options = "thumbnail|noicon", .expected = "noicon" },
+        .{ .options = "frame|autoplay", .expected = "autoplay" },
+        .{ .options = "thumb|frameless|noicon", .expected = "noicon" },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(try std.fmt.allocPrint(a, "[[File:Voice.ogg|{s}]]", .{case.options}), .{});
+        try std.testing.expectEqualStrings(case.expected, try flattened(a, spans));
+        try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
+        try std.testing.expectEqual(media_types.Kind.audio, r.media.items[0].kind);
+        try std.testing.expectEqualStrings("Voice.ogg", r.media.items[0].file);
+        try std.testing.expectEqualStrings(case.expected, r.media.items[0].caption);
+        for (spans) |span| {
+            try std.testing.expect(span.kind == .link);
+            try std.testing.expectEqualStrings("File:Voice.ogg", span.target);
+        }
+    }
+    var gallery_renderer: Renderer = .{ .a = a, .context = .{} };
+    const gallery_spans = try gallery_renderer.parseSpans("<gallery>\nFile:Voice.ogg|noicon\nFile:Other.ogg|Authored caption\n</gallery>", .{});
+    try std.testing.expectEqualStrings("noicon\nAuthored caption", try flattened(a, gallery_spans));
+    try std.testing.expectEqualStrings("noicon", gallery_renderer.media.items[0].caption);
+    try std.testing.expectEqualStrings("Authored caption", gallery_renderer.media.items[1].caption);
+    var heading_renderer: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("", try flattened(a, try heading_renderer.parseSpans("[[File:Voice.ogg|noicon]]", .{ .heading = true })));
+    try std.testing.expectEqualStrings("noicon", try flattened(a, try heading_renderer.parseSpans("[[File:Other.ogg|thumb|noicon]]", .{ .heading = true })));
+}
+
+test "timed media caption visibility leaves explicit links protected literals and images intact" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const explicit = try r.parseSpans("[[:File:Voice.ogg|noicon]]", .{});
+    try std.testing.expectEqualStrings("noicon", try flattened(a, explicit));
+    try std.testing.expectEqualStrings("File:Voice.ogg", explicit[0].target);
+    try std.testing.expectEqual(@as(usize, 0), r.media.items.len);
+    const protected = try r.parseSpans("<nowiki>[[File:Voice.ogg|noicon|175px]]</nowiki>", .{});
+    try std.testing.expectEqualStrings("[[File:Voice.ogg|noicon|175px]]", try flattened(a, protected));
+    try std.testing.expectEqual(@as(usize, 0), r.media.items.len);
+    try std.testing.expectEqualStrings("noicon", try flattened(a, try r.parseSpans("[[File:Photo.jpg|noicon]]", .{})));
+    try std.testing.expectEqualStrings("noicon", r.media.items[0].caption);
 }
 
 test "typed image handler options preserve valid captions without swallowing unrelated options" {
