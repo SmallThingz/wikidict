@@ -500,7 +500,7 @@ class ControllerPreparationTests(unittest.TestCase):
                 if change is not None:
                     receipt = self.transition_receipt(root / 'prep', receipt, old['source'], current['source'])
                     value = controller.read_ref(receipt); value['source_transition'].update(change)
-                    write_json(Path(receipt['path']), value, replace=True); receipt = controller.descriptor(receipt['path'])
+                    write_json(Path(receipt['path']), value); receipt = controller.descriptor(receipt['path'])
                 current['production_preparations'] = [receipt]
                 with self.assertRaisesRegex(ValueError, 'explicit source transition'):
                     controller.load_preparations(current)
