@@ -452,6 +452,50 @@ fn getSitelinkMethodCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Val
     return one(field(sitelink, "title") orelse .nil);
 }
 
+// The archived taxref path formats a single captured string main snak. Reuse
+// the default best-rank and term readers; refuse richer formats until proven.
+fn formatPropertyValuesMethodCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const entity = try entityReceiver(args);
+    if (args.len < 2 or args[1] != .string) return error.StringExpected;
+    if (args.len > 2 and args[2] != .nil) return error.UnsupportedWikibasePropertyFormat;
+    const property = (try canonicalEntityId(runtime, args[1].string)) orelse return error.InvalidPropertyId;
+    if (property[0] != 'P') return error.InvalidPropertyId;
+    var property_data = (try readProjectedEntity(runtime, property)) orelse return error.InvalidPropertyId;
+    defer property_data.deinit();
+    const datatype = (try projectionStringField(property_data.value, "datatype")) orelse return error.InvalidWikibaseEntitySnapshot;
+    if (!std.mem.eql(u8, datatype, "string")) return error.UnsupportedWikibasePropertyFormat;
+    const id = (try stringField(entity, "id")) orelse return error.InvalidWikibaseEntitySnapshot;
+    // Upstream formats a fresh lookup by entity.id, not mutable local claims.
+    const selected = try getBestStatementsCall(null, runtime, &.{ .{ .string = id }, .{ .string = property } });
+    defer rt.freeResults(selected);
+    const statements = selected[0].table;
+    if (statements.rawLen() > 1) return error.UnsupportedWikibasePropertyFormat;
+    var value: []const u8 = "";
+    if (statements.rawLen() == 1) {
+        const statement = statements.rawGet(.{ .number = 1 }) orelse return error.InvalidWikibaseEntitySnapshot;
+        if (statement != .table) return error.InvalidWikibaseEntitySnapshot;
+        const snak = (try tableField(statement.table, "mainsnak")) orelse return error.InvalidWikibaseEntitySnapshot;
+        const kind = (try stringField(snak, "snaktype")) orelse return error.InvalidWikibaseEntitySnapshot;
+        const snak_datatype = (try stringField(snak, "datatype")) orelse return error.InvalidWikibaseEntitySnapshot;
+        if (!std.mem.eql(u8, kind, "value") or !std.mem.eql(u8, snak_datatype, "string")) return error.UnsupportedWikibasePropertyFormat;
+        const data = (try tableField(snak, "datavalue")) orelse return error.InvalidWikibaseEntitySnapshot;
+        const data_type = (try stringField(data, "type")) orelse return error.InvalidWikibaseEntitySnapshot;
+        if (!std.mem.eql(u8, data_type, "string")) return error.UnsupportedWikibasePropertyFormat;
+        value = (try stringField(data, "value")) orelse return error.InvalidWikibaseEntitySnapshot;
+        // No guessed escaping or language-specific list formatter: this proven
+        // subset is one plain string with no wikitext or magic-link syntax.
+        if (std.mem.indexOfAny(u8, value, "&<>[]{}|\"'\r\n\t") != null or std.mem.indexOf(u8, value, "://") != null or
+            std.mem.startsWith(u8, value, "ISBN ") or std.mem.startsWith(u8, value, "RFC ") or std.mem.startsWith(u8, value, "PMID "))
+            return error.UnsupportedWikibasePropertyFormat;
+    }
+    const label = try getLabelCall(null, runtime, &.{.{ .string = property }});
+    defer rt.freeResults(label);
+    const result = try runtime.newTable();
+    try result.rawSet(runtime.allocator, .{ .string = "label" }, if (label[0] == .nil) .{ .string = property } else label[0]);
+    try result.rawSet(runtime.allocator, .{ .string = "value" }, .{ .string = value });
+    return one(.{ .table = result });
+}
+
 fn entityChildren(runtime: *rt.Context, entity: *rt.Table, key: []const u8, kind: []const u8) !*rt.Table {
     const result = try runtime.newTable();
     // Empty top-level forms/senses are omitted by canonical capture. A
@@ -486,6 +530,7 @@ fn installEntityMethods(runtime: *rt.Context, entity: *rt.Table, kind: []const u
     try methods.rawSet(runtime.allocator, .{ .string = "getId" }, try runtime.newNative(null, getIdMethodCall));
     try methods.rawSet(runtime.allocator, .{ .string = "getAllStatements" }, try runtime.newNative(null, getAllStatementsMethodCall));
     try methods.rawSet(runtime.allocator, .{ .string = "getSitelink" }, try runtime.newNative(null, getSitelinkMethodCall));
+    try methods.rawSet(runtime.allocator, .{ .string = "formatPropertyValues" }, try runtime.newNative(null, formatPropertyValuesMethodCall));
     if (std.mem.eql(u8, kind, "lexeme")) {
         try methods.rawSet(runtime.allocator, .{ .string = "getLemmas" }, try runtime.newNative(null, getLemmasCall));
         try methods.rawSet(runtime.allocator, .{ .string = "getLanguage" }, try runtime.newNative(null, getLanguageMethodCall));
@@ -1560,4 +1605,75 @@ test "Wikibase finite-number attestation does not bypass raw-source validation" 
     var host = host_api.Host{ .ctx = &probe, .wikibase_entity = ProjectionProbe.entity };
     host_api.set(&runtime, &host);
     try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, getAllStatementsCall(null, &runtime, &.{ .{ .string = "Q1" }, .{ .string = "P1" } }));
+}
+
+const StringPropertyProbe = struct {
+    source: []const u8,
+    label_present: bool = true,
+    fn entity(raw: ?*anyopaque, id: []const u8) !host_api.WikibaseEntity {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        if (std.mem.eql(u8, id, "Q1")) return .{ .source = self.source };
+        if (std.mem.eql(u8, id, "P373")) return .{ .source = "{\"id\":\"P373\",\"type\":\"property\",\"datatype\":\"string\",\"schemaVersion\":2}" };
+        return error.WikibaseEntitySnapshotMissing;
+    }
+    fn terms(raw: ?*anyopaque, id: []const u8) !host_api.WikibaseEntityTerms {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        if (std.mem.eql(u8, id, "Q1")) return .{ .label = null, .description = null };
+        if (std.mem.eql(u8, id, "P373")) return if (self.label_present) .{ .label = .{ .value = "Commons category", .language = "en" }, .description = null } else .{ .label = null, .description = null };
+        return error.WikibaseEntityTermSnapshotMissing;
+    }
+};
+
+test "Wikibase formatPropertyValues object method reads captured single string best rank" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    var fixture = StringPropertyProbe{ .source =
+        \\{"id":"Q1","type":"item","schemaVersion":2,"claims":{"P373":[{"rank":"normal","mainsnak":{"snaktype":"value","datatype":"string","datavalue":{"type":"string","value":"Not selected"}}},{"rank":"preferred","mainsnak":{"snaktype":"value","datatype":"string","datavalue":{"type":"string","value":"Curruca mystacea"}}}]}}
+    };
+    var host = host_api.Host{ .ctx = &fixture, .wikibase_entity = StringPropertyProbe.entity, .wikibase_entity_terms = StringPropertyProbe.terms };
+    host_api.set(&runtime, &host);
+    const object = try getEntityCall(null, &runtime, &.{.{ .string = "Q1" }});
+    defer rt.freeResults(object);
+    const method = try runtime.getIndex(object[0], .{ .string = "formatPropertyValues" });
+    const result = try runtime.callValue(method, &.{ object[0], .{ .string = "P373" } });
+    defer rt.freeResults(result);
+    try std.testing.expectEqualStrings("Commons category", (try stringField(result[0].table, "label")).?);
+    try std.testing.expectEqualStrings("Curruca mystacea", (try stringField(result[0].table, "value")).?);
+    // Mutating the local object's claims must not alter upstream-style refetch.
+    try object[0].table.rawSet(runtime.allocator, .{ .string = "claims" }, .{ .table = try runtime.newTable() });
+    fixture.source = "{\"id\":\"Q1\",\"type\":\"item\",\"claims\":{},\"schemaVersion\":2}";
+    fixture.label_present = false;
+    const empty = try runtime.callValue(method, &.{ object[0], .{ .string = "P373" }, .nil });
+    defer rt.freeResults(empty);
+    try std.testing.expectEqualStrings("P373", (try stringField(empty[0].table, "label")).?);
+    try std.testing.expectEqualStrings("", (try stringField(empty[0].table, "value")).?);
+}
+
+test "Wikibase single string formatter refuses unproven ranks snaks lists and escaping" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    var fixture = StringPropertyProbe{ .source = "{\"id\":\"Q1\",\"type\":\"item\",\"claims\":{},\"schemaVersion\":2}" };
+    var host = host_api.Host{ .ctx = &fixture, .wikibase_entity = StringPropertyProbe.entity, .wikibase_entity_terms = StringPropertyProbe.terms };
+    host_api.set(&runtime, &host);
+    const object = try getEntityCall(null, &runtime, &.{.{ .string = "Q1" }});
+    defer rt.freeResults(object);
+    try std.testing.expectError(error.UnsupportedWikibasePropertyFormat, formatPropertyValuesMethodCall(null, &runtime, &.{ object[0], .{ .string = "P373" }, .{ .table = try runtime.newTable() } }));
+    inline for (.{
+        "{\"id\":\"Q1\",\"type\":\"item\",\"claims\":{\"P373\":[{\"rank\":\"normal\",\"mainsnak\":{\"snaktype\":\"somevalue\",\"datatype\":\"string\"}}]},\"schemaVersion\":2}",
+        "{\"id\":\"Q1\",\"type\":\"item\",\"claims\":{\"P373\":[{\"rank\":\"normal\",\"mainsnak\":{\"snaktype\":\"value\",\"datatype\":\"string\",\"datavalue\":{\"type\":\"string\",\"value\":\"<b>markup</b>\"}}}]},\"schemaVersion\":2}",
+        "{\"id\":\"Q1\",\"type\":\"item\",\"claims\":{\"P373\":[{\"rank\":\"normal\",\"mainsnak\":{\"snaktype\":\"value\",\"datatype\":\"string\",\"datavalue\":{\"type\":\"string\",\"value\":\"one\"}}},{\"rank\":\"normal\",\"mainsnak\":{\"snaktype\":\"value\",\"datatype\":\"string\",\"datavalue\":{\"type\":\"string\",\"value\":\"two\"}}}]},\"schemaVersion\":2}",
+    }) |source| {
+        fixture.source = source;
+        try std.testing.expectError(error.UnsupportedWikibasePropertyFormat, formatPropertyValuesMethodCall(null, &runtime, &.{ object[0], .{ .string = "P373" } }));
+    }
+    fixture.source = "{\"id\":\"Q1\",\"type\":\"item\",\"claims\":{},\"schemaVersion\":2}";
+    host.wikibase_entity_terms = null;
+    try std.testing.expectError(error.LuaRaised, formatPropertyValuesMethodCall(null, &runtime, &.{ object[0], .{ .string = "P373" } }));
+    try std.testing.expectEqualStrings("Wikibase entity-term snapshot missing entity=P373", runtime.last_error.string);
 }
