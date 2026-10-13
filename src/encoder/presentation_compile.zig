@@ -2022,6 +2022,24 @@ pub const Renderer = struct {
                             continue;
                         }
                     }
+                    // MediaWiki rejects raw title line breaks before namespace effects.
+                    // Multiline alternate labels stay valid; decoded entity controls retain
+                    // their separate existing target-safety path.
+                    if (std.mem.indexOfAny(u8, target, "\r\n") != null) {
+                        const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
+                        var literal_style = s;
+                        literal_style.kind = .text;
+                        literal_style.target = "";
+                        self.fallbacks.literal_markup = true;
+                        if (token.link_has_pipe) {
+                            const label_start = @intFromPtr(token.text.ptr) - @intFromPtr(input.ptr);
+                            try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..label_start])), literal_style);
+                            try self.inlineText(input[label_start..it.cursor], literal_style, depth + 1);
+                        } else {
+                            try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..it.cursor])), literal_style);
+                        }
+                        continue;
+                    }
                     const authored_target = target;
                     target = try self.withoutBehaviorControls(target);
                     if (target.len != authored_target.len) {
@@ -8393,4 +8411,69 @@ test "localized TOC aliases are recognition boundaries through captured canonica
     for (negative) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
     const positive = try renderer.parseSpans("ISBN __SANSSECTION__9780306406157", .{});
     try std.testing.expect(unclosedExternalRecoveryHasLink(positive, .link, "Special:BookSources/9780306406157"));
+}
+
+test "raw internal title line breaks retain full syntax before namespace effects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "Before [[A\nB|label]] after [[C]].", .visible = "Before [[A B|label]] after C." },
+        .{ .source = "Before [[A\r\nB|label]] after [[C]].", .visible = "Before [[A B|label]] after C." },
+        .{ .source = "Before [[A\rB]] after [[C]].", .visible = "Before [[A B]] after C." },
+        .{ .source = "Before [[\nA|label]] after [[C]].", .visible = "Before [[ A|label]] after C." },
+        .{ .source = "Before [[A\n|label]] after [[C]].", .visible = "Before [[A |label]] after C." },
+        .{ .source = "Before [[File:A\nB|label]] after [[C]].", .visible = "Before [[File:A B|label]] after C." },
+        .{ .source = "Before [[Category:A\nB]] after [[C]].", .visible = "Before [[Category:A B]] after C." },
+        .{ .source = "Before [[:Category:A\nB|label]] after [[C]].", .visible = "Before [[:Category:A B|label]] after C." },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try plainText(a, spans));
+        try std.testing.expect(renderer.fallbacks.literal_markup);
+        try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
+        var links: usize = 0;
+        for (spans) |span| if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings("C", span.target);
+            try std.testing.expectEqualStrings("C", span.text);
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
+    }
+    var rich: Renderer = .{ .a = a, .context = .{} };
+    const rich_spans = try rich.parseSpans("Before [[A\nB|''label'']] after [[C]].", .{});
+    try std.testing.expectEqualStrings("Before [[A B|label]] after C.", try plainText(a, rich_spans));
+    var italic_label = false;
+    for (rich_spans) |span| {
+        if (std.mem.eql(u8, span.text, "label")) italic_label = span.flags.italic and span.kind == .text;
+        if (span.kind == .link) try std.testing.expectEqualStrings("C", span.target);
+    }
+    try std.testing.expect(italic_label);
+}
+
+test "multiline internal labels media captions and protected literal targets remain distinct" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("[[A|first\nsecond]] after [[C]].", .{});
+    try std.testing.expectEqualStrings("first second after C.", try plainText(a, spans));
+    try std.testing.expect(!renderer.fallbacks.any());
+    var a_links: usize = 0;
+    for (spans) |span| if (span.kind == .link) {
+        if (std.mem.eql(u8, span.target, "A")) a_links += 1 else try std.testing.expectEqualStrings("C", span.target);
+    };
+    try std.testing.expect(a_links != 0);
+    var media: Renderer = .{ .a = a, .context = .{} };
+    _ = try media.parseSpans("[[File:A.png|thumb|first\nsecond]] after [[C]].", .{});
+    try std.testing.expectEqual(@as(usize, 1), media.media.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, media.media.items[0].caption, "first") != null);
+    try std.testing.expect(std.mem.indexOf(u8, media.media.items[0].caption, "second") != null);
+    try std.testing.expect(!media.fallbacks.literal_markup);
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const literal = try protected.parseSpans("<nowiki>[[A\nB|label]]</nowiki> after [[C]].", .{});
+    try std.testing.expectEqualStrings("[[A\nB|label]] after C.", try plainText(a, literal));
+    try std.testing.expect(!protected.fallbacks.any());
+    for (literal) |span| if (span.kind == .link) try std.testing.expectEqualStrings("C", span.target);
 }
