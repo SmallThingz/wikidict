@@ -674,7 +674,7 @@ pub fn build(b: *std.Build) void {
     bundle_test_run.addFileArg(pipeline_exe.getEmittedBin());
     bundle_test_run.addFileArg(blob_verify_exe.getEmittedBin());
     bundle_test_run.setCwd(b.path("."));
-    bundle_test_run.addArg(".zig-cache");
+    bundle_test_run.addDirectoryArg2(std.Build.LazyPath.cache_root, .{ .make_absolute = true });
     bundle_test_run.addFileArg(llvm_exe.getEmittedBin());
     bundle_test_run.addFileArg(blob_build_exe.getEmittedBin());
     bundle_test_run.addFileArg(value_leaf_test_bc);
@@ -685,7 +685,7 @@ pub fn build(b: *std.Build) void {
     reader_test_run.addFileArg(blob_query_exe.getEmittedBin());
     reader_test_run.addFileArg(ffi_test_exe.getEmittedBin());
     reader_test_run.setCwd(b.path("."));
-    reader_test_run.addArg(".zig-cache");
+    reader_test_run.addDirectoryArg2(std.Build.LazyPath.cache_root, .{ .make_absolute = true });
     b.step("test-reader", "Exercise precompiled data-only reading through CLI and C FFI").dependOn(&reader_test_run.step);
     const index_blobs_exe = addCliExecutable(b, "dict-index-blobs", b.path("tools/index_blobs.zig"), target, optimize, &.{.{ .name = "blob_storage", .module = storage_mod }});
     index_blobs_exe.root_module.link_libc = true;
@@ -698,7 +698,7 @@ pub fn build(b: *std.Build) void {
     storage_exe.use_lld = true;
     const storage_run = b.addRunArtifact(storage_exe);
     storage_run.setCwd(b.path("."));
-    storage_run.addArg(".zig-cache");
+    storage_run.addDirectoryArg2(std.Build.LazyPath.cache_root, .{ .make_absolute = true });
     const storage_unit = b.addTest(.{ .root_module = storage_test, .test_runner = .{ .path = test_runner, .mode = .simple } });
     storage_unit.root_module.link_libc = true;
     storage_unit.use_llvm = true;
