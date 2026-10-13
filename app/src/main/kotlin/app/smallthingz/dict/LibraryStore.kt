@@ -62,6 +62,22 @@ internal fun cancelOwnedDownload(remove: () -> Unit, cancelOperation: () -> Unit
 } catch (cancelled: CancellationException) { throw cancelled }
 catch (failure: Exception) { failure }
 
+// A failed disk commit still leaves SharedPreferences ownership in memory.
+// Compensate the exact new ID; a failed removal must keep Cancel available.
+internal fun enqueueOwnedDownload(lock: Any, enqueue: () -> Long, commit: (Long) -> Boolean, remove: (Long) -> Unit): Long {
+    val (id, committed) = synchronized(lock) {
+        val id = enqueue()
+        id to commit(id)
+    }
+    if (committed) return id
+    try { remove(id) }
+    catch (cancelled: CancellationException) { throw cancelled }
+    catch (failure: Exception) {
+        throw IOException("Could not save the download and cancellation failed. Keep the app open and use Cancel to retry.", failure)
+    }
+    throw IOException("Could not save the download. The download was cancelled.")
+}
+
 class LibraryStore private constructor(private val context: Context) {
     companion object {
         @Volatile private var instance: LibraryStore? = null
@@ -210,12 +226,12 @@ class LibraryStore private constructor(private val context: Context) {
                     .setDescription("Wikidict dictionary")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                     .setDestinationInExternalFilesDir(context, "downloads", "${UUID.randomUUID()}.wikblb")
-                synchronized(downloadLock) {
-                    val id = manager.enqueue(request)
-                    prefs.edit().putLong("downloadId",id).putString("downloadUrl",item.url).putString("downloadLabel",item.label)
+                enqueueOwnedDownload(downloadLock, { manager.enqueue(request) }, { id ->
+                    val committed = prefs.edit().putLong("downloadId",id).putString("downloadUrl",item.url).putString("downloadLabel",item.label)
                         .putLong("downloadBytes",item.bytes ?: -1).putString("downloadHash",item.sha256).commit()
                     hasRetainedDownload = true
-                }
+                    committed
+                }, { removeDownload(it) })
             }
             watchDownload(item)
             return@operation

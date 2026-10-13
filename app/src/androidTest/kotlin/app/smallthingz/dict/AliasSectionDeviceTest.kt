@@ -91,15 +91,15 @@ class AliasSectionDeviceTest {
                 learning.updateSettings { it.copy(collapseEtymology = true, collapseOtherSections = true, allowImages = false, allowAudio = false) }
                 compose.activity.setContent { MaterialTheme { DictApp(library, learning, {}) } }
             }
-            compose.waitUntil(10000) { compose.onAllNodes(hasTestTag("entry-title") and hasText("Anchor source")).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(10000) { compose.onAllNodes(hasTestTag("entry-title") and hasText("Anchor source")).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
             fun search(title: String) {
                 compose.onNodeWithContentDescription("Dictionary").performClick()
                 compose.onNode(hasSetTextAction()).performTextInput(title)
-                compose.waitUntil(10000) { compose.onAllNodes(hasText(title) and hasClickAction() and !hasSetTextAction()).fetchSemanticsNodes().isNotEmpty() }
+                compose.waitUntil(10000) { compose.onAllNodes(hasText(title) and hasClickAction() and !hasSetTextAction()).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
                 compose.onNode(hasText(title) and hasClickAction() and !hasSetTextAction()).performClick()
             }
             search("Alias notes")
-            compose.waitUntil(10000) { compose.onAllNodesWithText("DESTINATION USAGE BODY").fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(10000) { compose.onAllNodesWithText("DESTINATION USAGE BODY").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
             compose.onNodeWithText("DESTINATION USAGE BODY").assertIsDisplayed()
             compose.onNodeWithContentDescription("Collapse Usage notes").assertIsDisplayed()
             compose.onNodeWithText("PARENT SECTION REMAINS FOLDED").assertDoesNotExist()
@@ -110,10 +110,10 @@ class AliasSectionDeviceTest {
             // A chain still stops after one edge. Its displayed link supplies a fragment
             // that must override the next alias's different, inherited Usage_notes fragment.
             search("Alias chain")
-            compose.waitUntil(10000) { compose.onAllNodes(hasTestTag("entry-title") and hasText("Alias click")).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(10000) { compose.onAllNodes(hasTestTag("entry-title") and hasText("Alias click")).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
             compose.onNodeWithText("DESTINATION USAGE BODY").assertDoesNotExist()
             touchLink("Use explicit etymology")
-            compose.waitUntil(10000) { compose.onAllNodesWithText("PARENT SECTION REMAINS FOLDED").fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(10000) { compose.onAllNodesWithText("PARENT SECTION REMAINS FOLDED").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
             compose.onNodeWithText("PARENT SECTION REMAINS FOLDED").assertIsDisplayed()
             compose.onNodeWithContentDescription("Collapse Etymology 2").assertIsDisplayed()
             compose.onNodeWithText("DESTINATION USAGE BODY").assertDoesNotExist()

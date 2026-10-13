@@ -81,4 +81,77 @@ class DownloadLifecycleTest {
         assertNull(reported); assertTrue(oldCancelled); assertFalse(newCancelled); assertTrue(state.values.isEmpty())
         current(); assertTrue(newCancelled)
     }
+
+    @Test fun successfulOwnershipCommitKeepsTheNewDownload() {
+        val state = Record(); state.values = emptyMap(); val calls = mutableListOf<String>()
+        val record = mapOf<String, Any>("downloadId" to 42L, "downloadUrl" to "https://example.test/new.wikblb", "downloadBytes" to 456L, "downloadHash" to "b".repeat(64))
+        val id = enqueueOwnedDownload(state.lock, { calls += "enqueue"; 42L }, {
+            assertEquals(42L, it); assertTrue(Thread.holdsLock(state.lock))
+            calls += "commit"; state.values = record; true
+        }, { fail("A successful ownership commit must not remove its download") })
+        assertEquals(42L, id); assertEquals(listOf("enqueue", "commit"), calls); assertEquals(record, state.values)
+    }
+
+    @Test fun failedOwnershipCommitRemovesOnlyTheNewDownload() {
+        val state = Record(); val record = state.values; state.values = emptyMap()
+        val calls = mutableListOf<String>(); val durable: Map<String, Any> = emptyMap()
+        val caught = assertThrows(IOException::class.java) {
+            enqueueOwnedDownload(state.lock, { calls += "enqueue"; 7L }, {
+                assertEquals(7L, it); calls += "commit"; state.values = record; false
+            }, { id ->
+                assertFalse(Thread.holdsLock(state.lock)); calls += "remove"
+                state.remove(id) { assertEquals(7L, it); assertEquals(record, state.values); assertTrue(durable.isEmpty()) }
+            })
+        }
+        assertEquals(listOf("enqueue", "commit", "remove"), calls)
+        assertTrue(caught.message!!.contains("cancelled")); assertTrue(state.values.isEmpty()); assertTrue(durable.isEmpty())
+    }
+
+    @Test fun failedCommitAndRemovalKeepExactOwnershipForCancelRetry() {
+        val state = Record(); val record = state.values; state.values = emptyMap()
+        val cleanup = IOException("provider unavailable"); var cancelled = false
+        val caught = assertThrows(IOException::class.java) {
+            enqueueOwnedDownload(state.lock, { 7L }, { state.values = record; false }, { id -> state.remove(id) { throw cleanup } })
+        }
+        assertSame(cleanup, caught.cause); assertEquals(record, state.values)
+        assertTrue(caught.message!!.contains("Keep the app open")); assertTrue(caught.message!!.contains("Cancel"))
+        val retry = cancelOwnedDownload({ state.remove { assertEquals(7L, it) } }, { cancelled = true })
+        assertNull(retry); assertTrue(cancelled); assertTrue(state.values.isEmpty())
+    }
+
+    @Test fun failedCommitCompensationCannotClearAReplacement() {
+        val state = Record(); val record = state.values; state.values = emptyMap()
+        val entered = CountDownLatch(1); val release = CountDownLatch(1); val executor = Executors.newSingleThreadExecutor()
+        try {
+            val pending = executor.submit<IOException> {
+                assertThrows(IOException::class.java) {
+                    enqueueOwnedDownload(state.lock, { 7L }, { state.values = record; false }, { id -> state.remove(id) {
+                        assertEquals(7L, it); assertFalse(Thread.holdsLock(state.lock)); entered.countDown(); check(release.await(5, TimeUnit.SECONDS))
+                    } })
+                }
+            }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            val replacement = record + mapOf("downloadId" to 9L, "downloadUrl" to "https://example.test/replacement.wikblb")
+            synchronized(state.lock) { state.values = replacement }
+            release.countDown(); assertTrue(pending.get(5, TimeUnit.SECONDS).message!!.contains("cancelled"))
+            assertEquals(replacement, state.values)
+        } finally { release.countDown(); executor.shutdownNow(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS)) }
+    }
+
+    @Test fun failedEnqueueDoesNotCommitOrRemoveAnUncreatedDownload() {
+        val failure = IOException("enqueue failed"); var committed = false; var removed = false
+        val caught = assertThrows(IOException::class.java) {
+            enqueueOwnedDownload(Any(), { throw failure }, { committed = true; true }, { removed = true })
+        }
+        assertSame(failure, caught); assertFalse(committed); assertFalse(removed)
+    }
+
+    @Test fun failedCommitCleanupCancellationPreservesOwnership() {
+        val state = Record(); val record = state.values; state.values = emptyMap()
+        val cancellation = CancellationException("cancelled during removal")
+        val caught = assertThrows(CancellationException::class.java) {
+            enqueueOwnedDownload(state.lock, { 7L }, { state.values = record; false }, { id -> state.remove(id) { throw cancellation } })
+        }
+        assertSame(cancellation, caught); assertEquals(record, state.values)
+    }
 }
