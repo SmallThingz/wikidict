@@ -14,6 +14,7 @@
 #include <QFontMetricsF>
 #include <QGridLayout>
 #include <QGlyphRun>
+#include <QPainterPath>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
@@ -407,7 +408,7 @@ private slots:
             const auto positions = run.positions();
             QCOMPARE(indexes.size(), positions.size());
             for (qsizetype i = 0; i < indexes.size(); ++i) {
-                const QRectF bounds = run.rawFont().boundingRect(indexes[i]).translated(positions[i]);
+                const QRectF bounds = run.rawFont().pathForGlyph(indexes[i]).boundingRect().translated(positions[i]);
                 if (bounds.isEmpty()) continue;
                 QVERIFY(indexes[i] != 0);
                 ink.append(bounds);
