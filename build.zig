@@ -88,6 +88,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("namespace_registry", namespace_registry_mod);
     encoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
     encoder_mod.addImport("blob_encoder", blob_encoder_mod);
+    encoder_mod.addImport("build_diagnostics", build_diagnostics_mod);
 
     const encoder_mod_test = b.addModule("encoder_test", .{
         .root_source_file = b.path("src/encoder/root.zig"),
@@ -97,6 +98,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_test.addImport("namespace_registry", namespace_registry_test_mod);
     encoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod_test);
     encoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
+    encoder_mod_test.addImport("build_diagnostics", build_diagnostics_test_mod);
 
     const blob_decoder_mod = b.addModule("blob_decoder", .{
         .root_source_file = b.path("src/decoder/blob_root.zig"),

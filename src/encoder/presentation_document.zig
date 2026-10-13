@@ -7,6 +7,11 @@ const types = blobs.presentation_types;
 const format = blobs.blob_format;
 const codec = blobs.presentation_codec;
 const A = std.mem.Allocator;
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+fn unclosedFragmentTraceFromEnv() !bool {
+    const raw = getenv("WIKIDICT_UNCLOSED_FRAGMENT_TRACE");
+    return compiler.unclosedFragmentTraceEnabled(if (raw) |value| std.mem.span(value) else null);
+}
 // Expanded heading templates can leave spacing around decorative media.
 // Consume the whole NBSP sequence, never individual UTF-8 continuation bytes.
 fn trimHeading(raw: []const u8) []const u8 {
@@ -145,6 +150,7 @@ fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, 
         .a = a,
         .context = .{
             .title = title,
+            .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv(),
             .language = if (language.len == 0) "English" else language,
             .link_trail = link_trail,
             .namespace_catalog = namespace_catalog,
@@ -795,7 +801,6 @@ test "AM source malformed style preserves both pronunciations and typed hiragana
     const protected = try workAlloc(a, "literal", "ጃፓንኛ", "<nowiki>" ++ literal ++ "</nowiki>", .{}, null, null, null, .{});
     try std.testing.expectEqualStrings(literal, try compiler.plainText(a, protected.sections[0].blocks[0].spans));
 }
-
 
 test "external HTML-label boundary compiles the Arabic Navbar witness as data-only links" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

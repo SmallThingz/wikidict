@@ -6,6 +6,7 @@ const ir = @import("blob_encoder").document_ir;
 const entities = @import("shared_xml_decode").html_entities;
 const syntax = @import("blob_encoder").wikitext_syntax;
 const templates = @import("presentation_templates.zig");
+const diagnostics = @import("build_diagnostics");
 const hieroglyphs = @import("hieroglyph_unicode.zig");
 const A = std.mem.Allocator;
 
@@ -146,6 +147,8 @@ pub const Context = struct {
     behavior_switches: ?*const @import("namespace_registry").behavior_switches.Registry = null,
     namespace_catalog: ?*const @import("namespace_registry").Registry = null,
     title: []const u8 = "Entry",
+    // Build-only opt-in; never serialized into typed presentation data.
+    unclosed_fragment_trace: bool = false,
     language: []const u8 = "English",
     link_trail: ir.LinkTrail = .{},
 };
@@ -832,6 +835,22 @@ test "safe internal target ASCII fast path preserves Unicode and control checks"
 }
 
 /// The caller uses an arena for a page; returned arrays/text share its lifetime.
+pub fn unclosedFragmentTraceEnabled(value: ?[]const u8) !bool {
+    const raw = value orelse return false;
+    if (std.mem.eql(u8, raw, "0")) return false;
+    if (std.mem.eql(u8, raw, "1")) return true;
+    return error.InvalidUnclosedFragmentTrace;
+}
+fn boundedTraceHex(buffer: []u8, bytes: []const u8) []const u8 {
+    const count = @min(bytes.len, buffer.len / 2);
+    const digits = "0123456789abcdef";
+    for (bytes[0..count], 0..) |byte, i| {
+        buffer[2 * i] = digits[byte >> 4];
+        buffer[2 * i + 1] = digits[byte & 15];
+    }
+    return buffer[0 .. count * 2];
+}
+
 pub const Renderer = struct {
     fallbacks: @import("presentation_fallback.zig").Report = .{},
     a: A,
@@ -843,6 +862,7 @@ pub const Renderer = struct {
     span_limit_marker: bool = false,
     block_limit_reached: bool = false,
     body_depth: usize = 0,
+    unclosed_trace_events: usize = 0,
     block_formatting: SpanFlags = .{},
     refs: std.ArrayList(Reference) = .empty,
     ref_defs: std.ArrayList(ReferenceDefinition) = .empty,
@@ -855,6 +875,26 @@ pub const Renderer = struct {
     spans: std.ArrayList(Span) = .empty,
     in_reference: bool = false,
     semantic_capture: ?*SemanticHints = null,
+
+    fn markUnclosed(self: *Renderer, input: []const u8, tag: syntax.Tag, comptime site: []const u8) void {
+        self.fallbacks.unclosed_formatting = true;
+        if (!self.context.unclosed_fragment_trace or self.unclosed_trace_events >= 8) return;
+        self.unclosed_trace_events += 1;
+        // parseSpans can normalize quotes/HTML into a new allocation. This
+        // offset is local to the exact compiler fragment, never a page offset.
+        const name_offset = @intFromPtr(tag.name.ptr) - @intFromPtr(input.ptr);
+        var fragment_buffer: [1024]u8 = undefined;
+        var title_buffer: [256]u8 = undefined;
+        const window_offset = name_offset -| 256;
+        const window_end = @min(input.len, window_offset + fragment_buffer.len / 2);
+        const fragment_hex = boundedTraceHex(&fragment_buffer, input[window_offset..window_end]);
+        const title_hex = boundedTraceHex(&title_buffer, self.context.title);
+        diagnostics.logLine("presentation unclosed site={s} title_hex={s} title_bytes={d} title_truncated={any} tag={s} name_offset={d} fragment_bytes={d} fragment_window_offset={d} fragment_window_hex={s} fragment_truncated={any}", .{
+            site,         title_hex,                                     self.context.title.len, self.context.title.len > title_hex.len / 2,
+            tag.name,     name_offset,                                   input.len,              window_offset,
+            fragment_hex, window_offset != 0 or window_end != input.len,
+        });
+    }
 
     fn namespaceOfTarget(self: *const Renderer, title: []const u8) ?i32 {
         const colon = std.mem.indexOfScalar(u8, title, ':') orelse return null;
@@ -1405,7 +1445,7 @@ pub const Renderer = struct {
         if (tag.self_closing) return tag.end;
         const matched_pair = syntax.matchingTag(input, tag);
         const pair = matched_pair orelse blk: {
-            self.fallbacks.unclosed_formatting = true;
+            self.markUnclosed(input, tag, "opaque-extension");
             break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
         };
         const content = input[tag.end..pair.inner_end];
@@ -1709,7 +1749,7 @@ pub const Renderer = struct {
         if (tag.name.len == "small".len and tag.attrs.len == 0 and tag.is("small")) {
             if (tag.closing or tag.self_closing) return tag.end;
             const pair = syntax.matchingTag(input, tag) orelse blk: {
-                self.fallbacks.unclosed_formatting = true;
+                self.markUnclosed(input, tag, "small");
                 break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
             };
             var s = style;
@@ -1730,7 +1770,7 @@ pub const Renderer = struct {
         if (literal_tag and !tag.closing) {
             if (tag.self_closing) return tag.end;
             const pair = syntax.matchingTag(input, tag) orelse blk: {
-                self.fallbacks.unclosed_formatting = true;
+                self.markUnclosed(input, tag, "nowiki");
                 break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
             };
             var s = style;
@@ -1754,7 +1794,7 @@ pub const Renderer = struct {
                 try self.literal(input[at..pair.end], style);
                 return pair.end;
             }
-            self.fallbacks.unclosed_formatting = true;
+            self.markUnclosed(input, tag, "disallowed-html");
             try self.literal(input[at..], style);
             return input.len;
         }
@@ -1773,7 +1813,7 @@ pub const Renderer = struct {
         // and semantic HTML that must pass through the inline compiler.
         if (tag.is("li") and syntax.matchingTag(input, tag) == null) return tag.end;
         const matched = syntax.matchingTag(input, tag);
-        if (matched == null) self.fallbacks.unclosed_formatting = true;
+        if (matched == null) self.markUnclosed(input, tag, "known-html");
         // Unclosed layout containers have no inline style to scope. Consume
         // them iteratively, including long runs of malformed openers.
         if (matched == null and oneOf(tag.name, &.{ "div", "span", "p", "center", "ul", "ol", "dl" })) return tag.end;
@@ -2451,7 +2491,7 @@ pub const Renderer = struct {
             if (protected_tag) |tag| {
                 const matched_pair = syntax.matchingTag(clean, tag);
                 if (tag.is("pre") and matched_pair == null) {
-                    self.fallbacks.unclosed_formatting = true;
+                    self.markUnclosed(clean, tag, "block-pre");
                     const body_start = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + tag.end;
                     try self.appendBlockBudgeted(&blocks, .{ .kind = .preformatted, .spans = try self.parseSpans(input[body_start..], .{ .code = true, .preserve_whitespace = true }) });
                     pos = input.len;
@@ -8164,6 +8204,29 @@ test "hieroglyph cell joins and following text survive unchanged DPR2" {
     try std.testing.expectEqualStrings("𓀨𓐰𓂡𓐱𓏏 linked", visible.items);
     try std.testing.expect(signs and linked);
     try std.testing.expect(!r.fallbacks.unsupported_element);
+}
+
+test "unclosed fragment trace requires explicit opt in and preserves exact bounded bytes" {
+    try std.testing.expect(!(try unclosedFragmentTraceEnabled(null)));
+    try std.testing.expect(!(try unclosedFragmentTraceEnabled("0")));
+    try std.testing.expect(try unclosedFragmentTraceEnabled("1"));
+    for ([_][]const u8{ "", "true", "2" }) |value|
+        try std.testing.expectError(error.InvalidUnclosedFragmentTrace, unclosedFragmentTraceEnabled(value));
+    var buffer: [6]u8 = undefined;
+    try std.testing.expectEqualStrings("0a225c", boundedTraceHex(&buffer, "\n\"\\X"));
+    try std.testing.expectEqualStrings("ff00", boundedTraceHex(&buffer, &.{ 255, 0 }));
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const input = "<span>unmatched";
+    const tag = syntax.tagAt(input, 0).?;
+    var normal: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    normal.markUnclosed(input, tag, "test");
+    try std.testing.expect(normal.fallbacks.unclosed_formatting);
+    try std.testing.expectEqual(@as(usize, 0), normal.unclosed_trace_events);
+    var traced: Renderer = .{ .a = arena.allocator(), .context = .{ .unclosed_fragment_trace = true } };
+    for (0..10) |_| traced.markUnclosed(input, tag, "test");
+    try std.testing.expect(traced.fallbacks.unclosed_formatting);
+    try std.testing.expectEqual(@as(usize, 8), traced.unclosed_trace_events);
 }
 
 test "continued paragraph formatting scopes list navigation and closing suffix" {
