@@ -359,14 +359,97 @@ def command(cfg, edition, workers):
     return argv
 
 
-def history(state, context):
+
+CONTEXT_KEYS = ('source', 'compiler', 'manifest', 'downloads', 'output', 'raw_shard_root',
+                'date', 'now_unix', 'expansion_timeout_ms')
+
+def production_context(cfg):
+    values = {key: cfg[key] for key in CONTEXT_KEYS}
+    if cfg.get('artifact_root') is not None:
+        values['artifact_root'] = cfg['artifact_root']
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+
+
+def load_history_transition(cfg):
+    transition = cfg.get('production_manifest_transition')
+    if transition is None:
+        return None
+    require(isinstance(transition, dict) and set(transition) == {
+            'scope', 'reason', 'from_configuration', 'from_manifest_snapshot', 'to_manifest'}
+            and transition['scope'] == 'english-auxiliary-only-non-english-history'
+            and isinstance(transition['reason'], str) and transition['reason'].strip(),
+            'Explicit English-only history transition required')
+    old = read_ref(transition['from_configuration'])
+    require(old.get('armed') is True and old.get('production_manifest_transition') is None,
+            'History transition requires one original armed configuration')
+    for key in (*CONTEXT_KEYS, 'state_directory', 'artifact_root', 'build_timeout_seconds'):
+        if key != 'manifest':
+            require(old.get(key) == cfg.get(key), 'History transition changes ' + key)
+    require(transition['to_manifest'] == cfg['manifest']
+            and old['manifest']['path'] == cfg['manifest']['path'], 'History manifest target differs')
+    snapshot = transition['from_manifest_snapshot']
+    require(all(snapshot.get(k) == old['manifest'][k] for k in ('bytes', 'sha256')),
+            'History original manifest snapshot differs')
+    before, after = read_ref(snapshot), read_ref(cfg['manifest'])
+    before, after = dict(before), dict(after)
+    old_roots, new_roots = before.pop('auxiliary_capture_roots', None), after.pop('auxiliary_capture_roots', None)
+    require(isinstance(old_roots, dict) and isinstance(new_roots, dict), 'History auxiliary roots missing')
+    old_roots, new_roots = dict(old_roots), dict(new_roots)
+    old_en, new_en = old_roots.pop('enwiktionary', None), new_roots.pop('enwiktionary', None)
+    require(isinstance(old_en, str) and old_en and isinstance(new_en, str) and new_en
+            and old_en != new_en and before == after and old_roots == new_roots,
+            'History transition must change only English auxiliary root')
+    old_context = production_context(old)
+    require(old_context != production_context(cfg), 'History transition does not change context')
+    return dict(context=old_context, configuration=old)
+
+
+def validate_history_context(start, row, context, transition=None, cfg=None):
+    old_context = transition is not None and start['context'] == transition['context']
+    require(start['context'] == context or old_context,
+            'Run directory has another source/input configuration')
+    if not old_context:
+        return
+    require(all(start[k] == row[k] for k in ('attempt_id', 'sequence', 'edition')),
+            'Transition attempt identity differs')
+    require(start['edition'] != 'enwiktionary' or row.get('accepted') is None,
+            'Prior English acceptance cannot cross its metadata transition')
+    if row.get('accepted') is not None:
+        accepted = row['accepted']
+        complete = read_ref(accepted['complete_snapshot'])
+        require((accepted['complete_snapshot']['bytes'], accepted['complete_snapshot']['sha256']) ==
+                (accepted['complete']['bytes'], accepted['complete']['sha256']), 'Accepted completion snapshot differs')
+        require((complete['edition'], complete['date'], complete['now_unix']) ==
+                (start['edition'], cfg['date'], cfg['now_unix'])
+                and accepted['root'] == str(Path(cfg['output']) / start['edition'] / cfg['date'])
+                and accepted['source'] == cfg['source'] and accepted['input_pages'] == complete['input_pages']
+                and accepted['build_inputs'] == complete['build_inputs'], 'Carried publication identity differs')
+        inputs = complete['build_inputs']
+        selected = [item for item in read_ref(cfg['manifest'])['files'] if item['wiki'] == start['edition']]
+        expected = sorted([[x['wiki'], x['date'], x['name'], x['size'], x['sha1']] for x in selected])
+        require(inputs['files'] == expected and inputs['source'] == cfg['source']['fingerprint']
+                and inputs['zig_sha256'] == cfg['compiler']['sha256']
+                and inputs['expansion_timeout_ms'] == cfg['expansion_timeout_ms'],
+                'Carried publication build inputs differ')
+
+
+def selected_phase_editions(editions, phase, defer_english=False):
+    require(phase in ('pilot', 'remaining'), 'Unknown production phase')
+    require(not defer_english or phase == 'remaining', 'English deferral is only a remaining-phase selection')
+    selected = list(PILOT) if phase == 'pilot' else [x for x in edition_order(editions) if x not in PILOT]
+    return [x for x in selected if not (defer_english and x == 'enwiktionary')]
+
+
+def history(state, context, cfg=None):
     rows = []
     attempts = state / 'attempts'
+    transition = load_history_transition(cfg) if cfg is not None else None
     for folder in sorted(attempts.iterdir()):
         if not folder.is_dir():
             continue
         start = read_json(folder / 'start.json')
-        require(start['context'] == context, 'Run directory has another source/input configuration')
+        require(start['context'] == context or (transition is not None and start['context'] == transition['context']),
+                'Run directory has another source/input configuration')
         terminal = folder / 'result.json'
         if not terminal.exists():
             launch = read_json(folder / 'launch.json') if (folder / 'launch.json').exists() else None
@@ -385,6 +468,7 @@ def history(state, context):
                 watchdog=descriptor(wdpath), watchdog_elapsed_seconds=wd.get('elapsed_seconds'),
                 accepted=None, timing_authority='parent terminal missing; elapsed unknown', recovered=True))
         row = read_json(terminal)
+        validate_history_context(start, row, context, transition, cfg)
         if row.get('accepted'):
             read_ref(row['accepted']['complete_snapshot'])
         rows.append(row)
@@ -491,6 +575,7 @@ def main(argv=None):
     parser.add_argument('--phase', choices=('pilot', 'remaining'), default='pilot')
     parser.add_argument('--retry-failed', action='store_true')
     parser.add_argument('--revalidate', action='store_true')
+    parser.add_argument('--defer-english', action='store_true', help='Remaining phase: preserve English as pending while its capture completes')
     args = parser.parse_args(argv)
     cfg = read_json(args.config)
     require(cfg.get('armed') is True, 'Configuration remains unarmed')
@@ -507,23 +592,20 @@ def main(argv=None):
     source_guard(cfg)
     gate(cfg['qualification'], cfg, ('passed-closed',))
     gate(cfg['diagnostic_disposition'], cfg, ('resolved', 'passed-closed'))
-    context_values = {k: cfg[k] for k in ('source', 'compiler', 'manifest', 'downloads', 'output', 'raw_shard_root', 'date', 'now_unix', 'expansion_timeout_ms')}
-    if cfg.get('artifact_root') is not None:
-        context_values['artifact_root'] = cfg['artifact_root']
-    context = hashlib.sha256(json.dumps(context_values, sort_keys=True).encode()).hexdigest()
+    context = production_context(cfg)
     state.mkdir(parents=True, exist_ok=True)
     (state / 'attempts').mkdir(exist_ok=True)
     with ExitStack() as stack:
         locks = [stack.enter_context(Lock(ROOT / 'data/build-resources/corpus-controller.lock', True)),
                  stack.enter_context(Lock(ROOT / '.tmp/build-resources.lock', False))]
-        rows = history(state, context)
+        rows = history(state, context, cfg)
         preparations = load_preparations(cfg)
         current = summarize(rows, editions, preparations)
         if args.phase == 'remaining':
             review = gate(cfg['pilot_review'], cfg, ('passed', 'passed-closed'))
             expected = {x['edition']: x['accepted']['complete']['sha256'] for x in current['editions'] if x['edition'] in PILOT and x['accepted']}
             require(set(expected) == set(PILOT) and review['accepted_completions'] == expected, 'Actual current eight-edition content review required')
-        selected = PILOT if args.phase == 'pilot' else [x for x in edition_order(editions) if x not in PILOT]
+        selected = selected_phase_editions(editions, args.phase, args.defer_english)
         sequence = max((x['sequence'] for x in rows), default=0)
         for edition in selected:
             prior = [x for x in rows if x['edition'] == edition]
@@ -551,7 +633,7 @@ def main(argv=None):
                 workers = next_workers(workers, wd)
         summary = summarize(rows, editions, preparations)
         write_json(state / 'summary.json', summary, replace=True)
-        print(json.dumps(dict(summary=str(state / 'summary.json'), remaining=[x['edition'] for x in summary['editions'] if not x['accepted']])))
+        print(json.dumps(dict(summary=str(state / 'summary.json'), remaining=[x['edition'] for x in summary['editions'] if not x['accepted']], deferred=['enwiktionary'] if args.defer_english else [])))
     return 0 if all(x['accepted'] for x in summary['editions'] if x['edition'] in selected) else 1
 
 
