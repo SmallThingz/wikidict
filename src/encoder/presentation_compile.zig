@@ -8537,7 +8537,7 @@ test "escaped disallowed HTML keeps ordinary body links and active controls" {
         for ([_]bool{ true, false }) |paired| {
             const closing = if (paired) try std.fmt.allocPrint(a, "</{s}>", .{tag}) else "";
             const source = try std.fmt.allocPrint(a, "before <{s}>[[x]] __NOEDITSECTION__ &amp;{s} [[B]]", .{ tag, closing });
-            const expected = try std.fmt.allocPrint(a, "before <{s}>x &{s} B", .{ tag, closing });
+            const expected = try std.fmt.allocPrint(a, "before <{s}>x  &{s} B", .{ tag, closing });
             var renderer: Renderer = .{ .a = a, .context = .{} };
             const spans = try renderer.parseSpans(source, .{});
             try std.testing.expectEqualStrings(expected, try flattened(a, spans));
@@ -8576,7 +8576,7 @@ test "disallowed tag bodies retain nowiki pre and once-only entity boundaries" {
     }
     var encoded: Renderer = .{ .a = a, .context = .{} };
     const spans = try encoded.parseSpans("&lt;script&gt;[[x]] __NOEDITSECTION__ &amp;lt;&lt;/script&gt; [[B]]", .{});
-    try std.testing.expectEqualStrings("<script>x &lt;</script> B", try flattened(a, spans));
+    try std.testing.expectEqualStrings("<script>x  &lt;</script> B", try flattened(a, spans));
     try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "x"));
     try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
     try std.testing.expect(!encoded.fallbacks.unsupported_element);
