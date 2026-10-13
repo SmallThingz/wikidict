@@ -970,11 +970,15 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
                 if (resolveCategorizedHeading(markers.codes.*, classified) != null) return true;
                 if (resolveLinkedHeading(markers.codes.*, classified) != null or
                     resolveLinkedDeclaration(markers.codes.*, classified) != null) return true;
-                const plain = std.mem.trim(u8, classified, " \t\r\n\'\"");
                 // A template name/argument can coincide with an ISO/POS code.
                 // Only whole trusted names and actual declarations may change
                 // depth; generic template-candidate attribution is not proof.
-                return markers.codes.resolveStrong(plain) != null or markers.codes.resolveTrusted(plain) != null;
+                // Exact registered punctuation belongs to the name; try it
+                // before the legacy decorative quote projection.
+                const candidates = [_][]const u8{ std.mem.trim(u8, classified, " \t\r\n"), std.mem.trim(u8, classified, " \t\r\n\'\"") };
+                for (candidates) |plain|
+                    if (markers.codes.resolveStrong(plain) != null or markers.codes.resolveTrusted(plain) != null) return true;
+                return false;
             }
         }.accepts,
     };
@@ -3827,14 +3831,16 @@ test "protected Sprache headings retain content without inventing a language own
         .{ "attribute", "Unclassified", "", "==Lemma <span title=\"{{Sprache|Deutsch}}\">literal</span>==\n# [[cat|retained sense]]\n", "==Lemma <span title=\"{{Sprache|Deutsch}}\">literal</span>==\n# [[cat|retained sense]]\n" },
         .{ "nested-hidden", "Unclassified", "", "==Lemma ({{unknown|{{Sprache|Deutsch}}}})==\n# [[cat|retained sense]]\n", "==Lemma==\n# [[cat|retained sense]]\n" },
         .{ "protected-argument", "Unclassified", "", "==Lemma ({{unknown|<nowiki>x|Deutsch|y</nowiki>}})==\n# [[cat|retained sense]]\n", "==Lemma <nowiki>x|Deutsch|y</nowiki>==\n# [[cat|retained sense]]\n" },
+        .{ "markup-language-argument", "Unclassified", "", "==Lemma ({{Sprache|Deutsch<nowiki>|French</nowiki>}})==\n# [[cat|retained sense]]\n", "==Lemma (Deutsch<nowiki>|French</nowiki>)==\n# [[cat|retained sense]]\n" },
+        .{ "markup-then-active", "Deutsch", "de", "==Lemma ({{Sprache|Deutsch<nowiki>|French</nowiki>}}) ({{Sprache|Deutsch}})==\n# [[cat|retained sense]]\n", "==Lemma (Deutsch<nowiki>|French</nowiki>) ([[:Template:Sprache]])==\n# [[cat|retained sense]]\n" },
         .{ "active", "Deutsch", "de", "==Lemma ({{Sprache|Deutsch}})==\n# [[cat|retained sense]]\n", "==Lemma ([[:Template:Sprache]])==\n# [[cat|retained sense]]\n" },
         .{ "later-active", "Deutsch", "de", "==Lemma <nowiki>{{Sprache|French}}</nowiki> ({{Sprache|Deutsch}})==\n# [[cat|retained sense]]\n", "==Lemma <nowiki>{{Sprache|French}}</nowiki> ([[:Template:Sprache]])==\n# [[cat|retained sense]]\n" },
     };
     inline for (rows) |row|
         try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, row[0], row[4], row[3], null, &.{});
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 7), stats.language_records);
-    try std.testing.expectEqual(@as(usize, 5), stats.fallback_pages);
+    try std.testing.expectEqual(@as(usize, 9), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 6), stats.fallback_pages);
     inline for (rows) |row| {
         var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row[1]));
         defer mapped.deinit();
@@ -3925,6 +3931,13 @@ test "Urak Lawoi apostrophe preserves real Writer ownership and lexical content"
     const wrapped = "==''English''==\n# [[thread|English wrapper sense]]\n";
     try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "wrapped-English", wrapped, wrapped, null, &.{});
     const mixed = "==English==\n# [[thread|English mixed sense]]\n=Urak Lawoi'=\n===Verb===\n# to [[sew]]\n";
+    // A differently deep exact registered name must form a boundary before
+    // Writer groups lexical bodies; the nested Verb is not a language.
+    const markers: LanguageMarkers = .{ .codes = &codes };
+    var boundaries = languageSections(mixed, &markers);
+    try std.testing.expectEqualStrings("English", boundaries.next().?.heading);
+    try std.testing.expectEqualStrings("Urak Lawoi'", boundaries.next().?.heading);
+    try std.testing.expect(boundaries.next() == null);
     try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "mixed", mixed, mixed, null, &.{});
     const stats = try writer.finish(codes);
     try std.testing.expectEqual(@as(usize, 4), stats.language_records);

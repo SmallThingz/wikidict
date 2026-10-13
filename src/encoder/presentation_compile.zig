@@ -3591,9 +3591,9 @@ test "opaque extensions render safely without leaking parser delimiters" {
     try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
     try std.testing.expectEqualStrings("A cat", r.media.items[0].caption);
 
-    // Authored witnesses: billion revision 1153469 uses 10^{12}; or revision
-    // 1139764 uses the hiero body below. Other numeric forms are controls.
-    // The supported subset does not implement general TeX or hieroglyphs.
+    // Authored witness: billion revision 1153469 uses 10^{12}.
+    // Other numeric forms and complex MdC grouping are unsupported controls.
+    // The supported subset does not implement general TeX or MdC layout.
     const power_cases = [_]struct { source: []const u8, base: []const u8, exponent: []const u8 }{
         .{ .source = "<math>10^{12}</math>", .base = "10", .exponent = "12" },
         .{ .source = "<math>10^3</math>", .base = "10", .exponent = "3" },
@@ -3624,7 +3624,7 @@ test "opaque extensions render safely without leaking parser delimiters" {
         .{ .source = "<math>\\frac{1}{2}</math>", .visible = "\\frac{1}{2}" },
         .{ .source = "<math>10^{\\alpha}</math>", .visible = "10^{\\alpha}" },
         .{ .source = "<math display='block'>10^{12}</math>", .visible = "10^{12}" },
-        .{ .source = "<hiero>r: Z1-p-w</hiero>", .visible = "r: Z1-p-w" },
+        .{ .source = "<hiero>(r: Z1)-p-w</hiero>", .visible = "(r: Z1)-p-w" },
         .{ .source = "<ce>H2O</ce>", .visible = "H2O" },
         .{ .source = "<chem>CO2</chem>", .visible = "CO2" },
         .{ .source = "<score>{ c'4 d' }</score>", .visible = "{ c'4 d' }" },
@@ -3658,6 +3658,24 @@ test "opaque extensions render safely without leaking parser delimiters" {
         try std.testing.expectEqualStrings(case.visible, try flattened(a, literal_spans));
         try std.testing.expect(!literal_renderer.fallbacks.any());
     }
+}
+
+test "authored phonetic hieroglyph sequence renders mapped signs and vertical join" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    // or revision 1139764; signs are independently pinned to the captured
+    // Module:egy-hieroglyphs/data revision 90914315 (r, Z1, p, w).
+    const spans = try r.parseSpans("<hiero>r: Z1-p-w</hiero>", .{});
+    try std.testing.expectEqualStrings("𓂋𓐰𓏤𓊪𓅱", try plainText(a, spans));
+    try std.testing.expect(!r.fallbacks.any());
+    try std.testing.expectEqual(@as(usize, 1), spans.len);
+    try std.testing.expect(!spans[0].flags.code);
+    try std.testing.expectEqualStrings("egy", spans[0].language);
+    try std.testing.expectEqualStrings("ltr", spans[0].direction);
+    try std.testing.expectEqualStrings("Egyp", spans[0].classes);
+    try std.testing.expectEqual(Provenance.protected_literal, spans[0].provenance);
 }
 
 test "reference identity includes group and decodes attribute entities" {

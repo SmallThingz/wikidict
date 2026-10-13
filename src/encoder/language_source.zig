@@ -64,7 +64,7 @@ pub fn classificationHeading(raw: []const u8) []const u8 {
             const tail = body[pipe + 1 ..];
             const next_pipe = syntax.delimiter(tail, "|", 0) orelse tail.len;
             const language = std.mem.trim(u8, tail[0..next_pipe], " \t");
-            if (language.len != 0 and std.mem.indexOfAny(u8, language, "{}[]") == null) return language;
+            if (language.len != 0 and std.mem.indexOfAny(u8, language, "{}[]<>") == null) return language;
         }
         search = pair.end;
     }
@@ -733,6 +733,11 @@ test "Sprache heading evidence ignores protected comments and tag attributes" {
 test "Sprache argument boundaries cannot shorten protected or nested language text" {
     inline for (.{ "Lemma ({{Sprache|Deutsch<nowiki>|French</nowiki>}})", "Lemma ({{Sprache|Deutsch<!--}}|French-->suffix}})", "Lemma ({{Sprache|{{Sprache|Deutsch}}}})" }) |heading|
         try std.testing.expectEqualStrings(heading, classificationHeading(heading));
+    inline for (.{ "Lemma ({{Sprache|<span>Deutsch</span>}})", "Lemma ({{Sprache|Deutsch<pre>|French</pre>}})", "Lemma ({{Sprache|Deutsch<code>|French</code>}})" }) |heading|
+        try std.testing.expectEqualStrings(heading, classificationHeading(heading));
+    try std.testing.expectEqualStrings("Deutsch", classificationHeading("Lemma ({{Sprache|Deutsch<nowiki>|French</nowiki>}}) ({{Sprache|Deutsch}})"));
+    try std.testing.expectEqualStrings("K'iche'", classificationHeading("Lemma ({{Sprache|K'iche'}})"));
+    try std.testing.expectEqualStrings("Egyptian (Ancient)", classificationHeading("Lemma ({{Sprache|Egyptian (Ancient)}})"));
     try std.testing.expectEqualStrings("Old English", classificationHeading("Lemma ({{Sprache|Old English|ignored}})"));
     try std.testing.expectEqualStrings("العربية", classificationHeading("Lemma ({{Sprache|العربية}})"));
     try std.testing.expectEqualStrings("Deutsch", classificationHeading("Lemma ({{Sprache|{{unknown}}}}) ({{Sprache|Deutsch}})"));
