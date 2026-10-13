@@ -4517,6 +4517,15 @@ const FnEmitter = struct {
         return false;
     }
 
+    fn storeIterationBinding(self: *FnEmitter, binding: u32, value: ValueRef) anyerror!void {
+        // A for-control local has a new lexical lifetime each iteration.
+        // Escaped closures retain old cells; siblings capture the new shared cell.
+        if (self.storage[binding] == .cell)
+            try self.initBinding(binding, value)
+        else
+            try self.storeResolved(.{ .local = binding }, value);
+    }
+
     fn emitNumericFor(self: *FnEmitter, s: anytype) anyerror!bool {
         const start = try self.coerceNumber(try self.expr(s.start));
         const limit = try self.coerceNumber(try self.expr(s.limit));
@@ -4551,7 +4560,7 @@ const FnEmitter = struct {
         try llvm.condBr(self.builder, keep_going, body_block, end_block);
 
         llvm.position(self.builder, body_block);
-        try self.storeResolved(.{ .local = binding }, .{ .number = current });
+        try self.storeIterationBinding(binding, .{ .number = current });
         try self.breaks.append(self.a(), end_block);
         const term = try self.block(s.body);
         _ = self.breaks.pop();
@@ -4605,7 +4614,7 @@ const FnEmitter = struct {
         llvm.position(self.builder, body_block);
         try self.copyValue(control, first);
         for (bindings, 0..) |binding, index|
-            try self.storeResolved(.{ .local = binding }, .{ .boxed = try self.arrayElem(results, index) });
+            try self.storeIterationBinding(binding, .{ .boxed = try self.arrayElem(results, index) });
         try self.breaks.append(self.a(), end_block);
         const term = try self.block(s.body);
         _ = self.breaks.pop();

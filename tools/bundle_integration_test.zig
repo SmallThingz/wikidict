@@ -30,7 +30,98 @@ const source =
     "# Subpage namespaces: {{BASEPAGENAME:Template:foo/bar}} / {{BASEPAGENAME:Category:foo/bar}}\n" ++
     "# Site magic: {{SERVER}} / {{SERVERNAME}}\n" ++
     "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}} / {{REVISIONUSER}} / {{PAGEID:rat}} / {{REVISIONUSER:rat}}\n";
-const module_source =
+const loop_capture_module_source =
+    \\do
+    \\ local outer=0
+    \\ local read,set={},{ }
+    \\ for i=1,3 do
+    \\  read[i]=function() return i,outer end
+    \\  set[i]=function(value) i=value;outer=outer+1 end
+    \\ end
+    \\ for i=1,3 do local value,shared=read[i]();assert(value==i and shared==0,"numeric iteration cell") end
+    \\ set[1](11);set[2](22)
+    \\ local a,x=read[1]();local b,y=read[2]();local z,w=read[3]()
+    \\ assert(a==11 and b==22 and z==3 and x==2 and y==2 and w==2,"numeric sibling updates and shared outer")
+    \\end
+    \\do
+    \\ local outer=0
+    \\ local read,set={},{ }
+    \\ for key,value in ipairs({10,20,30}) do
+    \\  read[key]=function() return key,value,outer end
+    \\  set[key]=function(k,v) key=k;value=v;outer=outer+1 end
+    \\ end
+    \\ for i=1,3 do local key,value,shared=read[i]();assert(key==i and value==i*10 and shared==0,"generic key/value iteration cells") end
+    \\ set[1](11,110)
+    \\ local a,b,c=read[1]();local d,e,f=read[2]();local g,h,j=read[3]()
+    \\ assert(a==11 and b==110 and c==1 and d==2 and e==20 and f==1 and g==3 and h==30 and j==1,"generic sibling updates and shared outer")
+    \\end
+    \\do
+    \\ local read,set={},{ }
+    \\ for i=1,3 do
+    \\  local body=i*10
+    \\  local function get() return body end
+    \\  read[i]=get;set[i]=function(value) body=value end
+    \\ end
+    \\ assert(read[1]()==10 and read[2]()==20 and read[3]()==30,"numeric body locals")
+    \\ set[2](25);assert(read[1]()==10 and read[2]()==25 and read[3]()==30,"numeric body sibling cell")
+    \\end
+    \\do
+    \\ local read,set={},{ }
+    \\ for key,value in ipairs({10,20,30}) do
+    \\  local body=value+key
+    \\  read[key]=function() return body end
+    \\  set[key]=function(value) body=value end
+    \\ end
+    \\ assert(read[1]()==11 and read[2]()==22 and read[3]()==33,"generic body locals")
+    \\ set[1](15);assert(read[1]()==15 and read[2]()==22 and read[3]()==33,"generic body sibling cell")
+    \\end
+    \\do
+    \\ local read,set={},{ }
+    \\ local i=1
+    \\ while i<=3 do
+    \\  local body=i*10
+    \\  read[i]=function() return body end
+    \\  set[i]=function(value) body=value end
+    \\  i=i+1
+    \\ end
+    \\ assert(read[1]()==10 and read[2]()==20 and read[3]()==30,"while body locals")
+    \\ set[2](25);assert(read[1]()==10 and read[2]()==25 and read[3]()==30,"while body sibling cell")
+    \\end
+    \\do
+    \\ local read,set={},{ }
+    \\ local i=0
+    \\ repeat
+    \\  i=i+1
+    \\  local body=i*10
+    \\  read[i]=function() return body end
+    \\  set[i]=function(value) body=value end
+    \\ until i==3
+    \\ assert(read[1]()==10 and read[2]()==20 and read[3]()==30,"repeat body locals")
+    \\ set[3](35);assert(read[1]()==10 and read[2]()==20 and read[3]()==35,"repeat body sibling cell")
+    \\end
+    \\do
+    \\ local escaped={}
+    \\ for i=1,2 do
+    \\  for j=1,2 do
+    \\   local body=i*10+j
+    \\   escaped[(i-1)*2+j]=function() return function() return i,j,body end end
+    \\  end
+    \\ end
+    \\ for index=1,4 do
+    \\  local i,j,body=escaped[index]()()
+    \\  local expected_i=index<=2 and 1 or 2
+    \\  local expected_j=index%2==1 and 1 or 2
+    \\  assert(i==expected_i and j==expected_j and body==expected_i*10+expected_j,"nested escaped iteration captures")
+    \\ end
+    \\end
+    \\do
+    \\ local sum=0
+    \\ for i=1,3 do sum=sum+i end
+    \\ for key,value in ipairs({10,20,30}) do sum=sum+value end
+    \\ assert(sum==66,"uncaptured loop behavior")
+    \\end
+;
+const module_source = loop_capture_module_source ++
     \\local concat_prefix = 'A'
     \\local concat_first = concat_prefix .. ('\000' .. 'β')
     \\assert(concat_first == 'A\000β')
