@@ -399,6 +399,8 @@ fn finalizeLanguageBucket(
 }
 
 fn resolveTrimmed(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    // Apostrophes can belong to an exact registered name, such as Urak Lawoi'.
+    if (codes.resolve(std.mem.trim(u8, value, " \t\r\n"))) |resolved| return resolved;
     const candidate = std.mem.trim(u8, value, " \t\r\n'\"[]");
     if (candidate.len == 0) return null;
     return codes.resolve(candidate);
@@ -461,9 +463,10 @@ fn resolveTemplateCandidates(codes: LanguageCodes, text: []const u8) ?ResolvedLa
 }
 
 fn valueConfirmsLanguage(codes: LanguageCodes, value_source: []const u8, wanted: []const u8) bool {
+    const exact = std.mem.trim(u8, value_source, " \t\r\n");
+    if (exact.len == 0) return false;
     const value = std.mem.trim(u8, value_source, " \t\r\n=-\'\"[]");
-    if (value.len == 0) return false;
-    const resolved = codes.resolve(value) orelse return false;
+    const resolved = codes.resolve(exact) orelse codes.resolve(value) orelse return false;
     return std.mem.eql(u8, resolved.code, wanted);
 }
 
@@ -774,8 +777,12 @@ fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?Resol
     if (resolveLinkedHeading(codes, classified)) |resolved| return resolved;
     if (resolveLinkedDeclaration(codes, classified)) |resolved| return resolved;
 
-    const plain = std.mem.trim(u8, classified, " \t\r\n\'\"[]");
-    if (plain.len != 0) {
+    const candidates = [_][]const u8{
+        std.mem.trim(u8, classified, " \t\r\n"),
+        std.mem.trim(u8, classified, " \t\r\n\'\"[]"),
+    };
+    for (candidates) |plain| {
+        if (plain.len == 0) continue;
         if (codes.resolveStrong(plain)) |resolved| return resolved;
 
         // Exact edition-local MediaWiki preferred names are language evidence.
@@ -799,6 +806,7 @@ fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?Res
     const heading = language_source.classificationSection(section);
     if (resolveCategorizedHeading(codes, heading)) |resolved| return resolved;
     if (resolveArabicLanguageHeading(codes, heading)) |resolved| return resolved;
+    if (codes.resolve(std.mem.trim(u8, heading, " \t\r\n"))) |resolved| return resolved;
     if (codes.resolve(std.mem.trim(u8, heading, " \t\r\n\'\""))) |resolved| return resolved;
     if (resolveLinkedHeading(codes, heading)) |resolved| return resolved;
     var cursor: usize = 0;
@@ -3841,6 +3849,116 @@ test "protected Sprache headings retain content without inventing a language own
         for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
             if (span.kind == .link and std.mem.eql(u8, span.target, "cat") and std.mem.eql(u8, span.text, "retained sense")) linked += 1;
         };
+        try std.testing.expectEqual(@as(usize, 1), linked);
+    }
+}
+
+test "registered language-name punctuation precedes legacy wrapper trimming" {
+    const Local = struct {
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |language| language.code else null;
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            // Exact selected English registry rows, not new aliases.
+            inline for (.{ .{ "Urak Lawoi'", "urk" }, .{ "K'iche'", "quc" }, .{ "Yanesha'", "ame" }, .{ "Fe'fe'", "fmp" }, .{ "English", "en" } }) |row| {
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]))
+                    return .{ .code = row[1], .heading = row[0] };
+            }
+            return null;
+        }
+        fn untrusted(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage {
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve, .strong_fn = Local.resolve };
+    inline for (.{ .{ "Urak Lawoi'", "urk" }, .{ "K'iche'", "quc" }, .{ "Yanesha'", "ame" }, .{ "Fe'fe'", "fmp" } }) |row| {
+        try std.testing.expectEqualStrings(row[1], resolveTrimmed(codes, " \t" ++ row[0] ++ "\n").?.code);
+        const section: language_source.Section = .{ .heading = row[0], .source = "" };
+        try std.testing.expectEqualStrings(row[1], resolveSection(codes, section).?.code);
+        try std.testing.expectEqualStrings(row[1], boundaryLanguage(codes, section).?.code);
+        try std.testing.expectEqualStrings(row[1], resolveTemplateCandidates(codes, "{{language|" ++ row[0] ++ "}}").?.code);
+        try std.testing.expect(valueConfirmsLanguage(codes, row[0], row[1]));
+        try std.testing.expect(!valueConfirmsLanguage(codes, row[0], "en"));
+    }
+    inline for (.{ " English ", "''English''", "'''English'''", "\"English\"", "[[English]]" }) |heading| {
+        try std.testing.expectEqualStrings("en", resolveTrimmed(codes, heading).?.code);
+        try std.testing.expectEqualStrings("en", resolveSection(codes, .{ .heading = heading, .source = "" }).?.code);
+        try std.testing.expectEqualStrings("en", boundaryLanguage(codes, .{ .heading = heading, .source = "" }).?.code);
+    }
+    try std.testing.expect(resolveSection(codes, .{ .heading = "Urak Lawoi", .source = "" }) == null);
+    try std.testing.expect(resolveSection(codes, .{ .heading = "Unknown'", .source = "" }) == null);
+    const weak: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.untrusted };
+    try std.testing.expect(resolveSection(weak, .{ .heading = "Urak Lawoi'", .source = "" }) == null);
+    try std.testing.expectEqualStrings("urk", resolveSection(weak, .{ .heading = "Urak Lawoi'", .source = "{{head|Urak Lawoi'|verb}}" }).?.code);
+    try std.testing.expect(resolveSection(weak, .{ .heading = "Urak Lawoi'", .source = "<nowiki>{{head|Urak Lawoi'|verb}}</nowiki>" }) == null);
+}
+
+test "Urak Lawoi apostrophe preserves real Writer ownership and lexical content" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Local = struct {
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |language| language.code else null;
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Urak Lawoi'") or std.mem.eql(u8, value, "urk"))
+                return .{ .code = "urk", .heading = "Urak Lawoi'" };
+            if (std.mem.eql(u8, value, "English") or std.mem.eql(u8, value, "en"))
+                return .{ .code = "en", .heading = "English" };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve, .strong_fn = Local.resolve };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Verbatim heading/verb excerpt: enwiktionary page10504101, revision81906835.
+    // Archived full source SHA256 89f8df3f95f6aa202dbe92ca71b59e67fce6e882da423184946acc6ccf9ec12e.
+    // The expanded fixture removes the head template; it is not a native expansion claim.
+    const raw = "==Urak Lawoi'==\n===Verb===\n{{head|urk|verb|tr=jahëq}}\n# to [[sew]]\n";
+    const expanded = "==Urak Lawoi'==\n===Verb===\n# to [[sew]]\n";
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "ยฺาเฮะ", expanded, raw, null, &.{});
+    const wrapped = "==''English''==\n# [[thread|English wrapper sense]]\n";
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "wrapped-English", wrapped, wrapped, null, &.{});
+    const mixed = "==English==\n# [[thread|English mixed sense]]\n=Urak Lawoi'=\n===Verb===\n# to [[sew]]\n";
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "mixed", mixed, mixed, null, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    inline for (.{
+        .{ "ยฺาเฮะ", "Urak Lawoi'", "urk", "sew", "sew" },
+        .{ "wrapped-English", "English", "en", "thread", "English wrapper sense" },
+        .{ "mixed", "English", "en", "thread", "English mixed sense" },
+        .{ "mixed", "Urak Lawoi'", "urk", "sew", "sew" },
+    }) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row[1]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(row[2], metadata.code);
+        try std.testing.expectEqualStrings(row[1], metadata.heading);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(row[0])).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(row[2], decoded.entry.language_code);
+        var definitions: usize = 0;
+        var linked: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block_value| {
+            if (std.mem.eql(u8, block_value.list_path, "#")) {
+                definitions += 1;
+                try std.testing.expect(block_value.kind == .definition);
+                for (block_value.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, row[3]) and std.mem.eql(u8, span.text, row[4])) {
+                    linked += 1;
+                };
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), definitions);
         try std.testing.expectEqual(@as(usize, 1), linked);
     }
 }
