@@ -2650,6 +2650,45 @@ pub const Expander = struct {
         return if (value.len == 0) null else value;
     }
 
+    fn categoryTreeNamespaces(self: *Expander, raw: ?[]const u8) ![]const i32 {
+        const a = self.runtime.allocator;
+        var ids: std.ArrayList(i32) = .empty;
+        errdefer ids.deinit(a);
+        // CategoryTree OptionManager splits namespace names on these separators.
+        var tokens = std.mem.tokenizeAny(u8, raw orelse return &.{}, " \t\r\n\x0b\x0c#:|");
+        while (tokens.next()) |token| {
+            const id: i32 = if (std.mem.eql(u8, token, "-") or std.mem.eql(u8, token, "_") or
+                std.mem.eql(u8, token, "*") or std.ascii.eqlIgnoreCase(token, "main"))
+                0
+            else blk: {
+                // PHP is_numeric also accepts decimal/exponent strings. Do not
+                // interpret non-decimal forms such as 0x10 or NaN as IDs.
+                var decimal = false;
+                var decimal_syntax = true;
+                for (token) |c| {
+                    if (std.ascii.isDigit(c)) decimal = true else if (c != '+' and c != '-' and c != '.' and c != 'e' and c != 'E') {
+                        decimal_syntax = false;
+                    }
+                }
+                if (decimal and decimal_syntax) {
+                    if (std.fmt.parseInt(i32, token, 10)) |number| break :blk number else |_| {}
+                    if (std.fmt.parseFloat(f64, token)) |number| {
+                        if (!std.math.isFinite(number) or number < -2147483648.0 or number >= 2147483648.0)
+                            return error.UnsupportedCategoryTreeOptions;
+                        break :blk @intFromFloat(number);
+                    } else |_| {}
+                }
+                // Unknown names are ignored by the official extension; an
+                // entirely unknown list means no namespace filter.
+                const spec = namespace_lib.byName(self.runtime, token) orelse continue;
+                break :blk spec.id;
+            };
+            try ids.append(a, id);
+        }
+        std.mem.sort(i32, ids.items, {}, std.sort.asc(i32));
+        return ids.toOwnedSlice(a);
+    }
+
     fn categoryTreeClass(raw: ?[]const u8) ?[]const u8 {
         var value = std.mem.trim(u8, raw orelse return null, " \t\r\n");
         if (value.len >= 2 and ((value[0] == '"' and value[value.len - 1] == '"') or
@@ -2658,6 +2697,32 @@ pub const Expander = struct {
         if (value.len == 0) return null;
         for (value) |byte| if (!(std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-' or byte == ' ')) return null;
         return value;
+    }
+
+    fn categoryTreeMode(raw: []const u8) []const u8 {
+        // OptionManager::decodeMode trims names, resolves aliases and legacy
+        // numeric modes, and defaults unknown values to categories.
+        const mode = std.mem.trim(u8, raw, " \t\r\n\x00\x0b");
+        if (std.ascii.eqlIgnoreCase(mode, "pages")) return "pages";
+        if (std.ascii.eqlIgnoreCase(mode, "all")) return "all";
+        if (std.ascii.eqlIgnoreCase(mode, "parents") or
+            std.ascii.eqlIgnoreCase(mode, "super") or
+            std.ascii.eqlIgnoreCase(mode, "inverse")) return "parents";
+        const number = std.mem.trim(u8, mode, " \t\r\n\x0b\x0c");
+        if (number.len == 0) return "categories";
+        for (number) |byte| {
+            if (!std.ascii.isDigit(byte) and byte != '+' and byte != '-' and
+                byte != '.' and byte != 'e' and byte != 'E') return "categories";
+        }
+        const numeric = std.fmt.parseFloat(f64, number) catch return "categories";
+        // Only these bounded, nonnegative legacy values can change the mode.
+        if (!std.math.isFinite(numeric) or numeric < 0 or numeric >= 101) return "categories";
+        return switch (@as(i32, @intFromFloat(numeric))) {
+            10 => "pages",
+            20 => "all",
+            100 => "parents",
+            else => "categories",
+        };
     }
 
     fn categoryTreeRootCount(mode: []const u8, stats: Provider.CategoryStats) ?u32 {
@@ -2675,12 +2740,12 @@ pub const Expander = struct {
         mode_explicit: bool,
         hideprefix: []const u8,
         showcount: []const u8,
-        namespaces: ?[]const u8,
+        namespace_ids: []const i32,
         class_name: ?[]const u8,
     ) ![]const u8 {
         const a = self.runtime.allocator;
-        const effective_mode = if (namespaces != null)
-            "pages"
+        const effective_mode = if (namespace_ids.len != 0)
+            mode
         else if (mode_explicit)
             mode
         else
@@ -2698,7 +2763,18 @@ pub const Expander = struct {
         try out.appendSlice(a, "&quot;,&quot;showcount&quot;:");
         try out.appendSlice(a, if (std.ascii.eqlIgnoreCase(showcount, "on")) "true" else "false");
         try out.appendSlice(a, ",&quot;namespaces&quot;:");
-        try out.appendSlice(a, if (namespaces != null) "[0]" else "false");
+        if (namespace_ids.len == 0) {
+            try out.appendSlice(a, "false");
+        } else {
+            try out.append(a, '[');
+            for (namespace_ids, 0..) |id, i| {
+                if (i != 0) try out.append(a, ',');
+                const value = try std.fmt.allocPrint(a, "{d}", .{id});
+                defer a.free(value);
+                try out.appendSlice(a, value);
+            }
+            try out.append(a, ']');
+        }
         try out.appendSlice(a, ",&quot;notranslations&quot;:false}\"><span class=\"CategoryTreeNotice\">Category <i>");
         try appendAttrEscaped(&out, a, display);
         try out.appendSlice(a, "</i> not found</span></div>");
@@ -2743,12 +2819,26 @@ pub const Expander = struct {
         const type_arg = categoryTreeArg(args, "type");
         if (mode_arg != null and type_arg != null and !std.ascii.eqlIgnoreCase(mode_arg.?, type_arg.?))
             return error.UnsupportedCategoryTreeOptions;
-        const namespaces = categoryTreeValue(categoryTreeArg(args, "namespaces"));
-        // MediaWiki defaults to subcategories. A main-namespace filter forces pages mode.
-        const mode = if (namespaces != null and std.mem.eql(u8, namespaces.?, "-"))
-            "pages"
+        // Parent traversal ignores namespace filters in the extension. It is
+        // unsupported here and must not be converted into forward page mode.
+        const requested_mode = categoryTreeMode(mode_arg orelse type_arg orelse "categories");
+        if (std.mem.eql(u8, requested_mode, "parents"))
+            return error.UnsupportedCategoryTreeOptions;
+        const namespace_ids = try self.categoryTreeNamespaces(categoryTreeValue(categoryTreeArg(args, "namespaces")));
+        defer self.runtime.allocator.free(namespace_ids);
+        var main_only = namespace_ids.len != 0;
+        for (namespace_ids) |id| if (id != 0) {
+            main_only = false;
+        };
+        // The extension adjusts mode after resolving the complete namespace list.
+        const mode = if (namespace_ids.len == 0)
+            requested_mode
+        else if (namespace_ids.len == 1 and namespace_ids[0] == 14)
+            "categories"
+        else if (std.mem.indexOfScalar(i32, namespace_ids, 6) != null)
+            "all"
         else
-            mode_arg orelse type_arg orelse "categories";
+            "pages";
         const depth = categoryTreeArg(args, "depth") orelse "1";
         const hideprefix = categoryTreeArg(args, "hideprefix") orelse "categories";
         const hideroot = categoryTreeArg(args, "hideroot") orelse "off";
@@ -2770,10 +2860,10 @@ pub const Expander = struct {
         const category_title = try self.runtime.namespace_catalog.?.normalizeTitle(self.runtime.allocator, display, 14, .literal);
         defer self.runtime.allocator.free(category_title);
         if (!try self.provider.exists(self.provider.ctx, category_title))
-            return self.missingCategoryTree(display, mode, mode_arg != null or type_arg != null, hideprefix, showcount, namespaces, class_name);
+            return self.missingCategoryTree(display, mode, mode_arg != null or type_arg != null, hideprefix, showcount, namespace_ids, class_name);
 
         if (std.mem.eql(u8, depth, "0")) {
-            if (namespaces) |value| if (!std.mem.eql(u8, value, "-")) return error.UnsupportedCategoryTreeOptions;
+            if (namespace_ids.len != 0 and !main_only) return error.UnsupportedCategoryTreeOptions;
             const stats_get = self.provider.category_stats orelse return error.NotImplemented;
             const stats = (try stats_get(self.provider.ctx, category)) orelse
                 Provider.CategoryStats{ .all = 0, .subcats = 0, .files = 0 };
@@ -2804,8 +2894,7 @@ pub const Expander = struct {
         }
 
         if (!std.ascii.eqlIgnoreCase(mode, "pages") or
-            !std.mem.eql(u8, depth, "1") or
-            (namespaces != null and !std.mem.eql(u8, namespaces.?, "-")))
+            !std.mem.eql(u8, depth, "1"))
             return error.UnsupportedCategoryTreeOptions;
 
         const style = categoryTreeArg(args, "style");
@@ -2821,13 +2910,25 @@ pub const Expander = struct {
         if (data_pages_left_over) |value| _ = std.fmt.parseInt(u64, value, 10) catch return error.UnsupportedCategoryTreeOptions;
 
         const get = self.provider.category_tree orelse return error.NotImplemented;
-        const members = try get(self.provider.ctx, self.runtime.allocator, category, if (namespaces == null) .pages else .main);
+        const members = try get(self.provider.ctx, self.runtime.allocator, category, if (main_only) .main else .pages);
         defer self.runtime.allocator.free(members);
 
         var page_count: usize = members.len;
+        var complete_members = members.len < 200;
         if (self.provider.category_stats) |stats_get| {
-            if (try stats_get(self.provider.ctx, category)) |stats|
+            if (try stats_get(self.provider.ctx, category)) |stats| {
                 page_count = stats.all -| stats.files;
+                if (page_count == members.len) complete_members = true;
+            }
+        }
+        if (namespace_ids.len != 0 and !main_only and !complete_members) {
+            // Captured pages are capped before filtering, but MediaWiki filters
+            // in SQL before its limit. A discarded row could hide a later match.
+            for (members) |title| {
+                const id = namespace_lib.ofTitle(self.runtime, title).id;
+                if (std.mem.indexOfScalar(i32, namespace_ids, id) == null)
+                    return error.CategoryTreeSnapshotIncomplete;
+            }
         }
 
         var out: std.ArrayList(u8) = .empty;
@@ -2870,6 +2971,8 @@ pub const Expander = struct {
         for ([_]bool{ true, false }) |categories| {
             for (members) |title| {
                 const member_namespace = namespace_lib.ofTitle(self.runtime, title);
+                if (namespace_ids.len != 0 and std.mem.indexOfScalar(i32, namespace_ids, member_namespace.id) == null)
+                    continue;
                 const is_category = member_namespace.id == 14;
                 if (is_category != categories) continue;
                 var child_count: ?u32 = null;
@@ -5464,4 +5567,136 @@ test "expanded authored behavior prefixes reach presentation without early strip
     try installTestHost(&runtime, 18, 23);
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
     try std.testing.expectEqualStrings("__NOEDITSECTION__==English==\n__NOEDITSECTION__===Noun===\n__NOEDITSECTION__# [[cat|lexical sense]]\n", try expander.expandFragment("entry", "<!--hidden-->__NOEDITSECTION__==English==\n__NOEDITSECTION__===Noun===\n__NOEDITSECTION__# [[cat|lexical sense]]\n", 1_670_803_200));
+}
+
+
+const CategoryTreeNamespaceFixture = struct {
+    const registry_text = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n" ++
+        "1\tTalk\tTalk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n" ++
+        "4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tinput\tWT\n" ++
+        "6\tFile\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\tImage\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tT\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "118\tRekonstruktion\tReconstruction\tcase-sensitive\t1\t0\t0\t\treconstruction\tverified_edition_feature\tReko\n";
+    members: []const []const u8 = &.{ "main", "Reconstruction:Proto-Test/term", "Talk:excluded", "Wiktionary:entry" },
+    count: ?u32 = null,
+    present: bool = true,
+
+    fn exists(raw: ?*anyopaque, _: []const u8) !bool {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        return self.present;
+    }
+    fn tree(raw: ?*anyopaque, a: std.mem.Allocator, _: []const u8, scope: Provider.CategoryTreeScope) ![]const []const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        return a.dupe([]const u8, if (scope == .main) &.{"main"} else self.members);
+    }
+    fn stats(raw: ?*anyopaque, _: []const u8) !?Provider.CategoryStats {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        return if (self.count) |count| .{ .all = count, .files = 0, .subcats = 0 } else null;
+    }
+};
+
+test "CategoryTree namespace filters retain qualified titles and resolve aliases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try rt.namespace_registry.Registry.init(a, CategoryTreeNamespaceFixture.registry_text);
+    defer registry.deinit();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &registry;
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: CategoryTreeNamespaceFixture = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{
+        .ctx = &source, .get = TestProvider.get, .exists = CategoryTreeNamespaceFixture.exists,
+        .category_tree = CategoryTreeNamespaceFixture.tree, .category_stats = CategoryTreeNamespaceFixture.stats,
+    } };
+    const page = "Reconstruction:Proto-Test/source";
+    const input = "{{#categorytree:Probe|type=pages|depth=1|class=\"columns-bg term-list\"|style=counter-reset: pagesleftover 0|namespaces=- Reconstruction}}";
+    const actual = try expander.expandFragment(page, input, 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, actual, "[[main]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, actual, "[[Reconstruction:Proto-Test/term]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, actual, "Talk:excluded") == null);
+    try std.testing.expect(std.mem.indexOf(u8, actual, "Wiktionary:entry") == null);
+    try std.testing.expect(std.mem.indexOf(u8, actual, "Unsupported") == null);
+    for ([_][]const u8{ "- reko", "MAIN Rekonstruktion", "0 118", "*#Reconstruction:Unknown", "0 1.18e2" }) |filter| {
+        const text = try std.fmt.allocPrint(a, "{{{{#categorytree:Probe|type=pages|depth=1|class=\"columns-bg term-list\"|style=counter-reset: pagesleftover 0|namespaces={s}}}}}", .{filter});
+        try std.testing.expectEqualStrings(actual, try expander.expandFragment(page, text, 1_670_803_200));
+    }
+    const multiple = try expander.expandFragment(page, "{{#categorytree:Probe|namespaces=- Reconstruction WT}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, multiple, "[[Wiktionary:entry]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, multiple, "Talk:excluded") == null);
+    const main = try expander.expandFragment(page, "{{#categorytree:Probe|namespaces=-}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, main, "[[main]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, main, "Reconstruction:Proto-Test/term") == null);
+    try std.testing.expectEqualStrings(main, try expander.expandFragment(page, "{{#categorytree:Probe|namespaces=_ * MAIN 0}}", 1_670_803_200));
+    const unfiltered = try expander.expandFragment(page, "{{#categorytree:Probe|type=pages}}", 1_670_803_200);
+    for ([_][]const u8{ "Unknown", "1_18", "118_", "0x76" }) |unknown| {
+        const text = try std.fmt.allocPrint(a, "{{{{#categorytree:Probe|type=pages|namespaces={s}}}}}", .{unknown});
+        try std.testing.expectEqualStrings(unfiltered, try expander.expandFragment(page, text, 1_670_803_200));
+    }
+    for ([_]bool{ true, false }) |present| {
+        source.present = present;
+        for ([_][]const u8{ "parents", "super", "inverse", "PaReNtS", " parents ", "\tSuPeR\r\n", "100", "1e2", "100.9", " +100.5 ", ".100e3" }) |inverse| {
+            for ([_][]const u8{ "mode", "type" }) |key| {
+                for ([_][]const u8{ "-", "- Reconstruction", "Unknown" }) |filter| {
+                    const text = try std.fmt.allocPrint(a, "{{{{#categorytree:Probe|{s}={s}|namespaces={s}}}}}", .{ key, inverse, filter });
+                    try std.testing.expectError(error.UnsupportedCategoryTreeOptions, expander.expandFragment(page, text, 1_670_803_200));
+                }
+            }
+        }
+    }
+    source.present = true;
+    for ([_][]const u8{ " pages ", "10", "1e1", "10.9" }) |forward| {
+        const text = try std.fmt.allocPrint(a, "{{{{#categorytree:Probe|type={s}}}}}", .{forward});
+        try std.testing.expectEqualStrings(unfiltered, try expander.expandFragment(page, text, 1_670_803_200));
+    }
+    // Unknown modes default to categories; a valid namespace filter then
+    // selects forward pages mode, just as the captured extension does.
+    for ([_][]const u8{ "Unknown", "1_00", "0x64", "sub", "0", "default" }) |unknown_mode| {
+        const text = try std.fmt.allocPrint(a, "{{{{#categorytree:Probe|type={s}|namespaces=-}}}}}", .{unknown_mode});
+        try std.testing.expectEqualStrings(main, try expander.expandFragment(page, text, 1_670_803_200));
+    }
+    source.present = false;
+    const missing = try expander.expandFragment(page, "{{#categorytree:Probe|type=pages|namespaces=Reko -}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, missing, "&quot;namespaces&quot;:[0,118]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, missing, "not found") != null);
+}
+
+test "CategoryTree namespace filtering refuses truncated capture ambiguity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try rt.namespace_registry.Registry.init(a, CategoryTreeNamespaceFixture.registry_text);
+    defer registry.deinit();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &registry;
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var members: [200][]const u8 = undefined;
+    for (&members) |*title| title.* = "Talk:excluded";
+    members[0] = "Reconstruction:Proto-Test/term";
+    var source: CategoryTreeNamespaceFixture = .{ .members = &members, .count = 201 };
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{
+        .ctx = &source, .get = TestProvider.get, .exists = CategoryTreeNamespaceFixture.exists,
+        .category_tree = CategoryTreeNamespaceFixture.tree, .category_stats = CategoryTreeNamespaceFixture.stats,
+    } };
+    const input = "{{#categorytree:Probe|type=pages|namespaces=- Reconstruction}}";
+    try std.testing.expectError(error.CategoryTreeSnapshotIncomplete, expander.expandFragment("Page", input, 1_670_803_200));
+    source.count = null;
+    try std.testing.expectError(error.CategoryTreeSnapshotIncomplete, expander.expandFragment("Page", input, 1_670_803_200));
+    source.count = 200;
+    const complete = try expander.expandFragment("Page", input, 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, complete, "[[Reconstruction:Proto-Test/term]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete, "Talk:excluded") == null);
+    source.count = 201;
+    // All first 200 rows match, so the official post-filter limit is satisfied.
+    for (&members) |*title| title.* = "Reconstruction:Proto-Test/term";
+    _ = try expander.expandFragment("Page", input, 1_670_803_200);
+    // The separately captured main scope retains its previous 200-row contract.
+    _ = try expander.expandFragment("Page", "{{#categorytree:Probe|namespaces=-}}", 1_670_803_200);
+    _ = try expander.expandFragment("Page", "{{#categorytree:Probe|type=pages}}", 1_670_803_200);
 }
