@@ -3,12 +3,31 @@ const std = @import("std");
 /// Core MediaWiki behavior switches have no visible dictionary text.
 /// Match only registered canonical aliases, retaining their case rules. Never
 /// call this on nowiki, opaque extension bodies, decoded entities or attributes.
+// The canonical aliases are ASCII. These are the only Unicode16 C/S
+// non-ASCII mappings to ASCII (CaseFolding.txt, also used by shared aliases).
+// Keep this small matcher std-only for the freestanding blob encoder module.
+fn canonicalAliasEqual(name: []const u8, alias: []const u8) bool {
+    if (name.len < alias.len or name.len > alias.len * 3) return false;
+    if (std.ascii.eqlIgnoreCase(name, alias)) return true;
+    var it = (std.unicode.Utf8View.init(name) catch return false).iterator();
+    for (alias) |byte| {
+        const cp = it.nextCodepoint() orelse return false;
+        const folded: u21 = if (cp < 128) std.ascii.toLower(@intCast(cp)) else switch (cp) {
+            0x017f => 's',
+            0x212a => 'k',
+            else => cp,
+        };
+        if (folded != std.ascii.toLower(byte)) return false;
+    }
+    return it.nextCodepoint() == null;
+}
+
 pub fn behaviorSwitchEnd(text: []const u8, start: usize) ?usize {
     if (start >= text.len or !starts(text[start..], "__")) return null;
     const close = std.mem.indexOfPos(u8, text, start + 2, "__") orelse return null;
     const name = text[start + 2 .. close];
     inline for (&.{ "NOTOC", "FORCETOC", "TOC", "NOEDITSECTION", "NOGALLERY", "NOCONTENTCONVERT", "NOCC", "NOTITLECONVERT", "NOTC" }) |alias| {
-        if (std.ascii.eqlIgnoreCase(name, alias)) return close + 2;
+        if (canonicalAliasEqual(name, alias)) return close + 2;
     }
     inline for (&.{ "HIDDENCAT", "INDEX", "NOINDEX", "NEWSECTIONLINK", "NONEWSECTIONLINK", "STATICREDIRECT", "EXPECTUNUSEDCATEGORY", "EXPECTUNUSEDTEMPLATE", "EXPECTSHORTPAGE" }) |alias| {
         if (std.mem.eql(u8, name, alias)) return close + 2;
@@ -776,4 +795,12 @@ test "opaque first closer is not hidden by literal pseudo-tag quotes" {
         try std.testing.expectEqualStrings("[[C]]", source[pair.end..]);
         try std.testing.expect(std.mem.endsWith(u8, source[opening.end..pair.inner_end], "[[B]]"));
     }
+}
+
+test "canonical behavior controls use simple Unicode caseless equivalence" {
+    try std.testing.expectEqual(@as(?usize, "__NOEDITſECTION__".len), behaviorSwitchEnd("__NOEDITſECTION__tail", 0));
+    try std.testing.expectEqual(@as(?usize, 1 + "__NOEDITſECTION__".len), behaviorSwitchEnd("x__NOEDITſECTION__tail", 1));
+    try std.testing.expect(canonicalAliasEqual("K", "K"));
+    for ([_][]const u8{ "__ſTATICREDIRECT__", "__NOEDİTSECTION__", "__UNKNOWN__", "__NOEDIT\xc0\xafECTION__" }) |source|
+        try std.testing.expectEqual(@as(?usize, null), behaviorSwitchEnd(source, 0));
 }

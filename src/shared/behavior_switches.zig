@@ -1,9 +1,9 @@
 //! Edition-scoped build-time behavior controls. Complete source aliases include delimiters.
 const std = @import("std");
-const lower = @import("unicode_lower");
+const casefold = @import("unicode_casefold.zig");
 pub const header = "# wikidict-behavior-switches-v1";
 pub const ids = [_][]const u8{ "notoc", "forcetoc", "toc", "noeditsection", "nogallery", "hiddencat", "index", "noindex", "newsectionlink", "nonewsectionlink", "nocontentconvert", "notitleconvert", "staticredirect", "expectunusedcategory", "expectunusedtemplate", "expectshortpage", "noglobal", "nomediaviewercarousel", "disambiguation", "expectedUnconnectedPage", "archivedtalk", "notalk", "keeptitle", "expectwithoutscans" };
-const Alias = struct { text: []const u8, folded: []const u8, sensitive: bool, scalars: usize, toc: bool = false };
+const Alias = struct { text: []const u8, sensitive: bool, scalars: usize, toc: bool = false };
 fn identity(lines: *std.mem.SplitIterator(u8, .scalar), prefix: []const u8, expected: []const u8) !void {
     const line = lines.next() orelse return error.InvalidBehaviorSnapshot;
     if (!std.mem.startsWith(u8, line, prefix) or !std.mem.eql(u8, line[prefix.len..], expected)) return error.BehaviorIdentityMismatch;
@@ -41,21 +41,31 @@ pub const Registry = struct {
             const alias = fields.next() orelse return error.InvalidBehaviorSnapshot;
             if (fields.next() != null or alias.len == 0 or alias.len > 1024) return error.InvalidBehaviorSnapshot;
             for (alias) |byte| if (byte < 32 or byte == 127) return error.InvalidBehaviorSnapshot;
+            var it = (try std.unicode.Utf8View.init(alias)).iterator();
+            const first_cp = it.nextCodepoint().?;
+            var count: usize = 1;
+            while (it.nextCodepoint() != null) count += 1;
             initials[alias[0]] = true;
             if (!sensitive) {
-                if (alias[0] < 128) {
+                if (first_cp < 128) {
                     initials[std.ascii.toLower(alias[0])] = true;
                     initials[std.ascii.toUpper(alias[0])] = true;
+                    // ASCII letters can also match long s or the Kelvin sign.
+                    if (std.ascii.isAlphabetic(alias[0]))
+                        for (128..256) |byte| {
+                            initials[byte] = true;
+                        };
                 } else if (!std.mem.startsWith(u8, alias, "＿＿")) {
-                    // Generic Unicode aliases may change UTF-8 lead byte on lowercase.
                     for (128..256) |byte| initials[byte] = true;
+                    const folded_first = casefold.simpleFold(first_cp);
+                    if (folded_first < 128) {
+                        initials[folded_first] = true;
+                        initials[std.ascii.toUpper(@intCast(folded_first))] = true;
+                    }
                 }
             }
-            var it = (try std.unicode.Utf8View.init(alias)).iterator();
-            var count: usize = 0;
-            while (it.nextCodepoint() != null) count += 1;
             if (entries.items.len >= 10000) return error.InvalidBehaviorSnapshot;
-            try entries.append(alloc, .{ .text = alias, .folded = try lower.lowerAlloc(alloc, alias), .sensitive = sensitive, .scalars = count, .toc = std.mem.eql(u8, id, "toc") });
+            try entries.append(alloc, .{ .text = alias, .sensitive = sensitive, .scalars = count, .toc = std.mem.eql(u8, id, "toc") });
         }
         return .{ .arena = arena, .aliases = try entries.toOwnedSlice(alloc), .initial_bytes = initials };
     }
@@ -88,10 +98,7 @@ pub const Registry = struct {
                     pos += n;
                 }
                 if (count != alias.scalars) continue;
-                var scratch: [4096]u8 = undefined;
-                var writer: std.Io.Writer = .fixed(&scratch);
-                lower.writeLower(&writer, input[at..pos]) catch continue;
-                if (std.mem.eql(u8, writer.buffered(), alias.folded)) longest = @max(longest, pos);
+                if (casefold.eqlIgnoreCase(input[at..pos], alias.text)) longest = @max(longest, pos);
             }
         }
         return if (longest > at) longest else null;
@@ -117,4 +124,19 @@ test "TOC recognition retains canonical identity and existing alias case rules" 
     try std.testing.expectEqual(@as(?usize, "__sommaire__".len), try registry.tocMatchAt(std.testing.allocator, "__sommaire__tail", 0));
     try std.testing.expectEqual(@as(?usize, null), try registry.tocMatchAt(std.testing.allocator, "__SANSSECTION__", 0));
     try std.testing.expectEqual(@as(?usize, "__SANSSECTION__".len), try registry.matchAt(std.testing.allocator, "__SANSSECTION__", 0));
+}
+
+test "behavior aliases use Unicode simple folding and original byte endpoints" {
+    const raw = header ++ "\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nnoeditsection\t0\t__NOEDITSECTION__\nnotoc\t0\t__Σ__\nstaticredirect\t1\t__STATICREDIRECT__\ntoc\t0\tSoft\nnogallery\t0\tKeep\n";
+    var registry = try Registry.init(std.testing.allocator, raw, "enwiktionary", "20261001", "en", @splat(0));
+    defer registry.deinit();
+    for ([_][]const u8{ "__NOEDITſECTION__", "__ς__", "__σ__", "ſoft", "KEEP", "Keep" }) |source| {
+        const input = try std.mem.concat(std.testing.allocator, u8, &.{ "x", source, "tail" });
+        defer std.testing.allocator.free(input);
+        try std.testing.expectEqual(@as(?usize, 1 + source.len), try registry.matchAt(std.testing.allocator, input, 1));
+    }
+    for ([_][]const u8{ "__ſTATICREDIRECT__", "__staticredirect__", "__NOEDİTSECTION__", "__UNKNOWN__", "__NOEDIT\xc0\xafECTION__" }) |source|
+        try std.testing.expectEqual(@as(?usize, null), try registry.matchAt(std.testing.allocator, source, 0));
+    try std.testing.expectEqual(@as(?usize, "ſoft".len), try registry.tocMatchAt(std.testing.allocator, "ſofttail", 0));
+    try std.testing.expectEqual(@as(?usize, null), try registry.tocMatchAt(std.testing.allocator, "__NOEDITſECTION__", 0));
 }

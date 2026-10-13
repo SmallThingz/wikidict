@@ -216,10 +216,164 @@ const Encoder = struct {
     }
 };
 
+/// Observed while the existing decoder consumes one successful DPR2 payload.
+/// These are measurements, not a reader compatibility verdict or new limits.
+pub const TableGridMetrics = struct {
+    exact_compact_columns: ?usize = 0,
+    columns_lower_bound: usize = 0,
+    column_limit_exceeded: bool = false,
+    spans_supported: bool = true,
+    occupied_rows: usize = 0,
+    max_colspan: u16 = 0,
+    max_rowspan: u16 = 0,
+};
+
+// Observation only. This mirrors the selected Android sparse placement without
+// allocating a dense grid or retaining more than 513 global boundaries.
+const GridObserver = struct {
+    const Interval = struct { start: u64, end: u64, until_row: usize };
+    active: [512]Interval = undefined,
+    active_len: usize = 0,
+    boundaries: [513]u64 = undefined,
+    boundary_len: usize = 1,
+
+    fn init() GridObserver {
+        var self: GridObserver = .{};
+        self.boundaries[0] = 0;
+        return self;
+    }
+    fn expire(self: *GridObserver, row: usize) void {
+        var kept: usize = 0;
+        for (self.active[0..self.active_len]) |interval| {
+            if (interval.until_row > row) {
+                self.active[kept] = interval;
+                kept += 1;
+            }
+        }
+        self.active_len = kept;
+    }
+    fn lowerActive(self: *const GridObserver, column: u64) usize {
+        var lo: usize = 0;
+        var hi = self.active_len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (self.active[mid].start < column) lo = mid + 1 else hi = mid;
+        }
+        return lo;
+    }
+    fn boundary(self: *GridObserver, value: u64) bool {
+        var lo: usize = 0;
+        var hi = self.boundary_len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (self.boundaries[mid] < value) lo = mid + 1 else hi = mid;
+        }
+        if (lo < self.boundary_len and self.boundaries[lo] == value) return true;
+        // A new 514th boundary proves at least 513 compact columns. Do not
+        // insert it or pretend the saturated count is the final exact width.
+        if (self.boundary_len == self.boundaries.len) return false;
+        var i = self.boundary_len;
+        while (i > lo) : (i -= 1) self.boundaries[i] = self.boundaries[i - 1];
+        self.boundaries[lo] = value;
+        self.boundary_len += 1;
+        return true;
+    }
+    fn place(self: *GridObserver, column: *u64, cell: types.Cell, row: usize) bool {
+        var end: u64 = undefined;
+        var index: usize = undefined;
+        while (true) {
+            end = column.* + cell.colspan;
+            index = self.lowerActive(column.*);
+            if (index > 0 and self.active[index - 1].end > column.*) {
+                column.* = self.active[index - 1].end;
+            } else if (index < self.active_len and self.active[index].start < end) {
+                column.* = self.active[index].end;
+            } else break;
+        }
+        if (!self.boundary(column.*) or !self.boundary(end)) return false;
+        // Nonoverlapping positive intervals need at most boundaries-1 slots.
+        std.debug.assert(self.active_len < self.active.len);
+        var i = self.active_len;
+        while (i > index) : (i -= 1) self.active[i] = self.active[i - 1];
+        self.active[index] = .{ .start = column.*, .end = end, .until_row = row + cell.rowspan };
+        self.active_len += 1;
+        column.* = end;
+        return true;
+    }
+};
+
+pub fn measureTableGrid(table: types.Table) TableGridMetrics {
+    var result: TableGridMetrics = .{ .occupied_rows = table.rows.len };
+    var observer = GridObserver.init();
+    var observe_columns = true;
+    for (table.rows, 0..) |row, row_index| {
+        if (observe_columns) observer.expire(row_index);
+        var column: u64 = 0;
+        for (row.cells) |cell| {
+            result.occupied_rows = @max(result.occupied_rows, row_index + @as(usize, cell.rowspan));
+            result.max_colspan = @max(result.max_colspan, cell.colspan);
+            result.max_rowspan = @max(result.max_rowspan, cell.rowspan);
+            if (cell.colspan == 0 or cell.colspan > 100 or cell.rowspan == 0 or cell.rowspan > 100) {
+                result.spans_supported = false;
+                result.exact_compact_columns = null;
+                observe_columns = false;
+            }
+            if (observe_columns and !observer.place(&column, cell, row_index)) {
+                result.column_limit_exceeded = true;
+                result.exact_compact_columns = null;
+                result.columns_lower_bound = 513;
+                observe_columns = false;
+            }
+        }
+    }
+    if (result.exact_compact_columns != null) {
+        result.exact_compact_columns = observer.boundary_len - 1;
+        result.columns_lower_bound = observer.boundary_len - 1;
+    }
+    return result;
+}
+
+pub const DecodeMetrics = struct {
+    total_items: u64 = 0,
+    largest_string_bytes: usize = 0,
+    tables: usize = 0,
+    table_columns_exact: ?usize = 0,
+    table_columns_lower_bound: usize = 0,
+    table_column_limit_exceeded: bool = false,
+    table_spans_supported: bool = true,
+    max_table_rows: usize = 0,
+    max_table_colspan: u16 = 0,
+    max_table_rowspan: u16 = 0,
+    widest_table: ?usize = null,
+    tallest_table: ?usize = null,
+    span_table: ?usize = null,
+
+    fn table(self: *DecodeMetrics, value: types.Table) void {
+        const observed = measureTableGrid(value);
+        const ordinal = self.tables;
+        self.tables += 1;
+        if (self.widest_table == null or observed.columns_lower_bound > self.table_columns_lower_bound or
+            (observed.column_limit_exceeded and !self.table_column_limit_exceeded)) self.widest_table = ordinal;
+        if (self.tallest_table == null or observed.occupied_rows > self.max_table_rows) self.tallest_table = ordinal;
+        if (self.span_table == null or observed.max_colspan > self.max_table_colspan or
+            observed.max_rowspan > self.max_table_rowspan or (!observed.spans_supported and self.table_spans_supported)) self.span_table = ordinal;
+        self.table_columns_lower_bound = @max(self.table_columns_lower_bound, observed.columns_lower_bound);
+        if (self.table_columns_exact) |previous| {
+            self.table_columns_exact = if (observed.exact_compact_columns) |columns| @max(previous, columns) else null;
+        }
+        self.table_column_limit_exceeded = self.table_column_limit_exceeded or observed.column_limit_exceeded;
+        self.table_spans_supported = self.table_spans_supported and observed.spans_supported;
+        self.max_table_rows = @max(self.max_table_rows, observed.occupied_rows);
+        self.max_table_colspan = @max(self.max_table_colspan, observed.max_colspan);
+        self.max_table_rowspan = @max(self.max_table_rowspan, observed.max_rowspan);
+    }
+};
+
 const Reader = struct {
     a: A,
     bytes: []const u8,
     pos: usize = 0,
+    metrics: ?*DecodeMetrics = null,
 
     fn remaining(self: Reader) usize {
         return self.bytes.len -| self.pos;
@@ -243,6 +397,9 @@ const Reader = struct {
         const value: usize = try self.readU32();
         if (value > max_items) return error.InvalidPresentation;
         if (min_bytes != 0 and value > self.remaining() / min_bytes) return error.InvalidPresentation;
+        if (self.metrics) |metrics| {
+            metrics.total_items = std.math.add(u64, metrics.total_items, @as(u64, value)) catch return error.InvalidPresentation;
+        }
         return value;
     }
     fn index(self: *Reader) !usize {
@@ -259,6 +416,7 @@ const Reader = struct {
         if (len > max_string_bytes) return error.InvalidPresentation;
         const value = try self.take(len);
         if (!std.unicode.utf8ValidateSlice(value)) return error.InvalidPresentation;
+        if (self.metrics) |metrics| metrics.largest_string_bytes = @max(metrics.largest_string_bytes, len);
         return value;
     }
     fn enumValue(self: *Reader, comptime E: type) !E {
@@ -336,7 +494,9 @@ const Reader = struct {
         const len = try self.count(4);
         const rows = try self.a.alloc(types.Row, len);
         for (rows) |*row_value| row_value.* = try self.row();
-        return .{ .caption = caption, .rows = rows };
+        const value: types.Table = .{ .caption = caption, .rows = rows };
+        if (self.metrics) |metrics| metrics.table(value);
+        return value;
     }
     fn block(self: *Reader) !types.Block {
         return .{
@@ -464,8 +624,34 @@ pub fn decodeAlloc(
     expected_kind: format.BlobKind,
     language_metadata: ?format.LanguageMetadata,
 ) !types.Stored {
+    return decodeImpl(a, payload, expected_title, expected_kind, language_metadata, null);
+}
+
+/// Commit measurements only after ordinary framing and semantic validation pass.
+pub fn decodeWithMetricsAlloc(
+    a: A,
+    payload: []const u8,
+    expected_title: []const u8,
+    expected_kind: format.BlobKind,
+    language_metadata: ?format.LanguageMetadata,
+    metrics: *DecodeMetrics,
+) !types.Stored {
+    var observed: DecodeMetrics = .{};
+    const stored = try decodeImpl(a, payload, expected_title, expected_kind, language_metadata, &observed);
+    metrics.* = observed;
+    return stored;
+}
+
+fn decodeImpl(
+    a: A,
+    payload: []const u8,
+    expected_title: []const u8,
+    expected_kind: format.BlobKind,
+    language_metadata: ?format.LanguageMetadata,
+    metrics: ?*DecodeMetrics,
+) !types.Stored {
     if (payload.len < magic.len or !std.mem.eql(u8, payload[0..magic.len], magic)) return error.InvalidPresentation;
-    var reader: Reader = .{ .a = a, .bytes = payload, .pos = magic.len };
+    var reader: Reader = .{ .a = a, .bytes = payload, .pos = magic.len, .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
     const preamble = try reader.spans();
@@ -637,6 +823,15 @@ test "binary presentation codec preserves composite semantic fields" {
     } };
     const bytes = try encodeAlloc(a, stored);
     const decoded = try decodeAlloc(a, bytes, "cat", .language, .{ .code = "en", .heading = "English" });
+    var metrics: DecodeMetrics = .{};
+    const measured = try decodeWithMetricsAlloc(a, bytes, "cat", .language, .{ .code = "en", .heading = "English" }, &metrics);
+    // Nested table rows/cells/spans, lexical indices, references and media all
+    // contribute to Android's per-record aggregate count budget.
+    try std.testing.expectEqual(@as(u64, 23), metrics.total_items);
+    try std.testing.expectEqual("https://example.invalid".len, metrics.largest_string_bytes);
+    const measured_json = try std.json.Stringify.valueAlloc(a, measured, .{});
+    const ordinary_json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    try std.testing.expectEqualStrings(ordinary_json, measured_json);
     const span = decoded.entry.sections[1].blocks[0].spans[0];
     try std.testing.expect(span.bold and span.italic and span.code and span.small and span.superscript and span.subscript and span.strike and span.underline);
     try std.testing.expectEqual(types.Role.quotation, span.role);
@@ -706,4 +901,100 @@ test "binary presentation codec rejects invalid framing and trailing bytes" {
     const bytes = try encodeAlloc(a, stored);
     const damaged = try std.mem.concat(a, u8, &.{ bytes, "x" });
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, damaged, "cat", .citations, null));
+}
+
+test "failed presentation decoding never commits successful metrics" {
+    var metrics: DecodeMetrics = .{ .total_items = 99, .largest_string_bytes = 77 };
+    try std.testing.expectError(error.InvalidPresentation, decodeWithMetricsAlloc(std.testing.allocator, "DPR2", "x", .supplemental, null, &metrics));
+    try std.testing.expectEqual(@as(u64, 99), metrics.total_items);
+    try std.testing.expectEqual(@as(usize, 77), metrics.largest_string_bytes);
+}
+
+test "sparse table observations preserve global boundaries and rowspan placement" {
+    const a = std.testing.allocator;
+    var broad: [6]types.Cell = undefined;
+    @memset(&broad, .{ .colspan = 100 });
+    const broad_rows = [_]types.Row{.{ .cells = &broad }};
+    const wide = measureTableGrid(.{ .rows = &broad_rows });
+    try std.testing.expectEqual(@as(?usize, 6), wide.exact_compact_columns);
+    try std.testing.expectEqual(@as(usize, 1), wide.occupied_rows);
+    const first = [_]types.Cell{ .{ .colspan = 100, .rowspan = 2 }, .{ .colspan = 100 } };
+    const second = [_]types.Cell{ .{ .colspan = 50 }, .{ .colspan = 50 } };
+    const split_rows = [_]types.Row{ .{ .cells = &first }, .{ .cells = &second } };
+    const split = measureTableGrid(.{ .rows = &split_rows });
+    try std.testing.expectEqual(@as(?usize, 3), split.exact_compact_columns);
+    try std.testing.expectEqual(@as(usize, 2), split.occupied_rows);
+    const old_a = [_]types.Cell{ .{ .rowspan = 2 }, .{ .colspan = 2 } };
+    const old_b = [_]types.Cell{ .{}, .{} };
+    const old_c = [_]types.Cell{ .{}, .{}, .{} };
+    const old_rows = [_]types.Row{ .{ .cells = &old_a }, .{ .cells = &old_b }, .{ .cells = &old_c } };
+    try std.testing.expectEqual(@as(?usize, 3), measureTableGrid(.{ .rows = &old_rows }).exact_compact_columns);
+    try std.testing.expectEqual(@as(?usize, 0), measureTableGrid(.{}).exact_compact_columns);
+    const empty_rows = [_]types.Row{ .{}, .{} };
+    try std.testing.expectEqual(@as(usize, 2), measureTableGrid(.{ .rows = &empty_rows }).occupied_rows);
+    const trailing = [_]types.Cell{.{ .rowspan = 100 }};
+    const trailing_rows = [_]types.Row{.{ .cells = &trailing }};
+    try std.testing.expectEqual(@as(usize, 100), measureTableGrid(.{ .rows = &trailing_rows }).occupied_rows);
+    const cells = try a.alloc(types.Cell, 513);
+    defer a.free(cells);
+    @memset(cells, .{ .colspan = 100 });
+    const exact_rows = [_]types.Row{.{ .cells = cells[0..512] }};
+    try std.testing.expectEqual(@as(?usize, 512), measureTableGrid(.{ .rows = &exact_rows }).exact_compact_columns);
+    cells[512].rowspan = 100;
+    const saturated_rows = [_]types.Row{ .{ .cells = cells }, .{}, .{} };
+    const saturated = measureTableGrid(.{ .rows = &saturated_rows });
+    try std.testing.expect(saturated.column_limit_exceeded);
+    try std.testing.expect(saturated.exact_compact_columns == null);
+    try std.testing.expectEqual(@as(usize, 513), saturated.columns_lower_bound);
+    try std.testing.expectEqual(@as(usize, 100), saturated.occupied_rows);
+}
+
+test "unsupported spans remain ordinary decode values while observation is explicit" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]types.Cell{ .{ .colspan = 0 }, .{ .colspan = 101 }, .{ .rowspan = 0 }, .{ .rowspan = 101 } }) |cell| {
+        const cells = [_]types.Cell{cell};
+        const rows = [_]types.Row{.{ .cells = &cells }};
+        const blocks = [_]types.Block{.{ .kind = .table, .table = .{ .rows = &rows } }};
+        const sections = [_]types.Section{.{ .level = 2, .title = "Table", .blocks = &blocks }};
+        const stored: types.Stored = .{ .entry = .{ .title = "table", .kind = .supplemental, .sections = &sections } };
+        const payload = try encodeAlloc(a, stored);
+        const ordinary = try decodeAlloc(a, payload, "table", .supplemental, null);
+        var metrics: DecodeMetrics = .{};
+        const measured = try decodeWithMetricsAlloc(a, payload, "table", .supplemental, null, &metrics);
+        try std.testing.expectEqual(ordinary.entry.sections[0].blocks[0].table.?.rows[0].cells[0].colspan, measured.entry.sections[0].blocks[0].table.?.rows[0].cells[0].colspan);
+        try std.testing.expect(!metrics.table_spans_supported);
+        try std.testing.expect(metrics.table_columns_exact == null);
+        try std.testing.expect(!metrics.table_column_limit_exceeded);
+        try std.testing.expectEqual(@as(usize, 1), metrics.tables);
+    }
+}
+
+test "table observations preserve round trips and do not commit failed decode" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cells: [6]types.Cell = undefined;
+    @memset(&cells, .{ .colspan = 100 });
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    const blocks = [_]types.Block{.{ .kind = .table, .table = .{ .rows = &rows } }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "Table", .blocks = &blocks }};
+    const stored: types.Stored = .{ .entry = .{ .title = "wide", .kind = .supplemental, .sections = &sections } };
+    const payload = try encodeAlloc(a, stored);
+    const ordinary = try decodeAlloc(a, payload, "wide", .supplemental, null);
+    var metrics: DecodeMetrics = .{};
+    const measured = try decodeWithMetricsAlloc(a, payload, "wide", .supplemental, null, &metrics);
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, ordinary, .{}), try std.json.Stringify.valueAlloc(a, measured, .{}));
+    try std.testing.expectEqual(@as(?usize, 6), metrics.table_columns_exact);
+    try std.testing.expectEqual(@as(usize, 1), metrics.max_table_rows);
+    try std.testing.expectEqual(@as(u16, 100), metrics.max_table_colspan);
+    const corrupt = try a.alloc(u8, payload.len + 1);
+    @memcpy(corrupt[0..payload.len], payload);
+    corrupt[payload.len] = 0;
+    metrics.table_columns_exact = 77;
+    metrics.tables = 99;
+    try std.testing.expectError(error.InvalidPresentation, decodeWithMetricsAlloc(a, corrupt, "wide", .supplemental, null, &metrics));
+    try std.testing.expectEqual(@as(?usize, 77), metrics.table_columns_exact);
+    try std.testing.expectEqual(@as(usize, 99), metrics.tables);
 }

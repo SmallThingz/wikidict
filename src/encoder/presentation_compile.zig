@@ -1501,7 +1501,10 @@ pub const Renderer = struct {
         } else if (oneOf(tag.name, &.{ "pre", "source", "syntaxhighlight", "math", "ce", "chem", "score", "timeline", "hiero" })) {
             var literal_style = style;
             literal_style.code = true;
-            try self.protectedLiteral(content, literal_style);
+            if (tag.is("source") or tag.is("syntaxhighlight")) {
+                literal_style.provenance = .protected_literal;
+                try self.text(content, literal_style);
+            } else try self.protectedLiteral(content, literal_style);
             // Readable source is not rendered formula, score or diagram output.
             if (oneOf(tag.name, &.{ "math", "ce", "chem", "score", "timeline", "hiero" })) self.fallbacks.unsupported_element = true;
         } else if (!oneOf(tag.name, &.{ "indicator", "references", "templatestyles", "section", "charinsert" })) {
@@ -2215,11 +2218,13 @@ pub const Renderer = struct {
         self.block_limit_reached = true;
         try list.append(self.a, value);
     }
-    fn protectedBlock(self: *Renderer, list: *std.ArrayList(Block), raw: []const u8) Error!void {
+    fn protectedBlock(self: *Renderer, list: *std.ArrayList(Block), raw: []const u8, decode_entities: bool) Error!void {
         const parent = self.spans;
         self.spans = .empty;
         defer self.spans = parent;
-        try self.protectedLiteral(raw, .{ .code = true });
+        if (decode_entities) {
+            try self.protectedLiteral(raw, .{ .code = true });
+        } else try self.text(raw, .{ .code = true, .provenance = .protected_literal });
         try self.appendBlockBudgeted(list, .{ .kind = .preformatted, .spans = try self.spans.toOwnedSlice(self.a) });
     }
     fn block(self: *Renderer, list: *std.ArrayList(Block), kind: Kind, raw: []const u8, path: []const u8, number: []const u8, level: u8) Error!void {
@@ -2409,7 +2414,7 @@ pub const Renderer = struct {
                 oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) and
                 syntax.matchingTag(clean, tag) != null) tag else null) else null;
             const protected_tag = if (syntax.tagAt(clean, 0)) |tag| (if (!tag.closing and
-                (tag.is("pre") or tag.is("syntaxhighlight"))) tag else null) else null;
+                (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
             const special = html_tag != null or protected_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or (!anchored_inline and (starts(line, " ") or table_indent != null or starts(clean, "----")));
             if (!special) {
                 if (para == null) {
@@ -2524,8 +2529,10 @@ pub const Renderer = struct {
                     pos = input.len;
                     continue;
                 }
+                // Source previously used opaque recovery; preserve its unclosed diagnostic.
+                if (tag.is("source") and matched_pair == null) self.markUnclosed(clean, tag, "block-source");
                 const pair = matched_pair orelse syntax.Pair{ .inner_end = clean.len, .end = clean.len };
-                try self.protectedBlock(&blocks, clean[tag.end..pair.inner_end]);
+                try self.protectedBlock(&blocks, clean[tag.end..pair.inner_end], tag.is("pre"));
                 pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
                 if (pos < input.len and input[pos] == '\n') {
                     pos += 1;
@@ -3653,7 +3660,7 @@ test "opaque extensions render safely without leaking parser delimiters" {
     const literal_cases = [_]struct { source: []const u8, visible: []const u8 }{
         .{ .source = "<pre>[[literal]]</pre>", .visible = "[[literal]]" },
         .{ .source = "<source>{{literal}}</source>", .visible = "{{literal}}" },
-        .{ .source = "<syntaxhighlight>x &amp; y</syntaxhighlight>", .visible = "x & y" },
+        .{ .source = "<syntaxhighlight>x &amp; y</syntaxhighlight>", .visible = "x &amp; y" },
         .{ .source = "<nowiki><math>10^{12}</math></nowiki>", .visible = "<math>10^{12}</math>" },
     };
     for (literal_cases) |case| {
@@ -5077,6 +5084,11 @@ test "behavior controls are compiled away only in parsed source text" {
     var r: Renderer = .{ .a = a, .context = .{} };
     const cases = [_]struct { source: []const u8, visible: []const u8 }{
         .{ .source = "before__NOEDITSECTION__after__notoc__", .visible = "beforeafter" },
+        .{ .source = "before__NOEDITſECTION__after", .visible = "beforeafter" },
+        .{ .source = "__ſTATICREDIRECT__", .visible = "__ſTATICREDIRECT__" },
+        .{ .source = "<nowiki>__NOEDITſECTION__</nowiki>", .visible = "__NOEDITſECTION__" },
+        .{ .source = "<pre>__NOEDITſECTION__</pre>", .visible = "__NOEDITſECTION__" },
+        .{ .source = "__NOEDIT&#x17f;ECTION__", .visible = "__NOEDITſECTION__" },
         .{ .source = "__UNKNOWN____index__", .visible = "__UNKNOWN____index__" },
         .{ .source = "<!--__NOTOC__-->kept", .visible = "kept" },
         .{ .source = "<nowiki>__NOEDITSECTION__</nowiki>", .visible = "__NOEDITSECTION__" },
@@ -5102,8 +5114,6 @@ test "localized behavior controls use complete captured aliases and protect lite
     try std.testing.expectEqualStrings("abc __index__ __NOTOC__ ＿＿目次非表示＿＿", try flattened(a, spans));
 }
 
-// Append to presentation_compile.zig for a focused current-behavior regression.
-// Expected failure today: non-cell visible text is dropped by htmlTable.
 test "HTML tables preserve fostered visible text outside cells" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -8580,4 +8590,97 @@ test "disallowed tag bodies retain nowiki pre and once-only entity boundaries" {
     try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "x"));
     try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
     try std.testing.expect(!encoded.fallbacks.unsupported_element);
+}
+
+test "source and syntaxhighlight preserve authored entity spelling and literal markup" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body = "&amp; &amp;lt; &#65; &#x41; [[X]] {{T}} <nowiki>Y</nowiki> <!--Z-->";
+    for ([_][]const u8{ "source", "syntaxhighlight" }) |tag| {
+        const input = try std.fmt.allocPrint(a, "before <{s} lang=\"text\">{s}</{s}> [[B]]", .{ tag, body, tag });
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(input, .{});
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "before {s} B", .{body}), try flattened(a, spans));
+        var code_seen = false;
+        for (spans) |span| {
+            if (span.provenance == .protected_literal) {
+                code_seen = true;
+                try std.testing.expectEqualStrings(body, span.text);
+                try std.testing.expect(span.flags.code);
+                try std.testing.expect(span.kind != .link and span.kind != .external_link and span.kind != .template);
+            } else if (span.kind == .link) {
+                try std.testing.expectEqualStrings("B", span.target);
+                try std.testing.expect(!span.flags.code);
+            }
+        }
+        try std.testing.expect(code_seen and unclosedExternalRecoveryHasLink(spans, .link, "B"));
+        try std.testing.expect(!renderer.fallbacks.unsupported_element and !renderer.fallbacks.unclosed_formatting);
+    }
+    for ([_][]const u8{ "pre", "nowiki" }) |tag| {
+        const input = try std.fmt.allocPrint(a, "<{s}>&amp; &amp;lt; &#65; &#x41; [[X]]</{s}> [[B]]", .{ tag, tag });
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(input, .{});
+        try std.testing.expectEqualStrings("& &lt; A A [[X]] B", try flattened(a, spans));
+        try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .link, "X"));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+    }
+}
+
+test "block code extension entities and inherited navigation retain literal source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body = "  &amp;\n\t[[X]] {{T}}\n";
+    for ([_][]const u8{ "source", "syntaxhighlight" }) |tag| {
+        const input = try std.fmt.allocPrint(a, "<{s} lang=\"text\">{s}</{s}> [[B]]", .{ tag, body, tag });
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(input);
+        try std.testing.expectEqual(@as(usize, 2), blocks.len);
+        try std.testing.expectEqual(Kind.preformatted, blocks[0].kind);
+        try std.testing.expectEqual(Kind.paragraph, blocks[1].kind);
+        try std.testing.expectEqual(@as(usize, 1), blocks[0].spans.len);
+        try std.testing.expectEqualStrings(body, blocks[0].spans[0].text);
+        var literal: std.ArrayList(u8) = .empty;
+        var following = false;
+        for (blocks) |block_value| for (block_value.spans) |span| {
+            if (span.provenance == .protected_literal) {
+                try literal.appendSlice(a, span.text);
+                try std.testing.expect(span.flags.code);
+                try std.testing.expect(span.kind != .link and span.kind != .template);
+            } else if (span.kind == .link) {
+                following = true;
+                try std.testing.expectEqualStrings("B", span.target);
+            }
+        };
+        try std.testing.expectEqualStrings(body, literal.items);
+        try std.testing.expect(following);
+        const linked_input = try std.fmt.allocPrint(a, "[[A|<{s}>&amp; [[X]]</{s}>]] [[B]]", .{ tag, tag });
+        const linked = try renderer.parseSpans(linked_input, .{ .bold = true });
+        try std.testing.expectEqualStrings("&amp; [[X]] B", try flattened(a, linked));
+        var inherited = false;
+        for (linked) |span| if (span.provenance == .protected_literal) {
+            inherited = true;
+            try std.testing.expectEqualStrings("A", span.target);
+            try std.testing.expect(span.kind == .link and span.flags.code and span.flags.bold);
+        };
+        try std.testing.expect(inherited and unclosedExternalRecoveryHasLink(linked, .link, "B"));
+        try std.testing.expect(!unclosedExternalRecoveryHasLink(linked, .link, "X"));
+    }
+}
+
+test "unclosed source block retains raw entity bytes and its existing diagnostic" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("<source lang=\"text\">&amp; [[X]]");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqual(Kind.preformatted, blocks[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), blocks[0].spans.len);
+    try std.testing.expectEqualStrings("&amp; [[X]]", blocks[0].spans[0].text);
+    try std.testing.expect(blocks[0].spans[0].flags.code);
+    try std.testing.expectEqual(Provenance.protected_literal, blocks[0].spans[0].provenance);
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(blocks[0].spans, .link, "X"));
+    try std.testing.expect(renderer.fallbacks.unclosed_formatting);
 }
