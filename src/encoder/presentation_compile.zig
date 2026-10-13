@@ -1037,18 +1037,10 @@ pub const Renderer = struct {
         return try out.toOwnedSlice(self.a);
     }
     fn plainWithMagicLinks(self: *Renderer, value: []const u8, style: Style) Error!void {
-        var emitted: usize = 0;
-        var scan: usize = 0;
-        while (scan < value.len) {
-            const at = scan;
-            const matched = if (self.context.behavior_switches) |registry| try registry.matchAt(self.a, value, at) else syntax.behaviorSwitchEnd(value, at);
-            if (matched) |end| {
-                try self.plainWithMagicLinksVisible(value[emitted..at], style);
-                emitted = end;
-                scan = end;
-            } else scan = at + 1;
-        }
-        try self.plainWithMagicLinksVisible(value[emitted..], style);
+        // MediaWiki removes active behavior switches before magic-link matching.
+        // Retain one authored text fragment so removing a switch cannot split
+        // an ISBN prefix/number. Protected and entity-decoded text bypasses this.
+        try self.plainWithMagicLinksVisible(try self.withoutBehaviorControls(value), style);
     }
     fn plainWithMagicLinksVisible(self: *Renderer, value: []const u8, style: Style) Error!void {
         if (style.kind == .link or style.kind == .external_link) return self.plain(value, style);
@@ -8256,4 +8248,54 @@ test "continued paragraph formatting scopes list navigation and closing suffix" 
     var unmatched: Renderer = .{ .a = a, .context = .{} };
     _ = try unmatched.renderBody("before\n<s># inline\n* later");
     try std.testing.expect(unmatched.fallbacks.unclosed_formatting);
+}
+
+test "behavior switches are removed before ISBN magic link matching" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "ISBN __NOEDITSECTION__9780306406157",
+        "ISBN 97803__NOEDITSECTION__06406157",
+        "ISBN __NOEDITSECTION____NOTOC__9780306406157",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqual(@as(usize, 1), spans.len);
+        try std.testing.expectEqualStrings("ISBN 9780306406157", spans[0].text);
+        try std.testing.expectEqual(ir.InlineKind.link, spans[0].kind);
+        try std.testing.expectEqualStrings("Special:BookSources/9780306406157", spans[0].target);
+    }
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const mixed = try renderer.parseSpans("before ISBN __NOEDITSECTION__978-0-306-40615-8 after [[B]]", .{});
+    try std.testing.expectEqualStrings("before ISBN 978-0-306-40615-8 after B", try flattened(a, mixed));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(mixed, .link, "Special:BookSources/9780306406158"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(mixed, .link, "B"));
+}
+
+test "magic link behavior boundary keeps protected and entity authored controls literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const literal = "ISBN __NOEDITSECTION__9780306406157";
+    for ([_][]const u8{ "nowiki", "pre", "source", "syntaxhighlight" }) |tag| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "<{s}>{s}</{s}>", .{ tag, literal, tag });
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings(literal, try flattened(a, spans));
+        for (spans) |span| {
+            try std.testing.expect(span.kind != .link and span.kind != .external_link);
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        }
+    }
+    for ([_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "ISBN &#95;&#95;NOEDITSECTION__9780306406157", .visible = literal },
+        .{ .source = "ISBN __UNKNOWN__9780306406157", .visible = "ISBN __UNKNOWN__9780306406157" },
+        .{ .source = "ISBN __NOEDITSECTION__1234567890123", .visible = "ISBN 1234567890123" },
+    }) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        for (spans) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
+    }
 }
