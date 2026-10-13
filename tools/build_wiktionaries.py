@@ -248,6 +248,9 @@ def auxiliary_capture_helper(name, path):
         if schema=='wikidict.file-metadata-capture.v2':
             import prepare_file_metadata_v2
             return prepare_file_metadata_v2
+        if schema=='wikidict.file-metadata-union.v1':
+            import prepare_file_metadata_union
+            return prepare_file_metadata_union
         if schema not in (None,'wikidict.file-metadata-capture.v1') or header==b'# wikidict-file-metadata-v2':
             raise ValueError('Unsupported file metadata capture schema/header')
         # Preserve the established generic contract for v1 and schema-less data.
@@ -411,7 +414,7 @@ def validated_auxiliary_capture(name, path, edition=None, date=None):
     if name=='language-names' and helper.__name__=='prepare_language_names_generic':
         return generic_language_names_capture(helper,path,edition,date)
     replay_key=None;previous=None
-    if name=='file-metadata' and helper.__name__=='prepare_file_metadata_v2':
+    if name=='file-metadata' and helper.__name__ in ('prepare_file_metadata_v2','prepare_file_metadata_union'):
         path=Path(path)
         if (path.name!='file-metadata.tsv' or path.is_symlink() or
                 path.parent.is_symlink() or not path.parent.is_dir()):
