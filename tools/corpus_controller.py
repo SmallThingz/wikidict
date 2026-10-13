@@ -144,7 +144,33 @@ def load_preparations(cfg):
                     'Older-source preparation needs an explicit source transition')
         elif transition is not None:
             require(False, 'Source transition does not change source')
-        for key in ('manifest', 'compiler', 'date', 'now_unix', 'expansion_timeout_ms'):
+        manifest_transition = receipt.get('manifest_transition')
+        if result['manifest'] != cfg['manifest']:
+            require(isinstance(manifest_transition, dict)
+                    and manifest_transition.get('from_manifest') == result['manifest']
+                    and manifest_transition.get('to_manifest') == cfg['manifest']
+                    and manifest_transition.get('scope') == 'retained-production-time-only'
+                    and manifest_transition.get('runtime_reuse_credit') is False
+                    and isinstance(manifest_transition.get('reason'), str)
+                    and manifest_transition['reason'].strip(),
+                    'Older-input preparation needs an explicit time-only manifest transition')
+            snapshot = manifest_transition.get('from_manifest_snapshot')
+            require(isinstance(snapshot, dict)
+                    and all(snapshot.get(key) == result['manifest'][key] for key in ('bytes', 'sha256')),
+                    'Original manifest snapshot differs from preparation')
+            before, after = read_ref(snapshot), read_ref(cfg['manifest'])
+            require(isinstance(before, dict) and isinstance(after, dict), 'Invalid transition manifests')
+            before, after = dict(before), dict(after)
+            old_roots, new_roots = before.pop('auxiliary_capture_roots', None), after.pop('auxiliary_capture_roots', None)
+            require(isinstance(old_roots, dict) and isinstance(new_roots, dict), 'Missing auxiliary capture roots')
+            old_roots, new_roots = dict(old_roots), dict(new_roots)
+            old_root, new_root = old_roots.pop(result['edition'], None), new_roots.pop(result['edition'], None)
+            require(isinstance(old_root, str) and old_root and isinstance(new_root, str) and new_root
+                    and old_root != new_root and before == after and old_roots == new_roots,
+                    'Manifest transition must change only this edition auxiliary capture root')
+        elif manifest_transition is not None:
+            require(False, 'Manifest transition does not change manifest')
+        for key in ('compiler', 'date', 'now_unix', 'expansion_timeout_ms'):
             require(result[key] == cfg[key], f'Preparation {key} differs from this run')
         seconds = result['elapsed_seconds']
         require(type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0, 'Invalid preparation interval')
@@ -154,7 +180,8 @@ def load_preparations(cfg):
                 and closed['remaining_owned_processes'] == [], 'Preparation is not independently closed')
         row = dict(preparation_id=result['preparation_id'], edition=result['edition'],
             outcome=result['outcome'], elapsed_seconds=seconds, receipt=ref,
-            original_source=result['source'], source_transition=transition)
+            original_source=result['source'], source_transition=transition,
+            original_manifest=result['manifest'], manifest_transition=manifest_transition)
         key = row['preparation_id']
         require(key not in unique or unique[key] == row, 'Conflicting preparation identity')
         unique[key] = row

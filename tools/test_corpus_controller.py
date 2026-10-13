@@ -550,5 +550,138 @@ class ControllerPreparationTests(unittest.TestCase):
             self.assertEqual(['enwiktionary'], unknown['unknown_timing_editions'])
 
 
+    def manifest_contexts(self, root):
+        old = self.config(root / 'context')
+        original = dict(requested_editions=['enwiktionary', 'arwiktionary'],
+                        files=[dict(edition='enwiktionary', date='20261001', sha256='a' * 64)],
+                        auxiliary_capture_roots={'enwiktionary': '/captures/old', 'arwiktionary': '/captures/ar'})
+        path = Path(old['manifest']['path'])
+        write_json(path, original)
+        old['manifest'] = controller.descriptor(path)
+        snapshot = root / 'manifest.original.json'
+        snapshot.write_bytes(path.read_bytes())
+        updated = copy.deepcopy(original)
+        updated['auxiliary_capture_roots']['enwiktionary'] = '/captures/new'
+        # The immutable saved copy authenticates history even after the selected path changes.
+        write_json(path, updated)
+        current = dict(old, manifest=controller.descriptor(path))
+        return old, current, controller.descriptor(snapshot)
+
+    def manifest_receipt(self, root, ref, old, current, snapshot, change=None):
+        receipt = controller.read_ref(ref)
+        receipt['manifest_transition'] = dict(from_manifest=old['manifest'], to_manifest=current['manifest'],
+            from_manifest_snapshot=snapshot, scope='retained-production-time-only', runtime_reuse_credit=False,
+            reason='Select the isolated auxiliary file metadata union; keep actual prior work, not runtime authority')
+        receipt['manifest_transition'].update(change or {})
+        path = root / 'manifest-transition-accounting.json'
+        write_json(path, receipt)
+        return controller.descriptor(path)
+
+    def test_manifest_transition_preserves_original_timing_once_with_separate_source_transition(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, current, snapshot = self.manifest_contexts(root)
+            current['source'] = self.config(root / 'new-source')['source']
+            selected, originals = [], []
+            for status, seconds in [('passed', 2), ('failed', 3)]:
+                receipt = self.preparation(root / status, old, status, status, seconds)
+                authority = controller.read_ref(receipt)
+                originals.extend((Path(authority[key]['path']), Path(authority[key]['path']).read_bytes())
+                                 for key in ('result', 'closure'))
+                receipt = self.transition_receipt(root / status, receipt, old['source'], current['source'])
+                selected.append(self.manifest_receipt(root / status, receipt, old, current, snapshot))
+            selected.append(self.preparation(root / 'fresh', current, 'fresh', seconds=5))
+            current['production_preparations'] = selected + [selected[0]]
+            first = controller.load_preparations(current)
+            self.assertEqual(first, controller.load_preparations(current))
+            summary = controller.summarize([attempt('build', 1, seconds=20)], ['enwiktionary'], first + first)
+            self.assertEqual(10, summary['observed_cohort_preparation_seconds'])
+            self.assertEqual(30, summary['observed_cohort_seconds'])
+            self.assertEqual(['passed', 'failed', 'passed'], [row['outcome'] for row in first])
+            self.assertEqual(old['manifest'], first[0]['original_manifest'])
+            self.assertEqual(current['manifest'], first[0]['manifest_transition']['to_manifest'])
+            self.assertEqual(old['source'], first[0]['original_source'])
+            self.assertEqual(current['source'], first[0]['source_transition']['to_source'])
+            self.assertIsNone(first[2]['manifest_transition'])
+            self.assertIsNone(first[2]['source_transition'])
+            for path, before in originals:
+                self.assertEqual(before, path.read_bytes())
+
+    def test_manifest_transition_requires_exact_time_only_authority(self):
+        changes = [None, {'from_manifest': {}}, {'to_manifest': {}}, {'reason': ' '},
+                   {'scope': 'runtime-reuse'}, {'runtime_reuse_credit': True},
+                   {'from_manifest_snapshot': {}}, {'from_manifest_snapshot': {'bytes': 1, 'sha256': '0' * 64}}]
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, current, snapshot = self.manifest_contexts(root)
+                receipt = self.preparation(root / 'prep', old, 'p')
+                if change is not None:
+                    receipt = self.manifest_receipt(root / 'prep', receipt, old, current, snapshot, change)
+                current['production_preparations'] = [receipt]
+                with self.assertRaises(ValueError):
+                    controller.load_preparations(current)
+
+    def test_manifest_transition_refuses_payload_other_editions_and_unrelated_metadata_changes(self):
+        changes = ['dump-bytes', 'editions', 'other-root', 'extra-field', 'missing-root', 'empty-root', 'unchanged-root']
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, current, snapshot = self.manifest_contexts(root)
+                path = Path(current['manifest']['path'])
+                value = controller.read_ref(current['manifest'])
+                if change == 'dump-bytes': value['files'][0]['sha256'] = 'b' * 64
+                if change == 'editions': value['requested_editions'].append('dewiktionary')
+                if change == 'other-root': value['auxiliary_capture_roots']['arwiktionary'] = '/different'
+                if change == 'extra-field': value['unrelated'] = True
+                if change == 'missing-root': del value['auxiliary_capture_roots']['enwiktionary']
+                if change == 'empty-root': value['auxiliary_capture_roots']['enwiktionary'] = ''
+                if change == 'unchanged-root': value['auxiliary_capture_roots']['enwiktionary'] = '/captures/old'
+                write_json(path, value)
+                current['manifest'] = controller.descriptor(path)
+                receipt = self.preparation(root / 'prep', old, 'p')
+                current['production_preparations'] = [self.manifest_receipt(root / 'prep', receipt, old, current, snapshot)]
+                with self.assertRaises(ValueError):
+                    controller.load_preparations(current)
+
+    def test_manifest_transition_authenticates_saved_and_current_manifest_bytes(self):
+        for which in ['snapshot', 'current']:
+            with self.subTest(which=which), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, current, snapshot = self.manifest_contexts(root)
+                receipt = self.preparation(root / 'prep', old, 'p')
+                current['production_preparations'] = [self.manifest_receipt(root / 'prep', receipt, old, current, snapshot)]
+                path = Path((snapshot if which == 'snapshot' else current['manifest'])['path'])
+                path.write_bytes(path.read_bytes() + b' ')
+                with self.assertRaisesRegex(ValueError, 'Receipt bytes changed'):
+                    controller.load_preparations(current)
+
+    def test_manifest_transition_does_not_relax_source_context_or_independent_closure(self):
+        changes = [{key: 'different'} for key in ['source', 'compiler', 'date', 'now_unix', 'expansion_timeout_ms']]
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, current, snapshot = self.manifest_contexts(root)
+                current.update(change)
+                receipt = self.preparation(root / 'prep', old, 'p')
+                current['production_preparations'] = [self.manifest_receipt(root / 'prep', receipt, old, current, snapshot)]
+                with self.assertRaises(ValueError):
+                    controller.load_preparations(current)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, current, snapshot = self.manifest_contexts(root)
+            receipt = self.preparation(root / 'prep', old, 'p', closure_changes={'source_guard': False})
+            current['production_preparations'] = [self.manifest_receipt(root / 'prep', receipt, old, current, snapshot)]
+            with self.assertRaisesRegex(ValueError, 'independently closed'):
+                controller.load_preparations(current)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, current, snapshot = self.manifest_contexts(root)
+            receipt = self.preparation(root / 'prep', current, 'p')
+            current['production_preparations'] = [self.manifest_receipt(root / 'prep', receipt, current, current, snapshot)]
+            with self.assertRaisesRegex(ValueError, 'does not change manifest'):
+                controller.load_preparations(current)
+
+
 if __name__ == '__main__':
     unittest.main()
