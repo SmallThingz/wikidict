@@ -5569,7 +5569,6 @@ test "expanded authored behavior prefixes reach presentation without early strip
     try std.testing.expectEqualStrings("__NOEDITSECTION__==English==\n__NOEDITSECTION__===Noun===\n__NOEDITSECTION__# [[cat|lexical sense]]\n", try expander.expandFragment("entry", "<!--hidden-->__NOEDITSECTION__==English==\n__NOEDITSECTION__===Noun===\n__NOEDITSECTION__# [[cat|lexical sense]]\n", 1_670_803_200));
 }
 
-
 const CategoryTreeNamespaceFixture = struct {
     const registry_text = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
         "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n" ++
@@ -5610,8 +5609,11 @@ test "CategoryTree namespace filters retain qualified titles and resolve aliases
     try stdlib.install(&runtime);
     var source: CategoryTreeNamespaceFixture = .{};
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{
-        .ctx = &source, .get = TestProvider.get, .exists = CategoryTreeNamespaceFixture.exists,
-        .category_tree = CategoryTreeNamespaceFixture.tree, .category_stats = CategoryTreeNamespaceFixture.stats,
+        .ctx = &source,
+        .get = TestProvider.get,
+        .exists = CategoryTreeNamespaceFixture.exists,
+        .category_tree = CategoryTreeNamespaceFixture.tree,
+        .category_stats = CategoryTreeNamespaceFixture.stats,
     } };
     const page = "Reconstruction:Proto-Test/source";
     const input = "{{#categorytree:Probe|type=pages|depth=1|class=\"columns-bg term-list\"|style=counter-reset: pagesleftover 0|namespaces=- Reconstruction}}";
@@ -5656,7 +5658,7 @@ test "CategoryTree namespace filters retain qualified titles and resolve aliases
     // Unknown modes default to categories; a valid namespace filter then
     // selects forward pages mode, just as the captured extension does.
     for ([_][]const u8{ "Unknown", "1_00", "0x64", "sub", "0", "default" }) |unknown_mode| {
-        const text = try std.fmt.allocPrint(a, "{{{{#categorytree:Probe|type={s}|namespaces=-}}}}}", .{unknown_mode});
+        const text = try std.fmt.allocPrint(a, "{{{{#categorytree:Probe|type={s}|namespaces=-}}}}", .{unknown_mode});
         try std.testing.expectEqualStrings(main, try expander.expandFragment(page, text, 1_670_803_200));
     }
     source.present = false;
@@ -5681,8 +5683,11 @@ test "CategoryTree namespace filtering refuses truncated capture ambiguity" {
     members[0] = "Reconstruction:Proto-Test/term";
     var source: CategoryTreeNamespaceFixture = .{ .members = &members, .count = 201 };
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{
-        .ctx = &source, .get = TestProvider.get, .exists = CategoryTreeNamespaceFixture.exists,
-        .category_tree = CategoryTreeNamespaceFixture.tree, .category_stats = CategoryTreeNamespaceFixture.stats,
+        .ctx = &source,
+        .get = TestProvider.get,
+        .exists = CategoryTreeNamespaceFixture.exists,
+        .category_tree = CategoryTreeNamespaceFixture.tree,
+        .category_stats = CategoryTreeNamespaceFixture.stats,
     } };
     const input = "{{#categorytree:Probe|type=pages|namespaces=- Reconstruction}}";
     try std.testing.expectError(error.CategoryTreeSnapshotIncomplete, expander.expandFragment("Page", input, 1_670_803_200));

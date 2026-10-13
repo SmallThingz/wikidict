@@ -121,7 +121,7 @@ const loop_capture_module_source =
     \\ assert(sum==66,"uncaptured loop behavior")
     \\end
 ;
-const module_source = loop_capture_module_source ++
+const module_source = loop_capture_module_source ++ "\n" ++
     \\local concat_prefix = 'A'
     \\local concat_first = concat_prefix .. ('\000' .. 'β')
     \\assert(concat_first == 'A\000β')
