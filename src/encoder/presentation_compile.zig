@@ -1037,10 +1037,41 @@ pub const Renderer = struct {
         return try out.toOwnedSlice(self.a);
     }
     fn plainWithMagicLinks(self: *Renderer, value: []const u8, style: Style) Error!void {
-        // MediaWiki removes active behavior switches before magic-link matching.
-        // Retain one authored text fragment so removing a switch cannot split
-        // an ISBN prefix/number. Protected and entity-decoded text bypasses this.
-        try self.plainWithMagicLinksVisible(try self.withoutBehaviorControls(value), style);
+        // The first MediaWiki TOC switch inserts a widget placeholder before
+        // magic links. We omit that UI, but must not join an ISBN across it.
+        // Page-wide TOC order is not available after block/heading handling;
+        // conservatively retain every active TOC as a recognition boundary.
+        var emitted: usize = 0;
+        var scan: usize = 0;
+        while (scan < value.len) {
+            if (value[scan] == '<') {
+                if (syntax.protectedEnd(value, scan)) |end| {
+                    scan = end;
+                    continue;
+                }
+                if (syntax.tagAt(value, scan)) |tag| {
+                    scan = tag.end;
+                    continue;
+                }
+            }
+            const matched = if (self.context.behavior_switches) |registry|
+                try registry.matchAt(self.a, value, scan)
+            else
+                syntax.behaviorSwitchEnd(value, scan);
+            if (matched) |end| {
+                const toc_end = if (self.context.behavior_switches) |registry|
+                    try registry.tocMatchAt(self.a, value, scan)
+                else if (std.ascii.eqlIgnoreCase(value[scan..end], "__TOC__")) end else null;
+                if (toc_end != null and toc_end.? == end) {
+                    try self.plainWithMagicLinksVisible(try self.withoutBehaviorControls(value[emitted..scan]), style);
+                    emitted = end;
+                }
+                scan = end;
+            } else scan += 1;
+        }
+        // Other switches remain empty before magic recognition. Protected
+        // bodies, attributes and entity-authored spellings keep existing paths.
+        try self.plainWithMagicLinksVisible(try self.withoutBehaviorControls(value[emitted..]), style);
     }
     fn plainWithMagicLinksVisible(self: *Renderer, value: []const u8, style: Style) Error!void {
         if (style.kind == .link or style.kind == .external_link) return self.plain(value, style);
@@ -8298,4 +8329,50 @@ test "magic link behavior boundary keeps protected and entity authored controls 
         try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
         for (spans) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
     }
+}
+
+test "TOC is an invisible magic link boundary while ordinary switches still join" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "ISBN __TOC__9780306406157",
+        "ISBN 97803__toc__06406157",
+        "ISBN __TOC____TOC__9780306406157",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("ISBN 9780306406157", try flattened(a, spans));
+        for (spans) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
+    }
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const positive = try renderer.parseSpans("ISBN __NOEDITSECTION__9780306406157 __TOC__ ISBN __NOEDITSECTION__9780306406157 [[B]]", .{});
+    var isbn_links: usize = 0;
+    for (positive) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) {
+        isbn_links += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), isbn_links);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(positive, .link, "B"));
+    for ([_][]const u8{ "<nowiki>ISBN __TOC__9780306406157</nowiki>", "ISBN &#95;&#95;TOC__9780306406157" }) |source| {
+        var literal: Renderer = .{ .a = a, .context = .{} };
+        const spans = try literal.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("ISBN __TOC__9780306406157", try flattened(a, spans));
+        for (spans) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
+    }
+}
+
+test "localized TOC aliases are recognition boundaries through captured canonical identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Registry = @import("namespace_registry").behavior_switches.Registry;
+    const raw = "# wikidict-behavior-switches-v1\n# wiki\tfrwiktionary\n# dump-date\t20261001\n# content-language\tfr\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\ntoc\t0\t__SOMMAIRE__\nnoeditsection\t0\t__SANSSECTION__\n";
+    var registry = try Registry.init(a, raw, "frwiktionary", "20261001", "fr", @splat(0));
+    defer registry.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .behavior_switches = &registry } };
+    const negative = try renderer.parseSpans("ISBN __sommaire__9780306406157", .{});
+    try std.testing.expectEqualStrings("ISBN 9780306406157", try flattened(a, negative));
+    for (negative) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
+    const positive = try renderer.parseSpans("ISBN __SANSSECTION__9780306406157", .{});
+    try std.testing.expect(unclosedExternalRecoveryHasLink(positive, .link, "Special:BookSources/9780306406157"));
 }
