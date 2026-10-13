@@ -82,6 +82,15 @@ QString readerFamily() {
     }();
     return family;
 }
+
+QString egyptianFamily() {
+    static const QString family = [] {
+        const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/NewGardinerOmni2d4.ttf"));
+        const auto families = QFontDatabase::applicationFontFamilies(id);
+        return families.isEmpty() ? readerFamily() : families.first();
+    }();
+    return family;
+}
 }
 
 MainWindow::MainWindow(const QString &root, const QString &initialWord)
@@ -913,6 +922,9 @@ QString MainWindow::spansHtml(const QJsonArray &spans) const {
         if (!classes.isEmpty() || !language.isEmpty() || !direction.isEmpty()) {
             QString attrs;
             if (!classes.isEmpty()) attrs += QStringLiteral(" class=\"%1\"").arg(classes.toHtmlEscaped());
+            if (!span.value(QStringLiteral("code")).toBool() &&
+                classes.simplified().split(QChar(' '), Qt::SkipEmptyParts).contains(QStringLiteral("Egyp")))
+                attrs += QStringLiteral(" style=\"font-family:'%1'\"").arg(egyptianFamily().toHtmlEscaped());
             if (!language.isEmpty()) attrs += QStringLiteral(" lang=\"%1\"").arg(language.toHtmlEscaped());
             if (!direction.isEmpty()) attrs += QStringLiteral(" dir=\"%1\"").arg(direction.toHtmlEscaped());
             text = QStringLiteral("<span%1>%2</span>").arg(attrs, text);

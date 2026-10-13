@@ -17,6 +17,10 @@ qt_add_resources(dict-qt reader_font PREFIX "/fonts"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/../web"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/../web/reader.ttf")
 
+qt_add_resources(dict-qt egyptian_font PREFIX "/fonts"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NewGardinerOmni2d4.ttf")
+
 target_compile_features(dict-qt PRIVATE cxx_std_20)
 target_compile_options(dict-qt PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(dict-qt PRIVATE "${WIKIDICT_CORE}/src/ffi")
@@ -38,6 +42,10 @@ set_target_properties(dict-qt PROPERTIES
 if(BUILD_TESTING)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
     add_executable(dict-qt-tests ../tests/MainWindowTest.cpp DictApi.cpp LearningStore.cpp MainWindow.cpp LibraryDialog.cpp LibraryStore.cpp MediaPanel.cpp)
+    qt_add_resources(dict-qt-tests test_egyptian_font PREFIX "/fonts"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+        FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NewGardinerOmni2d4.ttf")
+
     target_compile_features(dict-qt-tests PRIVATE cxx_std_20)
     target_compile_options(dict-qt-tests PRIVATE -Wall -Wextra -Wpedantic)
     target_include_directories(dict-qt-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${WIKIDICT_CORE}/src/ffi")

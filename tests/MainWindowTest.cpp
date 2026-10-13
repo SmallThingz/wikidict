@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QFontMetricsF>
 #include <QGridLayout>
 #include <QGlyphRun>
 #include <QJsonArray>
@@ -361,6 +362,63 @@ private slots:
         }
         QVERIFY2(clicked, "The linked trail was not clickable.");
         QCOMPARE(receiver.opened, QList<QUrl>{QUrl(href)});
+    }
+
+    void egyptianSpansShapeGroupsAndKeepNavigation() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const QString joined = QString::fromUtf8("𓂜𓐰𓏏𓐱𓏭𓅪𓆑");
+        const QString unjoined = QString::fromUtf8("𓂜𓏏𓏭𓅪𓆑");
+        const QJsonArray spans{
+            QJsonObject{{QStringLiteral("text"), QStringLiteral("before ")}},
+            QJsonObject{{QStringLiteral("text"), joined},
+                        {QStringLiteral("classes"), QStringLiteral("example Egyp")},
+                        {QStringLiteral("language"), QStringLiteral("egy")},
+                        {QStringLiteral("direction"), QStringLiteral("ltr")}},
+            QJsonObject{{QStringLiteral("text"), QStringLiteral("next")},
+                        {QStringLiteral("kind"), QStringLiteral("link")},
+                        {QStringLiteral("target"), QStringLiteral("jwtj-n.f")}},
+            QJsonObject{{QStringLiteral("text"), QStringLiteral(" after")}}
+        };
+        window.reading_->setHtml(window.spansHtml(spans));
+        QTextDocument *document = window.reading_->document();
+        document->setTextWidth(1000);
+        document->documentLayout()->documentSize();
+        const QTextCursor signs = document->find(joined);
+        QVERIFY(!signs.isNull());
+        QCOMPARE(signs.selectedText(), joined);
+        const QFont font = signs.charFormat().font();
+        QVERIFY(font.families().contains(QStringLiteral("NewGardinerOmni")));
+        QVERIFY(!document->find(QStringLiteral("before")).charFormat().font().families()
+                     .contains(QStringLiteral("NewGardinerOmni")));
+        QCOMPARE(document->find(QStringLiteral("next")).charFormat().anchorHref(),
+                 QStringLiteral("dict:jwtj-n.f"));
+
+        // The authored jwtj.f sequence stacks D35 over the horizontal t/y pair.
+        // Verify Qt's actual font shaping, not just retained Unicode controls.
+        const QFontMetricsF metrics(font);
+        QVERIFY(metrics.horizontalAdvance(joined) + 1 < metrics.horizontalAdvance(unjoined));
+        const QTextBlock block = document->begin();
+        QList<QRectF> ink;
+        for (const QGlyphRun &run : block.layout()->glyphRuns(
+                 signs.selectionStart() - block.position(), joined.size())) {
+            QCOMPARE(run.rawFont().familyName(), QStringLiteral("NewGardinerOmni"));
+            const auto indexes = run.glyphIndexes();
+            const auto positions = run.positions();
+            QCOMPARE(indexes.size(), positions.size());
+            for (qsizetype i = 0; i < indexes.size(); ++i) {
+                const QRectF bounds = run.rawFont().boundingRect(indexes[i]).translated(positions[i]);
+                if (bounds.isEmpty()) continue;
+                QVERIFY(indexes[i] != 0);
+                ink.append(bounds);
+            }
+        }
+        QCOMPARE(ink.size(), qsizetype(5));
+        QVERIFY(ink[0].bottom() < ink[1].top());
+        QVERIFY(ink[0].bottom() < ink[2].top());
+        QVERIFY(ink[1].right() < ink[2].left());
+        QVERIFY(ink[3].left() > ink[2].right());
+        QVERIFY(ink[4].left() > ink[3].right());
     }
 
     void cancellationKeepsLastWorkingDictionary() {
