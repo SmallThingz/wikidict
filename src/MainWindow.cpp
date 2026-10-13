@@ -50,6 +50,7 @@
 #include <QWidget>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
+#include <array>
 namespace {
 QString kindLabel(const QString &kind) {
     if (kind == QStringLiteral("language")) return QStringLiteral("Dictionary");
@@ -281,7 +282,7 @@ void MainWindow::chooseRoot() {
 void MainWindow::setupUi() {
     setWindowTitle(QStringLiteral("Dict"));
     resize(1180, 780);
-    setMinimumSize(680, 480);
+    setMinimumSize(480, 480);
 
     auto *splitter = new QSplitter(this);
     splitter->setObjectName(QStringLiteral("readerSplit"));
@@ -359,35 +360,43 @@ void MainWindow::setupUi() {
     side->addLayout(sideActions);
 
     auto *content = new QWidget(splitter);
+    readerContent_ = content;
     auto *right = new QVBoxLayout(content);
     right->setContentsMargins(28, 20, 28, 24);
     right->setSpacing(10);
 
-    auto *navigation = new QHBoxLayout;
+    auto *navigation = new QGridLayout;
+    navigationLayout_ = navigation;
     back_ = new QPushButton(QStringLiteral("Back"), content);
     forward_ = new QPushButton(QStringLiteral("Forward"), content);
     back_->setToolTip(QStringLiteral("Previous word (Alt+Left)"));
     forward_->setToolTip(QStringLiteral("Next word (Alt+Right)"));
     back_->setEnabled(false);
     forward_->setEnabled(false);
-    navigation->addWidget(back_);
-    navigation->addWidget(forward_);
+    navigation->addWidget(back_, 0, 0);
+    navigation->addWidget(forward_, 0, 1);
     sections_ = new QComboBox(content);
     sections_->setAccessibleName(QStringLiteral("Jump to section"));
     sections_->setMinimumContentsLength(10);
     sections_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     sections_->setEnabled(false);
-    navigation->addWidget(sections_, 1);
+    navigation->addWidget(sections_, 0, 2);
+    navigation->setColumnStretch(2, 1);
     auto *smaller = new QPushButton(QStringLiteral("A-"), content);
     auto *larger = new QPushButton(QStringLiteral("A+"), content);
     smaller->setAccessibleName(QStringLiteral("Smaller reading text"));
     larger->setAccessibleName(QStringLiteral("Larger reading text"));
-    navigation->addWidget(smaller);
-    navigation->addWidget(larger);
+    smaller_ = smaller;
+    navigation->addWidget(smaller, 0, 3);
+    larger_ = larger;
+    navigation->addWidget(larger, 0, 4);
     right->addLayout(navigation);
 
-    auto *header = new QHBoxLayout;
-    auto *heading = new QVBoxLayout;
+    auto *header = new QGridLayout;
+    headerLayout_ = header;
+    readerHeading_ = new QWidget(content);
+    auto *heading = new QVBoxLayout(readerHeading_);
+    heading->setContentsMargins(0, 0, 0, 0);
     title_ = new QLabel(QStringLiteral("Find the word."), content);
     QFont titleFont = title_->font();
     titleFont.setFamily(readerFamily());
@@ -397,19 +406,22 @@ void MainWindow::setupUi() {
     title_->setTextFormat(Qt::RichText);
     title_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     title_->setWordWrap(true);
+    title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     meta_ = new QLabel(QStringLiteral("Local Wiktionary · native Qt"), content);
     meta_->setTextFormat(Qt::PlainText);
     meta_->setWordWrap(true);
+    meta_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     heading->addWidget(title_);
     heading->addWidget(meta_);
-    header->addLayout(heading, 1);
+    header->addWidget(readerHeading_, 0, 0);
+    header->setColumnStretch(0, 1);
     listen_ = new QPushButton(QStringLiteral("Listen"), content);
     listen_->setToolTip(QStringLiteral("Pronounce this word with an installed offline voice"));
     listen_->setEnabled(false);
-    header->addWidget(listen_);
+    header->addWidget(listen_, 0, 1);
     bookmark_ = new QPushButton(QStringLiteral("☆ Bookmark"), content);
     bookmark_->setEnabled(false);
-    header->addWidget(bookmark_);
+    header->addWidget(bookmark_, 0, 2);
     right->addLayout(header);
     entryTabs_ = new QTabWidget(content);
     reading_ = new QTextBrowser(entryTabs_);
@@ -433,6 +445,8 @@ void MainWindow::setupUi() {
     splitter->setSizes({280, 900});
     splitter->setChildrenCollapsible(false);
     setCentralWidget(splitter);
+    content->installEventFilter(this);
+    updateReaderLayout();
 
     searchTimer_ = new QTimer(this);
     searchTimer_->setSingleShot(true);
@@ -575,7 +589,51 @@ void MainWindow::submitSearch() {
     else openWord(search_->text().trimmed());
 }
 
+void MainWindow::updateReaderLayout() {
+    if (!readerContent_ || !navigationLayout_ || !headerLayout_) return;
+    const bool compact = readerContent_->width() < 580;
+    if (compact == compactReader_) return;
+    compactReader_ = compact;
+    QFont headingFont = title_->font();
+    headingFont.setPointSize(compact ? 24 : 30);
+    title_->setFont(headingFont);
+    for (auto *widget : std::array<QWidget *, 5>{back_, forward_, sections_, smaller_, larger_})
+        navigationLayout_->removeWidget(widget);
+    for (auto *widget : std::array<QWidget *, 3>{readerHeading_, listen_, bookmark_})
+        headerLayout_->removeWidget(widget);
+    for (int column = 0; column < 5; ++column) navigationLayout_->setColumnStretch(column, 0);
+    for (int column = 0; column < 3; ++column) headerLayout_->setColumnStretch(column, 0);
+    if (compact) {
+        navigationLayout_->addWidget(back_, 0, 0);
+        navigationLayout_->addWidget(forward_, 0, 1);
+        navigationLayout_->addWidget(sections_, 1, 0, 1, 2);
+        navigationLayout_->addWidget(smaller_, 2, 0);
+        navigationLayout_->addWidget(larger_, 2, 1);
+        navigationLayout_->setColumnStretch(0, 1);
+        navigationLayout_->setColumnStretch(1, 1);
+        headerLayout_->addWidget(readerHeading_, 0, 0, 1, 2);
+        headerLayout_->addWidget(listen_, 1, 0);
+        headerLayout_->addWidget(bookmark_, 1, 1);
+        headerLayout_->setColumnStretch(0, 1);
+        headerLayout_->setColumnStretch(1, 1);
+    } else {
+        navigationLayout_->addWidget(back_, 0, 0);
+        navigationLayout_->addWidget(forward_, 0, 1);
+        navigationLayout_->addWidget(sections_, 0, 2);
+        navigationLayout_->addWidget(smaller_, 0, 3);
+        navigationLayout_->addWidget(larger_, 0, 4);
+        navigationLayout_->setColumnStretch(2, 1);
+        headerLayout_->addWidget(readerHeading_, 0, 0);
+        headerLayout_->addWidget(listen_, 0, 1);
+        headerLayout_->addWidget(bookmark_, 0, 2);
+        headerLayout_->setColumnStretch(0, 1);
+    }
+    readerContent_->layout()->setContentsMargins(compact ? 12 : 28, 20, compact ? 12 : 28, 24);
+}
+
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == readerContent_ && event->type() == QEvent::Resize)
+        updateReaderLayout();
     if (event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
         if (watched == results_ && (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)) {

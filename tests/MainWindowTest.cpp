@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QGridLayout>
 #include <QGlyphRun>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -41,6 +42,7 @@
 #include <QUrl>
 #include <QtTest>
 #include <algorithm>
+#include <array>
 
 class ExternalUrlReceiver final : public QObject {
     Q_OBJECT
@@ -134,6 +136,32 @@ private slots:
         QSettings learning(QStringLiteral("SmallThingz"), QStringLiteral("Dict"));
         learning.clear();
         learning.sync();
+    }
+
+    void narrowReaderKeepsNavigationAndHeadingVisible() {
+        MainWindow window{QString()};
+        window.title_->setText(QStringLiteral("acupuncture"));
+        window.resize(480, 540);
+        window.show();
+        QTRY_VERIFY(window.compactReader_);
+        QCOMPARE(window.width(), 480);
+        const QRect bounds = window.readerContent_->rect();
+        for (auto *widget : std::array<QWidget *, 7>{window.back_, window.forward_, window.sections_, window.smaller_, window.larger_, window.listen_, window.bookmark_}) {
+            QVERIFY(widget->isVisible());
+            QVERIFY(bounds.contains(QRect(widget->mapTo(window.readerContent_, QPoint()), widget->size())));
+            QVERIFY(widget->width() >= widget->minimumSizeHint().width());
+        }
+        QVERIFY(window.title_->width() >= window.title_->fontMetrics().horizontalAdvance(QStringLiteral("acupuncture")));
+        QVERIFY(window.readerHeading_->geometry().bottom() < window.listen_->geometry().top());
+        QVERIFY(window.sections_->geometry().top() > window.back_->geometry().bottom());
+        auto *back = window.back_;
+        auto *sections = window.sections_;
+        window.resize(1180, 780);
+        QTRY_VERIFY(!window.compactReader_);
+        QCOMPARE(window.back_, back);
+        QCOMPARE(window.sections_, sections);
+        QVERIFY(window.back_->geometry().top() <= window.sections_->geometry().bottom());
+        QVERIFY(window.sections_->geometry().top() <= window.back_->geometry().bottom());
     }
 
     void recoveryAndFolderPersistence() {

@@ -19,6 +19,8 @@ class QLineEdit;
 class QListWidget;
 class QPushButton;
 class QProgressBar;
+class QGridLayout;
+class QResizeEvent;
 class QTabWidget;
 class QTextBrowser;
 class QTextEdit;
@@ -42,6 +44,7 @@ private:
     };
 
     void setupUi();
+    void updateReaderLayout();
     void openRoot(const QString &root, const QString &word = {});
     void loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word = {}, int restoreVisit = -1, const QString &expectedRoot = {}, const QString &expectedEdition = {});
     void setLoading(bool loading);
@@ -92,6 +95,13 @@ private:
     QProgressBar *openingProgress_ = nullptr;
     QLabel *resultStatus_ = nullptr;
     QComboBox *sections_ = nullptr;
+    QWidget *readerContent_ = nullptr;
+    QWidget *readerHeading_ = nullptr;
+    QGridLayout *navigationLayout_ = nullptr;
+    QGridLayout *headerLayout_ = nullptr;
+    QPushButton *smaller_ = nullptr;
+    QPushButton *larger_ = nullptr;
+    bool compactReader_ = false;
     QLabel *title_ = nullptr;
     QLabel *meta_ = nullptr;
     QTabWidget *entryTabs_ = nullptr;
