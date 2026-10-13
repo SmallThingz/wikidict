@@ -40,7 +40,6 @@ fn templateSingletonNamespace(namespace: static_fields.Namespace) bool {
         .wikibase,
         .message,
         .os,
-        .namespace_map,
         .package,
         .package_loaded,
         .bit32,
@@ -54,6 +53,7 @@ fn templateSingletonNamespace(namespace: static_fields.Namespace) bool {
         .uri_value,
         .title_batch,
         .namespace_value,
+        .namespace_map,
         => false,
     };
 }
@@ -2252,6 +2252,22 @@ pub const Context = struct {
         return null;
     }
 
+    // The four mw.site namespace maps share one native layout, but each has
+    // a different identity and membership. Rebind captures by their site field,
+    // never by the last table installed for the namespace_map layout.
+    fn findTemplateNamespaceMap(self: *const Context, source: *const Context, source_table: *const Table) ?*Table {
+        const source_site = source.findTemplateNativeNamespace(.site) orelse return null;
+        const target_site = self.findTemplateNativeNamespace(.site) orelse return null;
+        for ([_][]const u8{ "namespaces", "subjectNamespaces", "talkNamespaces", "contentNamespaces" }) |name| {
+            const source_value = source_site.rawGet(.{ .string = name }) orelse continue;
+            if (source_value != .table or source_value.table != source_table) continue;
+            const target_value = target_site.rawGet(.{ .string = name }) orelse return null;
+            if (target_value != .table or target_value.table.native_namespace != .namespace_map) return null;
+            return target_value.table;
+        }
+        return null;
+    }
+
     fn seedModuleTemplateNativeAliases(
         self: *Context,
         source: *Context,
@@ -3224,6 +3240,12 @@ pub const Context = struct {
                 return .{ .table = source_table };
             }
             if (source_table.native_namespace) |namespace| {
+                if (namespace == .namespace_map) {
+                    const table = self.target.findTemplateNamespaceMap(self.source, source_table) orelse
+                        return error.UnsupportedModuleTemplate;
+                    try self.tables.put(self.mapAllocator(), source_table, table);
+                    return .{ .table = table };
+                }
                 if (templateSingletonNamespace(namespace)) {
                     const table = self.target.findTemplateNativeNamespace(namespace) orelse {
                         if (work_stats.current()) |work| if (work.sampled)
@@ -3529,6 +3551,8 @@ pub const Context = struct {
                     if (self.clone.source.nativeMetatableIndex(table)) |index|
                         return self.clone.target.template_native_metatables[index] != null;
                     if (table.cross_page_stable and table.read_only) return true;
+                    if (table.native_namespace == .namespace_map)
+                        return self.clone.target.findTemplateNamespaceMap(self.clone.source, table) != null;
                     if (table.native_namespace) |namespace| if (templateSingletonNamespace(namespace))
                         return self.clone.target.findTemplateNativeNamespace(namespace) != null;
                     if (!table.owns_slots or table.global_tail != null or table.has_identity_key)
@@ -5892,6 +5916,57 @@ test "module template cloning remaps context-bound native namespace callables" {
     const out = try target.callValue(callable, &.{});
     defer freeResults(out);
     try std.testing.expectEqual(@as(f64, 29), out[0].number);
+}
+
+test "module template namespace map captures keep full and filtered identities" {
+    const Fixture = struct {
+        fn install(ctx: *Context, reverse: bool) !*Table {
+            const site = try ctx.newNativeNamespace(.site);
+            const names = [_][]const u8{ "namespaces", "subjectNamespaces", "talkNamespaces", "contentNamespaces" };
+            for (0..names.len) |step| {
+                const index = if (reverse) names.len - 1 - step else step;
+                const map = try ctx.newNativeNamespace(.namespace_map);
+                if (index == 0 or index == 1)
+                    try map.rawSet(ctx.allocator, .{ .number = 10 }, .{ .string = "Template" });
+                if (index == 0 or index == 2)
+                    try map.rawSet(ctx.allocator, .{ .number = 11 }, .{ .string = "Template talk" });
+                try site.rawSet(ctx.allocator, .{ .string = names[index] }, .{ .table = map });
+            }
+            return site;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source = try Context.init(arena.allocator(), 0);
+    defer source.deinit();
+    var target = try Context.init(arena.allocator(), 0);
+    defer target.deinit();
+    const source_site = try Fixture.install(&source, false);
+    const target_site = try Fixture.install(&target, true);
+    for ([_]bool{ false, true }) |promotion| {
+        try target.seedModuleTemplateNativeAliases(&source);
+        var clone = Context.ModuleTemplateClone{
+            .source = &source,
+            .target = &target,
+            .promotion = promotion,
+        };
+        defer clone.deinit();
+        var preflight = Context.PromotionPreflight{ .clone = .{ .source = &source, .target = &target, .promotion = true } };
+        defer preflight.deinit();
+        inline for (.{ "namespaces", "subjectNamespaces", "talkNamespaces", "contentNamespaces" }) |name| {
+            const input = source_site.rawGet(.{ .string = name }).?;
+            const expected = target_site.rawGet(.{ .string = name }).?;
+            try std.testing.expect(try preflight.value(input));
+            const copied = try clone.cloneValue(input);
+            try std.testing.expect(copied == .table and copied.table == expected.table);
+            try std.testing.expect(copied.table != input.table);
+            try std.testing.expectEqual(input.table.rawGet(.{ .number = 10 }) != null, copied.table.rawGet(.{ .number = 10 }) != null);
+            try std.testing.expectEqual(input.table.rawGet(.{ .number = 11 }) != null, copied.table.rawGet(.{ .number = 11 }) != null);
+        }
+        const unregistered = Value{ .table = try source.newNativeNamespace(.namespace_map) };
+        try std.testing.expect(!try preflight.value(unregistered));
+        try std.testing.expectError(error.UnsupportedModuleTemplate, clone.cloneValue(unregistered));
+    }
 }
 
 test "module template cloning remaps structural package loaded singleton" {

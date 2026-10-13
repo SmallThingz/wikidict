@@ -1553,7 +1553,17 @@ fn loadDataCacheProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, b
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = languages, .data = "# wikidict-language-registry-v2\n# content-language\ten\n# mediawiki\nen\tEnglish\ten\teng\n# iso-639-3\n" });
     const probe =
         \\local p = {}
+        \\local namespaces = mw.site.namespaces
+        \\local subjects = mw.site.subjectNamespaces
+        \\local talks = mw.site.talkNamespaces
+        \\local contents = mw.site.contentNamespaces
         \\function p.run()
+        \\    assert(namespaces == mw.site.namespaces and subjects == mw.site.subjectNamespaces)
+        \\    assert(talks == mw.site.talkNamespaces and contents == mw.site.contentNamespaces)
+        \\    assert(namespaces ~= subjects and subjects ~= talks and talks ~= contents)
+        \\    assert(namespaces[10] and namespaces[10] == namespaces.Template)
+        \\    assert(subjects[10] == namespaces[10] and talks[10] == nil and contents[10] == nil)
+        \\    assert(subjects.Template == nil and talks.Template == nil and contents.Template == nil)
         \\    local title = mw.title.getCurrentTitle().text
         \\    local a = mw.loadData('Module:headword/data')
         \\    local b = mw.loadData('Module:headword/data')
