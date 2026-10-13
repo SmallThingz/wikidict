@@ -1796,30 +1796,16 @@ pub const Renderer = struct {
                 self.markUnclosed(input, tag, "nowiki");
                 break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
             };
-            var s = style;
-            s.code = !tag.is("nowiki");
-            try self.protectedLiteral(input[tag.end..pair.inner_end], s);
+            try self.protectedLiteral(input[tag.end..pair.inner_end], style);
             return pair.end;
         }
         if (oneOf(tag.name, &.{ "script", "style", "iframe", "object", "embed" })) {
             self.fallbacks.unsupported_element = true;
-            if (tag.closing) {
-                try self.literal(input[at..tag.end], style);
-                return tag.end;
-            }
-            // MediaWiki escapes these disallowed HTML elements as literal text.
-            // Preserve the exact visible source instead of fabricating a marker.
-            if (tag.self_closing) {
-                try self.literal(input[at..tag.end], style);
-                return tag.end;
-            }
-            if (syntax.matchingTag(input, tag)) |pair| {
-                try self.literal(input[at..pair.end], style);
-                return pair.end;
-            }
-            self.markUnclosed(input, tag, "disallowed-html");
-            try self.literal(input[at..], style);
-            return input.len;
+            // These disallowed tags are escaped text, not opaque extensions.
+            // Preserve only this literal tag token, then let ordinary body
+            // markup, active switches and protected regions retain their rules.
+            try self.literal(input[at..tag.end], style);
+            return tag.end;
         }
         const known = oneOf(tag.name, &.{
             "b",         "strong", "i",    "em", "u",          "s",      "del", "strike", "ins", "sup",  "sub", "small", "big",
@@ -4663,7 +4649,7 @@ test "stray and unclosed dangerous HTML cannot swallow following dictionary text
     try std.testing.expect(std.mem.indexOf(u8, text_value, "unsupported HTML") == null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "literal tail") != null);
     try std.testing.expect(r.fallbacks.unsupported_element);
-    try std.testing.expect(r.fallbacks.unclosed_formatting);
+    try std.testing.expect(!r.fallbacks.unclosed_formatting);
 
     const breaks = try r.parseSpans("a<br>b</br>c<hr>d</hr>e", .{});
     const break_text = try flattened(a, breaks);
@@ -8476,4 +8462,122 @@ test "multiline internal labels media captions and protected literal targets rem
     try std.testing.expectEqualStrings("[[A\nB|label]] after C.", try plainText(a, literal));
     try std.testing.expect(!protected.fallbacks.any());
     for (literal) |span| if (span.kind == .link) try std.testing.expectEqualStrings("C", span.target);
+}
+
+test "nowiki inherits enclosing code style while protecting literal controls and links" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "code", "tt", "kbd", "samp" }) |tag| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "<{s}>before <nowiki>[[x]] __NOEDITSECTION__ &amp;</nowiki> after</{s}> [[B]]", .{ tag, tag });
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("before [[x]] __NOEDITSECTION__ & after B", try flattened(a, spans));
+        var literal_seen = false;
+        var following_seen = false;
+        for (spans) |span| {
+            if (span.provenance == .protected_literal) {
+                literal_seen = true;
+                try std.testing.expect(span.flags.code);
+                try std.testing.expect(span.kind != .link and span.kind != .external_link);
+            }
+            if (span.kind == .link) {
+                following_seen = true;
+                try std.testing.expectEqualStrings("B", span.target);
+                try std.testing.expect(!span.flags.code);
+            }
+        }
+        try std.testing.expect(literal_seen and following_seen);
+    }
+}
+
+test "linked nowiki code retains parent navigation and Egyp code font semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const linked = try renderer.parseSpans("[[A|<code><nowiki>[[x]] __NOTOC__</nowiki></code>]] [[B]]", .{});
+    try std.testing.expectEqualStrings("[[x]] __NOTOC__ B", try flattened(a, linked));
+    var protected_link = false;
+    for (linked) |span| {
+        if (span.provenance == .protected_literal) {
+            protected_link = true;
+            try std.testing.expectEqual(ir.InlineKind.link, span.kind);
+            try std.testing.expectEqualStrings("A", span.target);
+            try std.testing.expect(span.flags.code);
+        } else if (span.kind == .link) {
+            try std.testing.expectEqualStrings("B", span.target);
+            try std.testing.expect(!span.flags.code);
+        }
+    }
+    try std.testing.expect(protected_link);
+    const glyph = try renderer.parseSpans("<code><span class=\"Egyp\" lang=\"egy\" dir=\"ltr\"><nowiki>𓂜</nowiki></span></code> [[B]]", .{});
+    var glyph_seen = false;
+    for (glyph) |span| {
+        if (std.mem.eql(u8, span.text, "𓂜")) {
+            glyph_seen = true;
+            try std.testing.expect(span.flags.code);
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+            try std.testing.expectEqualStrings("Egyp", span.classes);
+            try std.testing.expectEqualStrings("egy", span.language);
+            try std.testing.expectEqualStrings("ltr", span.direction);
+        } else if (span.kind == .link) {
+            try std.testing.expectEqualStrings("B", span.target);
+            try std.testing.expect(!span.flags.code);
+        }
+    }
+    try std.testing.expect(glyph_seen);
+}
+
+test "escaped disallowed HTML keeps ordinary body links and active controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "script", "style", "iframe", "object", "embed" }) |tag| {
+        for ([_]bool{ true, false }) |paired| {
+            const closing = if (paired) try std.fmt.allocPrint(a, "</{s}>", .{tag}) else "";
+            const source = try std.fmt.allocPrint(a, "before <{s}>[[x]] __NOEDITSECTION__ &amp;{s} [[B]]", .{ tag, closing });
+            const expected = try std.fmt.allocPrint(a, "before <{s}>x &{s} B", .{ tag, closing });
+            var renderer: Renderer = .{ .a = a, .context = .{} };
+            const spans = try renderer.parseSpans(source, .{});
+            try std.testing.expectEqualStrings(expected, try flattened(a, spans));
+            try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "x"));
+            try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+            try std.testing.expect(renderer.fallbacks.unsupported_element);
+            // Escaped tag text never opens a formatting scope, even unpaired.
+            try std.testing.expect(!renderer.fallbacks.unclosed_formatting);
+            for (spans) |span| if (std.mem.indexOfScalar(u8, span.text, '<') != null) {
+                try std.testing.expect(span.kind != .link and span.kind != .external_link);
+                try std.testing.expect(span.target.len == 0);
+            };
+        }
+    }
+}
+
+test "disallowed tag bodies retain nowiki pre and once-only entity boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "nowiki", "pre" }) |protected_tag| {
+        const source = try std.fmt.allocPrint(a, "<object><{s}>[[x]] __NOEDITSECTION__ &amp;lt;</{s}> [[B]]</object> [[C]]", .{ protected_tag, protected_tag });
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("<object>[[x]] __NOEDITSECTION__ &lt; B</object> C", try flattened(a, spans));
+        try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .link, "x"));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "C"));
+        try std.testing.expect(renderer.fallbacks.unsupported_element);
+        var protected_seen = false;
+        for (spans) |span| if (span.provenance == .protected_literal) {
+            protected_seen = true;
+            try std.testing.expect(span.kind != .link and span.kind != .external_link);
+        };
+        try std.testing.expect(protected_seen);
+    }
+    var encoded: Renderer = .{ .a = a, .context = .{} };
+    const spans = try encoded.parseSpans("&lt;script&gt;[[x]] __NOEDITSECTION__ &amp;lt;&lt;/script&gt; [[B]]", .{});
+    try std.testing.expectEqualStrings("<script>x &lt;</script> B", try flattened(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "x"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+    try std.testing.expect(!encoded.fallbacks.unsupported_element);
 }

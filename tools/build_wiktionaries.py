@@ -1664,6 +1664,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         raise ValueError('Derived page redirects changed during sharded build')
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
     persist_build_identity(staging,build_identity)
+    seal_verified_publication_inventory(staging)
     (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
@@ -1731,6 +1732,7 @@ def validate_fallback_report(path):
 
 BUILD_IDENTITY_NAME = '.build-inputs.json'
 VERIFIED_MARKER = '.verified-blobs'
+VERIFIED_INVENTORY_NAME = '.verified-publication-inventory.json'
 INTERWIKI_SHA_NAME = '.interwiki-map.sha256'
 AUXILIARY_SHA_NAME = '.auxiliary-snapshots.sha256.json'
 NOW_UNIX_NAME = '.build-now-unix.json'
@@ -1743,7 +1745,7 @@ def require_current_staging_version(path, version):
     if version != DUMP_STAGING_VERSION:
         raise ValueError(f'Outdated dump staging at {path}; rebuild in a new output directory (existing output preserved)')
 
-def publication_inventory(root):
+def publication_inventory(root, *, allow_raw=False):
     """Pin verified data bytes so resume cannot bless missing or changed output."""
     required={'languages.tsv','page-coverage.json','namespace-coverage.json','fallback-pages.jsonl'}
     metadata=required|{'compile-plan.tsv','module-compile-plan.tsv',BUILD_IDENTITY_NAME,
@@ -1764,8 +1766,9 @@ def publication_inventory(root):
     for path in sorted(files):
         name=path.relative_to(root).as_posix()
         if path.is_symlink():raise ValueError('Unsafe publication artifact: '+name)
-        if name in ('complete.json',VERIFIED_MARKER):continue
-        if not path.is_file() or (name not in metadata and not name.endswith('.wikblb.xz')):
+        if name in ('complete.json',VERIFIED_MARKER,VERIFIED_INVENTORY_NAME):continue
+        if not path.is_file() or (name not in metadata and not name.endswith('.wikblb.xz') and
+                                  not (allow_raw and name.endswith('.wikblb'))):
             raise ValueError('Unexpected publication artifact: '+name)
         before=index_identity(path.stat())
         digest=sha256_file(path)
@@ -1773,6 +1776,93 @@ def publication_inventory(root):
         inventory[name]={'size':before['size'],'sha256':digest}
     if not required.issubset(inventory):raise ValueError('Missing required publication report or language manifest')
     return inventory
+
+def seal_verified_publication_inventory(staging):
+    """Seal native-verified logical bytes before compression can remove raw twins."""
+    files=publication_inventory(staging,allow_raw=True)
+    if any(name.endswith('.wikblb.xz') for name in files):
+        raise ValueError('Cannot establish verified inventory from compressed leftovers')
+    raw=json.dumps({'version':1,'files':files},sort_keys=True).encode()+b'\n'
+    if len(raw)>8*1024*1024:raise ValueError('Verified publication inventory exceeds bound')
+    path=artifact_path(staging/VERIFIED_INVENTORY_NAME)
+    with path.open('xb') as out:
+        out.write(raw);out.flush();os.fsync(out.fileno())
+
+
+def verified_xz_record(path, expected_size):
+    """Reuse strict XZ decoding, with bounded logical output and diagnostics."""
+    child=subprocess.Popen(['xz','--format=xz','--decompress','--stdout','--threads=1',
+                            '--memlimit-decompress=64MiB','--',str(path)],
+                           stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    errors=bytearray();stderr_overflow=threading.Event()
+    def capture_errors():
+        while block:=child.stderr.read(4096):
+            if len(errors)+len(block)>64*1024:
+                stderr_overflow.set()
+                try:child.terminate()
+                except ProcessLookupError:pass
+                return
+            errors.extend(block)
+    reader=threading.Thread(target=capture_errors,daemon=True)
+    size=0;digest=hashlib.sha256()
+    try:
+        reader.start()
+        while block:=child.stdout.read(min(1024*1024,expected_size-size+1)):
+            size+=len(block)
+            if size>expected_size:raise ValueError('Verified decoded payload exceeds sealed size: '+str(path))
+            digest.update(block)
+        status=child.wait();reader.join(timeout=5)
+        if reader.is_alive():raise ValueError('Verified XZ diagnostic reader did not close')
+        if stderr_overflow.is_set():raise ValueError('Verified XZ decoder stderr exceeds bound')
+        if status!=0:raise ValueError('Invalid verified compressed payload: '+str(path)+'; '+errors.decode('utf-8','replace'))
+        return {'size':size,'sha256':digest.hexdigest()}
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            try:child.wait(timeout=5)
+            except subprocess.TimeoutExpired:child.kill();child.wait(timeout=5)
+        if reader.ident is not None:reader.join(timeout=5)
+        child.stdout.close();child.stderr.close()
+
+
+def validate_verified_publication_inventory(staging, verified_compressed=None):
+    """Admit only sealed members/content; never adopt surviving files on resume."""
+    path=artifact_path(staging/VERIFIED_INVENTORY_NAME)
+    if not path.is_file() or path.is_symlink():
+        raise ValueError('Verified staging lacks its sealed inventory; preserve and rebuild separately')
+    before=index_identity(path.stat());saved=read_small_json(path,8*1024*1024)
+    if index_identity(path.stat())!=before:raise ValueError('Verified inventory changed while reading')
+    if not isinstance(saved,dict) or set(saved)!={'version','files'} or type(saved['version']) is not int or saved['version']!=1 or not isinstance(saved['files'],dict):
+        raise ValueError('Invalid verified publication inventory')
+    expected=saved['files'];actual=publication_inventory(staging,allow_raw=True);allowed=set()
+    verified_compressed=verified_compressed or {};checked={}
+    for name,record in expected.items():
+        relative=Path(name)
+        if (not isinstance(name,str) or relative.is_absolute() or '..' in relative.parts or
+                relative.as_posix()!=name or not isinstance(record,dict) or set(record)!={'size','sha256'} or
+                type(record['size']) is not int or record['size']<0 or not isinstance(record['sha256'],str) or
+                not re.fullmatch('[0-9a-f]{64}',record['sha256']) or name.endswith('.wikblb.xz')):
+            raise ValueError('Invalid verified publication member')
+        allowed.add(name)
+        if not name.endswith('.wikblb'):
+            if actual.get(name)!=record:raise ValueError('Verified publication metadata changed: '+name)
+            continue
+        compressed=name+'.xz';allowed.add(compressed)
+        if name not in actual and compressed not in actual:raise ValueError('Missing verified payload: '+name)
+        if name in actual and actual[name]!=record:raise ValueError('Verified raw payload changed: '+name)
+        if compressed in actual:
+            if actual[compressed]!=verified_compressed.get(compressed):
+                target=artifact_path(staging/compressed);before=index_identity(target.stat())
+                decoded=verified_xz_record(target,record['size'])
+                if index_identity(target.stat())!=before:raise ValueError('Verified compressed payload changed while reading')
+                if decoded!=record:
+                    raise ValueError('Verified decoded payload changed: '+name)
+            checked[compressed]=actual[compressed]
+    if set(actual)-allowed:raise ValueError('Unexpected member in verified staging')
+    required={'languages.tsv','page-coverage.json','namespace-coverage.json','fallback-pages.jsonl'}
+    if not required.issubset(expected):raise ValueError('Verified inventory misses publication metadata')
+    return expected,checked
+
 
 def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None):
     if type(expected_rows) is not int or expected_rows<0:raise ValueError('Missing expected namespace row count')
@@ -1840,10 +1930,10 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     if namespace_snapshot is not None and namespace_totals['fallback_pages']!=fallback_pages:raise ValueError('Namespace fallback totals differ from fallback report')
     for part in staging.rglob('*.xz.part'):
         unlink_artifact(part)
+    sealed,checked_compressed=validate_verified_publication_inventory(staging)
     raw = sorted(staging.rglob('*.wikblb'))
     compressed = sorted(staging.rglob('*.wikblb.xz'))
-    logical = {str(path) for path in raw}
-    logical.update(str(path)[:-3] for path in compressed)
+    logical = {name for name in sealed if name.endswith('.wikblb')}
     pending = []
     for blob in raw:
         compressed_path = Path(str(blob) + '.xz')
@@ -1856,8 +1946,10 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
         workers = compression_workers or default_build_threads()
         compress_many(pending, 1024*1024, workers)
     compressed = sorted(staging.rglob('*.wikblb.xz'))
-    if len(compressed) != len(logical) or list(staging.rglob('*.wikblb')) or list(staging.rglob('*.xz.part')):
+    if ({path.relative_to(staging).as_posix()[:-3] for path in compressed} != logical or
+            list(staging.rglob('*.wikblb')) or list(staging.rglob('*.xz.part'))):
         raise ValueError(f'Incomplete compressed publication: {staging}')
+    validate_verified_publication_inventory(staging,checked_compressed)
     inventory=publication_inventory(staging)
     metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
         'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
@@ -1873,6 +1965,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     (staging / 'complete.json').write_text(json.dumps(metadata)+'\n')
     os.rename(staging, target)
     unlink_artifact(target/VERIFIED_MARKER)
+    unlink_artifact(target/VERIFIED_INVENTORY_NAME)
     print(f'Published: {target}', flush=True)
     return len(compressed),fallback_pages
 
@@ -1959,6 +2052,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         if workspace.exists():
             cleanup_shard_workspace(workspace)
         unlink_artifact(target/VERIFIED_MARKER, missing_ok=True)
+        unlink_artifact(target/VERIFIED_INVENTORY_NAME, missing_ok=True)
         print(f'Already built: {target}', flush=True)
         return 'existing_output'
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -2029,6 +2123,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             raise ValueError('Derived page redirects changed during build')
         (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
         persist_build_identity(staging,build_identity)
+        seal_verified_publication_inventory(staging)
         (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
         # Verified staging can now resume publication without the input cache.
         cleanup_shard_workspace(workspace)

@@ -1895,18 +1895,19 @@ class BuildTest(unittest.TestCase):
             staging=root/'output/testwiktionary/20260901.building';staging.mkdir(parents=True)
             (staging/'fallback-pages.jsonl').write_text('')
             (staging/'languages.tsv').write_text('heading\n')
-            (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
             (staging/b.AUXILIARY_SHA_NAME).write_text(json.dumps({name:b.sha256_file(folder/(name+'.tsv')) for name in ('namespace-registry','language-registry')}))
             with patch.object(b,'PROJECT',root):write_coverage(staging)
             first=staging/'first.wikblb';second=staging/'second.wikblb'
             first.write_bytes(b'WIKBLB08first');second.write_bytes(b'WIKBLB08second')
-            compress(first,64*1024,1)
             real_run=subprocess.run
             def run(command,**kwargs):
                 if command[0]=='xz':return real_run(command,**kwargs)
                 raise AssertionError(f'unexpected rebuild command: {command}')
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
                 b.persist_build_identity(staging,b.build_input_identity([item],'zig',b.verified_auxiliary_hashes(write_namespace_fixture(folder)),None,None))
+                b.seal_verified_publication_inventory(staging)
+                (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+                compress(first,64*1024,1)
                 b.build([item],root,root/'output','zig',1)
             final=root/'output/testwiktionary/20260901'
             meta=json.loads((final/'complete.json').read_text())
@@ -1980,11 +1981,12 @@ class PublicationResumeTests(unittest.TestCase):
         write_coverage(staging)
         (staging/'fallback-pages.jsonl').write_text('')
         (staging/'supplemental.wikblb').write_bytes(b'WIKBLB08fixture')
-        (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
         hashes=b.verified_auxiliary_hashes(snapshots)
         (staging/b.AUXILIARY_SHA_NAME).write_text(json.dumps(hashes))
         identity=b.build_input_identity([item],'zig',hashes,None,None)
         b.persist_build_identity(staging,identity)
+        b.seal_verified_publication_inventory(staging)
+        (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
         if publish:
             b._publish_verified_staging(staging,target,'testwiktionary','20260901',1,
                 auxiliary_hashes=hashes,build_identity=identity,namespace_snapshot=snapshots['namespace-registry'])
@@ -2106,6 +2108,155 @@ class PublicationResumeTests(unittest.TestCase):
                     self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'resumed_publication')
                     run.assert_not_called()
                 self.assertFalse((target/b.VERIFIED_MARKER).exists())
+
+
+class VerifiedPublicationInventoryTests(unittest.TestCase):
+    prepare = PublicationResumeTests.prepare
+    """Synthetic interrupted staging; never compile or bless native fixtures."""
+    def interrupted(self, root):
+        item,target,workspace=self.prepare(root,publish=False)
+        with patch.object(b.os,'rename',side_effect=OSError('publication interrupted')):
+            with self.assertRaisesRegex(OSError,'publication interrupted'):
+                b.build_locked([item],root,root/'output','zig',1)
+        staging=target.with_name('20260901.building')
+        self.assertFalse((staging/'supplemental.wikblb').exists())
+        self.assertTrue((staging/'supplemental.wikblb.xz').is_file())
+        return item,target,workspace,staging
+
+    def assert_refused_preserved(self,item,target,workspace,staging,pattern=''):
+        inventory=(staging/b.VERIFIED_INVENTORY_NAME).read_bytes() if (staging/b.VERIFIED_INVENTORY_NAME).exists() else None
+        complete=(staging/'complete.json').read_bytes() if (staging/'complete.json').exists() else None
+        with patch.object(b,'run_checked') as native:
+            with self.assertRaisesRegex(ValueError,pattern):b.build_locked([item],staging.parents[2],staging.parents[1],'zig',1)
+            native.assert_not_called()
+        self.assertFalse(target.exists());self.assertTrue((staging/b.VERIFIED_MARKER).is_file())
+        self.assertTrue((workspace/'sentinel').is_file())
+        self.assertEqual(inventory,(staging/b.VERIFIED_INVENTORY_NAME).read_bytes() if inventory is not None else None)
+        self.assertEqual(complete,(staging/'complete.json').read_bytes() if complete is not None else None)
+
+    def test_sealed_compressed_only_interrupted_resume_keeps_exact_logical_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root)
+                saved=(staging/b.VERIFIED_INVENTORY_NAME).read_bytes()
+                expected=json.loads(saved)['files'];self.assertIn('supplemental.wikblb',expected)
+                self.assertNotIn('supplemental.wikblb.xz',expected)
+                with patch.object(b,'run_checked') as native:
+                    self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'resumed_publication');native.assert_not_called()
+                self.assertEqual(lzma.open(target/'supplemental.wikblb.xz').read(),b'WIKBLB08fixture')
+                self.assertFalse((target/b.VERIFIED_INVENTORY_NAME).exists())
+                self.assertEqual(b.publication_inventory(target),json.loads((target/'complete.json').read_text())['publication_files'])
+
+    def test_interrupted_missing_compressed_payload_cannot_be_relabelled_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root);(staging/'supplemental.wikblb.xz').unlink()
+                self.assert_refused_preserved(item,target,workspace,staging,'Missing verified payload')
+
+    def test_interrupted_truncated_compressed_payload_preserves_inventory_and_completion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root);path=staging/'supplemental.wikblb.xz';path.write_bytes(path.read_bytes()[:-16])
+                self.assert_refused_preserved(item,target,workspace,staging,'Invalid verified compressed payload')
+
+    def test_interrupted_valid_compression_with_changed_same_size_logical_payload_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root);(staging/'supplemental.wikblb.xz').write_bytes(lzma.compress(b'WIKBLB08changed',preset=1))
+                self.assert_refused_preserved(item,target,workspace,staging,'Verified decoded payload changed')
+
+    def test_interrupted_equivalent_recompression_retains_logical_identity_and_pins_new_encoding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root);path=staging/'supplemental.wikblb.xz';original=path.read_bytes();replacement=lzma.compress(b'WIKBLB08fixture',preset=1)
+                self.assertNotEqual(original,replacement);path.write_bytes(replacement)
+                self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'resumed_publication')
+                record=json.loads((target/'complete.json').read_text())['publication_files']['supplemental.wikblb.xz']
+                self.assertEqual(record['sha256'],hashlib.sha256(replacement).hexdigest())
+                self.assertEqual(lzma.open(target/'supplemental.wikblb.xz').read(),b'WIKBLB08fixture')
+
+    def test_marker_only_legacy_staging_is_preserved_without_adopting_remaining_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace=self.prepare(root,publish=False);staging=target.with_name('20260901.building');(staging/b.VERIFIED_INVENTORY_NAME).unlink()
+                self.assert_refused_preserved(item,target,workspace,staging,'lacks its sealed inventory')
+                self.assertEqual((staging/'supplemental.wikblb').read_bytes(),b'WIKBLB08fixture')
+                self.assertFalse((staging/b.VERIFIED_INVENTORY_NAME).exists())
+
+    def test_interrupted_metadata_and_unexpected_payload_refuse(self):
+        for change in ('metadata','extra'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                with patch.object(b,'PROJECT',root):
+                    item,target,workspace,staging=self.interrupted(root)
+                    if change=='metadata':(staging/'languages.tsv').write_text('changed')
+                    else:(staging/'extra.wikblb.xz').write_bytes((staging/'supplemental.wikblb.xz').read_bytes())
+                    self.assert_refused_preserved(item,target,workspace,staging,'metadata changed|Unexpected member')
+
+    def test_changed_raw_payload_refuses_before_compression(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace=self.prepare(root,publish=False);staging=target.with_name('20260901.building');(staging/'supplemental.wikblb').write_bytes(b'WIKBLB08changed')
+                with patch.object(b,'compress_many') as compress:
+                    self.assert_refused_preserved(item,target,workspace,staging,'Verified raw payload changed');compress.assert_not_called()
+
+    def test_decoded_size_cannot_exceed_sealed_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root);(staging/'supplemental.wikblb.xz').write_bytes(lzma.compress(b'WIKBLB08fixture-extra',preset=1))
+                self.assert_refused_preserved(item,target,workspace,staging,'exceeds sealed size')
+
+    def test_interrupted_trailing_garbage_is_not_blessed_as_equivalent_compression(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root);path=staging/'supplemental.wikblb.xz';path.write_bytes(path.read_bytes()+b'not an XZ stream')
+                self.assert_refused_preserved(item,target,workspace,staging,'Invalid verified compressed payload')
+
+    def test_interrupted_lzma_alone_disguised_as_xz_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root);(staging/'supplemental.wikblb.xz').write_bytes(lzma.compress(b'WIKBLB08fixture',format=lzma.FORMAT_ALONE,preset=1))
+                self.assert_refused_preserved(item,target,workspace,staging,'Invalid verified compressed payload')
+
+    def test_interrupted_concatenated_valid_xz_streams_preserve_exact_logical_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root);path=staging/'supplemental.wikblb.xz';path.write_bytes(lzma.compress(b'WIKBLB08',preset=1)+lzma.compress(b'fixture',preset=1))
+                self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'resumed_publication')
+                self.assertEqual(lzma.open(target/'supplemental.wikblb.xz').read(),b'WIKBLB08fixture')
+
+    def test_decoder_diagnostics_are_bounded_and_owned_child_is_reaped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'fixture.wikblb.xz';path.write_bytes(lzma.compress(b'WIKBLB08fixture',preset=1))
+            real_popen=subprocess.Popen;children=[]
+            def noisy_decoder(argv,**kwargs):
+                self.assertIn('--format=xz',argv);self.assertNotIn('--single-stream',argv)
+                self.assertIn('--threads=1',argv);self.assertIn('--memlimit-decompress=64MiB',argv)
+                child=real_popen([sys.executable,'-B','-c',"import sys;sys.stderr.buffer.write(b'x'*65537);sys.stderr.flush();sys.stdout.buffer.write(b'WIKBLB08fixture');sys.stdout.flush()"],**kwargs)
+                children.append(child);return child
+            with patch.object(b.subprocess,'Popen',side_effect=noisy_decoder):
+                with self.assertRaisesRegex(ValueError,'stderr exceeds bound'):b.verified_xz_record(path,15)
+            self.assertEqual(len(children),1);self.assertIsNotNone(children[0].returncode)
+            self.assertTrue(children[0].stdout.closed and children[0].stderr.closed)
+
+    def test_inventory_cannot_be_resealed_from_compressed_survivors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root);before=(staging/b.VERIFIED_INVENTORY_NAME).read_bytes()
+                with self.assertRaisesRegex(ValueError,'compressed leftovers'):b.seal_verified_publication_inventory(staging)
+                self.assertEqual(before,(staging/b.VERIFIED_INVENTORY_NAME).read_bytes())
 
 
 class ExpansionDeadlineTests(unittest.TestCase):
