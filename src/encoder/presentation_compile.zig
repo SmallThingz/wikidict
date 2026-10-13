@@ -2254,9 +2254,10 @@ pub const Renderer = struct {
                         // A same-line suffix belongs to its existing inline
                         // block and must not be split off by this path.
                         const first_line_inline = trim(clean[tag.end..]).len != 0;
-                        if ((!first_line_inline or (para == null and endsAfterLaterWikiListLine(rest[tag.end..pair.inner_end]))) and
+                        if ((!first_line_inline or endsAfterLaterWikiListLine(rest[tag.end..pair.inner_end])) and
                             trim(rest[pair.end..closing_line_end]).len == 0)
                         {
+                            const join_inline_paragraph = para != null and first_line_inline;
                             if (para) |p| {
                                 try self.paragraph(&blocks, input[p..start]);
                                 para = null;
@@ -2267,7 +2268,26 @@ pub const Renderer = struct {
                             // Removing an inline opener must not move its same-line
                             // text to a wiki line start. Later physical lines retain
                             // normal list/heading/preformatted interpretation.
-                            try blocks.appendSlice(self.a, try self.renderBodyWithInlineStart(rest[tag.end..pair.inner_end], first_line_inline));
+                            const scoped_blocks = try self.renderBodyWithInlineStart(rest[tag.end..pair.inner_end], first_line_inline);
+                            var scoped_start: usize = 0;
+                            // An inline opener following a soft newline continues the
+                            // active paragraph. Merge its first paragraph without
+                            // extending the wrapper's flags over the preceding text.
+                            if (join_inline_paragraph and blocks.items.len != 0 and scoped_blocks.len != 0 and
+                                blocks.items[blocks.items.len - 1].kind == .paragraph and scoped_blocks[0].kind == .paragraph)
+                            {
+                                const previous = &blocks.items[blocks.items.len - 1];
+                                const leading = scoped_blocks[0];
+                                const spans = try self.a.alloc(Span, previous.spans.len + 1 + leading.spans.len);
+                                @memcpy(spans[0..previous.spans.len], previous.spans);
+                                spans[previous.spans.len] = .{ .text = " ", .flags = parent_formatting };
+                                @memcpy(spans[previous.spans.len + 1 ..], leading.spans);
+                                previous.spans = spans;
+                                previous.text = try std.fmt.allocPrint(self.a, "{s} {s}", .{ previous.text, leading.text });
+                                previous.relation_note = previous.relation_note or leading.relation_note;
+                                scoped_start = 1;
+                            }
+                            try blocks.appendSlice(self.a, scoped_blocks[scoped_start..]);
                             pos = offset + closing_line_end;
                             if (pos < input.len) pos += 1;
                             @memset(&counts, 0);
@@ -4909,16 +4929,23 @@ test "balanced formatting wrapper preserves implicit block newline and list styl
     try std.testing.expectEqual(Kind.list_item, rescanned_blocks[1].kind);
     try std.testing.expect(!rescanned.fallbacks.unclosed_formatting);
 
-    // An already active paragraph keeps its old continuity and limitation;
-    // this narrow repair does not promote or claim to repair that path.
+    // A wrapper after a soft newline continues the existing paragraph,
+    // while later list items inherit only the wrapper's own scope.
     var preceding: Renderer = .{ .a = a, .context = .{} };
     const preceding_blocks = try preceding.renderBody("before\n<s># inline\n* later\n</s>");
     try std.testing.expectEqual(@as(usize, 2), preceding_blocks.len);
     try std.testing.expectEqual(Kind.paragraph, preceding_blocks[0].kind);
     try std.testing.expectEqualStrings("before # inline", try flattened(a, preceding_blocks[0].spans));
     try std.testing.expectEqual(Kind.list_item, preceding_blocks[1].kind);
-    try std.testing.expect(preceding.fallbacks.unclosed_formatting);
-    for (preceding_blocks[1].spans) |span| try std.testing.expect(!span.flags.strike);
+    try std.testing.expect(!preceding.fallbacks.unclosed_formatting);
+    try std.testing.expect(!preceding_blocks[0].spans[0].flags.strike);
+    var inline_struck = false;
+    for (preceding_blocks[0].spans) |span| if (std.mem.indexOf(u8, span.text, "# inline") != null) {
+        inline_struck = true;
+        try std.testing.expect(span.flags.strike);
+    };
+    try std.testing.expect(inline_struck);
+    for (preceding_blocks[1].spans) |span| try std.testing.expect(span.flags.strike);
 }
 
 test "nested block formatting restores parent flags and keeps unclosed reports" {
@@ -8137,4 +8164,33 @@ test "hieroglyph cell joins and following text survive unchanged DPR2" {
     try std.testing.expectEqualStrings("𓀨𓐰𓂡𓐱𓏏 linked", visible.items);
     try std.testing.expect(signs and linked);
     try std.testing.expect(!r.fallbacks.unsupported_element);
+}
+
+test "continued paragraph formatting scopes list navigation and closing suffix" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("before [[A]]\n<s># inline [[B]]\n* later [[C]]\n</s>\nAfter [[D]]");
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqualStrings("before A # inline B", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.list_item, blocks[1].kind);
+    try std.testing.expectEqualStrings("later C", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqualStrings("After D", try flattened(a, blocks[2].spans));
+    var found: [4]bool = @splat(false);
+    for (blocks) |block_value| for (block_value.spans) |span| {
+        if (span.kind != .link) continue;
+        for ([_][]const u8{ "A", "B", "C", "D" }, 0..) |target, i| if (std.mem.eql(u8, span.target, target)) {
+            found[i] = true;
+            try std.testing.expectEqual(i == 1 or i == 2, span.flags.strike);
+        };
+    };
+    for (found) |present| try std.testing.expect(present);
+    for (blocks[1].spans) |span| try std.testing.expect(span.flags.strike);
+    for (blocks[2].spans) |span| try std.testing.expect(!span.flags.strike);
+    try std.testing.expect(!renderer.fallbacks.unclosed_formatting);
+    var unmatched: Renderer = .{ .a = a, .context = .{} };
+    _ = try unmatched.renderBody("before\n<s># inline\n* later");
+    try std.testing.expect(unmatched.fallbacks.unclosed_formatting);
 }
