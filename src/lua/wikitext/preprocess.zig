@@ -46,12 +46,14 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
             }
             continue;
         }
-        // Raw nowiki and closed pre bodies must reach the renderer intact.
-        // Their comments are visible text. An unclosed pre is ordinary HTML,
-        // so only nowiki protects the remaining input without a closing tag.
+        // Raw nowiki and closed pre/code-extension bodies reach the renderer
+        // intact: their comments are visible literal text. Without a closer,
+        // only nowiki protects the remaining input; existing recovery stays.
         if (inclusionTagAt(text, open)) |tag| {
             const nowiki = std.ascii.eqlIgnoreCase(tag.name, "nowiki");
-            if (nowiki or std.ascii.eqlIgnoreCase(tag.name, "pre")) {
+            const code_extension = std.ascii.eqlIgnoreCase(tag.name, "source") or
+                std.ascii.eqlIgnoreCase(tag.name, "syntaxhighlight");
+            if (nowiki or std.ascii.eqlIgnoreCase(tag.name, "pre") or code_extension) {
                 if (rawTagEnd(text, open)) |opening_end| {
                     var before_gt = opening_end - 1;
                     while (before_gt > open and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
@@ -745,4 +747,27 @@ test "protected comment boundary preserves closed pre and removes outside commen
         defer a.free(actual);
         try std.testing.expectEqualStrings(case.expected, actual);
     }
+}
+
+test "closed code extensions keep literal comments before behavior control matching" {
+    const a = std.testing.allocator;
+    for ([_][]const u8{ "source", "syntaxhighlight" }) |tag| {
+        const input = try std.fmt.allocPrint(a, "<{s} lang=\"text\">\n<!--__NOEDITSECTION__-->\n&#95;&#95;NOEDITSECTION&#95;&#95; {{{{T}}}}\n</{s}><!--outside-->tail", .{ tag, tag });
+        defer a.free(input);
+        const expected = try std.fmt.allocPrint(a, "<{s} lang=\"text\">\n<!--__NOEDITSECTION__-->\n&#95;&#95;NOEDITSECTION&#95;&#95; {{{{T}}}}\n</{s}>tail", .{ tag, tag });
+        defer a.free(expected);
+        const actual = try stripDecodedComments(a, input);
+        defer a.free(actual);
+        try std.testing.expectEqualStrings(expected, actual);
+        const unclosed = try std.fmt.allocPrint(a, "<{s}>A<!--ordinary-->B", .{tag});
+        defer a.free(unclosed);
+        const unchanged = try std.fmt.allocPrint(a, "<{s}>AB", .{tag});
+        defer a.free(unchanged);
+        const recovered = try stripDecodedComments(a, unclosed);
+        defer a.free(recovered);
+        try std.testing.expectEqualStrings(unchanged, recovered);
+    }
+    const joined = try stripDecodedComments(a, "__NOEDIT<!--ordinary-->SECTION__A");
+    defer a.free(joined);
+    try std.testing.expectEqualStrings("__NOEDITSECTION__A", joined);
 }

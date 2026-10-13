@@ -4436,6 +4436,12 @@ test "native AOT nowiki strip markers share page host state" {
         .{ .source = "<nowiki><span title=\"</nowiki>\">[[B]]<!--hide-->&lt;i&gt;", .expected = "<nowiki><span title=\"</nowiki>\">[[B]]&lt;i&gt;" },
         .{ .source = "<pre><span title=\"</pre>\">[[B]]<!--hide-->&lt;i&gt;", .expected = "<pre><span title=\"</pre>\">[[B]]&lt;i&gt;" },
         .{ .source = "A<pre>B<!--hidden-->&lt;i&gt;[[C]]", .expected = "A<pre>B&lt;i&gt;[[C]]" },
+        .{ .source = "__NOEDIT<!--ordinary-->SECTION__A", .expected = "__NOEDITSECTION__A" },
+        .{ .source = "<source lang=\"text\"><!--__NOEDITSECTION__-->&#95;&#95;NOEDITSECTION&#95;&#95;</source><!--outside-->tail", .expected = "<source lang=\"text\"><!--__NOEDITSECTION__-->&#95;&#95;NOEDITSECTION&#95;&#95;</source>tail" },
+        .{ .source = "<syntaxhighlight lang='text'>\n<!--__NOEDITSECTION__-->\n{{T}} &amp;\n</syntaxhighlight><!--outside-->tail", .expected = "<syntaxhighlight lang='text'>\n<!--__NOEDITSECTION__-->\n{{T}} &amp;\n</syntaxhighlight>tail" },
+        .{ .source = "<source>A<!--ordinary-->B", .expected = "<source>AB" },
+        .{ .source = "<syntaxhighlight>A<!--ordinary-->B", .expected = "<syntaxhighlight>AB" },
+        .{ .source = "<source/><!--ordinary-->tail", .expected = "<source/>tail" },
     };
     for (comment_cases) |case| {
         try std.testing.expectEqualStrings(case.expected, try expander.expandFragment("Page", case.source, 1_670_803_200));
