@@ -1030,7 +1030,9 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         const QString title = section.value(QStringLiteral("title")).toString();
         const int level = section.value(QStringLiteral("level")).toInt();
         out += QStringLiteral("<a name='section-%1'></a>").arg(index);
-        if (level >= 3 || entry.value(QStringLiteral("kind")).toString() != QStringLiteral("language")) {
+        const bool ownerLanguage = entry.value(QStringLiteral("kind")).toString() == QStringLiteral("language") &&
+            level == 2 && title == entry.value(QStringLiteral("language")).toString();
+        if (!ownerLanguage) {
             out += QStringLiteral("<h2><a href='section:%1'>%2 %3</a></h2>").arg(index)
                 .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), title.toHtmlEscaped());
         }

@@ -611,6 +611,15 @@ private slots:
         QCOMPARE(choices, QStringList({QStringLiteral("Finnish"), QStringLiteral("Etymology"), QStringLiteral("Proper noun"),
             QStringLiteral("Declension"), QStringLiteral("Etymology"), QStringLiteral("English"), QStringLiteral("English")}));
         QCOMPARE(indices, QList<int>({0, 2, 3, 4, 5, 6, 7}));
+        QCOMPARE(window.reading_->toPlainText().count(QStringLiteral("English")), 2);
+        QVERIFY(window.reading_->document()->find(QStringLiteral("Finnish")).isNull());
+        const QTextCursor firstEnglish = window.reading_->document()->find(QStringLiteral("English"));
+        const QTextCursor secondEnglish = window.reading_->document()->find(QStringLiteral("English"), firstEnglish);
+        QVERIFY(!firstEnglish.isNull() && !secondEnglish.isNull());
+        QCOMPARE(firstEnglish.charFormat().anchorHref(), QStringLiteral("section:6"));
+        QCOMPARE(secondEnglish.charFormat().anchorHref(), QStringLiteral("section:7"));
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("section:6")));
+        QVERIFY(window.collapsedSections_.contains(6));
         QCOMPARE(window.reading_->toPlainText().count(QStringLiteral("See also: yya")), 1);
         QVERIFY(window.reading_->toHtml().contains(QStringLiteral("dict:yya")));
         QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("section-0")));
