@@ -791,7 +791,7 @@ class BuildTest(unittest.TestCase):
                 if 'build-blobs' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir(exist_ok=True);write_coverage(dest,command)
                 if 'merge-blobs' in command:
-                    Path(command[command.index('--')+1]).mkdir()
+                    dest=Path(command[command.index('--')+1]);dest.mkdir();write_coverage(dest)
             with patch.object(b,'run_checked',side_effect=run):
                 b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
                                 [{'wiki':'test','date':'20260901'}],123,8,expansion_timeout_ms=600000)
@@ -889,7 +889,7 @@ class BuildTest(unittest.TestCase):
                 if 'build-blobs' in command:
                     dest=Path(command[command.index('--')+2]);dest.mkdir(exist_ok=True);write_coverage(dest,command)
                 if 'merge-blobs' in command:
-                    Path(command[command.index('--')+1]).mkdir()
+                    dest=Path(command[command.index('--')+1]);dest.mkdir();write_coverage(dest)
             with patch.object(b,'run_checked',side_effect=run):
                 b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',8,[{'wiki':'test','date':'20260901'}],123)
             builds=[c for c in calls if 'build-blobs' in c]
