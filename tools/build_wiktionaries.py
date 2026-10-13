@@ -23,6 +23,7 @@ import threading
 import time
 from compress_blobs import compress, compress_many, default_workers, verify_round_trip
 from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space
+from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -203,7 +204,7 @@ def copy_verified_snapshot(source, destination, expected_sha):
             raise ValueError('External snapshot changed while copying')
         os.replace(temporary,destination)
     finally:
-        temporary.unlink(missing_ok=True)
+        unlink_artifact(temporary, missing_ok=True)
     return destination
 
 
@@ -846,7 +847,7 @@ def _remove_partial_stage_on_error(*paths):
         yield
     except BaseException:
         for path in paths:
-            try: path.unlink(missing_ok=True)
+            try: unlink_artifact(path, missing_ok=True)
             except OSError: pass
         raise
 
@@ -1125,8 +1126,8 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
         print(f'Staged parallel Zstandard dump: pages={pages} members={members} xml_bytes={xml_bytes} compressed_bytes={dump.stat().st_size} seconds={time.monotonic()-started:.1f}',flush=True)
         return dump
     except _SplitPageAcrossParts:
-        dump.unlink(missing_ok=True)
-        index.unlink(missing_ok=True)
+        unlink_artifact(dump, missing_ok=True)
+        unlink_artifact(index, missing_ok=True)
         print('XML page crosses archive part boundary; using serial stage',flush=True)
         return _stage_seekable_dump_serial(items,downloads,scratch,metadata)
 
@@ -1245,7 +1246,7 @@ def cleanup_dead_private_shards(shards_root):
             raise ValueError(f'Cannot establish private shard owner death: {partial}') from error
         else:
             raise ValueError(f'Native builder PID still exists; preserve partial shard: {partial}')
-        shutil.rmtree(partial)
+        remove_artifact_tree(partial)
 
 
 def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxiliary_snapshots=None):
@@ -1291,7 +1292,7 @@ RAW_SHARD_OWNER = '.wikidict-raw-shards.json'
 
 def external_raw_shards(workspace, path, create=False):
     """Authenticate a private raw-shard directory before using or deleting it."""
-    raw=Path(path)
+    raw=artifact_path(path)
     if not raw.is_absolute() or raw.resolve()!=raw or raw.is_symlink():
         raise ValueError(f'Unsafe external raw shard path: {raw}')
     work=workspace.resolve()
@@ -1322,6 +1323,7 @@ def external_raw_shards(workspace, path, create=False):
 
 def cleanup_shard_workspace(workspace):
     """Remove only the external shards recorded by this workspace."""
+    artifact_path(workspace)
     if workspace.is_symlink() or (workspace.exists() and not workspace.is_dir()):
         raise ValueError(f'Unsafe shard workspace: {workspace}')
     if not workspace.exists(): return
@@ -1332,13 +1334,14 @@ def cleanup_shard_workspace(workspace):
         raw=external_raw_shards(workspace,state['raw_shards_path'])
         if raw.exists():
             cleanup_dead_private_shards(raw)
-            shutil.rmtree(raw)
-    shutil.rmtree(workspace)
+            remove_artifact_tree(raw)
+    remove_artifact_tree(workspace)
 
 
 def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None):
     expected=dict(expected)
     if 'raw_shards_path' in expected: raise ValueError('Raw shard path must be supplied explicitly')
+    artifact_path(workspace)
     selected=str(Path(raw_shards_path).absolute()) if raw_shards_path is not None else None
     if selected is not None: expected['raw_shards_path']=selected
     embedded=expected.pop('now_unix',None)
@@ -1367,13 +1370,13 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
         if selected is not None:
             raw=external_raw_shards(workspace,selected,create=True)
             cleanup_dead_private_shards(raw)
-            shutil.rmtree(raw)
+            remove_artifact_tree(raw)
         # Compiler/registry changes invalidate the expander and shards, but
         # the verified compressed XML repack has independent inputs.
         for child in workspace.iterdir():
             if child.name=='input' and child.is_dir(): continue
-            if child.is_dir() and not child.is_symlink(): shutil.rmtree(child)
-            else: child.unlink()
+            if child.is_dir() and not child.is_symlink(): remove_artifact_tree(child)
+            else: unlink_artifact(child)
     else:
         workspace.mkdir(parents=True)
     if selected is not None: external_raw_shards(workspace,selected,create=True)
@@ -1415,7 +1418,7 @@ def cached_shard_dump(items, downloads, workspace):
         result['cache_hit']=False
     if cache.exists():
         if not cache.is_dir(): raise ValueError(f'Unsafe cached dump path: {cache}')
-        shutil.rmtree(cache)
+        remove_artifact_tree(cache)
     cache.mkdir()
     metadata={}
     stage_seekable_dump(items,downloads,cache,metadata)
@@ -1492,7 +1495,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     page_links_sha=sha256_file(page_links_snapshot) if page_links_snapshot is not None else None
     page_redirects_sha=sha256_file(page_redirects_snapshot) if page_redirects_snapshot is not None else None
     if not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha):
-        if expander_build.exists(): shutil.rmtree(expander_build)
+        if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=json.loads((workspace/'input/.complete.json').read_text())
         extraction_cache=workspace/'input'/'extraction-cache'
         timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(expander_build),
@@ -1535,7 +1538,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             validate_page_coverage(shard,start,limit,index,index['offsets'][start])
         except ValueError:
             print(f'Rebuilding shard with invalid coverage {items[0]["wiki"]} start={start}',flush=True)
-            shutil.rmtree(shard)
+            remove_artifact_tree(shard)
             break
         # A verifier failure can be a transient resource/tool failure. Preserve
         # the existing shard and stop; only invalid coverage permits deletion.
@@ -1584,7 +1587,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     validate_page_coverage(shard,start,limit,index,offset)
                 except ValueError:
                     print(f'Rebuilding shard with invalid coverage {items[0]["wiki"]} start={start}',flush=True)
-                    shutil.rmtree(shard)
+                    remove_artifact_tree(shard)
                 else:
                     timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
                               edition,date,'resume_shard_verify',start_page=start,pages=limit)
@@ -1593,7 +1596,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     shard_paths.append(shard);continue
             last_error=None
             for attempt in range(1,SHARD_RETRIES+1):
-                if shard.exists(): shutil.rmtree(shard)
+                if shard.exists(): remove_artifact_tree(shard)
                 try:
                     timed_run([zig,'build','-j1','-Doptimize=fast','build-blobs','--',str(dump),str(shard),
                                  '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
@@ -1632,7 +1635,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if interwiki_snapshot is not None:metadata_texts.append(interwiki_sha+'\n')
     if auxiliary_hashes:metadata_texts.append(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
     if build_identity is not None:metadata_texts.append(json.dumps(build_identity,sort_keys=True)+'\n')
-    if staging.exists(): shutil.rmtree(staging)
+    if staging.exists(): remove_artifact_tree(staging)
     admission=require_merge_disk_space(shard_paths,staging,BUILD_DISK_RESERVE_BYTES,
         metadata_paths=(expander_build/'compile-plan.tsv',),metadata_texts=metadata_texts)
     phase_event(edition,date,'merge_disk_admission','admitted',**admission)
@@ -1666,6 +1669,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
 
 
 def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None):
+    artifact_path(output)
+    if raw_shard_root is not None: artifact_path(raw_shard_root)
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     for item in items:
@@ -1831,7 +1836,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     namespace_totals=validate_namespace_coverage(staging,coverage['pages_seen'],namespace_snapshot)
     if namespace_snapshot is not None and namespace_totals['fallback_pages']!=fallback_pages:raise ValueError('Namespace fallback totals differ from fallback report')
     for part in staging.rglob('*.xz.part'):
-        part.unlink()
+        unlink_artifact(part)
     raw = sorted(staging.rglob('*.wikblb'))
     compressed = sorted(staging.rglob('*.wikblb.xz'))
     logical = {str(path) for path in raw}
@@ -1841,7 +1846,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
         compressed_path = Path(str(blob) + '.xz')
         if compressed_path.exists():
             verify_round_trip(blob, compressed_path)
-            blob.unlink()
+            unlink_artifact(blob)
         else:
             pending.append(blob)
     if pending:
@@ -1864,7 +1869,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     if auxiliary_hashes: metadata['auxiliary_snapshot_sha256']=auxiliary_hashes
     (staging / 'complete.json').write_text(json.dumps(metadata)+'\n')
     os.rename(staging, target)
-    (target/VERIFIED_MARKER).unlink()
+    unlink_artifact(target/VERIFIED_MARKER)
     print(f'Published: {target}', flush=True)
     return len(compressed),fallback_pages
 
@@ -1950,7 +1955,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         workspace=target.with_name(date+'.shards')
         if workspace.exists():
             cleanup_shard_workspace(workspace)
-        (target/VERIFIED_MARKER).unlink(missing_ok=True)
+        unlink_artifact(target/VERIFIED_MARKER, missing_ok=True)
         print(f'Already built: {target}', flush=True)
         return 'existing_output'
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1967,7 +1972,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             cleanup_shard_workspace(target.with_name(date+'.shards'))
             return 'resumed_publication'
         print(f'Retrying incomplete build: {staging}', flush=True)
-        shutil.rmtree(staging)
+        remove_artifact_tree(staging)
     workers = min(compression_workers or default_build_threads(),MAX_PIPELINE_WORKERS)
     workspace=target.with_name(date+'.shards')
     expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots)
@@ -2105,6 +2110,7 @@ def main():
     p.add_argument('--watchdog-address-space',choices=('default','unlimited'),default='default',
                    help='Watchdog virtual address-space policy; unlimited retains the 8 GiB aggregate resident-memory cap')
     p.add_argument('--build-timeout-seconds',type=int,help='Explicit watchdog build deadline, up to seven days; default two hours')
+    p.add_argument('--artifact-root-spec', help='Explicit private artifact-root identity JSON for output and raw shards')
     p.add_argument('--cpu-admission',choices=('load','affinity'),default='load',
                    help='CPU admission: load headroom (default), or fixed affinity sharing within a verified watchdog and one edition job')
     p.add_argument('--threads',type=int,help='Workers per edition (up to 4 within CPU load and fixed 8 GiB aggregate cap)')
@@ -2119,6 +2125,7 @@ def main():
         p.add_argument('--'+name+'-snapshot',type=Path,
                        help='Optional '+name+' snapshot; its SHA-256 is part of the shard identity')
     a=p.parse_args()
+    configure_artifact_root(json.loads(a.artifact_root_spec) if a.artifact_root_spec is not None else None, a.output, a.raw_shard_root)
     if a.watchdog_address_space!='default' and a.resource_mode!='watchdog':
         p.error('Unlimited address space requires explicit watchdog mode')
     try:
@@ -2200,6 +2207,7 @@ def cli():
         route.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup')
         route.add_argument('--watchdog-address-space',choices=('default','unlimited'),default='default')
         route.add_argument('--cpu-admission',choices=('load','affinity'),default='load')
+        route.add_argument('--artifact-root-spec')
         route.add_argument('--threads',type=int)
         route.add_argument('--jobs',type=int)
         route.add_argument('--expansion-workers',type=int)
@@ -2207,6 +2215,7 @@ def cli():
         route.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries')
         route.add_argument('--raw-shard-root',type=Path)
         routing=route.parse_known_args()[0]
+        configure_artifact_root(json.loads(routing.artifact_root_spec) if routing.artifact_root_spec is not None else None, routing.output, routing.raw_shard_root)
         mode=routing.resource_mode
         if routing.watchdog_address_space!='default' and mode!='watchdog':
             raise ContainmentUnavailable('Unlimited address space requires explicit watchdog mode')

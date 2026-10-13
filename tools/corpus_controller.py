@@ -19,6 +19,7 @@ import math
 import os
 from pathlib import Path
 import resource
+from build_artifact_root import validate_pipeline_paths
 import signal
 import subprocess
 import sys
@@ -327,6 +328,8 @@ class Lock:
 
 
 def source_guard(cfg):
+    if cfg.get('artifact_root') is not None:
+        validate_pipeline_paths(cfg, ROOT)
     import build_wiktionaries as builder
     head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=ROOT, text=True)
@@ -344,13 +347,16 @@ def gate(ref, cfg, outcomes):
 
 
 def command(cfg, edition, workers):
-    return [sys.executable, '-B', str(ROOT / 'tools/build_wiktionaries.py'),
+    argv = [sys.executable, '-B', str(ROOT / 'tools/build_wiktionaries.py'),
         '--resource-mode', 'watchdog', '--watchdog-address-space', 'unlimited',
         '--cpu-admission', 'affinity', '--threads', str(workers), '--jobs', '1',
         '--expansion-workers', str(workers), '--build-timeout-seconds', str(cfg['build_timeout_seconds']),
         '--now-unix', str(cfg['now_unix']), '--expansion-timeout-ms', str(cfg['expansion_timeout_ms']),
         '--downloads', cfg['downloads'], '--output', cfg['output'], '--raw-shard-root', cfg['raw_shard_root'],
         '--zig', cfg['compiler']['path'], '--wikis', edition]
+    if cfg.get('artifact_root') is not None:
+        argv += ['--artifact-root-spec', json.dumps(cfg['artifact_root'], sort_keys=True, separators=(',', ':'))]
+    return argv
 
 
 def history(state, context):
@@ -489,10 +495,7 @@ def main(argv=None):
     cfg = read_json(args.config)
     require(cfg.get('armed') is True, 'Configuration remains unarmed')
     require(resource.getrlimit(resource.RLIMIT_AS) == (resource.RLIM_INFINITY, resource.RLIM_INFINITY), 'Controller requires inherited unlimited AS')
-    for key in ('downloads', 'output', 'raw_shard_root', 'state_directory'):
-        path = Path(cfg[key])
-        require(path.is_absolute() and path.is_relative_to(ROOT / 'data')
-                and not any(p.is_symlink() for p in (path, *path.parents)), 'Use explicit non-symlink repository data paths')
+    validate_pipeline_paths(cfg, ROOT)
     state = Path(cfg['state_directory'])
     require(not state.is_relative_to(Path(cfg['output'])) and not state.is_relative_to(Path(cfg['raw_shard_root'])), 'Receipts must be separate from build artifacts')
     require(descriptor(cfg['compiler']['path']) == cfg['compiler'], 'Pinned compiler changed')
@@ -504,7 +507,10 @@ def main(argv=None):
     source_guard(cfg)
     gate(cfg['qualification'], cfg, ('passed-closed',))
     gate(cfg['diagnostic_disposition'], cfg, ('resolved', 'passed-closed'))
-    context = hashlib.sha256(json.dumps({k: cfg[k] for k in ('source', 'compiler', 'manifest', 'downloads', 'output', 'raw_shard_root', 'date', 'now_unix', 'expansion_timeout_ms')}, sort_keys=True).encode()).hexdigest()
+    context_values = {k: cfg[k] for k in ('source', 'compiler', 'manifest', 'downloads', 'output', 'raw_shard_root', 'date', 'now_unix', 'expansion_timeout_ms')}
+    if cfg.get('artifact_root') is not None:
+        context_values['artifact_root'] = cfg['artifact_root']
+    context = hashlib.sha256(json.dumps(context_values, sort_keys=True).encode()).hexdigest()
     state.mkdir(parents=True, exist_ok=True)
     (state / 'attempts').mkdir(exist_ok=True)
     with ExitStack() as stack:
