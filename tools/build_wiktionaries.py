@@ -1689,6 +1689,11 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise ValueError(f'Build already running: {parent / date}') from None
+            # An existing publication is verification-only even when input or
+            # publication checks fail before build_locked can return its mode.
+            # Legitimate producers share this edition lock; success still overrides.
+            if (parent / date / 'complete.json').exists():
+                result['execution_mode']='existing_output'
             mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}))
             result['execution_mode']=mode
             return mode

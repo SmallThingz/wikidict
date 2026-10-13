@@ -1994,6 +1994,90 @@ class PublicationResumeTests(unittest.TestCase):
         (workspace/'sentinel').write_text('keep until publication is verified')
         return item,target,workspace
 
+    def assert_failed_build_timing(self, root, item, error, verification):
+        import corpus_controller as controller
+        output=io.StringIO()
+        with patch.object(b,'run_checked') as native,patch('sys.stdout',output):
+            with self.assertRaisesRegex(ValueError,error):
+                b.build([item],root,root/'output','zig',1)
+        native.assert_not_called()
+        log=root/'failed-build.log';log.write_text(output.getvalue())
+        phase=controller.phase_end(log,item['wiki'],item['date'])
+        self.assertEqual(phase['status'],'failure')
+        self.assertEqual(phase.get('execution_mode'),'existing_output' if verification else None)
+        row=dict(attempt_id='failed',sequence=2,edition=item['wiki'],elapsed_seconds=3,
+                 execution_mode=phase.get('execution_mode'),accepted=None,outcome='failed')
+        prior=dict(attempt_id='built',sequence=1,edition=item['wiki'],elapsed_seconds=7,
+                   execution_mode='pipeline_run_may_reuse_verified_inputs_or_shards',
+                   accepted={'input_pages':11},outcome='passed')
+        summary=controller.summarize([prior,row,dict(row)],[item['wiki']])
+        observed=summary['editions'][0]
+        self.assertEqual(observed['attempt_count'],2)
+        self.assertEqual(observed['observed_build_seconds'],7 if verification else 10)
+        self.assertEqual(observed['verification_seconds'],3 if verification else 0)
+        self.assertIsNone(observed['accepted'])
+        self.assertEqual(summary['accepted_cohort_input_pages'],0)
+        self.assertIsNone(summary['final_observed_pages_per_second'])
+
+    def test_failed_published_inventory_revalidation_excludes_production_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root),patch.object(b,'run_checked'):
+                item,target,workspace=self.prepare(root)
+                before=(target/'complete.json').read_bytes()
+                with (target/'supplemental.wikblb.xz').open('ab') as stream:stream.write(b'changed')
+                self.assert_failed_build_timing(root,item,'publication inventory is missing or changed',True)
+                self.assertEqual((target/'complete.json').read_bytes(),before)
+                self.assertTrue((workspace/'sentinel').is_file())
+
+    def test_failed_existing_input_admission_excludes_production_time(self):
+        for failure in ('registry','download'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                with patch.object(b,'PROJECT',root),patch.object(b,'run_checked'):
+                    item,target,workspace=self.prepare(root)
+                    before=(target/'complete.json').read_bytes()
+                    folder=root/item['wiki']/item['date']
+                    if failure=='registry':
+                        (folder/'language-registry.tsv').unlink()
+                        error='Missing pinned language registry'
+                    else:
+                        (folder/item['name']).write_bytes(b'changed')
+                        error='Missing or unverified download'
+                    self.assert_failed_build_timing(root,item,error,True)
+                    self.assertEqual((target/'complete.json').read_bytes(),before)
+                    self.assertTrue((workspace/'sentinel').is_file())
+
+    def test_failed_fresh_and_resumed_publication_remain_production_time(self):
+        for resumed in (False,True):
+            with self.subTest(resumed=resumed),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                with patch.object(b,'PROJECT',root),patch.object(b,'run_checked'):
+                    item,target,workspace=self.prepare(root,publish=False)
+                    if resumed:
+                        patcher=patch.object(b,'publish_verified_staging',side_effect=ValueError('resumed publication failure'))
+                        error='resumed publication failure'
+                    else:
+                        (target.with_name(item['date']+'.building')/b.VERIFIED_MARKER).unlink()
+                        patcher=patch.object(b,'cached_shard_dump',side_effect=ValueError('fresh input preparation failure'))
+                        error='fresh input preparation failure'
+                    with patcher:self.assert_failed_build_timing(root,item,error,False)
+                    self.assertFalse((target/'complete.json').exists())
+
+    def test_successful_return_overrides_provisional_existing_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root),patch.object(b,'run_checked'):
+                item,target,_=self.prepare(root)
+                output=io.StringIO()
+                with patch.object(b,'build_locked',return_value='resumed_publication'),patch('sys.stdout',output):
+                    self.assertEqual(b.build([item],root,root/'output','zig',1),'resumed_publication')
+                events=[json.loads(line[len('BUILD_PHASE '):]) for line in output.getvalue().splitlines() if line.startswith('BUILD_PHASE ')]
+                terminal=[row for row in events if row['phase']=='edition_build' and row['event']=='end']
+                self.assertEqual(len(terminal),1)
+                self.assertEqual(terminal[0]['status'],'success')
+                self.assertEqual(terminal[0]['execution_mode'],'resumed_publication')
+
     def test_valid_published_resume_verifies_bytes_then_removes_workspace(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(b,'run_checked') as run:
             root=Path(tmp)
