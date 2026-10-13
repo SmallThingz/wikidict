@@ -466,6 +466,17 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffe
         const out = try rt.returnBuffer(result_buffer, 2);
         errdefer if (result_buffer == null) rt.freeResults(out);
         const error_value = try protectedErrorValue(ctx, err);
+        // Engine supplies root_profile only for WIKIDICT_EXPANSION_PROFILE=1.
+        // Preserve caught values and returns; the existing writer bounds diagnostics to 4096 bytes.
+        if (rt.work_stats.current()) |work| {
+            if (work.root_profile != null) {
+                const detail = switch (error_value) {
+                    .string => |value| value,
+                    else => "",
+                };
+                rt.work_stats.logLine("protected Lua call failed: error={s} value_kind={s} detail={s}\n", .{ @errorName(err), @tagName(error_value), detail });
+            }
+        }
         rt.storeReturn(out, 0, .{ .boolean = false });
         rt.storeReturn(out, 1, error_value);
         return out;
