@@ -1,0 +1,26 @@
+Hieroglyph mapping attribution
+=============================
+
+The generated hieroglyph_data.zig mapping derives from the literal sign,
+phonogram and simple atom-normalization maps in English Wiktionary's
+Module:egy-hieroglyphs/data, revision 90914315 (22 May 2026), by Wiktionary
+contributors:
+
+https://en.wiktionary.org/w/index.php?title=Module:egy-hieroglyphs/data&oldid=90914315
+https://en.wiktionary.org/w/index.php?title=Module:egy-hieroglyphs/data&action=history
+
+The mapping attribution is retained under Creative Commons Attribution-
+ShareAlike 4.0 International:
+https://creativecommons.org/licenses/by-sa/4.0/
+
+Changes: select single Unicode Gardiner signs and unambiguous literal phonetic
+or simple atom aliases; sort the static data; omit complex, conflicting or
+unrecognized syntax. The original captured source has SHA-256
+407969a6e14aa3ab1ba133bf679556687b46ca89dbb5767dc24d0863ba6269fb.
+
+Colon and asterisk joins follow the captured module's Unicode sign-join
+controls U+13430 and U+13431; a dash separates adjacent signs without adding a
+join control. This bounded conversion does not reproduce WikiHiero's complete
+SVG layout, mirroring, enclosures or every Gardiner variant. Unknown input
+keeps its readable source and unsupported-element diagnostic. Glyph/font and
+spatial rendering require separate actual frontend review.

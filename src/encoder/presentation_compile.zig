@@ -6,6 +6,7 @@ const ir = @import("blob_encoder").document_ir;
 const entities = @import("shared_xml_decode").html_entities;
 const syntax = @import("blob_encoder").wikitext_syntax;
 const templates = @import("presentation_templates.zig");
+const hieroglyphs = @import("hieroglyph_unicode.zig");
 const A = std.mem.Allocator;
 
 fn optionalTableEnd(input: []const u8, opening: syntax.Tag) syntax.Pair {
@@ -1416,6 +1417,18 @@ pub const Renderer = struct {
             return pair.end;
         }
         if (tag.is("math") and matched_pair != null and trim(tag.attrs).len == 0 and try self.numericPower(content, style)) return pair.end;
+        if (tag.is("hiero") and matched_pair != null and trim(tag.attrs).len == 0) {
+            if (try hieroglyphs.decodeAlloc(self.a, content)) |glyphs| {
+                var glyph_style = style;
+                glyph_style.code = false;
+                glyph_style.provenance = .protected_literal;
+                glyph_style.language = "egy";
+                glyph_style.direction = "ltr";
+                glyph_style.classes = if (style.classes.len == 0) "Egyp" else try std.fmt.allocPrint(self.a, "{s} Egyp", .{style.classes});
+                try self.text(glyphs, glyph_style);
+                return pair.end;
+            }
+        }
         if (tag.is("gallery")) {
             try self.gallery(content, style, depth + 1);
         } else if (tag.is("imagemap")) {
@@ -8048,4 +8061,80 @@ test "external URL entity normalization still refuses raw controls and unsafe sc
         for (span.target) |ch| try std.testing.expect(ch >= 32);
         if (span.kind == .external_link) try std.testing.expect(safeUrl(span.target));
     }
+}
+
+test "captured Coptic hieroglyph etymology retains signs links and literal provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("From Egyptian <hiero>A35-D40</hiero> ([[qd|to build]]).", .{});
+    try std.testing.expectEqualStrings("From Egyptian 𓀨𓂡 (to build).", try plainText(a, spans));
+    try std.testing.expect(!r.fallbacks.unsupported_element);
+    var signs = false;
+    for (spans) |span| if (std.mem.eql(u8, span.text, "𓀨𓂡")) {
+        signs = true;
+        try std.testing.expect(!span.flags.code);
+        try std.testing.expectEqualStrings("egy", span.language);
+        try std.testing.expectEqualStrings("ltr", span.direction);
+        try std.testing.expectEqualStrings("Egyp", span.classes);
+        try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+    };
+    try std.testing.expect(signs);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "qd"));
+}
+
+test "unrecognized hieroglyph syntax retains source and its existing diagnostic" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "A35-NotASign", "(A35:D40)", "A35& D40" }) |source| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(try std.fmt.allocPrint(a, "<hiero>{s}</hiero> after", .{source}), .{});
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s} after", .{source}), try plainText(a, spans));
+        try std.testing.expect(r.fallbacks.unsupported_element);
+        var coded: std.ArrayList(u8) = .empty;
+        for (spans) |span| if (span.flags.code) try coded.appendSlice(a, span.text);
+        try std.testing.expectEqualStrings(source, coded.items);
+    }
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const literal = try protected.parseSpans("<nowiki><hiero>A35-D40</hiero></nowiki>", .{});
+    try std.testing.expectEqualStrings("<hiero>A35-D40</hiero>", try plainText(a, literal));
+    try std.testing.expect(!protected.fallbacks.unsupported_element);
+    var attrs: Renderer = .{ .a = a, .context = .{} };
+    const styled = try attrs.parseSpans("<hiero dir='rtl'>A35-D40</hiero>", .{});
+    try std.testing.expectEqualStrings("A35-D40", try plainText(a, styled));
+    try std.testing.expect(attrs.fallbacks.unsupported_element);
+}
+
+test "hieroglyph cell joins and following text survive unchanged DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n| <hiero>A35:D40*t</hiero> [[A|linked]]\n|} tail");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqualStrings("tail", trim(try plainText(a, blocks[1].spans)));
+    const blob = @import("blob_encoder");
+    const Section = struct { level: u8 = 2, title: []const u8 = "Egyptian", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "hiero", .language, .{ .code = "egy", .heading = "Egyptian" });
+    const cell = decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0];
+    var visible: std.ArrayList(u8) = .empty;
+    var linked = false;
+    var signs = false;
+    for (cell.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "𓀨𓐰𓂡𓐱𓏏")) {
+            signs = true;
+            try std.testing.expect(!span.code);
+            try std.testing.expectEqualStrings("egy", span.language);
+            try std.testing.expectEqualStrings("ltr", span.direction);
+        }
+        if (span.kind == .link and std.mem.eql(u8, span.target, "A")) linked = true;
+    }
+    try std.testing.expectEqualStrings("𓀨𓐰𓂡𓐱𓏏 linked", visible.items);
+    try std.testing.expect(signs and linked);
+    try std.testing.expect(!r.fallbacks.unsupported_element);
 }
