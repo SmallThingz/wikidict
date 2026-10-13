@@ -160,8 +160,8 @@ private slots:
         QTRY_VERIFY(!window.compactReader_);
         QCOMPARE(window.back_, back);
         QCOMPARE(window.sections_, sections);
-        QVERIFY(window.back_->geometry().top() <= window.sections_->geometry().bottom());
-        QVERIFY(window.sections_->geometry().top() <= window.back_->geometry().bottom());
+        QTRY_VERIFY(window.back_->geometry().top() <= window.sections_->geometry().bottom());
+        QTRY_VERIFY(window.sections_->geometry().top() <= window.back_->geometry().bottom());
     }
 
     void recoveryAndFolderPersistence() {
