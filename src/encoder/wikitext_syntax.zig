@@ -60,15 +60,16 @@ pub fn leadingBehaviorControlOffset(raw: []const u8, matcher: ?ControlMatcher) u
 }
 
 pub fn headingControlPrefix(raw: []const u8, matcher: ?ControlMatcher) []const u8 {
+    var no_more_nowiki_close = false;
     const line = std.mem.trimEnd(u8, raw[leadingBehaviorControlOffset(raw, matcher)..], " \t");
     if (line.len == 0 or line[0] != '=') return line;
     var at: usize = 0;
     while (at < line.len) {
-        if (protectedEnd(line, at)) |end| {
+        if (protectedEndCached(line, at, &no_more_nowiki_close)) |end| {
             at = end;
             continue;
         }
-        if (line[at] == '<') if (tagAt(line, at)) |tag| {
+        if (line[at] == '<') if (tagAtCached(line, at, &no_more_nowiki_close)) |tag| {
             at = tag.end;
             continue;
         };
@@ -159,9 +160,46 @@ pub const Tag = struct {
         return null;
     }
 };
+pub const NowikiRegion = struct {
+    opening_end: usize,
+    inner_end: usize,
+    end: usize,
+    self_closing: bool,
+};
+// The source preprocessor recognizes nowiki before ordinary HTML attributes.
+// Its opener and first valid closer are raw, nonrecursive source boundaries.
+fn rawNowikiOpeningAt(text: []const u8, start: usize) ?Tag {
+    if (start >= text.len or text[start] != '<') return null;
+    const name_start = start + 1;
+    const name_end = name_start + "nowiki".len;
+    if (name_end > text.len or !std.ascii.eqlIgnoreCase(text[name_start..name_end], "nowiki")) return null;
+    if (name_end < text.len and !std.ascii.isWhitespace(text[name_end]) and text[name_end] != '/' and text[name_end] != '>') return null;
+    const gt = std.mem.indexOfScalarPos(u8, text, name_end, '>') orelse return null;
+    const attrs = std.mem.trimEnd(u8, text[name_end..gt], " \t\r\n");
+    const self_closing = std.mem.endsWith(u8, attrs, "/");
+    return .{ .name = text[name_start..name_end], .attrs = if (self_closing) attrs[0 .. attrs.len - 1] else attrs, .end = gt + 1, .closing = false, .self_closing = self_closing };
+}
+pub fn nowikiRegionAt(text: []const u8, start: usize) ?NowikiRegion {
+    return nowikiRegionAtCached(text, start, null);
+}
+pub fn nowikiRegionAtCached(text: []const u8, start: usize, no_more_close: ?*bool) ?NowikiRegion {
+    const opening = rawNowikiOpeningAt(text, start) orelse return null;
+    if (opening.self_closing) return .{ .opening_end = opening.end, .inner_end = opening.end, .end = opening.end, .self_closing = true };
+    if (no_more_close) |missing| if (missing.*) return null;
+    const pair = opaquePair(text, opening) orelse {
+        if (no_more_close) |missing| missing.* = true;
+        return null;
+    };
+    return .{ .opening_end = opening.end, .inner_end = pair.inner_end, .end = pair.end, .self_closing = false };
+}
+
 // MediaWiki ends a tag at the first raw greater-than, including in quoted
 // attribute text. Attribute value extraction remains the responsibility of Tag.attr.
 pub fn tagAt(text: []const u8, start: usize) ?Tag {
+    return tagAtCached(text, start, null);
+}
+// A missing-closer cache belongs to one monotonically forward scan of one input.
+pub fn tagAtCached(text: []const u8, start: usize, no_more_nowiki_close: ?*bool) ?Tag {
     if (start >= text.len or text[start] != '<') return null;
     var i = start + 1;
     const closing = i < text.len and text[i] == '/';
@@ -171,7 +209,12 @@ pub fn tagAt(text: []const u8, start: usize) ?Tag {
     if (i == name_start or !std.ascii.isAlphabetic(text[name_start])) return null;
     const name = text[name_start..i];
     if (i < text.len and !std.ascii.isWhitespace(text[i]) and text[i] != '/' and text[i] != '>') return null;
+    if (!closing and std.ascii.eqlIgnoreCase(name, "nowiki")) return rawNowikiOpeningAt(text, start);
     const attr_start = i;
+    // Attribute lookahead is speculative: on failure the caller resumes
+    // before markers already visited here. Never publish a later miss backward.
+    var local_missing = if (no_more_nowiki_close) |cache| cache.* else false;
+    const missing = &local_missing;
     while (i < text.len) : (i += 1) {
         const ch = text[i];
         if (ch == '>') {
@@ -179,7 +222,13 @@ pub fn tagAt(text: []const u8, start: usize) ?Tag {
             const self_closing = std.mem.endsWith(u8, attrs, "/");
             return .{ .name = name, .attrs = if (self_closing) attrs[0 .. attrs.len - 1] else attrs, .end = i + 1, .closing = closing, .self_closing = self_closing };
         }
-        if (ch == '<') return null;
+        if (ch == '<') {
+            if (nowikiRegionAtCached(text, i, missing)) |region| {
+                i = region.end - 1;
+                continue;
+            }
+            return null;
+        }
     }
     return null;
 }
@@ -210,6 +259,7 @@ pub fn matchingTag(text: []const u8, tag: Tag) ?Pair {
     if (isOpaqueTag(tag.name)) return opaquePair(text, tag);
     var i = tag.end;
     var nesting: usize = 1;
+    var no_more_nowiki_close = false;
     while (std.mem.indexOfScalarPos(u8, text, i, '<')) |open| {
         if (starts(text[open..], "<!--")) {
             i = if (std.mem.indexOfPos(u8, text, open + 4, "-->")) |end| end + 3 else text.len;
@@ -218,6 +268,10 @@ pub fn matchingTag(text: []const u8, tag: Tag) ?Pair {
         if (tagAt(text, open)) |next| {
             // Closing-looking text inside nowiki/ref/math/etc. cannot close the
             // surrounding ordinary HTML element.
+            if (!next.closing and next.is("nowiki")) {
+                i = if (nowikiRegionAtCached(text, open, &no_more_nowiki_close)) |region| region.end else next.end;
+                continue;
+            }
             if (!next.closing and isOpaqueTag(next.name)) {
                 const pair = opaquePair(text, next) orelse return null;
                 i = pair.end;
@@ -233,13 +287,20 @@ pub fn matchingTag(text: []const u8, tag: Tag) ?Pair {
     return null;
 }
 pub fn protectedEnd(text: []const u8, start: usize) ?usize {
+    return protectedEndCached(text, start, null);
+}
+pub fn protectedEndCached(text: []const u8, start: usize, no_more_nowiki_close: ?*bool) ?usize {
+    if (start >= text.len) return null;
+    if (rawNowikiOpeningAt(text, start) != null)
+        return if (nowikiRegionAtCached(text, start, no_more_nowiki_close)) |region| region.end else null;
     if (starts(text[start..], "<!--")) return if (std.mem.indexOfPos(u8, text, start + 4, "-->")) |end| end + 3 else text.len;
-    const tag = tagAt(text, start) orelse return null;
+    const tag = tagAtCached(text, start, no_more_nowiki_close) orelse return null;
     if (tag.closing or !isOpaqueTag(tag.name)) return null;
     return if (matchingTag(text, tag)) |pair| pair.end else text.len;
 }
 /// Stack-based matching prevents pipes in links/parameters from becoming template delimiters.
 pub fn balanced(text: []const u8, start: usize) ?Pair {
+    var no_more_nowiki_close = false;
     if (start + 2 <= text.len and starts(text[start..], "[[")) {
         var i = start + 2;
         while (i < text.len) {
@@ -260,13 +321,13 @@ pub fn balanced(text: []const u8, start: usize) ?Pair {
     var i = start;
     while (i < text.len) {
         if (text[i] == '<') {
-            if (protectedEnd(text, i)) |end| {
+            if (protectedEndCached(text, i, &no_more_nowiki_close)) |end| {
                 i = end;
                 continue;
             }
             // Attribute delimiters are HTML syntax only inside a root link frame.
             // Template and parameter braces retain their existing semantics.
-            if (n == 1 and stack[0] == .link) if (tagAt(text, i)) |tag| {
+            if (n == 1 and stack[0] == .link) if (tagAtCached(text, i, &no_more_nowiki_close)) |tag| {
                 i = tag.end;
                 continue;
             };
@@ -298,6 +359,11 @@ pub fn balanced(text: []const u8, start: usize) ?Pair {
 }
 /// A logical line may span physical newlines inside templates, comments or protected tags.
 pub fn logicalEnd(text: []const u8, start: usize) usize {
+    return logicalEndCached(text, start, null);
+}
+pub fn logicalEndCached(text: []const u8, start: usize, no_more_nowiki_close: ?*bool) usize {
+    var local_missing = false;
+    const missing = no_more_nowiki_close orelse &local_missing;
     var i = start;
     var line_end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
     while (i < text.len) {
@@ -306,9 +372,9 @@ pub fn logicalEnd(text: []const u8, start: usize) usize {
         i += relative;
         var skip_to: ?usize = null;
         if (text[i] == '<') {
-            if (protectedEnd(text, i)) |end| {
+            if (protectedEndCached(text, i, missing)) |end| {
                 skip_to = end;
-            } else if (tagAt(text, i)) |tag| {
+            } else if (tagAtCached(text, i, missing)) |tag| {
                 skip_to = tag.end;
                 if (!tag.closing and isMultilineContainerTag(tag.name)) {
                     if (matchingTag(text, tag)) |pair| skip_to = pair.end;
@@ -329,6 +395,7 @@ pub fn logicalEnd(text: []const u8, start: usize) usize {
     return i;
 }
 fn delimiterByte(text: []const u8, needle: u8, start: usize) ?usize {
+    var no_more_nowiki_close = false;
     const interesting = [_]u8{ needle, '<', '{', '[' };
     var i = start;
     while (i < text.len) {
@@ -336,11 +403,11 @@ fn delimiterByte(text: []const u8, needle: u8, start: usize) ?usize {
         i += relative;
         if (text[i] == needle) return i;
         if (text[i] == '<') {
-            if (protectedEnd(text, i)) |end| {
+            if (protectedEndCached(text, i, &no_more_nowiki_close)) |end| {
                 i = end;
                 continue;
             }
-            if (tagAt(text, i)) |tag| {
+            if (tagAtCached(text, i, &no_more_nowiki_close)) |tag| {
                 i = tag.end;
                 continue;
             }
@@ -357,16 +424,17 @@ fn delimiterByte(text: []const u8, needle: u8, start: usize) ?usize {
     return null;
 }
 pub fn delimiter(text: []const u8, needle: []const u8, start: usize) ?usize {
+    var no_more_nowiki_close = false;
     if (needle.len == 1) return delimiterByte(text, needle[0], start);
     var i = start;
     while (i < text.len) {
         if (starts(text[i..], needle)) return i;
         if (text[i] == '<') {
-            if (protectedEnd(text, i)) |end| {
+            if (protectedEndCached(text, i, &no_more_nowiki_close)) |end| {
                 i = end;
                 continue;
             }
-            if (tagAt(text, i)) |tag| {
+            if (tagAtCached(text, i, &no_more_nowiki_close)) |tag| {
                 i = tag.end;
                 continue;
             }
@@ -718,4 +786,42 @@ test "canonical behavior controls use simple Unicode caseless equivalence" {
     try std.testing.expect(canonicalAliasEqual("K", "K"));
     for ([_][]const u8{ "__ſTATICREDIRECT__", "__NOEDİTSECTION__", "__UNKNOWN__", "__NOEDIT\xc0\xafECTION__" }) |source|
         try std.testing.expectEqual(@as(?usize, null), behaviorSwitchEnd(source, 0));
+}
+
+test "nowiki source regions preserve raw offsets and active unclosed remainder" {
+    const closed = "<nowiki>raw > <span title=\"</nowiki extra>\">[[hidden]]</NOWIKI \t>tail";
+    const region = nowikiRegionAt(closed, 0).?;
+    try std.testing.expectEqualStrings("raw > <span title=\"</nowiki extra>\">[[hidden]]", closed[region.opening_end..region.inner_end]);
+    try std.testing.expectEqualStrings("tail", closed[region.end..]);
+    try std.testing.expect(nowikiRegionAt("< nowiki>literal</nowiki>", 0) == null);
+    try std.testing.expect(protectedEnd("<nowiki>[[active]]", 0) == null);
+    try std.testing.expectEqual(@as(?usize, "<pre>[[inactive]]".len), protectedEnd("<pre>[[inactive]]", 0));
+    const ordinary = "<span title=\"<nowiki>raw > \" </nowiki>suffix\">word</span>";
+    const tag = tagAt(ordinary, 0).?;
+    try std.testing.expectEqualStrings("word</span>", ordinary[tag.end..]);
+    try std.testing.expectEqualStrings(" title=\"<nowiki>raw > \" </nowiki>suffix\"", tag.attrs);
+    try std.testing.expect(tagAt("<span title=\"<nowiki>unclosed>word", 0) == null);
+    const container = "<div><nowiki>active</div>tail";
+    try std.testing.expectEqualStrings("tail", container[matchingTag(container, tagAt(container, 0).?).?.end..]);
+    const template = "{{T|<nowiki>active|second}}tail";
+    const parsed = try Template.parse(std.testing.allocator, template[2..balanced(template, 0).?.inner_end]);
+    defer std.testing.allocator.free(parsed.params);
+    try std.testing.expectEqualStrings("<nowiki>active", parsed.get(1));
+    try std.testing.expectEqualStrings("second", parsed.get(2));
+    var missing = false;
+    try std.testing.expect(nowikiRegionAtCached("<nowiki>unclosed", 0, &missing) == null);
+    try std.testing.expect(missing);
+    try std.testing.expect(nowikiRegionAtCached("<nowiki/>", 0, &missing).?.self_closing);
+}
+
+test "failed attribute lookahead cannot invalidate an earlier closed nowiki" {
+    const source = "<span title=\"<nowiki>|hidden</nowiki><nowiki>unclosed";
+    var missing = false;
+    try std.testing.expect(tagAtCached(source, 0, &missing) == null);
+    try std.testing.expect(!missing);
+    try std.testing.expect(delimiter(source, "|", 0) == null);
+    const later_pipe = source ++ "|active";
+    try std.testing.expectEqual(source.len, delimiter(later_pipe, "|", 0).?);
+    const lines = "<span title=\"<nowiki>hidden\nline</nowiki><nowiki>unclosed\nvisible";
+    try std.testing.expectEqualStrings("<span title=\"<nowiki>hidden\nline</nowiki><nowiki>unclosed", lines[0..logicalEnd(lines, 0)]);
 }

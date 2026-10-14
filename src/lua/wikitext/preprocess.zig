@@ -13,12 +13,36 @@ fn decodedTagEnd(text: []const u8, start: usize) ?usize {
     return p + 1;
 }
 
+// Nowiki alone requires a real closed region; an unmatched opener is literal.
+// Match source boundaries before interpreting its literal body, without recursion.
+fn nowikiRegionEnd(text: []const u8, start: usize) ?usize {
+    return nowikiRegionEndCached(text, start, null);
+}
+fn nowikiRegionEndCached(text: []const u8, start: usize, no_more_close: ?*bool) ?usize {
+    if (start >= text.len or text[start] != '<') return null;
+    const name_start = start + 1;
+    const name_end = name_start + "nowiki".len;
+    if (name_end > text.len or !std.ascii.eqlIgnoreCase(text[name_start..name_end], "nowiki") or
+        !isTagNameBoundary(text, name_end)) return null;
+    const open_end = decodedTagEnd(text, start) orelse return null;
+    var before_gt = open_end - 1;
+    while (before_gt > start and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
+    if (before_gt > start and text[before_gt - 1] == '/') return open_end;
+    if (no_more_close) |missing| if (missing.*) return null;
+    const end = inclusionCloseEnd(text, open_end, "nowiki");
+    if (end == null) {
+        if (no_more_close) |missing| missing.* = true;
+    }
+    return end;
+}
+
 pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     var pos: usize = 0;
     var line_start: usize = 0;
     var line_has_content = false;
+    var no_more_nowiki_close = false;
     while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |open| {
         const prefix = text[pos..open];
         for (prefix, 0..) |byte, at| {
@@ -46,18 +70,29 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
             }
             continue;
         }
-        // Raw nowiki and closed pre/code-extension bodies reach the renderer
-        // intact: their comments are visible literal text. Without a closer,
-        // only nowiki protects the remaining input; existing recovery stays.
+        // Only a real closed/self-closing nowiki protects comments. An
+        // unmatched opener remains literal and leaves the remainder active.
+        if (nowikiRegionEndCached(text, open, &no_more_nowiki_close)) |end| {
+            const protected = text[open..end];
+            for (protected, 0..) |byte, at| {
+                if (byte == '\n') {
+                    line_start = out.items.len + at + 1;
+                    line_has_content = false;
+                } else if (byte != ' ' and byte != '\t' and byte != '\r') line_has_content = true;
+            }
+            try out.appendSlice(a, protected);
+            pos = end;
+            continue;
+        }
+        // Preserve existing closed pre/code-extension comment behavior.
         if (inclusionTagAt(text, open)) |tag| {
-            const nowiki = std.ascii.eqlIgnoreCase(tag.name, "nowiki");
             const code_extension = std.ascii.eqlIgnoreCase(tag.name, "source") or
                 std.ascii.eqlIgnoreCase(tag.name, "syntaxhighlight");
-            if (nowiki or std.ascii.eqlIgnoreCase(tag.name, "pre") or code_extension) {
+            if (std.ascii.eqlIgnoreCase(tag.name, "pre") or code_extension) {
                 if (rawTagEnd(text, open)) |opening_end| {
                     var before_gt = opening_end - 1;
                     while (before_gt > open and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
-                    const end = if (before_gt > open and text[before_gt - 1] == '/') opening_end else inclusionCloseEnd(text, opening_end, tag.name) orelse (if (nowiki) text.len else opening_end);
+                    const end = if (before_gt > open and text[before_gt - 1] == '/') opening_end else inclusionCloseEnd(text, opening_end, tag.name) orelse opening_end;
                     const protected = text[open..end];
                     for (protected, 0..) |byte, at| {
                         if (byte == '\n') {
@@ -367,13 +402,20 @@ pub fn rawTagEnd(s: []const u8, start: usize) ?usize {
 
 pub fn findNextConstructOutsideLiteralTags(s: []const u8, start: usize) ?Construct {
     var i = start;
+    var no_more_nowiki_close = false;
     while (i + 1 < s.len) {
         if (s[i] == '<') {
+            if (nowikiRegionEndCached(s, i, &no_more_nowiki_close)) |end| {
+                i = end;
+                continue;
+            }
             var p = i + 1;
             while (p < s.len and std.ascii.isWhitespace(s[p])) : (p += 1) {}
             const name_start = p;
             while (p < s.len and (std.ascii.isAlphanumeric(s[p]) or s[p] == '-')) : (p += 1) {}
-            if (p > name_start and isTagNameBoundary(s, p) and isLiteralParserTag(s[name_start..p])) {
+            if (p > name_start and isTagNameBoundary(s, p) and isLiteralParserTag(s[name_start..p]) and
+                !std.ascii.eqlIgnoreCase(s[name_start..p], "nowiki"))
+            {
                 const name = s[name_start..p];
                 const open_end = rawTagEnd(s, i) orelse return null;
                 var before_gt = open_end - 1;
@@ -419,6 +461,7 @@ pub fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
         const close = std.mem.indexOfPos(u8, s, start + 4, "-->") orelse return s.len;
         return close + 3;
     }
+    if (nowikiRegionEnd(s, start)) |end| return end;
     var p = start + 1;
     if (p >= s.len or s[p] == '/') return null;
     while (p < s.len and std.ascii.isWhitespace(s[p])) : (p += 1) {}
@@ -427,7 +470,7 @@ pub fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
     if (p == name_start) return null;
     if (!isTagNameBoundary(s, p)) return null;
     const name = s[name_start..p];
-    if (!isOpaqueParserTag(name)) return null;
+    if (!isOpaqueParserTag(name) or std.ascii.eqlIgnoreCase(name, "nowiki")) return null;
     const open_end = rawTagEnd(s, start) orelse return s.len;
     var before_gt = open_end - 1;
     while (before_gt > start and std.ascii.isWhitespace(s[before_gt - 1])) : (before_gt -= 1) {}
@@ -538,7 +581,7 @@ pub fn splitParameter(s: []const u8) ParameterSplit {
 test "template opener scan skips literal extension bodies but enters wikitext extensions" {
     const source = "a<NoWiKi class='x'>{{hidden}}</NoWiKi>b{{visible}}";
     try std.testing.expectEqual(std.mem.indexOf(u8, source, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(source, 0).?);
-    try std.testing.expect(findTemplateOpenOutsideLiteralTags("<nowiki>{{hidden}}", 0) == null);
+    try std.testing.expectEqual(@as(usize, 8), findTemplateOpenOutsideLiteralTags("<nowiki>{{hidden}}", 0).?);
     try std.testing.expectEqual(@as(usize, 10), findTemplateOpenOutsideLiteralTags("<nowiki/> {{x}}", 0).?);
     const math = "<math>{{hidden}}</math>{{visible}}";
     try std.testing.expectEqual(std.mem.indexOf(u8, math, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(math, 0).?);
@@ -770,4 +813,40 @@ test "closed code extensions keep literal comments before behavior control match
     const joined = try stripDecodedComments(a, "__NOEDIT<!--ordinary-->SECTION__A");
     defer a.free(joined);
     try std.testing.expectEqualStrings("__NOEDITSECTION__A", joined);
+}
+
+test "nowiki preprocessing requires immediate name and first valid closer" {
+    const a = std.testing.allocator;
+    const unclosed = "<nowiki>A<!--hide-->{{visible}}";
+    const stripped = try stripDecodedComments(a, unclosed);
+    defer a.free(stripped);
+    try std.testing.expectEqualStrings("<nowiki>A{{visible}}", stripped);
+    try std.testing.expect(opaqueParserRegionEnd(unclosed, 0) == null);
+    try std.testing.expectEqual(@as(usize, 20), findTemplateOpenOutsideLiteralTags(unclosed, 0).?);
+    const malformed_open = "< nowiki>{{visible}}</nowiki>";
+    try std.testing.expect(opaqueParserRegionEnd(malformed_open, 0) == null);
+    try std.testing.expectEqual(@as(usize, 9), findTemplateOpenOutsideLiteralTags(malformed_open, 0).?);
+    const closed = "<NoWiKi>{{hidden}}<!--literal--></nowiki extra>{{alsohidden}}</NOWIKI \t>{{visible}}";
+    const preserved = try stripDecodedComments(a, closed);
+    defer a.free(preserved);
+    try std.testing.expectEqualStrings(closed, preserved);
+    try std.testing.expectEqual(closed.len - "{{visible}}".len, opaqueParserRegionEnd(closed, 0).?);
+    try std.testing.expectEqual(closed.len - "{{visible}}".len, findTemplateOpenOutsideLiteralTags(closed, 0).?);
+    try std.testing.expectEqual(@as(usize, 11), opaqueParserRegionEnd("<nowiki / >{{visible}}", 0).?);
+    try std.testing.expectEqual(@as(usize, 11), findTemplateOpenOutsideLiteralTags("<nowiki / >{{visible}}", 0).?);
+    // The other literal extension recovery policy is deliberately unchanged.
+    try std.testing.expect(findTemplateOpenOutsideLiteralTags("<math>{{hidden}}", 0) == null);
+}
+
+test "missing nowiki closer cache retains later self-closing markers" {
+    var missing = false;
+    const input = "<nowiki><!--ordinary--><nowiki/><nowiki>{{visible}}";
+    try std.testing.expect(nowikiRegionEndCached(input, 0, &missing) == null);
+    try std.testing.expect(missing);
+    try std.testing.expectEqual(@as(usize, 32), nowikiRegionEndCached(input, 23, &missing).?);
+    try std.testing.expect(nowikiRegionEndCached(input, 32, &missing) == null);
+    try std.testing.expectEqual(@as(usize, 40), findTemplateOpenOutsideLiteralTags(input, 0).?);
+    const stripped = try stripDecodedComments(std.testing.allocator, input);
+    defer std.testing.allocator.free(stripped);
+    try std.testing.expectEqualStrings("<nowiki><nowiki/><nowiki>{{visible}}", stripped);
 }

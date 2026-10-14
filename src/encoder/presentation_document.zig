@@ -711,7 +711,7 @@ test "localized image options reach serialized media captions without swallowing
     }
 }
 
-test "malformed redundant attribute quote preserves semantic heading and protected literal" {
+test "raw tag termination preserves semantic heading and protected literal" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -735,7 +735,7 @@ test "malformed redundant attribute quote preserves semantic heading and protect
     const protected = try workAlloc(a, "page", "alemán", "=<nowiki>" ++ markup ++ "</nowiki>=\n# retained\n", .{}, null, null, null, .{});
     try std.testing.expectEqualStrings(markup, protected.sections[0].title);
     const unclosed = try workAlloc(a, "page", "alemán", "=<span title=\"unterminated>Alemán=\n# retained\n", .{}, null, null, null, .{});
-    try std.testing.expectEqualStrings("<span title=\"unterminated>Alemán", unclosed.sections[0].title);
+    try std.testing.expectEqualStrings("Alemán", unclosed.sections[0].title);
 }
 
 test "ruby strict compiled record preserves readable annotation and existing typed spans" {
@@ -837,8 +837,13 @@ test "external HTML-label boundary compiles the Arabic Navbar witness as data-on
     const attribute_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", attribute_source, null, &attribute_report);
     const attribute = try codec.decodeAlloc(a, attribute_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
     const spans = attribute.entry.sections[0].blocks[0].spans;
-    try std.testing.expectEqual(@as(usize, 1), spans.len);
-    try std.testing.expect(spans[0].kind != .external_link);
-    try std.testing.expectEqualStrings("visible", spans[0].text);
+    try std.testing.expectEqual(@as(usize, 3), spans.len);
+    try std.testing.expectEqual(types.InlineKind.text, spans[0].kind);
+    try std.testing.expectEqualStrings("<span title=\"", spans[0].text);
+    try std.testing.expectEqual(types.InlineKind.external_link, spans[1].kind);
+    try std.testing.expectEqualStrings("https://example.test/x", spans[1].target);
+    try std.testing.expectEqualStrings("hidden", spans[1].text);
+    try std.testing.expectEqual(types.InlineKind.text, spans[2].kind);
+    try std.testing.expectEqualStrings("\">visible", spans[2].text);
     try std.testing.expect(!attribute_report.any());
 }

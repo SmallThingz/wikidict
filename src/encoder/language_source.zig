@@ -407,7 +407,7 @@ pub const CategoryIterator = struct {
                     self.cursor = end;
                     continue;
                 }
-                for ([_][]const u8{ "nowiki", "pre", "source", "syntaxhighlight", "math", "includeonly" }) |name| {
+                for ([_][]const u8{ "pre", "source", "syntaxhighlight", "math", "includeonly" }) |name| {
                     if (tagMatches(rest, name, false)) {
                         const opening_end = std.mem.indexOfScalar(u8, rest, '>') orelse {
                             self.cursor = self.source.len;
@@ -741,4 +741,17 @@ test "Sprache argument boundaries cannot shorten protected or nested language te
     try std.testing.expectEqualStrings("Old English", classificationHeading("Lemma ({{Sprache|Old English|ignored}})"));
     try std.testing.expectEqualStrings("العربية", classificationHeading("Lemma ({{Sprache|العربية}})"));
     try std.testing.expectEqualStrings("Deutsch", classificationHeading("Lemma ({{Sprache|{{unknown}}}}) ({{Sprache|Deutsch}})"));
+}
+
+test "unclosed nowiki leaves category and language boundaries active" {
+    var unclosed: CategoryIterator = .{ .source = "<nowiki>[[Category:German]]" };
+    try std.testing.expectEqualStrings("Category:German", unclosed.next().?);
+    try std.testing.expect(unclosed.next() == null);
+    var closed: CategoryIterator = .{ .source = "<nowiki>[[Category:German]]</nowiki extra>[[Category:Spanish]]</nowiki>[[Category:English]]" };
+    try std.testing.expectEqualStrings("Category:English", closed.next().?);
+    try std.testing.expect(closed.next() == null);
+    var active = Iterator.init("==English==\n<nowiki>ordinary\n==French==\n# chat\n");
+    try std.testing.expectEqualStrings("English", active.next().?.heading);
+    try std.testing.expectEqualStrings("French", active.next().?.heading);
+    try std.testing.expect(active.next() == null);
 }

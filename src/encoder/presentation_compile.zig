@@ -544,6 +544,7 @@ fn htmlNormalizationMatch(frames: []const HtmlNormalizationFrame, token: HtmlNor
     return null;
 }
 fn hasMisnestedHtml(input: []const u8, depth: usize) bool {
+    var no_more_nowiki_close = false;
     if (depth >= max_depth) return false;
     const boundaries = QuoteBoundaries.init(input);
     if (std.mem.indexOfScalar(u8, input, '<') == null) return false;
@@ -551,7 +552,7 @@ fn hasMisnestedHtml(input: []const u8, depth: usize) bool {
     var frame_count: usize = 0;
     var pos: usize = 0;
     while (std.mem.indexOfAnyPos(u8, input, pos, "<[]")) |at| {
-        if (input[at] == '<') if (syntax.protectedEnd(input, at)) |end| {
+        if (input[at] == '<') if (syntax.protectedEndCached(input, at, &no_more_nowiki_close)) |end| {
             pos = end;
             continue;
         };
@@ -567,7 +568,7 @@ fn hasMisnestedHtml(input: []const u8, depth: usize) bool {
             pos = at + 2;
             continue;
         }
-        if (input[at] == '<') if (syntax.tagAt(input, at)) |tag| {
+        if (input[at] == '<') if (syntax.tagAtCached(input, at, &no_more_nowiki_close)) |tag| {
             if (!normalizableHtmlTag(tag.name) or tag.self_closing) {
                 pos = tag.end;
                 continue;
@@ -604,6 +605,7 @@ fn normalizeMisnestedHtml(a: A, input: []const u8) Error![]const u8 {
     return normalizeMisnestedHtmlDepth(a, input, 0);
 }
 fn normalizeMisnestedHtmlDepth(a: A, input: []const u8, depth: usize) Error![]const u8 {
+    var no_more_nowiki_close = false;
     if (!hasMisnestedHtml(input, depth)) return input;
     const boundaries = QuoteBoundaries.init(input);
     var out: std.ArrayList(u8) = .empty;
@@ -612,7 +614,7 @@ fn normalizeMisnestedHtmlDepth(a: A, input: []const u8, depth: usize) Error![]co
     var pos: usize = 0;
     while (std.mem.indexOfAnyPos(u8, input, pos, "<[]")) |at| {
         try out.appendSlice(a, input[pos..at]);
-        if (input[at] == '<') if (syntax.protectedEnd(input, at)) |end| {
+        if (input[at] == '<') if (syntax.protectedEndCached(input, at, &no_more_nowiki_close)) |end| {
             try out.appendSlice(a, input[at..end]);
             pos = end;
             continue;
@@ -632,7 +634,7 @@ fn normalizeMisnestedHtmlDepth(a: A, input: []const u8, depth: usize) Error![]co
             pos = at + 2;
             continue;
         }
-        if (input[at] == '<') if (syntax.tagAt(input, at)) |tag| {
+        if (input[at] == '<') if (syntax.tagAtCached(input, at, &no_more_nowiki_close)) |tag| {
             if (!normalizableHtmlTag(tag.name) or tag.self_closing) {
                 try out.appendSlice(a, input[at..tag.end]);
                 pos = tag.end;
@@ -1017,7 +1019,7 @@ pub const Renderer = struct {
                     scan = end;
                     continue;
                 }
-                if (syntax.tagAt(value, scan)) |tag| {
+                if (try self.semanticTagAt(value, scan)) |tag| {
                     scan = tag.end;
                     continue;
                 }
@@ -1049,7 +1051,7 @@ pub const Renderer = struct {
                     scan = end;
                     continue;
                 }
-                if (syntax.tagAt(value, scan)) |tag| {
+                if (try self.semanticTagAt(value, scan)) |tag| {
                     scan = tag.end;
                     continue;
                 }
@@ -1259,30 +1261,30 @@ pub const Renderer = struct {
                 pos = syntax.protectedEnd(content, open) orelse content.len;
                 continue;
             }
-            const tag = syntax.tagAt(content, open) orelse {
+            const tag = try self.semanticTagAt(content, open) orelse {
                 pos = open + 1;
                 continue;
             };
             pos = tag.end;
             if (!tag.closing and tag.is("references")) {
                 const pair = syntax.matchingTag(content, tag) orelse continue;
-                const own_group = try self.entityText(tag.attr("group") orelse "");
+                const own_group = ((try self.semanticAttribute(tag, "group")) orelse "");
                 try self.referenceDefinitionsInner(content[tag.end..pair.inner_end], if (own_group.len != 0) own_group else default_group, depth + 1);
                 pos = pair.end;
                 continue;
             }
             if (!tag.closing and syntax.isOpaqueTag(tag.name) and !tag.is("ref")) {
-                pos = if (syntax.matchingTag(content, tag)) |pair| pair.end else content.len;
+                pos = if (syntax.matchingTag(content, tag)) |pair| pair.end else if (tag.is("nowiki")) tag.end else content.len;
                 continue;
             }
             if (tag.closing or !tag.is("ref")) continue;
             const pair = syntax.matchingTag(content, tag) orelse continue;
-            const name = try self.entityText(tag.attr("name") orelse "");
+            const name = ((try self.semanticAttribute(tag, "name")) orelse "");
             if (name.len == 0) {
                 pos = pair.end;
                 continue;
             }
-            const own_group = try self.entityText(tag.attr("group") orelse "");
+            const own_group = ((try self.semanticAttribute(tag, "group")) orelse "");
             const group = if (own_group.len != 0) own_group else default_group;
             const body = if (tag.self_closing) "" else content[tag.end..pair.inner_end];
             var found = false;
@@ -1724,20 +1726,63 @@ pub const Renderer = struct {
         if (!caption_visible) return .{ .text = "", .authored_caption = false };
         return .{ .text = if (caption.len != 0) caption else alt, .authored_caption = caption.len != 0 };
     }
-    fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize) Error!?usize {
+    fn normalizedTag(self: *Renderer, tag: syntax.Tag) Error!syntax.Tag {
+        if (std.mem.indexOfScalar(u8, tag.attrs, '<') == null) return tag;
+        var out: std.ArrayList(u8) = .empty;
+        var copied: usize = 0;
+        var cursor: usize = 0;
+        var no_more_close = false;
+        var changed = false;
+        while (std.mem.indexOfScalarPos(u8, tag.attrs, cursor, '<')) |open| {
+            const region = syntax.nowikiRegionAtCached(tag.attrs, open, &no_more_close) orelse {
+                cursor = open + 1;
+                continue;
+            };
+            try out.appendSlice(self.a, tag.attrs[copied..open]);
+            if (!region.self_closing) for (tag.attrs[region.opening_end..region.inner_end]) |byte| {
+                // Preserve entity spellings and raw quote/whitespace semantics.
+                switch (byte) {
+                    '<' => try out.appendSlice(self.a, "&lt;"),
+                    '>' => try out.appendSlice(self.a, "&gt;"),
+                    else => try out.append(self.a, byte),
+                }
+            };
+            changed = true;
+            copied = region.end;
+            cursor = region.end;
+        }
+        if (!changed) return tag;
+        try out.appendSlice(self.a, tag.attrs[copied..]);
+        var normalized = tag;
+        normalized.attrs = std.mem.trimEnd(u8, try out.toOwnedSlice(self.a), " \t\r\n");
+        return normalized;
+    }
+    fn semanticTagAt(self: *Renderer, input: []const u8, at: usize) Error!?syntax.Tag {
+        return try self.semanticTagAtCached(input, at, null);
+    }
+    fn semanticTagAtCached(self: *Renderer, input: []const u8, at: usize, no_more_close: ?*bool) Error!?syntax.Tag {
+        const tag = syntax.tagAtCached(input, at, no_more_close) orelse return null;
+        return try self.normalizedTag(tag);
+    }
+    fn semanticAttribute(self: *Renderer, tag: syntax.Tag, name: []const u8) Error!?[]const u8 {
+        const normalized = try self.normalizedTag(tag);
+        return try self.entityText(normalized.attr(name) orelse return null);
+    }
+
+    fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool) Error!?usize {
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
-        const tag = syntax.tagAt(input, at) orelse return null;
+        const tag = try self.semanticTagAtCached(input, at, no_more_nowiki_close) orelse return null;
         if (tag.is("br")) {
             if (!tag.closing) try self.lineBreak(style);
             return tag.end;
         }
         if (tag.is("wbr")) return tag.end;
         if ((tag.is("meta") or tag.is("link")) and !tag.closing) {
-            if (tag.attr("itemprop") == null) return null;
+            if ((try self.semanticAttribute(tag, "itemprop")) == null) return null;
             if (tag.is("meta")) {
-                if (tag.attr("content") == null) return null;
+                if ((try self.semanticAttribute(tag, "content")) == null) return null;
             } else {
-                _ = tag.attr("href") orelse return null;
+                _ = (try self.semanticAttribute(tag, "href")) orelse return null;
             }
             return tag.end;
         }
@@ -1757,8 +1802,8 @@ pub const Renderer = struct {
                 try self.literal(input[tag.end..], style);
                 return input.len;
             };
-            const name = try self.entityText(tag.attr("name") orelse "");
-            const group = try self.entityText(tag.attr("group") orelse "");
+            const name = ((try self.semanticAttribute(tag, "name")) orelse "");
+            const group = ((try self.semanticAttribute(tag, "group")) orelse "");
             try self.reference(name, group, if (tag.self_closing) "" else input[tag.end..pair.inner_end], style);
             return pair.end;
         }
@@ -1768,7 +1813,7 @@ pub const Renderer = struct {
                 try self.literal(input[tag.end..], style);
                 return input.len;
             };
-            const group = try self.entityText(tag.attr("group") orelse "");
+            const group = ((try self.semanticAttribute(tag, "group")) orelse "");
             try self.referenceDefinitions(input[tag.end..pair.inner_end], group);
             return pair.end;
         }
@@ -1795,12 +1840,13 @@ pub const Renderer = struct {
         const literal_tag = tag.is("nowiki");
         if (literal_tag and !tag.closing) {
             if (tag.self_closing) return tag.end;
-            const pair = syntax.matchingTag(input, tag) orelse blk: {
+            const region = syntax.nowikiRegionAtCached(input, at, no_more_nowiki_close) orelse {
                 self.markUnclosed(input, tag, "nowiki");
-                break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
+                try self.protectedLiteral(input[at..tag.end], style);
+                return tag.end;
             };
-            try self.protectedLiteral(input[tag.end..pair.inner_end], style);
-            return pair.end;
+            try self.protectedLiteral(input[region.opening_end..region.inner_end], style);
+            return region.end;
         }
         if (oneOf(tag.name, &.{ "script", "style", "iframe", "object", "embed" })) {
             self.fallbacks.unsupported_element = true;
@@ -1839,8 +1885,8 @@ pub const Renderer = struct {
         if (tag.is("sub")) s.subscript = true;
         if (tag.is("small")) s.small = true;
         if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) s.code = true;
-        if (tag.attr("class")) |classes| {
-            const decoded_classes = try self.entityText(classes);
+        if ((try self.semanticAttribute(tag, "class"))) |classes| {
+            const decoded_classes = classes;
             var safe_classes: std.ArrayList(u8) = .empty;
             defer safe_classes.deinit(self.a);
             var tokens = std.mem.tokenizeAny(u8, decoded_classes, " \t\r\n");
@@ -1873,8 +1919,8 @@ pub const Renderer = struct {
         const content = input[tag.end..pair.inner_end];
         // This attribute is emitted only after the runtime validates captured
         // AUDIO metadata. Keep canonical file, caption and language independent.
-        if (tag.is("span")) if (tag.attr("data-phonos-audio")) |raw_file| {
-            try self.mediaFileKind(try self.entityText(raw_file), content, .audio);
+        if (tag.is("span")) if ((try self.semanticAttribute(tag, "data-phonos-audio"))) |raw_file| {
+            try self.mediaFileKind(raw_file, content, .audio);
         };
         if (tag.is("ol") or tag.is("ul") or tag.is("dl")) {
             // Span-only containers, including ordinary table cells, still need
@@ -1951,12 +1997,13 @@ pub const Renderer = struct {
             .renderer_boundaries = true,
             .link_trail = self.context.link_trail,
         };
+        var no_more_nowiki_close = false;
         while (it.cursor < input.len) {
             if (self.truncated and self.span_limit_marker) return;
             var s = inherited;
             s.bold = it.bold;
             s.italic = it.italic;
-            if (input[it.cursor] == '<') if (try self.htmlTag(input, it.cursor, s, depth)) |end| {
+            if (input[it.cursor] == '<') if (try self.htmlTag(input, it.cursor, s, depth, &no_more_nowiki_close)) |end| {
                 it.cursor = end;
                 continue;
             };
@@ -2317,7 +2364,7 @@ pub const Renderer = struct {
             // Match across the whole body before line splitting discards that
             // wrapper. Keep list/table structure and inherit its flags while
             // rendering the enclosed blocks; never repair unmatched markup.
-            if (clean.ptr == line.ptr) if (syntax.tagAt(clean, 0)) |tag| {
+            if (clean.ptr == line.ptr) if (try self.semanticTagAt(clean, 0)) |tag| {
                 if (blockFormattingFlags(tag)) |flags| {
                     const offset = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr);
                     const rest = input[offset..];
@@ -2372,7 +2419,7 @@ pub const Renderer = struct {
             // TemplateStyles commonly precedes a NavFrame on the same line.
             // Consume this non-presentational extension before classifying the
             // following block, or its nested wiki table becomes inline text.
-            if (syntax.tagAt(clean, 0)) |tag| {
+            if (try self.semanticTagAt(clean, 0)) |tag| {
                 if (!tag.closing and tag.is("templatestyles")) {
                     if (syntax.matchingTag(clean, tag)) |pair| {
                         if (para) |p| {
@@ -2410,10 +2457,10 @@ pub const Renderer = struct {
             var prefix: usize = 0;
             while (!anchored_inline and prefix < list_line.len and std.mem.indexOfScalar(u8, "#*:;", list_line[prefix]) != null) : (prefix += 1) {}
             const table_indent: ?[]const u8 = if (anchored_inline) null else wikiTableIndent(clean);
-            const html_tag = if (syntax.tagAt(clean, 0)) |tag| (if (!tag.closing and
+            const html_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) and
                 syntax.matchingTag(clean, tag) != null) tag else null) else null;
-            const protected_tag = if (syntax.tagAt(clean, 0)) |tag| (if (!tag.closing and
+            const protected_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
             const special = html_tag != null or protected_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or (!anchored_inline and (starts(line, " ") or table_indent != null or starts(clean, "----")));
             if (!special) {
@@ -2435,7 +2482,7 @@ pub const Renderer = struct {
             if (html_tag) |tag| {
                 const pair = syntax.matchingTag(clean, tag).?;
                 if (tag.is("table")) {
-                    if (std.mem.eql(u8, tag.attr("class") orelse "", "translations")) {
+                    if (std.mem.eql(u8, (try self.semanticAttribute(tag, "class")) orelse "", "translations")) {
                         // Translation tables are layout wrappers around wiki lists,
                         // with optional tr/td end tags. Keep their reading blocks.
                         var body: std.ArrayList(u8) = .empty;
@@ -2448,7 +2495,7 @@ pub const Renderer = struct {
                                 cursor = protected_end;
                                 continue;
                             };
-                            if (content[cursor] == '<') if (syntax.tagAt(content, cursor)) |cell| {
+                            if (content[cursor] == '<') if (try self.semanticTagAt(content, cursor)) |cell| {
                                 // Keep ordinary tags whole so quoted attribute text is not rescanned.
                                 if (!oneOf(cell.name, &.{ "tr", "td", "th", "tbody" }))
                                     try body.appendSlice(self.a, content[cursor..cell.end]);
@@ -2595,9 +2642,9 @@ pub const Renderer = struct {
     }
     fn htmlLanguageDirection(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
         var result = inherited;
-        if (tag.attr("lang")) |lang| result.language = try self.entityText(lang);
-        if (tag.attr("dir")) |dir| {
-            const decoded_dir = try self.entityText(dir);
+        if ((try self.semanticAttribute(tag, "lang"))) |lang| result.language = lang;
+        if ((try self.semanticAttribute(tag, "dir"))) |dir| {
+            const decoded_dir = dir;
             if (std.ascii.eqlIgnoreCase(decoded_dir, "ltr")) result.direction = "ltr" else if (std.ascii.eqlIgnoreCase(decoded_dir, "rtl")) result.direction = "rtl" else if (std.ascii.eqlIgnoreCase(decoded_dir, "auto")) result.direction = "auto";
         }
         return result;
@@ -2612,8 +2659,8 @@ pub const Renderer = struct {
         const list_style = try self.htmlLanguageDirection(list_tag, style);
         const reversed = list_tag.is("ol") and htmlAttributePresent(list_tag, "reversed");
         const default_start: i32 = if (reversed) htmlListItemCount(input) else 1;
-        var ordinal: i32 = if (list_tag.attr("start")) |value| std.fmt.parseInt(i32, trim(try self.entityText(value)), 10) catch default_start else default_start;
-        const number_style = if (list_tag.attr("type")) |value| htmlListNumberStyle(try self.entityText(value)) orelse .decimal else .decimal;
+        var ordinal: i32 = if ((try self.semanticAttribute(list_tag, "start"))) |value| std.fmt.parseInt(i32, trim(value), 10) catch default_start else default_start;
+        const number_style = if ((try self.semanticAttribute(list_tag, "type"))) |value| htmlListNumberStyle(value) orelse .decimal else .decimal;
         var cursor: usize = 0;
         var preceding: usize = 0;
         while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |at| {
@@ -2622,7 +2669,7 @@ pub const Renderer = struct {
                 cursor = end;
                 continue;
             }
-            const item = syntax.tagAt(input, at) orelse {
+            const item = try self.semanticTagAt(input, at) orelse {
                 cursor = at + 1;
                 continue;
             };
@@ -2640,8 +2687,8 @@ pub const Renderer = struct {
             const path = try std.fmt.allocPrint(self.a, "{s}{c}", .{ parent_path, mark });
             var number: []const u8 = "";
             if (list_tag.is("ol")) {
-                if (item.attr("value")) |value| ordinal = std.fmt.parseInt(i32, trim(try self.entityText(value)), 10) catch ordinal;
-                const item_style = if (item.attr("type")) |value| htmlListNumberStyle(try self.entityText(value)) orelse number_style else number_style;
+                if ((try self.semanticAttribute(item, "value"))) |value| ordinal = std.fmt.parseInt(i32, trim(value), 10) catch ordinal;
+                const item_style = if ((try self.semanticAttribute(item, "type"))) |value| htmlListNumberStyle(value) orelse number_style else number_style;
                 const label = try self.htmlListNumber(ordinal, item_style);
                 number = label;
                 if (reversed) ordinal -|= 1 else ordinal +|= 1;
@@ -2690,7 +2737,7 @@ pub const Renderer = struct {
                 cursor = end;
                 continue;
             }
-            const tag = syntax.tagAt(input, at) orelse {
+            const tag = try self.semanticTagAt(input, at) orelse {
                 cursor = at + 1;
                 continue;
             };
@@ -2737,7 +2784,7 @@ pub const Renderer = struct {
                     at = end;
                     continue;
                 }
-                if (syntax.tagAt(input, at)) |tag| {
+                if (try self.semanticTagAt(input, at)) |tag| {
                     if (!tag.closing and (tag.is("td") or tag.is("th"))) {
                         at = optionalTableEnd(input, tag).end;
                         continue;
@@ -2765,7 +2812,7 @@ pub const Renderer = struct {
                             var index = stack.items.len;
                             while (index != 0) {
                                 index -= 1;
-                                const opening = syntax.tagAt(stack.items[index], 0).?;
+                                const opening = (try self.semanticTagAt(stack.items[index], 0)).?;
                                 if (std.ascii.eqlIgnoreCase(opening.name, tag.name)) {
                                     stack.shrinkRetainingCapacity(index);
                                     break;
@@ -2786,13 +2833,13 @@ pub const Renderer = struct {
         var closing = local_blocks.items.len;
         while (closing != 0) {
             closing -= 1;
-            const tag = syntax.tagAt(local_blocks.items[closing], 0).?;
+            const tag = (try self.semanticTagAt(local_blocks.items[closing], 0)).?;
             try source.appendSlice(self.a, try std.fmt.allocPrint(self.a, "</{s}>", .{tag.name}));
         }
         closing = formatting.items.len;
         while (closing != 0) {
             closing -= 1;
-            const tag = syntax.tagAt(formatting.items[closing], 0).?;
+            const tag = (try self.semanticTagAt(formatting.items[closing], 0)).?;
             try source.appendSlice(self.a, try std.fmt.allocPrint(self.a, "</{s}>", .{tag.name}));
         }
         var explicit_blocks = false;
@@ -2806,7 +2853,7 @@ pub const Renderer = struct {
                 cursor = end;
                 continue;
             }
-            const tag = syntax.tagAt(source.items, open) orelse {
+            const tag = try self.semanticTagAt(source.items, open) orelse {
                 cursor = open + 1;
                 continue;
             };
@@ -2867,7 +2914,7 @@ pub const Renderer = struct {
                 pos = end;
                 continue;
             }
-            const tag = syntax.tagAt(input, open) orelse {
+            const tag = try self.semanticTagAt(input, open) orelse {
                 pos = open + 1;
                 continue;
             };
@@ -3030,7 +3077,7 @@ pub const Renderer = struct {
                 }
             } else if (starts(line, "<tr")) {
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
-                if (syntax.tagAt(line, 0)) |tag| {
+                if (try self.semanticTagAt(line, 0)) |tag| {
                     if (tag.is("tr") and !tag.closing) {
                         const pair = optionalTableEnd(line, tag);
                         if (nextHtmlTableCell(line[0..pair.inner_end], tag.end) == null) {
@@ -3106,10 +3153,11 @@ pub const Renderer = struct {
     }
 
     fn cellSpans(self: *Renderer, source: []const u8) Error![]const Span {
+        var no_more_nowiki_close = false;
         var has_blocks = false;
         var pos: usize = 0;
         while (pos < source.len) {
-            const end = syntax.logicalEnd(source, pos);
+            const end = syntax.logicalEndCached(source, pos, &no_more_nowiki_close);
             if (pos != 0 and end != pos and (source[pos] == ' ' or std.mem.indexOfScalar(u8, "#*:;", source[pos]) != null or self.tableCellHeading(source[pos..end]) != null)) has_blocks = true;
             pos = if (end < source.len) end + 1 else end;
         }
@@ -3147,9 +3195,8 @@ pub const Renderer = struct {
         }
     }
     fn tableSpanAttr(self: *Renderer, tag: syntax.Tag, name: []const u8) Error!u16 {
-        const raw = tag.attr(name) orelse return 1;
-        const decoded = try self.entityText(raw);
-        const parsed = std.fmt.parseInt(u16, decoded, 10) catch 1;
+        const raw = (try self.semanticAttribute(tag, name)) orelse return 1;
+        const parsed = std.fmt.parseInt(u16, raw, 10) catch 1;
         // Zero is build-only: the completed row group resolves it before encoding.
         if (parsed == 0 and std.mem.eql(u8, name, "rowspan")) return 0;
         return @max(1, @min(100, parsed));
@@ -3511,7 +3558,7 @@ test "translation layout stripping preserves protected table tags and neighborin
     };
     try std.testing.expectEqual(@as(usize, 2), neighboring_links);
 
-    // A protected-tag spelling inside an ordinary quoted attribute is not an opener.
+    // An unmatched nowiki spelling is literal; malformed attribute markup remains visible.
     var quoted: Renderer = .{ .a = a, .context = .{} };
     const quoted_blocks = try quoted.renderBody(
         "<table class=\"translations\"><tr><td>\n" ++
@@ -3522,7 +3569,7 @@ test "translation layout stripping preserves protected table tags and neighborin
     );
     try std.testing.expectEqual(@as(usize, 2), quoted_blocks.len);
     for (quoted_blocks) |block_value| try std.testing.expectEqual(Kind.list_item, block_value.kind);
-    try std.testing.expectEqualStrings("French: chat", try flattened(a, quoted_blocks[0].spans));
+    try std.testing.expectEqualStrings("French: <span title=\"<nowiki>\">chat", try flattened(a, quoted_blocks[0].spans));
     try std.testing.expectEqualStrings("German: Katze", try flattened(a, quoted_blocks[1].spans));
 }
 
@@ -8734,7 +8781,7 @@ test "raw greater-than starts ordinary active bodies and retains lexical suffix 
     for ([_][]const u8{ "span", "div", "b", "code" }) |name| {
         for ([_]u8{ '"', '\'' }) |quote| {
             const source = try std.fmt.allocPrint(a, "<{s} title={c}alpha > beta{c}>[[cat|word]] __NOTOC__ &amp;</{s}> tail", .{ name, quote, quote, name });
-            const expected = try std.fmt.allocPrint(a, " beta{c}>word  & tail", .{quote});
+            const expected = try std.fmt.allocPrint(a, if (std.mem.eql(u8, name, "div")) " beta{c}>word  & \n tail" else " beta{c}>word  & tail", .{quote});
             var renderer: Renderer = .{ .a = a, .context = .{} };
             const spans = try renderer.parseSpans(source, .{});
             try std.testing.expectEqualStrings(expected, try flattened(a, spans));
@@ -8828,5 +8875,118 @@ test "cell heading detection keeps first-line inline equals protected and unknow
             try std.testing.expect(std.mem.indexOf(u8, visible, "== Inside ==") == null);
             try std.testing.expect(std.mem.indexOf(u8, visible, "Inside") != null);
         }
+    }
+}
+
+test "nowiki semantic attributes follow source phase and decode values exactly once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const Fixture = struct { source: []const u8, name: []const u8, value: []const u8 };
+    for ([_]Fixture{
+        .{ .source = "<span title=\"<nowiki>a>b&quot;c</nowiki>\">tail", .name = "title", .value = "a>b\"c" },
+        .{ .source = "<span title=\"<nowiki>a &amp;lt; b \" c</nowiki>\">tail", .name = "title", .value = "a &lt; b " },
+        .{ .source = "<span title=<nowiki>a b\tc</nowiki>>tail", .name = "title", .value = "a" },
+        .{ .source = "<span ti<nowiki/>tle=\"value\">tail", .name = "title", .value = "value" },
+        .{ .source = "<span title=\"a<nowiki/>b\">tail", .name = "title", .value = "ab" },
+        .{ .source = "<span <nowiki>title</nowiki>=\"value\">tail", .name = "title", .value = "value" },
+        .{ .source = "<span title=\"ordinary &amp;lt;\">tail", .name = "title", .value = "ordinary &lt;" },
+    }) |fixture| {
+        const raw = syntax.tagAt(fixture.source, 0).?;
+        const normalized = try renderer.normalizedTag(raw);
+        try std.testing.expectEqual(raw.end, normalized.end);
+        try std.testing.expectEqualStrings("tail", fixture.source[normalized.end..]);
+        try std.testing.expectEqualStrings(fixture.value, (try renderer.semanticAttribute(normalized, fixture.name)).?);
+        // The source-authority view remains borrowed and unchanged.
+        try std.testing.expectEqual(@intFromPtr(fixture.source.ptr) + "<span".len, @intFromPtr(raw.attrs.ptr));
+    }
+    const plain_source = "<span class='Egyp'>tail";
+    const plain_tag = syntax.tagAt(plain_source, 0).?;
+    const unchanged = try renderer.normalizedTag(plain_tag);
+    try std.testing.expectEqual(@intFromPtr(plain_tag.attrs.ptr), @intFromPtr(unchanged.attrs.ptr));
+    try std.testing.expectEqualStrings(plain_tag.attrs, unchanged.attrs);
+}
+
+test "closed nowiki supplies meaningful class and table span without parsing literal wiki body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("<span class=\"<nowiki>Egyp X</nowiki>\">𓀀</span>", .{});
+    try std.testing.expectEqual(@as(usize, 1), spans.len);
+    try std.testing.expectEqualStrings("𓀀", spans[0].text);
+    try std.testing.expectEqualStrings("Egyp X", spans[0].classes);
+    try std.testing.expect(!spans[0].flags.code);
+    const blocks = try renderer.renderBody("<table><tr><td colspan=\"<nowiki>2</nowiki>\">[[chat]]</td><td>[[Katze]]</td></tr></table>");
+    const cells = blocks[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 2), cells.len);
+    try std.testing.expectEqual(@as(u16, 2), cells[0].colspan);
+    try std.testing.expectEqualStrings("chat", try flattened(a, cells[0].spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(cells[0].spans, .link, "chat"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(cells[1].spans, .link, "Katze"));
+    const wiki = try renderer.renderBody("{|\n| colspan=\"<nowiki>2</nowiki>\" | [[chat]]\n|}");
+    try std.testing.expectEqual(@as(u16, 2), wiki[0].table.?.rows[0].cells[0].colspan);
+    const literal = try renderer.parseSpans("<nowiki>[[chat]] __NOTOC__ &amp;</nowiki> [[Katze]]", .{});
+    try std.testing.expectEqualStrings("[[chat]] __NOTOC__ & Katze", try flattened(a, literal));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(literal, .link, "chat"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(literal, .link, "Katze"));
+}
+
+test "unmatched nowiki opener is literal and later controls links and table cells stay active" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("before <nowiki>[[chat]] __NOTOC__ &amp; [[Katze]]", .{});
+    try std.testing.expectEqualStrings("before <nowiki>chat  & Katze", try flattened(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "chat"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "Katze"));
+    // Retain the authored unclosed-token diagnostic without inventing a protected remainder.
+    try std.testing.expect(renderer.fallbacks.unclosed_formatting);
+    const selfclosing = try renderer.parseSpans("<nowiki/>[[chat]]", .{});
+    try std.testing.expectEqualStrings("chat", try flattened(a, selfclosing));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(selfclosing, .link, "chat"));
+}
+
+test "block and table suffix rewinds keep earlier closed nowiki protected after a later miss" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "<div>block</div><nowiki>[[chat]]\n== Literal ==</nowiki> <nowiki>[[Katze]]",
+        "{|\n| cell\n|}<nowiki>[[chat]]\n== Literal ==</nowiki> <nowiki>[[Katze]]",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        var protected: std.ArrayList(u8) = .empty;
+        var active_katze = false;
+        for (blocks) |block_value| for (block_value.spans) |span| {
+            if (span.provenance == .protected_literal and !std.mem.eql(u8, span.text, "<nowiki>"))
+                try protected.appendSlice(a, span.text);
+            try std.testing.expect(!(span.kind == .link and std.mem.eql(u8, span.target, "chat")));
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Katze")) active_katze = true;
+        };
+        try std.testing.expectEqualStrings("[[chat]]\n== Literal ==", protected.items);
+        try std.testing.expect(active_katze);
+    }
+}
+
+test "list-defined references keep unmatched nowiki remainder active and paired body protected" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]bool{ false, true }) |closed| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        _ = try renderer.parseSpans("<ref name=x/>", .{});
+        try renderer.referenceDefinitions(if (closed)
+            "<nowiki><ref name=x>[[cat|body]]</ref></nowiki>"
+        else
+            "<nowiki><ref name=x>[[cat|body]]</ref>", "");
+        const references = try renderer.finishReferences();
+        try std.testing.expectEqual(@as(usize, 1), references.len);
+        try std.testing.expectEqual(@as(usize, if (closed) 0 else 1), renderer.ref_defs.items.len);
+        try std.testing.expectEqualStrings(if (closed) "Reference text unavailable" else "body", try flattened(a, references[0].spans));
+        try std.testing.expectEqual(!closed, unclosedExternalRecoveryHasLink(references[0].spans, .link, "cat"));
     }
 }

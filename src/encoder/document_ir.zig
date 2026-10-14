@@ -1202,3 +1202,14 @@ test "external HTML-label boundary preserves URL, attribute and bracket controls
         "[https://example.test<abbr title=\"broken]",
     }) |source| try std.testing.expect(parseExternalLinkAt(source, 0) == null);
 }
+
+test "unclosed nowiki leaves external label closing bracket active" {
+    const unclosed = "[https://example.test <nowiki>label]tail";
+    const active = parseExternalLinkAt(unclosed, 0).?;
+    try std.testing.expectEqualStrings("<nowiki>label", active.label);
+    try std.testing.expectEqualStrings("tail", unclosed[active.end..]);
+    const closed = "[https://example.test <nowiki>]literal</nowiki extra>]</nowiki>visible]tail";
+    const protected = parseExternalLinkAt(closed, 0).?;
+    try std.testing.expectEqualStrings("<nowiki>]literal</nowiki extra>]</nowiki>visible", protected.label);
+    try std.testing.expectEqualStrings("tail", closed[protected.end..]);
+}
