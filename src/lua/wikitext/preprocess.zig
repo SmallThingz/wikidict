@@ -43,6 +43,7 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
     var line_start: usize = 0;
     var line_has_content = false;
     var no_more_nowiki_close = false;
+    var no_more_close: [opaque_parser_tags.len + 1]bool = @splat(false);
     while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |open| {
         const prefix = text[pos..open];
         for (prefix, 0..) |byte, at| {
@@ -92,7 +93,13 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
                 if (rawTagEnd(text, open)) |opening_end| {
                     var before_gt = opening_end - 1;
                     while (before_gt > open and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
-                    const end = if (before_gt > open and text[before_gt - 1] == '/') opening_end else inclusionCloseEnd(text, opening_end, tag.name) orelse opening_end;
+                    var end = opening_end;
+                    if (!(before_gt > open and text[before_gt - 1] == '/')) {
+                        // Strict first-closer misses remain absent in the suffix.
+                        // Keep each tag's slot separate, and bypass self-closing.
+                        const close_end = if (no_more_close[tag.close_cache_slot]) null else inclusionCloseEnd(text, opening_end, tag.name);
+                        if (close_end) |closed_end| end = closed_end else no_more_close[tag.close_cache_slot] = true;
+                    }
                     const protected = text[open..end];
                     for (protected, 0..) |byte, at| {
                         if (byte == '\n') {
@@ -112,6 +119,153 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
     }
     try out.appendSlice(a, text[pos..]);
     return out.toOwnedSlice(a);
+}
+
+// Sanitizer's post-expansion phase is distinct from authored preprocessing.
+// The input cursor advances once; bounded tail checks also see comment openers
+// formed by elision. A cached literal-space suffix is never scanned repeatedly.
+pub fn stripExpandedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    var pos: usize = 0;
+    var no_more_comment_close = false;
+    var no_more_nowiki_close = false;
+    var no_more_close: [opaque_parser_tags.len + 1]bool = @splat(false);
+    var spaces_end: usize = 0;
+    var spaces_start: usize = 0;
+    var tag_open: ?usize = null;
+    var tag_joined = false;
+    while (pos < text.len or std.mem.endsWith(u8, out.items, "<!--")) {
+        if (std.mem.endsWith(u8, out.items, "<!--")) {
+            const prefix_end = out.items.len - 4;
+            out.items.len = prefix_end;
+            if (tag_open) |open| {
+                if (open >= prefix_end) tag_open = null else tag_joined = true;
+            }
+            const close = if (no_more_comment_close) null else std.mem.indexOfPos(u8, text, pos, "-->");
+            if (close) |end| {
+                pos = end + 3;
+                var before = prefix_end;
+                if (before >= spaces_start and before <= spaces_end) {
+                    before = spaces_start;
+                } else {
+                    while (before > 0 and out.items[before - 1] == ' ') : (before -= 1) {}
+                }
+                spaces_start = before;
+                spaces_end = prefix_end;
+                var after = pos;
+                while (after < text.len and text[after] == ' ') : (after += 1) {}
+                if (before > 0 and out.items[before - 1] == '\n' and after < text.len and text[after] == '\n') {
+                    out.items.len = before;
+                    pos = after + 1;
+                    spaces_end = before;
+                } else {
+                    // Consume this space run once even when it is not collapsed.
+                    try out.appendSlice(a, text[pos..after]);
+                    spaces_end = out.items.len;
+                    pos = after;
+                }
+            } else {
+                // Sanitizer leaves the unclosed comment, then escapes the '<'
+                // as an unknown tag. Keep its remaining body active downstream.
+                no_more_comment_close = true;
+                try out.appendSlice(a, "&lt;!--");
+            }
+            continue;
+        }
+        if (text[pos] == '<' and !std.mem.startsWith(u8, text[pos..], "<!--")) {
+            var protected_end = nowikiRegionEndCached(text, pos, &no_more_nowiki_close);
+            if (protected_end == null) {
+                if (inclusionTagAt(text, pos)) |tag| {
+                    if (std.ascii.eqlIgnoreCase(tag.name, "pre") or std.ascii.eqlIgnoreCase(tag.name, "source") or std.ascii.eqlIgnoreCase(tag.name, "syntaxhighlight")) {
+                        if (rawTagEnd(text, pos)) |opening_end| {
+                            var before_gt = opening_end - 1;
+                            while (before_gt > pos and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
+                            if (before_gt > pos and text[before_gt - 1] == '/') {
+                                protected_end = opening_end;
+                            } else if (!no_more_close[tag.close_cache_slot]) {
+                                protected_end = inclusionCloseEnd(text, opening_end, tag.name);
+                                if (protected_end == null) no_more_close[tag.close_cache_slot] = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if (protected_end) |end| {
+                try out.appendSlice(a, text[pos..end]);
+                pos = end;
+                tag_open = null;
+                continue;
+            }
+            tag_open = out.items.len;
+            tag_joined = false;
+        }
+        const byte = text[pos];
+        try out.append(a, byte);
+        pos += 1;
+        if (byte == '>') {
+            if (tag_open) |open| {
+                if (tag_joined) {
+                    if (inclusionTagAt(out.items, open)) |tag| {
+                        // Only the newly reconstructed, sanitizer-unknown nowiki
+                        // opener is escaped. Allowed pre and original scopes stay.
+                        if (std.ascii.eqlIgnoreCase(tag.name, "nowiki")) {
+                            const old_len = out.items.len;
+                            try out.resize(a, old_len + 3);
+                            std.mem.copyBackwards(u8, out.items[open + 4 ..], out.items[open + 1 .. old_len]);
+                            @memcpy(out.items[open .. open + 4], "&lt;");
+                            spaces_start = out.items.len;
+                            spaces_end = out.items.len;
+                        }
+                    }
+                }
+            }
+            tag_open = null;
+        }
+    }
+    return out.toOwnedSlice(a);
+}
+
+test "post expansion comments follow sanitizer boundaries and reconstructed openers" {
+    const a = std.testing.allocator;
+    const cases = [_][2][]const u8{
+        .{ "A<!<!--inner-->--outer-->B", "AB" },
+        .{ "<!--x-->\nB", "\nB" },
+        .{ "A\n <!--x--> \nB", "A\nB" },
+        .{ "A\n\t<!--x--> \nB", "A\n\t \nB" },
+        .{ "A\n <!--x-->\t\nB", "A\n \t\nB" },
+        .{ "A\r <!--x--> \nB", "A\r  \nB" },
+        .{ "A\n <!--x--> ", "A\n  " },
+        .{ "A<!--unclosed __NOEDITSECTION__ [[B]] ISBN 9780306406157", "A&lt;!--unclosed __NOEDITSECTION__ [[B]] ISBN 9780306406157" },
+        .{ "<no<!--x-->wiki>__NOEDITSECTION__[[B]]</nowiki>", "&lt;nowiki>__NOEDITSECTION__[[B]]</nowiki>" },
+        .{ "<pr<!--x-->e>body</pre>", "<pre>body</pre>" },
+        .{ "<nowiki><!--literal-->__NOEDITSECTION__[[B]]</nowiki>", "<nowiki><!--literal-->__NOEDITSECTION__[[B]]</nowiki>" },
+        .{ "<pre><!--literal--></pre><source><!--literal--></source><syntaxhighlight><!--literal--></syntaxhighlight>", "<pre><!--literal--></pre><source><!--literal--></source><syntaxhighlight><!--literal--></syntaxhighlight>" },
+        .{ "<code>A<!--x-->B</code>", "<code>AB</code>" },
+    };
+    for (cases) |case| {
+        const actual = try stripExpandedComments(a, case[0]);
+        defer a.free(actual);
+        try std.testing.expectEqualStrings(case[1], actual);
+    }
+    const authored = try stripDecodedComments(a, "A<!--unclosed __NOEDITSECTION__ [[B]]");
+    defer a.free(authored);
+    try std.testing.expectEqualStrings("A", authored);
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(a);
+    try input.appendSlice(a, "text");
+    try input.appendNTimes(a, ' ', 4096);
+    for (0..256) |_| try input.appendSlice(a, "<!--x-->");
+    const expected = try a.dupe(u8, input.items[0..4100]);
+    defer a.free(expected);
+    const actual = try stripExpandedComments(a, input.items);
+    defer a.free(actual);
+    try std.testing.expectEqualStrings(expected, actual);
+    input.clearRetainingCapacity();
+    for (0..256) |_| try input.appendSlice(a, "<!--unclosed ");
+    const escaped = try stripExpandedComments(a, input.items);
+    defer a.free(escaped);
+    try std.testing.expectEqual(@as(usize, 256), std.mem.count(u8, escaped, "&lt;!--unclosed "));
 }
 
 const InclusionTag = struct {
@@ -849,4 +1003,30 @@ test "missing nowiki closer cache retains later self-closing markers" {
     const stripped = try stripDecodedComments(std.testing.allocator, input);
     defer std.testing.allocator.free(stripped);
     try std.testing.expectEqualStrings("<nowiki><nowiki/><nowiki>{{visible}}", stripped);
+}
+
+test "comment normalization caches repeated missing code-extension closers without changing protection" {
+    const a = std.testing.allocator;
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(a);
+    var expected: std.ArrayList(u8) = .empty;
+    defer expected.deinit(a);
+    for (0..256) |_| {
+        try source.appendSlice(a, "<pre>A<!--a-->B<source/>C<!--b-->D<source>E<!--c-->F<syntaxhighlight />G<!--d-->H<syntaxhighlight>I<!--e-->J");
+        try expected.appendSlice(a, "<pre>AB<source/>CD<source>EF<syntaxhighlight />GH<syntaxhighlight>IJ");
+    }
+    const actual = try stripDecodedComments(a, source.items);
+    defer a.free(actual);
+    try std.testing.expectEqualStrings(expected.items, actual);
+    const mixed = "<pre>A<!--literal--></pre><source />B<!--outside-->C<source>D<!--literal--></source><syntaxhighlight>E<!--literal--></syntaxhighlight>";
+    const mixed_actual = try stripDecodedComments(a, mixed);
+    defer a.free(mixed_actual);
+    try std.testing.expectEqualStrings("<pre>A<!--literal--></pre><source />BC<source>D<!--literal--></source><syntaxhighlight>E<!--literal--></syntaxhighlight>", mixed_actual);
+    // A missing pre closer cannot poison a later closed source scope.
+    const independent = try stripDecodedComments(a, "<pre>A<!--outside--><source>B<!--literal--></source><!--outside-->C");
+    defer a.free(independent);
+    try std.testing.expectEqualStrings("<pre>A<source>B<!--literal--></source>C", independent);
+    const first_closer = try stripDecodedComments(a, "<pre><pre>A<!--literal--></pre><!--outside-->B");
+    defer a.free(first_closer);
+    try std.testing.expectEqualStrings("<pre><pre>A<!--literal--></pre>B", first_closer);
 }

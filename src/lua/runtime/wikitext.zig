@@ -470,7 +470,16 @@ pub const Expander = struct {
         if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(comments_start);
         defer self.runtime.allocator.free(stripped);
         const params = try self.runtime.newTable();
-        return self.expandPageWikitext(stripped, params, title);
+        const expanded = try self.expandPageWikitext(stripped, params, title);
+        // Sanitizer removes generated comments after expansion and before
+        // behavior controls, headings and links. Do not re-expand the result.
+        if (std.mem.indexOf(u8, expanded, "<!--") == null) return expanded;
+        defer self.runtime.allocator.free(expanded);
+        if (work_stats.current()) |work| work.comment_bytes +|= expanded.len;
+        const generated_comments_start = work_stats.cpuNow();
+        const normalized = try preprocess.stripExpandedComments(self.runtime.allocator, expanded);
+        if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(generated_comments_start);
+        return normalized;
     }
 
     fn observePageLine(self: *Expander, raw: []const u8) void {
@@ -3261,6 +3270,8 @@ const TestModule = struct {
         try exports.rawSet(ctx.allocator, .{ .string = "repair_oom" }, try ctx.makeFunctionKnown(14, repairOom, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "lua_oom" }, try ctx.makeFunctionKnown(15, luaOom, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "object" }, try ctx.makeFunctionKnown(16, objectReturn, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "generated_comments" }, try ctx.makeFunctionKnown(17, generatedComments, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "generated_unclosed" }, try ctx.makeFunctionKnown(18, generatedUnclosed, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "value" }, .{ .number = 17 });
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
@@ -3272,6 +3283,16 @@ const TestModule = struct {
         const value = try ctx.getIndex(frame_args, .{ .string = "x" });
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = value;
+        return out;
+    }
+    fn generatedComments(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "Generated A__NOEDIT<!--generated-->SECTION__B\nISBN 97803<!--generated-->06406157\n__T<!--generated-->OC__\nISBN 97803__TOC__06406157\n<!--generated-only-->\nTail\n<no<!--x-->wiki>__NOEDITSECTION__[[B]]</nowiki>\nA<!<!--inner-->--outer-->B" };
+        return out;
+    }
+    fn generatedUnclosed(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "Unclosed <!--tail __NOEDITSECTION__ [[B]] ISBN 9780306406157" };
         return out;
     }
     fn fail(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
@@ -5714,4 +5735,25 @@ test "CategoryTree namespace filtering refuses truncated capture ambiguity" {
     // The separately captured main scope retains its previous 200-row contract.
     _ = try expander.expandFragment("Page", "{{#categorytree:Probe|namespaces=-}}", 1_670_803_200);
     _ = try expander.expandFragment("Page", "{{#categorytree:Probe|type=pages}}", 1_670_803_200);
+}
+
+test "native AOT generated comments normalize after invoke while authored literals stay protected" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(TestModule.root)};
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TestModule.lookup, TestModule.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists }, .install_scribunto = installTestInvoke };
+    // Module output contains comments absent from the authored invocation input.
+    const source = "Authored A__NOEDIT<!--authored-->SECTION__B\n\n{{#invoke:Test|generated_comments}}\n\n<nowiki>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</nowiki>\n\n<pre>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</pre>\n\n<source>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</source>\n\n<syntaxhighlight>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</syntaxhighlight>\n\n<code>Ordinary A<!--ordinary-->B __NOEDITSECTION__</code>\n\n&#95;&#95;NOEDITSECTION__\n\n{{#invoke:Test|generated_unclosed}}";
+    const expected = "Authored A__NOEDITSECTION__B\n\nGenerated A__NOEDITSECTION__B\nISBN 9780306406157\n__TOC__\nISBN 97803__TOC__06406157\nTail\n&lt;nowiki>__NOEDITSECTION__[[B]]</nowiki>\nAB\n\n<nowiki>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</nowiki>\n\n<pre>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</pre>\n\n<source>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</source>\n\n<syntaxhighlight>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</syntaxhighlight>\n\n<code>Ordinary AB __NOEDITSECTION__</code>\n\n&#95;&#95;NOEDITSECTION__\n\nUnclosed &lt;!--tail __NOEDITSECTION__ [[B]] ISBN 9780306406157";
+    try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", source, 1_670_803_200));
+    // Normalization does not decode entity-authored pseudo-comments or recurse
+    // into newly generated template syntax.
+    try std.testing.expectEqualStrings("&lt;!--literal--&gt;__NOEDITSECTION__", try expander.expandFragment("Page", "&lt;!--literal--&gt;__NOEDITSECTION__", 1_670_803_200));
 }

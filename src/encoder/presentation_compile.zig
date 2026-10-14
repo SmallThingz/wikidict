@@ -747,57 +747,139 @@ fn magicSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t';
 }
 
-fn magicLinkAt(input: []const u8, start: usize) ?MagicLink {
-    if (!ir.linkBoundaryBefore(input, start)) return null;
+// MediaWiki Parser::SPACE_NOT_NL, on authored source. Do not decode arbitrary
+// entities here: encoded prefixes and double-encoded spaces remain literal.
+fn isbnSpaceLen(input: []const u8) usize {
+    if (input.len == 0) return 0;
+    if (magicSpace(input[0])) return 1;
+    if (std.mem.startsWith(u8, input, "&nbsp;")) return 6;
+    if (std.mem.startsWith(u8, input, "&#")) {
+        var pos: usize = 2;
+        const hex = pos < input.len and (input[pos] == 'x' or input[pos] == 'X');
+        if (hex) pos += 1;
+        while (pos < input.len and input[pos] == '0') : (pos += 1) {}
+        if (hex) {
+            if (pos + 3 <= input.len and (input[pos] == 'a' or input[pos] == 'A') and
+                input[pos + 1] == '0' and input[pos + 2] == ';') return pos + 3;
+        } else if (std.mem.startsWith(u8, input[pos..], "160;")) return pos + 4;
+        return 0;
+    }
+    if (input[0] < 0x80) return 0;
+    const len = std.unicode.utf8ByteSequenceLength(input[0]) catch return 0;
+    if (len > input.len) return 0;
+    const cp = std.unicode.utf8Decode(input[0..len]) catch return 0;
+    return if (cp == 0xa0 or cp == 0x1680 or (cp >= 0x2000 and cp <= 0x200a) or
+        cp == 0x202f or cp == 0x205f or cp == 0x3000) len else 0;
+}
+
+fn isbnDelimiterLen(input: []const u8) usize {
+    return if (input.len != 0 and input[0] == '-') 1 else isbnSpaceLen(input);
+}
+
+// The optional second slice starts at an entity boundary in ordinary text.
+// Matching this view avoids copying or decoding the unconsumed page suffix.
+const MagicSource = struct {
+    first: []const u8,
+    tail: []const u8 = "",
+
+    fn remaining(self: MagicSource, pos: usize) []const u8 {
+        return if (pos < self.first.len) self.first[pos..] else self.tail[pos - self.first.len ..];
+    }
+    fn byte(self: MagicSource, pos: usize) ?u8 {
+        const rest = self.remaining(pos);
+        return if (rest.len == 0) null else rest[0];
+    }
+    fn boundaryAfter(self: MagicSource, pos: usize) bool {
+        return if (pos < self.first.len)
+            ir.linkBoundaryAfter(self.first, pos)
+        else
+            ir.linkBoundaryAfter(self.tail, pos - self.first.len);
+    }
+};
+
+const MagicMatch = struct { kind: MagicLinkKind, end: usize, payload_start: usize };
+
+fn isbnPayloadEnd(input: MagicSource, start: usize, thirteen: bool) ?usize {
+    var pos = start;
+    if (thirteen) {
+        const rest = input.remaining(pos);
+        if (!std.mem.startsWith(u8, rest, "978") and !std.mem.startsWith(u8, rest, "979")) return null;
+        pos += 3;
+        pos += isbnDelimiterLen(input.remaining(pos));
+    }
+    for (0..9) |_| {
+        const ch = input.byte(pos) orelse return null;
+        if (!std.ascii.isDigit(ch)) return null;
+        pos += 1;
+        pos += isbnDelimiterLen(input.remaining(pos));
+    }
+    const check = input.byte(pos) orelse return null;
+    if (!std.ascii.isDigit(check) and check != 'X' and check != 'x') return null;
+    pos += 1;
+    return if (input.boundaryAfter(pos)) pos else null;
+}
+
+fn magicMatchAt(input: MagicSource, start: usize) ?MagicMatch {
+    if (!ir.linkBoundaryBefore(input.first, start)) return null;
     const Prefix = struct { kind: MagicLinkKind, len: usize };
-    const prefix: Prefix = if (std.mem.startsWith(u8, input[start..], "RFC"))
+    const prefix: Prefix = if (std.mem.startsWith(u8, input.first[start..], "RFC"))
         .{ .kind = .rfc, .len = 3 }
-    else if (std.mem.startsWith(u8, input[start..], "PMID"))
+    else if (std.mem.startsWith(u8, input.first[start..], "PMID"))
         .{ .kind = .pmid, .len = 4 }
-    else if (std.mem.startsWith(u8, input[start..], "ISBN"))
+    else if (std.mem.startsWith(u8, input.first[start..], "ISBN"))
         .{ .kind = .isbn, .len = 4 }
     else
         return null;
 
-    const kind = prefix.kind;
     var pos = start + prefix.len;
-    if (pos >= input.len or !magicSpace(input[pos])) return null;
-    while (pos < input.len and magicSpace(input[pos])) : (pos += 1) {}
+    const spaces_start = pos;
+    while (true) {
+        const rest = input.remaining(pos);
+        const len = if (prefix.kind == .isbn)
+            isbnSpaceLen(rest)
+        else if (rest.len != 0 and magicSpace(rest[0]))
+            @as(usize, 1)
+        else
+            0;
+        if (len == 0) break;
+        pos += len;
+    }
+    if (pos == spaces_start) return null;
     const payload_start = pos;
-
-    if (kind == .rfc or kind == .pmid) {
-        while (pos < input.len and std.ascii.isDigit(input[pos])) : (pos += 1) {}
-        if (pos == payload_start or !ir.linkBoundaryAfter(input, pos)) return null;
-        return .{ .kind = kind, .end = pos, .text = input[start..pos], .payload = input[payload_start..pos] };
+    if (prefix.kind == .rfc or prefix.kind == .pmid) {
+        while (input.byte(pos)) |ch| {
+            if (!std.ascii.isDigit(ch)) break;
+            pos += 1;
+        }
+        if (pos == payload_start or !input.boundaryAfter(pos)) return null;
+        return .{ .kind = prefix.kind, .end = pos, .payload_start = payload_start };
     }
+    // The upstream optional 97[89] prefix is greedy, but may backtrack to the
+    // ten-digit alternative. Each digit position allows only one delimiter.
+    const end = isbnPayloadEnd(input, payload_start, true) orelse
+        isbnPayloadEnd(input, payload_start, false) orelse return null;
+    return .{ .kind = .isbn, .end = end, .payload_start = payload_start };
+}
 
-    while (pos < input.len) : (pos += 1) {
-        const ch = input[pos];
-        if (!std.ascii.isDigit(ch) and ch != 'X' and ch != 'x' and ch != '-' and !magicSpace(ch)) break;
-    }
-    var end = pos;
-    while (end > payload_start and (input[end - 1] == '-' or magicSpace(input[end - 1]))) : (end -= 1) {}
-    if (end == payload_start or !ir.linkBoundaryAfter(input, end)) return null;
-
-    var normalized: [13]u8 = undefined;
-    var count: usize = 0;
-    for (input[payload_start..end]) |ch| {
-        if (ch == '-' or magicSpace(ch)) continue;
-        if (count == normalized.len) return null;
-        normalized[count] = if (ch == 'x') 'X' else ch;
-        count += 1;
-    }
-    const valid_ten = count == 10 and blk: {
-        for (normalized[0..9]) |ch| if (!std.ascii.isDigit(ch)) break :blk false;
-        break :blk std.ascii.isDigit(normalized[9]) or normalized[9] == 'X';
+fn magicLinkAt(input: []const u8, start: usize) ?MagicLink {
+    const matched = magicMatchAt(.{ .first = input }, start) orelse return null;
+    return .{
+        .kind = matched.kind,
+        .end = matched.end,
+        .text = input[start..matched.end],
+        .payload = input[matched.payload_start..matched.end],
     };
-    const valid_thirteen = count == 13 and
-        (std.mem.eql(u8, normalized[0..3], "978") or std.mem.eql(u8, normalized[0..3], "979")) and blk: {
-        for (normalized[3..12]) |ch| if (!std.ascii.isDigit(ch)) break :blk false;
-        break :blk std.ascii.isDigit(normalized[12]) or normalized[12] == 'X';
-    };
-    if (!valid_ten and !valid_thirteen) return null;
-    return .{ .kind = .isbn, .end = end, .text = input[start..end], .payload = input[payload_start..end] };
+}
+
+fn isbnCandidateStart(value: []const u8) ?usize {
+    var cursor: usize = 0;
+    while (std.mem.indexOfPos(u8, value, cursor, "ISBN")) |at| {
+        const after = at + 4;
+        if (ir.linkBoundaryBefore(value, at) and
+            (after == value.len or isbnSpaceLen(value[after..]) != 0)) return at;
+        cursor = after;
+    }
+    return null;
 }
 
 fn magicLinkStart(input: []const u8, start: usize) ?usize {
@@ -872,6 +954,9 @@ pub fn preparePageTocSourceAlloc(a: A, input: []const u8, registry: ?*const @imp
     var emitted: usize = 0;
     var scan: usize = 0;
     var first_toc = false;
+    // Track the copied output line once, so TOC elision cannot create or
+    // extend an earlier-phase horizontal-rule prefix.
+    var hyphen_line = true;
     var no_more_nowiki_close = false;
     var no_more_ref_close = false;
     var no_more_references_close = false;
@@ -914,11 +999,22 @@ pub fn preparePageTocSourceAlloc(a: A, input: []const u8, registry: ?*const @imp
             const toc_end = if (registry) |captured| try captured.tocMatchAt(a, input, scan) else if (std.ascii.eqlIgnoreCase(input[scan..end], "__TOC__")) end else null;
             if (toc_end != null and toc_end.? == end) {
                 if (first_toc) {
-                    try out.appendSlice(a, input[emitted..scan]);
+                    const copied = input[emitted..scan];
+                    try out.appendSlice(a, copied);
+                    for (copied) |ch| {
+                        if (ch == '\n') hyphen_line = true else if (ch != '-') hyphen_line = false;
+                    }
                     emitted = end;
+                    if (hyphen_line and end < input.len and input[end] == '-') {
+                        // Preserve this existing suffix byte without joining it
+                        // to an authored hyphen run across the removed control.
+                        try out.appendSlice(a, "&#45;");
+                        emitted = end + 1;
+                        hyphen_line = false;
+                    }
                 } else first_toc = true;
             }
-            scan = end;
+            scan = @max(end, emitted);
         } else scan += 1;
     }
     if (emitted == 0) return input;
@@ -1070,12 +1166,24 @@ pub const Renderer = struct {
             },
             .isbn => {
                 var normalized: std.ArrayList(u8) = .empty;
-                for (link_value.payload) |ch| {
-                    if (ch == '-' or magicSpace(ch)) continue;
-                    try normalized.append(self.a, if (ch == 'x') 'X' else ch);
+                var label: std.ArrayList(u8) = .empty;
+                try label.appendSlice(self.a, "ISBN ");
+                var pos: usize = 0;
+                while (pos < link_value.payload.len) {
+                    const space_len = isbnSpaceLen(link_value.payload[pos..]);
+                    if (space_len != 0) {
+                        try label.append(self.a, ' ');
+                        pos += space_len;
+                        continue;
+                    }
+                    const ch = link_value.payload[pos];
+                    try label.append(self.a, ch);
+                    if (ch != '-') try normalized.append(self.a, if (ch == 'x') 'X' else ch);
+                    pos += 1;
                 }
                 link_style.kind = .link;
                 link_style.target = try std.fmt.allocPrint(self.a, "Special:BookSources/{s}", .{normalized.items});
+                return self.plain(try label.toOwnedSlice(self.a), link_style);
             },
         }
         try self.plain(link_value.text, link_style);
@@ -1111,7 +1219,132 @@ pub const Renderer = struct {
         try out.appendSlice(self.a, value[emitted..]);
         return try out.toOwnedSlice(self.a);
     }
-    fn plainWithMagicLinks(self: *Renderer, value: []const u8, style: Style) Error!void {
+    fn isbnEntityByte(self: *Renderer, value: []const u8, cursor: *usize) Error!?u8 {
+        while (cursor.* < value.len) {
+            if (value[cursor.*] == '<') return null;
+            const matched = if (self.context.behavior_switches) |registry|
+                try registry.matchAt(self.a, value, cursor.*)
+            else
+                syntax.behaviorSwitchEnd(value, cursor.*);
+            if (matched) |end| {
+                const toc_end = if (self.context.behavior_switches) |registry|
+                    try registry.tocMatchAt(self.a, value, cursor.*)
+                else if (std.ascii.eqlIgnoreCase(value[cursor.*..end], "__TOC__")) end else null;
+                if (toc_end != null and toc_end.? == end) return null;
+                cursor.* = end;
+                continue;
+            }
+            const ch = value[cursor.*];
+            cursor.* += 1;
+            return ch;
+        }
+        return null;
+    }
+    fn isbnAuthoredSpaceLen(self: *Renderer, value: []const u8) Error!usize {
+        const direct = isbnSpaceLen(value);
+        if (direct != 0) return direct;
+        if (value.len == 0 or value[0] != '&') return 0;
+        // Empty authored controls may form a SPACE_NOT_NL entity before the
+        // ISBN pass. Recognize only that fixed grammar, with O(1) storage.
+        // Never decode a prefix, nested entity or arbitrary entity name.
+        var cursor: usize = 1;
+        const first = (try self.isbnEntityByte(value, &cursor)) orelse return 0;
+        if (first == 'n') {
+            for ("bsp;") |expected| {
+                if (((try self.isbnEntityByte(value, &cursor)) orelse return 0) != expected) return 0;
+            }
+            return cursor;
+        }
+        if (first != '#') return 0;
+        var ch = (try self.isbnEntityByte(value, &cursor)) orelse return 0;
+        const hex = ch == 'x' or ch == 'X';
+        if (hex) ch = (try self.isbnEntityByte(value, &cursor)) orelse return 0;
+        while (ch == '0') ch = (try self.isbnEntityByte(value, &cursor)) orelse return 0;
+        if (hex) {
+            if (ch != 'A' and ch != 'a') return 0;
+            for ("0;") |expected| {
+                if (((try self.isbnEntityByte(value, &cursor)) orelse return 0) != expected) return 0;
+            }
+        } else {
+            if (ch != '1') return 0;
+            for ("60;") |expected| {
+                if (((try self.isbnEntityByte(value, &cursor)) orelse return 0) != expected) return 0;
+            }
+        }
+        return cursor;
+    }
+    fn isbnEntityTail(self: *Renderer, value: []const u8) Error!struct { text: []const u8, source_ends: []const usize } {
+        var text_value: std.ArrayList(u8) = .empty;
+        var source_ends: std.ArrayList(usize) = .empty;
+        var scan: usize = 0;
+        var digits: usize = 0;
+        var delimiters: usize = 0;
+        while (scan < value.len) {
+            // Only inspect the relevant number token and one boundary. A
+            // complete ISBN needs at most thirteen digit/check characters;
+            // the fourteenth is sufficient to reject a missing word boundary.
+            const matched = if (value[scan] != '<') blk: {
+                break :blk if (self.context.behavior_switches) |registry|
+                    try registry.matchAt(self.a, value, scan)
+                else
+                    syntax.behaviorSwitchEnd(value, scan);
+            } else null;
+            if (matched) |end| {
+                const toc_end = if (self.context.behavior_switches) |registry|
+                    try registry.tocMatchAt(self.a, value, scan)
+                else if (std.ascii.eqlIgnoreCase(value[scan..end], "__TOC__")) end else null;
+                if (toc_end != null and toc_end.? == end) break;
+                scan = end;
+                continue;
+            }
+            const space_len = try self.isbnAuthoredSpaceLen(value[scan..]);
+            if (space_len != 0) {
+                scan += space_len;
+                // At most two leading spaces distinguish prefix ++ from a
+                // payload's optional single delimiter. Keep the raw end of the
+                // whole run without allocating one entry per authored space.
+                if (digits == 0 and text_value.items.len == 2 and
+                    std.mem.eql(u8, text_value.items, "  "))
+                {
+                    source_ends.items[1] = scan;
+                } else {
+                    try text_value.append(self.a, ' ');
+                    try source_ends.append(self.a, scan);
+                }
+                delimiters += 1;
+                // Prefix spaces may repeat, but payload slots allow one.
+                if (digits != 0 and delimiters == 2) break;
+                continue;
+            }
+            const ch = value[scan];
+            if (std.ascii.isDigit(ch) or ch == 'X' or ch == 'x' or ch == '-') {
+                scan += 1;
+                try text_value.append(self.a, ch);
+                try source_ends.append(self.a, scan);
+                if (ch == '-') {
+                    delimiters += 1;
+                    if (delimiters >= 2) break;
+                } else {
+                    digits += 1;
+                    delimiters = 0;
+                    if (digits == 14) break;
+                }
+                continue;
+            }
+            // Preserve the actual next codepoint for the existing word-boundary
+            // predicate. Markup and encoded controls are never consumed here.
+            const n = std.unicode.utf8ByteSequenceLength(ch) catch 1;
+            const end = @min(scan + n, value.len);
+            while (scan < end) {
+                try text_value.append(self.a, value[scan]);
+                scan += 1;
+                try source_ends.append(self.a, scan);
+            }
+            break;
+        }
+        return .{ .text = try text_value.toOwnedSlice(self.a), .source_ends = try source_ends.toOwnedSlice(self.a) };
+    }
+    fn plainWithMagicLinks(self: *Renderer, value: []const u8, style: Style, entity_tail: []const u8) Error!usize {
         // The first MediaWiki TOC switch inserts a widget placeholder before
         // magic links. We omit that UI, but must not join an ISBN across it.
         // Page-body order is normalized before owner/block handling. Direct
@@ -1147,7 +1380,36 @@ pub const Renderer = struct {
         }
         // Other switches remain empty before magic recognition. Protected
         // bodies, attributes and entity-authored spellings keep existing paths.
-        try self.plainWithMagicLinksVisible(try self.withoutBehaviorControls(value[emitted..]), style);
+        const visible = try self.withoutBehaviorControls(value[emitted..]);
+        const candidate_start = isbnCandidateStart(visible);
+        if (candidate_start != null and style.kind != .link and style.kind != .external_link and entity_tail.len != 0 and
+            entity_tail[0] == '&' and (try self.isbnAuthoredSpaceLen(entity_tail)) != 0)
+        {
+            // Only an exact valid ISBN may cross the tokenizer's entity
+            // boundary. The existing TOC split and switch removal run first.
+            const probe = try self.isbnEntityTail(entity_tail);
+            var cursor: usize = candidate_start.?;
+            while (std.mem.indexOfScalarPos(u8, visible, cursor, 'I')) |at| {
+                if (magicMatchAt(.{ .first = visible, .tail = probe.text }, at)) |matched| {
+                    if (matched.kind == .isbn and matched.end > visible.len) {
+                        const probe_consumed = matched.end - visible.len;
+                        const consumed = probe.source_ends[probe_consumed - 1];
+                        try self.plainWithMagicLinksVisible(visible[0..at], style);
+                        const text_value = try std.mem.concat(self.a, u8, &.{ visible[at..], probe.text[0..probe_consumed] });
+                        try self.renderMagicLink(.{
+                            .kind = .isbn,
+                            .end = text_value.len,
+                            .text = text_value,
+                            .payload = text_value[matched.payload_start - at ..],
+                        }, style);
+                        return consumed;
+                    }
+                }
+                cursor = at + 1;
+            }
+        }
+        try self.plainWithMagicLinksVisible(visible, style);
+        return 0;
     }
     fn plainWithMagicLinksVisible(self: *Renderer, value: []const u8, style: Style) Error!void {
         if (style.kind == .link or style.kind == .external_link) return self.plain(value, style);
@@ -2109,8 +2371,9 @@ pub const Renderer = struct {
             switch (token.kind) {
                 .text => if (token.literal_tail)
                     try self.plain(token.text, s)
-                else
-                    try self.plainWithMagicLinks(token.text, s),
+                else {
+                    it.cursor += try self.plainWithMagicLinks(token.text, s, input[it.cursor..]);
+                },
                 .line_break => try self.lineBreak(s),
                 .link => {
                     var target = token.target;
@@ -2548,7 +2811,10 @@ pub const Renderer = struct {
                 syntax.matchingTag(clean, tag) != null) tag else null) else null;
             const protected_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
-            const special = html_tag != null or protected_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or (!anchored_inline and (starts(line, " ") or table_indent != null or starts(clean, "----")));
+            // Horizontal rules precede behavior-control removal and require an
+            // authored physical line start, without trimming leading whitespace.
+            const horizontal_rule = !anchored_inline and (start == 0 or input[start - 1] == '\n') and starts(line, "----");
+            const special = html_tag != null or protected_tag != null or multiline_data != null or clean.len == 0 or heading != null or prefix != 0 or horizontal_rule or (!anchored_inline and (starts(line, " ") or table_indent != null));
             if (!special) {
                 if (para == null) {
                     para = start;
@@ -2626,8 +2892,16 @@ pub const Renderer = struct {
                 @memset(&counts, 0);
                 continue;
             }
-            if (starts(clean, "----")) {
+            if (horizontal_rule) {
                 try self.block(&blocks, .rule, "", "", "", 0);
+                var suffix: usize = 4;
+                while (suffix < line.len and line[suffix] == '-') : (suffix += 1) {}
+                if (suffix < line.len) {
+                    // Only the initial hyphen run is replaced. Resume its suffix
+                    // on the same physical line through the existing inline path.
+                    pos = start + suffix;
+                    inline_line_end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
+                }
                 continue;
             }
             if (table_indent) |table_path| {
@@ -4059,6 +4333,251 @@ test "renderer preserves MediaWiki RFC PMID and ISBN magic links" {
         if (span.kind == .external_link) unicode_magic += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), unicode_magic);
+}
+
+test "ISBN magic links stop at the matched token and backtrack to ten digits" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { source: []const u8, label: []const u8, number: []const u8 };
+    for ([_]Case{
+        .{ .source = "ISBN 9780306406157 2020", .label = "ISBN 9780306406157", .number = "9780306406157" },
+        .{ .source = "ISBN 1234567890 1", .label = "ISBN 1234567890", .number = "1234567890" },
+        .{ .source = "ISBN 9780306406 2020", .label = "ISBN 9780306406", .number = "9780306406" },
+        .{ .source = "ISBN 979-0-306-40615-8.", .label = "ISBN 979-0-306-40615-8", .number = "9790306406158" },
+        .{ .source = "ISBN 123456789x 2020", .label = "ISBN 123456789x", .number = "123456789X" },
+        .{ .source = "ISBN 978030640615X-2020", .label = "ISBN 978030640615X", .number = "978030640615X" },
+    }) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.source, try flattened(a, spans));
+        var links: usize = 0;
+        for (spans) |span| if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings(case.label, span.text);
+            try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "Special:BookSources/{s}", .{case.number}), span.target);
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
+    }
+}
+
+test "ISBN magic links reject repeated delimiters and split thirteen digit prefixes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "ISBN 1--234567890",
+        "ISBN 1  234567890",
+        "ISBN 1- 234567890",
+        "ISBN 9-780306406157",
+        "ISBN 97-80306406157",
+        "ISBN 978--0306406157",
+        "ISBN 12345678901",
+        "ISBN 97803064061570",
+        "ISBN 1234567890x",
+        "xISBN 1234567890",
+        "ISBN_1234567890",
+    }) |source| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(source, .{});
+        try std.testing.expectEqualStrings(source, try flattened(a, spans));
+        for (spans) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
+    }
+    for ([_][]const u8{ "ISBN\n1234567890", "ISBN 12345\n67890" }) |source| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(source, .{});
+        for (spans) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
+    }
+}
+
+test "ISBN magic link spaces match authored MediaWiki non newline separators" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "\t",       "\u{00a0}", "\u{1680}",                "\u{2000}",                "\u{2007}",                   "\u{200a}",
+        "\u{202f}", "\u{205f}", "\u{3000}",                "&nbsp;",                  "&#160;",                     "&#000160;",
+        "&#xA0;",   "&#X00a0;", "&nb__NOEDITSECTION__sp;", "&__NOEDITSECTION__nbsp;", "&#000__NOEDITSECTION__160;", "&#x00__NOEDITSECTION__A0;",
+    }) |separator| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "before ISBN{s}978{s}0306406157 after [[cat]]", .{ separator, separator });
+        const spans = try r.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("before ISBN 978 0306406157 after cat", try flattened(a, spans));
+        var isbn: usize = 0;
+        var lexical: usize = 0;
+        for (spans) |span| if (span.kind == .link) {
+            if (std.mem.eql(u8, span.target, "cat")) {
+                lexical += 1;
+            } else {
+                isbn += 1;
+                try std.testing.expectEqualStrings("Special:BookSources/9780306406157", span.target);
+                try std.testing.expectEqualStrings("ISBN 978 0306406157", span.text);
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), isbn);
+        try std.testing.expectEqual(@as(usize, 1), lexical);
+    }
+}
+
+test "ISBN entity bridge preserves switch order and once only literal decoding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const positive = try r.parseSpans("before ISBN __NOEDITSECTION__978&nbsp;0306406157 2020 after", .{});
+    try std.testing.expectEqualStrings("before ISBN 978 0306406157 2020 after", try flattened(a, positive));
+    var links: usize = 0;
+    for (positive) |span| if (span.kind == .link) {
+        links += 1;
+        try std.testing.expectEqualStrings("ISBN 978 0306406157", span.text);
+        try std.testing.expectEqualStrings("Special:BookSources/9780306406157", span.target);
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
+    for ([_][]const u8{
+        "before ISBN 978&nbsp;03__NOEDITSECTION__06406157 2020 after [[cat]]",
+        "before ISBN&nbsp;97803__NOEDITSECTION__06406157 2020 after [[cat]]",
+        "before ISBN&nbsp;9780306406157__NOEDITSECTION__ 2020 after [[cat]]",
+    }) |source| {
+        const spans = try r.parseSpans(source, .{});
+        var isbn_count: usize = 0;
+        var lexical_count: usize = 0;
+        for (spans) |span| if (span.kind == .link) {
+            if (std.mem.eql(u8, span.target, "cat")) {
+                lexical_count += 1;
+            } else {
+                isbn_count += 1;
+                try std.testing.expectEqualStrings("Special:BookSources/9780306406157", span.target);
+                try std.testing.expect(std.mem.eql(u8, span.text, "ISBN 978 0306406157") or
+                    std.mem.eql(u8, span.text, "ISBN 9780306406157"));
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), isbn_count);
+        try std.testing.expectEqual(@as(usize, 1), lexical_count);
+        try std.testing.expectEqualStrings(
+            if (std.mem.startsWith(u8, source, "before ISBN 978")) "before ISBN 978 0306406157 2020 after cat" else "before ISBN 9780306406157 2020 after cat",
+            try flattened(a, spans),
+        );
+    }
+    const ten = try r.parseSpans("ISBN&nbsp;12345__NOEDITSECTION__67890 1", .{});
+    try std.testing.expectEqualStrings("ISBN 1234567890 1", try flattened(a, ten));
+    var ten_count: usize = 0;
+    for (ten) |span| if (span.kind == .link) {
+        ten_count += 1;
+        try std.testing.expectEqualStrings("ISBN 1234567890", span.text);
+        try std.testing.expectEqualStrings("Special:BookSources/1234567890", span.target);
+    };
+    try std.testing.expectEqual(@as(usize, 1), ten_count);
+    const Case = struct { source: []const u8, visible: []const u8 };
+    for ([_]Case{
+        .{ .source = "ISBN &nb__TOC__sp;1234567890", .visible = "ISBN &nbsp;1234567890" },
+        .{ .source = "ISBN &nb&#95;&#95;NOEDITSECTION__sp;1234567890", .visible = "ISBN &nb__NOEDITSECTION__sp;1234567890" },
+        .{ .source = "ISBN &nb<nowiki>__NOEDITSECTION__</nowiki>sp;1234567890", .visible = "ISBN &nb__NOEDITSECTION__sp;1234567890" },
+        .{ .source = "ISBN &nb<b>sp;</b>1234567890", .visible = "ISBN &nbsp;1234567890" },
+        .{ .source = "ISBN &amp;nb__NOEDITSECTION__sp;1234567890", .visible = "ISBN &nbsp;1234567890" },
+        .{ .source = "ISBN&nbsp;12345__TOC__67890", .visible = "ISBN\u{00a0}1234567890" },
+        .{ .source = "ISBN&nbsp;12345&#95;&#95;NOEDITSECTION__67890", .visible = "ISBN\u{00a0}12345__NOEDITSECTION__67890" },
+        .{ .source = "ISBN&nbsp;12345<nowiki>__NOEDITSECTION__</nowiki>67890", .visible = "ISBN\u{00a0}12345__NOEDITSECTION__67890" },
+        .{ .source = "ISBN&nbsp;12345<b>67890</b>", .visible = "ISBN\u{00a0}1234567890" },
+        .{ .source = "ISBN __TOC__978&nbsp;0306406157", .visible = "ISBN 978\u{00a0}0306406157" },
+        .{ .source = "&#73;SBN&nbsp;1234567890", .visible = "ISBN\u{00a0}1234567890" },
+        .{ .source = "ISBN &amp;nbsp;1234567890", .visible = "ISBN &nbsp;1234567890" },
+        .{ .source = "ISBN 1&nbsp;&nbsp;234567890", .visible = "ISBN 1\u{00a0}\u{00a0}234567890" },
+        .{ .source = "ISBN 1&nbsp;&nbsp;&nbsp;234567890", .visible = "ISBN 1\u{00a0}\u{00a0}\u{00a0}234567890" },
+        .{ .source = "<nowiki>ISBN&nbsp;1234567890</nowiki>", .visible = "ISBN\u{00a0}1234567890" },
+        .{ .source = "[[A|ISBN&nbsp;1234567890]]", .visible = "ISBN\u{00a0}1234567890" },
+    }) |case| {
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        for (spans) |span| if (span.kind == .link) try std.testing.expectEqualStrings("A", span.target);
+    }
+}
+
+test "ISBN entity probe keeps long prefix space storage bounded and ignores ordinary text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    var zero_entity: std.ArrayList(u8) = .empty;
+    try zero_entity.appendSlice(a, "&#x");
+    for (0..4096) |_| try zero_entity.append(a, '0');
+    try zero_entity.appendSlice(a, "__NOEDITSECTION__A0;");
+    try std.testing.expectEqual(zero_entity.items.len, try r.isbnAuthoredSpaceLen(zero_entity.items));
+    const formed = try r.parseSpans(try std.mem.concat(a, u8, &.{ "ISBN ", zero_entity.items, "1234567890 1" }), .{});
+    try std.testing.expectEqualStrings("ISBN 1234567890 1", try flattened(a, formed));
+    var formed_links: usize = 0;
+    for (formed) |span| if (span.kind == .link) {
+        formed_links += 1;
+        try std.testing.expectEqualStrings("ISBN 1234567890", span.text);
+        try std.testing.expectEqualStrings("Special:BookSources/1234567890", span.target);
+    };
+    try std.testing.expectEqual(@as(usize, 1), formed_links);
+    var tail: std.ArrayList(u8) = .empty;
+    for (0..4096) |_| try tail.appendSlice(a, "&nbsp;");
+    const raw_prefix_end = tail.items.len;
+    try tail.appendSlice(a, "1234567890 suffix [[cat]]");
+    const probe = try r.isbnEntityTail(tail.items);
+    try std.testing.expect(probe.text.len <= 14);
+    try std.testing.expectEqual(probe.text.len, probe.source_ends.len);
+    try std.testing.expectEqualStrings("  ", probe.text[0..2]);
+    try std.testing.expectEqual(raw_prefix_end, probe.source_ends[1]);
+    const source = try std.mem.concat(a, u8, &.{ "before ISBN", tail.items });
+    const spans = try r.parseSpans(source, .{});
+    try std.testing.expectEqualStrings("before ISBN 1234567890 suffix cat", try flattened(a, spans));
+    var isbn: usize = 0;
+    var lexical: usize = 0;
+    for (spans) |span| if (span.kind == .link) {
+        if (std.mem.eql(u8, span.target, "cat")) {
+            lexical += 1;
+        } else {
+            isbn += 1;
+            try std.testing.expectEqualStrings("ISBN 1234567890", span.text);
+            try std.testing.expectEqualStrings("Special:BookSources/1234567890", span.target);
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), isbn);
+    try std.testing.expectEqual(@as(usize, 1), lexical);
+
+    // No eligible prefix: the caller must leave every entity on its original
+    // path, rather than constructing/scanning a probe for each remaining tail.
+    try std.testing.expect(isbnCandidateStart("ordinary text") == null);
+    try std.testing.expect(isbnCandidateStart("ordinary xISBN") == null);
+    const ordinary = try r.parseSpans(try std.mem.concat(a, u8, &.{ "ordinary text", tail.items }), .{});
+    const visible = try flattened(a, ordinary);
+    try std.testing.expect(std.mem.startsWith(u8, visible, "ordinary text"));
+    try std.testing.expect(std.mem.endsWith(u8, visible, "1234567890 suffix cat"));
+    try std.testing.expectEqual(@as(usize, 4096), std.mem.count(u8, visible, "\u{00a0}"));
+    for (ordinary) |span| if (span.kind == .link) try std.testing.expectEqualStrings("cat", span.target);
+}
+
+test "ISBN token ranges and normalized navigation survive ordinary DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("ISBN 9780306406157 2020 | ISBN&nbsp;123456789x | ISBN 1--234567890 | [[cat]]");
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "ISBN fixture", .language, .{ .code = "en", .heading = "English" });
+    const spans = decoded.entry.sections[0].blocks[0].spans;
+    var visible: std.ArrayList(u8) = .empty;
+    var links: usize = 0;
+    for (spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind != .link) continue;
+        links += 1;
+        if (std.mem.eql(u8, span.text, "ISBN 9780306406157"))
+            try std.testing.expectEqualStrings("Special:BookSources/9780306406157", span.target)
+        else if (std.mem.eql(u8, span.text, "ISBN 123456789x"))
+            try std.testing.expectEqualStrings("Special:BookSources/123456789X", span.target)
+        else {
+            try std.testing.expectEqualStrings("cat", span.text);
+            try std.testing.expectEqualStrings("cat", span.target);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), links);
+    try std.testing.expectEqualStrings("ISBN 9780306406157 2020 | ISBN 123456789x | ISBN 1--234567890 | cat", visible.items);
 }
 
 test "renderer accepts current MediaWiki semantic HTML tags without leaking tag source" {
@@ -6612,6 +7131,184 @@ test "table closing oracle nested tails and protected markers preserve cell owne
     try std.testing.expectEqual(Kind.table, literal[0].kind);
     try std.testing.expectEqualStrings("|}literal", try flattened(a, literal[0].table.?.rows[0].cells[0].spans));
     try std.testing.expectEqualStrings("tail", try flattened(a, literal[1].spans));
+}
+
+test "horizontal rules preserve same-line suffixes and following paragraph text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, link: bool = false }{
+        .{ .source = "----word", .visible = "word" },
+        .{ .source = "------word", .visible = "word" },
+        .{ .source = "----#literal", .visible = "#literal" },
+        .{ .source = "----==literal==", .visible = "==literal==" },
+        .{ .source = "---- indented", .visible = "indented" },
+        .{ .source = "----\tindented", .visible = "indented" },
+        .{ .source = "----__NOEDITSECTION__word", .visible = "word" },
+        .{ .source = "----[[cat]]\nnext", .visible = "cat next", .link = true },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 2), blocks.len);
+        try std.testing.expectEqual(Kind.rule, blocks[0].kind);
+        try std.testing.expectEqual(Kind.paragraph, blocks[1].kind);
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, blocks[1].spans));
+        var links: usize = 0;
+        for (blocks[1].spans) |span| if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings("cat", span.text);
+            try std.testing.expectEqualStrings("cat", span.target);
+        };
+        try std.testing.expectEqual(@as(usize, if (case.link) 1 else 0), links);
+    }
+}
+
+test "horizontal rule suffixes do not consume following physical block starts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, suffix: []const u8, tail: []const u8, kind: Kind }{
+        .{ .source = "----#literal\n# next", .suffix = "#literal", .tail = "next", .kind = .definition },
+        .{ .source = "----==literal==\n== Heading ==", .suffix = "==literal==", .tail = "Heading", .kind = .heading },
+        .{ .source = "---- indented\n next", .suffix = "indented", .tail = "next", .kind = .preformatted },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 3), blocks.len);
+        try std.testing.expectEqual(Kind.rule, blocks[0].kind);
+        try std.testing.expectEqual(Kind.paragraph, blocks[1].kind);
+        try std.testing.expectEqualStrings(case.suffix, try flattened(a, blocks[1].spans));
+        try std.testing.expectEqual(case.kind, blocks[2].kind);
+        try std.testing.expectEqualStrings(case.tail, try flattened(a, blocks[2].spans));
+    }
+    var bare: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try bare.renderBody("----\n# next");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.rule, blocks[0].kind);
+    try std.testing.expectEqual(Kind.definition, blocks[1].kind);
+    try std.testing.expectEqualStrings("next", try flattened(a, blocks[1].spans));
+}
+
+test "horizontal rules require authored physical starts outside protected text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, kind: Kind = .paragraph }{
+        .{ .source = " ----word", .visible = "----word", .kind = .preformatted },
+        .{ .source = "\t----word", .visible = "----word" },
+        .{ .source = "---word", .visible = "---word" },
+        .{ .source = "before----word", .visible = "before----word" },
+        .{ .source = "__NOEDITSECTION__----word", .visible = "----word" },
+        .{ .source = "__NOTOC__----word", .visible = "----word" },
+        .{ .source = "&#45;---word", .visible = "----word" },
+        .{ .source = "<nowiki>----[[cat]]</nowiki>", .visible = "----[[cat]]" },
+        .{ .source = "<pre>----[[cat]]</pre>", .visible = "----[[cat]]", .kind = .preformatted },
+        .{ .source = "<syntaxhighlight>----[[cat]]</syntaxhighlight>", .visible = "----[[cat]]", .kind = .preformatted },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqual(case.kind, blocks[0].kind);
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, blocks[0].spans));
+        for (blocks[0].spans) |span| try std.testing.expect(span.kind != .link);
+    }
+    var inline_body: Renderer = .{ .a = a, .context = .{} };
+    const anchored = try inline_body.renderBodyWithInlineStart("----word", true);
+    try std.testing.expectEqual(@as(usize, 1), anchored.len);
+    try std.testing.expectEqual(Kind.paragraph, anchored[0].kind);
+    try std.testing.expectEqualStrings("----word", try flattened(a, anchored[0].spans));
+}
+
+test "horizontal rule suffix navigation and text survive ordinary DPR2 roundtrip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("----[[cat]]\nnext\n----#literal\n# definition");
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "rule fixture", .language, .{ .code = "en", .heading = "English" });
+    const actual = decoded.entry.sections[0].blocks;
+    try std.testing.expectEqual(@as(usize, 5), actual.len);
+    try std.testing.expect(actual[0].kind == .rule);
+    try std.testing.expect(actual[1].kind == .paragraph);
+    try std.testing.expect(actual[2].kind == .rule);
+    try std.testing.expect(actual[3].kind == .paragraph);
+    try std.testing.expect(actual[4].kind == .definition);
+    var visible: std.ArrayList(u8) = .empty;
+    var links: usize = 0;
+    for (actual[1].spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings("cat", span.text);
+            try std.testing.expectEqualStrings("cat", span.target);
+        }
+    }
+    try std.testing.expectEqualStrings("cat next", visible.items);
+    try std.testing.expectEqual(@as(usize, 1), links);
+    visible.clearRetainingCapacity();
+    for (actual[3].spans) |span| try visible.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("#literal", visible.items);
+    visible.clearRetainingCapacity();
+    for (actual[4].spans) |span| try visible.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("definition", visible.items);
+}
+
+test "horizontal rule phase survives page TOC elision and ordinary DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, prepared: []const u8, visible: []const u8, rules: usize }{
+        .{ .source = "__TOC__\n__TOC__----[[cat]]", .prepared = "__TOC__\n&#45;---[[cat]]", .visible = "----cat", .rules = 0 },
+        .{ .source = "__TOC__\n--__TOC__--[[cat]]", .prepared = "__TOC__\n--&#45;-[[cat]]", .visible = "----cat", .rules = 0 },
+        .{ .source = "__TOC__\n----__TOC__-[[cat]]", .prepared = "__TOC__\n----&#45;[[cat]]", .visible = "-cat", .rules = 1 },
+        .{ .source = "__TOC__\n------__TOC__--[[cat]]", .prepared = "__TOC__\n------&#45;-[[cat]]", .visible = "--cat", .rules = 1 },
+        .{ .source = "__TOC__\n__TOC____TOC__----[[cat]]", .prepared = "__TOC__\n&#45;---[[cat]]", .visible = "----cat", .rules = 0 },
+        .{ .source = "__TOC__----[[cat]]", .prepared = "__TOC__----[[cat]]", .visible = "----cat", .rules = 0 },
+    };
+    for (cases) |case| {
+        const prepared = try preparePageTocSourceAlloc(a, case.source, null);
+        try std.testing.expectEqualStrings(case.prepared, prepared);
+        try std.testing.expectEqualStrings(prepared, try preparePageTocSourceAlloc(a, prepared, null));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, prepared, "__TOC__"));
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(prepared);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "TOC rule fixture", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        var rules: usize = 0;
+        var links: usize = 0;
+        for (decoded.entry.sections[0].blocks) |block_value| {
+            if (block_value.kind == .rule) rules += 1;
+            for (block_value.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                if (span.kind == .link) {
+                    links += 1;
+                    try std.testing.expectEqualStrings("cat", span.text);
+                    try std.testing.expectEqualStrings("cat", span.target);
+                }
+            }
+        }
+        try std.testing.expectEqual(case.rules, rules);
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expectEqualStrings(case.visible, trim(visible.items));
+    }
+    // A first TOC still separates the ISBN; eliding a later one must not
+    // weaken that existing page-wide ownership boundary.
+    var first: Renderer = .{ .a = a, .context = .{} };
+    for (try first.renderBody("ISBN 97803__TOC__06406157\n__TOC__----word")) |block_value| {
+        try std.testing.expect(block_value.kind != .rule);
+        for (block_value.spans) |span| try std.testing.expect(span.kind != .link);
+    }
 }
 
 test "visible preservation oracle protected blocks retain same-line suffix and newline ownership" {

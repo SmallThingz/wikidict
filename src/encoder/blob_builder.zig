@@ -3998,8 +3998,19 @@ test "page-body TOC order crosses preamble headings and language owner regroupin
         const title = if (i == 0) "preamble" else "heading";
         try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, title, source, source, null, &.{});
     }
+    const rule_cases = [_]struct { title: []const u8, source: []const u8, visible: []const u8, rules: usize }{
+        .{ .title = "rule-created", .source = "__TOC__----[[cat]]", .visible = "----cat", .rules = 0 },
+        .{ .title = "rule-joined", .source = "--__TOC__--[[cat]]", .visible = "----cat", .rules = 0 },
+        .{ .title = "rule-extended", .source = "----__TOC__-[[cat]]", .visible = "-cat", .rules = 1 },
+        .{ .title = "rule-longer", .source = "------__TOC__--[[cat]]", .visible = "--cat", .rules = 1 },
+        .{ .title = "rule-adjacent", .source = "__TOC____TOC__----[[cat]]", .visible = "----cat", .rules = 0 },
+    };
+    for (rule_cases) |case| {
+        const source = try std.fmt.allocPrint(a, "__TOC__\n==English==\n# English body\n==French==\n{s}\n# ISBN 97803__TOC__06406157\n", .{case.source});
+        try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, case.title, source, source, null, &.{});
+    }
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 4 + 2 * rule_cases.len), stats.language_records);
     try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
     var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, out_root, "French"));
     defer mapped.deinit();
@@ -4016,5 +4027,31 @@ test "page-body TOC order crosses preamble headings and language owner regroupin
             if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) links += 1;
         };
         try std.testing.expectEqual(@as(usize, 1), links);
+    }
+    for (rule_cases) |case| {
+        const record = (try index.find(case.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var visible: std.ArrayList(u8) = .empty;
+        var rules: usize = 0;
+        var lexical_links: usize = 0;
+        var isbn_links: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block_value| {
+            if (block_value.kind == .rule) rules += 1;
+            for (block_value.spans) |span| {
+                if (block_value.kind == .paragraph) try visible.appendSlice(a, span.text);
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "__TOC__") == null);
+                if (span.kind != .link) continue;
+                if (std.mem.eql(u8, span.target, "cat")) {
+                    lexical_links += 1;
+                    try std.testing.expectEqualStrings("cat", span.text);
+                } else if (std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) {
+                    isbn_links += 1;
+                } else try std.testing.expect(false);
+            }
+        };
+        try std.testing.expectEqual(case.rules, rules);
+        try std.testing.expectEqualStrings(case.visible, std.mem.trim(u8, visible.items, " \t\r\n"));
+        try std.testing.expectEqual(@as(usize, 1), lexical_links);
+        try std.testing.expectEqual(@as(usize, 1), isbn_links);
     }
 }

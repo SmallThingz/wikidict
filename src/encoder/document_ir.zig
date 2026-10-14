@@ -709,14 +709,20 @@ fn externalUrlEnd(input: []const u8, start: usize, allow_relative: bool, trim_tr
     if (!trim_trailing) return end;
 
     const has_left_paren = std.mem.indexOfScalar(u8, input[start..end], '(') != null;
+    const untrimmed_end = end;
+    // Find the entire punctuation suffix once. Rechecking every trailing ';'
+    // would repeatedly search the whole URL prefix for an entity ampersand.
     while (end > address_start) {
         const ch = input[end - 1];
         const punctuation = std.mem.indexOfScalar(u8, ",;\\.:!?", ch) != null or
             (ch == ')' and !has_left_paren);
         if (!punctuation) break;
-        if (ch == ';' and entityEndsAt(input[start..end], end - start)) break;
         end -= 1;
     }
+    // Preserve only the first suffix semicolon when it closes an entity,
+    // exactly as MediaWiki's single trailing-run/entity check does.
+    if (end < untrimmed_end and input[end] == ';' and
+        entityEndsAt(input[start .. end + 1], end + 1 - start)) end += 1;
     if (end == address_start) return null;
     return end;
 }
@@ -1212,4 +1218,49 @@ test "unclosed nowiki leaves external label closing bracket active" {
     const protected = parseExternalLinkAt(closed, 0).?;
     try std.testing.expectEqualStrings("<nowiki>]literal</nowiki extra>]</nowiki>visible", protected.label);
     try std.testing.expectEqualStrings("tail", closed[protected.end..]);
+}
+
+test "free URL punctuation preserves exact entity and parenthesis suffix semantics" {
+    const Case = struct { source: []const u8, target: []const u8, trail: []const u8 };
+    for ([_]Case{
+        .{ .source = "https://example.test/a&amp;...;;)", .target = "https://example.test/a&amp;", .trail = "...;;)" },
+        .{ .source = "https://example.test/a&#x21;:;", .target = "https://example.test/a&#x21;", .trail = ":;" },
+        .{ .source = "https://example.test/a&#xZZ;:;", .target = "https://example.test/a&#xZZ", .trail = ";:;" },
+        .{ .source = "https://example.test/a&word;", .target = "https://example.test/a&word;", .trail = "" },
+        .{ .source = "https://example.test/a&word0;", .target = "https://example.test/a&word0", .trail = ";" },
+        .{ .source = "https://example.test/a(b));", .target = "https://example.test/a(b))", .trail = ";" },
+        .{ .source = "https://example.test/a));", .target = "https://example.test/a", .trail = "));" },
+    }) |case| {
+        const end = externalUrlEnd(case.source, 0, false, true).?;
+        try std.testing.expectEqualStrings(case.target, case.source[0..end]);
+        try std.testing.expectEqualStrings(case.trail, case.source[end..]);
+    }
+    try std.testing.expect(externalUrlEnd("http://;;;;", 0, false, true) == null);
+}
+
+test "free URL long semicolon suffix retains link and every punctuation byte" {
+    const a = std.testing.allocator;
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(a);
+    try source.appendSlice(a, "https://example.test/");
+    try source.appendNTimes(a, 'a', 4096);
+    const target_end = source.items.len;
+    try source.appendNTimes(a, ';', 8192);
+    try std.testing.expectEqual(target_end, externalUrlEnd(source.items, 0, false, true).?);
+    var iterator: InlineIterator = .{ .input = source.items };
+    const link = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.external_link, link.kind);
+    try std.testing.expectEqualStrings(source.items[0..target_end], link.target);
+    const trail = iterator.next().?;
+    try std.testing.expectEqual(InlineKind.text, trail.kind);
+    try std.testing.expectEqual(@as(usize, 8192), trail.text.len);
+    try std.testing.expectEqualStrings(source.items[target_end..], trail.text);
+    try std.testing.expect(iterator.next() == null);
+
+    source.items.len = target_end;
+    try source.appendSlice(a, "&amp;");
+    const entity_end = source.items.len;
+    try source.appendNTimes(a, ';', 4096);
+    try std.testing.expectEqual(entity_end, externalUrlEnd(source.items, 0, false, true).?);
+    try std.testing.expectEqual(@as(usize, 4096), source.items.len - entity_end);
 }

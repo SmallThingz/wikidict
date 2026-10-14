@@ -882,3 +882,39 @@ test "page-body unmatched pre TOC navigation survives ordinary DPR2 round trip" 
     try std.testing.expect(std.mem.indexOf(u8, visible.items, "__TOC__ [[hidden]]") != null);
     try std.testing.expect(report.unclosed_formatting);
 }
+
+test "post-expansion generated-comment fixture preserves control semantics and ISBN through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact normalized fixture asserted by the real native AOT invoke test.
+    // This boundary consumes expanded source; it must not re-expand raw Lua output.
+    const normalized = "Authored A__NOEDITSECTION__B\n\nGenerated A__NOEDITSECTION__B\nISBN 9780306406157\n__TOC__\nISBN 97803__TOC__06406157\nTail\n&lt;nowiki>__NOEDITSECTION__[[B]]</nowiki>\nAB\n\n<nowiki>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</nowiki>\n\n<pre>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</pre>\n\n<source>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</source>\n\n<syntaxhighlight>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</syntaxhighlight>\n\n<code>Ordinary AB __NOEDITSECTION__</code>\n\n&#95;&#95;NOEDITSECTION__\n\nUnclosed &lt;!--tail __NOEDITSECTION__ [[B]] ISBN 9780306406157";
+    var report: Fallbacks = .{};
+    // Production retains intentional visible markup with an explicit diagnostic.
+    // The unmatched closing nowiki spelling must not weaken strict validation.
+    const encoded = try compileReportedAlloc(a, "entry", .language, "English", "en", normalized, null, &report);
+    try std.testing.expect(report.literal_markup);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    var visible: std.ArrayList(u8) = .empty;
+    var isbn_links: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) isbn_links += 1;
+    };
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Authored AB") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Generated AB") != null);
+    try std.testing.expectEqual(@as(usize, 3), isbn_links);
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, visible.items, "__NOEDIT<!--literal-->SECTION__"));
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "<nowiki>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "</nowiki>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Unclosed <!--tail ") != null);
+    var b_links: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "B")) b_links += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), b_links);
+    // Only the entity-authored spelling remains a visible complete control.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "__NOEDITSECTION__"));
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Ordinary AB") != null);
+}
