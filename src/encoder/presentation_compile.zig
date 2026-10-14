@@ -3056,7 +3056,7 @@ pub const Renderer = struct {
             } else if (current != null) {
                 // A marker after an empty cell opener starts a block list;
                 // the same marker on the opener's own line stays inline text.
-                if (cell_source.items.len != 0 or (raw_line.len != 0 and (raw_line[0] == ' ' or std.mem.indexOfScalar(u8, "#*:;", raw_line[0]) != null)))
+                if (cell_source.items.len != 0 or (raw_line.len != 0 and (raw_line[0] == ' ' or std.mem.indexOfScalar(u8, "#*:;", raw_line[0]) != null or self.tableCellHeading(raw_line) != null)))
                     try cell_source.append(self.a, '\n');
                 try cell_source.appendSlice(self.a, raw_line);
             } else {
@@ -3092,12 +3092,25 @@ pub const Renderer = struct {
         }
     }
 
+    fn tableCellHeading(self: *Renderer, line: []const u8) ?Heading {
+        const control_matcher: ?syntax.ControlMatcher = if (self.context.behavior_switches) |registry| .{
+            .ctx = registry,
+            .match = struct {
+                fn match(raw: ?*const anyopaque, value: []const u8, at: usize) ?usize {
+                    const profile: *const @import("namespace_registry").behavior_switches.Registry = @ptrCast(@alignCast(raw.?));
+                    return profile.matchAt(std.heap.page_allocator, value, at) catch null;
+                }
+            }.match,
+        } else null;
+        return headingLine(syntax.headingControlPrefix(line, control_matcher));
+    }
+
     fn cellSpans(self: *Renderer, source: []const u8) Error![]const Span {
         var has_blocks = false;
         var pos: usize = 0;
         while (pos < source.len) {
             const end = syntax.logicalEnd(source, pos);
-            if (pos != 0 and end != pos and (source[pos] == ' ' or std.mem.indexOfScalar(u8, "#*:;", source[pos]) != null)) has_blocks = true;
+            if (pos != 0 and end != pos and (source[pos] == ' ' or std.mem.indexOfScalar(u8, "#*:;", source[pos]) != null or self.tableCellHeading(source[pos..end]) != null)) has_blocks = true;
             pos = if (end < source.len) end + 1 else end;
         }
         if (!has_blocks and std.mem.indexOf(u8, source, "{|") == null) return self.parseSpans(source, .{});
@@ -3107,8 +3120,9 @@ pub const Renderer = struct {
         var body = source;
         // The first line belongs to the cell opener, so its marker is literal
         // even when later lines contain a list or nested table.
-        if (source.len != 0 and std.mem.indexOfScalar(u8, "#*:;", source[0]) != null) {
-            const end = syntax.logicalEnd(source, 0);
+        const first_end = syntax.logicalEnd(source, 0);
+        if (source.len != 0 and (std.mem.indexOfScalar(u8, "#*:;", source[0]) != null or self.tableCellHeading(source[0..first_end]) != null)) {
+            const end = first_end;
             try self.spans.appendSlice(self.a, try self.parseSpans(source[0..end], .{}));
             body = source[if (end < source.len) end + 1 else end..];
             if (body.len != 0) try self.lineBreak(.{});
@@ -8754,5 +8768,65 @@ test "raw greater-than starts protected bodies without activating literal wiki c
         try std.testing.expectEqualStrings(expected, try flattened(a, spans));
         for (spans) |span| try std.testing.expect(span.kind != .link);
         try std.testing.expect(!renderer.fallbacks.unclosed_formatting);
+    }
+}
+
+test "later cell headings retain visible text and exact lexical navigation in wiki and HTML grids" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "{|\n| first\n== Inside ==\n[[cat|word]]\n|}",
+        "<table><tr><td>first\n== Inside ==\n[[cat|word]]</td></tr></table>",
+        "{|\n|\n== Inside ==\n[[cat|word]]\n|}",
+    }, 0..) |source, index| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqual(Kind.table, blocks[0].kind);
+        const rows = blocks[0].table.?.rows;
+        try std.testing.expectEqual(@as(usize, 1), rows.len);
+        try std.testing.expectEqual(@as(usize, 1), rows[0].cells.len);
+        const spans = rows[0].cells[0].spans;
+        try std.testing.expectEqualStrings(if (index == 2) "Inside\nword" else "first\nInside\nword", try flattened(a, spans));
+        var links: usize = 0;
+        for (spans) |span| if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings("cat", span.target);
+            try std.testing.expectEqualStrings("word", span.text);
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expect(!renderer.fallbacks.malformed_table);
+    }
+    var styled: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try styled.renderBody("{|\n| first\n== \x27\x27\x27Inside\x27\x27\x27 ==\n[[cat|word]]\n|}");
+    var saw_bold_heading = false;
+    for (blocks[0].table.?.rows[0].cells[0].spans) |span| {
+        if (std.mem.eql(u8, span.text, "Inside")) saw_bold_heading = span.flags.bold;
+    }
+    try std.testing.expect(saw_bold_heading);
+}
+
+test "cell heading detection keeps first-line inline equals protected and unknown literals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fixture = struct { source: []const u8, literal: []const u8 };
+    for ([_]Fixture{
+        .{ .source = "{|\n| == First literal ==\n== Inside ==\n[[cat|word]]\n|}", .literal = "== First literal ==" },
+        .{ .source = "{|\n| first\ninline == Literal ==\n[[cat|word]]\n|}", .literal = "inline == Literal ==" },
+        .{ .source = "{|\n| first\n<nowiki>== Protected ==</nowiki>\n[[cat|word]]\n|}", .literal = "== Protected ==" },
+        .{ .source = "{|\n| first\n== Unknown ==__UNKNOWN__\n[[cat|word]]\n|}", .literal = "== Unknown ==__UNKNOWN__" },
+    }) |fixture| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(fixture.source);
+        const spans = blocks[0].table.?.rows[0].cells[0].spans;
+        const visible = try flattened(a, spans);
+        try std.testing.expect(std.mem.indexOf(u8, visible, fixture.literal) != null);
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "cat"));
+        if (std.mem.indexOf(u8, fixture.source, "== Inside ==") != null) {
+            try std.testing.expect(std.mem.indexOf(u8, visible, "== Inside ==") == null);
+            try std.testing.expect(std.mem.indexOf(u8, visible, "Inside") != null);
+        }
     }
 }
