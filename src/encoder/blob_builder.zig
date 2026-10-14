@@ -1146,12 +1146,15 @@ fn processMain(
     spools: *Spools,
     codes: LanguageCodes,
     title: []const u8,
-    source: []const u8,
+    source_raw: []const u8,
     raw_source: ?[]const u8,
     display_title: ?[]const u8,
     stats: *BuildStats,
     fallbacks: *presentation_document.Fallbacks,
 ) !void {
+    // MediaWiki's first body TOC is page-scoped, before language-owner regrouping.
+    const source = try presentation_document.preparePageTocSourceAlloc(page_allocator, source_raw, codes.behavior_switches);
+    defer if (source.ptr != source_raw.ptr) page_allocator.free(source);
     stats.main_pages += 1;
 
     if (fallbacks.expansion_error and source.len == 0) {
@@ -3973,5 +3976,45 @@ test "Urak Lawoi apostrophe preserves real Writer ownership and lexical content"
         };
         try std.testing.expectEqual(@as(usize, 1), definitions);
         try std.testing.expectEqual(@as(usize, 1), linked);
+    }
+}
+
+test "page-body TOC order crosses preamble headings and language owner regrouping" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const out_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, out_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const sources = [_][]const u8{
+        "__TOC__\n==English==\n# English body\n==French==\n# ISBN 97803__TOC__06406157\n",
+        "==English==\n===__TOC__Noun===\n# English body\n==French==\n# ISBN 97803__TOC__06406157\n",
+    };
+    for (sources, 0..) |source, i| {
+        const title = if (i == 0) "preamble" else "heading";
+        try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, title, source, source, null, &.{});
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, out_root, "French"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("fr", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    for ([_][]const u8{ "preamble", "heading" }) |title| {
+        const record = (try index.find(title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var links: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) links += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
     }
 }

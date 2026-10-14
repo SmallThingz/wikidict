@@ -863,6 +863,67 @@ fn boundedTraceHex(buffer: []u8, bytes: []const u8) []const u8 {
     return buffer[0 .. count * 2];
 }
 
+/// Preserve only the first active page-body TOC boundary before owner regrouping.
+/// Returns input when unchanged; otherwise the caller owns the allocated slice.
+/// Reference/list bodies retain the existing deferred-reference policy, not Cite parity.
+pub fn preparePageTocSourceAlloc(a: A, input: []const u8, registry: ?*const @import("namespace_registry").behavior_switches.Registry) Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    var emitted: usize = 0;
+    var scan: usize = 0;
+    var first_toc = false;
+    var no_more_nowiki_close = false;
+    var no_more_ref_close = false;
+    var no_more_references_close = false;
+    while (scan < input.len) {
+        if (input[scan] == '<') {
+            // Closed references are independent deferred scopes. An unmatched
+            // opener does not manufacture an opaque remainder in this prepass.
+            const tag = syntax.tagAtCached(input, scan, &no_more_nowiki_close);
+            if (tag) |opening| {
+                if (!opening.closing and (opening.is("ref") or opening.is("references"))) {
+                    const no_more_close = if (opening.is("ref")) &no_more_ref_close else &no_more_references_close;
+                    if (opening.self_closing) {
+                        scan = opening.end;
+                        continue;
+                    }
+                    if (!no_more_close.*) {
+                        if (syntax.matchingTag(input, opening)) |pair| {
+                            scan = pair.end;
+                            continue;
+                        }
+                        no_more_close.* = true;
+                    }
+                    scan = opening.end;
+                    continue;
+                }
+            }
+            if (syntax.protectedEndCached(input, scan, &no_more_nowiki_close)) |end| {
+                scan = end;
+                continue;
+            }
+            if (tag) |opening| {
+                scan = opening.end;
+                continue;
+            }
+        }
+        const matched = if (registry) |captured| try captured.matchAt(a, input, scan) else syntax.behaviorSwitchEnd(input, scan);
+        if (matched) |end| {
+            const toc_end = if (registry) |captured| try captured.tocMatchAt(a, input, scan) else if (std.ascii.eqlIgnoreCase(input[scan..end], "__TOC__")) end else null;
+            if (toc_end != null and toc_end.? == end) {
+                if (first_toc) {
+                    try out.appendSlice(a, input[emitted..scan]);
+                    emitted = end;
+                } else first_toc = true;
+            }
+            scan = end;
+        } else scan += 1;
+    }
+    if (emitted == 0) return input;
+    try out.appendSlice(a, input[emitted..]);
+    return try out.toOwnedSlice(a);
+}
+
 pub const Renderer = struct {
     fallbacks: @import("presentation_fallback.zig").Report = .{},
     a: A,
@@ -1051,8 +1112,9 @@ pub const Renderer = struct {
     fn plainWithMagicLinks(self: *Renderer, value: []const u8, style: Style) Error!void {
         // The first MediaWiki TOC switch inserts a widget placeholder before
         // magic links. We omit that UI, but must not join an ISBN across it.
-        // Page-wide TOC order is not available after block/heading handling;
-        // conservatively retain every active TOC as a recognition boundary.
+        // Page-body order is normalized before owner/block handling. Direct
+        // fragments and deferred references retain conservative boundaries;
+        // page-wide Cite list/use ordering is not modeled here.
         var emitted: usize = 0;
         var scan: usize = 0;
         while (scan < value.len) {
@@ -2356,7 +2418,7 @@ pub const Renderer = struct {
         return ends_with_list;
     }
     pub fn renderBody(self: *Renderer, input: []const u8) Error![]const Block {
-        return self.renderBodyWithInlineStart(input, false);
+        return self.renderBodyWithInlineStart(try preparePageTocSourceAlloc(self.a, input, self.context.behavior_switches), false);
     }
     fn renderBodyWithInlineStart(self: *Renderer, input: []const u8, initial_inline: bool) Error![]const Block {
         if (self.body_depth >= max_depth) {
@@ -9102,4 +9164,78 @@ test "nowiki internal title rejection precedes namespace effects and preserves e
         try std.testing.expectEqualStrings("en", span.language);
         try std.testing.expectEqualStrings("rtl", span.direction);
     }
+}
+
+test "page-body first TOC keeps its boundary and later TOCs join ISBN source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "__TOC__\n\nISBN 97803__TOC__06406157",
+        "==__TOC__Heading==\nISBN 97803__toc__06406157",
+        "__TOC__ ISBN 97803__TOC__06406157",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        var links: usize = 0;
+        for (blocks) |block_value| for (block_value.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) links += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
+    }
+    for ([_][]const u8{ "ISBN 97803__TOC__06406157", "ISBN __TOC____TOC__9780306406157" }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        for (try renderer.renderBody(source)) |block_value| for (block_value.spans) |span| {
+            try std.testing.expect(span.kind != .link and span.kind != .external_link);
+        };
+    }
+}
+
+test "page-body TOC prepass preserves protected attributes entities and deferred references" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const prefixes = [_][]const u8{
+        "<nowiki>__TOC__</nowiki>",                     "<pre>__TOC__</pre>",
+        "<source>__TOC__</source>",                     "<syntaxhighlight>__TOC__</syntaxhighlight>",
+        "<!--__TOC__-->",                               "<nowiki></ref>__TOC__</nowiki>",
+        "&#95;&#95;TOC__",                              "<span title='__TOC__'>body</span>",
+        "<ref>__TOC__ ISBN 97803__TOC__06406157</ref>", "<references><ref name='x'>__TOC__</ref></references>",
+        "<ref name='__TOC__'/>",
+    };
+    for (prefixes) |prefix| {
+        const source = try std.fmt.allocPrint(a, "{s} __TOC__ ISBN 97803__TOC__06406157", .{prefix});
+        const expected = try std.fmt.allocPrint(a, "{s} __TOC__ ISBN 9780306406157", .{prefix});
+        try std.testing.expectEqualStrings(expected, try preparePageTocSourceAlloc(a, source, null));
+    }
+    // Unmatched ref/list openers must not shield all subsequent page controls.
+    for ([_][]const u8{ "<ref>", "<references>" }) |prefix| {
+        const source = try std.fmt.allocPrint(a, "{s}__TOC__ ISBN 97803__TOC__06406157", .{prefix});
+        const expected = try std.fmt.allocPrint(a, "{s}__TOC__ ISBN 9780306406157", .{prefix});
+        try std.testing.expectEqualStrings(expected, try preparePageTocSourceAlloc(a, source, null));
+    }
+    // Extension bodies use the existing first strict closer, not nesting.
+    for ([_][]const u8{ "ref", "references" }) |name| {
+        const source = try std.fmt.allocPrint(a, "<{s}>unclosed <{s}>__TOC__</{s}> __TOC__ ISBN 97803__TOC__06406157", .{ name, name, name });
+        const expected = try std.fmt.allocPrint(a, "<{s}>unclosed <{s}>__TOC__</{s}> __TOC__ ISBN 9780306406157", .{ name, name, name });
+        try std.testing.expectEqualStrings(expected, try preparePageTocSourceAlloc(a, source, null));
+    }
+    const unchanged = "<nowiki>__TOC__</nowiki> __TOC__";
+    try std.testing.expect((try preparePageTocSourceAlloc(a, unchanged, null)).ptr == unchanged.ptr);
+    var deferred: Renderer = .{ .a = a, .context = .{} };
+    const fragments = try deferred.parseSpans("__TOC__ ISBN 97803__TOC__06406157", .{});
+    for (fragments) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
+}
+
+test "page-body TOC order uses captured localized and bare Unicode aliases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Registry = @import("namespace_registry").behavior_switches.Registry;
+    const raw = "# wikidict-behavior-switches-v1\n# wiki\tfrwiktionary\n# dump-date\t20261001\n# content-language\tfr\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\ntoc\t0\t__SOMMAIRE__\ntoc\t0\tSoft\nnoeditsection\t0\t__SANSSECTION__\nnoeditsection\t0\tSoftExtra\n";
+    var registry = try Registry.init(a, raw, "frwiktionary", "20261001", "fr", @splat(0));
+    defer registry.deinit();
+    try std.testing.expectEqualStrings("__sommaire__ ISBN 97803__SANSSECTION__06406157", try preparePageTocSourceAlloc(a, "__sommaire__ ISBN 97803Soft__SANSSECTION__06406157", &registry));
+    try std.testing.expectEqualStrings("ſoft ISBN 9780306406157", try preparePageTocSourceAlloc(a, "ſoft ISBN 97803Soft06406157", &registry));
+    try std.testing.expectEqualStrings("SoftExtra Soft ISBN 9780306406157", try preparePageTocSourceAlloc(a, "SoftExtra Soft ISBN 97803Soft06406157", &registry));
 }

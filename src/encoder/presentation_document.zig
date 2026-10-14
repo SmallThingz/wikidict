@@ -27,6 +27,7 @@ const NamespaceRegistry = @import("namespace_registry").Registry;
 pub const Fallbacks = @import("presentation_fallback.zig").Report;
 pub const ReferenceDefinitions = compiler.ReferenceDefinitions;
 pub const referenceDefinitionsAlloc = compiler.referenceDefinitionsAlloc;
+pub const preparePageTocSourceAlloc = compiler.preparePageTocSourceAlloc;
 
 fn requireCompiledText(text: []const u8) !void {
     for ([_][]const u8{ "[[", "]]", "{{", "}}", "{|", "|}" }) |token| {
@@ -846,4 +847,18 @@ test "external HTML-label boundary compiles the Arabic Navbar witness as data-on
     try std.testing.expectEqual(types.InlineKind.text, spans[2].kind);
     try std.testing.expectEqualStrings("\">visible", spans[2].text);
     try std.testing.expectEqualDeep(Fallbacks{ .literal_markup = true }, attribute_report);
+}
+
+test "page-body repeated TOC navigation survives ordinary DPR2 round trip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "__TOC__\n===Noun===\n# ISBN 97803__TOC__06406157\n";
+    const encoded = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    var links: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) links += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
 }
