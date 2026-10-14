@@ -30,6 +30,7 @@
 #include <QSet>
 #include <QSettings>
 #include <QStackedWidget>
+#include <QStringList>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -111,6 +112,42 @@ private:
     static QPushButton *buttonWithText(QWidget *parent, const QString &text) {
         for (auto *button : parent->findChildren<QPushButton *>()) if (button->text() == text) return button;
         return nullptr;
+    }
+
+    static bool prepareCaseTitleFixture(const QString &fixtureRoot, const QString &directory, QStringList titles) {
+        QFile fixture(fixtureRoot + QStringLiteral("/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"));
+        if (!fixture.open(QIODevice::ReadOnly)) return false;
+        const QByteArray original = fixture.readAll();
+        qsizetype at = 9;
+        for (int i = 0; i < 3; ++i) {
+            at = original.indexOf('\0', at) + 1;
+            if (at <= 0) return false;
+        }
+        const qsizetype lengthStart = at;
+        quint64 length = 0;
+        for (int shift = 0; ; shift += 7) {
+            if (at >= original.size() || shift >= 64) return false;
+            const auto byte = static_cast<unsigned char>(original[at++]);
+            length |= quint64(byte & 127) << shift;
+            if (!(byte & 128)) break;
+        }
+        if (length > quint64(original.size() - at)) return false;
+        const QByteArray record = original.mid(lengthStart, at - lengthStart + qsizetype(length));
+        std::sort(titles.begin(), titles.end(), [](const QString &left, const QString &right) {
+            return left.toUtf8() < right.toUtf8();
+        });
+        QByteArray bytes = QByteArrayLiteral("WIKBLB08") + char(1) +
+            QByteArrayLiteral("en\0") + QByteArrayLiteral("English\0");
+        for (const QString &word : titles) bytes += word.toUtf8() + '\0' + record;
+        const QString source = directory + QStringLiteral("/source.wikblb");
+        QFile file(source);
+        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()) return false;
+        file.close();
+        std::atomic_bool cancelled = false;
+        const QString root = directory + QStringLiteral("/library");
+        auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled, [](const QString &, qint64, qint64) {});
+        LibraryStorage::commitImport(root, *prepared);
+        return true;
     }
 
 private slots:
@@ -785,6 +822,108 @@ private slots:
         QTest::keyClicks(window.search_, "PAGE");
         QTRY_COMPARE(window.results_->count(), 80);
         QCOMPARE(window.results_->item(0)->data(Qt::UserRole).toString(), QStringLiteral("page001"));
+    }
+
+    void exactSearchPreservesExplicitSelection_data() {
+        QTest::addColumn<QString>("action");
+        QTest::addColumn<bool>("typeSecond");
+        QTest::addColumn<int>("expectedRow");
+        QTest::newRow("typed-exact") << QStringLiteral("typed") << true << 1;
+        QTest::newRow("arrow-down-unchanged-row-zero") << QStringLiteral("down") << true << 0;
+        QTest::newRow("arrow-up-transfer-last-row") << QStringLiteral("up") << false << 1;
+        QTest::newRow("list-down") << QStringLiteral("list-down") << false << 1;
+        QTest::newRow("list-up") << QStringLiteral("list-up") << true << 0;
+        QTest::newRow("home") << QStringLiteral("home") << true << 0;
+        QTest::newRow("end") << QStringLiteral("end") << false << 1;
+        QTest::newRow("page-up") << QStringLiteral("page-up") << true << 0;
+        QTest::newRow("page-down") << QStringLiteral("page-down") << false << 1;
+        QTest::newRow("mouse-alternate") << QStringLiteral("mouse") << false << 1;
+        QTest::newRow("list-enter-alternate") << QStringLiteral("list-enter") << false << 1;
+    }
+
+    void exactSearchPreservesExplicitSelection() {
+        QFETCH(QString, action);
+        QFETCH(bool, typeSecond);
+        QFETCH(int, expectedRow);
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-exact-selection-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString path = QDir(directory.path()).absolutePath();
+        QVERIFY(prepareCaseTitleFixture(fixture_, path, {QStringLiteral("Apple"), QStringLiteral("apple")}));
+        MainWindow window(path + QStringLiteral("/library"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.search_->setText(QStringLiteral("app"));
+        QTRY_COMPARE(window.resultsQuery_, QStringLiteral("app"));
+        QTRY_COMPARE(window.results_->count(), 2);
+        const QString first = window.results_->item(0)->data(Qt::UserRole).toString();
+        const QString second = window.results_->item(1)->data(Qt::UserRole).toString();
+        QVERIFY(first != second);
+        const QString typed = typeSecond ? second : first;
+        const QString expected = expectedRow == 0 ? first : second;
+        window.search_->setText(typed);
+        QTRY_COMPARE(window.resultsQuery_, typed);
+        QTRY_COMPARE(window.results_->count(), 2);
+        window.search_->setFocus();
+        if (action == QStringLiteral("mouse")) {
+            window.results_->scrollToItem(window.results_->item(1));
+            QTest::mouseClick(window.results_->viewport(), Qt::LeftButton, Qt::NoModifier,
+                window.results_->visualItemRect(window.results_->item(1)).center());
+        } else {
+            if (action != QStringLiteral("typed")) {
+                QTest::keyClick(window.search_, action == QStringLiteral("up") ? Qt::Key_Up : Qt::Key_Down);
+                if (action == QStringLiteral("list-down") || action == QStringLiteral("list-enter"))
+                    QTest::keyClick(window.results_, Qt::Key_Down);
+                if (action == QStringLiteral("list-up") || action == QStringLiteral("home") || action == QStringLiteral("page-up"))
+                    QTest::keyClick(window.results_, Qt::Key_End);
+                if (action == QStringLiteral("list-up")) QTest::keyClick(window.results_, Qt::Key_Up);
+                if (action == QStringLiteral("home")) QTest::keyClick(window.results_, Qt::Key_Home);
+                if (action == QStringLiteral("end")) QTest::keyClick(window.results_, Qt::Key_End);
+                if (action == QStringLiteral("page-up")) QTest::keyClick(window.results_, Qt::Key_PageUp);
+                if (action == QStringLiteral("page-down")) QTest::keyClick(window.results_, Qt::Key_PageDown);
+                QCOMPARE(window.results_->currentRow(), expectedRow);
+                if (action != QStringLiteral("list-enter"))
+                    QTest::keyClick(window.results_, Qt::Key_Escape);
+            }
+            QTest::keyClick(action == QStringLiteral("list-enter") ? static_cast<QWidget *>(window.results_) :
+                static_cast<QWidget *>(window.search_), Qt::Key_Return);
+        }
+        QTRY_COMPARE(title(window), expected);
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+
+        // A new query resets an earlier explicit choice without changing the row ordering.
+        const QString next = expected == first ? second : first;
+        window.search_->setText(next);
+        QTRY_COMPARE(window.resultsQuery_, next);
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QTRY_COMPARE(title(window), next);
+    }
+
+    void exactSearchFindsTitleBeyondFirstSuggestionPage() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-exact-page-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString path = QDir(directory.path()).absolutePath();
+        QStringList variants;
+        for (unsigned bits = 0; bits < 96; ++bits) {
+            QString word = QStringLiteral("caseword");
+            for (int i = 0; i < word.size(); ++i)
+                if (bits & (1u << i)) word[i] = word[i].toUpper();
+            variants.append(word);
+        }
+        QVERIFY(prepareCaseTitleFixture(fixture_, path, variants));
+        MainWindow window(path + QStringLiteral("/library"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QCOMPARE(window.searchTitles_.size(), 96);
+        const QString exact = window.searchTitles_.last();
+        window.search_->setText(exact);
+        QTRY_COMPARE(window.resultsQuery_, exact);
+        QTRY_COMPARE(window.results_->count(), 80);
+        QVERIFY(window.moreResults_->isEnabled());
+        for (int i = 0; i < window.results_->count(); ++i)
+            QVERIFY(window.results_->item(i)->data(Qt::UserRole).toString() != exact);
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QTRY_COMPARE(title(window), exact);
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
     }
 
     void enterUsesFreshSuggestionsDuringDebounce() {

@@ -461,6 +461,7 @@ void MainWindow::setupUi() {
     searchTimer_->setSingleShot(true);
     searchTimer_->setInterval(120);
     connect(search_, &QLineEdit::textChanged, this, [this] {
+        searchSelectionExplicit_ = false;
         results_->clear();
         moreResults_->setEnabled(false);
         resultStatus_->setText(QStringLiteral("Searching..."));
@@ -468,6 +469,9 @@ void MainWindow::setupUi() {
     });
     connect(searchTimer_, &QTimer::timeout, this, &MainWindow::refreshSearch);
     connect(search_, &QLineEdit::returnPressed, this, &MainWindow::submitSearch);
+    connect(results_, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (row >= 0) searchSelectionExplicit_ = true;
+    });
     connect(results_, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
         const QString word = item->data(Qt::UserRole).toString();
         if (currentEntry_.value(QStringLiteral("title")).toString() != word) openWord(word);
@@ -558,6 +562,7 @@ void MainWindow::refreshSearch() {
     if (!api_ || loading_) return;
     searchTimer_->stop();
     resultsQuery_ = search_->text().trimmed();
+    searchSelectionExplicit_ = false;
     results_->clear();
     const auto first = std::lower_bound(searchTitles_.cbegin(), searchTitles_.cend(), resultsQuery_, titleLess);
     const auto last = std::upper_bound(first, searchTitles_.cend(), resultsQuery_, [](const QString &query, const QString &title) {
@@ -594,6 +599,13 @@ void MainWindow::loadMoreResults() {
 void MainWindow::submitSearch() {
     if (!api_ || loading_) return;
     if (searchTimer_->isActive() || resultsQuery_ != search_->text().trimmed()) refreshSearch();
+    if (!searchSelectionExplicit_) {
+        const auto equal = std::equal_range(searchTitles_.cbegin(), searchTitles_.cend(), resultsQuery_, titleLess);
+        if (std::find(equal.first, equal.second, resultsQuery_) != equal.second) {
+            openWord(resultsQuery_);
+            return;
+        }
+    }
     if (auto *item = results_->currentItem()) openWord(item->data(Qt::UserRole).toString());
     else openWord(search_->text().trimmed());
 }
@@ -652,11 +664,17 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
         if (watched == search_ && (key->key() == Qt::Key_Down || key->key() == Qt::Key_Up)) {
             if (searchTimer_->isActive()) refreshSearch();
             if (results_->count() > 0) {
+                searchSelectionExplicit_ = true; // Arrow transfer also selects an unchanged row zero.
                 results_->setFocus();
                 results_->setCurrentRow(key->key() == Qt::Key_Down ? 0 : results_->count() - 1);
             }
             return true;
         }
+        if (watched == results_ && results_->currentItem() &&
+            (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down ||
+             key->key() == Qt::Key_Home || key->key() == Qt::Key_End ||
+             key->key() == Qt::Key_PageUp || key->key() == Qt::Key_PageDown))
+            searchSelectionExplicit_ = true;
         if (watched == results_ && (key->key() == Qt::Key_Escape || (key->key() == Qt::Key_Up && results_->currentRow() == 0))) {
             search_->setFocus();
             return true;

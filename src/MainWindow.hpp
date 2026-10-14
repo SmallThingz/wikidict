@@ -119,6 +119,7 @@ private:
     QVector<Visit> visits_;
     int visitIndex_ = -1;
     int readingPointSize_ = 12;
+    bool searchSelectionExplicit_ = false;
     bool moreAvailable_ = false;
     bool loading_ = false;
     unsigned loadSerial_ = 0;
