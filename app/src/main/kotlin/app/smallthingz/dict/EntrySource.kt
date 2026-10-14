@@ -16,6 +16,14 @@ internal fun sourcePage(entry: Entry, title: String): String = sourceWiki(entry.
     it + "wiki/" + java.net.URLEncoder.encode(title,"UTF-8").replace("+","%20")
 } ?: "https://www.wiktionary.org/"
 
+// Match the normalized target emitted by the compiler, including its terminal-X form.
+private val compiledBookSourcesTarget = Regex("Special:BookSources/(?:[0-9]{9}[0-9X]|97[89][0-9]{9}[0-9X])")
+
+internal fun bookSourcesUrl(entry: Entry, target: String): String? {
+    if (!compiledBookSourcesTarget.matches(target) || sourceWiki(entry.edition) == null) return null
+    return sourcePage(entry, target)
+}
+
 internal fun mediaHosts(edition: String): List<String> = listOf("commons.wikimedia.org") + listOfNotNull(sourceWiki(edition)?.let { java.net.URI(it).host })
 
 internal fun mediaKey(media: Media, edition: String): String = java.security.MessageDigest.getInstance("SHA-256")

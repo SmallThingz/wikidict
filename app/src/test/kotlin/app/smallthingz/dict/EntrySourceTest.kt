@@ -57,4 +57,26 @@ class EntrySourceTest {
             }
         }
     }
+    @Test fun compiledBookSourcesTargetsUseOnlyTheirKnownSourceEdition() {
+        val source = entry(edition = "arwiktionary-20261001").copy(language = "French", languageCode = "fr")
+        for (isbn in listOf("1234567890", "123456789X", "9780306406157", "9791234567890", "978123456789X", "979123456789X")) {
+            assertEquals("https://ar.wiktionary.org/wiki/Special%3ABookSources%2F$isbn",
+                bookSourcesUrl(source, "Special:BookSources/$isbn"))
+        }
+        assertEquals("https://en.wiktionary.org/wiki/Special%3ABookSources%2F9780306406157",
+            bookSourcesUrl(source.copy(edition = "enwiktionary-20261001"), "Special:BookSources/9780306406157"))
+        for (target in listOf("", "word", "#Usage_notes", "File:book.png", "Image:book.png", "Special:FilePath/book.png",
+            "special:BookSources/9780306406157", "Special:Booksources/9780306406157", "Special:BookSources/",
+            "Special:BookSources/123456789", "Special:BookSources/12345678901", "Special:BookSources/123456789x",
+            "Special:BookSources/9770306406157", "Special:BookSources/978030640615x", "Special:BookSources/97803064061577",
+            "Special:BookSources/978-0306406157", "Special:BookSources/978 0306406157", "Special:BookSources/978\t0306406157",
+            "Special:BookSources/9780306406157#French", "Special:BookSources/9780306406157?x=1",
+            "Special:BookSources/9780306406157/extra", "Special:BookSources/%39%37%38%30%33%30%36%34%30%36%31%35%37",
+            "Special:BookSources/٩٧٨٠٣٠٦٤٠٦١٥٧", " Special:BookSources/9780306406157", "Special:BookSources/9780306406157\n")) {
+            assertNull(target, bookSourcesUrl(source, target))
+        }
+        for (edition in listOf("", "bad", "en", "../arwiktionary-20261001")) {
+            assertNull(edition, bookSourcesUrl(source.copy(edition = edition), "Special:BookSources/9780306406157"))
+        }
+    }
 }

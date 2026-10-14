@@ -112,8 +112,9 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                             val matches by produceState<List<WordHit>>(emptyList(), library.revision, query) { value = library.search(query) }
                             WordMatches(matches, ::open)
                         } else selected?.let { entry -> EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, settings = learning.data.settings, onScrollDirection = { dockHidden = it }, anchorRequest = anchorRequest, onAnchorConsumed = { if (anchorRequest === it) anchorRequest = null }, onLink = { target ->
-                            if (target.startsWith("File:",true) || target.startsWith("Image:",true)) {
-                                uri.openUri(sourcePage(entry,target))
+                            val bookSource = bookSourcesUrl(entry, target)
+                            if (target.startsWith("File:",true) || target.startsWith("Image:",true) || bookSource != null) {
+                                uri.openUri(bookSource ?: sourcePage(entry,target))
                             } else scope.launch { library.link(target,entry)?.let { openDestination(it, target) } ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
                         }) } ?: LibraryScreen(library,onImport)
                     }
