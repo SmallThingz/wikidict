@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.net.Uri
 import android.content.Context
 import android.database.Cursor
+import android.database.sqlite.SQLiteDatabase
 import androidx.compose.runtime.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -11,7 +12,6 @@ import kotlinx.coroutines.sync.withLock
 import java.io.*
 import java.net.URI
 import java.security.MessageDigest
-import java.util.Locale
 import java.util.UUID
 
 private val blobKinds = listOf("language", "thesaurus", "citations", "reconstruction", "rhymes", "sign_gloss", "supplemental", "alias")
@@ -78,6 +78,50 @@ internal fun enqueueOwnedDownload(lock: Any, enqueue: () -> Long, commit: (Long)
     throw IOException("Could not save the download. The download was cancelled.")
 }
 
+internal fun committedDictionaryRegistration(db: SQLiteDatabase, id: String): Boolean? {
+    if (db.inTransaction()) return null
+    // A fresh writer transaction cannot succeed while an earlier native write
+    // transaction remains unresolved, even if the Java stack was already cleared.
+    db.beginTransaction()
+    return try {
+        db.rawQuery("SELECT id FROM dictionaries WHERE id=?", arrayOf(id)).use { it.moveToFirst() }
+    } finally { db.endTransaction() }
+}
+
+// An endTransaction exception does not establish whether COMMIT succeeded.
+// registered must observe committed state; null means the outcome is unresolved.
+internal inline fun finishDictionaryInstall(
+    failure: Throwable?, placedFile: File?, endTransaction: () -> Unit,
+    registered: () -> Boolean?, refresh: () -> Unit
+) {
+    var primary = failure
+    try { endTransaction() }
+    catch (endFailure: Exception) {
+        if (primary == null) primary = endFailure
+        else if (primary !== endFailure) primary.addSuppressed(endFailure)
+    }
+    val error = primary
+    if (error == null) {
+        refresh()
+        return
+    }
+    if (error is Error) return // Preserve fatal body failures without recovery work.
+    if (placedFile != null) {
+        try {
+            when (registered()) {
+                false -> if (!placedFile.delete() && placedFile.exists()) {
+                    throw IOException("Cannot remove unregistered dictionary")
+                }
+                true -> refresh()
+                null -> Unit
+            }
+        } catch (cleanupFailure: Exception) {
+            if (cleanupFailure !== error) error.addSuppressed(cleanupFailure)
+        }
+    }
+    if (failure == null) throw error
+}
+
 // Queued operations must not replace the job that currently owns the library.
 internal class LibraryOperationOwner(private val mutex: Mutex) {
     @Volatile var active: Job? = null
@@ -112,11 +156,21 @@ class LibraryStore private constructor(private val context: Context) {
     private val downloadLock = Any()
     var hasRetainedDownload by mutableStateOf(prefs.getLong("downloadId", -1) >= 0); private set
     var sources by mutableStateOf(prefs.getStringSet("sources", setOf(Catalog.DEFAULT))!!.toList()); private set
-    init { scope.launch { mutex.withLock {
-        val installed=helper.readableDatabase.rawQuery("SELECT id FROM dictionaries",null).use{c->buildSet{while(c.moveToNext())add(c.getString(0)+".wikblb")}}
-        directory.listFiles()?.filter{it.extension=="part" || (it.extension=="wikblb" && it.name !in installed)}?.forEach{it.delete()}
-        refresh()
-    }; resumeDownload() } }
+    init { scope.launch {
+        val opened = mutex.withLock {
+            try {
+                val installed=helper.readableDatabase.rawQuery("SELECT id FROM dictionaries",null).use{c->buildSet{while(c.moveToNext())add(c.getString(0)+".wikblb")}}
+                directory.listFiles()?.filter{it.extension=="part" || (it.extension=="wikblb" && it.name !in installed)}?.forEach{it.delete()}
+                refresh()
+                true
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                withContext(Dispatchers.Main) { error = "Unable to open your library. Restart the app to try again." }
+                false
+            }
+        }
+        if (opened) resumeDownload()
+    } }
     private suspend fun refresh() {
         val values = helper.readableDatabase.rawQuery("SELECT * FROM dictionaries ORDER BY language", null).use { c -> buildList {
             while (c.moveToNext()) add(DictionaryInfo(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getInt(4), c.getLong(5), c.getString(6)))
@@ -291,6 +345,7 @@ class LibraryStore private constructor(private val context: Context) {
         var count = 0; var language = ""; var code = ""; var kind = ""
         val final = File(directory, "$id.wikblb")
         var placedFile = false
+        var failure: Throwable? = null
         db.beginTransaction()
         try {
             BlobSource(temp).use { source ->
@@ -315,7 +370,7 @@ class LibraryStore private constructor(private val context: Context) {
                             input.skipFully(length-4)
                         }
                         val lookup = alias?.sourceKey ?: title
-                        statement.bindString(1,id); statement.bindBlob(2,lookup.toByteArray(Charsets.UTF_8)); statement.bindBlob(3,lookup.lowercase(Locale.ROOT).toByteArray(Charsets.UTF_8)); statement.bindLong(4,offset); statement.bindLong(5,length)
+                        statement.bindString(1,id); statement.bindBlob(2,lookup.toByteArray(Charsets.UTF_8)); statement.bindBlob(3,foldSearchKey(lookup).toByteArray(Charsets.UTF_8)); statement.bindLong(4,offset); statement.bindLong(5,length)
                         statement.bindBlob(6,title.toByteArray(Charsets.UTF_8)); statement.bindString(7,alias?.sourceKind ?: kind); statement.executeInsert(); count++
                     }
                 }
@@ -334,12 +389,26 @@ class LibraryStore private constructor(private val context: Context) {
                 require(!collision) { "Redirect collides with a definition in this edition" }
             }
             db.setTransactionSuccessful()
-        } catch (e: Exception) { if (placedFile) final.delete(); throw e } finally { db.endTransaction() }
-        refresh()
+        } catch (e: Throwable) {
+            failure = e
+            throw e
+        } finally {
+            finishDictionaryInstall(
+                failure, final.takeIf { placedFile }, { db.endTransaction() },
+                registered = { committedDictionaryRegistration(db, id) },
+                refresh = { refresh() }
+            )
+        }
     }
     suspend fun search(query: String, limit: Int = 80): List<WordHit> = withContext(Dispatchers.IO) {
-        val q = query.trim().lowercase(Locale.ROOT)
-        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized >= substr(?,2) AND normalized < substr(?,2) ORDER BY normalized,title,language,dictionary LIMIT ?", arrayOf(sqlText(q),sqlText(q + String(Character.toChars(0x10ffff))),limit.coerceIn(1,500).toString())).use { c -> buildList {
+        val q = foldSearchKey(query.trim())
+        val upper = searchPrefixUpperBound(q)
+        val range = if (upper == null) "normalized >= substr(?,2)"
+            else "normalized >= substr(?,2) AND normalized < substr(?,2)"
+        val count = limit.coerceIn(1,500).toString()
+        val arguments = if (upper == null) arrayOf(sqlText(q), count)
+            else arrayOf(sqlText(q), sqlText(upper), count)
+        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE $range ORDER BY normalized,title,language,dictionary LIMIT ?", arguments).use { c -> buildList {
             while(c.moveToNext()) add(hit(c))
         } }
     }
@@ -355,7 +424,7 @@ class LibraryStore private constructor(private val context: Context) {
         }
     }
     suspend fun exact(title: String, language: String? = null, edition: String? = null): WordHit? = withContext(Dispatchers.IO) {
-        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND (?='0' OR edition=?) ORDER BY CASE WHEN language=substr(?,2) THEN 0 ELSE 1 END, CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END, dictionary LIMIT 1",arrayOf(sqlText(title.lowercase(Locale.ROOT)),if(edition==null) "0" else "1",edition.orEmpty(),sqlText(language.orEmpty()),sqlText(title))).use{c ->
+        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND (?='0' OR edition=?) ORDER BY CASE WHEN language=substr(?,2) THEN 0 ELSE 1 END, CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END, dictionary LIMIT 1",arrayOf(sqlText(foldSearchKey(title)),if(edition==null) "0" else "1",edition.orEmpty(),sqlText(language.orEmpty()),sqlText(title))).use{c ->
             if(c.moveToFirst()) hit(c) else null
         }
     }
@@ -365,7 +434,7 @@ class LibraryStore private constructor(private val context: Context) {
         // Old records did not retain a dictionary ID. Preserve their recorded context;
         // an ambiguous match cannot establish which source the user had selected.
         return helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND title=substr(?,2) AND edition=? AND (?='' OR kind=?) AND (?='0' OR language=substr(?,2)) LIMIT 2",
-            arrayOf(sqlText(title.lowercase(Locale.ROOT)),sqlText(title),edition,kind.orEmpty(),kind.orEmpty(),if(language==null) "0" else "1",sqlText(language.orEmpty()))).use { c ->
+            arrayOf(sqlText(foldSearchKey(title)),sqlText(title),edition,kind.orEmpty(),kind.orEmpty(),if(language==null) "0" else "1",sqlText(language.orEmpty()))).use { c ->
             if (!c.moveToFirst()) null else hit(c).takeUnless { c.moveToNext() }
         }
     }
@@ -419,11 +488,11 @@ class LibraryStore private constructor(private val context: Context) {
         if (entry.edition.isEmpty()) {
             val dictionary = entry.origin?.dictionary ?: return@withContext null
             return@withContext helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND dictionary=? AND kind=? ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
-                arrayOf(sqlText(key.lowercase(Locale.ROOT)),dictionary,entry.navigationKind,sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
+                arrayOf(sqlText(foldSearchKey(key)),dictionary,entry.navigationKind,sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
         }
         if (entry.navigationKind == "language" && entry.navigationLanguage.isNullOrEmpty()) return@withContext null
         helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND edition=? AND kind=? AND (substr(?,2)='' OR language=substr(?,2)) ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
-            arrayOf(sqlText(key.lowercase(Locale.ROOT)),entry.edition,entry.navigationKind,sqlText(entry.navigationLanguage.orEmpty()),sqlText(entry.navigationLanguage.orEmpty()),sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
+            arrayOf(sqlText(foldSearchKey(key)),entry.edition,entry.navigationKind,sqlText(entry.navigationLanguage.orEmpty()),sqlText(entry.navigationLanguage.orEmpty()),sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
     }
     fun rememberWord(hit:WordHit) { prefs.edit().putString("lastTitle",hit.title).putString("lastLanguage",hit.language)
         .putString("lastDictionary",hit.dictionary).putString("lastRecordKey",hit.recordKey).putString("lastContextDictionary",hit.contextDictionary).putString("lastEdition",hit.edition).apply() }
