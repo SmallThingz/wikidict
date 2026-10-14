@@ -875,14 +875,16 @@ pub fn preparePageTocSourceAlloc(a: A, input: []const u8, registry: ?*const @imp
     var no_more_nowiki_close = false;
     var no_more_ref_close = false;
     var no_more_references_close = false;
+    var no_more_pre_close = false;
     while (scan < input.len) {
         if (input[scan] == '<') {
-            // Closed references are independent deferred scopes. An unmatched
-            // opener does not manufacture an opaque remainder in this prepass.
+            // Closed references are independent deferred scopes; closed pre is
+            // protected. Their unmatched openers do not shield the remainder:
+            // unmatched pre is parsed by opaqueExtension and the block path.
             const tag = syntax.tagAtCached(input, scan, &no_more_nowiki_close);
             if (tag) |opening| {
-                if (!opening.closing and (opening.is("ref") or opening.is("references"))) {
-                    const no_more_close = if (opening.is("ref")) &no_more_ref_close else &no_more_references_close;
+                if (!opening.closing and (opening.is("ref") or opening.is("references") or opening.is("pre"))) {
+                    const no_more_close = if (opening.is("ref")) &no_more_ref_close else if (opening.is("references")) &no_more_references_close else &no_more_pre_close;
                     if (opening.self_closing) {
                         scan = opening.end;
                         continue;
@@ -9238,4 +9240,42 @@ test "page-body TOC order uses captured localized and bare Unicode aliases" {
     try std.testing.expectEqualStrings("__sommaire__ ISBN 97803__SANSSECTION__06406157", try preparePageTocSourceAlloc(a, "__sommaire__ ISBN 97803Soft__SANSSECTION__06406157", &registry));
     try std.testing.expectEqualStrings("ſoft ISBN 9780306406157", try preparePageTocSourceAlloc(a, "ſoft ISBN 97803Soft06406157", &registry));
     try std.testing.expectEqualStrings("SoftExtra Soft ISBN 9780306406157", try preparePageTocSourceAlloc(a, "SoftExtra Soft ISBN 97803Soft06406157", &registry));
+}
+
+test "page-body TOC treats unmatched pre remainder as active and closed pre as protected" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "__TOC__\n<pre><nowiki>__TOC__ [[hidden]]</nowiki> ISBN 97803__TOC__06406157";
+    const normalized = try preparePageTocSourceAlloc(a, source, null);
+    try std.testing.expectEqualStrings("__TOC__\n<pre><nowiki>__TOC__ [[hidden]]</nowiki> ISBN 9780306406157", normalized);
+    var inline_renderer: Renderer = .{ .a = a, .context = .{} };
+    const inline_spans = try inline_renderer.parseSpans(normalized, .{});
+    try std.testing.expect(unclosedExternalRecoveryHasLink(inline_spans, .link, "Special:BookSources/9780306406157"));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(inline_spans, .link, "hidden"));
+    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, inline_spans), "__TOC__ [[hidden]]") != null);
+    try std.testing.expect(inline_renderer.fallbacks.unclosed_formatting);
+    var block_renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try block_renderer.renderBody(source);
+    var links: usize = 0;
+    var literal_seen = false;
+    for (blocks) |block_value| for (block_value.spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) links += 1;
+        try std.testing.expect(!(span.kind == .link and std.mem.eql(u8, span.target, "hidden")));
+        if (span.provenance == .protected_literal and std.mem.indexOf(u8, span.text, "__TOC__ [[hidden]]") != null) literal_seen = true;
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
+    try std.testing.expect(literal_seen);
+    try std.testing.expect(block_renderer.fallbacks.unclosed_formatting);
+    const closed = "__TOC__\n<pre>ISBN 97803__TOC__06406157</pre>";
+    try std.testing.expect((try preparePageTocSourceAlloc(a, closed, null)).ptr == closed.ptr);
+    var closed_renderer: Renderer = .{ .a = a, .context = .{} };
+    for (try closed_renderer.renderBody(closed)) |block_value| for (block_value.spans) |span| {
+        try std.testing.expect(span.kind != .link and span.kind != .external_link);
+    };
+    try std.testing.expect(!closed_renderer.fallbacks.unclosed_formatting);
+    // The existing opaque matcher takes the first strict closer, even inside
+    // quoted pseudo-tags; the later active TOC must still be removed.
+    try std.testing.expectEqualStrings("__TOC__ <pre><span title=\"</pre>\"> ISBN 9780306406157", try preparePageTocSourceAlloc(a, "__TOC__ <pre><span title=\"</pre>\"> ISBN 97803__TOC__06406157", null));
+    try std.testing.expectEqualStrings("__TOC__ <pre>A <pre> ISBN 9780306406157", try preparePageTocSourceAlloc(a, "__TOC__ <pre>A <pre> ISBN 97803__TOC__06406157", null));
 }

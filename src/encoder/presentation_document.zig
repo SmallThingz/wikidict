@@ -862,3 +862,23 @@ test "page-body repeated TOC navigation survives ordinary DPR2 round trip" {
     };
     try std.testing.expectEqual(@as(usize, 1), links);
 }
+
+test "page-body unmatched pre TOC navigation survives ordinary DPR2 round trip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "__TOC__\n<pre><nowiki>__TOC__ [[hidden]]</nowiki> ISBN 97803__TOC__06406157";
+    var report: Fallbacks = .{};
+    const encoded = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    var links: usize = 0;
+    var visible: std.ArrayList(u8) = .empty;
+    for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) links += 1;
+        try std.testing.expect(!(span.kind == .link and std.mem.eql(u8, span.target, "hidden")));
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "__TOC__ [[hidden]]") != null);
+    try std.testing.expect(report.unclosed_formatting);
+}
