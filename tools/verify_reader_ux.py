@@ -121,6 +121,10 @@ class ReaderPty:
                           self.screen.display[1])
         return (match[1], *map(int, match.groups()[1:])) if match else None
 
+    def entry_focused(self) -> bool:
+        # The wide split view also shows READING while only previewing a match.
+        return self.screen.display[self.rows - 2].lstrip().startswith("Esc results  / search")
+
     def query(self) -> str:
         return normalized(self.screen.display[3][12:].rstrip())
 
@@ -276,7 +280,8 @@ def exercise(reader: ReaderPty, initial_width: int) -> None:
                   and reader.screen.cursor.hidden,
                   "first Down focuses the first match without skipping it")
     reader.action(ENTER, lambda: reader.page_is("search", 1, 2)
-                  and "READING" in reader.text(), "Enter reads first CAT match")
+                  and "READING" in reader.text() and reader.entry_focused(),
+                  "Enter reads first CAT match")
     require(reader.cli("history") == ["cat"], "First result navigation did not open cat")
     reader.action("s", lambda: "Saved. Press 1" in reader.text(), "save reports success")
     require(reader.cli("saved") == ["cat"], "Save was not persisted while TUI remained open")
@@ -289,7 +294,8 @@ def exercise(reader: ReaderPty, initial_width: int) -> None:
     require(reader.cli("saved") == ["catfish"], "Concurrent CLI save/remove did not take effect")
 
     reader.search("catfish", 1, "catfish")
-    reader.action(ENTER, lambda: "READING" in reader.text(), "open second word")
+    reader.action(ENTER, lambda: "READING" in reader.text() and reader.entry_focused(),
+                  "open second word")
     require(set(reader.cli("history")) == {"cat", "catfish"}, "Reading history missing opened words")
     reader.action("2", lambda: reader.page_is("history", 1, 2), "History displays opened words")
     require(reader.cli("history")[0] == "catfish", "History ordering is not most recent first")
