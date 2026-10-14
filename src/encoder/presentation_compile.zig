@@ -8781,7 +8781,10 @@ test "raw greater-than starts ordinary active bodies and retains lexical suffix 
     for ([_][]const u8{ "span", "div", "b", "code" }) |name| {
         for ([_]u8{ '"', '\'' }) |quote| {
             const source = try std.fmt.allocPrint(a, "<{s} title={c}alpha > beta{c}>[[cat|word]] __NOTOC__ &amp;</{s}> tail", .{ name, quote, quote, name });
-            const expected = try std.fmt.allocPrint(a, if (std.mem.eql(u8, name, "div")) " beta{c}>word  & \n tail" else " beta{c}>word  & tail", .{quote});
+            const expected = if (std.mem.eql(u8, name, "div"))
+                try std.fmt.allocPrint(a, " beta{c}>word  & \n tail", .{quote})
+            else
+                try std.fmt.allocPrint(a, " beta{c}>word  & tail", .{quote});
             var renderer: Renderer = .{ .a = a, .context = .{} };
             const spans = try renderer.parseSpans(source, .{});
             try std.testing.expectEqualStrings(expected, try flattened(a, spans));
