@@ -52,6 +52,17 @@
 #include <algorithm>
 #include <array>
 namespace {
+bool compiledBookSourcesTarget(const QString &target) {
+    const QString prefix = QStringLiteral("Special:BookSources/");
+    if (!target.startsWith(prefix)) return false;
+    const QString isbn = target.mid(prefix.size());
+    if (isbn.size() != 10 && isbn.size() != 13) return false;
+    if (isbn.size() == 13 && !isbn.startsWith(QStringLiteral("978")) && !isbn.startsWith(QStringLiteral("979"))) return false;
+    const auto digit = [](QChar c) { return c >= QChar('0') && c <= QChar('9'); };
+    for (qsizetype i = 0; i < isbn.size() - 1; ++i) if (!digit(isbn[i])) return false;
+    return digit(isbn.back()) || isbn.back() == QChar('X');
+}
+
 QString kindLabel(const QString &kind) {
     if (kind == QStringLiteral("language")) return QStringLiteral("Dictionary");
     QString label = kind;
@@ -510,6 +521,16 @@ void MainWindow::setupUi() {
     connect(reading_, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
         if (url.scheme() == QStringLiteral("dict")) {
             const QString target = url.path(QUrl::FullyDecoded);
+            // Validate the entire compiled target before ordinary fragment handling.
+            if (api_ && !url.hasQuery() && !url.hasFragment() && compiledBookSourcesTarget(target)) {
+                const QString host = LibraryStorage::sourceHost(api_->root());
+                if (!host.isEmpty()) {
+                    const QUrl source(QStringLiteral("https://") + host + QStringLiteral("/wiki/") +
+                        QString::fromLatin1(QUrl::toPercentEncoding(target)));
+                    QDesktopServices::openUrl(source);
+                    return;
+                }
+            }
             const QString word = target.section(QChar('#'), 0, 0);
             const std::optional<QString> section = target.contains(QChar('#')) ?
                 std::optional<QString>(target.section(QChar('#'), 1)) : std::nullopt;

@@ -1381,6 +1381,70 @@ private slots:
         QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("section-%1").arg(nounSection)));
         QVERIFY(textIsVisible(window.reading_, QStringLiteral("Noun")));
         QVERIFY(window.reading_->verticalScrollBar()->value() > 0);
+
+        // The same selected navigation test checks the source-edition ISBN route.
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-booksources-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString path = QDir(directory.path()).absolutePath();
+        const QString ordinary = QStringLiteral("Special:BookSources/not-an-isbn");
+        QVERIFY(prepareCaseTitleFixture(fixture_, path, {QStringLiteral("cat"), ordinary}));
+        const QString library = path + QStringLiteral("/library");
+        QFile marker(library + QStringLiteral("/.desktop-edition"));
+        QVERIFY(marker.open(QIODevice::WriteOnly));
+        QCOMPARE(marker.write("frwiktionary-20261001\n"), qint64(22));
+        marker.close();
+        MainWindow bookWindow(library, QStringLiteral("cat"));
+        bookWindow.resize(780, 480);
+        bookWindow.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!bookWindow.loading_ && bookWindow.api_, 30000);
+        QTRY_COMPARE(title(bookWindow), QStringLiteral("cat"));
+        QCOMPARE(bookWindow.api_->language(), QStringLiteral("English"));
+        QCOMPARE(LibraryStorage::sourceHost(bookWindow.api_->root()), QStringLiteral("fr.wiktionary.org"));
+        ExternalUrlReceiver receiver;
+        QDesktopServices::setUrlHandler(QStringLiteral("https"), &receiver, "capture");
+        const auto restore = qScopeGuard([] { QDesktopServices::unsetUrlHandler(QStringLiteral("https")); });
+        const auto link = [](const QString &target) {
+            return QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")},
+                {QStringLiteral("text"), QStringLiteral("ISBN route")}, {QStringLiteral("target"), target}}};
+        };
+        const QString prefix = QStringLiteral("Special:BookSources/");
+        qsizetype openedCount = 0;
+        for (const QString &isbn : {QStringLiteral("123456789X"), QStringLiteral("0000000000"),
+                                   QStringLiteral("9780306406157"), QStringLiteral("979123456789X")}) {
+            const QString target = prefix + isbn;
+            bookWindow.reading_->setHtml(bookWindow.spansHtml(link(target)));
+            QVERIFY(clickAnchor(bookWindow.reading_, QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target))));
+            ++openedCount;
+            QCOMPARE(receiver.opened.size(), openedCount);
+            QCOMPARE(receiver.opened.last(), QUrl(QStringLiteral("https://fr.wiktionary.org/wiki/") +
+                QString::fromLatin1(QUrl::toPercentEncoding(target))));
+            QCOMPARE(title(bookWindow), QStringLiteral("cat"));
+            QCOMPARE(bookWindow.search_->text(), QStringLiteral("cat"));
+        }
+        QCOMPARE(receiver.opened.size(), qsizetype(4));
+        for (const QString &target : {prefix + QStringLiteral("123456789x"), prefix + QStringLiteral("1234567890123"),
+                                     prefix + QStringLiteral("9780306406157#Noun"), prefix + QStringLiteral("9780306406157?q=1"),
+                                     prefix + QStringLiteral("9780306406157/path"), prefix + QStringLiteral("%31%32%33%34%35%36%37%38%39X"),
+                                     prefix + QStringLiteral("123-456789X"), prefix + QStringLiteral("١٢٣٤٥٦٧٨٩X"),
+                                     QStringLiteral("special:BookSources/123456789X")}) {
+            bookWindow.reading_->setHtml(bookWindow.spansHtml(link(target)));
+            QVERIFY(clickAnchor(bookWindow.reading_, QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target))));
+            QCOMPARE(receiver.opened.size(), qsizetype(4));
+            QCOMPARE(title(bookWindow), QStringLiteral("cat"));
+        }
+        // An unlabeled root must not guess the lexical language's source edition.
+        QVERIFY(LibraryStorage::sourceHost(window.api_->root()).isEmpty());
+        const QString unknownTarget = prefix + QStringLiteral("123456789X");
+        window.reading_->setHtml(window.spansHtml(link(unknownTarget)));
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(unknownTarget))));
+        QCOMPARE(receiver.opened.size(), qsizetype(4));
+        QCOMPARE(title(window), QStringLiteral("dog"));
+        // A real ordinary title sharing the prefix still uses exact dictionary lookup.
+        bookWindow.reading_->setHtml(bookWindow.spansHtml(link(ordinary)));
+        QVERIFY(clickAnchor(bookWindow.reading_, QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(ordinary))));
+        QCOMPARE(title(bookWindow), ordinary);
+        QVERIFY(bookWindow.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        QCOMPARE(receiver.opened.size(), qsizetype(4));
     }
 
     void captionOnlyTablesAndFosteredParagraphsKeepVisibleDepth() {
