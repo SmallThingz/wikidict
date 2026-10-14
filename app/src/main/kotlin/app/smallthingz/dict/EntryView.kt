@@ -131,6 +131,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         }
         val currentLink = rememberUpdatedState(readerLink)
         val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
+        val remainingMedia = remember(entry) {
+            val linkedFiles = inlineMediaFiles(entry)
+            entry.media.filter { it.file !in linkedFiles }
+        }
         CompositionLocalProvider(LocalTextCache provides cache) {
         LazyColumn(Modifier.fillMaxSize().nestedScroll(dockScroll).testTag("entry-scroll"), state = scroll, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 56.dp)) {
             item("title", contentType = "title") {
@@ -199,8 +203,6 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 val label = referenceLabel(ref)
                 Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text(label, style = MaterialTheme.typography.labelMedium, color = colors.primary); StyledText(ref.spans, Modifier.weight(1f), onLink = readerLink) }
             }
-            val linkedFiles = entry.sections.flatMap { it.blocks }.flatMap { block -> block.spans + block.table?.rows.orEmpty().flatten().flatMap { it.spans } }.filter { it.classes == "wikidict-media" }.map { it.target.removePrefix("File:").replace('_',' ') }.toSet()
-            val remainingMedia = entry.media.filter { it.file !in linkedFiles }
             if (remainingMedia.isNotEmpty()) item("media-heading") { FoldHeading("Media", folded["media"] == true) { folded["media"] = folded["media"] != true } }
             (if (folded["media"] == true) emptyList() else remainingMedia).forEachIndexed { index, media -> item("media-$index", contentType = "media") {
                 MediaView(media, settings, edition=entry.edition)
@@ -309,11 +311,39 @@ private fun TableView(table: Table, onLink: (String) -> Unit) {
     }
 }
 
+/** Use the same exact marker matching for inline controls and the media footer. */
+private fun embeddedMedia(spans: List<Span>, available: List<Media>): List<Media> =
+    spans.filter { it.classes == "wikidict-media" && it.target.startsWith("File:") }
+        .mapNotNull { span -> available.firstOrNull { it.file == span.target.removePrefix("File:").replace('_', ' ') } }
+        .distinctBy { it.file }
+
+private fun inlineMediaFiles(entry: Entry): Set<String> = buildSet {
+    fun include(spans: List<Span>, preserveWhitespace: Boolean = false) {
+        val rendered = if (preserveWhitespace) spans else compactSpans(spans)
+        embeddedMedia(rendered, entry.media).forEach { add(it.file) }
+    }
+    include(entry.displayTitle)
+    include(entry.preamble)
+    entry.readingRows.forEach { row ->
+        row.block?.let { block ->
+            val table = block.table
+            when {
+                table != null -> {
+                    include(table.caption)
+                    table.rows.forEach { cells -> cells.forEach { include(it.spans) } }
+                }
+                block.kind != "rule" -> include(block.spans, preserveWhitespace = block.kind == "preformatted")
+            }
+        }
+    }
+    entry.references.forEach { include(it.spans) }
+}
+
 @Composable
 internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}, preserveWhitespace: Boolean = false) {
     val spans = remember(source, preserveWhitespace) { if (preserveWhitespace) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
-    val embedded = spans.filter { it.classes == "wikidict-media" && it.target.startsWith("File:") }.mapNotNull { span -> availableMedia.firstOrNull { it.file == span.target.removePrefix("File:").replace('_',' ') } }.distinctBy { it.file }
+    val embedded = embeddedMedia(spans, availableMedia)
     if (embedded.isNotEmpty()) {
         Column(modifier) {
             // Captions are compiled spans; the media record contains only a plain summary.
