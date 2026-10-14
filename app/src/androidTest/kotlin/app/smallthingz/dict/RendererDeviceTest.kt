@@ -20,7 +20,7 @@ class RendererDeviceTest {
             library.download(library.catalog.first()).join()
             assertNull(library.error)
         }
-        compose.waitUntil(15000) { compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(15000) { compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
     }
     private fun search(word:String) {
         compose.onNodeWithContentDescription("Dictionary").performClick()

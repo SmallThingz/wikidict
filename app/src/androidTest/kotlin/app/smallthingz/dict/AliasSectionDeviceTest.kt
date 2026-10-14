@@ -113,7 +113,7 @@ class AliasSectionDeviceTest {
             compose.waitUntil(10000) { compose.onAllNodes(hasTestTag("entry-title") and hasText("Alias click")).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
             compose.onNodeWithText("DESTINATION USAGE BODY").assertDoesNotExist()
             touchLink("Use explicit etymology")
-            compose.waitUntil(10000) { compose.onAllNodesWithText("PARENT SECTION REMAINS FOLDED").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
+            compose.waitUntil(10000) { compose.onNodeWithText("PARENT SECTION REMAINS FOLDED").isDisplayed() }
             compose.onNodeWithText("PARENT SECTION REMAINS FOLDED").assertIsDisplayed()
             compose.onNodeWithContentDescription("Collapse Etymology 2").assertIsDisplayed()
             compose.onNodeWithText("DESTINATION USAGE BODY").assertDoesNotExist()

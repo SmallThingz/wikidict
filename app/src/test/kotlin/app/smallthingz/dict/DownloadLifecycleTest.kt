@@ -1,6 +1,13 @@
 package app.smallthingz.dict
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.IOException
@@ -9,6 +16,44 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class DownloadLifecycleTest {
+    @Test fun cancelTargetsActiveImportWhileRefreshWaits() = runBlocking {
+        withTimeout(5_000) {
+            val operations = LibraryOperationOwner(Mutex())
+            val events = mutableListOf<String>()
+            val refreshStarted = CompletableDeferred<Unit>()
+            val finishRefresh = CompletableDeferred<Unit>()
+            val importing = launch(start = CoroutineStart.UNDISPATCHED) {
+                operations.run {
+                    events += "import started"
+                    try { awaitCancellation() }
+                    finally { events += "import cleaned" }
+                }
+            }
+            val refreshing = launch(start = CoroutineStart.UNDISPATCHED) {
+                operations.run {
+                    events += "refresh started"
+                    refreshStarted.complete(Unit)
+                    finishRefresh.await()
+                }
+            }
+            assertSame(importing, operations.active)
+            assertFalse(refreshStarted.isCompleted)
+
+            val captured = operations.active
+            assertNull(cancelOwnedDownload({}, { captured?.cancel() }))
+            importing.join()
+            refreshStarted.await()
+            assertTrue(importing.isCancelled)
+            assertTrue(refreshing.isActive)
+            assertSame(refreshing, operations.active)
+            assertEquals(listOf("import started", "import cleaned", "refresh started"), events)
+
+            finishRefresh.complete(Unit)
+            refreshing.join()
+            assertNull(operations.active)
+        }
+    }
+
     private class Record {
         val lock = Any()
         var values: Map<String, Any> = mapOf("downloadId" to 7L, "downloadUrl" to "https://example.test/dictionary.wikblb", "downloadBytes" to 123L, "downloadHash" to "a".repeat(64))

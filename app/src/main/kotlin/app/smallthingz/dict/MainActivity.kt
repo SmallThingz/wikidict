@@ -17,7 +17,7 @@ class MainActivity : ComponentActivity() {
         setContent { DictTheme(learning.data.settings.darkMode) {
             DictApp(library, learning) { picker.launch(arrayOf("application/octet-stream", "application/x-wikblb", "*/*")) }
         } }
-        handle(intent)
+        if (savedInstanceState == null) handle(intent)
     }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

@@ -2,9 +2,12 @@ package app.smallthingz.dict
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -34,6 +37,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.intl.LocaleList
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -41,8 +45,12 @@ import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
+
+private val EgyptianFontFamily = FontFamily(Font(R.font.egyptian_hieroglyphs))
+private val spanClassWhitespace = Regex("\\s+")
 
 private class TextCache(val link: State<(String) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<FontWeight?, AnnotatedString>>()
@@ -240,31 +248,61 @@ private fun BlockView(block: Block, onLink: (String) -> Unit) {
 @Composable
 private fun TableView(table: Table, onLink: (String) -> Unit) {
     val grid = remember(table) { tableGrid(table) }
+    var unavailable by remember(table) { mutableStateOf(false) }
+    var drawingPixels by remember(table) { mutableStateOf<TablePixelLayout?>(null) }
+    val headerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+    val cellColor = MaterialTheme.colorScheme.surface
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (table.caption.isNotEmpty()) StyledText(table.caption, onLink = onLink)
-        Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            Layout(content = {
+        if (unavailable) {
+            Text("Table is too large to display.")
+        } else Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            Layout(modifier = Modifier.drawBehind {
+                val pixels = drawingPixels ?: return@drawBehind
+                grid.cells.forEach { placed ->
+                    val left = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr)
+                        pixels.columnWidth * placed.column
+                    else pixels.width - pixels.columnWidth * (placed.column + placed.colspan)
+                    val top = pixels.rowOffsets[placed.row]
+                    val bottom = pixels.rowOffsets[placed.row + placed.cell.rowspan]
+                    drawRect(if (placed.cell.header) headerColor else cellColor,
+                        topLeft = Offset(left.toFloat(), top.toFloat()),
+                        size = Size((pixels.columnWidth * placed.colspan).toFloat(), (bottom - top).toFloat()))
+                }
+            }, content = {
                 grid.cells.forEach { placed ->
                     Box(Modifier.background(if (placed.cell.header) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface).padding(10.dp)) {
                         StyledText(placed.cell.spans, weight = if (placed.cell.header) FontWeight.SemiBold else null, onLink = onLink)
                     }
                 }
             }) { measurables, _ ->
-                val columnWidth = 136.dp.roundToPx()
-                val heights = IntArray(grid.rows) { 40.dp.roundToPx() }
-                grid.cells.forEachIndexed { index, placed ->
-                    val needed = measurables[index].maxIntrinsicHeight(columnWidth * placed.cell.colspan)
-                    val available = (placed.row until placed.row + placed.cell.rowspan).sumOf { heights[it] }
-                    if (needed > available) heights[placed.row + placed.cell.rowspan - 1] += needed - available
+                val columnWidth = tableColumnWidth(grid.columns, 136.dp.roundToPx())
+                // Measure once; native Egyptian cells use SubcomposeLayout, which
+                // deliberately has no intrinsic measurement implementation.
+                val children = if (columnWidth == null) emptyList() else measurables.mapIndexed { index, measurable ->
+                    val width = columnWidth * grid.cells[index].colspan
+                    measurable.measure(Constraints(minWidth = width, maxWidth = width,
+                        minHeight = 0, maxHeight = TablePixelLimit))
                 }
-                val offsets = IntArray(grid.rows + 1)
-                heights.forEachIndexed { i, height -> offsets[i + 1] = offsets[i] + height }
-                val children = measurables.mapIndexed { index, measurable ->
-                    val placed = grid.cells[index]
-                    measurable.measure(Constraints.fixed(columnWidth * placed.cell.colspan, offsets[placed.row + placed.cell.rowspan] - offsets[placed.row]))
-                }
-                layout(columnWidth * grid.columns, offsets.last()) {
-                    children.forEachIndexed { index, child -> val placed = grid.cells[index]; child.placeRelative(columnWidth * placed.column, offsets[placed.row]) }
+                // Saturation at the child height limit is unavailable: it could
+                // mean clipped content, so it must not be promoted to success.
+                val pixels = if (columnWidth == null) null else tablePixelLayout(grid, columnWidth,
+                    40.dp.roundToPx(), IntArray(children.size) { children[it].height })
+                if (pixels == null) {
+                    // A following composition exposes the explicit unavailable state.
+                    // No partial table or clipped cell is presented as successful layout.
+                    drawingPixels = null
+                    unavailable = true
+                    layout(0, 0) {}
+                } else {
+                    val offsets = pixels.rowOffsets
+                    drawingPixels = pixels
+                    layout(pixels.width, pixels.height) {
+                        children.forEachIndexed { index, child ->
+                            val placed = grid.cells[index]
+                            child.placeRelative(pixels.columnWidth * placed.column, offsets[placed.row])
+                        }
+                    }
                 }
             }
         }
@@ -272,7 +310,7 @@ private fun TableView(table: Table, onLink: (String) -> Unit) {
 }
 
 @Composable
-private fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}, preserveWhitespace: Boolean = false) {
+internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}, preserveWhitespace: Boolean = false) {
     val spans = remember(source, preserveWhitespace) { if (preserveWhitespace) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
     val embedded = spans.filter { it.classes == "wikidict-media" && it.target.startsWith("File:") }.mapNotNull { span -> availableMedia.firstOrNull { it.file == span.target.removePrefix("File:").replace('_',' ') } }.distinctBy { it.file }
@@ -305,11 +343,17 @@ private fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight
                 val end = length
                 if (end > start) {
                     val languageTag = spanLanguageTag(span.language)
-                    if (languageTag != null || weight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
+                    val fontFamily = when {
+                        span.code -> FontFamily.Monospace
+                        span.classes.split(spanClassWhitespace).any { it == "Egyp" } -> EgyptianFontFamily
+                        else -> null
+                    }
+                    if (languageTag != null || fontFamily != null || weight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
                         localeList = languageTag?.let { LocaleList(Locale(it)) },
                         fontWeight = if (span.bold) FontWeight.Bold else weight,
                         fontStyle = if (span.italic) FontStyle.Italic else null,
-                        fontFamily = if (span.code) FontFamily.Monospace else null,
+                        fontFamily = fontFamily,
+                        letterSpacing = if (fontFamily == EgyptianFontFamily) 0.sp else TextUnit.Unspecified,
                         fontSize = if (span.small || span.superscript || span.subscript) 0.8.em else 1.em,
                         baselineShift = when { span.superscript -> BaselineShift.Superscript; span.subscript -> BaselineShift.Subscript; else -> null },
                         background = if (span.code) codeColor else androidx.compose.ui.graphics.Color.Unspecified,
@@ -329,5 +373,8 @@ private fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight
             }
         }.also { cache?.values?.getOrPut(spans) { mutableMapOf() }?.put(weight, it) }
     }
-    Text(annotated, modifier = modifier, style = style.copy(textDirection = TextDirection.Content))
+    val egyptianRuns = remember(spans) { egyptianTextRuns(spans) }
+    SelectionContainer {
+        EgyptianInlineText(annotated, egyptianRuns, modifier, style.copy(textDirection = TextDirection.Content), linkColor)
+    }
 }

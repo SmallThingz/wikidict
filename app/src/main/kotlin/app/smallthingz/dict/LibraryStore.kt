@@ -78,6 +78,19 @@ internal fun enqueueOwnedDownload(lock: Any, enqueue: () -> Long, commit: (Long)
     throw IOException("Could not save the download. The download was cancelled.")
 }
 
+// Queued operations must not replace the job that currently owns the library.
+internal class LibraryOperationOwner(private val mutex: Mutex) {
+    @Volatile var active: Job? = null
+        private set
+
+    suspend fun run(action: suspend () -> Unit) = mutex.withLock {
+        val owner = currentCoroutineContext().job
+        active = owner
+        try { action() }
+        finally { if (active === owner) active = null }
+    }
+}
+
 class LibraryStore private constructor(private val context: Context) {
     companion object {
         @Volatile private var instance: LibraryStore? = null
@@ -86,6 +99,7 @@ class LibraryStore private constructor(private val context: Context) {
     private val directory = File(context.filesDir, "dictionaries").apply { mkdirs() }
     private val helper = LibraryDatabase(context).apply { setWriteAheadLoggingEnabled(true) }
     private val mutex = Mutex()
+    private val operations = LibraryOperationOwner(mutex)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var dictionaries by mutableStateOf<List<DictionaryInfo>>(emptyList()); private set
     var busy by mutableStateOf<String?>(null); private set
@@ -114,10 +128,9 @@ class LibraryStore private constructor(private val context: Context) {
         sources = (sources + uri.toString()).distinct(); prefs.edit().putStringSet("sources", sources.toSet()).apply()
     }
     fun removeSource(url: String) { sources = sources - url; prefs.edit().putStringSet("sources", sources.toSet()).apply(); refreshCatalogs() }
-    @Volatile private var currentOperation: Job? = null
     fun cancel() {
         val id = prefs.getLong("downloadId", -1)
-        val operation = currentOperation
+        val operation = operations.active
         scope.launch {
             val failure = cancelOwnedDownload({ if (id >= 0) removeDownload(id) }, { operation?.cancel() })
             withContext(Dispatchers.Main) { error = failure?.let { "Could not cancel download: ${it.message ?: "Try again"}" } }
@@ -190,13 +203,13 @@ class LibraryStore private constructor(private val context: Context) {
         catch (e: Exception) { failOwnedDownload(e) { removeDownload(id) } }
     }
     private fun operation(label: String, action: suspend () -> Unit): Job = scope.launch {
-        mutex.withLock {
+        operations.run {
             withContext(Dispatchers.Main) { busy = label; error = null; progress = 0f; transferDetail = null }
             try { action() } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 withContext(Dispatchers.Main) { error = e.message ?: "Could not complete this operation" }
             } finally { withContext(NonCancellable + Dispatchers.Main) { busy = null; transferDetail = null } }
         }
-    }.also { currentOperation = it }
+    }
     fun refreshCatalogs() = operation("Reading catalogues") {
         val entries = ArrayList<CatalogItem>()
         val failures = ArrayList<String>()

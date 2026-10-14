@@ -1,0 +1,6 @@
+WIKIDICT_EGYPTIAN {
+    global:
+        Java_app_smallthingz_dict_EgyptianNative_version;
+        Java_app_smallthingz_dict_EgyptianNative_shape;
+    local: *;
+};
