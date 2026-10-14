@@ -6862,16 +6862,16 @@ test "unclosed div attribute Marathi NavFrame retains heading and table cells" {
     try std.testing.expectEqualStrings("After", try flattened(a, blocks[2].spans));
 }
 
-test "unclosed div attribute recovery preserves quoted and protected literal controls" {
+test "raw div attribute boundary preserves suffixes and protected literal controls" {
     const quoted = syntax.tagAt("<div style=\"a>b\">body</div>", 0).?;
-    try std.testing.expectEqualStrings("a>b", quoted.attr("style").?);
+    try std.testing.expectEqualStrings("a", quoted.attr("style").?);
     const multiline = syntax.tagAt("<div style=\"a>b\nline two\">body</div>", 0).?;
-    try std.testing.expectEqualStrings("a>b\nline two", multiline.attr("style").?);
+    try std.testing.expectEqualStrings("a", multiline.attr("style").?);
     const angles = syntax.tagAt("<div title=\"a><b>foo\">body</div>", 0).?;
-    try std.testing.expectEqualStrings("a><b>foo", angles.attr("title").?);
+    try std.testing.expectEqualStrings("a", angles.attr("title").?);
     const multiline_angles = syntax.tagAt("<div title=\"a>\n<b>foo\">body</div>", 0).?;
-    try std.testing.expectEqualStrings("a>\n<b>foo", multiline_angles.attr("title").?);
-    try std.testing.expect(syntax.tagAt("<widget title=\"literal>body</widget>", 0) == null);
+    try std.testing.expectEqualStrings("a", multiline_angles.attr("title").?);
+    try std.testing.expectEqualStrings("literal", syntax.tagAt("<widget title=\"literal>body</widget>", 0).?.attr("title").?);
     try std.testing.expect(syntax.tagAt("<re>ctis", 0).?.is("re"));
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -8683,4 +8683,76 @@ test "unclosed source block retains raw entity bytes and its existing diagnostic
     try std.testing.expectEqual(Provenance.protected_literal, blocks[0].spans[0].provenance);
     try std.testing.expect(!unclosedExternalRecoveryHasLink(blocks[0].spans, .link, "X"));
     try std.testing.expect(renderer.fallbacks.unclosed_formatting);
+}
+
+test "authored unquoted attribute quote recovery preserves lexical links and hides attributes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "<span title=can't>[[cat|word]]</span> tail",
+        "<span title=abc\"def>[[cat|word]]</span> tail",
+        "<span title=left=can't>[[cat|word]]</span> tail",
+        "<span title=left=abc\"def>[[cat|word]]</span> tail",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("word tail", try flattened(a, spans));
+        var links: usize = 0;
+        for (spans) |span| if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings("cat", span.target);
+            try std.testing.expectEqualStrings("word", span.text);
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expect(!renderer.fallbacks.unclosed_formatting);
+    }
+    var literal: Renderer = .{ .a = a, .context = .{} };
+    const protected = try literal.parseSpans("<nowiki><span title=can't>[[cat|word]]</span></nowiki> tail", .{});
+    try std.testing.expectEqualStrings("<span title=can't>[[cat|word]]</span> tail", try flattened(a, protected));
+    for (protected) |span| try std.testing.expect(span.kind != .link);
+}
+
+test "raw greater-than starts ordinary active bodies and retains lexical suffix and navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "span", "div", "b", "code" }) |name| {
+        for ([_]u8{ '"', '\'' }) |quote| {
+            const source = try std.fmt.allocPrint(a, "<{s} title={c}alpha > beta{c}>[[cat|word]] __NOTOC__ &amp;</{s}> tail", .{ name, quote, quote, name });
+            const expected = try std.fmt.allocPrint(a, " beta{c}>word  & tail", .{quote});
+            var renderer: Renderer = .{ .a = a, .context = .{} };
+            const spans = try renderer.parseSpans(source, .{});
+            try std.testing.expectEqualStrings(expected, try flattened(a, spans));
+            var links: usize = 0;
+            for (spans) |span| if (span.kind == .link) {
+                links += 1;
+                try std.testing.expectEqualStrings("cat", span.target);
+                try std.testing.expectEqualStrings("word", span.text);
+                if (std.mem.eql(u8, name, "code")) try std.testing.expect(span.flags.code);
+            };
+            try std.testing.expectEqual(@as(usize, 1), links);
+            try std.testing.expect(!renderer.fallbacks.unclosed_formatting);
+        }
+    }
+    for ([_][]const u8{ "<span title=\"one>visible</span> tail", "<big title='one>visible</big> tail", "<span title=\"one\n\ntwo>visible</span> tail" }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectEqualStrings("visible tail", try flattened(a, try renderer.parseSpans(source, .{})));
+    }
+}
+
+test "raw greater-than starts protected bodies without activating literal wiki controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "nowiki", "pre", "source", "syntaxhighlight" }) |name| {
+        const source = try std.fmt.allocPrint(a, "<{s} title=\"alpha > beta\">[[cat|word]] __NOTOC__ &amp;</{s}> tail", .{ name, name });
+        const raw_entities = std.mem.eql(u8, name, "source") or std.mem.eql(u8, name, "syntaxhighlight");
+        const expected = if (raw_entities) " beta\">[[cat|word]] __NOTOC__ &amp; tail" else " beta\">[[cat|word]] __NOTOC__ & tail";
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings(expected, try flattened(a, spans));
+        for (spans) |span| try std.testing.expect(span.kind != .link);
+        try std.testing.expect(!renderer.fallbacks.unclosed_formatting);
+    }
 }

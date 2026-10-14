@@ -159,84 +159,9 @@ pub const Tag = struct {
         return null;
     }
 };
-// Recover only the source-proven malformed style terminator. A genuine ASCII
-// closure at an attribute boundary wins even when its quoted data contains
-// typographic quotes, >, markup-looking text or line breaks.
-fn recoverTypographicStyleEnd(text: []const u8, name: []const u8, attr_start: usize, quote_start: usize, end: usize, quote: u8) bool {
-    if (end < 3 or quote_start == 0) return false;
-    const typographic = if (quote == '"') "”" else "’";
-    if (!std.mem.endsWith(u8, text[quote_start..end], typographic)) return false;
-    const before_quote = std.mem.trimEnd(u8, text[attr_start .. quote_start - 1], " \t\r\n");
-    if (!std.mem.endsWith(u8, before_quote, "=")) return false;
-    const before_equal = std.mem.trimEnd(u8, before_quote[0 .. before_quote.len - 1], " \t\r\n");
-    if (before_equal.len < 5 or !std.ascii.eqlIgnoreCase(before_equal[before_equal.len - 5 ..], "style")) return false;
-    if (before_equal.len > 5 and !std.ascii.isWhitespace(before_equal[before_equal.len - 6])) return false;
-    const ascii_close = std.mem.indexOfScalarPos(u8, text, end + 1, quote);
-    if (ascii_close) |close| {
-        if (close + 1 == text.len or std.ascii.isWhitespace(text[close + 1]) or
-            text[close + 1] == '/' or text[close + 1] == '>') return false;
-    }
-    const limit = ascii_close orelse text.len;
-    var cursor = end + 1;
-    while (std.mem.indexOfPos(u8, text, cursor, "</")) |open| {
-        if (open >= limit) break;
-        const start = open + 2;
-        if (start + name.len <= limit and std.ascii.eqlIgnoreCase(text[start .. start + name.len], name)) {
-            var close = start + name.len;
-            while (close < limit and std.ascii.isWhitespace(text[close])) : (close += 1) {}
-            if (close < limit and text[close] == '>') return true;
-        }
-        cursor = start;
-    }
-    return false;
-}
-
-// The captured Greek Woodhouse and Marathi personal-form modules omit the
-// final quote of an ordinary div attribute value. MediaWiki closes those
-// values at the physical tag end. Prefer the strict tokenizer first, retaining
-// valid quoted greater-than characters and multiline attributes unchanged.
+// MediaWiki ends a tag at the first raw greater-than, including in quoted
+// attribute text. Attribute value extraction remains the responsibility of Tag.attr.
 pub fn tagAt(text: []const u8, start: usize) ?Tag {
-    return tagAtStrict(text, start) orelse recoverUnclosedDivAttribute(text, start);
-}
-fn recoverUnclosedDivAttribute(text: []const u8, start: usize) ?Tag {
-    if (start >= text.len or text[start] != '<') return null;
-    const name_end = start + 4;
-    if (name_end >= text.len or !std.ascii.eqlIgnoreCase(text[start + 1 .. name_end], "div") or
-        !std.ascii.isWhitespace(text[name_end])) return null;
-    const line_end = std.mem.indexOfScalarPos(u8, text, name_end, '\n') orelse text.len;
-    const end = std.mem.indexOfScalarPos(u8, text, name_end, '>') orelse return null;
-    if (end >= line_end) return null;
-    var at = name_end;
-    while (at < end) {
-        while (at < end and std.ascii.isWhitespace(text[at])) : (at += 1) {}
-        if (at == end) return null;
-        const key_start = at;
-        while (at < end and (std.ascii.isAlphanumeric(text[at]) or text[at] == '-' or text[at] == '_' or text[at] == ':')) : (at += 1) {}
-        if (at == key_start) return null;
-        while (at < end and std.ascii.isWhitespace(text[at])) : (at += 1) {}
-        if (at == end or text[at] != '=') continue;
-        at += 1;
-        while (at < end and std.ascii.isWhitespace(text[at])) : (at += 1) {}
-        if (at == end) return null;
-        const quote = text[at];
-        if (quote != '\'' and quote != '"') {
-            while (at < end and !std.ascii.isWhitespace(text[at])) : (at += 1) {}
-            continue;
-        }
-        at += 1;
-        if (std.mem.indexOfScalarPos(u8, text[0..line_end], at, quote)) |close| {
-            // A quote after this greater-than belongs to an authored quoted
-            // value, not the concrete missing-final-quote recovery.
-            if (close >= end) return null;
-            at = close + 1;
-            continue;
-        }
-        if (std.mem.indexOfScalar(u8, text[at..end], '<') != null) return null;
-        return .{ .name = text[start + 1 .. name_end], .attrs = text[name_end..end], .end = end + 1, .closing = false, .self_closing = false };
-    }
-    return null;
-}
-fn tagAtStrict(text: []const u8, start: usize) ?Tag {
     if (start >= text.len or text[start] != '<') return null;
     var i = start + 1;
     const closing = i < text.len and text[i] == '/';
@@ -247,37 +172,8 @@ fn tagAtStrict(text: []const u8, start: usize) ?Tag {
     const name = text[name_start..i];
     if (i < text.len and !std.ascii.isWhitespace(text[i]) and text[i] != '/' and text[i] != '>') return null;
     const attr_start = i;
-    var quote: u8 = 0;
-    var quote_start: usize = 0;
-    var quote_recovery_attempted = false;
     while (i < text.len) : (i += 1) {
         const ch = text[i];
-        if (quote != 0) {
-            if (ch == quote) {
-                quote = 0;
-                continue;
-            }
-            if (ch != '>' or quote_recovery_attempted) continue;
-            const typographic = if (quote == '"') "”" else "’";
-            if (!std.mem.endsWith(u8, text[quote_start..i], typographic)) continue;
-            // At most one suffix lookahead per quoted value; repeated literal
-            // typographic delimiters in valid data cannot cause quadratic work.
-            quote_recovery_attempted = true;
-            if (!recoverTypographicStyleEnd(text, name, attr_start, quote_start, i, quote)) continue;
-            quote = 0;
-        }
-        if (ch == '\'' or ch == '"') {
-            // HTML tokenization tolerates a redundant quote in the attribute
-            // name position after a completed quoted value. Admit only the
-            // exact adjacent-quote-before-close form; unclosed values remain
-            // conservative and literal.
-            if (i > attr_start and text[i - 1] == ch and
-                i + 1 < text.len and text[i + 1] == '>') continue;
-            quote = ch;
-            quote_start = i + 1;
-            quote_recovery_attempted = false;
-            continue;
-        }
         if (ch == '>') {
             const attrs = std.mem.trimEnd(u8, text[attr_start..i], " \t\r\n");
             const self_closing = std.mem.endsWith(u8, attrs, "/");
@@ -658,15 +554,15 @@ test "ordinary HTML matching ignores fake closers in comments and opaque extensi
     try std.testing.expectEqualStrings("tail", raw_source[raw_pair.end..]);
 }
 
-test "HTML tag scanning respects quoted delimiters self-closing whitespace and malformed quotes" {
-    const source = "<REF name=\"a>b\" group='g&amp;x' / >tail";
+test "HTML tag scanning ends attributes at raw greater-than and retains self-closing whitespace" {
+    const source = "<REF name=\"ab\" group='g&amp;x' / >tail";
     const tag = tagAt(source, 0).?;
     try std.testing.expect(tag.is("ref"));
     try std.testing.expect(tag.self_closing);
-    try std.testing.expectEqualStrings("a>b", tag.attr("name").?);
+    try std.testing.expectEqualStrings("ab", tag.attr("name").?);
     try std.testing.expectEqualStrings("g&amp;x", tag.attr("GROUP").?);
     try std.testing.expectEqualStrings("tail", source[tag.end..]);
-    try std.testing.expect(tagAt("<span title='unterminated>", 0) == null);
+    try std.testing.expectEqualStrings("unterminated", tagAt("<span title='unterminated>", 0).?.attr("title").?);
     try std.testing.expect(tagAt("<9invalid>", 0) == null);
 }
 
@@ -694,16 +590,17 @@ test "behavior switches preserve unknown names and source case rules" {
         try std.testing.expectEqual(@as(?usize, null), behaviorSwitchEnd(value, 0));
 }
 
-test "redundant terminal attribute quote follows HTML recovery without unclosing values" {
+test "redundant and missing terminal attribute quotes keep the raw tag boundary" {
     const input = "<span style=\"color:#6b5a40;\"\">tail";
     const tag = tagAt(input, 0).?;
     try std.testing.expect(tag.is("span"));
     try std.testing.expectEqualStrings("color:#6b5a40;", tag.attr("style").?);
     try std.testing.expectEqualStrings("tail", input[tag.end..]);
-    try std.testing.expect(tagAt("<span title=\"unterminated>", 0) == null);
-    try std.testing.expect(tagAt("<span title='unterminated>", 0) == null);
+    try std.testing.expectEqualStrings("unterminated", tagAt("<span title=\"unterminated>", 0).?.attr("title").?);
+    try std.testing.expectEqualStrings("unterminated", tagAt("<span title='unterminated>", 0).?.attr("title").?);
     const quoted = tagAt("<span title=\"a>b\">tail", 0).?;
-    try std.testing.expectEqualStrings("a>b", quoted.attr("title").?);
+    try std.testing.expectEqualStrings("a", quoted.attr("title").?);
+    try std.testing.expectEqualStrings("b\">tail", "<span title=\"a>b\">tail"[quoted.end..]);
 }
 
 test "balanced internal links ignore quoted HTML attribute brackets only in link frames" {
@@ -738,29 +635,47 @@ test "logical lines skip complete quoted HTML tags without hiding content breaks
     const content = "before <span>one\n\ntwo</span> after";
     try std.testing.expectEqual(std.mem.indexOfScalar(u8, content, '\n').?, logicalEnd(content, 0));
     const malformed = "before <span title=\"one\n\ntwo>visible";
-    try std.testing.expectEqual(std.mem.indexOfScalar(u8, malformed, '\n').?, logicalEnd(malformed, 0));
+    try std.testing.expectEqual(malformed.len, logicalEnd(malformed, 0));
 }
 
-test "malformed typographic style terminator preserves later readings without changing valid quote data" {
-    const malformed = "<big style=\"color: #00008B;”>first</big>\n<big style=\"color: #00008B;”>second</big>";
-    const first = tagAt(malformed, 0).?;
-    try std.testing.expectEqualStrings("first</big>\n<big style=\"color: #00008B;”>second</big>", malformed[first.end..]);
-    const second_start = std.mem.indexOfPos(u8, malformed, first.end, "<big").?;
-    const second = tagAt(malformed, second_start).?;
-    try std.testing.expectEqualStrings("second</big>", malformed[second.end..]);
-    // A real closure wins despite the exact apparent recovery trigger in data.
-    const valid = "<big style=\"literal ”> </big>\n still quoted\">visible</big>";
-    const good = tagAt(valid, 0).?;
-    try std.testing.expectEqualStrings("literal ”> </big>\n still quoted", good.attr("style").?);
-    try std.testing.expectEqualStrings("visible</big>", valid[good.end..]);
-    const title = "<span title=\"literal ”> </span>\">tail</span>";
-    try std.testing.expectEqualStrings("literal ”> </span>", tagAt(title, 0).?.attr("title").?);
-    try std.testing.expect(tagAt("<big style=\"unterminated>first</big>", 0) == null);
-    try std.testing.expect(tagAt("<big style=\"color:red;”>no closing element", 0) == null);
-    const repeated = "<big style=\"one ”> two ”> three ”> end\">visible</big>";
-    try std.testing.expectEqualStrings("one ”> two ”> three ”> end", tagAt(repeated, 0).?.attr("style").?);
+test "typographic and missing attribute quotes end at the first raw tag delimiter" {
+    const Fixture = struct { source: []const u8, attribute: []const u8, suffix: []const u8 };
+    for ([_]Fixture{
+        .{ .source = "<big style=\"color: #00008B;”>first</big>", .attribute = "color: #00008B;”", .suffix = "first</big>" },
+        .{ .source = "<big style=\"literal ”> </big>\n still quoted\">visible</big>", .attribute = "literal ”", .suffix = " </big>\n still quoted\">visible</big>" },
+        .{ .source = "<big style=\"unterminated>first</big>", .attribute = "unterminated", .suffix = "first</big>" },
+        .{ .source = "<big style=\"color:red;”>no closing element", .attribute = "color:red;”", .suffix = "no closing element" },
+        .{ .source = "<big style=\"one ”> two ”> three ”> end\">visible</big>", .attribute = "one ”", .suffix = " two ”> three ”> end\">visible</big>" },
+    }) |fixture| {
+        const tag = tagAt(fixture.source, 0).?;
+        try std.testing.expectEqualStrings(fixture.attribute, tag.attr("style").?);
+        try std.testing.expectEqualStrings(fixture.suffix, fixture.source[tag.end..]);
+    }
     const multiline = "<big style=\"color:\nred;\">tail</big>";
     try std.testing.expectEqualStrings("color:\nred;", tagAt(multiline, 0).?.attr("style").?);
+    try std.testing.expect(tagAt("<div title=\"a<b\">word</div>", 0) == null);
+}
+
+test "unquoted quote and equals bytes preserve attribute extraction at the raw tag boundary" {
+    const Fixture = struct { source: []const u8, title: []const u8 };
+    for ([_]Fixture{
+        .{ .source = "<span title=can't>tail", .title = "can't" },
+        .{ .source = "<span title=abc\"def>tail", .title = "abc\"def" },
+        .{ .source = "<span title=left=can't>tail", .title = "left=can't" },
+        .{ .source = "<span title=left=abc\"def>tail", .title = "left=abc\"def" },
+        .{ .source = "<span title=can't lang='en'>tail", .title = "can't" },
+    }) |fixture| {
+        const tag = tagAt(fixture.source, 0).?;
+        try std.testing.expectEqualStrings(fixture.title, tag.attr("title").?);
+        try std.testing.expectEqualStrings("tail", fixture.source[tag.end..]);
+    }
+    for ([_][]const u8{ "span", "div", "b", "code", "nowiki", "pre", "ref", "source", "syntaxhighlight" }) |name| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "<{s} title=\"alpha > beta\">body</{s}>", .{ name, name });
+        defer std.testing.allocator.free(source);
+        const tag = tagAt(source, 0).?;
+        try std.testing.expectEqualStrings("alpha", tag.attr("title").?);
+        try std.testing.expect(std.mem.startsWith(u8, source[tag.end..], " beta\">body"));
+    }
 }
 
 test "heading control suffix keeps protected unknown and entity literals" {
