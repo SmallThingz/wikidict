@@ -845,5 +845,5 @@ test "external HTML-label boundary compiles the Arabic Navbar witness as data-on
     try std.testing.expectEqualStrings("hidden", spans[1].text);
     try std.testing.expectEqual(types.InlineKind.text, spans[2].kind);
     try std.testing.expectEqualStrings("\">visible", spans[2].text);
-    try std.testing.expect(!attribute_report.any());
+    try std.testing.expectEqualDeep(Fallbacks{ .literal_markup = true }, attribute_report);
 }
