@@ -810,6 +810,16 @@ fn magicLinkStart(input: []const u8, start: usize) ?usize {
     }
     return null;
 }
+fn internalTargetHasNowikiRegion(target: []const u8) bool {
+    var cursor: usize = 0;
+    var no_more_close = false;
+    while (std.mem.indexOfScalarPos(u8, target, cursor, '<')) |open| {
+        if (syntax.nowikiRegionAtCached(target, open, &no_more_close) != null) return true;
+        cursor = open + 1;
+    }
+    return false;
+}
+
 fn safeInternalTarget(target: []const u8) bool {
     var has_non_ascii = false;
     for (target) |ch| {
@@ -2042,6 +2052,18 @@ pub const Renderer = struct {
                     var target = token.target;
                     var label_value = if (token.link_empty_label) "" else token.text;
                     const trail = token.trail;
+                    // A source nowiki marker invalidates the outer title even when
+                    // its visible body would form a valid title after unstripping.
+                    // Keep outer syntax literal and let the existing renderer
+                    // preserve protected bytes and ordinary label formatting.
+                    if (internalTargetHasNowikiRegion(target)) {
+                        const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
+                        const literal_style = s;
+                        self.fallbacks.literal_markup = true;
+                        try self.plain("[[", literal_style);
+                        try self.inlineText(input[raw_start + 2 .. it.cursor], literal_style, depth + 1);
+                        continue;
+                    }
                     // An authored inner opener is a separate link. Keep the
                     // malformed outer prefix/suffix visible; never navigate to
                     // a bracket-bearing target or reparse decoded entities.
@@ -8991,5 +9013,93 @@ test "list-defined references keep unmatched nowiki remainder active and paired 
         try std.testing.expectEqual(@as(usize, if (closed) 0 else 1), renderer.ref_defs.items.len);
         try std.testing.expectEqualStrings(if (closed) "Reference text unavailable" else "body", try flattened(a, references[0].spans));
         try std.testing.expectEqual(!closed, unclosedExternalRecoveryHasLink(references[0].spans, .link, "cat"));
+    }
+}
+
+test "nowiki in an internal title keeps outer syntax literal and later navigation active" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "[[ca<nowiki/>t|word]] [[dog]]",
+        "[[ca<nowiki>t</nowiki>|word]] [[dog]]",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("[[cat|word]] dog", try flattened(a, spans));
+        var links: usize = 0;
+        for (spans) |span| if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings("dog", span.target);
+            try std.testing.expectEqualStrings("dog", span.text);
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expect(renderer.fallbacks.literal_markup);
+    }
+}
+
+test "nowiki label delimiter and apostrophe boundaries retain active links and inherited formatting" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fixture = struct { source: []const u8, visible: []const u8 };
+    for ([_]Fixture{
+        .{ .source = "[[cat|a<nowiki/>b]]", .visible = "ab" },
+        .{ .source = "[[cat|a<nowiki>|]]</nowiki>b]]", .visible = "a|]]b" },
+    }) |fixture| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(fixture.source, .{});
+        try std.testing.expectEqualStrings(fixture.visible, try flattened(a, spans));
+        for (spans) |span| {
+            try std.testing.expect(span.kind == .link);
+            try std.testing.expectEqualStrings("cat", span.target);
+        }
+        try std.testing.expect(!renderer.fallbacks.literal_markup);
+    }
+    for ([_]Fixture{
+        .{ .source = "''a<nowiki>'</nowiki>'b''", .visible = "a''b" },
+        .{ .source = "''a<nowiki/>'b''", .visible = "a'b" },
+    }) |fixture| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(fixture.source, .{});
+        try std.testing.expectEqualStrings(fixture.visible, try flattened(a, spans));
+        for (spans) |span| {
+            try std.testing.expect(span.flags.italic);
+            try std.testing.expect(span.kind != .link);
+        }
+    }
+}
+
+test "nowiki internal title rejection precedes namespace effects and preserves enclosing style" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fixture = struct { source: []const u8, visible: []const u8 };
+    for ([_]Fixture{
+        .{ .source = "[[File:ca<nowiki/>t.png|word]]", .visible = "[[File:cat.png|word]]" },
+        .{ .source = "[[Category:ca<nowiki>t</nowiki>|word]]", .visible = "[[Category:cat|word]]" },
+    }) |fixture| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(fixture.source, .{});
+        try std.testing.expectEqualStrings(fixture.visible, try flattened(a, spans));
+        for (spans) |span| try std.testing.expect(span.kind != .link);
+        try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
+    }
+    var inherited: Renderer = .{ .a = a, .context = .{} };
+    const spans = try inherited.parseSpans("[[ca<nowiki>t</nowiki>|word]]", .{
+        .kind = .external_link,
+        .target = "https://example.test/parent",
+        .bold = true,
+        .code = true,
+        .language = "en",
+        .direction = "rtl",
+    });
+    try std.testing.expectEqualStrings("[[cat|word]]", try flattened(a, spans));
+    for (spans) |span| {
+        try std.testing.expect(span.kind == .external_link);
+        try std.testing.expectEqualStrings("https://example.test/parent", span.target);
+        try std.testing.expect(span.flags.bold and span.flags.code);
+        try std.testing.expectEqualStrings("en", span.language);
+        try std.testing.expectEqualStrings("rtl", span.direction);
     }
 }
