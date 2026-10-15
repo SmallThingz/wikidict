@@ -150,6 +150,7 @@ pub const Iterator = struct {
     marker_filter: ?MarkerFilter = null,
     heading_filter: ?MarkerFilter = null,
     mixed_levels: bool = false,
+    all_heading_levels: bool = false,
     control_matcher: ?syntax.ControlMatcher = null,
 
     pub const MarkerFilter = struct {
@@ -196,7 +197,7 @@ pub const Iterator = struct {
                     break :blk body[0] == '-';
                 } else false;
                 const candidate_level: ?u8 = if (heading) |value|
-                    if (value.level == 1 or value.level == 2) value.level else null
+                    if (self.all_heading_levels or value.level == 1 or value.level == 2) value.level else null
                 else if (marker != null) 2 else null;
                 if (candidate_level) |level| {
                     if (self.active_level == null) self.active_level = level;
@@ -417,7 +418,8 @@ pub const CategoryIterator = struct {
                     self.cursor = end;
                     continue;
                 }
-                for ([_][]const u8{ "pre", "source", "syntaxhighlight", "math", "includeonly" }) |name| {
+                const html_pre = if (self.protection.tagAt(self.source, start)) |tag| tag.html_pre else false;
+                if (!html_pre) for ([_][]const u8{ "pre", "source", "syntaxhighlight", "math", "includeonly" }) |name| {
                     if (tagMatches(rest, name, false)) {
                         const opening_end = std.mem.indexOfScalar(u8, rest, '>') orelse {
                             self.cursor = self.source.len;
@@ -434,7 +436,7 @@ pub const CategoryIterator = struct {
                         } else self.cursor = self.source.len;
                         break;
                     }
-                }
+                };
                 if (self.cursor != start) continue;
                 if (self.templates == 0) {
                     if (self.protection.tagAt(self.source, start)) |tag| {
@@ -808,5 +810,39 @@ test "unmatched extension openers retain active language classification evidence
         try std.testing.expectEqualStrings("Deutsch", classificationHeading(heading));
         const closed_heading = try std.mem.concat(a, u8, &.{ heading, closing });
         try std.testing.expectEqualStrings(closed_heading, classificationHeading(closed_heading));
+    }
+}
+
+test "pre HTML fallback leaves active language owners while strip hooks protect paired bodies" {
+    const cases = [_]struct { opener: []const u8, body_active: bool }{
+        .{ .opener = "<pre/ >", .body_active = true },
+        .{ .opener = "<PRE/ >", .body_active = true },
+        .{ .opener = "<pre/>", .body_active = true },
+        .{ .opener = "<pre />", .body_active = true },
+        .{ .opener = "<pre>", .body_active = false },
+        .{ .opener = "<pre / >", .body_active = false },
+        .{ .opener = "<pre title='literal' / >", .body_active = false },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "==English==\n{s}\n<nowiki>\n==Latin==\n</nowiki>\n==French==\n# chat\n</pre>\n==German==\n# Hund\n", .{case.opener});
+        defer std.testing.allocator.free(source);
+        var owners = Iterator.init(source);
+        try std.testing.expectEqualStrings("English", owners.next().?.heading);
+        if (case.body_active) try std.testing.expectEqualStrings("French", owners.next().?.heading);
+        try std.testing.expectEqualStrings("German", owners.next().?.heading);
+        try std.testing.expect(owners.next() == null);
+    }
+}
+
+test "pre HTML fallback exposes categories while genuine core pairs remain protected" {
+    var active: CategoryIterator = .{ .source = "<pre/ foo>[[Category:English nouns]]</pre>" };
+    try std.testing.expectEqualStrings("Category:English nouns", active.next().?);
+    try std.testing.expect(active.next() == null);
+    var short: CategoryIterator = .{ .source = "<pre/>[[Category:English nouns]]" };
+    try std.testing.expectEqualStrings("Category:English nouns", short.next().?);
+    try std.testing.expect(short.next() == null);
+    for ([_][]const u8{ "<pre>[[Category:English nouns]]</pre>", "<pre / >[[Category:English nouns]]</pre>", "<nowiki><pre/ foo>[[Category:English nouns]]</pre></nowiki>", "<!-- <pre/ foo>[[Category:English nouns]]</pre> -->" }) |source| {
+        var hidden: CategoryIterator = .{ .source = source };
+        try std.testing.expect(hidden.next() == null);
     }
 }

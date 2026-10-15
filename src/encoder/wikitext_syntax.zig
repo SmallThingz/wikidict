@@ -241,11 +241,26 @@ pub fn isOpaqueTag(name: []const u8) bool {
     for (opaque_tag_names) |tag| if (std.ascii.eqlIgnoreCase(name, tag)) return true;
     return false;
 }
+// Sanitizer ignores a lexical '/>' on allowed paired HTML. Core pre is a
+// registered strip hook instead; only its invalid-name HTML fallback is paired.
+fn pairedHtmlTag(name: []const u8) bool {
+    inline for (&.{
+        "b",      "bdi",  "del",  "i",   "ins",    "u",          "font", "big",  "small", "sub",   "sup",
+        "h1",     "h2",   "h3",   "h4",  "h5",     "h6",         "cite", "code", "em",    "s",     "strike",
+        "strong", "tt",   "var",  "div", "center", "blockquote", "ol",   "ul",   "dl",    "table", "caption",
+        "ruby",   "rb",   "rp",   "rt",  "rtc",    "p",          "span", "abbr", "dfn",   "kbd",   "samp",
+        "data",   "time", "mark", "q",   "bdo",    "tr",         "td",   "th",
+    }) |tag| if (std.ascii.eqlIgnoreCase(name, tag)) return true;
+    return false;
+}
 // One cache belongs to one input. A missing closer is final only for that
 // tag family at or after the observed raw offset, including after lookahead.
 pub const OpaqueScan = struct {
     missing: u32 = 0,
     missing_from: [opaque_tag_names.len]usize = @splat(std.math.maxInt(usize)),
+    // Ordinary fallback pre skips protected bodies; its closer absence is
+    // separate from the strip hook's first-raw-closer cache.
+    html_pre_missing_from: usize = std.math.maxInt(usize),
     last_angle_known: bool = false,
     last_angle_end: usize = 0,
     pub fn tagAt(self: *OpaqueScan, text: []const u8, start: usize, no_more_nowiki_close: ?*bool) ?Tag {
@@ -263,6 +278,7 @@ pub const OpaqueScan = struct {
         return .{ .opening_end = opening.end, .inner_end = found.inner_end, .end = found.end, .self_closing = opening.self_closing };
     }
     pub fn pair(self: *OpaqueScan, text: []const u8, tag: Tag) ?Pair {
+        if (!tag.isOpaque()) return null;
         if (tag.self_closing) return .{ .inner_end = tag.end, .end = tag.end };
         for (opaque_tag_names, 0..) |name, index| if (tag.is(name)) {
             const mask = @as(u32, 1) << @as(u5, @intCast(index));
@@ -281,7 +297,7 @@ pub const OpaqueScan = struct {
         if (starts(text[start..], "<!--")) return if (std.mem.indexOfPos(u8, text, start + 4, "-->")) |end| end + 3 else text.len;
         const tag = self.tagAt(text, start, no_more_nowiki_close) orelse return null;
         if (!tag.closing and tag.is("nowiki")) return if (self.pair(text, tag)) |found| found.end else null;
-        if (tag.closing or !isOpaqueTag(tag.name)) return null;
+        if (tag.closing or !tag.isOpaque()) return null;
         return if (self.pair(text, tag)) |found| found.end else tag.end;
     }
 };
@@ -291,6 +307,12 @@ pub const Tag = struct {
     end: usize,
     closing: bool,
     self_closing: bool,
+    // '<pre/ ...>' bypasses the strip-hook name boundary but remains allowed
+    // HTML. Retain that source distinction through attribute normalization.
+    html_pre: bool = false,
+    pub fn isOpaque(self: Tag) bool {
+        return !self.html_pre and isOpaqueTag(self.name);
+    }
     pub fn is(self: Tag, name: []const u8) bool {
         return std.ascii.eqlIgnoreCase(self.name, name);
     }
@@ -377,8 +399,10 @@ fn tagAtWithOpaqueScan(text: []const u8, start: usize, no_more_nowiki_close: ?*b
     if (i == name_start or !std.ascii.isAlphabetic(text[name_start])) return null;
     const name = text[name_start..i];
     if (i < text.len and !std.ascii.isWhitespace(text[i]) and text[i] != '/' and text[i] != '>') return null;
-    if (!closing and isOpaqueTag(name) and i < text.len and text[i] == '/' and
-        (i + 1 >= text.len or text[i + 1] != '>')) return null;
+    const invalid_extension_boundary = !closing and isOpaqueTag(name) and i < text.len and text[i] == '/' and
+        (i + 1 >= text.len or text[i + 1] != '>');
+    const html_pre = invalid_extension_boundary and std.ascii.eqlIgnoreCase(name, "pre");
+    if (invalid_extension_boundary and !html_pre) return null;
     if (!closing and std.ascii.eqlIgnoreCase(name, "nowiki")) return rawNowikiOpeningAt(text, start);
     const attr_start = i;
     // Attribute lookahead is speculative: on failure the caller resumes
@@ -389,8 +413,9 @@ fn tagAtWithOpaqueScan(text: []const u8, start: usize, no_more_nowiki_close: ?*b
         const ch = text[i];
         if (ch == '>') {
             const attrs = std.mem.trimEnd(u8, text[attr_start..i], " \t\r\n");
-            const self_closing = if (isOpaqueTag(name)) i > attr_start and text[i - 1] == '/' else std.mem.endsWith(u8, attrs, "/");
-            return .{ .name = name, .attrs = if (self_closing) attrs[0 .. attrs.len - 1] else attrs, .end = i + 1, .closing = closing, .self_closing = self_closing };
+            const lexical_short = i > attr_start and text[i - 1] == '/';
+            const self_closing = lexical_short and !html_pre and !pairedHtmlTag(name);
+            return .{ .name = name, .attrs = if (lexical_short) attrs[0 .. attrs.len - 1] else attrs, .end = i + 1, .closing = closing, .self_closing = self_closing, .html_pre = html_pre };
         }
         if (ch == '<') {
             const region_at = if (opaque_scan) |cache| cache.nowikiRegion(text, i) else nowikiRegionAtCached(text, i, missing);
@@ -431,7 +456,9 @@ pub fn matchingTagWithOpaqueScan(text: []const u8, tag: Tag, opaque_scan: *Opaqu
     if (tag.self_closing) return .{ .inner_end = tag.end, .end = tag.end };
     // MediaWiki extension bodies are opaque: an opening tag of the same name
     // inside the body is literal text, not a nested extension.
-    if (isOpaqueTag(tag.name)) return opaque_scan.pair(text, tag);
+    if (tag.isOpaque()) return opaque_scan.pair(text, tag);
+    if (tag.html_pre and tag.end >= opaque_scan.html_pre_missing_from) return null;
+    var saw_closer = false;
     var i = tag.end;
     var nesting: usize = 1;
     var no_more_nowiki_close = false;
@@ -447,17 +474,22 @@ pub fn matchingTagWithOpaqueScan(text: []const u8, tag: Tag, opaque_scan: *Opaqu
                 i = if (opaque_scan.pair(text, next)) |pair| pair.end else next.end;
                 continue;
             }
-            if (!next.closing and isOpaqueTag(next.name)) {
+            if (!next.closing and next.isOpaque()) {
                 i = if (opaque_scan.pair(text, next)) |pair| pair.end else next.end;
                 continue;
             }
             if (std.ascii.eqlIgnoreCase(next.name, tag.name)) {
+                if (next.closing) saw_closer = true;
                 if (next.closing) nesting -= 1 else if (!next.self_closing) nesting += 1;
                 if (nesting == 0) return .{ .inner_end = open, .end = next.end };
             }
             i = next.end;
         } else i = open + 1;
     }
+    // A failed nested root can still contain a valid inner pair. Publish only
+    // proved suffix absence, never the generic failure to balance this root.
+    if (tag.html_pre and !saw_closer)
+        opaque_scan.html_pre_missing_from = @min(opaque_scan.html_pre_missing_from, tag.end);
     return null;
 }
 pub fn protectedEnd(text: []const u8, start: usize) ?usize {
@@ -555,7 +587,7 @@ pub fn logicalEndWithOpaqueScan(text: []const u8, start: usize, no_more_nowiki_c
                 skip_to = end;
             } else if (opaque_scan.tagAt(text, i, missing)) |tag| {
                 skip_to = tag.end;
-                if (!tag.closing and isMultilineContainerTag(tag.name)) {
+                if (!tag.closing and (tag.html_pre or isMultilineContainerTag(tag.name))) {
                     if (matchingTagWithOpaqueScan(text, tag, opaque_scan)) |pair| skip_to = pair.end;
                 }
             }
@@ -803,11 +835,11 @@ test "ordinary HTML matching ignores fake closers in comments and opaque extensi
     try std.testing.expectEqualStrings("tail", raw_source[raw_pair.end..]);
 }
 
-test "HTML tag scanning ends attributes at raw greater-than and retains self-closing whitespace" {
+test "HTML tag scanning keeps raw attribute boundaries and distinguishes spaced extension slash" {
     const source = "<REF name=\"ab\" group='g&amp;x' / >tail";
     const tag = tagAt(source, 0).?;
     try std.testing.expect(tag.is("ref"));
-    try std.testing.expect(tag.self_closing);
+    try std.testing.expect(!tag.self_closing);
     try std.testing.expectEqualStrings("ab", tag.attr("name").?);
     try std.testing.expectEqualStrings("g&amp;x", tag.attr("GROUP").?);
     try std.testing.expectEqualStrings("tail", source[tag.end..]);
@@ -1121,7 +1153,10 @@ test "opaque selfclosing needs adjacent slash and later misses do not poison ear
         try std.testing.expectEqualStrings("tail", source[pair.end..]);
         const invalid = try std.fmt.allocPrint(std.testing.allocator, "<{s}/ >[[active]]</{s}>", .{ name, name });
         defer std.testing.allocator.free(invalid);
-        try std.testing.expect(tagAt(invalid, 0) == null);
+        if (std.mem.eql(u8, name, "pre")) {
+            const fallback = tagAt(invalid, 0).?;
+            try std.testing.expect(fallback.html_pre and !fallback.isOpaque() and !fallback.self_closing);
+        } else try std.testing.expect(tagAt(invalid, 0) == null);
         try std.testing.expect(protectedEnd(invalid, 0) == null);
     }
     const source = "<source>closed</source><source>missing";
@@ -1130,5 +1165,61 @@ test "opaque selfclosing needs adjacent slash and later misses do not poison ear
     try std.testing.expect(scan.pair(source, tagAt(source, later).?) == null);
     const earlier = scan.pair(source, tagAt(source, 0).?).?;
     try std.testing.expectEqualStrings("closed", source[8..earlier.inner_end]);
-    try std.testing.expect(tagAt("<div / >", 0).?.self_closing);
+    try std.testing.expect(!tagAt("<div / >", 0).?.self_closing);
+}
+
+test "sanitized paired HTML and registered short tags retain distinct matching" {
+    const a = std.testing.allocator;
+    for ([_][]const u8{ "b", "span", "div", "table", "tr", "td", "th", "q", "bdo" }) |name| {
+        for ([_][]const u8{ "/>", " / >", "/ >" }) |ending| {
+            const source = try std.fmt.allocPrint(a, "<{s}{s}[[cat]]</{s}>tail", .{ name, ending, name });
+            defer a.free(source);
+            const tag = tagAt(source, 0).?;
+            try std.testing.expect(!tag.self_closing and !tag.isOpaque());
+            const pair = matchingTag(source, tag).?;
+            try std.testing.expectEqualStrings("[[cat]]", source[tag.end..pair.inner_end]);
+            try std.testing.expectEqualStrings("tail", source[pair.end..]);
+        }
+    }
+    for ([_][]const u8{ "br", "wbr", "hr", "li", "dt", "dd", "meta", "link", "ref", "source", "pre", "nowiki", "poem" }) |name| {
+        const short = try std.fmt.allocPrint(a, "<{s}/>body", .{name});
+        defer a.free(short);
+        const tag = tagAt(short, 0).?;
+        try std.testing.expect(tag.self_closing);
+        try std.testing.expectEqual(tag.end, matchingTag(short, tag).?.end);
+        const spaced = try std.fmt.allocPrint(a, "<{s} / >body", .{name});
+        defer a.free(spaced);
+        try std.testing.expect(!tagAt(spaced, 0).?.self_closing);
+    }
+    const nested = "<div/><div/>inner</div>outer</div>tail";
+    try std.testing.expectEqualStrings("tail", nested[matchingTag(nested, tagAt(nested, 0).?).?.end..]);
+    const fallback = "<div><pre/ >[[cat]]</div>tail";
+    try std.testing.expectEqualStrings("tail", fallback[matchingTag(fallback, tagAt(fallback, 0).?).?.end..]);
+    try std.testing.expect(tagAt(fallback, 5).?.html_pre and protectedEnd(fallback, 5) == null);
+    const protected = "<pre>[[cat]]</pre>tail";
+    try std.testing.expectEqualStrings("tail", protected[protectedEnd(protected, 0).?..]);
+    try std.testing.expectEqualStrings("[[cat]]", "<pre/>[[cat]]"[protectedEnd("<pre/>[[cat]]", 0).?..]);
+}
+
+test "pre HTML fallback multiline scope and absence cache keep later body outside" {
+    const lines = "<pre/ > A\n\nB</pre>\ntail";
+    try std.testing.expectEqual(std.mem.lastIndexOfScalar(u8, lines, '\n').?, logicalEnd(lines, 0));
+    const nested = "<pre/ ><pre/ >body</pre>";
+    var scan: OpaqueScan = .{};
+    try std.testing.expect(matchingTagWithOpaqueScan(nested, tagAt(nested, 0).?, &scan) == null);
+    const inner = tagAt(nested, "<pre/ >".len).?;
+    const pair = matchingTagWithOpaqueScan(nested, inner, &scan).?;
+    try std.testing.expectEqualStrings("body", nested[inner.end..pair.inner_end]);
+    const hidden = "<pre><pre/ ><nowiki></pre></nowiki>";
+    var separate: OpaqueScan = .{};
+    try std.testing.expect(matchingTagWithOpaqueScan(hidden, tagAt(hidden, 5).?, &separate) == null);
+    try std.testing.expect(separate.html_pre_missing_from != std.math.maxInt(usize));
+    const raw = separate.pair(hidden, tagAt(hidden, 0).?).?;
+    try std.testing.expectEqualStrings("<pre/ ><nowiki>", hidden[5..raw.inner_end]);
+    const rewind = "<pre/ >closed</pre><pre/ >missing";
+    var forward: OpaqueScan = .{};
+    const later = std.mem.lastIndexOf(u8, rewind, "<pre/ >").?;
+    try std.testing.expect(matchingTagWithOpaqueScan(rewind, tagAt(rewind, later).?, &forward) == null);
+    const earlier = matchingTagWithOpaqueScan(rewind, tagAt(rewind, 0).?, &forward).?;
+    try std.testing.expectEqualStrings("closed", rewind["<pre/ >".len..earlier.inner_end]);
 }

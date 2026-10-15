@@ -1864,7 +1864,7 @@ pub const Renderer = struct {
                     continue;
                 }
                 if (syntax.tagAtCached(input, cursor, &no_more_nowiki_close)) |tag| {
-                    if (!tag.closing and !tag.self_closing and syntax.isOpaqueTag(tag.name) and !tag.is("nowiki")) {
+                    if (!tag.closing and !tag.self_closing and tag.isOpaque() and !tag.is("nowiki")) {
                         if (!tag.is("pre") or !no_more_pre_close) {
                             if (syntax.matchingTag(input, tag)) |pair| {
                                 cursor = pair.end;
@@ -2448,7 +2448,7 @@ pub const Renderer = struct {
                 pos = pair.end;
                 continue;
             }
-            if (!tag.closing and syntax.isOpaqueTag(tag.name) and !tag.is("ref")) {
+            if (!tag.closing and tag.isOpaque() and !tag.is("ref")) {
                 pos = if (opaque_scan.pair(content, tag)) |pair| pair.end else tag.end;
                 continue;
             }
@@ -2677,7 +2677,7 @@ pub const Renderer = struct {
                 if (syntax.nowikiRegionAtCached(input, at, &no_more_nowiki_close)) |region| scan = region.end;
                 continue;
             }
-            if (!syntax.isOpaqueTag(tag.name)) continue;
+            if (!tag.isOpaque()) continue;
             if (opaque_scan.pair(input, tag)) |pair| {
                 scan = pair.end;
                 continue;
@@ -2703,15 +2703,17 @@ pub const Renderer = struct {
     fn opaqueExtension(self: *Renderer, input: []const u8, tag: syntax.Tag, style: Style, depth: usize) Error!usize {
         if (tag.self_closing) return tag.end;
         const matched_pair = syntax.matchingTag(input, tag);
+        if (tag.html_pre or (tag.is("pre") and matched_pair == null)) {
+            if (matched_pair == null) self.markUnclosed(input, tag, "opaque-extension");
+            const parsed_pair = matched_pair orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
+            var parsed_style = style;
+            parsed_style.code = true;
+            parsed_style.preserve_whitespace = true;
+            try self.inlineText(input[tag.end..parsed_pair.inner_end], parsed_style, depth + 1);
+            return parsed_pair.end;
+        }
         const pair = matched_pair orelse {
             self.markUnclosed(input, tag, "opaque-extension");
-            if (tag.is("pre")) {
-                var parsed_style = style;
-                parsed_style.code = true;
-                parsed_style.preserve_whitespace = true;
-                try self.inlineText(input[tag.end..], parsed_style, depth + 1);
-                return input.len;
-            }
             const opening = @intFromPtr(tag.name.ptr) - @intFromPtr(input.ptr) - 1;
             try self.literal(input[opening..tag.end], style);
             return tag.end;
@@ -3080,7 +3082,7 @@ pub const Renderer = struct {
                 return tag.end;
             }
         }
-        if (syntax.isOpaqueTag(tag.name) and !tag.closing and !tag.is("nowiki")) return try self.opaqueExtension(input, tag, style, depth);
+        if ((tag.isOpaque() or tag.html_pre) and !tag.closing and !tag.is("nowiki")) return try self.opaqueExtension(input, tag, style, depth);
         if (tag.is("hr")) {
             if (!tag.closing) {
                 try self.lineBreak(style);
@@ -3918,15 +3920,20 @@ pub const Renderer = struct {
             }
             if (protected_tag) |tag| {
                 const matched_pair = syntax.matchingTag(clean, tag);
-                if (tag.is("pre") and matched_pair == null) {
-                    self.markUnclosed(clean, tag, "block-pre");
-                    const body_start = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + tag.end;
+                if (tag.is("pre") and (tag.html_pre or matched_pair == null)) {
+                    if (matched_pair == null) self.markUnclosed(clean, tag, "block-pre");
+                    const offset = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr);
+                    const body_start = offset + tag.end;
+                    const body_end = if (matched_pair) |pair| offset + pair.inner_end else input.len;
                     const previous_pre = self.parsed_pre;
                     self.parsed_pre = true;
                     defer self.parsed_pre = previous_pre;
                     const first_line_inline = body_start < end;
-                    try blocks.appendSlice(self.a, try self.renderBodyWithInlineStart(input[body_start..], first_line_inline));
-                    pos = input.len;
+                    try blocks.appendSlice(self.a, try self.renderBodyWithInlineStart(input[body_start..body_end], first_line_inline));
+                    pos = if (matched_pair) |pair| offset + pair.end else input.len;
+                    if (pos < input.len and input[pos] == '\n') {
+                        pos += 1;
+                    } else if (pos < input.len) inline_line_end = syntax.logicalEnd(input, pos);
                     continue;
                 }
                 const pair = matched_pair orelse {
@@ -11932,7 +11939,7 @@ test "unmatched opener preparation preserves closed scopes literal attributes an
         const hidden = try renderer.parseSpans(closed, .{});
         try std.testing.expect(!unclosedExternalRecoveryHasLink(hidden, .link, "cat"));
     }
-    for ([_][]const u8{ "source", "math", "ref", "pre" }) |family| {
+    for ([_][]const u8{ "source", "math", "ref" }) |family| {
         const invalid = try std.fmt.allocPrint(a, "<{s}/ >[[cat]]</{s}>", .{ family, family });
         const active = try renderer.parseSpans(invalid, .{});
         try std.testing.expect(unclosedExternalRecoveryHasLink(active, .link, "cat"));
@@ -12038,4 +12045,116 @@ test "unmatched scope preparation keeps authenticated Poem items and bounded act
     const tail = try bounded.parseSpans(storm.items, .{});
     try std.testing.expect(unclosedExternalRecoveryHasLink(tail, .link, "tail"));
     for (tail) |span| if (span.kind == .link) try std.testing.expect(span.flags.italic);
+}
+
+test "paired HTML slash forms preserve styled navigation through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "<b/>", "<b / >", "<b/ >" }) |opening| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "<div/>{s}[[cat|word]]</b><br/ >[[dog|plain]]</div>[[bird|tail]]", .{opening});
+        const spans = try renderer.parseSpans(source, .{});
+        var cat = false;
+        var dog = false;
+        var bird = false;
+        var breaks: usize = 0;
+        for (spans) |span| {
+            if (span.kind == .line_break) breaks += 1;
+            if (span.kind != .link) continue;
+            if (std.mem.eql(u8, span.target, "cat")) {
+                cat = true;
+                try std.testing.expect(span.flags.bold);
+                try std.testing.expectEqualStrings("word", span.text);
+            } else {
+                try std.testing.expect(!span.flags.bold);
+                dog = dog or std.mem.eql(u8, span.target, "dog");
+                bird = bird or std.mem.eql(u8, span.target, "bird");
+            }
+        }
+        try std.testing.expect(cat and dog and bird and breaks != 0);
+        const blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = &blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "HTML slash", .language, .{ .code = "en", .heading = "English" });
+        const saved = decoded.entry.sections[0].blocks[0].spans;
+        try std.testing.expectEqual(spans.len, saved.len);
+        for (spans, saved) |before, after| {
+            try std.testing.expectEqualStrings(before.text, after.text);
+            try std.testing.expectEqualStrings(before.target, after.target);
+            try std.testing.expectEqualStrings("", after.trail);
+            try std.testing.expectEqual(before.flags.bold, after.bold);
+        }
+    }
+    var table_renderer: Renderer = .{ .a = a, .context = .{} };
+    const tables = try table_renderer.renderBody("<table/><tr/><td/><b/>[[cat]]</b></td></tr></table>");
+    try std.testing.expectEqual(@as(usize, 1), tables.len);
+    const cells = tables[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 1), cells.len);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(cells[0].spans, .link, "cat"));
+    for (cells[0].spans) |span| if (span.kind == .link) try std.testing.expect(span.flags.bold);
+    for ([_][]const u8{ "<nowiki><b/>[[cat]]</b></nowiki>", "<pre><b/>[[cat]]</b></pre>", "<source><b/>[[cat]]</b></source>" }) |protected| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(protected, .{});
+        try std.testing.expectEqualStrings("<b/>[[cat]]</b>", try flattened(a, spans));
+        try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .link, "cat"));
+    }
+    var encoded: Renderer = .{ .a = a, .context = .{} };
+    const literal = try encoded.parseSpans("&lt;b/&gt;[[cat]]&lt;/b&gt;", .{});
+    try std.testing.expectEqualStrings("<b/>cat</b>", try flattened(a, literal));
+    for (literal) |span| try std.testing.expect(!span.flags.bold);
+}
+
+test "pre HTML fallback keeps active content and raw spelling distinct from strip hooks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const source = "<pre/ > A [[cat]]\n\n* literal\n</pre>\n[[dog]]";
+    const tag = syntax.tagAt(source, 0).?;
+    try std.testing.expect((try renderer.normalizedTag(tag)).html_pre);
+    const normalized = try normalizeMisnestedHtml(a, "<b><pre/ >[[cat]]</b></pre>");
+    try std.testing.expect(std.mem.indexOf(u8, normalized, "<pre/ >") != null);
+    try std.testing.expect(std.mem.indexOf(u8, normalized, "<pre / >") == null);
+    const blocks = try renderer.renderBody(source);
+    var retained: std.ArrayList(u8) = .empty;
+    var cat = false;
+    var dog = false;
+    for (blocks) |block_value| {
+        if (block_value.kind == .preformatted) {
+            try retained.appendSlice(a, try flattened(a, block_value.spans));
+            for (block_value.spans) |span| try std.testing.expect(span.flags.code);
+        }
+        try std.testing.expect(block_value.kind != .list_item);
+        cat = cat or unclosedExternalRecoveryHasLink(block_value.spans, .link, "cat");
+        dog = dog or unclosedExternalRecoveryHasLink(block_value.spans, .link, "dog");
+    }
+    try std.testing.expect(cat and dog);
+    try std.testing.expect(std.mem.indexOf(u8, retained.items, " A cat\n\n* literal") != null);
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "pre fallback", .language, .{ .code = "en", .heading = "English" });
+    var saved_cat = false;
+    var saved_dog = false;
+    for (decoded.entry.sections[0].blocks) |block_value| for (block_value.spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "cat")) {
+            saved_cat = true;
+            try std.testing.expect(span.code and block_value.kind == .preformatted);
+        }
+        saved_dog = saved_dog or (span.kind == .link and std.mem.eql(u8, span.target, "dog") and !span.code);
+    };
+    try std.testing.expect(saved_cat and saved_dog);
+    var short: Renderer = .{ .a = a, .context = .{} };
+    const outside = try short.parseSpans("<pre/>[[cat]]", .{});
+    try std.testing.expectEqualStrings("cat", try flattened(a, outside));
+    for (outside) |span| try std.testing.expect(!span.flags.code);
+    var closed: Renderer = .{ .a = a, .context = .{} };
+    const protected = try closed.parseSpans("<pre / >[[cat]]</pre>", .{});
+    try std.testing.expectEqualStrings("[[cat]]", try flattened(a, protected));
+    try std.testing.expect(!unclosedExternalRecoveryHasLink(protected, .link, "cat"));
+    for (protected) |span| try std.testing.expect(span.flags.code);
 }

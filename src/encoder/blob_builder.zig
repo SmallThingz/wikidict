@@ -1056,6 +1056,53 @@ fn amharicSupportCategoryLanguage(
     return raw_language;
 }
 
+// Live arwiktionary bit page10972/rev1142865 has one المعاني L2 and an
+// explicit language category. Both authored and expanded forms must agree.
+fn arabicMeaningsSupportSections(codes: LanguageCodes, source: []const u8, sections: []const language_source.Section) bool {
+    if (sections.len != 1 or sections[0].hyphen_marker or
+        !std.mem.eql(u8, std.mem.trim(u8, sections[0].heading, " \t\r\n"), "المعاني") or
+        hasExplicitLanguageDeclaration(codes, sections[0]) or resolveSection(codes, sections[0]) != null) return false;
+    const section = sections[0];
+    const prefix_end = @intFromPtr(section.source.ptr) - @intFromPtr(source.ptr);
+    if (std.mem.trim(u8, source[0..prefix_end], " \t\r\n").len != 0) return false;
+    const first_line = std.mem.trim(u8, section.source[0..(std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len)], " \t\r");
+    if (first_line.len < 3 or first_line[0] != '=' or first_line[1] != '=' or first_line[2] == '=') return false;
+    // Reuse the protected declaration filter at every heading depth: ordinary
+    // POS headings stay support content, but an L3+ language cannot be hidden.
+    const markers: LanguageMarkers = .{ .codes = &codes };
+    var nested = languageSections(source, &markers);
+    nested.all_heading_levels = true;
+    _ = nested.next() orelse return false;
+    return nested.next() == null;
+}
+
+fn arabicMeaningsCategory(codes: LanguageCodes, source: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    var categories: language_source.CategoryIterator = .{ .source = source };
+    var found: ?ResolvedLanguage = null;
+    while (categories.next()) |target| {
+        const title = namespaces.ofTitle(target);
+        if (title.id != 14) continue;
+        const name = std.mem.trim(u8, title.text, " \t\r\n");
+        const language = codes.resolveStrong(name) orelse codes.resolveTrusted(name) orelse continue;
+        if (found) |previous| if (!std.mem.eql(u8, previous.code, language.code)) return null;
+        found = language;
+    }
+    return found;
+}
+
+fn arabicMeaningsSupportCategoryLanguage(codes: LanguageCodes, source: []const u8, raw_source: ?[]const u8, raw_sections: []const language_source.Section, page_sections: []const language_source.Section) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "ar")) return null;
+    const raw = raw_source orelse return null;
+    if (!arabicMeaningsSupportSections(codes, raw, raw_sections) or
+        !arabicMeaningsSupportSections(codes, source, page_sections)) return null;
+    const raw_language = arabicMeaningsCategory(codes, raw) orelse return null;
+    const expanded_language = arabicMeaningsCategory(codes, source) orelse return null;
+    if (!std.mem.eql(u8, raw_language.code, expanded_language.code)) return null;
+    return raw_language;
+}
+
 // The pinned Bulgarian Noun/Verb/Adjective/Adverb templates have no language
 // heading. Their category uses the expanded language-name parameter. Resolve
 // only those exact edition-local wrappers through the trusted registry.
@@ -1343,14 +1390,15 @@ fn processMain(
 
     if (groups.items.len == 0) {
         // Arbitrary unknown headings cannot inherit a page-wide category.
-        // The captured AM support-heading convention has separate, corroborated
-        // raw/expanded category authority and preserves the whole entry body.
-        const am_support = amharicSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items);
+        // Captured edition-local support forms require corroborated raw and
+        // expanded category authority and preserve the whole entry body.
+        const support = amharicSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
+            arabicMeaningsSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items);
         const explicit = if (page_sections.items.len == 0)
             unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source)
         else
-            am_support;
-        if (am_support != null) fallbacks.unresolved_language_heading = unresolved_before_sections;
+            support;
+        if (support != null) fallbacks.unresolved_language_heading = unresolved_before_sections;
         if (explicit == null) fallbacks.missing_language_heading = true;
         // Unknown candidate headings cannot inherit the edition's language.
         // The captured AY -ay- banner has no heading: its noun/adjective
@@ -4198,4 +4246,165 @@ test "unmatched extension openers preserve published language owners" {
         const inclusion_record = try index.find("included-tail");
         if (std.mem.eql(u8, owner[0], "French")) try std.testing.expect(inclusion_record == null) else try std.testing.expect(inclusion_record != null);
     }
+}
+
+// Live raw source retrieved2026-10-15, not October dump/revision equality.
+const ArabicMeaningsCategoryFixture = struct {
+    const body = "== المعاني ==\n# [[cat|Retained definition]]\n";
+    const category = "[[تصنيف:إنجليزية]]\n";
+    const source = body ++ category;
+    const bit_source = "== المعاني ==\n# ال[[لِجَام]]، قطعة من معدن توضع في فم الحصان أو غيره وتربط بال[[سَيْر]].\n# آلة معدنية تَدُور تربط بال[[مِثْقَاب]]، تستخدم لل[[ثَقْب]].\n# جزء من ثمانية أجزاء من ال[[دُولار]]. استخدام قديم وحاليا لا يوجد قطعة نقدية مثل هذه.\n# [[جُزْء]] من شيء، سواء كان كبيرا أو صغيرا.\n# ال[[قَلِيل]] جدا، ال[[قُلَيْل]] أو ال[[شُوَيَّة]] أو ال[[شُوَيُّونَة]]\n\n[[تصنيف:إنجليزية]]";
+    fn namespaces(a: std.mem.Allocator) !@import("namespace_registry").Registry {
+        return @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+            "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+            "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+            "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    }
+    fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+        inline for (.{ .{ "إنجليزية", "en", "الإنجليزية" }, .{ "الإنجليزية", "en", "الإنجليزية" }, .{ "English", "en", "الإنجليزية" }, .{ "untrusted English", "en", "الإنجليزية" }, .{ "فرنسية", "fr", "French" }, .{ "French", "fr", "French" }, .{ "العربية", "ar", "العربية" } }) |entry|
+            if (std.mem.eql(u8, value, entry[0])) return .{ .code = entry[1], .heading = entry[2] };
+        return null;
+    }
+    fn trusted(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, value, "untrusted English")) return null;
+        return resolve(ctx, value);
+    }
+    fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+        return if (resolve(ctx, value)) |language| language.code else null;
+    }
+    fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+        return .{ .code = "ar", .heading = "العربية" };
+    }
+    fn codes(ns: *const @import("namespace_registry").Registry) LanguageCodes {
+        // Production tools/blob_build.zig275–286 also installs an explicit
+        // Registry.resolveTrusted/resolveStrong callback, not permissive get.
+        return .{ .namespace_catalog = ns, .get_fn = get, .resolve_fn = resolve, .trusted_fn = trusted, .content_fn = content };
+    }
+};
+
+test "Arabic corroborated meanings category publishes its whole English entry through DPR2" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = ArabicMeaningsCategoryFixture;
+    var namespaces = try F.namespaces(a);
+    defer namespaces.deinit();
+    const codes = F.codes(&namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "bit", F.bit_source, F.bit_source, null);
+    const pos = F.body ++ "=== اسم ===\n# [[tail|Tail survives]]\n" ++ F.category;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ordinary-pos", pos, pos, null);
+    const protected = F.body ++ "<nowiki>\n===French===\n</nowiki>\n<!--\n=== {{اللغة|Unlisted spelling}} ===\n-->\n" ++ F.category;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "protected-headings", protected, protected, null);
+    const html_pre = F.body ++ "<pre/ data=x>" ++ F.category ++ "</pre>\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "html-pre-category", html_pre, html_pre, null);
+    try writer.addPageWithFallback(a, .{ .id = 0, .kind = .language }, "preserved-warning", F.source, null, .{ .malformed_table = true, .unresolved_language_heading = true });
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 5), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "الإنجليزية"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("en", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    for ([_][]const u8{ "bit", "ordinary-pos", "protected-headings", "html-pre-category", "preserved-warning" }) |title| {
+        const record = (try index.find(title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings("en", decoded.entry.language_code);
+        try std.testing.expect(std.mem.indexOf(u8, record.payload, "المعاني") != null);
+        if (std.mem.eql(u8, title, "bit")) {
+            for ([_][]const u8{ "لِجَام", "مِثْقَاب", "دُولار", "قُلَيْل" }) |target| {
+                var found = false;
+                for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                    if (span.kind == .link and std.mem.eql(u8, span.target, target)) found = true;
+                };
+                try std.testing.expect(found);
+            }
+        }
+        if (std.mem.eql(u8, title, "ordinary-pos")) try std.testing.expect(std.mem.indexOf(u8, record.payload, "Tail survives") != null);
+    }
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    try std.testing.expect(std.mem.indexOf(u8, report, "preserved-warning") != null);
+    try std.testing.expect(std.mem.indexOf(u8, report, "malformed_table") != null);
+    try std.testing.expect(std.mem.indexOf(u8, report, "unresolved_language_heading") != null);
+    try std.testing.expect(std.mem.indexOf(u8, report, "missing_language_heading") == null);
+}
+
+test "Arabic meanings category refuses uncorroborated ambiguous protected and nested declarations" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = ArabicMeaningsCategoryFixture;
+    var namespaces = try F.namespaces(a);
+    defer namespaces.deinit();
+    const codes = F.codes(&namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const cases = [_]struct { title: []const u8, expanded: []const u8, raw: ?[]const u8 = null }{
+        .{ .title = "absent-category", .expanded = F.body },
+        .{ .title = "topic-only", .expanded = F.body ++ "[[تصنيف:أثاث]]" },
+        .{ .title = "translations-only", .expanded = F.body ++ "{{en}} {{t|en|word}}" },
+        .{ .title = "comment-category", .expanded = F.body ++ "<!--" ++ F.category ++ "-->" },
+        .{ .title = "nowiki-category", .expanded = F.body ++ "<nowiki>" ++ F.category ++ "</nowiki>" },
+        .{ .title = "pre-category", .expanded = F.body ++ "<pre>" ++ F.category ++ "</pre>" },
+        .{ .title = "source-category", .expanded = F.body ++ "<source>" ++ F.category ++ "</source>" },
+        .{ .title = "escaped-category", .expanded = F.body ++ "[[:تصنيف:إنجليزية]]" },
+        .{ .title = "ordinary-link", .expanded = F.body ++ "[[إنجليزية]]" },
+        .{ .title = "untrusted-alias", .expanded = F.body ++ "[[تصنيف:untrusted English]]" },
+        .{ .title = "ambiguous", .expanded = F.source ++ "[[تصنيف:فرنسية]]" },
+        .{ .title = "different-category", .expanded = F.body ++ "[[تصنيف:فرنسية]]", .raw = F.source },
+        .{ .title = "expanded-only-category", .expanded = F.source, .raw = F.body },
+        .{ .title = "raw-only-category", .expanded = F.body, .raw = F.source },
+        .{ .title = "missing-raw", .expanded = F.source, .raw = "" },
+        .{ .title = "unknown-raw-heading", .expanded = F.source, .raw = "== Unknown ==\n# Retained definition\n" ++ F.category },
+        .{ .title = "unknown-expanded-heading", .expanded = "== Unknown ==\n# Retained definition\n" ++ F.category, .raw = F.source },
+        .{ .title = "extra-unknown-boundary", .expanded = F.source ++ "== Notes ==\nRetained tail" },
+        .{ .title = "known-nested-language", .expanded = F.body ++ "===French===\n# Retained foreign definition\n" ++ F.category },
+        .{ .title = "deep-known-language", .expanded = F.body ++ "======French======\n# Retained foreign definition\n" ++ F.category },
+        .{ .title = "explicit-unknown-nested", .expanded = F.body ++ "=== {{اللغة|Unlisted spelling}} ===\n# Retained unknown definition\n" ++ F.category },
+        .{ .title = "explicit-nested-raw-only", .expanded = F.source, .raw = F.body ++ "=== {{اللغة|Unlisted spelling}} ===\n# Retained unknown definition\n" ++ F.category },
+        .{ .title = "nonempty-prefix", .expanded = "Retained unscoped prefix\n" ++ F.source },
+    };
+    for (cases) |case| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, case.expanded, case.raw orelse case.expanded, null);
+    const foreign = F.body ++ "==French==\n# [[chien|Foreign definition]]\n" ++ F.category;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "explicit-foreign", foreign, foreign, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, cases.len + 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Unclassified"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    for (cases) |case| {
+        const record = (try index.find(case.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings("", decoded.entry.language_code);
+        try std.testing.expect(std.mem.indexOf(u8, record.payload, "Retained") != null);
+    }
+    var foreign_map = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "French"));
+    defer foreign_map.deinit();
+    const foreign_blob = try blob_format.inspect(foreign_map.bytes);
+    const foreign_metadata = try foreign_blob.languageMetadata();
+    try std.testing.expectEqualStrings("fr", foreign_metadata.code);
+    var foreign_index = try foreign_blob.buildTrustedIndexAlloc(a);
+    defer foreign_index.deinit(a);
+    const record = (try foreign_index.find("explicit-foreign")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, foreign_metadata);
+    try std.testing.expectEqualStrings("fr", decoded.entry.language_code);
+    try std.testing.expect(std.mem.indexOf(u8, record.payload, "Foreign definition") != null);
 }
