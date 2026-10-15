@@ -1823,6 +1823,112 @@ private slots:
         QVERIFY(document.find(caption).charFormat().fontItalic()); // An actual rendered cell does own it.
     }
 
+    void embeddedMultilineMediaCaptionKeepsTypedBreaksAndCollapsedFallback() {
+        MainWindow window{QString()};
+        for (bool poem : {false, true}) {
+            const QString classes = poem
+                ? QStringLiteral("wikidict-media\twikidict-poem wikidict-poem-indent-2")
+                : QStringLiteral("note wikidict-media");
+            const QString firstText = QStringLiteral("First caption");
+            const QString secondText = QStringLiteral("Second verse");
+            const QString caption = firstText + (poem ? QStringLiteral("\n\n") : QStringLiteral("\n")) + secondText;
+            const QJsonObject first{{QStringLiteral("kind"), QStringLiteral("link")},
+                {QStringLiteral("text"), firstText}, {QStringLiteral("target"), QStringLiteral("File:Tone.ogg")},
+                {QStringLiteral("classes"), classes}, {QStringLiteral("bold"), true}};
+            const QJsonObject second{{QStringLiteral("kind"), QStringLiteral("link")},
+                {QStringLiteral("text"), secondText}, {QStringLiteral("target"), QStringLiteral("File:Tone.ogg")},
+                {QStringLiteral("classes"), classes}, {QStringLiteral("italic"), true}};
+            const QJsonObject ownedBreak{{QStringLiteral("kind"), QStringLiteral("line_break")},
+                {QStringLiteral("text"), QStringLiteral("\n")}, {QStringLiteral("target"), QStringLiteral("File:Tone.ogg")},
+                {QStringLiteral("classes"), classes}};
+            QJsonArray spans{first, ownedBreak};
+            if (poem) spans.append(ownedBreak); // A blank stanza remains part of this caption.
+            spans.append(second);
+            const QJsonObject block{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                {QStringLiteral("spans"), spans}};
+            const QJsonObject entry{{QStringLiteral("title"), QStringLiteral("Multiline media")},
+                {QStringLiteral("kind"), QStringLiteral("supplemental")},
+                {QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), QStringLiteral("Gallery")},
+                    {QStringLiteral("level"), 3}, {QStringLiteral("blocks"), QJsonArray{block}}}}},
+                {QStringLiteral("media"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("audio")},
+                    {QStringLiteral("file"), QStringLiteral("Tone.ogg")}, {QStringLiteral("caption"), caption}}}}};
+            const QJsonObject original = entry;
+            QTextDocument document;
+            document.setTextWidth(360);
+            document.setHtml(window.entryHtml(entry));
+            const QString plain = document.toPlainText();
+            QVERIFY(plain.contains(caption));
+            QCOMPARE(plain.count(firstText), 1);
+            QCOMPARE(plain.count(secondText), 1);
+            const QTextCursor firstCursor = document.find(firstText);
+            const QTextCursor secondCursor = document.find(secondText);
+            QVERIFY(!firstCursor.isNull() && !secondCursor.isNull());
+            QVERIFY(firstCursor.charFormat().fontWeight() >= QFont::Bold);
+            QVERIFY(secondCursor.charFormat().fontItalic());
+            QCOMPARE(firstCursor.charFormat().anchorHref(), QStringLiteral("dict:File%3ATone.ogg"));
+            QCOMPARE(secondCursor.charFormat().anchorHref(), QStringLiteral("dict:File%3ATone.ogg"));
+            const QTextCursor fileCursor = document.find(QStringLiteral("Tone.ogg"));
+            QVERIFY(!fileCursor.isNull());
+            QCOMPARE(fileCursor.charFormat().anchorHref(), QStringLiteral("https://commons.wikimedia.org/wiki/File:Tone.ogg"));
+            QCOMPARE(entry, original);
+
+            window.collapsedSections_.insert(0);
+            document.setHtml(window.entryHtml(entry));
+            const QString collapsed = document.toPlainText();
+            QCOMPARE(collapsed.count(firstText), 1);
+            QCOMPARE(collapsed.count(secondText), 1);
+            QVERIFY(collapsed.simplified().contains(caption.simplified()));
+            QVERIFY(document.find(firstText).charFormat().fontWeight() < QFont::Bold);
+            QVERIFY(!document.find(secondText).charFormat().fontItalic());
+            QVERIFY(document.find(firstText).charFormat().anchorHref().isEmpty());
+            QVERIFY(!document.find(QStringLiteral("Tone.ogg")).isNull());
+            QCOMPARE(entry, original);
+            window.collapsedSections_.clear();
+        }
+    }
+
+    void mediaCaptionOwnershipStopsAtUnrelatedBreaksAndOtherFiles() {
+        MainWindow window{QString()};
+        const QString firstText = QStringLiteral("First caption");
+        const QString secondText = QStringLiteral("Second verse");
+        const QString marked = QStringLiteral("wikidict-media wikidict-poem");
+        const QJsonObject first{{QStringLiteral("kind"), QStringLiteral("link")},
+            {QStringLiteral("text"), firstText}, {QStringLiteral("target"), QStringLiteral("File:Tone.ogg")},
+            {QStringLiteral("classes"), marked}};
+        QJsonObject second = first;
+        second.insert(QStringLiteral("text"), secondText);
+        const auto boundary = [](const QString &classes, const QString &target) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("line_break")},
+                {QStringLiteral("text"), QStringLiteral("\n")}, {QStringLiteral("classes"), classes},
+                {QStringLiteral("target"), target}};
+        };
+        const QJsonArray boundaries{
+            boundary(QStringLiteral("wikidict-poem"), QStringLiteral("File:Tone.ogg")),
+            boundary(QStringLiteral("not-wikidict-media wikidict-poem"), QStringLiteral("File:Tone.ogg")),
+            boundary(marked, QStringLiteral("File:Other.ogg")),
+            boundary(marked, QString())};
+        for (const QJsonValue &separator : boundaries) {
+            const QJsonObject entry{{QStringLiteral("title"), QStringLiteral("Separate captions")},
+                {QStringLiteral("kind"), QStringLiteral("supplemental")},
+                {QStringLiteral("preamble_spans"), QJsonArray{first, separator, second}},
+                {QStringLiteral("sections"), QJsonArray{}},
+                {QStringLiteral("media"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("audio")},
+                    {QStringLiteral("file"), QStringLiteral("Tone.ogg")},
+                    {QStringLiteral("caption"), firstText + QStringLiteral("\n") + secondText}}}}};
+            const QJsonObject original = entry;
+            QTextDocument document;
+            document.setHtml(window.entryHtml(entry));
+            const QString plain = document.toPlainText();
+            QVERIFY(plain.contains(firstText + QStringLiteral("\n") + secondText));
+            // These separately owned pieces cannot suppress the full metadata caption.
+            QCOMPARE(plain.count(firstText), 2);
+            QCOMPARE(plain.count(secondText), 2);
+            QCOMPARE(document.find(firstText).charFormat().anchorHref(), QStringLiteral("dict:File%3ATone.ogg"));
+            QCOMPARE(document.find(secondText).charFormat().anchorHref(), QStringLiteral("dict:File%3ATone.ogg"));
+            QCOMPARE(entry, original);
+        }
+    }
+
     void crossEntrySectionLinkKeepsFragmentThroughRealLookup() {
         MainWindow window(fixture_, QStringLiteral("cat"));
         window.resize(780, 480);

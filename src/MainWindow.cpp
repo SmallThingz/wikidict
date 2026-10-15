@@ -1241,15 +1241,17 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
             const QJsonObject span = value.toObject();
             const QStringList classes = span.value(QStringLiteral("classes")).toString().simplified().split(QChar(' '), Qt::SkipEmptyParts);
             const QString target = span.value(QStringLiteral("target")).toString();
+            const QString kind = span.value(QStringLiteral("kind")).toString();
             QString captionFile;
-            if (span.value(QStringLiteral("kind")).toString() == QStringLiteral("link") &&
+            if ((kind == QStringLiteral("link") || kind == QStringLiteral("line_break")) &&
                 classes.contains(QStringLiteral("wikidict-media")) &&
                 (target.startsWith(QStringLiteral("File:"), Qt::CaseInsensitive) || target.startsWith(QStringLiteral("Image:"), Qt::CaseInsensitive)))
                 captionFile = target.mid(target.indexOf(QChar(':')) + 1).replace(QChar('_'), QChar(' '));
             if (captionFile != file || captionFile.isEmpty()) finishCaption();
             if (!captionFile.isEmpty()) {
                 file = captionFile;
-                text += span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString();
+                text += kind == QStringLiteral("line_break") ? QStringLiteral("\n")
+                    : span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString();
             }
         }
         finishCaption();
