@@ -41,6 +41,91 @@ class SectionLinkDeviceTest {
         compose.waitForIdle()
     }
 
+
+    private fun blankHeadingFixture(): ByteArray {
+        fun u32(n: Int) = ByteArray(4) { (n ushr (it * 8)).toByte() }
+        fun u16(n: Int) = byteArrayOf(n.toByte(), (n ushr 8).toByte())
+        fun string(value: String) = value.toByteArray(Charsets.UTF_8).let { u32(it.size) + it }
+        fun spans(text: String, target: String = ""): ByteArray =
+            u32(1) + byteArrayOf(if (target.isEmpty()) 0 else 1, 0, 0) +
+                listOf(text, target, "", "", "", "").fold(byteArrayOf()) { bytes, value -> bytes + string(value) }
+        fun block(kind: Int, text: String, target: String = "", path: String = "",
+                  table: ByteArray = byteArrayOf(0)): ByteArray =
+            byteArrayOf(kind.toByte(), if (kind == 2 || kind == 5) 1 else 0, 0) +
+                (if (kind == 12) u32(0) else spans(text, target)) +
+                byteArrayOf(0) + string(path) + string("") + table
+        fun table(text: String, target: String): ByteArray = block(12, "", table =
+            byteArrayOf(1) + u32(0) + u32(1) + u32(1) +
+                byteArrayOf(0) + u16(1) + u16(1) + spans(text, target))
+        fun section(title: String, blocks: List<ByteArray>): ByteArray =
+            byteArrayOf(3) + string(title) + u32(blocks.size) +
+                blocks.fold(byteArrayOf()) { bytes, value -> bytes + value }
+        val sections = listOf(
+            section("", listOf(
+                block(0, "Read blank prose", "prose"),
+                block(5, "Read blank list", "list", "*"),
+                table("Read blank cell", "cell"))),
+            section(" \t", listOf(
+                block(2, "Blank meaning"),
+                block(0, "Read blank detail", "detail"),
+                block(5, "Blank detail list", path = "*"),
+                table("Blank detail cell", "detail-cell"))),
+            section("Notes", listOf(block(0, "Named notes remain folded")))
+        )
+        return "DPR2".toByteArray() + u32(0) + u32(sections.size) +
+            sections.fold(byteArrayOf()) { bytes, value -> bytes + value } +
+            u32(0) + u32(0) + u32(0) + u32(0) + u32(0)
+    }
+
+    @Test fun decodedBlankHeadingsKeepContentAndLinksReachableWithRetainedFolds() {
+        val entry = BlobDecoder.decode(blankHeadingFixture(), "Blank heading fixture", "language", "English", "en")
+        assertEquals(listOf("", " \t", "Notes"), entry.sections.map { it.title })
+        assertEquals(listOf("paragraph", "list_item", "table"), entry.sections[0].blocks.map { it.kind })
+        assertEquals("cell", entry.sections[0].blocks[2].table!!.rows.single().single().spans.single().target)
+        assertEquals(listOf("definition", "paragraph", "list_item", "table"), entry.sections[1].blocks.map { it.kind })
+        val displayed = androidx.compose.runtime.mutableStateOf(entry)
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MaterialTheme { EntryView(displayed.value, false, {}, onLink = { forwarded.add(it) }, settings = AppSettings()) }
+            }
+        }
+        fun assertBlankContent() {
+            for (label in listOf("Read blank prose", "Read blank list", "Read blank cell", "Blank meaning",
+                    "Read blank detail", "Blank detail list", "Blank detail cell")) {
+                compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText(label))
+                compose.onNodeWithText(label, useUnmergedTree = true).assertIsDisplayed()
+            }
+            compose.onNodeWithText("Named notes remain folded").assertDoesNotExist()
+        }
+        assertBlankContent()
+        for (label in listOf("Read blank prose", "Read blank list", "Read blank cell", "Read blank detail")) {
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText(label))
+            touchLink(label)
+        }
+        compose.runOnIdle { assertEquals(listOf("prose", "list", "cell", "detail"), forwarded) }
+        // Keep the same entry key and settings so EntryView retains its actual fold map.
+        compose.runOnIdle {
+            displayed.value = entry.copy(sections = entry.sections.mapIndexed { index, section ->
+                if (index < 2) section.copy(title = "Foldable $index") else section
+            })
+        }
+        for (index in 0..1) {
+            val label = "Collapse Foldable $index"
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription(label))
+            compose.onNodeWithContentDescription(label).performClick()
+            compose.onNodeWithContentDescription("Expand Foldable $index").assertIsDisplayed()
+        }
+        compose.onNodeWithText("Read blank prose").assertDoesNotExist()
+        compose.onNodeWithText("Blank meaning").assertDoesNotExist()
+        compose.runOnIdle { displayed.value = entry }
+        assertBlankContent()
+        // A real named section remains folded and still exposes its ordinary toggle.
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription("Expand Notes"))
+        compose.onNodeWithContentDescription("Expand Notes").performClick()
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Named notes remain folded"))
+        compose.onNodeWithText("Named notes remain folded").assertIsDisplayed()
+    }
+
     @Test fun sameEntrySectionLinkOpensFoldedHeadingAndShowsItsBody() {
         show("#Usage_notes", "Read usage notes", "Usage notes")
         compose.onNodeWithText("SECTION DESTINATION BODY").assertDoesNotExist()

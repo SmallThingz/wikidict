@@ -106,14 +106,21 @@ fun readingRows(sections: List<Section>): List<ReadingRow> = buildList {
 /** Fold a section's own prose, keeping child parts of speech and definitions reachable. */
 fun visibleReadingRows(rows: List<ReadingRow>, folded: Set<String>): List<ReadingRow> {
     var hideBody = false
+    var canFold = false
     return rows.filter { row ->
-        if (row.heading != null) { hideBody = row.key in folded; true } else !hideBody && !(row.meaningSection && row.block?.kind != "definition" && row.sectionKey + "-details" in folded)
+        if (row.heading != null) {
+            // Blank labels have no heading or details toggle in EntryView.
+            canFold = row.heading.title.isNotBlank()
+            hideBody = canFold && row.key in folded
+            true
+        } else !hideBody && !(canFold && row.meaningSection && row.block?.kind != "definition" && row.sectionKey + "-details" in folded)
     }
 }
 
 
 fun initiallyFolded(row: ReadingRow, settings: AppSettings): Boolean {
     val section = row.heading ?: return false
+    if (section.title.isBlank()) return false
     return when {
         section.title.startsWith("Pronunciation", true) -> settings.collapsePronunciation
         section.title.startsWith("Etymology", true) -> settings.collapseEtymology

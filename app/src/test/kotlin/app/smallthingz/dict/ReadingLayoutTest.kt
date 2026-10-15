@@ -75,6 +75,42 @@ class ReadingLayoutTest {
         assertFalse(initiallyFolded(rows.first(), AppSettings(collapseOtherSections = false)))
     }
 
+
+    @Test fun blankHeadingsKeepBodiesAndDetailsVisibleUnderDefaultsAndRetainedFolds() {
+        for (title in listOf("", " \t\n")) {
+            val prose = Block("paragraph", 0, listOf(Span("link", "Read prose", target = "prose")))
+            val item = Block("list_item", 1, listOf(Span("text", "List content")), listPath = "*")
+            val table = Block("table", 0, emptyList(), table = Table(emptyList(),
+                listOf(listOf(Cell(listOf(Span("link", "Cell content", target = "cell")), false, 1, 1)))))
+            val meaning = Block("definition", 1, listOf(Span("text", "Meaning")))
+            val note = Block("quotation", 1, listOf(Span("text", "Supporting detail")))
+            val named = Block("paragraph", 0, listOf(Span("text", "Named section body")))
+            val rows = readingRows(listOf(
+                Section(3, "Before", listOf(named)),
+                Section(3, title, listOf(prose, item, table)),
+                Section(3, title, listOf(meaning, note)),
+                Section(3, "After", listOf(named)),
+                Section(3, "Noun", listOf(meaning, note))
+            ))
+            val defaults = rows.filter { initiallyFolded(it, AppSettings()) }.map { it.key }.toSet() +
+                setOf("heading-2-details", "heading-4-details")
+            assertFalse(initiallyFolded(rows.single { it.key == "heading-1" }, AppSettings()))
+            assertFalse(initiallyFolded(rows.single { it.key == "heading-2" }, AppSettings()))
+            val expected = listOf(prose, item, table, meaning, note, meaning)
+            assertEquals(expected, visibleReadingRows(rows, defaults).mapNotNull { it.block })
+            // Retained fold indices must not hide bodies with no visible way to reopen them.
+            val retained = defaults + setOf("heading-1", "heading-1-details", "heading-2")
+            val visible = visibleReadingRows(rows, retained)
+            assertEquals(expected, visible.mapNotNull { it.block })
+            assertEquals(rows.filter { it.heading != null }, visible.filter { it.heading != null })
+            // Ordinary named section and detail toggles still work.
+            assertEquals(listOf(named) + expected,
+                visibleReadingRows(rows, retained - "heading-0").mapNotNull { it.block })
+            assertEquals(expected + note,
+                visibleReadingRows(rows, retained - "heading-4-details").mapNotNull { it.block })
+        }
+    }
+
     @Test fun semanticSpacingDropsEmptyRowsAndRepeatedBreaksButKeepsLiteralSpacing() {
         val br = Span("line_break", "\n")
         val spans = listOf(br, br, Span("text", "one"), br, br, Span("text", " "), br, Span("text", "two"), br, br)
