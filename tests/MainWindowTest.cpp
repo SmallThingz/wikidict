@@ -1391,6 +1391,325 @@ private slots:
         QVERIFY(inner.charFormat().fontWeight() >= QFont::Bold);
     }
 
+
+    void poemLinesPreserveBlankLinesStylesAndLinks() {
+        MainWindow window{QString()};
+        const auto text = [](const QString &value, const QString &classes = QString()) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), value}, {QStringLiteral("classes"), classes}};
+        };
+        const QString marked = QStringLiteral("wikidict-poem");
+        const QString indented = marked + QStringLiteral(" wikidict-poem-indent-2");
+        const auto br = [](const QString &classes) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("line_break")},
+                {QStringLiteral("classes"), classes}};
+        };
+        QJsonObject bold = text(QStringLiteral("Styled "), indented);
+        bold.insert(QStringLiteral("bold"), true);
+        QJsonObject link = text(QStringLiteral("cat"), indented);
+        link.insert(QStringLiteral("kind"), QStringLiteral("link"));
+        link.insert(QStringLiteral("target"), QStringLiteral("cat#Noun"));
+        const QString padding = QString(2, QChar(0x00a0));
+        const QJsonArray spans{text(QStringLiteral("Lead")), br({}), bold, link, br(indented),
+            br(marked), text(padding + QStringLiteral("End"), marked), br(marked)};
+        const QJsonObject block{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+            {QStringLiteral("spans"), spans}};
+        const QJsonObject original = block;
+        QTextDocument document;
+        document.setTextWidth(360);
+        document.setHtml(window.blockHtml(block));
+        QString plain = document.toPlainText();
+        plain.replace(QChar(0x00a0), QChar(' '));
+        QCOMPARE(plain, QStringLiteral("Lead\nStyled cat\n\n  End\n"));
+        QVERIFY(document.toRawText().contains(padding + QStringLiteral("End")));
+        const QTextCursor styled = document.find(QStringLiteral("Styled "));
+        const QTextCursor linked = document.find(QStringLiteral("cat"));
+        QVERIFY(!styled.isNull() && !linked.isNull());
+        QCOMPARE(styled.block().position(), linked.block().position()); // A style/link boundary cannot create a new line.
+        QVERIFY(styled.charFormat().fontWeight() >= QFont::Bold);
+        QCOMPARE(linked.charFormat().anchorHref(), QStringLiteral("dict:cat%23Noun"));
+        const qreal em = window.readingPointSize_ * window.reading_->logicalDpiY() / 72.0;
+        QVERIFY(qAbs(styled.blockFormat().leftMargin() - 2 * em) < 0.1);
+        QCOMPARE(styled.blockFormat().rightMargin(), 0.0);
+        QCOMPARE(document.blockCount(), 5);
+        QVERIFY(document.lastBlock().text().isEmpty());
+        QCOMPARE(block, original);
+
+        // A boundary break is one line boundary, not an extra stanza.
+        QTextDocument boundary;
+        boundary.setHtml(window.blockHtml(QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+            {QStringLiteral("spans"), QJsonArray{text(QStringLiteral("Before")), br({}),
+                text(QStringLiteral("Verse"), marked), br({}), text(QStringLiteral("After"))}}}));
+        QCOMPARE(boundary.toPlainText(), QStringLiteral("Before\nVerse\nAfter"));
+        QCOMPARE(boundary.blockCount(), 3);
+
+        // Ordinary unmarked output remains the existing inline path.
+        QTextDocument ordinary;
+        ordinary.setHtml(window.spansHtml(QJsonArray{text(QStringLiteral("Ordinary")), br({}),
+            text(QStringLiteral("line"))}));
+        QCOMPARE(ordinary.toPlainText(), QStringLiteral("Ordinary\nline"));
+        QCOMPARE(ordinary.blockCount(), 1);
+    }
+
+    void poemIndentFollowsEnclosingDirectionOnWrappedLines() {
+        MainWindow window{QString()};
+        const qreal em = window.readingPointSize_ * window.reading_->logicalDpiY() / 72.0;
+        for (const bool rtl : {false, true}) {
+            const QString words = rtl
+                ? QStringLiteral("אבגד הוזח טיכל מנסע פצקר שתאב גדוז חטיכ למנס עפצק רשתא בגדו זחטי כלמנ סעפצ קרשת")
+                : QStringLiteral("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma");
+            const QString classes = QStringLiteral("wikidict-poem wikidict-poem-indent-2 wikidict-poem-dir-") +
+                (rtl ? QStringLiteral("rtl") : QStringLiteral("ltr"));
+            // A child's opposite isolate must not change the enclosing line's margin.
+            const QJsonObject span{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), words}, {QStringLiteral("classes"), classes},
+                {QStringLiteral("direction"), rtl ? QStringLiteral("ltr") : QStringLiteral("rtl")}};
+            QTextDocument document;
+            QFont font = document.defaultFont();
+            font.setPointSize(window.readingPointSize_);
+            document.setDefaultFont(font);
+            document.setTextWidth(230);
+            document.setHtml(window.blockHtml(QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                {QStringLiteral("spans"), QJsonArray{span}}}));
+            (void) document.documentLayout()->documentSize();
+            const QTextCursor located = document.find(words.left(4));
+            QVERIFY(!located.isNull());
+            const QTextBlock block = located.block();
+            QVERIFY(block.isValid());
+            QCOMPARE(block.blockFormat().layoutDirection(), rtl ? Qt::RightToLeft : Qt::LeftToRight);
+            QVERIFY(qAbs(block.blockFormat().leftMargin() - (rtl ? 0 : 2 * em)) < 0.1);
+            QVERIFY(qAbs(block.blockFormat().rightMargin() - (rtl ? 2 * em : 0)) < 0.1);
+            const QTextLayout *layout = block.layout();
+            QVERIFY(layout && layout->lineCount() >= 2);
+            const qreal available = document.textWidth() - 2 * document.documentMargin() - 2 * em;
+            for (int i = 0; i < layout->lineCount(); ++i) {
+                const QTextLine line = layout->lineAt(i);
+                QVERIFY(line.isValid());
+                QVERIFY(line.width() <= available + 0.5);
+                QVERIFY(line.width() > 0);
+            }
+            const QString raw = document.toRawText();
+            QVERIFY(raw.contains(words)); // No spaces or indentation characters were injected.
+        }
+    }
+
+    void poemLinesRetainCellCaptionAndOuterIndentContexts() {
+        MainWindow window{QString()};
+        const auto spans = [](const QString &text, int depth) {
+            return QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), text}, {QStringLiteral("classes"),
+                    QStringLiteral("wikidict-poem wikidict-poem-indent-%1").arg(depth)}}};
+        };
+        const qreal em = window.readingPointSize_ * window.reading_->logicalDpiY() / 72.0;
+        const QJsonObject cell{{QStringLiteral("spans"), spans(QStringLiteral("Cell verse"), 2)}};
+        const QJsonObject table{{QStringLiteral("caption"), spans(QStringLiteral("Caption verse"), 1)},
+            {QStringLiteral("rows"), QJsonArray{QJsonObject{{QStringLiteral("cells"), QJsonArray{cell}}}}}};
+        QTextDocument document;
+        document.setTextWidth(400);
+        document.setHtml(window.tableHtml(table, 0));
+        const QTextCursor caption = document.find(QStringLiteral("Caption verse"));
+        const QTextCursor content = document.find(QStringLiteral("Cell verse"));
+        QVERIFY(!caption.isNull() && !content.isNull());
+        QVERIFY(qAbs(caption.blockFormat().leftMargin() - em) < 0.1);
+        QVERIFY(qAbs(content.blockFormat().leftMargin() - 2 * em) < 0.1);
+        QCOMPARE(document.toPlainText().count(QStringLiteral("Caption verse")), 1);
+        QCOMPARE(document.toPlainText().count(QStringLiteral("Cell verse")), 1);
+
+        QTextDocument nested;
+        nested.setHtml(window.blockHtml(QJsonObject{{QStringLiteral("kind"), QStringLiteral("indent")},
+            {QStringLiteral("depth"), 2}, {QStringLiteral("spans"), spans(QStringLiteral("Nested verse"), 2)}}));
+        const QTextCursor verse = nested.find(QStringLiteral("Nested verse"));
+        QVERIFY(!verse.isNull());
+        QVERIFY(qAbs(verse.blockFormat().leftMargin() - (46 + 2 * em)) < 0.1);
+
+        // Noncanonical or excessive numbers preserve text but cannot select arbitrary margins.
+        for (const QString &number : {QStringLiteral("0"), QStringLiteral("33"), QStringLiteral("02"),
+                QStringLiteral("-1"), QStringLiteral("999999999999999999999")}) {
+            const QJsonArray malformed{QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), QStringLiteral("Bounded verse")},
+                {QStringLiteral("classes"), QStringLiteral("wikidict-poem wikidict-poem-indent-") + number}}};
+            QTextDocument bounded;
+            bounded.setHtml(window.spansHtml(malformed));
+            QCOMPARE(bounded.toPlainText(), QStringLiteral("Bounded verse"));
+            QCOMPARE(bounded.begin().blockFormat().leftMargin(), 0.0);
+            QCOMPARE(bounded.begin().blockFormat().rightMargin(), 0.0);
+        }
+        QTextDocument maximum;
+        maximum.setHtml(window.spansHtml(spans(QStringLiteral("Maximum verse"), 32)));
+        QVERIFY(qAbs(maximum.begin().blockFormat().leftMargin() - 32 * em) < 0.1);
+    }
+
+
+    void poemMetadataAndRawLineFeedsFollowTheCanonicalContract() {
+        MainWindow window{QString()};
+        const qreal em = window.readingPointSize_ * window.reading_->logicalDpiY() / 72.0;
+        const auto span = [](const QString &text, const QString &classes) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), text}, {QStringLiteral("classes"), classes}};
+        };
+        const QString mark = QStringLiteral("wikidict-poem");
+        const QString one = mark + QStringLiteral(" wikidict-poem-indent-1");
+        const QString two = mark + QStringLiteral(" wikidict-poem-indent-2");
+        QJsonObject raw = span(QStringLiteral("First\n\nSecond"), one);
+        raw.insert(QStringLiteral("trail"), QStringLiteral("\nTail\n"));
+        raw.insert(QStringLiteral("kind"), QStringLiteral("link"));
+        raw.insert(QStringLiteral("target"), QStringLiteral("cat#Noun"));
+        raw.insert(QStringLiteral("bold"), true);
+        const QJsonObject original = raw;
+        QTextDocument lines;
+        lines.setHtml(window.spansHtml(QJsonArray{raw}));
+        QCOMPARE(lines.toPlainText(), QStringLiteral("First\n\nSecond\nTail\n"));
+        QCOMPARE(lines.blockCount(), 5);
+        for (const QString &word : {QStringLiteral("First"), QStringLiteral("Second"), QStringLiteral("Tail")}) {
+            const QTextCursor found = lines.find(word);
+            QVERIFY(!found.isNull());
+            QCOMPARE(found.charFormat().anchorHref(), QStringLiteral("dict:cat%23Noun"));
+            QVERIFY(found.charFormat().fontWeight() >= QFont::Bold);
+            const qreal expected = word == QStringLiteral("First") ? em : 0.0;
+            QVERIFY(qAbs(found.blockFormat().leftMargin() - expected) < 0.1);
+        }
+        QCOMPARE(raw, original);
+        QJsonObject br{{QStringLiteral("kind"), QStringLiteral("line_break")}, {QStringLiteral("classes"), one}};
+        lines.setHtml(window.spansHtml(QJsonArray{raw, br}));
+        QCOMPARE(lines.toPlainText(), QStringLiteral("First\n\nSecond\nTail\n\n"));
+        QCOMPARE(lines.blockCount(), 6);
+        lines.setHtml(window.spansHtml(QJsonArray{span(QStringLiteral("First\n"), one),
+            span(QStringLiteral("New wrapper"), two)}));
+        const QTextCursor separatelyWrapped = lines.find(QStringLiteral("New wrapper"));
+        QVERIFY(!separatelyWrapped.isNull());
+        QVERIFY(qAbs(separatelyWrapped.blockFormat().leftMargin() - 2 * em) < 0.1);
+
+        const QList<QJsonArray> invalidIndent{
+            QJsonArray{span(QStringLiteral("Left"), two + QStringLiteral(" wikidict-poem-indent-2"))},
+            QJsonArray{span(QStringLiteral("Left"), two), span(QStringLiteral("Right"), one)},
+            QJsonArray{span(QStringLiteral("Left"), two), span(QStringLiteral("Right"), mark)},
+            QJsonArray{span(QStringLiteral("Left"), mark + QStringLiteral(" wikidict-poem-indent-+3"))},
+            QJsonArray{span(QStringLiteral("Left"), mark + QStringLiteral(" wikidict-poem-indent-"))}
+        };
+        for (const QJsonArray &value : invalidIndent) {
+            QTextDocument document;
+            document.setHtml(window.spansHtml(value));
+            QVERIFY(document.toPlainText().startsWith(QStringLiteral("Left")));
+            QCOMPARE(document.begin().blockFormat().leftMargin(), 0.0);
+            QCOMPARE(document.begin().blockFormat().rightMargin(), 0.0);
+        }
+        const QList<QJsonArray> invalidDirection{
+            QJsonArray{span(QStringLiteral("Default direction"), two + QStringLiteral(" wikidict-poem-dir-rtl wikidict-poem-dir-rtl"))},
+            QJsonArray{span(QStringLiteral("Default direction"), two + QStringLiteral(" wikidict-poem-dir-ltr wikidict-poem-dir-rtl"))},
+            QJsonArray{span(QStringLiteral("Default direction"), two + QStringLiteral(" wikidict-poem-dir-sideways"))},
+            QJsonArray{span(QStringLiteral("Default "), two + QStringLiteral(" wikidict-poem-dir-rtl")),
+                span(QStringLiteral("direction"), two)}
+        };
+        for (const QJsonArray &value : invalidDirection) {
+            QTextDocument document;
+            document.setHtml(window.spansHtml(value));
+            QCOMPARE(document.toPlainText(), QStringLiteral("Default direction"));
+            QVERIFY(qAbs(document.begin().blockFormat().leftMargin() - 2 * em) < 0.1);
+            QCOMPARE(document.begin().blockFormat().rightMargin(), 0.0);
+        }
+        for (const QString &classes : {QStringLiteral("not-wikidict-poem wikidict-poem-indent-2"),
+                QStringLiteral("wikidict-poem") + QChar(0x00a0) + QStringLiteral("wikidict-poem-indent-2")}) {
+            QTextDocument document;
+            document.setHtml(window.spansHtml(QJsonArray{span(QStringLiteral("Ordinary"), classes)}));
+            QCOMPARE(document.toPlainText(), QStringLiteral("Ordinary"));
+            QCOMPARE(document.begin().blockFormat().leftMargin(), 0.0);
+        }
+    }
+
+
+    void poemPrefixesStayOnTheFirstLineAndDefaultDirectionIsTheContainer() {
+        MainWindow window{QString()};
+        const QString marked = QStringLiteral("wikidict-poem wikidict-poem-indent-2");
+        const auto span = [](const QString &text, const QString &classes = QString()) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), text}, {QStringLiteral("classes"), classes}};
+        };
+        const QJsonArray mixed{span(QStringLiteral("Lead")),
+            QJsonObject{{QStringLiteral("kind"), QStringLiteral("line_break")}},
+            span(QStringLiteral("Verse"), marked)};
+        for (const QString &kind : {QStringLiteral("definition"), QStringLiteral("list_item"), QStringLiteral("example")}) {
+            const QString prefix = kind == QStringLiteral("definition") ? QStringLiteral("7")
+                : kind == QStringLiteral("list_item") ? QStringLiteral("7.") : QStringLiteral("Example:");
+            const QJsonObject block{{QStringLiteral("kind"), kind}, {QStringLiteral("number"), QStringLiteral("7")},
+                {QStringLiteral("depth"), 1}, {QStringLiteral("spans"), mixed}};
+            QTextDocument document;
+            document.setTextWidth(360);
+            document.setHtml(window.blockHtml(block));
+            QCOMPARE(document.toPlainText(), prefix + QStringLiteral(" Lead\nVerse"));
+            QCOMPARE(document.blockCount(), 2);
+            const QTextCursor label = document.find(prefix);
+            const QTextCursor lead = document.find(QStringLiteral("Lead"));
+            const QTextCursor verse = document.find(QStringLiteral("Verse"));
+            QVERIFY(!label.isNull() && !lead.isNull() && !verse.isNull());
+            QCOMPARE(label.block().position(), lead.block().position());
+            QVERIFY(verse.block().position() > lead.block().position());
+            if (kind == QStringLiteral("definition")) QVERIFY(label.charFormat().fontWeight() >= QFont::Bold);
+            if (kind == QStringLiteral("example")) QVERIFY(label.charFormat().fontItalic());
+            QVERIFY(!lead.charFormat().fontItalic());
+        }
+        const qreal em = window.readingPointSize_ * window.reading_->logicalDpiY() / 72.0;
+        for (const bool rtlContainer : {false, true}) {
+            window.reading_->setLayoutDirection(rtlContainer ? Qt::RightToLeft : Qt::LeftToRight);
+            QJsonObject child = span(rtlContainer ? QStringLiteral("English child") : QStringLiteral("אבגד"), marked);
+            child.insert(QStringLiteral("direction"), rtlContainer ? QStringLiteral("ltr") : QStringLiteral("rtl"));
+            QTextDocument document;
+            document.setHtml(window.spansHtml(QJsonArray{child}));
+            const QTextBlock block = document.begin();
+            QCOMPARE(block.blockFormat().layoutDirection(), rtlContainer ? Qt::RightToLeft : Qt::LeftToRight);
+            QVERIFY(qAbs(block.blockFormat().leftMargin() - (rtlContainer ? 0 : 2 * em)) < 0.1);
+            QVERIFY(qAbs(block.blockFormat().rightMargin() - (rtlContainer ? 2 * em : 0)) < 0.1);
+            QVERIFY(document.toRawText().contains(child.value(QStringLiteral("text")).toString()));
+        }
+    }
+
+
+    void poemReferencePrefixKeepsItsFirstLineAnchorAndMediaNavigation() {
+        MainWindow window{QString()};
+        const QJsonObject lead{{QStringLiteral("kind"), QStringLiteral("link")},
+            {QStringLiteral("text"), QStringLiteral("Lead")}, {QStringLiteral("target"), QStringLiteral("cat#Noun")},
+            {QStringLiteral("classes"), QStringLiteral("wikidict-poem wikidict-poem-indent-1")},
+            {QStringLiteral("bold"), true}};
+        const QJsonObject br{{QStringLiteral("kind"), QStringLiteral("line_break")},
+            {QStringLiteral("classes"), QStringLiteral("wikidict-poem wikidict-poem-indent-1")}};
+        const QJsonObject caption{{QStringLiteral("kind"), QStringLiteral("link")},
+            {QStringLiteral("text"), QStringLiteral("Poem caption")},
+            {QStringLiteral("target"), QStringLiteral("File:Tone.ogg")},
+            {QStringLiteral("classes"), QStringLiteral("wikidict-media\twikidict-poem wikidict-poem-indent-2")}};
+        const QJsonObject reference{{QStringLiteral("number"), 4}, {QStringLiteral("group_number"), 2},
+            {QStringLiteral("group"), QStringLiteral("note <one>")},
+            {QStringLiteral("spans"), QJsonArray{lead, br, caption}}};
+        const QJsonObject ordinary{{QStringLiteral("number"), 5}, {QStringLiteral("group_number"), 3},
+            {QStringLiteral("spans"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), QStringLiteral("Ordinary citation")}}}}};
+        const QJsonObject entry{{QStringLiteral("title"), QStringLiteral("Poem references")},
+            {QStringLiteral("kind"), QStringLiteral("supplemental")}, {QStringLiteral("sections"), QJsonArray{}},
+            {QStringLiteral("references"), QJsonArray{reference, ordinary}},
+            {QStringLiteral("media"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("audio")},
+                {QStringLiteral("file"), QStringLiteral("Tone.ogg")}, {QStringLiteral("caption"), QStringLiteral("Poem caption")}}}}};
+        QTextDocument document;
+        document.setTextWidth(360);
+        document.setHtml(window.entryHtml(entry));
+        const QString plain = document.toPlainText();
+        QVERIFY(plain.contains(QStringLiteral("[note <one> 2] Lead\nPoem caption")));
+        QVERIFY(plain.contains(QStringLiteral("[3] Ordinary citation")));
+        QCOMPARE(plain.count(QStringLiteral("Poem caption")), 1);
+        QVERIFY(plain.contains(QStringLiteral("Tone.ogg")));
+        QVERIFY(hasAnchor(&document, QStringLiteral("reference-4")));
+        QVERIFY(hasAnchor(&document, QStringLiteral("reference-5")));
+        const QTextCursor label = document.find(QStringLiteral("[note <one> 2]"));
+        const QTextCursor first = document.find(QStringLiteral("Lead"));
+        const QTextCursor second = document.find(QStringLiteral("Poem caption"));
+        QVERIFY(!label.isNull() && !first.isNull() && !second.isNull());
+        QCOMPARE(label.block().position(), first.block().position());
+        QCOMPARE(first.block().next().position(), second.block().position());
+        QVERIFY(first.charFormat().fontWeight() >= QFont::Bold);
+        QCOMPARE(first.charFormat().anchorHref(), QStringLiteral("dict:cat%23Noun"));
+        QCOMPARE(second.charFormat().anchorHref(), QStringLiteral("dict:File%3ATone.ogg"));
+        const qreal em = window.readingPointSize_ * window.reading_->logicalDpiY() / 72.0;
+        QVERIFY(qAbs(first.block().blockFormat().leftMargin() - em) < 0.1);
+        QVERIFY(qAbs(second.block().blockFormat().leftMargin() - 2 * em) < 0.1);
+    }
+
     void groupedReferenceLabelsUseCompiledIdentity() {
         MainWindow window{QString()};
         const auto reference = [](int number, int groupNumber, const QString &group, const QString &text) {

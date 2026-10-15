@@ -70,7 +70,7 @@ private:
     void updateNavigation();
     QString entryHtml(const QJsonObject &entry) const;
     QString blockHtml(const QJsonObject &block) const;
-    QString spansHtml(const QJsonArray &spans) const;
+    QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}) const;
     QString tableHtml(const QJsonObject &table, int depth) const;
     SavedWord savedWord(const QJsonObject &entry) const;
     QString clueFor(const QJsonObject &entry) const;

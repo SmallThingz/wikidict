@@ -63,6 +63,61 @@ bool compiledBookSourcesTarget(const QString &target) {
     return digit(isbn.back()) || isbn.back() == QChar('X');
 }
 
+
+QStringList poemClassTokens(const QJsonObject &span) {
+    const QString value = span.value(QStringLiteral("classes")).toString();
+    const auto space = [](QChar c) { return c == QChar(' ') || (c.unicode() >= 9 && c.unicode() <= 13); };
+    QStringList tokens;
+    for (qsizetype start = 0; start < value.size();) {
+        while (start < value.size() && space(value[start])) ++start;
+        qsizetype end = start;
+        while (end < value.size() && !space(value[end])) ++end;
+        if (end > start) tokens.append(value.mid(start, end - start));
+        start = end;
+    }
+    return tokens;
+}
+
+bool hasPoemSpans(const QJsonArray &spans) {
+    return std::any_of(spans.begin(), spans.end(), [](const QJsonValue &value) {
+        return poemClassTokens(value.toObject()).contains(QStringLiteral("wikidict-poem"));
+    });
+}
+
+// -1 means invalid metadata; dimensions fall back independently for the whole line.
+int poemIndent(const QStringList &classes) {
+    if (!classes.contains(QStringLiteral("wikidict-poem"))) return 0;
+    const QString reserved = QStringLiteral("wikidict-poem-indent");
+    const QString prefix = reserved + QChar('-');
+    int indent = 0;
+    bool seen = false;
+    for (const QString &token : classes) {
+        if (!token.startsWith(reserved)) continue;
+        if (seen || !token.startsWith(prefix)) return -1;
+        seen = true;
+        bool ok = false;
+        const QString number = token.mid(prefix.size());
+        const int value = number.toInt(&ok);
+        if (!ok || value < 1 || value > 32 || QString::number(value) != number) return -1;
+        indent = value;
+    }
+    return indent;
+}
+
+int poemDirection(const QStringList &classes) {
+    if (!classes.contains(QStringLiteral("wikidict-poem"))) return 0;
+    int direction = 0;
+    for (const QString &token : classes) {
+        if (!token.startsWith(QStringLiteral("wikidict-poem-dir"))) continue;
+        if (direction != 0) return -1;
+        if (token == QStringLiteral("wikidict-poem-dir-ltr")) direction = 1;
+        else if (token == QStringLiteral("wikidict-poem-dir-rtl")) direction = 2;
+        else return -1;
+    }
+    return direction;
+}
+
+
 QString kindLabel(const QString &kind) {
     if (kind == QStringLiteral("language")) return QStringLiteral("Dictionary");
     QString label = kind;
@@ -934,59 +989,159 @@ void MainWindow::openSavedWord(const SavedWord &word) {
     if (api_->kind() == requested.kind && (requested.kind != QStringLiteral("language") || api_->language() == requested.language)) openWord(requested.title);
     else loadDataset(api_->root(), requested.language, requested.kind, false, requested.title, -1, originRoot_, originEdition_);
 }
-QString MainWindow::spansHtml(const QJsonArray &spans) const {
+QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix) const {
+    const auto flatHtml = [&](const QJsonArray &parts) {
+        QString out;
+        for (const QJsonValue &value : parts) {
+            const QJsonObject span = value.toObject();
+            const QString kind = span.value(QStringLiteral("kind")).toString();
+            if (kind == QStringLiteral("line_break")) { out += QStringLiteral("<br>"); continue; }
+            QString text = (span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString()).toHtmlEscaped();
+            if (kind == QStringLiteral("template"))
+                throw DictApiError("compiled dictionary contains an uncompiled template span");
+            if (kind == QStringLiteral("link")) {
+                const QByteArray encoded = QUrl::toPercentEncoding(span.value(QStringLiteral("target")).toString());
+                text = QStringLiteral("<a href='dict:%1'>%2</a>").arg(QString::fromLatin1(encoded), text);
+            } else if (kind == QStringLiteral("external_link")) {
+                const QString target = span.value(QStringLiteral("target")).toString();
+                QUrl url(target);
+                if (target.startsWith(QStringLiteral("//")) && url.scheme().isEmpty())
+                    url.setScheme(QStringLiteral("https"));
+                if (url.isValid() && !url.host().isEmpty() &&
+                    (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https")))
+                    // QTextDocument decodes attribute entities only inside double quotes.
+                    text = QStringLiteral("<a href=\"%1\">%2</a>").arg(url.toString(QUrl::FullyEncoded).toHtmlEscaped(), text);
+            }
+            if (span.value(QStringLiteral("code")).toBool()) text = QStringLiteral("<code>%1</code>").arg(text);
+            if (span.value(QStringLiteral("small")).toBool()) text = QStringLiteral("<small>%1</small>").arg(text);
+            if (span.value(QStringLiteral("bold")).toBool()) text = QStringLiteral("<b>%1</b>").arg(text);
+            if (span.value(QStringLiteral("italic")).toBool()) text = QStringLiteral("<i>%1</i>").arg(text);
+            if (span.value(QStringLiteral("underline")).toBool()) text = QStringLiteral("<u>%1</u>").arg(text);
+            if (span.value(QStringLiteral("strike")).toBool()) text = QStringLiteral("<s>%1</s>").arg(text);
+            if (span.value(QStringLiteral("superscript")).toBool()) text = QStringLiteral("<sup>%1</sup>").arg(text);
+            if (span.value(QStringLiteral("subscript")).toBool()) text = QStringLiteral("<sub>%1</sub>").arg(text);
+            const QString classes = span.value(QStringLiteral("classes")).toString();
+            const QString language = span.value(QStringLiteral("language")).toString();
+            const QString direction = span.value(QStringLiteral("direction")).toString();
+            // QTextDocument does not isolate inline HTML direction attributes.
+            // Keep the complete styled link/text and its trail in one bidi isolate.
+            ushort isolate = 0;
+            if (direction == QStringLiteral("auto")) isolate = 0x2068; // FSI
+            else if (direction == QStringLiteral("rtl")) isolate = 0x2067; // RLI
+            else if (direction == QStringLiteral("ltr")) isolate = 0x2066; // LRI
+            if (isolate) text = QString(QChar(isolate)) + text + QChar(0x2069); // PDI
+            if (!classes.isEmpty() || !language.isEmpty() || !direction.isEmpty()) {
+                QString attrs;
+                if (!classes.isEmpty()) attrs += QStringLiteral(" class=\"%1\"").arg(classes.toHtmlEscaped());
+                if (!span.value(QStringLiteral("code")).toBool() &&
+                    classes.simplified().split(QChar(' '), Qt::SkipEmptyParts).contains(QStringLiteral("Egyp")))
+                    attrs += QStringLiteral(" style=\"font-family:'%1'\"").arg(egyptianFamily().toHtmlEscaped());
+                if (!language.isEmpty()) attrs += QStringLiteral(" lang=\"%1\"").arg(language.toHtmlEscaped());
+                if (!direction.isEmpty()) attrs += QStringLiteral(" dir=\"%1\"").arg(direction.toHtmlEscaped());
+                text = QStringLiteral("<span%1>%2</span>").arg(attrs, text);
+            }
+            out += text;
+        }
+        return out;
+    };
+
+    if (!hasPoemSpans(spans)) return prefix + flatHtml(spans);
+
     QString out;
+    QString firstLinePrefix = prefix;
+    QJsonArray line;
+    bool haveMetadata = false;
+    int indent = 0, direction = 0;
+    bool endedWithBreak = false;
+    QJsonObject lastBreak;
+    const auto includeMetadata = [&](const QJsonObject &span) {
+        const QStringList classes = poemClassTokens(span);
+        const int nextIndent = poemIndent(classes), nextDirection = poemDirection(classes);
+        if (!haveMetadata) {
+            indent = nextIndent;
+            direction = nextDirection;
+            haveMetadata = true;
+        } else {
+            if (indent != nextIndent) indent = -1;
+            if (direction != nextDirection) direction = -1;
+        }
+    };
+    const auto appendLine = [&] {
+        QString plain;
+        for (const QJsonValue &value : line) {
+            const QJsonObject span = value.toObject();
+            plain += span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString();
+        }
+        // Enclosing layout direction is independent of child span isolates.
+        const bool rtl = direction == 1 ? false : direction == 2 ? true : reading_->layoutDirection() == Qt::RightToLeft;
+        const qreal margin = std::max(0, indent) * readingPointSize_ * reading_->logicalDpiY() / 72.0;
+        const bool empty = plain.isEmpty() && firstLinePrefix.isEmpty();
+        const QString body = firstLinePrefix + flatHtml(line);
+        out += QStringLiteral("<p dir='%1' style='margin:0px;margin-left:%2px;margin-right:%3px%4'>%5</p>")
+            .arg(rtl ? QStringLiteral("rtl") : QStringLiteral("ltr"))
+            .arg(leftMargin + (rtl ? 0.0 : margin)).arg(rtl ? margin : 0.0)
+            .arg(empty ? QStringLiteral(";-qt-paragraph-type:empty") : QString(),
+                 empty ? QStringLiteral("<br>") : body);
+        firstLinePrefix.clear();
+        line = QJsonArray();
+        haveMetadata = false;
+        indent = direction = 0;
+    };
+    const auto appendPart = [&](QJsonObject &span, const QString &text, bool trail) {
+        qsizetype start = 0;
+        while (start < text.size()) {
+            const qsizetype newline = text.indexOf(QChar('\n'), start);
+            const qsizetype end = newline < 0 ? text.size() : newline;
+            if (end > start) {
+                QJsonObject part = span;
+                part.insert(QStringLiteral("text"), trail ? QString() : text.mid(start, end - start));
+                part.insert(QStringLiteral("trail"), trail ? text.mid(start, end - start) : QString());
+                includeMetadata(span);
+                line.append(part);
+                endedWithBreak = false;
+            }
+            if (newline < 0) break;
+            includeMetadata(span);
+            appendLine();
+            endedWithBreak = true;
+            // Raw LF starts an unindented line unless a following span owns a
+            // separately parsed line wrapper. Enclosing direction still applies.
+            QStringList classes = poemClassTokens(span);
+            classes.removeIf([](const QString &token) { return token.startsWith(QStringLiteral("wikidict-poem-indent")); });
+            span.insert(QStringLiteral("classes"), classes.join(QChar(' ')));
+            lastBreak = span;
+            start = newline + 1;
+        }
+    };
     for (const QJsonValue &value : spans) {
-        const QJsonObject span = value.toObject();
-        const QString kind = span.value(QStringLiteral("kind")).toString();
-        if (kind == QStringLiteral("line_break")) { out += QStringLiteral("<br>"); continue; }
-        QString text = (span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString()).toHtmlEscaped();
-        if (kind == QStringLiteral("template"))
-            throw DictApiError("compiled dictionary contains an uncompiled template span");
-        if (kind == QStringLiteral("link")) {
-            const QByteArray encoded = QUrl::toPercentEncoding(span.value(QStringLiteral("target")).toString());
-            text = QStringLiteral("<a href='dict:%1'>%2</a>").arg(QString::fromLatin1(encoded), text);
-        } else if (kind == QStringLiteral("external_link")) {
-            const QString target = span.value(QStringLiteral("target")).toString();
-            QUrl url(target);
-            if (target.startsWith(QStringLiteral("//")) && url.scheme().isEmpty())
-                url.setScheme(QStringLiteral("https"));
-            if (url.isValid() && !url.host().isEmpty() &&
-                (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https")))
-                // QTextDocument decodes attribute entities only inside double quotes.
-                text = QStringLiteral("<a href=\"%1\">%2</a>").arg(url.toString(QUrl::FullyEncoded).toHtmlEscaped(), text);
+        QJsonObject span = value.toObject();
+        if (span.value(QStringLiteral("kind")).toString() == QStringLiteral("line_break")) {
+            // An unmarked boundary ends the line without changing its poem metadata.
+            if (poemClassTokens(span).contains(QStringLiteral("wikidict-poem"))) includeMetadata(span);
+            appendLine();
+            endedWithBreak = true;
+            lastBreak = span;
+        } else {
+            const QString text = span.value(QStringLiteral("text")).toString();
+            const QString trail = span.value(QStringLiteral("trail")).toString();
+            if (text.isEmpty() && trail.isEmpty()) {
+                includeMetadata(span);
+                line.append(value);
+                endedWithBreak = false;
+            } else {
+                appendPart(span, text, false);
+                appendPart(span, trail, true);
+            }
         }
-        if (span.value(QStringLiteral("code")).toBool()) text = QStringLiteral("<code>%1</code>").arg(text);
-        if (span.value(QStringLiteral("small")).toBool()) text = QStringLiteral("<small>%1</small>").arg(text);
-        if (span.value(QStringLiteral("bold")).toBool()) text = QStringLiteral("<b>%1</b>").arg(text);
-        if (span.value(QStringLiteral("italic")).toBool()) text = QStringLiteral("<i>%1</i>").arg(text);
-        if (span.value(QStringLiteral("underline")).toBool()) text = QStringLiteral("<u>%1</u>").arg(text);
-        if (span.value(QStringLiteral("strike")).toBool()) text = QStringLiteral("<s>%1</s>").arg(text);
-        if (span.value(QStringLiteral("superscript")).toBool()) text = QStringLiteral("<sup>%1</sup>").arg(text);
-        if (span.value(QStringLiteral("subscript")).toBool()) text = QStringLiteral("<sub>%1</sub>").arg(text);
-        const QString classes = span.value(QStringLiteral("classes")).toString();
-        const QString language = span.value(QStringLiteral("language")).toString();
-        const QString direction = span.value(QStringLiteral("direction")).toString();
-        // QTextDocument does not isolate inline HTML direction attributes.
-        // Keep the complete styled link/text and its trail in one bidi isolate.
-        ushort isolate = 0;
-        if (direction == QStringLiteral("auto")) isolate = 0x2068; // FSI
-        else if (direction == QStringLiteral("rtl")) isolate = 0x2067; // RLI
-        else if (direction == QStringLiteral("ltr")) isolate = 0x2066; // LRI
-        if (isolate) text = QString(QChar(isolate)) + text + QChar(0x2069); // PDI
-        if (!classes.isEmpty() || !language.isEmpty() || !direction.isEmpty()) {
-            QString attrs;
-            if (!classes.isEmpty()) attrs += QStringLiteral(" class=\"%1\"").arg(classes.toHtmlEscaped());
-            if (!span.value(QStringLiteral("code")).toBool() &&
-                classes.simplified().split(QChar(' '), Qt::SkipEmptyParts).contains(QStringLiteral("Egyp")))
-                attrs += QStringLiteral(" style=\"font-family:'%1'\"").arg(egyptianFamily().toHtmlEscaped());
-            if (!language.isEmpty()) attrs += QStringLiteral(" lang=\"%1\"").arg(language.toHtmlEscaped());
-            if (!direction.isEmpty()) attrs += QStringLiteral(" dir=\"%1\"").arg(direction.toHtmlEscaped());
-            text = QStringLiteral("<span%1>%2</span>").arg(attrs, text);
-        }
-        out += text;
+    }
+    if (!line.isEmpty() || haveMetadata) appendLine();
+    else if (endedWithBreak) {
+        // A retained terminal break starts an intentional empty line.
+        includeMetadata(lastBreak);
+        appendLine();
     }
     return out;
+
 }
 QString MainWindow::tableHtml(const QJsonObject &table, int depth) const {
     const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
@@ -1015,8 +1170,33 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
     if (kind == QStringLiteral("rule")) return QStringLiteral("<hr>");
     const QJsonValue table = block.value(QStringLiteral("table"));
     if (table.isObject()) return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt());
-    const QString body = spansHtml(block.value(QStringLiteral("spans")).toArray());
+    const QJsonArray spans = block.value(QStringLiteral("spans")).toArray();
+    const bool poem = hasPoemSpans(spans);
     const int indent = std::clamp(block.value(QStringLiteral("depth")).toInt(1) - 1, 0, 20) * 16;
+    const int depth = block.value(QStringLiteral("depth")).toInt();
+    const int outerIndent = kind == QStringLiteral("definition") || kind == QStringLiteral("term") ? indent
+        : kind == QStringLiteral("list_item") ? 18 + indent
+        : kind == QStringLiteral("list_detail") || kind == QStringLiteral("indent") ? 30 + indent
+        : depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
+    QString prefix;
+    if (poem && (kind == QStringLiteral("definition") || kind == QStringLiteral("list_item"))) {
+        const QString number = block.value(QStringLiteral("number")).toString();
+        const QString marker = number.isEmpty() ? QStringLiteral("•")
+            : number.toHtmlEscaped() + (kind == QStringLiteral("list_item") ? QStringLiteral(".") : QString());
+        prefix = kind == QStringLiteral("definition") ? QStringLiteral("<b>%1</b> ").arg(marker) : marker + QChar(' ');
+    } else if (poem && kind == QStringLiteral("example")) {
+        prefix = QStringLiteral("<i>Example:</i> ");
+    }
+    const QString body = spansHtml(spans, poem ? outerIndent : 0, prefix);
+    if (poem) {
+        // Marked lines are paragraphs already. Prefixes belong to their first line.
+        if (kind == QStringLiteral("quotation") || kind == QStringLiteral("example"))
+            return QStringLiteral("<blockquote>%1</blockquote>").arg(body);
+        const QString style = kind == QStringLiteral("term") ? QStringLiteral("font-weight:bold")
+            : kind == QStringLiteral("heading") ? QStringLiteral("font-weight:bold;font-size:large")
+            : kind == QStringLiteral("preformatted") ? QStringLiteral("font-family:monospace;white-space:pre") : QString();
+        return QStringLiteral("<div style='%1'>%2</div>").arg(style, body);
+    }
     if (kind == QStringLiteral("preformatted")) return QStringLiteral("<pre>%1</pre>").arg(body);
     if (kind == QStringLiteral("definition")) {
         const QString number = block.value(QStringLiteral("number")).toString();
@@ -1033,7 +1213,6 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
     if (kind == QStringLiteral("list_detail") || kind == QStringLiteral("indent"))
         return QStringLiteral("<p style='margin-left:%1px'>%2</p>").arg(30 + indent).arg(body);
     if (kind == QStringLiteral("heading")) return QStringLiteral("<h3>%1</h3>").arg(body);
-    const int depth = block.value(QStringLiteral("depth")).toInt();
     if (depth > 0)
         return QStringLiteral("<p style='margin-left:%1px'>%2</p>")
             .arg(30 + std::clamp(depth - 1, 0, 20) * 16).arg(body);
@@ -1077,7 +1256,10 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
     };
     const QJsonArray preamble = entry.value(QStringLiteral("preamble_spans")).toArray();
     collectEmbeddedMedia(preamble);
-    if (!preamble.isEmpty()) out += QStringLiteral("<p>%1</p>").arg(spansHtml(preamble));
+    if (!preamble.isEmpty()) {
+        const QString tag = hasPoemSpans(preamble) ? QStringLiteral("div") : QStringLiteral("p");
+        out += QStringLiteral("<%1>%2</%1>").arg(tag, spansHtml(preamble));
+    }
     int index = -1;
     for (const QJsonValue &sectionValue : entry.value(QStringLiteral("sections")).toArray()) {
         ++index;
@@ -1118,9 +1300,13 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
             const int groupNumber = ref.value(QStringLiteral("group_number")).toInt();
             const QString label = group.isEmpty() ? QStringLiteral("[%1]").arg(groupNumber)
                 : QStringLiteral("[%1 %2]").arg(group, QString::number(groupNumber));
-            out += QStringLiteral("<p><a name='reference-%1'></a>%2 %3</p>")
-                .arg(ref.value(QStringLiteral("number")).toInt())
-                .arg(label.toHtmlEscaped(), spansHtml(ref.value(QStringLiteral("spans")).toArray()));
+            const QJsonArray spans = ref.value(QStringLiteral("spans")).toArray();
+            const QString prefix = QStringLiteral("<a name='reference-%1'></a>%2 ")
+                .arg(ref.value(QStringLiteral("number")).toInt()).arg(label.toHtmlEscaped());
+            if (hasPoemSpans(spans))
+                out += QStringLiteral("<div>%1</div>").arg(spansHtml(spans, 0, prefix));
+            else
+                out += QStringLiteral("<p>%1%2</p>").arg(prefix, spansHtml(spans));
         }
     }
     const QJsonArray media = entry.value(QStringLiteral("media")).toArray();
