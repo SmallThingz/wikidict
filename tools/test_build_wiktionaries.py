@@ -2509,6 +2509,87 @@ class ExternalRawShardTests(unittest.TestCase):
 
 
 
+class WatchdogMemoryLimitCliTests(unittest.TestCase):
+    def test_memory_flag_bounds_and_watchdog_mode_are_strict(self):
+        self.assertIsNone(b.watchdog_memory_limit_bytes(None, 'watchdog'))
+        self.assertIsNone(b.watchdog_memory_limit_bytes(None, 'cgroup'))
+        for mib in [1, 4096, 8192]:
+            self.assertEqual(mib*1024**2, b.watchdog_memory_limit_bytes(mib, 'watchdog'))
+        for mib in [True, False, 0, -1, 8193, 4096.0, '4096']:
+            with self.subTest(mib=mib), self.assertRaises(ValueError):
+                b.watchdog_memory_limit_bytes(mib, 'watchdog')
+        with self.assertRaises(ValueError):
+            b.watchdog_memory_limit_bytes(4096, 'cgroup')
+
+    def test_outer_watchdog_forwards_exact_selected_bytes_and_keeps_unlimited_lock(self):
+        for mib in [4096, 8192]:
+            with self.subTest(mib=mib), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp); output=root/'output'
+                def supervised(**kwargs):
+                    self.assertEqual(dict(wall_seconds=7200,
+                        disk_paths=(root/'.tmp',output),
+                        address_space_limit_bytes='unlimited',
+                        memory_limit_bytes=mib*1024**2), kwargs)
+                    with self.assertRaises(limits.ContainmentUnavailable):
+                        b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
+                    return 0
+                argv=['build_wiktionaries.py','--resource-mode=watchdog',
+                      '--watchdog-address-space=unlimited',
+                      '--watchdog-memory-limit-mib='+str(mib),
+                      '--output',str(output)]
+                with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
+                     patch.object(limits,'inside_watchdog',return_value=False), \
+                     patch.object(limits,'supervise_watchdog',side_effect=supervised) as watchdog, \
+                     patch.object(limits,'supervise') as cgroup,patch.object(b,'main') as main:
+                    with self.assertRaises(SystemExit) as result:b.cli()
+                    self.assertEqual(0,result.exception.code)
+                watchdog.assert_called_once(); cgroup.assert_not_called(); main.assert_not_called()
+
+    def test_unlimited_child_requires_authenticated_selected_memory_before_main(self):
+        argv=['build_wiktionaries.py','--resource-mode=watchdog',
+              '--watchdog-address-space=unlimited','--watchdog-memory-limit-mib=4096']
+        for actual in [4*1024**3,8*1024**3]:
+            with self.subTest(actual=actual),patch.object(sys,'argv',argv), \
+                 patch.object(limits,'inside_watchdog',return_value=True), \
+                 patch.object(limits,'watchdog_physical_memory_limit_bytes',return_value=actual), \
+                 patch.object(b,'main') as main,patch.object(limits,'supervise_watchdog') as watchdog:
+                if actual==4*1024**3:
+                    b.cli();main.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(SystemExit, '^Authenticated watchdog memory budget differs from requested limit$'):b.cli()
+                    main.assert_not_called()
+                watchdog.assert_not_called()
+
+    def test_both_parsers_refuse_invalid_memory_or_nonwatchdog_before_work(self):
+        for options in [['--resource-mode=watchdog','--watchdog-memory-limit-mib=0'],
+                        ['--resource-mode=watchdog','--watchdog-memory-limit-mib=8193'],
+                        ['--resource-mode=cgroup','--watchdog-memory-limit-mib=4096']]:
+            for entry in [b.cli,b.main]:
+                with self.subTest(options=options,entry=entry.__name__), \
+                     patch.object(sys,'argv',['build_wiktionaries.py',*options]), \
+                     patch.object(limits,'supervise_watchdog') as watchdog, \
+                     patch.object(limits,'supervise') as cgroup, \
+                     patch.object(b,'safe_worker_budget') as budget, \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises((ValueError,SystemExit,limits.ContainmentUnavailable)):entry()
+                    watchdog.assert_not_called();cgroup.assert_not_called();budget.assert_not_called()
+
+    def test_main_parser_accepts_selected_memory_without_leaking_resource_kwargs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'manifest.json').write_text('{"files": []}')
+            argv=['build_wiktionaries.py','--resource-mode=watchdog',
+                  '--watchdog-address-space=unlimited','--watchdog-memory-limit-mib=4096',
+                  '--downloads',str(root),'--threads=1','--jobs=1']
+            with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=1), \
+                 patch.object(b,'select_manifest_files',return_value=[]), \
+                 patch.object(b,'resolve_edition_snapshot_options',return_value={}), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            groups.assert_called_once()
+            self.assertNotIn('memory_limit_bytes',groups.call_args.kwargs)
+            self.assertNotIn('watchdog_memory_limit_mib',groups.call_args.kwargs)
+
+
 class WatchdogAddressSpaceCliTests(unittest.TestCase):
     def test_unlimited_parent_route_preserves_lock_and_resident_envelope(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -32,6 +32,7 @@ PILOT = ('aawiktionary', 'abwiktionary', 'afwiktionary', 'akwiktionary',
          'amwiktionary', 'angwiktionary', 'anwiktionary', 'arwiktionary')
 EXCLUDED = frozenset(PILOT[:7])
 WORKERS = (4, 2, 1)
+MEMORY_INITIAL = 4 * 1024**3
 MEMORY = 8 * 1024**3
 
 
@@ -100,6 +101,21 @@ def next_workers(current, watchdog, log_tail=''):
     if not memory_failure or current not in WORKERS or current == 1:
         return None
     return WORKERS[WORKERS.index(current) + 1]
+
+
+
+def next_resources(workers, memory_limit_bytes, watchdog):
+    # Only this attempt's measured resident-cap event authorizes escalation.
+    if (workers not in WORKERS or type(memory_limit_bytes) is not int
+            or memory_limit_bytes not in (MEMORY_INITIAL, MEMORY)
+            or watchdog.get('termination_reason') != 'sampled_pss_limit'
+            or type(watchdog.get('memory_limit_bytes')) is not int
+            or watchdog['memory_limit_bytes'] != memory_limit_bytes):
+        return None
+    if memory_limit_bytes == MEMORY_INITIAL:
+        return workers, MEMORY
+    reduced = next_workers(workers, watchdog)
+    return (reduced, MEMORY) if reduced is not None else None
 
 
 def phase_end(log_path, edition, date):
@@ -346,9 +362,12 @@ def gate(ref, cfg, outcomes):
     return value
 
 
-def command(cfg, edition, workers):
+def command(cfg, edition, workers, memory_limit_bytes=MEMORY_INITIAL):
+    require(type(memory_limit_bytes) is int and memory_limit_bytes in (MEMORY_INITIAL, MEMORY),
+            'Production memory budget must be 4 or 8 GiB')
     argv = [sys.executable, '-B', str(ROOT / 'tools/build_wiktionaries.py'),
         '--resource-mode', 'watchdog', '--watchdog-address-space', 'unlimited',
+        '--watchdog-memory-limit-mib', str(memory_limit_bytes // 1024**2),
         '--cpu-admission', 'affinity', '--threads', str(workers), '--jobs', '1',
         '--expansion-workers', str(workers), '--build-timeout-seconds', str(cfg['build_timeout_seconds']),
         '--now-unix', str(cfg['now_unix']), '--expansion-timeout-ms', str(cfg['expansion_timeout_ms']),
@@ -506,12 +525,12 @@ def accept(cfg, edition, folder, phase, log_ref):
     return accepted
 
 
-def execute(cfg, edition, workers, folder, sequence, context, locks):
+def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes=MEMORY_INITIAL):
     from build_resource_limits import _signal_owned
     folder.mkdir()
     start = dict(attempt_id=folder.name, sequence=sequence, edition=edition, date=cfg['date'],
-        workers_requested=workers, memory_limit_bytes=MEMORY, address_space='unlimited', context=context,
-        controller=process_identity(os.getpid()), started_utc=utc(), argv=command(cfg, edition, workers))
+        workers_requested=workers, memory_limit_bytes=memory_limit_bytes, address_space='unlimited', context=context,
+        controller=process_identity(os.getpid()), started_utc=utc(), argv=command(cfg, edition, workers, memory_limit_bytes))
     write_json(folder / 'start.json', start)
     started = time.monotonic()
     error, process, rc = None, None, None
@@ -552,6 +571,9 @@ def execute(cfg, edition, workers, folder, sequence, context, locks):
         for lock in locks:
             lock.check()
         source_guard(cfg)
+        if wd:
+            require(type(wd.get('memory_limit_bytes')) is int and wd['memory_limit_bytes'] == memory_limit_bytes,
+                    'Actual watchdog memory budget differs from the requested attempt')
         if error is None and rc == 0:
             require(cleanup_proven, 'Tracked watchdog cleanup is unproven')
             require(wd.get('child_exit_status') == wd.get('guardian_exit_status') == 0
@@ -560,7 +582,7 @@ def execute(cfg, edition, workers, folder, sequence, context, locks):
     except (OSError, ValueError) as exc:
         error = f'{type(exc).__name__}: {exc}'
     row = dict(attempt_id=folder.name, sequence=sequence, edition=edition, workers_requested=workers,
-        outcome='passed' if accepted else 'failed', exit_code=rc, error=error, elapsed_seconds=elapsed,
+        memory_limit_bytes=memory_limit_bytes, outcome='passed' if accepted else 'failed', exit_code=rc, error=error, elapsed_seconds=elapsed,
         controller_interrupted=interrupted, cleanup_proven=cleanup_proven,
         timing_authority='actual controller monotonic interval around joined tracked CLI', ended_utc=utc(),
         execution_mode=phase.get('execution_mode') if phase else None, edition_build=phase,
@@ -616,13 +638,14 @@ def main(argv=None):
             if prior and not prior[-1].get('accepted') and prior[-1]['outcome'] != 'interrupted' and not args.retry_failed:
                 continue
             workers = next(x for x in WORKERS if x <= len(os.sched_getaffinity(0)))
+            memory_limit_bytes = MEMORY_INITIAL
             while workers:
                 for lock in locks:
                     lock.check()
                 source_guard(cfg)
                 sequence += 1
                 folder = state / 'attempts' / f'{sequence:06d}-{edition}-w{workers}-{uuid.uuid4().hex[:12]}'
-                row, wd = execute(cfg, edition, workers, folder, sequence, context, locks)
+                row, wd = execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes)
                 rows.append(row)
                 write_json(state / 'summary.json', summarize(rows, editions, preparations), replace=True)
                 if row['controller_interrupted']:
@@ -630,7 +653,10 @@ def main(argv=None):
                 require(row['cleanup_proven'], 'Owned cleanup is unproven; no next edition admitted')
                 if row['accepted']:
                     break
-                workers = next_workers(workers, wd)
+                following = next_resources(workers, memory_limit_bytes, wd)
+                if following is None:
+                    break
+                workers, memory_limit_bytes = following
         summary = summarize(rows, editions, preparations)
         write_json(state / 'summary.json', summary, replace=True)
         print(json.dumps(dict(summary=str(state / 'summary.json'), remaining=[x['edition'] for x in summary['editions'] if not x['accepted']], deferred=['enwiktionary'] if args.defer_english else [])))

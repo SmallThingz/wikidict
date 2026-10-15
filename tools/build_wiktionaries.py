@@ -2202,6 +2202,15 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
     return failures
 
 
+
+def watchdog_memory_limit_bytes(limit_mib, resource_mode):
+    if limit_mib is None:
+        return None
+    if resource_mode != 'watchdog' or type(limit_mib) is not int or not 1 <= limit_mib <= 8192:
+        raise ValueError('Explicit watchdog memory limit requires watchdog mode and 1 through 8192 MiB')
+    return limit_mib * 1024**2
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
@@ -2212,6 +2221,7 @@ def main():
                    help='Resource supervisor: strict cgroup (default), or explicit best-effort 8 GiB process-tree watchdog with a two-hour deadline')
     p.add_argument('--watchdog-address-space',choices=('default','unlimited'),default='default',
                    help='Watchdog virtual address-space policy; unlimited retains the 8 GiB aggregate resident-memory cap')
+    p.add_argument('--watchdog-memory-limit-mib',type=int,help='Explicit aggregate watchdog resident limit, 1 through 8192 MiB; omitted retains the existing 8 GiB default')
     p.add_argument('--build-timeout-seconds',type=int,help='Explicit watchdog build deadline, up to seven days; default two hours')
     p.add_argument('--artifact-root-spec', help='Explicit private artifact-root identity JSON for output and raw shards')
     p.add_argument('--cpu-admission',choices=('load','affinity'),default='load',
@@ -2228,6 +2238,8 @@ def main():
         p.add_argument('--'+name+'-snapshot',type=Path,
                        help='Optional '+name+' snapshot; its SHA-256 is part of the shard identity')
     a=p.parse_args()
+    try: watchdog_memory_limit_bytes(a.watchdog_memory_limit_mib,a.resource_mode)
+    except ValueError as error: p.error(str(error))
     configure_artifact_root(json.loads(a.artifact_root_spec) if a.artifact_root_spec is not None else None, a.output, a.raw_shard_root)
     if a.watchdog_address_space!='default' and a.resource_mode!='watchdog':
         p.error('Unlimited address space requires explicit watchdog mode')
@@ -2309,6 +2321,7 @@ def cli():
         route=argparse.ArgumentParser(add_help=False)
         route.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup')
         route.add_argument('--watchdog-address-space',choices=('default','unlimited'),default='default')
+        route.add_argument('--watchdog-memory-limit-mib',type=int)
         route.add_argument('--cpu-admission',choices=('load','affinity'),default='load')
         route.add_argument('--artifact-root-spec')
         route.add_argument('--threads',type=int)
@@ -2320,6 +2333,8 @@ def cli():
         routing=route.parse_known_args()[0]
         configure_artifact_root(json.loads(routing.artifact_root_spec) if routing.artifact_root_spec is not None else None, routing.output, routing.raw_shard_root)
         mode=routing.resource_mode
+        try: requested_memory=watchdog_memory_limit_bytes(routing.watchdog_memory_limit_mib,mode)
+        except ValueError as error: raise ContainmentUnavailable(str(error)) from error
         if routing.watchdog_address_space!='default' and mode!='watchdog':
             raise ContainmentUnavailable('Unlimited address space requires explicit watchdog mode')
         if routing.cpu_admission=='affinity':
@@ -2339,11 +2354,16 @@ def cli():
                 raise ContainmentUnavailable('Watchdog child requires explicit --resource-mode=watchdog')
             if mode=='watchdog':
                 if watchdog_child:
+                    if requested_memory is not None and routing.watchdog_address_space=='unlimited':
+                        from build_resource_limits import watchdog_physical_memory_limit_bytes
+                        if watchdog_physical_memory_limit_bytes()!=requested_memory:
+                            raise ContainmentUnavailable('Authenticated watchdog memory budget differs from requested limit')
                     main()
                 else:
                     with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
                         options={'wall_seconds':routing.build_timeout_seconds if routing.build_timeout_seconds is not None else 7200,
                                  'disk_paths':(PROJECT/'.tmp', routing.output)}
+                        if requested_memory is not None: options['memory_limit_bytes']=requested_memory
                         if routing.watchdog_address_space=='unlimited': options['address_space_limit_bytes']='unlimited'
                         if routing.raw_shard_root is not None: options['disk_paths']+=(routing.raw_shard_root,)
                         if routing.expansion_workers is not None and routing.expansion_workers>MAX_PIPELINE_WORKERS:

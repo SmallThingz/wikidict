@@ -683,5 +683,140 @@ class ControllerPreparationTests(unittest.TestCase):
                 controller.load_preparations(current)
 
 
+class ControllerMemoryPolicyTests(unittest.TestCase):
+    def cfg(self, root):
+        return dict(armed=True, source={'head': 'a'*40, 'fingerprint': 'b'*64},
+                    compiler={'path': str(root/'zig'), 'bytes': 1, 'sha256': 'c'*64},
+                    manifest={'path': str(root/'downloads/manifest.json'), 'bytes': 1, 'sha256': 'd'*64},
+                    downloads=str(root/'downloads'), output=str(root/'output'),
+                    raw_shard_root=str(root/'raw'), state_directory=str(root/'state'),
+                    date='20261001', now_unix=1, expansion_timeout_ms=10,
+                    build_timeout_seconds=123, qualification={}, diagnostic_disposition={})
+
+    def test_real_cap_transition_preserves_workers_before_8g_backoff(self):
+        state = (4, 4*1024**3)
+        observed = [state]
+        for expected in [(4, 8*1024**3), (2, 8*1024**3), (1, 8*1024**3)]:
+            state = controller.next_resources(*state, {
+                'termination_reason': 'sampled_pss_limit', 'memory_limit_bytes': state[1]})
+            self.assertEqual(expected, state)
+            observed.append(state)
+        self.assertEqual([(4, 4*1024**3), (4, 8*1024**3),
+                          (2, 8*1024**3), (1, 8*1024**3)], observed)
+        self.assertIsNone(controller.next_resources(*state, {
+            'termination_reason': 'sampled_pss_limit', 'memory_limit_bytes': state[1]}))
+
+    def test_noncap_or_unmatched_actual_limit_never_authorizes_8g(self):
+        for reason in ['child_exit', 'wall_timeout', 'running', None, 'OutOfMemory']:
+            with self.subTest(reason=reason):
+                self.assertIsNone(controller.next_resources(4, 4*1024**3, {
+                    'termination_reason': reason, 'memory_limit_bytes': 4*1024**3,
+                    'error': 'OutOfMemory: ordinary failed entry'}))
+        for actual in [None, True, '4294967296', 2*1024**3, 8*1024**3]:
+            with self.subTest(actual=actual):
+                self.assertIsNone(controller.next_resources(4, 4*1024**3, {
+                    'termination_reason': 'sampled_pss_limit', 'memory_limit_bytes': actual}))
+
+    def test_command_requests_actual_4g_default_and_explicit_8g_without_guard_changes(self):
+        cfg = self.cfg(Path('/unused-memory-control'))
+        for memory, mib in [(None, '4096'), (8*1024**3, '8192')]:
+            argv = (controller.command(cfg, 'arwiktionary', 4) if memory is None else
+                    controller.command(cfg, 'arwiktionary', 4, memory))
+            self.assertEqual(mib, argv[argv.index('--watchdog-memory-limit-mib')+1])
+            self.assertEqual('unlimited', argv[argv.index('--watchdog-address-space')+1])
+            self.assertEqual('affinity', argv[argv.index('--cpu-admission')+1])
+            self.assertEqual('watchdog', argv[argv.index('--resource-mode')+1])
+            for flag in ['--threads', '--expansion-workers']:
+                self.assertEqual('4', argv[argv.index(flag)+1])
+            self.assertEqual('1', argv[argv.index('--jobs')+1])
+            self.assertEqual('arwiktionary', argv[argv.index('--wikis')+1])
+            self.assertNotIn('--clobber', argv)
+
+    def test_execute_start_receipt_matches_selected_memory_and_actual_argv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); cfg = self.cfg(root)
+            for memory in [4*1024**3, 8*1024**3]:
+                folder = root/str(memory)
+                process = mock.Mock(pid=900123)
+                process.poll.return_value = 1
+                process.wait.return_value = 1
+                def spawn(*args, **kwargs):
+                    write_json(Path(kwargs['cwd'])/'.tmp/build-watchdog-report.json', {
+                        'termination_reason': 'child_exit', 'memory_limit_bytes': memory})
+                    return process
+                with mock.patch.object(controller,'ROOT',root), \
+                     mock.patch.object(controller.subprocess, 'Popen', side_effect=spawn), \
+                     mock.patch.object(controller, 'process_identity', return_value={'pid':900123,'start_time_ticks':1}), \
+                     mock.patch.object(controller, 'watchdog_closed', return_value=True), \
+                     mock.patch.object(controller, 'source_guard'), \
+                     mock.patch.object(controller, 'phase_end', return_value=None):
+                    row, _ = controller.execute(cfg, 'arwiktionary', 4, folder, 1, 'context', [], memory)
+                start = json.loads((folder/'start.json').read_text())
+                self.assertEqual(memory, start['memory_limit_bytes'])
+                self.assertEqual(str(memory//1024**2),
+                                 start['argv'][start['argv'].index('--watchdog-memory-limit-mib')+1])
+                self.assertEqual(1, row['exit_code'])
+                self.assertIsNone(row['accepted'])
+
+    def test_main_resets_initial_4g_for_next_edition_after_8g_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); cfg = self.cfg(root); seen = []
+            def execute(cfg, edition, workers, folder, sequence, context, locks,
+                        memory_limit_bytes=controller.MEMORY_INITIAL):
+                seen.append((edition, workers, memory_limit_bytes))
+                cap = len(seen) == 1
+                return ({'edition': edition, 'sequence': sequence,
+                         'controller_interrupted': False, 'cleanup_proven': True,
+                         'accepted': None if cap else {'tiny': True}},
+                        {'termination_reason': 'sampled_pss_limit' if cap else 'child_exit',
+                         'memory_limit_bytes': memory_limit_bytes})
+            manifest = {'requested_editions': all_editions(), 'files': [{'date':'20261001'}]}
+            summary = {'editions': [{'edition': e, 'accepted': {'tiny':True}}
+                                    for e in ['arwiktionary', 'enwiktionary']]}
+            with mock.patch.object(controller, 'read_json', return_value=cfg), \
+                 mock.patch.object(controller, 'read_ref', return_value=manifest), \
+                 mock.patch.object(controller, 'descriptor', return_value=cfg['compiler']), \
+                 mock.patch.object(controller, 'validate_pipeline_paths'), \
+                 mock.patch.object(controller, 'source_guard'), \
+                 mock.patch.object(controller, 'gate', return_value={}), \
+                 mock.patch.object(controller, 'production_context', return_value='context'), \
+                 mock.patch.object(controller, 'history', return_value=[]), \
+                 mock.patch.object(controller, 'load_preparations', return_value=[]), \
+                 mock.patch.object(controller, 'summarize', return_value=summary), \
+                 mock.patch.object(controller, 'selected_phase_editions', return_value=['arwiktionary','enwiktionary']), \
+                 mock.patch.object(controller, 'Lock'), \
+                 mock.patch.object(controller.resource, 'getrlimit',
+                     return_value=(controller.resource.RLIM_INFINITY, controller.resource.RLIM_INFINITY)), \
+                 mock.patch.object(controller.os, 'sched_getaffinity', return_value={0,2,4,6}), \
+                 mock.patch.object(controller, 'execute', side_effect=execute), \
+                 mock.patch('builtins.print'):
+                self.assertEqual(0, controller.main(['--config', str(root/'config.json')]))
+            self.assertEqual([('arwiktionary',4,4*1024**3),
+                              ('arwiktionary',4,8*1024**3),
+                              ('enwiktionary',4,4*1024**3)], seen)
+
+
+    def test_nominal_success_with_wrong_actual_cap_cannot_accept_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);cfg=self.cfg(root);folder=root/'attempt'
+            process=mock.Mock(pid=900123);process.poll.return_value=0;process.wait.return_value=0
+            def spawn(*args,**kwargs):
+                write_json(Path(kwargs['cwd'])/'.tmp/build-watchdog-report.json', {
+                    'termination_reason':'child_exit','memory_limit_bytes':8*1024**3})
+                return process
+            with mock.patch.object(controller,'ROOT',root), \
+                 mock.patch.object(controller.subprocess,'Popen',side_effect=spawn), \
+                 mock.patch.object(controller,'process_identity',return_value={'pid':900123,'start_time_ticks':1}), \
+                 mock.patch.object(controller,'watchdog_closed',return_value=True), \
+                 mock.patch.object(controller,'source_guard'), \
+                 mock.patch.object(controller,'phase_end',return_value={'status':'success'}), \
+                 mock.patch.object(controller,'accept') as accept:
+                row,_=controller.execute(cfg,'arwiktionary',4,folder,1,'context',[],4*1024**3)
+            self.assertEqual(0,row['exit_code'])
+            self.assertIsNone(row['accepted'])
+            self.assertIn('watchdog memory budget differs',row['error'])
+            accept.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
