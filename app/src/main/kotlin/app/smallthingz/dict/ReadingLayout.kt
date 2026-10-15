@@ -80,7 +80,12 @@ fun readingRows(sections: List<Section>): List<ReadingRow> = buildList {
             val block = compactBlock(original)
             val key = "block-$sectionIndex-$blockIndex"
             if (block.kind == "blank" || (block.table == null && block.kind != "rule" && block.spans.isEmpty())) return@forEachIndexed
-            if (block.kind != "paragraph" || block.spans.size < 80 || block.spans.none { it.kind == "line_break" } || block.spans.any { it.hasClassToken("wikidict-poem") }) {
+            // A caption owns one inline media control across all of its typed lines.
+            // Splitting its paragraph would append that control to every resulting row.
+            if (block.kind != "paragraph" || block.spans.size < 80 || block.spans.none { it.kind == "line_break" } || block.spans.any {
+                    it.hasClassToken("wikidict-poem") ||
+                        (it.hasClassToken("wikidict-media") && it.target.startsWith("File:"))
+                }) {
                 add(ReadingRow(key, block = block, sectionKey = sectionKey, meaningSection = meaningSection))
             } else {
                 var line = ArrayList<Span>()

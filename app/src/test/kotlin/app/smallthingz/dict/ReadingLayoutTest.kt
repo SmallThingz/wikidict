@@ -14,6 +14,35 @@ class ReadingLayoutTest {
         assertTrue(blocks.all { it.spans.size == 2 })
         assertEquals(spans.filter { it.kind != "line_break" }, blocks.flatMap { it.spans })
     }
+
+    @Test fun denseMediaCaptionKeepsOneRowAndAllCompiledSpans() {
+        val owner = "File:Tone.ogg"
+        val mediaClass = "caption wikidict-media"
+        fun line(text: String) = text.mapIndexed { index, character ->
+            Span("link", character.toString(), target = owner, classes = mediaClass, bold = index % 2 == 0)
+        }
+        val first = "First caption line " + "a".repeat(21)
+        val second = "Second caption line " + "b".repeat(20)
+        val caption = line(first) + Span("line_break", "\n", target = owner, classes = mediaClass) + line(second)
+        assertEquals(81, caption.size)
+        val block = Block("paragraph", 0, caption)
+        val rows = readingRows(listOf(Section(3, "Pronunciation", listOf(block))))
+        assertEquals(2, rows.size) // Heading plus the one original media container.
+        assertSame(block, rows.last().block)
+        assertEquals(caption, rows.last().block!!.spans)
+        assertEquals("$first\n$second", caption.joinToString("") { it.text })
+        // A substring class or an ordinary word target does not own inline media.
+        for (unowned in listOf(
+            caption.map { it.copy(classes = "wikidict-media-extra") },
+            caption.map { it.copy(target = "Tone") },
+        )) {
+            val split = readingRows(listOf(Section(3, "Notes", listOf(block.copy(spans = unowned)))))
+                .mapNotNull { it.block }
+            assertEquals(2, split.size)
+            assertEquals(unowned.filter { it.kind != "line_break" }, split.flatMap { it.spans })
+        }
+    }
+
     @Test fun preformattedAndShortStyledParagraphsKeepExplicitBreaks() {
         val spans = listOf(Span("text", "first"), Span("line_break", "\n"), Span("text", "second", bold = true))
         val pre = Block("preformatted", 0, List(40) { spans }.flatten())
