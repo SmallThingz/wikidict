@@ -187,16 +187,25 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 Column(Modifier.animateItem()) {
                 row.heading?.let { section ->
                     if (section.title.isNotBlank() && (section.title != entry.language || section.blocks.any { it.kind != "blank" })) {
-                        val label = if (section.title == entry.language) "Overview" else section.title
+                        val richHeading = row.headingBlock
+                        val label = if (richHeading == null && section.title == entry.language) "Overview" else section.title
                         val angle by animateFloatAsState(if (folded[row.key] == true) -90f else 0f, label = "Section fold")
-                        Row(Modifier.fillMaxWidth().clickable { folded[row.key] = folded[row.key] != true }.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(label, Modifier.weight(1f), style = if (row.meaningSection) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium)
-                            if (row.meaningSection && section.blocks.any { it.kind !in setOf("definition", "blank") }) {
+                        val toggle = { folded[row.key] = folded[row.key] != true }
+                        val headingModifier = if (richHeading == null) Modifier.clickable(onClick = toggle) else Modifier
+                        Row(Modifier.fillMaxWidth().then(headingModifier).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                            val headingStyle = if (row.meaningSection) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium
+                            if (richHeading == null) Text(label, Modifier.weight(1f), style = headingStyle)
+                            else StyledText(richHeading.spans, Modifier.weight(1f), style = headingStyle, onLink = readerLink)
+                            if (row.meaningSection && section.blocks.any { it !== richHeading && it.kind !in setOf("definition", "blank") }) {
                                 IconToggleButton(checked = folded[row.key + "-details"] != true, onCheckedChange = { folded[row.key + "-details"] = !it }) {
                                     Icon(Icons.Outlined.Notes, if (folded[row.key + "-details"] == true) "Show examples and notes for ${section.title}" else "Hide examples and notes for ${section.title}", Modifier.size(20.dp))
                                 }
                             }
-                            Icon(Icons.Filled.ExpandMore, if (folded[row.key] == true) "Expand $label" else "Collapse $label", Modifier.size(20.dp).rotate(angle))
+                            if (richHeading == null) {
+                                Icon(Icons.Filled.ExpandMore, if (folded[row.key] == true) "Expand $label" else "Collapse $label", Modifier.size(20.dp).rotate(angle))
+                            } else IconButton(onClick = toggle) {
+                                Icon(Icons.Filled.ExpandMore, if (folded[row.key] == true) "Expand $label" else "Collapse $label", Modifier.size(20.dp).rotate(angle))
+                            }
                         }
                     }
                 }
@@ -332,6 +341,7 @@ private fun inlineMediaFiles(entry: Entry): Set<String> = buildSet {
     include(entry.displayTitle)
     include(entry.preamble)
     entry.readingRows.forEach { row ->
+        row.headingBlock?.let { include(it.spans) }
         row.block?.let { block ->
             val table = block.table
             when {

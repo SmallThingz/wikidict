@@ -126,6 +126,106 @@ class SectionLinkDeviceTest {
         compose.onNodeWithText("Named notes remain folded").assertIsDisplayed()
     }
 
+
+    private fun richHeadingFixture(): ByteArray {
+        fun u32(n: Int) = ByteArray(4) { (n ushr (it * 8)).toByte() }
+        fun string(value: String) = value.toByteArray(Charsets.UTF_8).let { u32(it.size) + it }
+        fun span(text: String, target: String = "", kind: Int = if (target.isEmpty()) 0 else 1,
+                 trail: String = ""): ByteArray =
+            byteArrayOf(kind.toByte(), 0, 1) +
+                listOf(text, target, trail, "", "", "").fold(byteArrayOf()) { bytes, value -> bytes + string(value) }
+        fun block(kind: Int, depth: Int, text: String, target: String = "", spanKind: Int = if (target.isEmpty()) 0 else 1,
+                  trail: String = "", level: Int = 0): ByteArray =
+            byteArrayOf(kind.toByte(), depth.toByte(), level.toByte()) + u32(1) + span(text, target, spanKind, trail) +
+                byteArrayOf(0) + string("") + string("") + byteArrayOf(0)
+        fun section(level: Int, title: String, blocks: List<ByteArray>): ByteArray =
+            byteArrayOf(level.toByte()) + string(title) + u32(blocks.size) +
+                blocks.fold(byteArrayOf()) { bytes, value -> bytes + value }
+        val sections = listOf(
+            section(2, "English", listOf(
+                block(9, 0, "English", "owner-target", level = 2),
+                block(2, 1, "Owner meaning"),
+                block(2, 1, "Jump to usage", "#Usage_notes"))),
+            section(3, "Etymology 1", listOf(
+                block(9, 0, "Etymology 1", "origin-target", level = 3),
+                block(0, 0, "Historical body"))),
+            section(3, "Usage notes", listOf(
+                block(9, 0, "Usage", "https://example.org/heading", 2, " notes", level = 3),
+                block(0, 0, "Usage destination body"))),
+            section(4, "Noun", listOf(block(2, 1, "Following child meaning")))
+        )
+        return "DPR2".toByteArray() + u32(0) + u32(sections.size) +
+            sections.fold(byteArrayOf()) { bytes, value -> bytes + value } +
+            u32(0) + u32(0) + u32(0) + u32(0) + u32(0)
+    }
+
+    @Test fun decodedRichHeadingsKeepLinksFoldsContentsAndFragmentsIndependent() {
+        val entry = BlobDecoder.decode(richHeadingFixture(), "Rich heading fixture", "language", "English", "en")
+        assertEquals(listOf("English", "Etymology 1", "Usage notes", "Noun"), entry.sections.map { it.title })
+        assertEquals(listOf(2, 3, 3, 4), entry.sections.map { it.level })
+        assertEquals(listOf(0, 0, 0), entry.sections.take(3).map { it.blocks.first().depth })
+        assertEquals(listOf(2, 3, 3), entry.sections.take(3).map { it.blocks.first().level })
+        assertEquals(" notes", entry.sections[2].blocks.first().spans.single().trail)
+        val displayed = androidx.compose.runtime.mutableStateOf(entry)
+        val external = mutableListOf<String>()
+        val uri = object : androidx.compose.ui.platform.UriHandler {
+            override fun openUri(uri: String) { external.add(uri) }
+        }
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides uri) {
+                    MaterialTheme { EntryView(displayed.value, false, {}, onLink = { forwarded.add(it) }, settings = AppSettings()) }
+                }
+            }
+        }
+        fun reveal(text: String) {
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText(text))
+            compose.onNodeWithText(text, useUnmergedTree = true).assertIsDisplayed()
+        }
+        reveal("English")
+        compose.onAllNodesWithText("English", useUnmergedTree = true).assertCountEquals(1)
+        compose.onNodeWithText("Overview").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Hide examples and notes for English").assertDoesNotExist()
+        touchLink("English")
+        compose.runOnIdle { assertEquals(listOf("owner-target"), forwarded) }
+        compose.onNodeWithContentDescription("Collapse English").assertIsDisplayed()
+        reveal("Owner meaning")
+
+        reveal("Etymology 1")
+        compose.onAllNodesWithText("Etymology 1", useUnmergedTree = true).assertCountEquals(1)
+        touchLink("Etymology 1")
+        compose.runOnIdle { assertEquals(listOf("owner-target", "origin-target"), forwarded) }
+        compose.onNodeWithContentDescription("Expand Etymology 1").assertIsDisplayed()
+        compose.onNodeWithText("Historical body").assertDoesNotExist()
+        reveal("Following child meaning") // A folded preceding heading never owns this section.
+        reveal("Etymology 1")
+        compose.onNodeWithContentDescription("Expand Etymology 1").performClick()
+        reveal("Historical body")
+        reveal("Etymology 1")
+        compose.onNodeWithContentDescription("Collapse Etymology 1").performClick()
+        compose.runOnIdle { displayed.value = entry.copy(displayTitle = listOf(Span("text", "Refreshed rich fixture"))) }
+        compose.onNodeWithText("Historical body").assertDoesNotExist()
+        reveal("Etymology 1")
+        compose.onNodeWithContentDescription("Expand Etymology 1").assertIsDisplayed()
+
+        reveal("Usage notes")
+        touchLink("Usage notes")
+        compose.runOnIdle { assertEquals(listOf("https://example.org/heading"), external) }
+        compose.onNodeWithContentDescription("Expand Usage notes").assertIsDisplayed()
+        compose.onNodeWithText("Usage destination body").assertDoesNotExist()
+        reveal("Jump to usage")
+        touchLink("Jump to usage")
+        compose.onNodeWithText("Usage destination body").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Collapse Usage notes").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(listOf("owner-target", "origin-target"), forwarded) }
+        compose.onNodeWithContentDescription("Collapse Usage notes").performClick()
+        compose.onNodeWithTag("entry-scroll").performScrollToIndex(0)
+        compose.onNodeWithContentDescription("Sections").performClick()
+        compose.onNode(hasText("Usage notes") and hasAnyAncestor(isPopup())).performClick()
+        compose.onNodeWithText("Usage destination body").assertIsDisplayed()
+        compose.onAllNodesWithText("Usage notes", useUnmergedTree = true).assertCountEquals(1)
+    }
+
     @Test fun sameEntrySectionLinkOpensFoldedHeadingAndShowsItsBody() {
         show("#Usage_notes", "Read usage notes", "Usage notes")
         compose.onNodeWithText("SECTION DESTINATION BODY").assertDoesNotExist()

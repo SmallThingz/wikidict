@@ -68,7 +68,7 @@ object BlobDecoder {
                 superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role)
         }
         fun block(): Block {
-            val kind = enum(kinds); val depth = byte(); byte()
+            val kind = enum(kinds); val depth = byte(); val level = byte()
             val spans = spans()
             val feature = if (presence()) Feature(string(), string(), string(), string(), string()) else null
             val path = string(); val number = string()
@@ -80,7 +80,7 @@ object BlobDecoder {
                     Cell(spans(), header, cols, rows)
                 } }).also { tableGrid(it) }
             }
-            return Block(kind, depth, spans, path, number, table, feature)
+            return Block(kind, depth, spans, path, number, table, feature, level)
         }
     }
 }

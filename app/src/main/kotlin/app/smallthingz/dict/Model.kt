@@ -30,6 +30,7 @@ data class Block(
     val number: String = "",
     val table: Table? = null,
     val feature: Feature? = null,
+    val level: Int = 0,
 )
 data class Feature(val kind: String, val language: String, val data: String, val tailKind: String, val tail: String)
 data class Section(val level: Int, val title: String, val blocks: List<Block>)

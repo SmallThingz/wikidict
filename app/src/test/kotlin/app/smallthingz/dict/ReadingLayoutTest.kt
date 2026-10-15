@@ -5,6 +5,71 @@ import org.junit.Test
 import androidx.compose.ui.unit.em
 
 class ReadingLayoutTest {
+
+    @Test fun richHeadingCompanionRequiresExactFirstLevelLabelAndActionableSpans() {
+        val linked = Block("heading", 0, listOf(
+            Span("text", "\u00a0 \t"), Span("link", "Usage", target = "usage", trail = " notes", bold = true),
+            Span("line_break", "ignored"), Span("text", "\r ")), level = 3)
+        fun section(block: Block = linked, title: String = "Usage notes") = Section(3, title, listOf(block))
+        assertSame(linked, sectionHeadingCompanion(section()))
+        val nestedDepth = linked.copy(depth = 5)
+        assertSame(nestedDepth, sectionHeadingCompanion(section(nestedDepth)))
+        val external = linked.copy(spans = listOf(Span("external_link", "Usage notes", target = "https://example.org/notes")))
+        assertSame(external, sectionHeadingCompanion(section(external)))
+        val trail = linked.copy(spans = listOf(Span("link", "", target = "notes", trail = "Usage notes")))
+        assertSame(trail, sectionHeadingCompanion(section(trail)))
+        val unicode = linked.copy(spans = listOf(Span("link", "\u2003Usage notes", target = "notes")))
+        assertNull(sectionHeadingCompanion(section(unicode)))
+        assertSame(unicode, sectionHeadingCompanion(section(unicode, "\u2003Usage notes")))
+        for (invalid in listOf(
+            linked.copy(kind = "paragraph"), linked.copy(level = 2), linked.copy(depth = 3, level = 0),
+            linked.copy(spans = listOf(Span("link", "usage notes", target = "notes"))),
+            linked.copy(spans = listOf(Span("link", "Usage notes", target = ""))),
+            linked.copy(spans = listOf(Span("text", "Usage notes", target = "notes"))),
+            linked.copy(spans = listOf(Span("link", "Usage notes", target = "notes"),
+                Span("line_break", "\n", trail = "extra"))),
+        )) {
+            val value = section(invalid)
+            assertNull(sectionHeadingCompanion(value))
+            assertEquals(1, readingRows(listOf(value)).count { it.block != null })
+        }
+        val later = Section(3, "Usage notes", listOf(Block("paragraph", 0, listOf(Span("text", "Before"))), linked))
+        assertNull(sectionHeadingCompanion(later))
+        assertEquals(2, readingRows(listOf(later)).count { it.block != null })
+        val blankBody = Block("paragraph", 0, listOf(Span("text", "Visible "), Span("link", "body", target = "retained-body")))
+        val blank = Section(3, " \t", listOf(
+            linked.copy(spans = listOf(Span("link", " \t", target = "notes"))), blankBody))
+        assertNull(sectionHeadingCompanion(blank))
+        assertEquals(listOf(blankBody), visibleReadingRows(readingRows(listOf(blank)), setOf("heading-0")).mapNotNull { it.block })
+    }
+
+    @Test fun richHeadingKeepsStableSectionKeysFoldsAndFragmentDestinations() {
+        val heading = Block("heading", 0, listOf(Span("link", "Etymology 1", target = "origin")), level = 3)
+        val body = Block("paragraph", 0, listOf(Span("text", "Origin body")))
+        val definition = Block("definition", 1, listOf(Span("text", "Following meaning")))
+        val nested = Block("heading", 0, listOf(Span("link", "Nested", target = "nested")), level = 5)
+        val sections = listOf(
+            Section(3, "Etymology 1", listOf(heading, body)),
+            Section(4, "Noun", listOf(definition, nested)),
+        )
+        val rows = readingRows(sections)
+        assertEquals(listOf("heading-0", "block-0-1", "heading-1", "block-1-0", "block-1-1"), rows.map { it.key })
+        assertSame(heading, rows.first().headingBlock)
+        assertEquals(listOf(body, definition, nested), rows.mapNotNull { it.block })
+        assertTrue(initiallyFolded(rows.first(), AppSettings()))
+        val folded = setOf("heading-0", "heading-1-details")
+        assertEquals(listOf(definition), visibleReadingRows(rows, folded).mapNotNull { it.block })
+        assertEquals(listOf(body, definition), visibleReadingRows(rows, folded - "heading-0").mapNotNull { it.block })
+        val entry = Entry("Rich fixture", emptyList(), "language", "English", "en", sections,
+            listOf(Reference(1, 1, "", listOf(Span("text", "Reference")))))
+        assertEquals("heading-0", sectionScrollKey(entry, "#Etymology_1"))
+        assertEquals("heading-1", sectionScrollKey(entry, "#Noun"))
+        assertEquals(5, referenceScrollIndex(entry, "#reference-1", folded))
+        val owner = Section(2, "English", listOf(heading.copy(level = 2,
+            spans = listOf(Span("link", "English", target = "language"))), definition))
+        assertEquals("English", readingRows(listOf(owner)).first().headingBlock!!.spans.single().text)
+    }
+
     @Test fun denseListsAreLazyWithoutLosingTextOrLinkSemantics() {
         val spans = (0 until 330).flatMap { index -> listOf(Span("text", "• "), Span("link", "word $index", target = "word $index", italic = true), Span("line_break", "\n")) }
         val rows = readingRows(listOf(Section(3, "Derived terms", listOf(Block("paragraph", 0, spans)))))

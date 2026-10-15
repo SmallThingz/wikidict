@@ -68,15 +68,31 @@ internal fun poemParagraphs(text: String, spans: List<Pair<Span, IntRange>>): Li
     if (start < text.length) finish(text.length)
 }
 
+
+/** The first typed heading may carry the section label's links without changing its identity. */
+internal fun sectionHeadingCompanion(section: Section): Block? {
+    val block = section.blocks.firstOrNull() ?: return null
+    // Blank labels have no header affordance; leave their blocks in the visible body.
+    if (section.title.isBlank() || block.kind != "heading" || block.level != section.level) return null
+    if (block.spans.any { it.kind == "line_break" && it.trail.isNotEmpty() }) return null
+    if (block.spans.none { it.kind in setOf("link", "external_link") && it.target.isNotEmpty() &&
+            (it.text.isNotEmpty() || it.trail.isNotEmpty()) }) return null
+    val label = block.spans.joinToString("") { if (it.kind == "line_break") "\n" else it.text + it.trail }
+        .trim(' ', '\t', '\r', '\n', '\u00a0')
+    return block.takeIf { label == section.title }
+}
+
 /** Presentation-only rows. No source parsing: explicit semantic breaks are layout boundaries. */
-data class ReadingRow(val key: String, val heading: Section? = null, val block: Block? = null, val compact: Boolean = false, val sectionKey: String = "", val meaningSection: Boolean = false)
+data class ReadingRow(val key: String, val heading: Section? = null, val block: Block? = null, val compact: Boolean = false, val sectionKey: String = "", val meaningSection: Boolean = false, val headingBlock: Block? = null)
 
 fun readingRows(sections: List<Section>): List<ReadingRow> = buildList {
     sections.forEachIndexed { sectionIndex, section ->
         val sectionKey = "heading-$sectionIndex"
         val meaningSection = section.blocks.any { it.kind == "definition" }
-        add(ReadingRow(sectionKey, heading = section, meaningSection = meaningSection))
+        val headingBlock = sectionHeadingCompanion(section)
+        add(ReadingRow(sectionKey, heading = section, meaningSection = meaningSection, headingBlock = headingBlock))
         section.blocks.forEachIndexed { blockIndex, original ->
+            if (blockIndex == 0 && headingBlock != null) return@forEachIndexed
             val block = compactBlock(original)
             val key = "block-$sectionIndex-$blockIndex"
             if (block.kind == "blank" || (block.table == null && block.kind != "rule" && block.spans.isEmpty())) return@forEachIndexed
