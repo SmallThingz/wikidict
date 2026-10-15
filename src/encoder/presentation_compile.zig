@@ -10774,7 +10774,8 @@ test "external line boundary fixture leaves protected multiline labels linked an
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
     const spans = try r.parseSpans("[https://example.test <nowiki>docs\n[[B]]</nowiki>] tail", .{});
-    try std.testing.expectEqualStrings("docs\n[[B]] tail", try plainText(a, spans));
+    // Protected label bytes remain ordinary HTML text, whose LF is soft whitespace.
+    try std.testing.expectEqualStrings("docs [[B]] tail", try plainText(a, spans));
     try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
     try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .link, "B"));
     var protected = false;
@@ -10934,7 +10935,8 @@ test "external raw CR boundary retains opener URL following navigation and tail"
     }
     var protected: Renderer = .{ .a = a, .context = .{} };
     const spans = try protected.parseSpans("[https://example.test <nowiki>docs\r[[B]]</nowiki>] tail", .{});
-    try std.testing.expectEqualStrings("docs\r[[B]] tail", try plainText(a, spans));
+    // CR is soft in ordinary text; nowiki still protects the bracket bytes.
+    try std.testing.expectEqualStrings("docs [[B]] tail", try plainText(a, spans));
     try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
     try std.testing.expect(!unclosedExternalRecoveryHasLink(spans, .link, "B"));
 }
@@ -11421,7 +11423,8 @@ test "multiline internal labels media captions and protected literal targets rem
     try std.testing.expect(!media.fallbacks.literal_markup);
     var protected: Renderer = .{ .a = a, .context = .{} };
     const literal = try protected.parseSpans("<nowiki>[[A\nB|label]]</nowiki> after [[C]].", .{});
-    try std.testing.expectEqualStrings("[[A\nB|label]] after C.", try plainText(a, literal));
+    // The raw title syntax stays literal while ordinary protected LF stays soft.
+    try std.testing.expectEqualStrings("[[A B|label]] after C.", try plainText(a, literal));
     try std.testing.expect(!protected.fallbacks.any());
     for (literal) |span| if (span.kind == .link) try std.testing.expectEqualStrings("C", span.target);
 }
@@ -11859,7 +11862,8 @@ test "block and table suffix rewinds keep earlier closed nowiki protected after 
             try std.testing.expect(!(span.kind == .link and std.mem.eql(u8, span.target, "chat")));
             if (span.kind == .link and std.mem.eql(u8, span.target, "Katze")) active_katze = true;
         };
-        try std.testing.expectEqualStrings("[[chat]]\n== Literal ==", protected.items);
+        // This suffix is ordinary text, not preformatted or a Poem verse.
+        try std.testing.expectEqualStrings("[[chat]] == Literal ==", protected.items);
         try std.testing.expect(active_katze);
     }
 }
