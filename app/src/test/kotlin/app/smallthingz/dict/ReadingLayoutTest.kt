@@ -80,6 +80,52 @@ class ReadingLayoutTest {
         assertEquals(spans.filter { it.kind != "line_break" }, blocks.flatMap { it.spans })
     }
 
+    @Test fun explicitMediaOwnersKeepActionsAndRejectUnknownOrAmbiguousTokens() {
+        val tone = Media("Tone.ogg", "audio", "same")
+        val other = Media("Other.ogg", "audio", "same")
+        val unicode = Media("Écho 🔊.ogg", "audio", "same")
+        val owners = MediaOwners(listOf(tone, other, unicode))
+        val toneToken = "wikidict-media-file-546f6e652e6f6767"
+        val otherToken = "wikidict-media-file-4f746865722e6f6767"
+        val unicodeToken = "wikidict-media-file-c38963686f20f09f948a2e6f6767"
+        val lexical = Span("link", "same", target = "cat", classes = "note\twikidict-media $toneToken", bold = true)
+        val external = lexical.copy(kind = "external_link", target = "https://example.org", classes = "wikidict-media $otherToken")
+        val before = listOf(lexical, external)
+        assertEquals(listOf(tone, other), owners.embedded(before))
+        assertEquals("cat", lexical.target)
+        assertEquals("https://example.org", external.target)
+        assertEquals(before, listOf(lexical, external))
+        assertEquals(unicode.file, owners.file(lexical.copy(classes = "wikidict-media $unicodeToken")))
+        // Even a usable legacy target cannot override a present invalid owner.
+        for (marker in listOf(
+            "wikidict-media-file-", "wikidict-media-file-0", "wikidict-media-file-ff",
+            "wikidict-media-file-546F6E652E6F6767", "wikidict-media-file-556e6b6e6f776e2e6f6767",
+            "$toneToken $toneToken", "$toneToken $otherToken"
+        )) assertNull(marker, owners.file(lexical.copy(target = "File:Tone.ogg", classes = "wikidict-media $marker")))
+        assertNull(owners.file(lexical.copy(classes = "not-wikidict-media $toneToken")))
+        assertEquals(tone.file, owners.file(lexical.copy(target = "File:Tone.ogg", classes = "wikidict-media")))
+        assertEquals("Missing file.ogg", owners.file(lexical.copy(target = "File:Missing_file.ogg", classes = "wikidict-media")))
+        assertTrue(owners.embedded(listOf(lexical.copy(target = "File:Missing_file.ogg", classes = "wikidict-media"))).isEmpty())
+    }
+
+    @Test fun denseAuthoredMediaCaptionKeepsOneRowWithoutAFileNavigationTarget() {
+        val media = Media("Tone.ogg", "audio", "a".repeat(40) + "\n" + "b".repeat(40))
+        val classes = "wikidict-media wikidict-media-file-546f6e652e6f6767"
+        val first = List(40) { Span("link", "a", target = "cat", classes = classes) }
+        val second = List(40) { Span("external_link", "b", target = "https://example.org", classes = classes) }
+        val spans = first + Span("line_break", "\n", classes = classes) + second
+        val block = Block("paragraph", 0, spans)
+        val entry = Entry("Caption", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Noun", listOf(block))), emptyList(), media = listOf(media))
+        assertEquals(81, spans.size)
+        assertEquals(2, entry.readingRows.size)
+        assertSame(block, entry.readingRows.last().block)
+        assertEquals(spans, entry.readingRows.last().block!!.spans)
+        assertEquals(listOf(media), MediaOwners(entry.media).embedded(spans))
+        // A token for an unavailable file is not proof of ownership.
+        assertEquals(3, readingRows(entry.sections).size)
+    }
+
     @Test fun denseMediaCaptionKeepsOneRowAndAllCompiledSpans() {
         val owner = "File:Tone.ogg"
         val mediaClass = "caption wikidict-media"

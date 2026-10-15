@@ -7,6 +7,37 @@ internal fun Span.hasClassToken(token: String): Boolean =
 internal fun Span.withoutClassToken(token: String): Span =
     copy(classes = classes.split(compiledClassWhitespace).filter { it.isNotEmpty() && it != token }.joinToString(" "))
 
+/** Ownership and lexical navigation are independent compiled fields. */
+internal class MediaOwners(media: List<Media>) {
+    private val files = media.associateBy { it.file }
+    // Only existing catalog names are encoded. No untrusted token is decoded or allocated.
+    private val tokens = media.filter { it.file.isNotEmpty() }.associate { item ->
+        val bytes = item.file.toByteArray(Charsets.UTF_8)
+        val token = buildString {
+            append("wikidict-media-file-")
+            for (byte in bytes) {
+                val value = byte.toInt() and 255
+                append("0123456789abcdef"[value ushr 4])
+                append("0123456789abcdef"[value and 15])
+            }
+        }
+        token to item.file
+    }
+
+    fun file(span: Span): String? {
+        val classes = span.classes.split(compiledClassWhitespace)
+        if ("wikidict-media" !in classes) return null
+        val owners = classes.filter { it.startsWith("wikidict-media-file-") }
+        // A present marker is authoritative, including when it is invalid or ambiguous.
+        if (owners.isNotEmpty()) return owners.singleOrNull()?.let(tokens::get)
+        return span.target.takeIf { it.startsWith("File:") }
+            ?.removePrefix("File:")?.replace('_', ' ')
+    }
+
+    fun embedded(spans: List<Span>): List<Media> =
+        spans.mapNotNull { file(it)?.let(files::get) }.distinctBy { it.file }
+}
+
 internal data class PoemParagraph(val start: Int, val end: Int, val indent: Int, val direction: String?)
 private data class PoemMetadata(val indent: Int, val direction: String?)
 
@@ -85,7 +116,8 @@ internal fun sectionHeadingCompanion(section: Section): Block? {
 /** Presentation-only rows. No source parsing: explicit semantic breaks are layout boundaries. */
 data class ReadingRow(val key: String, val heading: Section? = null, val block: Block? = null, val compact: Boolean = false, val sectionKey: String = "", val meaningSection: Boolean = false, val headingBlock: Block? = null)
 
-fun readingRows(sections: List<Section>): List<ReadingRow> = buildList {
+fun readingRows(sections: List<Section>, media: List<Media> = emptyList()): List<ReadingRow> = buildList {
+    val owners = MediaOwners(media)
     sections.forEachIndexed { sectionIndex, section ->
         val sectionKey = "heading-$sectionIndex"
         val meaningSection = section.blocks.any { it.kind == "definition" }
@@ -100,7 +132,7 @@ fun readingRows(sections: List<Section>): List<ReadingRow> = buildList {
             // Splitting its paragraph would append that control to every resulting row.
             if (block.kind != "paragraph" || block.spans.size < 80 || block.spans.none { it.kind == "line_break" } || block.spans.any {
                     it.hasClassToken("wikidict-poem") ||
-                        (it.hasClassToken("wikidict-media") && it.target.startsWith("File:"))
+                        owners.file(it) != null
                 }) {
                 add(ReadingRow(key, block = block, sectionKey = sectionKey, meaningSection = meaningSection))
             } else {

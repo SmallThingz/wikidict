@@ -327,16 +327,12 @@ private fun TableView(table: Table, onLink: (String) -> Unit) {
     }
 }
 
-/** Use the same class-token matching for inline controls and the media footer. */
-private fun embeddedMedia(spans: List<Span>, available: List<Media>): List<Media> =
-    spans.filter { it.hasClassToken("wikidict-media") && it.target.startsWith("File:") }
-        .mapNotNull { span -> available.firstOrNull { it.file == span.target.removePrefix("File:").replace('_', ' ') } }
-        .distinctBy { it.file }
-
+/** Use the same explicit ownership for inline controls and the media footer. */
 private fun inlineMediaFiles(entry: Entry): Set<String> = buildSet {
+    val owners = MediaOwners(entry.media)
     fun include(spans: List<Span>, preserveWhitespace: Boolean = false) {
         val rendered = if (preserveWhitespace) spans else compactSpans(spans)
-        embeddedMedia(rendered, entry.media).forEach { add(it.file) }
+        owners.embedded(rendered).forEach { add(it.file) }
     }
     include(entry.displayTitle)
     include(entry.preamble)
@@ -360,7 +356,8 @@ private fun inlineMediaFiles(entry: Entry): Set<String> = buildSet {
 internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}, preserveWhitespace: Boolean = false) {
     val spans = remember(source, preserveWhitespace) { if (preserveWhitespace) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
-    val embedded = embeddedMedia(spans, availableMedia)
+    val owners = remember(availableMedia) { MediaOwners(availableMedia) }
+    val embedded = owners.embedded(spans)
     if (embedded.isNotEmpty()) {
         Column(modifier) {
             // Captions are compiled spans; the media record contains only a plain summary.

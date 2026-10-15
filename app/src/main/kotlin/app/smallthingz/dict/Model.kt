@@ -56,7 +56,7 @@ data class Entry(
 ) {
     val key: String = origin?.key ?: "$kind\u0000${language.orEmpty()}\u0000$title"
     // Constructed with the decoded entry on the import dispatcher.
-    val readingRows: List<ReadingRow> = readingRows(sections)
+    val readingRows: List<ReadingRow> = readingRows(sections, media)
     fun clue(): String {
         // Media controls belong in the reader, not a saved word's textual clue.
         fun preview(block: Block) = textOf(block.spans.filterNot { span ->
