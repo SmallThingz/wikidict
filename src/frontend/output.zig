@@ -428,6 +428,154 @@ fn sectionTextProjected(w: *std.Io.Writer, section: model.Section, color: bool, 
     try blocksTextProjected(w, section.blocks[first..], color, projection);
 }
 
+// Observe only span domains that the current output route actually emitted.
+// Media metadata still owns file controls; this only avoids repeating a caption.
+const VisibleMediaCaptions = struct {
+    a: std.mem.Allocator,
+    media: []const model.Media,
+    seen: []bool,
+    owners: std.StringHashMap(usize),
+    run: std.ArrayList(u8) = .empty,
+    enabled: bool,
+    const prefix = "wikidict-media-file-";
+
+    fn init(a: std.mem.Allocator, media: []const model.Media, enabled: bool) !VisibleMediaCaptions {
+        const observe = enabled and media.len != 0;
+        var result: VisibleMediaCaptions = .{
+            .a = a,
+            .media = media,
+            .seen = try a.alloc(bool, if (observe) media.len else 0),
+            .owners = std.StringHashMap(usize).init(a),
+            .enabled = observe,
+        };
+        @memset(result.seen, false);
+        if (observe) for (media, 0..) |item, index| {
+            // Larger keys cannot occur in the codec's bounded classes string.
+            if (item.file.len == 0 or item.file.len > (32 * 1024 * 1024 - prefix.len) / 2) continue;
+            const key = try a.alloc(u8, prefix.len + item.file.len * 2);
+            @memcpy(key[0..prefix.len], prefix);
+            const hex = "0123456789abcdef";
+            for (item.file, 0..) |byte, n| {
+                key[prefix.len + 2 * n] = hex[byte >> 4];
+                key[prefix.len + 2 * n + 1] = hex[byte & 15];
+            }
+            try result.owners.put(key, index);
+        };
+        return result;
+    }
+    fn owner(self: *const VisibleMediaCaptions, span: model.Span) ?usize {
+        var tokens = std.mem.tokenizeAny(u8, span.classes, " \t\r\n\x0b\x0c");
+        var marked = false;
+        var selected: ?[]const u8 = null;
+        var count: usize = 0;
+        while (tokens.next()) |token| {
+            if (std.mem.eql(u8, token, "wikidict-media")) marked = true;
+            if (std.mem.startsWith(u8, token, prefix)) {
+                count += 1;
+                selected = token;
+            }
+        }
+        if (!marked) return null;
+        // A present bad, unknown or duplicate owner is authoritative refusal.
+        if (count != 0) return if (count == 1) self.owners.get(selected.?) else null;
+        if (span.kind != .link and span.kind != .line_break) return null;
+        if (!std.ascii.startsWithIgnoreCase(span.target, "File:") and
+            !std.ascii.startsWithIgnoreCase(span.target, "Image:")) return null;
+        const file = span.target[(std.mem.indexOfScalar(u8, span.target, ':') orelse return null) + 1 ..];
+        for (self.media, 0..) |item, index| {
+            if (file.len != item.file.len) continue;
+            var equal = true;
+            for (file, item.file) |left, right| if ((if (left == '_') @as(u8, ' ') else left) !=
+                (if (right == '_') @as(u8, ' ') else right))
+            {
+                equal = false;
+                break;
+            };
+            if (equal) return index;
+        }
+        return null;
+    }
+    const Words = struct {
+        text: []const u8,
+        pos: usize = 0,
+        fn whitespace(byte: u8) bool {
+            // terminalText escapes CR/VT/FF instead of displaying whitespace.
+            return byte == ' ' or byte == '\t' or byte == '\n';
+        }
+        fn next(self: *Words) ?[]const u8 {
+            while (self.pos < self.text.len and whitespace(self.text[self.pos])) self.pos += 1;
+            const start = self.pos;
+            while (self.pos < self.text.len and !whitespace(self.text[self.pos])) self.pos += 1;
+            return if (start == self.pos) null else self.text[start..self.pos];
+        }
+    };
+    fn sameCaption(left: []const u8, right: []const u8) bool {
+        var a: Words = .{ .text = left };
+        var b: Words = .{ .text = right };
+        var nonempty = false;
+        while (a.next()) |word| {
+            const other = b.next() orelse return false;
+            if (!std.mem.eql(u8, word, other)) return false;
+            nonempty = true;
+        }
+        return nonempty and b.next() == null;
+    }
+    fn finish(self: *VisibleMediaCaptions, index: ?usize) void {
+        if (index) |owned| for (self.media, 0..) |item, n| {
+            if (std.mem.eql(u8, item.file, self.media[owned].file) and sameCaption(self.run.items, item.caption))
+                self.seen[n] = true;
+        };
+        self.run.clearRetainingCapacity();
+    }
+    fn observeSpans(self: *VisibleMediaCaptions, spans: []const model.Span) !void {
+        if (!self.enabled) return;
+        var current: ?usize = null;
+        for (spans) |span| {
+            const next = self.owner(span);
+            // Equal Media.file records share ownership, not their caption text.
+            const same = if (current != null and next != null)
+                std.mem.eql(u8, self.media[current.?].file, self.media[next.?].file)
+            else
+                false;
+            if (!same) self.finish(current);
+            current = next;
+            if (next != null) {
+                if (span.kind == .line_break) try self.run.append(self.a, '\n') else try self.run.appendSlice(self.a, span.text);
+                // SpanCursor emits the decoded trail after a break as well.
+                try self.run.appendSlice(self.a, span.trail);
+            }
+        }
+        self.finish(current);
+    }
+    fn observeBlocks(self: *VisibleMediaCaptions, blocks: []const model.Block) !void {
+        if (!self.enabled) return;
+        for (blocks) |block| {
+            if (block.kind == .blank or block.kind == .rule) continue;
+            if (block.table) |table| {
+                try self.observeSpans(table.caption);
+                for (table.rows) |row| for (row.cells) |cell| try self.observeSpans(cell.spans);
+            } else try self.observeSpans(block.spans);
+        }
+    }
+    fn emitSpans(self: *VisibleMediaCaptions, w: *std.Io.Writer, values: []const model.Span, color: bool, projection: ?*PoemProjection) !void {
+        try spansTextProjected(w, values, color, projection);
+        try self.observeSpans(values);
+    }
+    fn emitBlocks(self: *VisibleMediaCaptions, w: *std.Io.Writer, values: []const model.Block, color: bool, projection: ?*PoemProjection) !void {
+        try blocksTextProjected(w, values, color, projection);
+        try self.observeBlocks(values);
+    }
+    fn emitSection(self: *VisibleMediaCaptions, w: *std.Io.Writer, value: model.Section, color: bool, projection: ?*PoemProjection) !void {
+        try sectionTextProjected(w, value, color, projection);
+        // The companion, if any, was emitted as the section label instead.
+        try self.observeBlocks(value.blocks);
+    }
+    fn emitLabel(self: *VisibleMediaCaptions, w: *std.Io.Writer, value: model.Section, color: bool, projection: ?*PoemProjection) !void {
+        try sectionLabelProjected(w, value, color, projection);
+        if (sectionHeadingCompanion(value)) |values| try self.observeSpans(values);
+    }
+};
+
 pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
     return entryTextWithDetails(w, entry, color, true);
 }
@@ -436,9 +584,12 @@ pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, 
     return entryTextWithDetailsProjected(w, entry, color, details, null);
 }
 pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, details: bool, projection: ?*PoemProjection) !void {
+    var caption_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer caption_arena.deinit();
+    var captions = try VisibleMediaCaptions.init(caption_arena.allocator(), entry.media, details);
     if (color) try w.writeAll("\x1b[1;36m");
     if (entry.display_title.len != 0)
-        try spansTextProjected(w, entry.display_title, color, projection)
+        try captions.emitSpans(w, entry.display_title, color, projection)
     else
         try terminalText(w, entry.title);
     if (color) try w.writeAll("\x1b[0m");
@@ -446,7 +597,7 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
     try terminalText(w, entry.language orelse @tagName(entry.kind));
     try w.writeByte('\n');
     if ((details or entry.kind == .alias) and entry.preamble_spans.len != 0) {
-        try spansTextProjected(w, entry.preamble_spans, color, projection);
+        try captions.emitSpans(w, entry.preamble_spans, color, projection);
         try w.writeByte('\n');
     }
     const organization = entry.organization;
@@ -460,14 +611,14 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
                         try w.writeByte('\n');
                         heading = true;
                     }
-                    try blocksTextProjected(w, &.{block}, color, projection);
+                    try captions.emitBlocks(w, &.{block}, color, projection);
                 };
                 continue;
             }
             if (std.mem.eql(u8, section.title, entry.language orelse "") and sectionHeadingCompanion(section) == null)
-                try blocksTextProjected(w, section.blocks, color, projection)
+                try captions.emitBlocks(w, section.blocks, color, projection)
             else
-                try sectionTextProjected(w, section, color, projection);
+                try captions.emitSection(w, section, color, projection);
         }
     } else {
         for (organization.lexemes, 0..) |lexeme, l| {
@@ -505,7 +656,7 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
                 if (per_part_headers) {
                     try w.writeByte('\n');
                     if (color) try w.writeAll("\x1b[1m");
-                    if (companion) |spans| try spansTextProjected(w, spans, color, projection) else try terminalText(w, part.kind);
+                    if (companion) |spans| try captions.emitSpans(w, spans, color, projection) else try terminalText(w, part.kind);
                     if (part.language.len != 0 and !std.mem.eql(u8, part.language, entry.language orelse "")) {
                         try w.writeAll(" / ");
                         try terminalText(w, part.language);
@@ -520,37 +671,39 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
                 };
                 if (details) for (part.introduction) |i| {
                     if (rendered_companion and i == 0) continue;
-                    try blocksTextProjected(w, section.blocks[i..][0..1], color, projection);
+                    try captions.emitBlocks(w, section.blocks[i..][0..1], color, projection);
                 };
                 for (part.definitions) |sense| {
-                    try blocksTextProjected(w, section.blocks[sense.block..][0..1], color, projection);
-                    if (details) for (sense.examples) |i| try blocksTextProjected(w, section.blocks[i..][0..1], color, projection);
+                    try captions.emitBlocks(w, section.blocks[sense.block..][0..1], color, projection);
+                    if (details) for (sense.examples) |i| try captions.emitBlocks(w, section.blocks[i..][0..1], color, projection);
                     if (details) {
-                        for (sense.notes) |i| try blocksTextProjected(w, section.blocks[i..][0..1], color, projection);
-                        for (sense.quotations) |i| try blocksTextProjected(w, section.blocks[i..][0..1], color, projection);
+                        for (sense.notes) |i| try captions.emitBlocks(w, section.blocks[i..][0..1], color, projection);
+                        for (sense.quotations) |i| try captions.emitBlocks(w, section.blocks[i..][0..1], color, projection);
                     }
                 }
                 if (details) {
                     for (part.other_blocks) |i| {
                         if (rendered_companion and i == 0) continue;
-                        try blocksTextProjected(w, section.blocks[i..][0..1], color, projection);
+                        try captions.emitBlocks(w, section.blocks[i..][0..1], color, projection);
                     }
-                    for (part.related_sections) |i| try sectionTextProjected(w, entry.sections[i], color, projection);
+                    for (part.related_sections) |i| try captions.emitSection(w, entry.sections[i], color, projection);
                 }
             }
         }
-        if (details) for (organization.other_sections) |i| try sectionTextProjected(w, entry.sections[i], color, projection);
+        if (details) for (organization.other_sections) |i| try captions.emitSection(w, entry.sections[i], color, projection);
     }
-    if (details) try entryMetadataProjected(w, entry, color, projection);
+    if (details) try entryMetadataProjected(w, entry, color, projection, &captions);
 }
 
-fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, projection: ?*PoemProjection) !void {
+fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, projection: ?*PoemProjection, captions: *VisibleMediaCaptions) !void {
+    // These references are emitted by this same details route below.
+    for (entry.references) |ref| try captions.observeSpans(ref.spans);
     if (entry.media.len != 0) {
         try w.writeAll("\nMedia\n");
-        for (entry.media) |media| {
+        for (entry.media, 0..) |media, media_index| {
             try w.print("[{s}] ", .{@tagName(media.kind)});
             try terminalText(w, media.file);
-            if (media.caption.len != 0) {
+            if (media.caption.len != 0 and !captions.seen[media_index]) {
                 try w.writeAll(" — ");
                 try terminalText(w, media.caption);
             }
@@ -633,14 +786,17 @@ pub fn entryTextFolded(frame: *std.Io.Writer.Allocating, entry: model.Entry, col
     return entryTextFoldedProjected(frame, entry, color, preferences, expanded, selected, null);
 }
 pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.Entry, color: bool, preferences: @import("reading_state.zig").Data, expanded: []const usize, selected: usize, projection: ?*PoemProjection) !usize {
+    var caption_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer caption_arena.deinit();
+    var captions = try VisibleMediaCaptions.init(caption_arena.allocator(), entry.media, preferences.details);
     const w = &frame.writer;
     var selected_offset: usize = 0;
-    if (entry.display_title.len != 0) try spansTextProjected(w, entry.display_title, color, projection) else try terminalText(w, entry.title);
+    if (entry.display_title.len != 0) try captions.emitSpans(w, entry.display_title, color, projection) else try terminalText(w, entry.title);
     try w.writeAll("  / ");
     try terminalText(w, entry.language orelse @tagName(entry.kind));
     try w.writeByte('\n');
     if (entry.preamble_spans.len != 0) {
-        try spansTextProjected(w, entry.preamble_spans, color, projection);
+        try captions.emitSpans(w, entry.preamble_spans, color, projection);
         try w.writeByte('\n');
     }
     for (entry.sections, 0..) |section, index| {
@@ -657,14 +813,14 @@ pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.E
         if (selected == index) selected_offset = frame.written().len;
         if (color and selected == index) try w.writeAll("\x1b[1m");
         try w.writeAll(if (selected == index) "> " else "  ");
-        try sectionLabelProjected(w, section, color, projection);
+        try captions.emitLabel(w, section, color, projection);
         if (closed) try w.writeAll(if (meaning) "  [+ notes]" else "  [+]");
         if (color) try w.writeAll("\x1b[0m");
         try w.writeByte('\n');
         const first: usize = if (sectionHeadingCompanion(section) != null) 1 else 0;
-        for (section.blocks[first..]) |block| if (!closed or (meaning and block.kind == .definition)) try blocksTextProjected(w, &.{block}, color, projection);
+        for (section.blocks[first..]) |block| if (!closed or (meaning and block.kind == .definition)) try captions.emitBlocks(w, &.{block}, color, projection);
     }
-    if (preferences.details) try entryMetadataProjected(w, entry, color, projection) else if (entry.media.len != 0 or entry.references.len != 0) try w.writeAll("\n  d: media and references\n");
+    if (preferences.details) try entryMetadataProjected(w, entry, color, projection, &captions) else if (entry.media.len != 0 or entry.references.len != 0) try w.writeAll("\n  d: media and references\n");
     return selected_offset;
 }
 test "ordered list items render numbers without becoming dictionary meanings" {
@@ -1021,4 +1177,200 @@ test "DPR2 rich heading wire fields preserve level trails targets and indexed bo
     try entryTextWithDetails(&out.writer, decoded.entry, false, false);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Nouns"));
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "wire example") == null);
+}
+
+test "visible media captions deduplicate metadata without replacing authored actions through DPR2" {
+    const tone = "wikidict-media wikidict-media-file-546f6e652e6f6767";
+    const mixed = [_]model.Span{
+        .{ .kind = .link, .text = "A ", .target = "File:Tone.ogg", .classes = tone },
+        .{ .kind = .link, .text = "domestic cat", .target = "cat", .classes = tone, .bold = true },
+        .{ .kind = .link, .text = " and ", .target = "File:Tone.ogg", .classes = tone },
+        .{ .kind = .external_link, .text = "external", .target = "https://example.org", .classes = tone },
+        .{ .kind = .link, .text = ".", .target = "File:Tone.ogg", .classes = tone },
+    };
+    const authored = [_]model.Span{
+        .{ .kind = .link, .text = "domestic", .trail = " cat", .target = "cat", .classes = tone, .bold = true },
+    };
+    const codec = @import("blob_encoder").presentation_codec;
+    for ([_][]const model.Span{ &mixed, &authored }, [_][]const u8{ "A domestic cat and external.", "domestic cat" }) |values, caption| {
+        const media = [_]model.Media{.{ .file = "Tone.ogg", .kind = .audio, .caption = caption }};
+        const entry: model.Entry = .{ .title = "entry", .kind = .language, .language = "English", .language_code = "en", .preamble_spans = values, .media = &media };
+        const bytes = try codec.encodeAlloc(std.testing.allocator, .{ .entry = entry });
+        defer std.testing.allocator.free(bytes);
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const decoded = try codec.decodeAlloc(arena.allocator(), bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        const linked_index: usize = if (values.len == 1) 0 else 1;
+        try std.testing.expectEqualStrings("cat", decoded.entry.preamble_spans[linked_index].target);
+        var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer out.deinit();
+        try entryTextWithDetails(&out.writer, decoded.entry, false, true);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), caption));
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Tone.ogg\n") != null);
+        out.clearRetainingCapacity();
+        _ = try entryTextFolded(&out, decoded.entry, false, .{ .details = true }, &.{}, 0);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), caption));
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Tone.ogg\n") != null);
+        // Output is a read-only projection: lexical targets and styles survive.
+        try std.testing.expectEqualStrings("cat", decoded.entry.preamble_spans[linked_index].target);
+        try std.testing.expect(decoded.entry.preamble_spans[linked_index].bold);
+    }
+}
+
+test "caption deduplication follows actual folded and organized visibility" {
+    const owner = "wikidict-media wikidict-media-file-546f6e652e6f6767";
+    const caption = [_]model.Span{.{ .kind = .link, .text = "visible caption", .target = "cat", .classes = owner }};
+    const meaning = [_]model.Span{.{ .text = "meaning" }};
+    const blocks = [_]model.Block{
+        .{ .kind = .paragraph, .spans = &caption },
+        .{ .kind = .definition, .depth = 1, .spans = &meaning },
+    };
+    const sections = [_]model.Section{.{ .level = 3, .title = "Noun", .blocks = &blocks }};
+    const media = [_]model.Media{.{ .file = "Tone.ogg", .kind = .audio, .caption = "visible caption" }};
+    var entry: model.Entry = .{ .title = "entry", .kind = .language, .language = "English", .sections = &sections, .media = &media };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    // Explicitly folded body: the fallback caption is its sole visible copy.
+    _ = try entryTextFolded(&out, entry, false, .{ .details = true }, &.{0}, 0);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "visible caption"));
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Tone.ogg — visible caption") != null);
+    out.clearRetainingCapacity();
+    _ = try entryTextFolded(&out, entry, false, .{ .details = true }, &.{}, 0);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "visible caption"));
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Tone.ogg\n") != null);
+    // Layout indices stay authoritative: an unselected paragraph cannot dedup.
+    const senses = [_]model.Sense{.{ .block = 1 }};
+    const hidden = [_]model.Lexeme{.{ .kind = "Noun", .section = 0, .definitions = &senses }};
+    entry.organization = .{ .lexemes = &hidden };
+    out.clearRetainingCapacity();
+    try entryTextWithDetails(&out.writer, entry, false, true);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Tone.ogg — visible caption") != null);
+    const shown = [_]model.Lexeme{.{ .kind = "Noun", .section = 0, .introduction = &.{0}, .definitions = &senses }};
+    entry.organization = .{ .lexemes = &shown };
+    out.clearRetainingCapacity();
+    try entryTextWithDetails(&out.writer, entry, false, true);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "visible caption"));
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Tone.ogg\n") != null);
+    out.clearRetainingCapacity();
+    try entryTextWithDetails(&out.writer, entry, false, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "visible caption") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "Media") == null);
+}
+
+test "media caption owners reject forged ambiguous partial and cross-file matches" {
+    const tone = "wikidict-media wikidict-media-file-546f6e652e6f6767";
+    const token = "wikidict-media-file-546f6e652e6f6767";
+    const media = [_]model.Media{
+        .{ .file = "Tone.ogg", .kind = .audio, .caption = "same caption" },
+        .{ .file = "Other.ogg", .kind = .audio, .caption = "same caption" },
+    };
+    var values = [_]model.Span{.{ .kind = .link, .text = "same caption", .target = "cat", .classes = tone }};
+    var entry: model.Entry = .{ .title = "entry", .kind = .language, .language = "English", .preamble_spans = &values, .media = &media };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, out.written(), "same caption"));
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Tone.ogg\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Other.ogg — same caption") != null);
+    // A legacy caption is identified only by the unmarked File/Image action.
+    values[0].classes = "wikidict-media";
+    values[0].target = "Image:Tone.ogg";
+    out.clearRetainingCapacity();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Tone.ogg\n") != null);
+    for ([_][]const u8{
+        "wikidict-media wikidict-media-file-",
+        "wikidict-media wikidict-media-file-0",
+        "wikidict-media wikidict-media-file-ff",
+        "wikidict-media wikidict-media-file-546F6E652E6F6767",
+        "wikidict-media wikidict-media-file-556e6b6e6f776e2e6f6767",
+        "wikidict-media " ++ token ++ " " ++ token,
+        "wikidict-media " ++ token ++ " wikidict-media-file-4f746865722e6f6767",
+        "not-wikidict-media " ++ token,
+    }) |bad| {
+        values[0].classes = bad;
+        out.clearRetainingCapacity();
+        try entryText(&out.writer, entry, false);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Tone.ogg — same caption") != null);
+    }
+    const partial = [_]model.Span{
+        .{ .kind = .link, .text = "same ", .target = "cat", .classes = tone },
+        .{ .kind = .line_break },
+        .{ .kind = .link, .text = "caption", .target = "cat", .classes = tone },
+    };
+    entry.preamble_spans = &partial;
+    out.clearRetainingCapacity();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Tone.ogg — same caption") != null);
+    // DPR2 permits break trails and escaped controls. Compare the bytes which
+    // this terminal consumer actually displays, not generic HTML whitespace.
+    const break_trail = [_]model.Span{
+        .{ .kind = .link, .text = "a", .target = "cat", .classes = tone },
+        .{ .kind = .line_break, .trail = "EXTRA", .classes = tone },
+        .{ .kind = .link, .text = "b", .target = "cat", .classes = tone },
+    };
+    const ordinary = [_]model.Span{.{ .kind = .link, .text = "a b", .target = "cat", .classes = tone }};
+    const cases = [_]struct { values: []const model.Span, caption: []const u8, metadata: []const u8 }{
+        .{ .values = &break_trail, .caption = "a b", .metadata = "[audio] Tone.ogg — a b\n" },
+        .{ .values = &break_trail, .caption = "a EXTRAb", .metadata = "[audio] Tone.ogg\n" },
+        .{ .values = &ordinary, .caption = "a\rb", .metadata = "[audio] Tone.ogg — a\\u{d}b\n" },
+        .{ .values = &ordinary, .caption = "a\x0bb", .metadata = "[audio] Tone.ogg — a\\u{b}b\n" },
+        .{ .values = &ordinary, .caption = "a\x0cb", .metadata = "[audio] Tone.ogg — a\\u{c}b\n" },
+    };
+    const codec = @import("blob_encoder").presentation_codec;
+    for (cases) |case| {
+        const wire_media = [_]model.Media{.{ .kind = .audio, .file = "Tone.ogg", .caption = case.caption }};
+        const wire_entry: model.Entry = .{ .title = "entry", .kind = .language, .language = "English", .language_code = "en", .preamble_spans = case.values, .media = &wire_media };
+        const bytes = try codec.encodeAlloc(std.testing.allocator, .{ .entry = wire_entry });
+        defer std.testing.allocator.free(bytes);
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const decoded = try codec.decodeAlloc(arena.allocator(), bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        out.clearRetainingCapacity();
+        try entryText(&out.writer, decoded.entry, false);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), case.metadata) != null);
+        if (case.values.len == 3) {
+            try std.testing.expectEqualStrings("EXTRA", decoded.entry.preamble_spans[1].trail);
+            try std.testing.expect(std.mem.indexOf(u8, out.written(), "a\nEXTRAb\n") != null);
+        } else try std.testing.expect(std.mem.indexOf(u8, out.written(), "a b\n") != null);
+    }
+}
+
+test "caption observation keeps table reference and projected span domains local" {
+    const unicode_owner = "wikidict-media wikidict-media-file-c38963686f20f09f948a2e6f6767";
+    const spans = [_]model.Span{.{ .kind = .link, .text = "unicode caption", .target = "cat", .classes = unicode_owner }};
+    const cells = [_]@import("blob_encoder").presentation_types.Cell{.{ .spans = &spans }};
+    const rows = [_]@import("blob_encoder").presentation_types.Row{.{ .cells = &cells }};
+    const blocks = [_]model.Block{.{ .kind = .table, .table = .{ .rows = &rows } }};
+    const sections = [_]model.Section{.{ .level = 3, .title = "Table", .blocks = &blocks }};
+    const media = [_]model.Media{.{ .file = "Écho 🔊.ogg", .kind = .audio, .caption = "unicode caption" }};
+    var entry: model.Entry = .{ .title = "entry", .kind = .language, .language = "English", .sections = &sections, .media = &media };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "unicode caption"));
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Écho 🔊.ogg\n") != null);
+    const references = [_]model.Reference{.{ .number = 1, .group_number = 1, .spans = &spans }};
+    entry.sections = &.{};
+    entry.references = &references;
+    out.clearRetainingCapacity();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "unicode caption"));
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Écho 🔊.ogg\n") != null);
+
+    const poem = [_]model.Span{
+        .{ .kind = .link, .text = "unicode", .target = "cat", .classes = unicode_owner ++ " wikidict-poem wikidict-poem-indent-2" },
+        .{ .kind = .line_break, .classes = unicode_owner ++ " wikidict-poem" },
+        .{ .kind = .external_link, .text = "caption", .target = "https://example.org", .classes = unicode_owner ++ " wikidict-poem" },
+    };
+    entry.references = &.{};
+    entry.preamble_spans = &poem;
+    out.clearRetainingCapacity();
+    var lines: std.ArrayList(terminal.PoemLine) = .empty;
+    defer lines.deinit(std.testing.allocator);
+    var projection: PoemProjection = .{ .frame = &out, .allocator = std.testing.allocator, .lines = &lines };
+    _ = try entryTextFoldedProjected(&out, entry, false, .{ .details = true }, &.{}, 0, &projection);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "unicode\ncaption") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Écho 🔊.ogg\n") != null);
+    try std.testing.expect(lines.items.len >= 2);
 }

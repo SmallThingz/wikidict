@@ -1429,6 +1429,8 @@ pub const Renderer = struct {
     pre_block: bool = false,
     pre_scope_observer: ?PreScopeObserver = null,
     body_link_target: []const u8 = "",
+    // Only an active structural parent supplies this lexical lang/dir base.
+    body_language_direction: ?Style = null,
     body_paragraph_join: ?*BodyParagraphJoin = null,
     navigation_target_probe: ?*?[]const u8 = null,
     navigation_refused_probe: ?*bool = null,
@@ -1747,29 +1749,18 @@ pub const Renderer = struct {
         return safeInternalTarget(target) and (explicit or namespace != 14);
     }
 
-    pub fn mediaFile(self: *Renderer, raw: []const u8, caption: []const u8) Error!void {
-        return self.mediaFileKind(raw, caption, null);
-    }
-    fn mediaFileKind(self: *Renderer, raw: []const u8, caption: []const u8, authoritative_kind: ?media_types.Kind) Error!void {
-        // Media is supplemental presentation. Pathological nesting or a page with
-        // hundreds of assets must not make the entry itself unreadable.
-        if (self.media_depth >= max_depth) {
-            self.fallbacks.render_limit = true;
-            return;
-        }
-        self.media_depth += 1;
-        defer self.media_depth -= 1;
+    fn canonicalMediaFile(self: *Renderer, raw: []const u8) Error!?[]const u8 {
         var identity = raw;
         if (std.mem.indexOf(u8, raw, poem_prefix) != null) {
             var at: usize = 0;
             while (std.mem.indexOfPos(u8, raw, at, poem_prefix)) |found| {
                 const item = self.poemItemAt(raw[found..]) orelse {
                     self.fallbacks.unsupported_element = true;
-                    return;
+                    return null;
                 };
                 if (item.kind != .literal or !std.mem.eql(u8, item.tag, "text")) {
                     self.fallbacks.unsupported_element = true;
-                    return;
+                    return null;
                 }
                 at = found + item.token.len;
             }
@@ -1777,16 +1768,85 @@ pub const Renderer = struct {
         }
         const file = try self.a.dupe(u8, std.mem.trim(u8, identity, " \t\r\n"));
         std.mem.replaceScalar(u8, file, '_', ' ');
-        const kind = authoritative_kind orelse media_types.referencedKind(file) orelse return;
-        for (self.media.items) |item| if (std.mem.eql(u8, item.file, file)) return;
+        return file;
+    }
+    fn mediaClasses(self: *Renderer, raw: []const u8) Error![]const u8 {
+        const file = (try self.canonicalMediaFile(raw)) orelse return "wikidict-media";
+        // Only an actual emitted Media.file can authorize ownership metadata.
+        var present = false;
+        for (self.media.items) |item| if (std.mem.eql(u8, item.file, file)) {
+            present = true;
+            break;
+        };
+        if (!present) return "wikidict-media";
+        const prefix = "wikidict-media wikidict-media-file-";
+        // DPR2 already limits each classes string to 32 MiB. Check before doubling.
+        if (file.len > (32 * 1024 * 1024 - prefix.len) / 2) return error.RenderLimit;
+        const value = try self.a.alloc(u8, prefix.len + file.len * 2);
+        @memcpy(value[0..prefix.len], prefix);
+        const hex = "0123456789abcdef";
+        for (file, 0..) |byte, index| {
+            value[prefix.len + index * 2] = hex[byte >> 4];
+            value[prefix.len + index * 2 + 1] = hex[byte & 15];
+        }
+        return value;
+    }
+    pub fn mediaFile(self: *Renderer, raw: []const u8, caption: []const u8) Error!void {
+        return self.mediaFileKind(raw, caption, null);
+    }
+    fn mediaFileKind(self: *Renderer, raw: []const u8, caption: []const u8, authoritative_kind: ?media_types.Kind) Error!void {
+        _ = try self.mediaFileKindWithSpans(raw, caption, authoritative_kind, null);
+    }
+    const MediaCaptionCapture = struct {
+        mode: enum { spans, inline_body, link } = .spans,
+        style: Style,
+        depth: usize = 0,
+        target: []const u8 = "",
+        external: bool = false,
+    };
+    fn captureMediaCaption(self: *Renderer, input: []const u8, capture: MediaCaptionCapture) Error![]const Span {
+        if (capture.mode == .spans) return self.parseSpans(input, capture.style);
+        const parent = self.spans;
+        self.spans = try .initCapacity(self.a, 4);
+        defer self.spans = parent;
+        errdefer self.spans.deinit(self.a);
+        switch (capture.mode) {
+            .spans => unreachable,
+            .inline_body => {
+                if (std.mem.indexOf(u8, input, "{|") != null) {
+                    try self.blocksInline(try self.renderBody(input), capture.style);
+                } else try self.inlineText(input, capture.style, capture.depth);
+            },
+            .link => try self.link(input, capture.target, capture.style, capture.depth, capture.external),
+        }
+        return self.spans.toOwnedSlice(self.a);
+    }
+    pub fn mediaCaptionLink(self: *Renderer, file: []const u8, caption: []const u8, target: []const u8, style: Style, depth: usize, external: bool) Error!void {
+        const capture: MediaCaptionCapture = .{ .mode = .link, .style = style, .depth = depth, .target = target, .external = external };
+        const parsed = (try self.mediaFileKindWithSpans(file, caption, null, capture)) orelse try self.captureMediaCaption(caption, capture);
+        try self.spans.appendSlice(self.a, parsed);
+    }
+    fn mediaFileKindWithSpans(self: *Renderer, raw: []const u8, caption: []const u8, authoritative_kind: ?media_types.Kind, caption_style: ?MediaCaptionCapture) Error!?[]const Span {
+        // Media is supplemental presentation. Pathological nesting or a page with
+        // hundreds of assets must not make the entry itself unreadable.
+        if (self.media_depth >= max_depth) {
+            self.fallbacks.render_limit = true;
+            return null;
+        }
+        self.media_depth += 1;
+        defer self.media_depth -= 1;
+        const file = (try self.canonicalMediaFile(raw)) orelse return null;
+        const kind = authoritative_kind orelse media_types.referencedKind(file) orelse return null;
+        for (self.media.items) |item| if (std.mem.eql(u8, item.file, file)) return null;
         if (self.media.items.len >= 128) {
             self.fallbacks.render_limit = true;
-            return;
+            return null;
         }
-        const caption_spans = try self.parseSpans(caption, .{});
+        const caption_spans = if (caption_style) |capture| try self.captureMediaCaption(caption, capture) else try self.parseSpans(caption, .{});
         const description = try plainText(self.a, caption_spans);
         try self.media.append(self.a, .{ .file = file, .kind = kind, .caption = description });
         try self.media_caption_spans.append(self.a, caption_spans);
+        return if (caption_style != null) caption_spans else null;
     }
     fn spend(self: *Renderer) bool {
         if (self.nodes >= max_nodes) {
@@ -2488,7 +2548,13 @@ pub const Renderer = struct {
             const n = std.unicode.utf8Encode(if (cp == 0 or cp > 0x10ffff or (cp >= 0xd800 and cp <= 0xdfff)) 0xfffd else cp, buf) catch return null;
             return .{ .bytes = buf[0..n], .consumed = end + 1, .scratch = true };
         }
-        const value = entities.lookupNamedEntity(name) orelse return null;
+        // Renderer text follows MediaWiki's named-reference policy; dump typo
+        // aliases belong only to XML recovery. MediaWiki additionally accepts
+        // these Hebrew/Arabic spellings of the right-to-left mark.
+        const value: []const u8 = if (std.mem.eql(u8, name, "רלמ") or std.mem.eql(u8, name, "رلم"))
+            "\u{200f}"
+        else
+            entities.lookupHtmlNamedEntity(name) orelse return null;
         return .{ .bytes = value, .consumed = end + 1 };
     }
     fn entity(self: *Renderer, input: []const u8, style: Style) Error!?usize {
@@ -2503,6 +2569,26 @@ pub const Renderer = struct {
         var literal_style = style;
         literal_style.provenance = .protected_literal;
         try self.literal(input, literal_style);
+    }
+    fn protectedNowikiLiteral(self: *Renderer, input: []const u8, style: Style) Error!void {
+        // Ordinary nowiki is unstripped into HTML text: raw LF is soft space.
+        // Parsed pre keeps authored whitespace; Poem dispatches its registered
+        // semantic breaks through the existing protected-literal path.
+        if (style.preserve_whitespace or self.poem_depth != 0)
+            return self.protectedLiteral(input, style);
+        var literal_style = style;
+        literal_style.provenance = .protected_literal;
+        var start: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, input, start, '&')) |i| {
+            try self.plain(input[start..i], literal_style);
+            if (try self.entity(input[i..], literal_style)) |n| {
+                start = i + n;
+            } else {
+                try self.text("&", literal_style);
+                start = i + 1;
+            }
+        }
+        try self.plain(input[start..], literal_style);
     }
     fn literal(self: *Renderer, input: []const u8, style: Style) Error!void {
         var start: usize = 0;
@@ -2745,9 +2831,26 @@ pub const Renderer = struct {
         }
         return self.refs.items;
     }
-    fn gallery(self: *Renderer, input: []const u8, style: Style, _: usize) Error!void {
+    fn gallery(self: *Renderer, input: []const u8, tag: syntax.Tag, style: Style, _: usize) Error!void {
         var lines = std.mem.splitScalar(u8, input, '\n');
         var emitted = false;
+        // Gallery-wide captions are separately parsed extension attributes, not
+        // filenames or one of the per-item media captions.
+        if (try self.semanticAttribute(tag, "caption")) |caption| {
+            if (trim(caption).len != 0) {
+                if (self.media_depth >= max_depth) {
+                    self.fallbacks.render_limit = true;
+                    try self.protectedLiteral(caption, style);
+                    emitted = true;
+                } else {
+                    self.media_depth += 1;
+                    defer self.media_depth -= 1;
+                    const caption_spans = try self.parseSpans(caption, style);
+                    try self.spans.appendSlice(self.a, caption_spans);
+                    emitted = caption_spans.len != 0;
+                }
+            }
+        }
         while (lines.next()) |raw_line| {
             const line = trim(raw_line);
             if (line.len == 0) continue;
@@ -2759,14 +2862,17 @@ pub const Renderer = struct {
             const options = if (pipe) |at_pipe| trim(line[at_pipe + 1 ..]) else "";
             const selected_label = self.mediaCaptionChoice(options, file, mediaOptionMode(file, true));
             const caption = selected_label.text;
-            try self.mediaFile(file, caption);
-            if (emitted) try self.lineBreak(style);
-            emitted = true;
             var media_style = style;
-            media_style.classes = "wikidict-media";
+            media_style.classes = try self.mediaCaptionClasses("", style.classes);
             media_style.kind = .link;
             media_style.target = try std.fmt.allocPrint(self.a, "File:{s}", .{file});
-            try self.mediaLabel(if (caption.len == 0) file else caption, media_style, false, selected_label.authored_caption);
+            const visible_label = if (caption.len == 0) file else caption;
+            const caption_style: ?MediaCaptionCapture = if (std.mem.eql(u8, caption, visible_label)) .{ .style = mediaCaptionStyle(media_style, false, selected_label.authored_caption) } else null;
+            const parsed = try self.mediaFileKindWithSpans(file, caption, null, caption_style);
+            media_style.classes = try self.mediaCaptionClasses(try self.mediaClasses(file), style.classes);
+            if (emitted) try self.lineBreak(style);
+            emitted = true;
+            try self.mediaLabel(visible_label, media_style, false, selected_label.authored_caption, parsed);
         }
     }
     fn imageMap(self: *Renderer, input: []const u8, style: Style, depth: usize) Error!bool {
@@ -2974,7 +3080,7 @@ pub const Renderer = struct {
             }
         }
         if (tag.is("gallery")) {
-            try self.gallery(content, style, depth + 1);
+            try self.gallery(content, tag, style, depth + 1);
         } else if (tag.is("imagemap")) {
             if (!try self.imageMap(content, style, depth + 1)) self.fallbacks.unsupported_element = true;
         } else if (tag.is("poem")) {
@@ -2999,12 +3105,43 @@ pub const Renderer = struct {
         }
         return pair.end;
     }
-    fn mediaLabel(self: *Renderer, label: []const u8, style: Style, heading: bool, authored_caption: bool) Error!void {
+    fn mediaCaptionClasses(self: *Renderer, owner: []const u8, parsed: []const u8) Error![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        // Caption parsing can occur before or after the generated owner is
+        // attached. In either case its inherited visual prefix is retained once.
+        var visual = owner;
+        while (visual.len != 0) {
+            const end = std.mem.indexOfAny(u8, visual, " \t\r\n") orelse visual.len;
+            const token = visual[0..end];
+            if (!std.mem.eql(u8, token, "wikidict-media") and !std.mem.startsWith(u8, token, "wikidict-media-file-")) break;
+            visual = std.mem.trimStart(u8, visual[end..], " \t\r\n");
+        }
+        const inherited = if (std.mem.startsWith(u8, parsed, owner)) owner else visual;
+        const additions = if (inherited.len != 0 and std.mem.startsWith(u8, parsed, inherited) and
+            (parsed.len == inherited.len or std.ascii.isWhitespace(parsed[inherited.len])))
+            parsed[inherited.len..]
+        else
+            parsed;
+        var tokens = std.mem.tokenizeAny(u8, additions, " \t\r\n");
+        while (tokens.next()) |token| {
+            // The outer media record alone owns this caption. Inner visual
+            // metadata may not replace or duplicate that generated identity.
+            if (std.mem.eql(u8, token, "wikidict-media") or std.mem.startsWith(u8, token, "wikidict-media-file-")) continue;
+            if (out.items.len == 0) try out.appendSlice(self.a, owner);
+            if (out.items.len != 0) try out.append(self.a, ' ');
+            try out.appendSlice(self.a, token);
+        }
+        return if (out.items.len == 0) owner else try out.toOwnedSlice(self.a);
+    }
+    fn mediaCaptionStyle(style: Style, heading: bool, authored_caption: bool) Style {
         var caption_style: Style = if (authored_caption) style else .{};
         caption_style.heading = heading;
         caption_style.kind = .text;
         caption_style.target = "";
-        const spans = try self.parseSpans(label, caption_style);
+        return caption_style;
+    }
+    fn mediaLabel(self: *Renderer, label: []const u8, style: Style, heading: bool, authored_caption: bool, parsed: ?[]const Span) Error!void {
+        const spans = parsed orelse try self.parseSpans(label, mediaCaptionStyle(style, heading, authored_caption));
         for (spans) |span| {
             var label_style = style;
             label_style.provenance = span.provenance;
@@ -3021,12 +3158,14 @@ pub const Renderer = struct {
                 label_style.underline = span.flags.underline;
                 label_style.language = span.language;
                 label_style.direction = span.direction;
+                label_style.classes = try self.mediaCaptionClasses(style.classes, span.classes);
+                label_style.role = span.role;
             }
             if (span.kind == .line_break) {
                 try self.lineBreak(label_style);
             } else {
-                if (span.kind == .template) {
-                    label_style.kind = .template;
+                if (span.kind == .template or (authored_caption and (span.kind == .link or span.kind == .external_link))) {
+                    label_style.kind = span.kind;
                     label_style.target = span.target;
                 }
                 try self.text(span.text, label_style);
@@ -3340,7 +3479,7 @@ pub const Renderer = struct {
                 try self.protectedLiteral(input[at..tag.end], style);
                 return tag.end;
             };
-            try self.protectedLiteral(input[region.opening_end..region.inner_end], style);
+            try self.protectedNowikiLiteral(input[region.opening_end..region.inner_end], style);
             return region.end;
         }
         if (oneOf(tag.name, &.{ "script", "style", "iframe", "object", "embed" })) {
@@ -3396,7 +3535,8 @@ pub const Renderer = struct {
                     safe = false;
                     break;
                 };
-                if (!safe) continue;
+                // Media ownership is compiler-generated metadata, never an authored CSS capability.
+                if (!safe or std.mem.startsWith(u8, class, "wikidict-media-file-")) continue;
                 if (safe_classes.items.len != 0) try safe_classes.append(self.a, ' ');
                 try safe_classes.appendSlice(self.a, class);
                 if (std.mem.eql(u8, class, "scribunto-error")) self.fallbacks.rendered_lua_error = true;
@@ -3433,8 +3573,9 @@ pub const Renderer = struct {
                 };
             }
         };
+        var phonos_spans: ?[]const Span = null;
         if (tag.is("span")) if ((try self.semanticAttribute(tag, "data-phonos-audio"))) |raw_file| {
-            try self.mediaFileKind(raw_file, content, .audio);
+            phonos_spans = try self.mediaFileKindWithSpans(raw_file, content, .audio, .{ .mode = .inline_body, .style = s, .depth = depth + 1 });
         };
         if (tag.is("ol") or tag.is("ul") or tag.is("dl")) {
             // Span-only containers, including ordinary table cells, still need
@@ -3462,7 +3603,9 @@ pub const Renderer = struct {
         if (annotation) s.ruby_parentheses = false;
         const annotation_start = self.spans.items.len;
         if (parenthetical) try self.text("（", s);
-        if (std.mem.indexOf(u8, content, "{|") != null) {
+        if (phonos_spans) |parsed| {
+            try self.spans.appendSlice(self.a, parsed);
+        } else if (std.mem.indexOf(u8, content, "{|") != null) {
             try self.blocksInline(try self.renderBody(content), s);
         } else try self.inlineText(content, s, depth + 1);
         if (parenthetical and annotation_start < self.spans.items.len and
@@ -3704,17 +3847,23 @@ pub const Renderer = struct {
                         var selected_label = self.mediaCaptionChoice(label_value, file_name, mediaOptionMode(file_name, false));
                         selected_label.authored_caption = token.link_has_pipe and selected_label.authored_caption;
                         label_value = selected_label.text;
-                        // Keep newly eligible SVG heading decoration out of entry media.
-                        if (!s.heading or media_types.kind(file_name) != null) try self.mediaFile(file_name, label_value);
+                        const metadata_caption = label_value;
                         if (s.heading) {
                             selected_label = self.mediaHeadingCaption(if (token.link_has_pipe) token.text else "", file_name);
                             label_value = selected_label.text;
                         }
                         var media_style = s;
-                        media_style.classes = "wikidict-media";
+                        media_style.classes = try self.mediaCaptionClasses("", s.classes);
                         media_style.kind = .link;
                         media_style.target = try std.fmt.allocPrint(self.a, "File:{s}", .{file_name});
-                        try self.mediaLabel(label_value, media_style, s.heading, selected_label.authored_caption);
+                        const caption_style: ?MediaCaptionCapture = if (std.mem.eql(u8, metadata_caption, label_value)) .{ .style = mediaCaptionStyle(media_style, s.heading, selected_label.authored_caption) } else null;
+                        // Keep SVG heading decoration out of entry media as before.
+                        const parsed = if (!s.heading or media_types.kind(file_name) != null)
+                            try self.mediaFileKindWithSpans(file_name, metadata_caption, null, caption_style)
+                        else
+                            null;
+                        media_style.classes = try self.mediaCaptionClasses(try self.mediaClasses(file_name), s.classes);
+                        try self.mediaLabel(label_value, media_style, s.heading, selected_label.authored_caption, parsed);
                     } else {
                         if (label_value.len == 0) label_value = pipeTrickLabel(target);
                         if (safeInternalTarget(target)) {
@@ -3880,7 +4029,7 @@ pub const Renderer = struct {
             defer self.spans = parent;
             try self.literal(raw, .{ .code = true });
             break :blk try self.spans.toOwnedSlice(self.a);
-        } else try self.parseSpans(raw, .{ .heading = kind == .heading });
+        } else try self.parseBodySpans(raw, .{ .heading = kind == .heading });
         if (spans.len == 0 and kind != .heading and kind != .blank and kind != .rule) return;
         try self.appendBlockBudgeted(list, .{ .kind = kind, .text = raw, .spans = spans, .depth = @intCast(@min(path.len, 255)), .list_path = path[0..@min(path.len, 255)], .number = number, .level = level, .relation_note = hints.relation_note });
     }
@@ -3892,7 +4041,7 @@ pub const Renderer = struct {
     }
     fn paragraph(self: *Renderer, list: *std.ArrayList(Block), text_value: []const u8) Error!void {
         if (self.parsed_pre) {
-            if (text_value.len != 0) try self.appendBlockBudgeted(list, .{ .kind = .preformatted, .spans = try self.parseSpans(text_value, .{ .code = true, .preserve_whitespace = true }) });
+            if (text_value.len != 0) try self.appendBlockBudgeted(list, .{ .kind = .preformatted, .spans = try self.parseBodySpans(text_value, .{ .code = true, .preserve_whitespace = true }) });
             return;
         }
         if (trim(text_value).len == 0) return;
@@ -4286,7 +4435,7 @@ pub const Renderer = struct {
 
     fn appendLinkContinuation(self: *Renderer, blocks: *std.ArrayList(Block), raw: []const u8, target: []const u8) Error!void {
         if (raw.len == 0) return;
-        const spans = try self.parseSpans(raw, if (target.len != 0) .{ .kind = .link, .target = target } else .{});
+        const spans = try self.parseBodySpans(raw, if (target.len != 0) .{ .kind = .link, .target = target } else .{});
         if (spans.len == 0) return;
         if (blocks.items.len != 0 and blocks.items[blocks.items.len - 1].kind == .paragraph) {
             try self.appendParagraphSpans(blocks, blocks.items.len - 1, spans, false);
@@ -4712,13 +4861,13 @@ pub const Renderer = struct {
                         try blocks.appendSlice(self.a, try self.renderBody(body.items));
                     } else {
                         var fostered: std.ArrayList(Block) = .empty;
-                        if (try self.htmlTable(clean[tag.end..pair.inner_end], &fostered, false)) |table_value| {
+                        if (try self.htmlTable(clean[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{}))) |table_value| {
                             try blocks.appendSlice(self.a, fostered.items);
                             try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value });
                         } else try self.block(&blocks, .preformatted, clean[0..pair.end], "", "", 0);
                     }
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
-                    try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, .{});
+                    try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, self.body_language_direction orelse .{});
                 } else {
                     const scoped_quote = try self.rawBodyQuoteSeed(input, clean[tag.end..pair.inner_end], &body_quotes);
                     try blocks.appendSlice(self.a, try self.renderBodySlice(clean[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(clean.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote));
@@ -4832,7 +4981,7 @@ pub const Renderer = struct {
                 const previous_seed = self.next_quote_seed;
                 self.next_quote_seed = try self.rawBodyQuoteSeed(input, line[1..], &body_quotes);
                 defer self.next_quote_seed = previous_seed;
-                try self.appendBlockBudgeted(&blocks, .{ .kind = .preformatted, .spans = try self.parseSpans(line[1..], .{ .code = true }) });
+                try self.appendBlockBudgeted(&blocks, .{ .kind = .preformatted, .spans = try self.parseBodySpans(line[1..], .{ .code = true }) });
                 continue;
             }
             if (prefix != 0) {
@@ -4893,6 +5042,34 @@ pub const Renderer = struct {
         try paragraph_join.finish(self.a);
         return try blocks.toOwnedSlice(self.a);
     }
+    fn parseBodySpans(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
+        // Structural entry points opt into the current DOM parent. Recursive
+        // inline parsers already carry an effective style, including lang="".
+        var effective = style;
+        if (self.body_language_direction) |base| {
+            if (effective.language.len == 0) effective.language = base.language;
+            if (effective.direction.len == 0) effective.direction = base.direction;
+        }
+        return self.parseSpans(input, effective);
+    }
+    fn renderBodyWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Block {
+        const previous = self.body_language_direction;
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction };
+        defer self.body_language_direction = previous;
+        return self.renderBody(input);
+    }
+    fn parseSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
+        const previous = self.body_language_direction;
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction };
+        defer self.body_language_direction = previous;
+        return self.parseSpans(input, .{ .language = style.language, .direction = style.direction });
+    }
+    fn cellSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
+        const previous = self.body_language_direction;
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction };
+        defer self.body_language_direction = previous;
+        return self.cellSpans(input);
+    }
     fn htmlLanguageDirection(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
         var result = inherited;
         if ((try self.semanticAttribute(tag, "lang"))) |lang| result.language = lang;
@@ -4910,6 +5087,9 @@ pub const Renderer = struct {
         }
         // Apply explicit container fields after inherited parent-item fields.
         const list_style = try self.htmlLanguageDirection(list_tag, style);
+        const previous_language_direction = self.body_language_direction;
+        self.body_language_direction = .{ .language = list_style.language, .direction = list_style.direction };
+        defer self.body_language_direction = previous_language_direction;
         const reversed = list_tag.is("ol") and htmlAttributePresent(list_tag, "reversed");
         const default_start: i32 = if (reversed) htmlListItemCount(input) else 1;
         var ordinal: i32 = if ((try self.semanticAttribute(list_tag, "start"))) |value| std.fmt.parseInt(i32, trim(value), 10) catch default_start else default_start;
@@ -5000,7 +5180,8 @@ pub const Renderer = struct {
             try self.htmlListItemPart(blocks, input[preceding..at], if (emitted) .list_detail else kind, path, if (emitted) "" else number, item, !emitted, style);
             emitted = true;
             if (tag.is("table")) {
-                const nested = try self.renderBody(input[at..pair.end]);
+                const item_style = try self.htmlLanguageDirection(item, style);
+                const nested = try self.renderBodyWithLanguageDirection(input[at..pair.end], item_style);
                 for (nested) |block_value| {
                     var child = block_value;
                     child.list_path = try std.fmt.allocPrint(self.a, "{s}:", .{path});
@@ -5118,7 +5299,7 @@ pub const Renderer = struct {
         const produced = if (explicit_blocks) try self.renderBody(source.items) else blk: {
             // Parsing inline character data directly retains source boundary
             // whitespace. Joining adds no separator that was not in source.
-            const spans = try self.parseSpans(source.items, .{});
+            const spans = try self.parseBodySpans(source.items, .{});
             if (spans.len == 0 or (!joinable.* and trim(try plainText(self.a, spans)).len == 0)) break :blk &.{};
             const result = try self.a.alloc(Block, 1);
             result[0] = .{ .kind = .paragraph, .spans = spans };
@@ -5154,7 +5335,7 @@ pub const Renderer = struct {
         }
         return null;
     }
-    fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block), defer_zero_rowspans: bool) Error!?Table {
+    fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block), defer_zero_rowspans: bool, style: Style) Error!?Table {
         var rows: std.ArrayList(Row) = .empty;
         var caption: std.ArrayList(Span) = .empty;
         var pos: usize = 0;
@@ -5183,10 +5364,11 @@ pub const Renderer = struct {
             pos = pair.end;
             if (tag.is("caption")) {
                 try self.htmlTableFostered(fostered, input[processed..open], &foster_joinable, &foster_formatting);
-                try self.appendTableCaption(&caption, try self.parseSpans(input[tag.end..pair.inner_end], .{}));
+                try self.appendTableCaption(&caption, try self.parseSpansWithLanguageDirection(input[tag.end..pair.inner_end], try self.htmlLanguageDirection(tag, style)));
                 processed = pair.end;
                 continue;
             }
+            const row_style = if (implicit_row) style else try self.htmlLanguageDirection(tag, style);
             var cells: std.ArrayList(Cell) = .empty;
             // Reuse the same cell parser, beginning before the actual first
             // cell when HTML implied the missing row opener.
@@ -5204,7 +5386,7 @@ pub const Renderer = struct {
                 processed = cell_pair.end;
                 if (!self.spend()) continue;
                 try cells.append(self.a, .{
-                    .spans = try self.cellSpans(input[cell_tag.end..cell_pair.inner_end]),
+                    .spans = try self.cellSpansWithLanguageDirection(input[cell_tag.end..cell_pair.inner_end], try self.htmlLanguageDirection(cell_tag, row_style)),
                     .header = cell_tag.is("th"),
                     .colspan = try self.tableSpanAttr(cell_tag, "colspan"),
                     .rowspan = try self.tableSpanAttr(cell_tag, "rowspan"),
@@ -5348,7 +5530,7 @@ pub const Renderer = struct {
                 try self.flushWikiTableFostered(&fostered, &outside_source);
                 try self.finishCell(&cells, &cell_source, &current);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
-                if (try self.htmlTable(line, &fostered, true)) |table| {
+                if (try self.htmlTable(line, &fostered, true, self.body_language_direction orelse .{})) |table| {
                     try rows.appendSlice(self.a, table.rows);
                 }
             } else if (caption_pending) {
@@ -5426,7 +5608,7 @@ pub const Renderer = struct {
             if (pos != 0 and end != pos and (source[pos] == ' ' or std.mem.indexOfScalar(u8, "#*:;", source[pos]) != null or self.tableCellHeading(source[pos..end]) != null)) has_blocks = true;
             pos = if (end < source.len) end + 1 else end;
         }
-        if (!has_blocks and std.mem.indexOf(u8, source, "{|") == null) return self.parseSpans(source, .{});
+        if (!has_blocks and std.mem.indexOf(u8, source, "{|") == null) return self.parseBodySpans(source, .{});
         const parent = self.spans;
         self.spans = .empty;
         defer self.spans = parent;
@@ -5436,7 +5618,7 @@ pub const Renderer = struct {
         const first_end = syntax.logicalEnd(source, 0);
         if (source.len != 0 and (std.mem.indexOfScalar(u8, "#*:;", source[0]) != null or self.tableCellHeading(source[0..first_end]) != null)) {
             const end = first_end;
-            try self.spans.appendSlice(self.a, try self.parseSpans(source[0..end], .{}));
+            try self.spans.appendSlice(self.a, try self.parseBodySpans(source[0..end], .{}));
             body = source[if (end < source.len) end + 1 else end..];
             if (body.len != 0) try self.lineBreak(.{});
         }
@@ -8551,7 +8733,7 @@ test "media labels preserve authored caption styles and plain alt fallbacks" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const cases = [_]struct { source: []const u8, visible: []const u8, heading: bool = false, inherited: bool = false, bold: bool = false, italic: bool = false, language: []const u8 = "", direction: []const u8 = "", provenance: Provenance = .parsed }{
+    const cases = [_]struct { source: []const u8, visible: []const u8, heading: bool = false, inherited: bool = false, bold: bool = false, italic: bool = false, language: []const u8 = "", direction: []const u8 = "", provenance: Provenance = .parsed, target: ?[]const u8 = null }{
         .{ .source = "[[File:Cat.jpg|thumb|''cat'']]", .visible = "cat", .italic = true },
         .{ .source = "<gallery>\nFile:Cat.jpg|'''cat'''\n</gallery>", .visible = "cat", .bold = true },
         .{ .source = "[[File:Cat.jpg|thumb|cat]]", .visible = "cat" },
@@ -8562,7 +8744,7 @@ test "media labels preserve authored caption styles and plain alt fallbacks" {
         .{ .source = "[[File:Cat.jpg|thumb|plain]]", .visible = "plain", .inherited = true, .bold = true, .language = "en", .direction = "rtl" },
         .{ .source = "[[File:Cat.jpg|thumb|''cat'']]", .visible = "cat", .inherited = true, .bold = true, .italic = true, .language = "en", .direction = "rtl" },
         .{ .source = "[[File:Cat.jpg|thumb|<nowiki>''cat''</nowiki>]]", .visible = "''cat''", .inherited = true, .bold = true, .language = "en", .direction = "rtl", .provenance = .protected_literal },
-        .{ .source = "[[File:Cat.jpg|thumb|[[cat|<span lang='ja' dir='ltr'>''cat''</span>]]]]", .visible = "cat", .inherited = true, .bold = true, .italic = true, .language = "ja", .direction = "ltr" },
+        .{ .source = "[[File:Cat.jpg|thumb|[[cat|<span lang='ja' dir='ltr'>''cat''</span>]]]]", .visible = "cat", .inherited = true, .bold = true, .italic = true, .language = "ja", .direction = "ltr", .target = "cat" },
         .{ .source = "[[File:Cat.jpg|thumb|<span lang=''>cat</span>]]", .visible = "cat", .inherited = true, .bold = true, .language = "", .direction = "rtl" },
         .{ .source = "[[File:Cat.jpg|thumb|Cat.jpg]]", .visible = "Cat.jpg" },
         .{ .source = "[[File:Icon.svg|''caption'']]", .visible = "caption", .heading = true, .inherited = true, .bold = true, .italic = true, .language = "en", .direction = "rtl" },
@@ -8581,7 +8763,7 @@ test "media labels preserve authored caption styles and plain alt fallbacks" {
             try std.testing.expectEqualStrings(case.direction, span.direction);
             try std.testing.expectEqual(case.provenance, span.provenance);
             try std.testing.expectEqual(ir.InlineKind.link, span.kind);
-            try std.testing.expectEqualStrings(if (case.heading) "File:Icon.svg" else "File:Cat.jpg", span.target);
+            try std.testing.expectEqualStrings(case.target orelse (if (case.heading) "File:Icon.svg" else "File:Cat.jpg"), span.target);
         }
     }
 }
@@ -14764,5 +14946,701 @@ test "official link label tables isolate caption and cell targets while rules st
         const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
         const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "link label table phase", .language, .{ .code = "en", .heading = "English" });
         try Check.blocks(a, decoded.entry.sections[0].blocks, case_index);
+    }
+}
+
+test "authored media captions preserve internal and external navigation through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn spans(values: anytype) !void {
+            const expected = "A domestic cat and external.";
+            var offset: usize = 0;
+            for (values) |span| {
+                try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-4578616d706c652e6a7067", span.classes);
+                const target = if (offset >= 2 and offset < 14) "cat" else if (offset >= 19 and offset < 27) "https://example.org" else "File:Example.jpg";
+                // Inspect actions even on empty spans; exact ranges below bind every visible byte.
+                try std.testing.expectEqualStrings(target, span.target);
+                if (std.mem.eql(u8, target, "https://example.org")) try std.testing.expect(span.kind == .external_link) else try std.testing.expect(span.kind == .link);
+                for (span.text) |byte| {
+                    try std.testing.expect(offset < expected.len);
+                    try std.testing.expectEqual(expected[offset], byte);
+                    const actual_target = if (offset >= 2 and offset < 14) "cat" else if (offset >= 19 and offset < 27) "https://example.org" else "File:Example.jpg";
+                    try std.testing.expectEqualStrings(actual_target, span.target);
+                    offset += 1;
+                }
+                if (@hasField(@TypeOf(span), "trail")) for (span.trail) |byte| {
+                    try std.testing.expect(offset < expected.len);
+                    try std.testing.expectEqual(expected[offset], byte);
+                    try std.testing.expectEqualStrings(if (offset >= 2 and offset < 14) "cat" else if (offset >= 19 and offset < 27) "https://example.org" else "File:Example.jpg", span.target);
+                    offset += 1;
+                };
+            }
+            try std.testing.expectEqual(expected.len, offset);
+        }
+    };
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("[[File:Example.jpg|thumb|80px|A [[cat|domestic cat]] and [https://example.org external].]]");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try Check.spans(blocks[0].spans);
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    try std.testing.expectEqualStrings("Example.jpg", renderer.media.items[0].file);
+    try std.testing.expectEqualStrings("A domestic cat and external.", renderer.media.items[0].caption);
+    try std.testing.expect(!renderer.fallbacks.any());
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "caption links", .language, .{ .code = "en", .heading = "English" });
+    try Check.spans(decoded.entry.sections[0].blocks[0].spans);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
+    try std.testing.expectEqualStrings("Example.jpg", decoded.entry.media[0].file);
+}
+
+test "media caption ownership is independent of all authored navigation through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn spans(values: anytype) !void {
+            var visible: usize = 0;
+            for (values) |span| {
+                try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-43c3a17420696d6167652e6a7067", span.classes);
+                try std.testing.expectEqualStrings("cat", span.target);
+                try std.testing.expect(span.kind == .link);
+                for (span.text) |byte| {
+                    try std.testing.expect(visible < "domestic cat".len);
+                    try std.testing.expectEqual("domestic cat"[visible], byte);
+                    visible += 1;
+                }
+                if (@hasField(@TypeOf(span), "trail")) for (span.trail) |byte| {
+                    try std.testing.expect(visible < "domestic cat".len);
+                    try std.testing.expectEqual("domestic cat"[visible], byte);
+                    visible += 1;
+                };
+            }
+            try std.testing.expectEqual("domestic cat".len, visible);
+        }
+    };
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("[[File:Cát_image.jpg|thumb|[[cat|domestic cat]]]]");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try Check.spans(blocks[0].spans);
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    try std.testing.expectEqualStrings("Cát image.jpg", renderer.media.items[0].file);
+    try std.testing.expect(!renderer.fallbacks.any());
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "caption owner", .language, .{ .code = "en", .heading = "English" });
+    try Check.spans(decoded.entry.sections[0].blocks[0].spans);
+    try std.testing.expectEqualStrings("Cát image.jpg", decoded.entry.media[0].file);
+    var forged: Renderer = .{ .a = a, .context = .{} };
+    const forged_blocks = try forged.renderBody("<span class='wikidict-media wikidict-media-file-4361742e6a7067 harmless'>[[cat|ordinary]]</span>");
+    for (forged_blocks) |block_value| for (block_value.spans) |span| {
+        try std.testing.expectEqualStrings("wikidict-media harmless", span.classes);
+        try std.testing.expectEqualStrings("cat", span.target);
+    };
+    const forged_sections = [_]Section{.{ .blocks = forged_blocks }};
+    const forged_bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &forged_sections, blob.presentation_types.Layout{}, forged.refs.items, forged.media.items);
+    const forged_decoded = try blob.presentation_codec.decodeAlloc(a, forged_bytes, "forged owner", .language, .{ .code = "en", .heading = "English" });
+    for (forged_decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+        try std.testing.expectEqualStrings("wikidict-media harmless", span.classes);
+        try std.testing.expectEqualStrings("cat", span.target);
+    };
+    try std.testing.expectEqual(@as(usize, 0), forged_decoded.entry.media.len);
+    for ([_][]const u8{ "[[File:|caption]]", "[[File:Unknown.bin|caption]]" }) |source| {
+        var unresolved: Renderer = .{ .a = a, .context = .{} };
+        const unresolved_blocks = try unresolved.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 0), unresolved.media.items.len);
+        for (unresolved_blocks) |block_value| for (block_value.spans) |span| {
+            try std.testing.expectEqualStrings("wikidict-media", span.classes);
+        };
+    }
+}
+
+test "renderer entity policy preserves unknown spellings and protected literals through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const unknown = "&emdash;|&endash;|&mdsash;|&dmash;|&squo;|&bnsp;|&nsbp;|&egravre;";
+    const canonical = "&copy;|&#169;|&amp;copy;|&רלמ;|&رلم;|&NotGreaterFullEqual;";
+    const decoded_canonical = "©|©|&copy;|\u{200f}|\u{200f}|\u{2267}\u{338}";
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{
+            .source = unknown ++ "|" ++ canonical ++ "|[[cat|word]]",
+            .visible = unknown ++ "|" ++ decoded_canonical ++ "|word",
+        },
+        .{
+            .source = "<nowiki>" ++ unknown ++ "|" ++ canonical ++ "|[[literal]] __NOTOC__</nowiki>|[[cat|word]]",
+            .visible = unknown ++ "|" ++ decoded_canonical ++ "|[[literal]] __NOTOC__|word",
+        },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, blocks[0].spans));
+        var links: usize = 0;
+        for (blocks[0].spans) |span| {
+            try std.testing.expect(!span.flags.bold and !span.flags.italic and !span.flags.code);
+            if (span.kind == .link) {
+                links += 1;
+                try std.testing.expectEqualStrings("word", span.text);
+                try std.testing.expectEqualStrings("cat", span.target);
+            } else {
+                try std.testing.expect(span.kind == .text);
+                try std.testing.expectEqualStrings("", span.target);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expect(!renderer.fallbacks.literal_markup);
+
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const payload = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, payload, "entity policy", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections[0].blocks.len);
+        const block_value = decoded.entry.sections[0].blocks[0];
+        try std.testing.expectEqual(blob.presentation_types.BlockKind.paragraph, block_value.kind);
+        var visible: std.ArrayList(u8) = .empty;
+        var decoded_links: usize = 0;
+        for (block_value.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            try std.testing.expectEqualStrings("", span.trail);
+            try std.testing.expect(!span.bold and !span.italic and !span.code);
+            if (span.kind == .link) {
+                decoded_links += 1;
+                try std.testing.expectEqualStrings("word", span.text);
+                try std.testing.expectEqualStrings("cat", span.target);
+            } else {
+                try std.testing.expect(span.kind == .text);
+                try std.testing.expectEqualStrings("", span.target);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), decoded_links);
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+    }
+}
+
+test "nowiki raw line feeds are soft only outside preformatted and Poem contexts through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn blocks(alloc: std.mem.Allocator, values: anytype, expected_body: []const u8, body_code: bool, expected_breaks: ?usize) !void {
+            var body: std.ArrayList(u8) = .empty;
+            var links: usize = 0;
+            var breaks: usize = 0;
+            for (values) |block_value| {
+                for (block_value.spans) |span| {
+                    const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                    const trail = if (@hasField(@TypeOf(span), "trail")) span.trail else "";
+                    if (span.kind == .link) {
+                        links += 1;
+                        try std.testing.expectEqualStrings("word", span.text);
+                        try std.testing.expectEqualStrings("cat", span.target);
+                        try std.testing.expectEqualStrings("", trail);
+                        try std.testing.expect(!code);
+                    } else {
+                        try std.testing.expect(span.kind == .text or span.kind == .line_break);
+                        try std.testing.expectEqualStrings("", span.target);
+                        try std.testing.expectEqualStrings("", trail);
+                        if (links == 0) {
+                            if (span.kind == .line_break) {
+                                breaks += 1;
+                                try body.append(alloc, '\n');
+                            } else {
+                                try body.appendSlice(alloc, span.text);
+                                if (std.mem.trim(u8, span.text, " \t\r\n").len != 0)
+                                    try std.testing.expectEqual(body_code, code);
+                            }
+                        } else {
+                            try std.testing.expectEqualStrings("", std.mem.trim(u8, span.text, " \t\r\n"));
+                        }
+                    }
+                }
+            }
+            try std.testing.expectEqual(@as(usize, 1), links);
+            try std.testing.expectEqualStrings(expected_body, std.mem.trim(u8, body.items, " \t\r\n"));
+            if (expected_breaks) |count| try std.testing.expectEqual(count, breaks);
+        }
+    };
+    // Explicit legacy captures distinguish soft HTML LF from pre whitespace
+    // and Poem's generated br. Source syntaxhighlight preserves authored LF.
+    const cases = [_]struct { source: []const u8, body: []const u8, code: bool = false, breaks: ?usize = null }{
+        .{ .source = "before<nowiki>a\nb</nowiki>after [[cat|word]]", .body = "beforea bafter", .breaks = 0 },
+        .{ .source = "<pre/ >before<nowiki>a\nb</nowiki>after</pre> [[cat|word]]", .body = "beforea\nbafter", .code = true },
+        .{ .source = "<poem>before<nowiki>a\nb</nowiki>after [[cat|word]]</poem>", .body = "beforea\nbafter", .breaks = 1 },
+        .{ .source = "<syntaxhighlight lang=\"text\">a\nb</syntaxhighlight> [[cat|word]]", .body = "a\nb", .code = true },
+        .{ .source = "before<nowiki>a\n[[fake]] &amp;copy;\nb</nowiki>after [[cat|word]]", .body = "beforea [[fake]] &copy; bafter", .breaks = 0 },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try Check.blocks(a, blocks, case.body, case.code, case.breaks);
+        try std.testing.expect(!renderer.fallbacks.any());
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const payload = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, payload, "nowiki whitespace", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+        try Check.blocks(a, decoded.entry.sections[0].blocks, case.body, case.code, case.breaks);
+    }
+}
+
+test "HTML list nested tables preserve inherited language direction and explicit resets through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn spans(values: anytype, inherited_language: []const u8, inherited_direction: []const u8, caption_language: []const u8, caption_direction: []const u8, seen: *[5]bool) !void {
+            for (values) |span| {
+                if (span.kind != .link) continue;
+                const index: usize = if (std.mem.eql(u8, span.target, "cat")) 0 else if (std.mem.eql(u8, span.target, "dog")) 1 else if (std.mem.eql(u8, span.target, "bird")) 2 else if (std.mem.eql(u8, span.target, "caption")) 3 else if (std.mem.eql(u8, span.target, "outside")) 4 else return error.UnexpectedLink;
+                seen[index] = true;
+                const language = if (index == 1) "en" else if (index == 2 or index == 4) "" else if (index == 3) caption_language else inherited_language;
+                const direction = if (index == 1) "ltr" else if (index == 2) "auto" else if (index == 4) "" else if (index == 3) caption_direction else inherited_direction;
+                try std.testing.expectEqualStrings(language, span.language);
+                try std.testing.expectEqualStrings(direction, span.direction);
+            }
+        }
+        fn blocks(values: anytype, language: []const u8, direction: []const u8, caption_language: []const u8, caption_direction: []const u8) !void {
+            var seen: [5]bool = @splat(false);
+            for (values) |block_value| {
+                try spans(block_value.spans, language, direction, caption_language, caption_direction, &seen);
+                if (block_value.table) |table| {
+                    try spans(table.caption, language, direction, caption_language, caption_direction, &seen);
+                    for (table.rows) |row| for (row.cells) |cell| try spans(cell.spans, language, direction, caption_language, caption_direction, &seen);
+                }
+            }
+            for (seen) |found| try std.testing.expect(found);
+        }
+    };
+    const cases = [_]struct { source: []const u8, language: []const u8, direction: []const u8, caption_language: ?[]const u8 = null, caption_direction: ?[]const u8 = null }{
+        .{ .source = "<ul lang=fr dir=rtl><li>before<table><caption>[[caption]]</caption><tr><td>[[cat|mot]]</td><td lang=en dir=ltr>[[dog|override]]</td><td lang=\"\" dir=auto>[[bird|reset]]</td></tr></table>after</li></ul>\n[[outside]]", .language = "fr", .direction = "rtl" },
+        .{ .source = "<ul lang=fr dir=ltr><li lang=ar dir=rtl>before<table><caption>[[caption]]</caption><tr><td>[[cat|mot]]</td><td lang=en dir=ltr>[[dog|override]]</td><td lang=\"\" dir=auto>[[bird|reset]]</td></tr></table>after</li></ul>\n[[outside]]", .language = "ar", .direction = "rtl" },
+        .{ .source = "<ul lang=fr dir=rtl><li>before<table lang=de dir=ltr><caption>[[caption]]</caption><tr><td>[[cat|mot]]</td><td lang=en dir=ltr>[[dog|override]]</td><td lang=\"\" dir=auto>[[bird|reset]]</td></tr></table>after</li></ul>\n[[outside]]", .language = "de", .direction = "ltr" },
+        .{ .source = "<ul lang=fr dir=rtl><li>before<table lang=de dir=ltr><caption lang=es dir=rtl>[[caption]]</caption><tr lang=ar dir=rtl><td>[[cat|mot]]</td><td lang=en dir=ltr>[[dog|override]]</td><td lang=\"\" dir=auto>[[bird|reset]]</td></tr></table>after</li></ul>\n[[outside]]", .language = "ar", .direction = "rtl", .caption_language = "es", .caption_direction = "rtl" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try Check.blocks(blocks, case.language, case.direction, case.caption_language orelse case.language, case.caption_direction orelse case.direction);
+        try std.testing.expect(renderer.body_language_direction == null);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "list table inherited style", .language, .{ .code = "en", .heading = "English" });
+        try Check.blocks(decoded.entry.sections[0].blocks, case.language, case.direction, case.caption_language orelse case.language, case.caption_direction orelse case.direction);
+    }
+
+    // An explicit empty item language is already effective, not unspecified.
+    var reset_renderer: Renderer = .{ .a = a, .context = .{} };
+    const reset_blocks = try reset_renderer.renderBody("<ul lang=fr dir=rtl><li lang=\"\" dir=auto><ul><li>[[cat|reset nested]]</li></ul></li></ul>\n[[outside]]");
+    const Reset = struct {
+        fn check(values: anytype) !void {
+            var seen = false;
+            for (values) |block_value| for (block_value.spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, "cat")) {
+                    seen = true;
+                    try std.testing.expectEqualStrings("", span.language);
+                    try std.testing.expectEqualStrings("auto", span.direction);
+                }
+            };
+            try std.testing.expect(seen);
+        }
+    };
+    try Reset.check(reset_blocks);
+    const ResetSection = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const reset_sections = [_]ResetSection{.{ .blocks = reset_blocks }};
+    const reset_blob = @import("blob_encoder");
+    const reset_bytes = try reset_blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &reset_sections, reset_blob.presentation_types.Layout{}, reset_renderer.refs.items, reset_renderer.media.items);
+    const reset_decoded = try reset_blob.presentation_codec.decodeAlloc(a, reset_bytes, "nested list empty language", .language, .{ .code = "en", .heading = "English" });
+    try Reset.check(reset_decoded.entry.sections[0].blocks);
+
+    var media_reset_renderer: Renderer = .{ .a = a, .context = .{} };
+    const media_reset_blocks = try media_reset_renderer.renderBody("<ul lang=fr dir=rtl><li><table><tr><td><span lang=\"\" dir=auto>[[File:Cat.jpg|thumb|caption reset]]</span></td></tr></table></li></ul>");
+    const MediaReset = struct {
+        fn check(values: anytype) !void {
+            var found = false;
+            for (values) |block_value| if (block_value.table) |table| {
+                for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
+                    if (std.mem.indexOf(u8, span.text, "caption reset") != null) {
+                        found = true;
+                        try std.testing.expectEqualStrings("", span.language);
+                        try std.testing.expectEqualStrings("auto", span.direction);
+                    }
+                };
+            };
+            try std.testing.expect(found);
+        }
+    };
+    try MediaReset.check(media_reset_blocks);
+    const media_reset_sections = [_]ResetSection{.{ .blocks = media_reset_blocks }};
+    const media_reset_bytes = try reset_blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &media_reset_sections, reset_blob.presentation_types.Layout{}, media_reset_renderer.refs.items, media_reset_renderer.media.items);
+    const media_reset_decoded = try reset_blob.presentation_codec.decodeAlloc(a, media_reset_bytes, "nested media empty language", .language, .{ .code = "en", .heading = "English" });
+    try MediaReset.check(media_reset_decoded.entry.sections[0].blocks);
+}
+
+test "gallery title captions retain nested actions styles and item bodies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const source = "<gallery caption=\"'''Bold [[Cat|cat]]''' [https://example.test external] A&amp;B\">\nFile:A.png|First body\nFile:B.svg|Second body\n</gallery>";
+    const spans = try renderer.parseSpans(source, .{});
+    try std.testing.expectEqualStrings("Bold cat external A&B\nFirst body\nSecond body", try plainText(a, spans));
+    var cat: usize = 0;
+    var external: usize = 0;
+    var first_body = false;
+    var second_body = false;
+    var visible_at: usize = 0;
+    for (spans) |span| {
+        const text_value = if (span.kind == .line_break) "\n" else span.text;
+        for (text_value) |_| {
+            try std.testing.expectEqual(visible_at < "Bold cat".len, span.flags.bold);
+            visible_at += 1;
+        }
+        if (std.mem.eql(u8, span.target, "Cat")) {
+            try std.testing.expect(span.kind == .link and span.flags.bold);
+            try std.testing.expectEqualStrings("cat", span.text);
+            cat += 1;
+        }
+        if (std.mem.eql(u8, span.target, "https://example.test")) {
+            try std.testing.expect(span.kind == .external_link and !span.flags.bold);
+            try std.testing.expectEqualStrings("external", span.text);
+            external += 1;
+        }
+        if (std.mem.eql(u8, span.text, "First body")) {
+            try std.testing.expectEqualStrings("File:A.png", span.target);
+            first_body = true;
+        }
+        if (std.mem.eql(u8, span.text, "Second body")) {
+            try std.testing.expectEqualStrings("File:B.svg", span.target);
+            second_body = true;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), cat);
+    try std.testing.expectEqual(@as(usize, 1), external);
+    try std.testing.expect(first_body and second_body);
+    try std.testing.expectEqual(@as(usize, 2), renderer.media.items.len);
+    try std.testing.expectEqualStrings("First body", renderer.media.items[0].caption);
+    try std.testing.expectEqualStrings("Second body", renderer.media.items[1].caption);
+    try std.testing.expect(!renderer.fallbacks.any());
+
+    const sections = [_]struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block }{
+        .{ .blocks = &.{.{ .kind = .paragraph, .spans = spans }} },
+    };
+    const blob = @import("blob_encoder");
+    const encoded = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, encoded, "gallery caption", .language, .{ .code = "en", .heading = "English" });
+    cat = 0;
+    external = 0;
+    var visible: std.ArrayList(u8) = .empty;
+    visible_at = 0;
+    for (decoded.entry.sections[0].blocks[0].spans) |span| {
+        const text_value = if (span.kind == .line_break) "\n" else span.text;
+        for (text_value) |_| {
+            try std.testing.expectEqual(visible_at < "Bold cat".len, span.bold);
+            visible_at += 1;
+        }
+        for (span.trail) |_| {
+            try std.testing.expectEqual(visible_at < "Bold cat".len, span.bold);
+            visible_at += 1;
+        }
+        if (span.kind == .line_break) try visible.append(a, '\n') else {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+        }
+        if (std.mem.eql(u8, span.target, "Cat")) {
+            try std.testing.expect(span.kind == .link and span.bold);
+            try std.testing.expectEqualStrings("cat", span.text);
+            cat += 1;
+        }
+        if (std.mem.eql(u8, span.target, "https://example.test")) {
+            try std.testing.expect(span.kind == .external_link and !span.bold);
+            try std.testing.expectEqualStrings("external", span.text);
+            external += 1;
+        }
+    }
+    try std.testing.expectEqualStrings("Bold cat external A&B\nFirst body\nSecond body", visible.items);
+    try std.testing.expectEqual(@as(usize, 1), cat);
+    try std.testing.expectEqual(@as(usize, 1), external);
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.media.len);
+    try std.testing.expectEqualStrings("First body", decoded.entry.media[0].caption);
+    try std.testing.expectEqualStrings("Second body", decoded.entry.media[1].caption);
+}
+
+test "gallery title captions preserve empty protected and bounded parsing controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "<gallery>A.png|Body</gallery>", .visible = "Body" },
+        .{ .source = "<gallery caption=''>A.png|Body</gallery>", .visible = "Body" },
+        .{ .source = "<gallery caption='&lt;nowiki&gt;[[Literal]]&lt;/nowiki&gt;'>A.png|Body</gallery>", .visible = "[[Literal]]\nBody" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try plainText(a, spans));
+        for (spans) |span| try std.testing.expect(!std.mem.eql(u8, span.target, "Literal"));
+        try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+        try std.testing.expectEqualStrings("Body", renderer.media.items[0].caption);
+        try std.testing.expect(!renderer.fallbacks.any());
+    }
+    var bounded: Renderer = .{ .a = a, .context = .{}, .media_depth = max_depth };
+    const bounded_spans = try bounded.parseSpans("<gallery caption='[[Cat|cat]]'>A.png|Body</gallery>", .{});
+    try std.testing.expect(bounded.fallbacks.render_limit);
+    try std.testing.expect(std.mem.indexOf(u8, try plainText(a, bounded_spans), "[[Cat|cat]]") != null);
+    for (bounded_spans) |span| try std.testing.expect(!std.mem.eql(u8, span.target, "Cat"));
+}
+
+test "authored media captions preserve visual classes roles and owner identity through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn spans(alloc: std.mem.Allocator, values: anytype) !void {
+            var visible: std.ArrayList(u8) = .empty;
+            var cat_text: std.ArrayList(u8) = .empty;
+            var glyphs: usize = 0;
+            var ipa: usize = 0;
+            var references: usize = 0;
+            var breaks: usize = 0;
+            var outside: usize = 0;
+            for (values) |span| {
+                const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                const superscript = if (@hasField(@TypeOf(span), "flags")) span.flags.superscript else span.superscript;
+                const trail = if (@hasField(@TypeOf(span), "trail")) span.trail else "";
+                const plain = std.mem.eql(u8, std.mem.trim(u8, span.text, " \t"), "plain");
+                var media: usize = 0;
+                var owners: usize = 0;
+                var egyp = false;
+                var ipa_class = false;
+                var classes = std.mem.tokenizeAny(u8, span.classes, " \t\r\n");
+                while (classes.next()) |token| {
+                    if (std.mem.eql(u8, token, "wikidict-media")) media += 1;
+                    if (std.mem.startsWith(u8, token, "wikidict-media-file-")) {
+                        owners += 1;
+                        try std.testing.expectEqualStrings("wikidict-media-file-4361742e6a7067", token);
+                    }
+                    egyp = egyp or std.mem.eql(u8, token, "Egyp");
+                    ipa_class = ipa_class or std.mem.eql(u8, token, "IPA");
+                }
+                try std.testing.expect(!code);
+                if (plain) {
+                    outside += 1;
+                    try std.testing.expect(span.kind == .text and span.role == .normal);
+                    try std.testing.expectEqualStrings("", span.target);
+                    try std.testing.expectEqual(@as(usize, 0), media);
+                    try std.testing.expectEqual(@as(usize, 0), owners);
+                } else {
+                    try std.testing.expectEqual(@as(usize, 1), media);
+                    try std.testing.expectEqual(@as(usize, 1), owners);
+                    try std.testing.expect(std.mem.eql(u8, span.target, "File:Cat.jpg") or std.mem.eql(u8, span.target, "cat") or std.mem.eql(u8, span.target, "#reference-1"));
+                }
+                if (std.mem.eql(u8, span.text, "𓀀")) {
+                    glyphs += 1;
+                    try std.testing.expect(egyp and span.role == .normal);
+                    try std.testing.expectEqualStrings("egy", span.language);
+                    try std.testing.expectEqualStrings("ltr", span.direction);
+                } else try std.testing.expect(!egyp);
+                if (std.mem.eql(u8, span.text, "/kat/")) {
+                    ipa += 1;
+                    try std.testing.expect(ipa_class and span.role == .pronunciation);
+                } else try std.testing.expect(!ipa_class);
+                if (std.mem.eql(u8, span.target, "#reference-1")) {
+                    references += 1;
+                    try std.testing.expect(span.kind == .link and span.role == .reference and superscript);
+                    try std.testing.expectEqualStrings("[1]", span.text);
+                } else try std.testing.expect(!superscript);
+                if (std.mem.eql(u8, span.target, "cat")) {
+                    try std.testing.expect(span.kind == .link);
+                    try cat_text.appendSlice(alloc, span.text);
+                    try cat_text.appendSlice(alloc, trail);
+                }
+                if (span.kind == .line_break) {
+                    breaks += 1;
+                    try std.testing.expectEqualStrings("", trail);
+                    try visible.append(alloc, '\n');
+                } else {
+                    try std.testing.expect(span.kind == .text or span.kind == .link);
+                    try visible.appendSlice(alloc, span.text);
+                    try visible.appendSlice(alloc, trail);
+                }
+            }
+            try std.testing.expectEqualStrings("𓀀 /kat/ [1] cats\ntail plain", visible.items);
+            try std.testing.expectEqualStrings("cats", cat_text.items);
+            try std.testing.expectEqual(@as(usize, 1), glyphs);
+            try std.testing.expectEqual(@as(usize, 1), ipa);
+            try std.testing.expectEqual(@as(usize, 1), references);
+            try std.testing.expectEqual(@as(usize, 1), breaks);
+            try std.testing.expectEqual(@as(usize, 1), outside);
+        }
+    };
+    const source = "[[File:Cat.jpg|thumb|<span class=\"Egyp wikidict-media-file-666f72676564\" lang=\"egy\" dir=\"ltr\">𓀀</span> <span class=\"IPA\">/kat/</span> <ref name=caption>caption note</ref> [[cat]]s<br>tail]] plain";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    const references = try renderer.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try Check.spans(a, blocks[0].spans);
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    try std.testing.expectEqualStrings("Cat.jpg", renderer.media.items[0].file);
+    try std.testing.expectEqualStrings("𓀀 /kat/ [1] cats\ntail", renderer.media.items[0].caption);
+    try std.testing.expectEqual(@as(usize, 1), references.len);
+    try std.testing.expectEqualStrings("caption note", try plainText(a, references[0].spans));
+    try std.testing.expect(!renderer.fallbacks.any());
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const payload = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, renderer.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, payload, "caption visual metadata", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections[0].blocks.len);
+    try Check.spans(a, decoded.entry.sections[0].blocks[0].spans);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
+    try std.testing.expectEqualStrings(renderer.media.items[0].caption, decoded.entry.media[0].caption);
+}
+
+test "media owner assignment preserves inherited visual classes through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var class_renderer: Renderer = .{ .a = a, .context = .{} };
+    const owned = "wikidict-media wikidict-media-file-4361742e6a7067 Egyp";
+    try std.testing.expectEqualStrings(owned, try class_renderer.mediaCaptionClasses(owned, "Egyp"));
+    try std.testing.expectEqualStrings(owned, try class_renderer.mediaCaptionClasses(owned, owned));
+    try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-4361742e6a7067 Egyp IPA", try class_renderer.mediaCaptionClasses(owned, "Egyp IPA"));
+
+    const Check = struct {
+        fn blocks(alloc: std.mem.Allocator, values: anytype) !void {
+            var visible: std.ArrayList(u8) = .empty;
+            var glyphs: usize = 0;
+            var outside: usize = 0;
+            for (values) |block_value| for (block_value.spans) |span| {
+                const trail = if (@hasField(@TypeOf(span), "trail")) span.trail else "";
+                var egyp: usize = 0;
+                var media: usize = 0;
+                var owners: usize = 0;
+                var classes = std.mem.tokenizeAny(u8, span.classes, " \t\r\n");
+                while (classes.next()) |token| {
+                    if (std.mem.eql(u8, token, "Egyp")) egyp += 1;
+                    if (std.mem.eql(u8, token, "wikidict-media")) media += 1;
+                    if (std.mem.startsWith(u8, token, "wikidict-media-file-")) {
+                        owners += 1;
+                        try std.testing.expectEqualStrings("wikidict-media-file-4361742e6a7067", token);
+                    }
+                }
+                if (std.mem.eql(u8, span.text, "𓀀")) {
+                    glyphs += 1;
+                    try std.testing.expectEqual(@as(usize, 1), egyp);
+                    try std.testing.expectEqual(@as(usize, 1), media);
+                    try std.testing.expectEqual(@as(usize, 1), owners);
+                    try std.testing.expect(span.kind == .link and span.role == .normal);
+                    try std.testing.expectEqualStrings("File:Cat.jpg", span.target);
+                    try std.testing.expectEqualStrings("egy", span.language);
+                    try std.testing.expectEqualStrings("ltr", span.direction);
+                } else {
+                    try std.testing.expectEqualStrings("plain", std.mem.trim(u8, span.text, " \t\r\n"));
+                    outside += 1;
+                    try std.testing.expect(span.kind == .text and span.role == .normal);
+                    try std.testing.expectEqualStrings("", span.target);
+                    try std.testing.expectEqualStrings("", span.language);
+                    try std.testing.expectEqualStrings("", span.direction);
+                    try std.testing.expectEqual(@as(usize, 0), egyp + media + owners);
+                }
+                try std.testing.expectEqualStrings("", trail);
+                try visible.appendSlice(alloc, span.text);
+            };
+            try std.testing.expectEqualStrings("𓀀 plain", visible.items);
+            try std.testing.expectEqual(@as(usize, 1), glyphs);
+            try std.testing.expectEqual(@as(usize, 1), outside);
+        }
+    };
+    const cases = [_][]const u8{
+        "<span class=\"Egyp wikidict-media-file-666f72676564\" lang=egy dir=ltr>[[File:Cat.jpg|thumb|𓀀]]</span> plain",
+        "<span class=\"Egyp wikidict-media-file-666f72676564\" lang=egy dir=ltr><gallery>Cat.jpg|𓀀</gallery></span> plain",
+    };
+    for (cases) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        try Check.blocks(a, blocks);
+        try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+        try std.testing.expectEqualStrings("Cat.jpg", renderer.media.items[0].file);
+        try std.testing.expectEqualStrings("𓀀", renderer.media.items[0].caption);
+        try std.testing.expect(!renderer.fallbacks.any());
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "inherited media classes", .language, .{ .code = "en", .heading = "English" });
+        try Check.blocks(a, decoded.entry.sections[0].blocks);
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
+        try std.testing.expectEqualStrings("𓀀", decoded.entry.media[0].caption);
+    }
+}
+
+test "media caption occurrences register references once across files galleries Phonos and audio through DPR2" {
+    const Check = struct {
+        fn values(a: A, blocks: anytype, references: anytype, notes: []const []const u8, markers: []const usize) !void {
+            try std.testing.expectEqual(notes.len, references.len);
+            var index: usize = 0;
+            for (blocks) |block_value| for (block_value.spans) |span| {
+                if (span.role != .reference) continue;
+                try std.testing.expect(index < markers.len);
+                try std.testing.expect(span.kind == .link);
+                try std.testing.expect(if (@hasField(@TypeOf(span), "flags")) span.flags.superscript else span.superscript);
+                try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "#reference-{d}", .{markers[index]}), span.target);
+                try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "[{d}]", .{markers[index]}), span.text);
+                index += 1;
+            };
+            try std.testing.expectEqual(markers.len, index);
+            for (references, notes) |reference_value, note| {
+                var text: std.ArrayList(u8) = .empty;
+                for (reference_value.spans) |span| {
+                    try text.appendSlice(a, span.text);
+                    if (@hasField(@TypeOf(span), "trail")) try text.appendSlice(a, span.trail);
+                }
+                try std.testing.expectEqualStrings(note, text.items);
+            }
+        }
+    };
+    const cases = [_]struct { source: []const u8, notes: []const []const u8, markers: []const usize }{
+        .{ .source = "[[File:Example.jpg|thumb|caption<ref>note</ref>]]", .notes = &.{"note"}, .markers = &.{1} },
+        .{ .source = "[[File:Example.jpg|thumb|first<ref>one</ref>]] [[File:Example.jpg|thumb|second<ref>two</ref>]]", .notes = &.{ "one", "two" }, .markers = &.{ 1, 2 } },
+        .{ .source = "[[File:Example.jpg|thumb|first<ref>same</ref>]] [[File:Example.jpg|thumb|second<ref>same</ref>]]", .notes = &.{ "same", "same" }, .markers = &.{ 1, 2 } },
+        .{ .source = "[[File:Example.jpg|thumb|first<ref name='n'>named</ref>]] [[File:Example.jpg|thumb|second<ref name='n'/>]]", .notes = &.{"named"}, .markers = &.{ 1, 1 } },
+        .{ .source = "<gallery>\nFile:Example.jpg|first<ref>one</ref>\nFile:Example.jpg|second<ref>two</ref>\n</gallery>", .notes = &.{ "one", "two" }, .markers = &.{ 1, 2 } },
+        .{ .source = "<span data-phonos-audio='Example.ogg'>caption<ref>note</ref></span>", .notes = &.{"note"}, .markers = &.{1} },
+        .{ .source = "{{audio|en|Example.ogg|caption<ref>note</ref>}}", .notes = &.{"note"}, .markers = &.{1} },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("caption reference source: {s}\n", .{case.source});
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        const references = try renderer.finishReferences();
+        try Check.values(a, blocks, references, case.notes, case.markers);
+        try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+        try std.testing.expect(!renderer.fallbacks.any());
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "caption references", .language, .{ .code = "en", .heading = "English" });
+        try Check.values(a, decoded.entry.sections[0].blocks, decoded.entry.references, case.notes, case.markers);
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
     }
 }
