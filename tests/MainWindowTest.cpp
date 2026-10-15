@@ -1887,6 +1887,90 @@ private slots:
         }
     }
 
+    void explicitMediaOwnersPreserveCaptionActionsAndExactFileIdentity() {
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("dog"));
+        const QString tone = QStringLiteral("wikidict-media wikidict-media-file-546f6e652e6f6767");
+        const QString other = QStringLiteral("wikidict-media wikidict-media-file-4f746865722e6f6767");
+        const QString caption = QStringLiteral("A domestic cat and external.");
+        const auto span = [](const QString &text, const QString &target, const QString &classes,
+                             const QString &kind = QStringLiteral("link")) {
+            return QJsonObject{{QStringLiteral("kind"), kind}, {QStringLiteral("text"), text},
+                {QStringLiteral("target"), target}, {QStringLiteral("classes"), classes}, {QStringLiteral("bold"), true}};
+        };
+        const auto media = [](const QString &file, const QString &text) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("audio")},
+                {QStringLiteral("file"), file}, {QStringLiteral("caption"), text}};
+        };
+        const QJsonArray mixed{span(QStringLiteral("A "), QStringLiteral("File:Tone.ogg"), tone),
+            span(QStringLiteral("domestic cat"), QStringLiteral("cat"), tone),
+            span(QStringLiteral(" and "), QStringLiteral("File:Tone.ogg"), tone),
+            span(QStringLiteral("external"), QStringLiteral("https://example.org"), tone, QStringLiteral("external_link")),
+            span(QStringLiteral("."), QStringLiteral("File:Tone.ogg"), tone)};
+        QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("dog"))).object();
+        QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+        entry.insert(QStringLiteral("preamble_spans"), mixed);
+        entry.insert(QStringLiteral("sections"), QJsonArray{});
+        entry.insert(QStringLiteral("references"), QJsonArray{});
+        entry.insert(QStringLiteral("media"), QJsonArray{media(QStringLiteral("Tone.ogg"), caption)});
+        response.insert(QStringLiteral("entries"), QJsonArray{entry});
+        window.renderResponse(QJsonDocument(response).toJson());
+        QCOMPARE(window.reading_->toPlainText().count(caption), 1);
+        const QTextCursor cat = window.reading_->document()->find(QStringLiteral("domestic cat"), 0, QTextDocument::FindCaseSensitively);
+        QVERIFY(!cat.isNull());
+        QCOMPARE(cat.charFormat().anchorHref(), QStringLiteral("dict:cat"));
+        QVERIFY(cat.charFormat().fontWeight() >= QFont::Bold);
+        QCOMPARE(window.reading_->document()->find(QStringLiteral("external")).charFormat().anchorHref(), QStringLiteral("https://example.org"));
+        QVERIFY(!window.reading_->document()->find(QStringLiteral("Tone.ogg")).isNull());
+        ExternalUrlReceiver receiver;
+        QDesktopServices::setUrlHandler(QStringLiteral("https"), &receiver, "capture");
+        const auto clearHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler(QStringLiteral("https")); });
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("https://example.org")));
+        QCOMPARE(receiver.opened, QList<QUrl>{QUrl(QStringLiteral("https://example.org"))});
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:cat")));
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+
+        // Equal visible labels cannot transfer ownership to another media record.
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{
+            span(QStringLiteral("same"), QStringLiteral("cat"), tone),
+            span(QStringLiteral("\n"), {}, {}, QStringLiteral("line_break")),
+            span(QStringLiteral("same"), QStringLiteral("dog"), other)});
+        entry.insert(QStringLiteral("media"), QJsonArray{
+            media(QStringLiteral("Tone.ogg"), QStringLiteral("same")),
+            media(QStringLiteral("Other.ogg"), QStringLiteral("same"))});
+        QTextDocument document;
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(document.toPlainText().count(QStringLiteral("same")), 2);
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{span(QStringLiteral("same"), QStringLiteral("cat"), tone)});
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(document.toPlainText().count(QStringLiteral("same")), 2); // Other still needs its fallback.
+
+        const QString unicode = QStringLiteral("wikidict-media wikidict-media-file-c38963686f20f09f948a2e6f6767");
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{span(QStringLiteral("same"), QStringLiteral("cat"), unicode)});
+        entry.insert(QStringLiteral("media"), QJsonArray{media(QStringLiteral("Écho 🔊.ogg"), QStringLiteral("same"))});
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(document.toPlainText().count(QStringLiteral("same")), 1);
+
+        const QString token = QStringLiteral("wikidict-media-file-546f6e652e6f6767");
+        const QString otherToken = QStringLiteral("wikidict-media-file-4f746865722e6f6767");
+        entry.insert(QStringLiteral("media"), QJsonArray{media(QStringLiteral("Tone.ogg"), QStringLiteral("same"))});
+        for (const QString &bad : {QStringLiteral("wikidict-media-file-"), QStringLiteral("wikidict-media-file-0"),
+                QStringLiteral("wikidict-media-file-ff"), QStringLiteral("wikidict-media-file-546F6E652E6F6767"),
+                QStringLiteral("wikidict-media-file-556e6b6e6f776e2e6f6767"), token + QChar(' ') + token,
+                token + QChar(' ') + otherToken}) {
+            entry.insert(QStringLiteral("preamble_spans"), QJsonArray{
+                span(QStringLiteral("same"), QStringLiteral("File:Tone.ogg"), QStringLiteral("wikidict-media ") + bad)});
+            document.setHtml(window.entryHtml(entry));
+            QCOMPARE(document.toPlainText().count(QStringLiteral("same")), 2);
+        }
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{
+            span(QStringLiteral("same"), QStringLiteral("File:Tone.ogg"), QStringLiteral("not-wikidict-media ") + token)});
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(document.toPlainText().count(QStringLiteral("same")), 2);
+    }
+
     void mediaCaptionOwnershipStopsAtUnrelatedBreaksAndOtherFiles() {
         MainWindow window{QString()};
         const QString firstText = QStringLiteral("First caption");

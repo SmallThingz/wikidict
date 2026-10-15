@@ -1263,6 +1263,13 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
     const QJsonObject redirect = entry.value(QStringLiteral("redirect")).toObject();
     if (redirect.value(QStringLiteral("followed")).toBool())
         out += QStringLiteral("<p><small>Redirected from %1</small></p>").arg(redirect.value(QStringLiteral("source_title")).toString().toHtmlEscaped());
+    const QString ownerPrefix = QStringLiteral("wikidict-media-file-");
+    QHash<QString, QString> mediaOwners;
+    for (const QJsonValue &value : entry.value(QStringLiteral("media")).toArray()) {
+        const QString file = value.toObject().value(QStringLiteral("file")).toString();
+        if (!file.isEmpty())
+            mediaOwners.insert(ownerPrefix + QString::fromLatin1(file.toUtf8().toHex()), file);
+    }
     QHash<QString, QSet<QString>> embeddedCaptions;
     const auto collectEmbeddedMedia = [&](const QJsonArray &spans) {
         QString file, text;
@@ -1277,10 +1284,19 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
             const QString target = span.value(QStringLiteral("target")).toString();
             const QString kind = span.value(QStringLiteral("kind")).toString();
             QString captionFile;
-            if ((kind == QStringLiteral("link") || kind == QStringLiteral("line_break")) &&
-                classes.contains(QStringLiteral("wikidict-media")) &&
-                (target.startsWith(QStringLiteral("File:"), Qt::CaseInsensitive) || target.startsWith(QStringLiteral("Image:"), Qt::CaseInsensitive)))
-                captionFile = target.mid(target.indexOf(QChar(':')) + 1).replace(QChar('_'), QChar(' '));
+            if (classes.contains(QStringLiteral("wikidict-media"))) {
+                QStringList owners;
+                for (const QString &token : classes)
+                    if (token.startsWith(ownerPrefix)) owners.append(token);
+                // Exact catalog tokens validate UTF-8, lowercase hex and membership without decoding input.
+                // Present invalid or ambiguous ownership never falls back to a lexical File link.
+                if (!owners.isEmpty()) {
+                    if (owners.size() == 1) captionFile = mediaOwners.value(owners.first());
+                } else if ((kind == QStringLiteral("link") || kind == QStringLiteral("line_break")) &&
+                    (target.startsWith(QStringLiteral("File:"), Qt::CaseInsensitive) || target.startsWith(QStringLiteral("Image:"), Qt::CaseInsensitive))) {
+                    captionFile = target.mid(target.indexOf(QChar(':')) + 1).replace(QChar('_'), QChar(' '));
+                }
+            }
             if (captionFile != file || captionFile.isEmpty()) finishCaption();
             if (!captionFile.isEmpty()) {
                 file = captionFile;
