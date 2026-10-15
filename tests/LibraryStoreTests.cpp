@@ -126,6 +126,10 @@ int main(int argc, char **argv) {
         require(read(QDir(root).filePath(QStringLiteral("languages.tsv"))) == QByteArrayLiteral("heading\nEnglish\n"), "replacement does not duplicate headings");
 
         const QString xz = QStandardPaths::findExecutable(QStringLiteral("xz"));
+        if (xz.isEmpty())
+            std::cout << "WIKIDICT_XZ_IMPORT_SKIPPED\tmissing-xz\n";
+        else
+            std::cout << "WIKIDICT_XZ_EXECUTABLE\t" << xz.toStdString() << '\n';
         if (!xz.isEmpty()) {
             const QString compressed = temporary.filePath(QStringLiteral("compressed.wikblb.xz"));
             QProcess process;
@@ -136,6 +140,7 @@ int main(int argc, char **argv) {
             LibraryStorage::commitImport(root, *packed);
             require(!QFileInfo::exists(installedPath) && QFileInfo::exists(installedPath + QStringLiteral(".xz")), "compressed replacement retires raw file");
             require(LibraryStorage::installed(root)[0].words == 1, "compressed import metadata");
+            std::cout << "WIKIDICT_XZ_IMPORT_PASSED\tlanguage\n";
         }
         LibraryStorage::removeDictionary(root, LibraryStorage::installed(root)[0]);
         require(LibraryStorage::installed(root).isEmpty(), "remove dictionary");
@@ -166,6 +171,7 @@ int main(int argc, char **argv) {
             LibraryStorage::commitImport(root, *packed);
             require(!QFileInfo::exists(extra->dictionary.path) && QFileInfo::exists(extra->dictionary.path + QStringLiteral(".xz")), "compressed supplemental retires raw");
             require(LibraryStorage::installed(root)[0].kind == QStringLiteral("supplemental"), "compressed supplemental metadata");
+            std::cout << "WIKIDICT_XZ_IMPORT_PASSED\tsupplemental\n";
         }
         LibraryStorage::removeDictionary(root, LibraryStorage::installed(root)[0]);
         require(LibraryStorage::installed(root).isEmpty(), "remove supplemental");
@@ -203,6 +209,7 @@ int main(int argc, char **argv) {
             LibraryStorage::commitImport(root, *packed);
             require(!QFileInfo::exists(redirects->dictionary.path) && QFileInfo::exists(redirects->dictionary.path + QStringLiteral(".xz")), "compressed aliases retire raw");
             require(LibraryStorage::installed(root)[0].kind == QStringLiteral("alias"), "compressed alias metadata");
+            std::cout << "WIKIDICT_XZ_IMPORT_PASSED\talias\n";
         }
         LibraryStorage::removeDictionary(root, LibraryStorage::installed(root)[0]);
         require(LibraryStorage::installed(root).isEmpty(), "remove alias sidecar");

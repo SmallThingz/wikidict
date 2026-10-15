@@ -64,6 +64,40 @@ bool compiledBookSourcesTarget(const QString &target) {
 }
 
 
+
+QJsonArray sectionHeadingSpans(const QJsonObject &section) {
+    const QString title = section.value(QStringLiteral("title")).toString();
+    const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
+    if (title.isEmpty() || blocks.isEmpty()) return {};
+    const QJsonObject first = blocks.first().toObject();
+    if (first.value(QStringLiteral("kind")).toString() != QStringLiteral("heading") ||
+        first.value(QStringLiteral("level")).toInt() != section.value(QStringLiteral("level")).toInt()) return {};
+    const QJsonArray spans = first.value(QStringLiteral("spans")).toArray();
+    QString label;
+    bool actionable = false;
+    for (const QJsonValue &value : spans) {
+        const QJsonObject span = value.toObject();
+        const QString kind = span.value(QStringLiteral("kind")).toString();
+        const QString text = span.value(QStringLiteral("text")).toString();
+        const QString trail = span.value(QStringLiteral("trail")).toString();
+        if (kind == QStringLiteral("line_break")) {
+            // The producer has no break trail; noncanonical imported blocks stay in the body.
+            if (!trail.isEmpty()) return {};
+            label += QChar('\n');
+        } else label += text + trail;
+        if ((kind == QStringLiteral("link") || kind == QStringLiteral("external_link")) &&
+            !span.value(QStringLiteral("target")).toString().isEmpty() && (!text.isEmpty() || !trail.isEmpty()))
+            actionable = true;
+    }
+    const auto edgeSpace = [](QChar c) {
+        return c == QChar(' ') || c == QChar('\t') || c == QChar('\r') || c == QChar('\n') || c == QChar(0x00a0);
+    };
+    qsizetype start = 0, end = label.size();
+    while (start < end && edgeSpace(label[start])) ++start;
+    while (end > start && edgeSpace(label[end - 1])) --end;
+    return actionable && label.mid(start, end - start) == title ? spans : QJsonArray{};
+}
+
 QStringList poemClassTokens(const QJsonObject &span) {
     const QString value = span.value(QStringLiteral("classes")).toString();
     const auto space = [](QChar c) { return c == QChar(' ') || (c.unicode() >= 9 && c.unicode() <= 13); };
@@ -1271,13 +1305,22 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         out += QStringLiteral("<a name='section-%1'></a>").arg(index);
         const bool ownerLanguage = entry.value(QStringLiteral("kind")).toString() == QStringLiteral("language") &&
             level == 2 && title == entry.value(QStringLiteral("language")).toString();
-        if (!ownerLanguage) {
+        const QJsonArray richHeading = sectionHeadingSpans(section);
+        const bool renderRichHeading = !richHeading.isEmpty();
+        if (renderRichHeading) {
+            // The fold control and lexical links are siblings, never nested anchors.
+            collectEmbeddedMedia(richHeading);
+            out += QStringLiteral("<h2><a href='section:%1'>%2</a> %3</h2>").arg(index)
+                .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), spansHtml(richHeading));
+        } else if (!ownerLanguage) {
             out += QStringLiteral("<h2><a href='section:%1'>%2 %3</a></h2>").arg(index)
                 .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), title.toHtmlEscaped());
         }
         if (collapsedSections_.contains(index)) continue;
-        for (const QJsonValue &value : section.value(QStringLiteral("blocks")).toArray()) {
-            const QJsonObject block = value.toObject();
+        const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
+        for (qsizetype blockIndex = 0; blockIndex < blocks.size(); ++blockIndex) {
+            if (blockIndex == 0 && renderRichHeading) continue;
+            const QJsonObject block = blocks[blockIndex].toObject();
             const QString kind = block.value(QStringLiteral("kind")).toString();
             if (kind != QStringLiteral("blank") && kind != QStringLiteral("rule")) {
                 const QJsonValue table = block.value(QStringLiteral("table"));

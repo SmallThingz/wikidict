@@ -2266,6 +2266,233 @@ private slots:
         QVERIFY(window.reading_->viewport()->height() > 100);
     }
 
+
+    void richSectionHeadingsKeepLexicalLinksFoldsAndNavigation() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        window.learning_.setCollapseEtymology(true);
+        QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object();
+        QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+        const auto span = [](const QString &text, const QString &target, const QString &kind = QStringLiteral("link"), const QString &trail = QString()) {
+            return QJsonObject{{QStringLiteral("kind"), kind}, {QStringLiteral("text"), text},
+                {QStringLiteral("target"), target}, {QStringLiteral("trail"), trail}, {QStringLiteral("bold"), true}};
+        };
+        const auto block = [](const QString &kind, int depth, const QJsonArray &spans, int level = 0) {
+            return QJsonObject{{QStringLiteral("kind"), kind}, {QStringLiteral("depth"), depth}, {QStringLiteral("level"), level}, {QStringLiteral("spans"), spans}};
+        };
+        const auto section = [&](const QString &name, int level, const QJsonObject &heading, const QString &body) {
+            return QJsonObject{{QStringLiteral("title"), name}, {QStringLiteral("level"), level},
+                {QStringLiteral("blocks"), QJsonArray{block(QStringLiteral("heading"), 0, QJsonArray{heading}, level),
+                    block(QStringLiteral("paragraph"), 0, QJsonArray{span(body, {}, QStringLiteral("text"))})}}};
+        };
+        entry.insert(QStringLiteral("sections"), QJsonArray{
+            section(QStringLiteral("English"), 2, span(QStringLiteral("English"), QStringLiteral("#Usage_notes")), QStringLiteral("OWNER BODY")),
+            section(QStringLiteral("Etymology 1"), 3, span(QStringLiteral("Etymology 1"), QStringLiteral("dog")), QStringLiteral("RICH HISTORICAL BODY")),
+            section(QStringLiteral("Usage notes"), 3, span(QStringLiteral("Usage"), QStringLiteral("https://example.org/heading"), QStringLiteral("external_link"), QStringLiteral(" notes")), QStringLiteral("RICH USAGE BODY")),
+            section(QStringLiteral("Noun"), 4, span(QStringLiteral("Noun"), QStringLiteral("cat")), QStringLiteral("FOLLOWING MEANING")),
+            section(QStringLiteral("Same"), 3, span(QStringLiteral("Same"), QStringLiteral("same-a")), QStringLiteral("FIRST SAME BODY")),
+            section(QStringLiteral("Same"), 3, span(QStringLiteral("Same"), QStringLiteral("same-b")), QStringLiteral("SECOND SAME BODY"))
+        });
+        response.insert(QStringLiteral("entries"), QJsonArray{entry});
+        const auto render = [&] { window.renderResponse(QJsonDocument(response).toJson()); };
+        render();
+        const QString plain = window.reading_->toPlainText();
+        for (const QString &name : {QStringLiteral("English"), QStringLiteral("Etymology 1"), QStringLiteral("Usage notes"), QStringLiteral("Noun")})
+            QCOMPARE(plain.count(name), 1);
+        QCOMPARE(plain.count(QStringLiteral("Same")), 2);
+        QCOMPARE(window.reading_->document()->find(QStringLiteral("English")).charFormat().anchorHref(), QStringLiteral("dict:%23Usage_notes"));
+        QCOMPARE(window.reading_->document()->find(QStringLiteral("Usage notes")).charFormat().anchorHref(), QStringLiteral("https://example.org/heading"));
+        QTextCursor same = window.reading_->document()->find(QStringLiteral("Same"), 0, QTextDocument::FindCaseSensitively);
+        QVERIFY(!same.isNull());
+        QCOMPARE(same.selectedText(), QStringLiteral("Same"));
+        QCOMPARE(same.charFormat().anchorHref(), QStringLiteral("dict:same-a"));
+        same = window.reading_->document()->find(QStringLiteral("Same"), same, QTextDocument::FindCaseSensitively);
+        QVERIFY(!same.isNull());
+        QCOMPARE(same.selectedText(), QStringLiteral("Same"));
+        QCOMPARE(same.charFormat().anchorHref(), QStringLiteral("dict:same-b"));
+        QVERIFY(window.sections_->findText(QStringLiteral("English")) >= 0);
+        QCOMPARE(window.sections_->itemData(window.sections_->findText(QStringLiteral("Usage notes"))).toInt(), 2);
+        for (int i = 0; i < 6; ++i) QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("section-%1").arg(i)));
+        QVERIFY(window.collapsedSections_.contains(1));
+        QVERIFY(!plain.contains(QStringLiteral("RICH HISTORICAL BODY")));
+        QVERIFY(plain.contains(QStringLiteral("FOLLOWING MEANING")));
+
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("section:1")));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("RICH HISTORICAL BODY")));
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("section:1")));
+        const QSet<int> retained = window.collapsedSections_;
+        window.collapsedSections_.clear(); window.refreshReading();
+        window.collapsedSections_ = retained; window.refreshReading();
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("RICH HISTORICAL BODY")));
+        QCOMPARE(window.reading_->document()->find(QStringLiteral("Etymology 1")).charFormat().anchorHref(), QStringLiteral("dict:dog"));
+
+        window.collapsedSections_.insert(2); window.refreshReading();
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:%23Usage_notes")));
+        QVERIFY(!window.collapsedSections_.contains(0));
+        QVERIFY(!window.collapsedSections_.contains(2));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("RICH USAGE BODY")));
+        ExternalUrlReceiver receiver;
+        QDesktopServices::setUrlHandler(QStringLiteral("https"), &receiver, "capture");
+        const auto clearHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler(QStringLiteral("https")); });
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("https://example.org/heading")));
+        QCOMPARE(receiver.opened, QList<QUrl>{QUrl(QStringLiteral("https://example.org/heading"))});
+        QVERIFY(!window.collapsedSections_.contains(2));
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("section:2")));
+        QVERIFY(window.collapsedSections_.contains(2));
+        const int pickerRow = window.sections_->findText(QStringLiteral("Usage notes"));
+        window.sections_->setCurrentIndex(pickerRow);
+        QVERIFY(QMetaObject::invokeMethod(window.sections_, "activated", Qt::DirectConnection, Q_ARG(int, pickerRow)));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("RICH USAGE BODY")));
+        QVERIFY(!window.collapsedSections_.contains(2));
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:dog")));
+        QTRY_COMPARE(title(window), QStringLiteral("dog"));
+    }
+
+    void richHeadingCompanionMatchesOnlyExactFirstCanonicalLabel() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const QJsonObject decoded = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object()
+            .value(QStringLiteral("entries")).toArray().first().toObject();
+        const auto span = [](const QString &kind, const QString &text, const QString &target = QString(), const QString &trail = QString()) {
+            return QJsonObject{{QStringLiteral("kind"), kind}, {QStringLiteral("text"), text},
+                {QStringLiteral("target"), target}, {QStringLiteral("trail"), trail}};
+        };
+        const auto heading = [](const QJsonArray &spans, int level = 3, const QString &kind = QStringLiteral("heading")) {
+            return QJsonObject{{QStringLiteral("kind"), kind}, {QStringLiteral("depth"), 0}, {QStringLiteral("level"), level}, {QStringLiteral("spans"), spans}};
+        };
+        const QJsonObject linked = span(QStringLiteral("link"), QStringLiteral("Notes"), QStringLiteral("notes"));
+        const auto check = [&](const QJsonArray &blocks, int count, const QString &name = QStringLiteral("Notes")) {
+            QJsonObject entry = decoded;
+            entry.insert(QStringLiteral("preamble_spans"), QJsonArray{});
+            entry.insert(QStringLiteral("references"), QJsonArray{});
+            entry.insert(QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), name},
+                {QStringLiteral("level"), 3}, {QStringLiteral("blocks"), blocks}}});
+            window.collapsedSections_.clear();
+            QTextDocument document;
+            document.setHtml(window.entryHtml(entry));
+            QCOMPARE(document.toPlainText().count(QStringLiteral("Notes")), count);
+        };
+        check(QJsonArray{heading(QJsonArray{linked})}, 1);
+        QJsonObject nestedDepth = heading(QJsonArray{linked});
+        nestedDepth.insert(QStringLiteral("depth"), 5);
+        check(QJsonArray{nestedDepth}, 1);
+        nestedDepth.insert(QStringLiteral("depth"), 3);
+        nestedDepth.insert(QStringLiteral("level"), 0);
+        check(QJsonArray{nestedDepth}, 2);
+        check(QJsonArray{heading(QJsonArray{span(QStringLiteral("text"), QStringLiteral("\u00a0 \t")),
+            linked, span(QStringLiteral("line_break"), QStringLiteral("ignored")), span(QStringLiteral("text"), QStringLiteral("\r "))})}, 1);
+        check(QJsonArray{heading(QJsonArray{span(QStringLiteral("external_link"), QStringLiteral("Notes"), QStringLiteral("https://example.org/notes"))})}, 1);
+        check(QJsonArray{heading(QJsonArray{span(QStringLiteral("link"), {}, QStringLiteral("notes"), QStringLiteral("Notes"))})}, 1);
+        check(QJsonArray{heading(QJsonArray{span(QStringLiteral("link"), QStringLiteral("\u2003Notes"), QStringLiteral("notes"))})}, 2);
+        check(QJsonArray{heading(QJsonArray{span(QStringLiteral("link"), QStringLiteral("\u2003Notes"), QStringLiteral("notes"))})}, 1, QStringLiteral("\u2003Notes"));
+        check(QJsonArray{heading(QJsonArray{linked}, 2)}, 2);
+        check(QJsonArray{heading(QJsonArray{linked}, 3, QStringLiteral("paragraph"))}, 2);
+        check(QJsonArray{heading(QJsonArray{span(QStringLiteral("link"), QStringLiteral("Notes"))})}, 2);
+        check(QJsonArray{heading(QJsonArray{span(QStringLiteral("text"), QStringLiteral("Notes"), QStringLiteral("notes"))})}, 2);
+        check(QJsonArray{heading(QJsonArray{linked, span(QStringLiteral("line_break"), QStringLiteral("\n"), {}, QStringLiteral("extra"))})}, 2);
+        check(QJsonArray{heading(QJsonArray{span(QStringLiteral("text"), QStringLiteral("Before"))}, 0, QStringLiteral("paragraph")),
+            heading(QJsonArray{linked})}, 2);
+        check(QJsonArray{heading(QJsonArray{span(QStringLiteral("link"), QStringLiteral("Different Notes"), QStringLiteral("notes"))})}, 2);
+    }
+
+    void blankSectionHeadingsKeepBodyReachableAfterRetainedFolds() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        window.learning_.setCollapseEtymology(true);
+        const QJsonObject originalResponse = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object();
+        const QJsonObject originalEntry = originalResponse.value(QStringLiteral("entries")).toArray().first().toObject();
+        const QJsonArray originalSections = originalEntry.value(QStringLiteral("sections")).toArray();
+        int nounIndex = -1, etymologyIndex = -1;
+        for (qsizetype i = 0; i < originalSections.size(); ++i) {
+            const QString heading = originalSections[i].toObject().value(QStringLiteral("title")).toString();
+            if (heading == QStringLiteral("Noun")) nounIndex = int(i);
+            if (heading == QStringLiteral("Etymology")) etymologyIndex = int(i);
+        }
+        QVERIFY(nounIndex >= 0 && etymologyIndex >= 0);
+        const QString nounToggle = QStringLiteral("section:%1").arg(nounIndex);
+        const QString etymologyToggle = QStringLiteral("section:%1").arg(etymologyIndex);
+        for (const QString &heading : {QString(), QStringLiteral(" \t\n ")}) {
+            QJsonObject response = originalResponse, entry = originalEntry;
+            QJsonArray sections = originalSections;
+            QJsonObject noun = sections[nounIndex].toObject();
+            noun.insert(QStringLiteral("title"), heading);
+            sections[nounIndex] = noun;
+            entry.insert(QStringLiteral("sections"), sections);
+            response.insert(QStringLiteral("entries"), QJsonArray{entry});
+            window.renderResponse(QJsonDocument(response).toJson());
+
+            QVERIFY(!window.collapsedSections_.contains(nounIndex));
+            QVERIFY(window.collapsedSections_.contains(etymologyIndex));
+            QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("section-%1").arg(nounIndex)));
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("The cat sleeps.")));
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Inflection table")));
+            QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("Historical source.")));
+
+            // Unlike the Android heading, the desktop keeps a real chevron even with no label.
+            QVERIFY(clickAnchor(window.reading_, nounToggle));
+            QVERIFY(window.collapsedSections_.contains(nounIndex));
+            QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+            const QSet<int> retained = window.collapsedSections_;
+            window.collapsedSections_.clear(); window.refreshReading();
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+            window.collapsedSections_ = retained; window.refreshReading();
+            QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+            QVERIFY(clickAnchor(window.reading_, nounToggle));
+            QVERIFY(!window.collapsedSections_.contains(nounIndex));
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+            QCOMPARE(window.reading_->document()->find(QStringLiteral("écoles")).charFormat().anchorHref(),
+                QStringLiteral("dict:%C3%A9cole"));
+            QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("Historical source.")));
+
+            // An ordinary named heading still folds and reopens independently.
+            QVERIFY(clickAnchor(window.reading_, etymologyToggle));
+            QVERIFY(!window.collapsedSections_.contains(etymologyIndex));
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Historical source.")));
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        }
+    }
+
+    void compiledPreformattedTextPreservesIndentationTabsAndLineBreaks() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const QString expected = QStringLiteral("column A  column B\n  indented\tvalue");
+        QJsonArray preformatted;
+        for (const QJsonValue &section : window.currentEntry_.value(QStringLiteral("sections")).toArray()) {
+            for (const QJsonValue &block : section.toObject().value(QStringLiteral("blocks")).toArray()) {
+                if (block.toObject().value(QStringLiteral("kind")).toString() == QStringLiteral("preformatted"))
+                    preformatted.append(block);
+            }
+        }
+        QCOMPARE(preformatted.size(), 1);
+        const QJsonArray spans = preformatted.first().toObject().value(QStringLiteral("spans")).toArray();
+        QCOMPARE(spans.size(), 1);
+        QCOMPARE(spans.first().toObject().value(QStringLiteral("text")).toString(), expected);
+        QCOMPARE(spans.first().toObject().value(QStringLiteral("trail")).toString(), QString());
+
+        QPushButton *larger = nullptr;
+        for (auto *button : window.findChildren<QPushButton *>())
+            if (button->accessibleName() == QStringLiteral("Larger reading text")) larger = button;
+        QVERIFY(larger);
+        const int initialSize = window.readingPointSize_;
+        for (int phase = 0; phase < 2; ++phase) {
+            const QString plain = window.reading_->document()->toPlainText();
+            const qsizetype start = plain.indexOf(QStringLiteral("column A"));
+            QVERIFY(start >= 0);
+            QCOMPARE(plain.mid(start, expected.size()), expected);
+            QCOMPARE(plain.count(expected), 1);
+            if (phase == 0) QTest::mouseClick(larger, Qt::LeftButton);
+        }
+        QVERIFY(window.readingPointSize_ > initialSize);
+    }
+
     void semanticReadingZoomAndThemes() {
         MainWindow window(fixture_, QStringLiteral("cat"));
         window.show();
