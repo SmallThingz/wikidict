@@ -178,18 +178,31 @@ class LearningStore private constructor(context: Context) {
 
 internal fun LearningData.recordEntry(entry: Entry, now: Long): LearningData {
     val word = entry.saved(now)
-    // Refresh only a resolved stored identity; legacy rows without provenance are not guessed.
-    fun refresh(words: List<SavedWord>) = words.map { old ->
-        if (word.dictionary != null && word.recordKey != null && old.key == word.key &&
-            old.dictionary == word.dictionary && old.recordKey == word.recordKey &&
-            old.contextDictionary == word.contextDictionary && old.edition.orEmpty() == word.edition.orEmpty())
-            old.copy(clue = word.clue) else old
+    val legacyKey = if (entry.origin != null && entry.edition.isEmpty() && entry.redirect == null)
+        "${entry.kind}\u0000${entry.language.orEmpty()}\u0000${entry.title}" else null
+    fun sameIdentity(old: SavedWord) = word.dictionary != null && word.recordKey != null &&
+        old.dictionary == word.dictionary && old.recordKey == word.recordKey &&
+        old.contextDictionary == word.contextDictionary && old.edition.orEmpty() == word.edition.orEmpty()
+    fun refresh(words: List<SavedWord>): List<SavedWord> {
+        // Never merge into an existing target or guess which duplicate/legacy row to migrate.
+        val migration = if (legacyKey != null && legacyKey != word.key && words.none { it.key == word.key })
+            words.singleOrNull { it.key == legacyKey && sameIdentity(it) } else null
+        return words.map { old ->
+            when {
+                old === migration -> old.copy(key = word.key, clue = word.clue)
+                old.key == word.key && sameIdentity(old) -> old.copy(clue = word.clue)
+                else -> old
+            }
+        }
     }
     val refreshedBookmarks = refresh(bookmarks)
-    if (!settings.historyEnabled) return copy(bookmarks = refreshedBookmarks, history = refresh(history))
-    val previous = history.firstOrNull { it.key == word.key }
+    val refreshedHistory = refresh(history)
+    // Legacy study statistics have no stored origin and may combine several old identities.
+    // Keep them under their original key even when a surviving row can be migrated.
+    if (!settings.historyEnabled) return copy(bookmarks = refreshedBookmarks, history = refreshedHistory)
+    val previous = refreshedHistory.firstOrNull { it.key == word.key }
     val merged = word.copy(views = (previous?.views ?: 0) + 1, lastViewed = now)
-    val recorded = (listOf(merged) + history.filterNot { it.key == word.key })
+    val recorded = (listOf(merged) + refreshedHistory.filterNot { it.key == word.key })
         .take(settings.historyLimit.coerceIn(1, 100_000))
     return copy(history = recorded, bookmarks = refreshedBookmarks)
 }

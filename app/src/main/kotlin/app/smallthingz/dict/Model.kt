@@ -53,9 +53,7 @@ data class Entry(
     // The body may come from a different immutable blob than the navigation origin.
     val contentDictionary: String? = null,
 ) {
-    val key: String = origin?.takeIf { edition.isNotEmpty() || redirect != null }?.let {
-        "${it.dictionary}\u0000${it.contextDictionary.orEmpty()}\u0000${it.recordKey}"
-    } ?: "$kind\u0000${language.orEmpty()}\u0000$title"
+    val key: String = origin?.key ?: "$kind\u0000${language.orEmpty()}\u0000$title"
     // Constructed with the decoded entry on the import dispatcher.
     val readingRows: List<ReadingRow> = readingRows(sections)
     fun clue(): String {

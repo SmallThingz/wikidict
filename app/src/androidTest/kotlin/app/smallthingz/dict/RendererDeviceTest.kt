@@ -306,6 +306,12 @@ class RendererDeviceTest {
         val expected = library.read(rawHit)
         val before = library.dictionaries.map { it.id }.toSet()
         val compressed = java.io.File(context.cacheDir, "test.wikblb.xz")
+        val learning = LearningStore.get(context)
+        val prefs = context.getSharedPreferences("library", 0)
+        val lastKeys = listOf("lastTitle", "lastLanguage", "lastDictionary", "lastRecordKey", "lastContextDictionary", "lastEdition")
+        val oldPrefs = lastKeys.associateWith { prefs.getString(it, null) }
+        var learningBefore: LearningData? = null
+        var createdKeys = emptySet<String>()
         try {
             InstrumentationRegistry.getInstrumentation().context.assets.open("English-extreme.wikblb.xz").use { input ->
                 compressed.outputStream().use { output -> input.copyTo(output) }
@@ -320,10 +326,93 @@ class RendererDeviceTest {
             assertEquals(expected.copy(origin=null, contentDictionary=null), actual.copy(origin=null, contentDictionary=null))
             assertNotEquals(expected.origin?.dictionary, actual.origin?.dictionary)
             assertEquals(compressed.length(), java.io.File(context.filesDir, "dictionaries/${info.id}.wikblb").length())
+            assertEquals("", expected.edition)
+            assertEquals("", actual.edition)
+            assertEquals(rawHit.key, expected.key)
+            assertEquals(hit.key, actual.key)
+            assertNotEquals(expected.key, actual.key)
+            val keys = setOf(expected.key, actual.key)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                val saved = learning.data
+                assertTrue(saved.settings.historyEnabled)
+                assertTrue(saved.history.size + 2 <= saved.settings.historyLimit)
+                assertTrue((saved.history + saved.bookmarks).none {
+                    it.key in keys || it.key == expected.copy(origin = null).key
+                })
+                learningBefore = saved
+                createdKeys = keys
+            }
+            val choices = library.search("elephant").filter { it.title == "elephant" }
+            assertEquals(setOf(rawHit.key, hit.key), choices.map { it.key }.toSet())
+            assertEquals(2, choices.size)
+            val titleRow = hasText("elephant") and !hasSetTextAction()
+            // Return to the raw entry last so removing the compressed fixture cannot open a fallback.
+            for (choice in listOf(hit, rawHit)) {
+                compose.onNodeWithContentDescription("Dictionary").performClick()
+                compose.onNode(hasSetTextAction()).performTextReplacement("elephant")
+                compose.waitUntil(10000) {
+                    compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isEmpty() &&
+                        compose.onAllNodes(titleRow).fetchSemanticsNodes().size == choices.size
+                }
+                compose.onAllNodes(titleRow)[choices.indexOfFirst { it.key == choice.key }].performClick()
+                compose.waitUntil(10000) { compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithTag("entry-title").assertExists()
+                assertEquals(choice.key, library.lastWord()!!.key)
+                compose.onNodeWithContentDescription("Bookmark").performClick()
+                compose.onNodeWithContentDescription("Remove bookmark").assertExists()
+            }
+            compose.onNodeWithContentDescription("Saved").performClick()
+            compose.waitUntil(10000) { compose.onAllNodes(titleRow).fetchSemanticsNodes().size == 2 }
+            compose.onAllNodes(titleRow).assertCountEquals(2)
+            val bookmarks = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                learning.data.bookmarks.filter { it.key in keys }
+            }
+            assertEquals(keys, bookmarks.map { it.key }.toSet())
+            assertEquals(setOf(rawHit.dictionary, hit.dictionary), bookmarks.map { it.dictionary }.toSet())
+            for (word in bookmarks) assertEquals(word.key, library.read(library.savedWord(word)!!).key)
+            compose.waitUntil(10000) {
+                val state = context.getSharedPreferences("dict.learning.v1", 0).getString("state", null)
+                val saved = state?.let { org.json.JSONObject(it).optJSONArray("bookmarks") }
+                val persistedKeys = if (saved == null) emptySet() else
+                    (0 until saved.length()).map { saved.getJSONObject(it).getString("key") }.toSet()
+                persistedKeys.containsAll(keys)
+            }
+            compose.activityRule.scenario.recreate()
+            compose.waitUntil(15000) {
+                compose.onAllNodes(titleRow).fetchSemanticsNodes(atLeastOneRootRequired = false).size == 2
+            }
+            compose.onAllNodes(titleRow).assertCountEquals(2)
+            for (choice in listOf(hit, rawHit)) {
+                compose.onAllNodes(titleRow)[bookmarks.indexOfFirst { it.key == choice.key }].performClick()
+                compose.waitUntil(10000) { compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isNotEmpty() }
+                assertEquals(choice.key, library.lastWord()!!.key)
+                compose.onNodeWithContentDescription("Remove bookmark").assertExists()
+                compose.onNodeWithContentDescription("Saved").performClick()
+                compose.onAllNodes(titleRow).assertCountEquals(2)
+            }
             library.remove(info.id).join()
         } finally {
-            library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
-            compressed.delete()
+            try {
+                try {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        createdKeys.forEach { learning.removeBookmark(it); learning.removeHistory(it) }
+                    }
+                } finally {
+                    library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
+                }
+            } finally {
+                try {
+                    assertTrue(prefs.edit().apply {
+                        oldPrefs.forEach { (key, value) -> putString(key, value) }
+                    }.commit())
+                } finally {
+                    compressed.delete()
+                }
+            }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                learningBefore?.let { assertEquals(it, learning.data) }
+            }
+            assertEquals(oldPrefs, lastKeys.associateWith { prefs.getString(it, null) })
         }
     }
 
