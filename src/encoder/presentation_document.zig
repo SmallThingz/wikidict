@@ -884,14 +884,30 @@ test "external HTML-label boundary compiles the Arabic Navbar witness as data-on
     const attribute_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", attribute_source, null, &attribute_report);
     const attribute = try codec.decodeAlloc(a, attribute_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
     const spans = attribute.entry.sections[0].blocks[0].spans;
-    try std.testing.expectEqual(@as(usize, 3), spans.len);
-    try std.testing.expectEqual(types.InlineKind.text, spans[0].kind);
-    try std.testing.expectEqualStrings("<span title=\"", spans[0].text);
-    try std.testing.expectEqual(types.InlineKind.external_link, spans[1].kind);
-    try std.testing.expectEqualStrings("https://example.test/x", spans[1].target);
-    try std.testing.expectEqualStrings("hidden", spans[1].text);
-    try std.testing.expectEqual(types.InlineKind.text, spans[2].kind);
-    try std.testing.expectEqualStrings("\">visible", spans[2].text);
+    // Adjacent plain-text chunks may differ across scanner entry paths. Preserve
+    // the exact visible prefix/link/suffix boundary and navigation instead.
+    var attribute_prefix: std.ArrayList(u8) = .empty;
+    var attribute_suffix: std.ArrayList(u8) = .empty;
+    var attribute_links: usize = 0;
+    for (spans) |span| {
+        try std.testing.expectEqualStrings("", span.trail);
+        if (span.kind == .external_link) {
+            try std.testing.expectEqual(@as(usize, 0), attribute_links);
+            try std.testing.expectEqualStrings("https://example.test/x", span.target);
+            try std.testing.expectEqualStrings("hidden", span.text);
+            attribute_links += 1;
+        } else {
+            try std.testing.expectEqual(types.InlineKind.text, span.kind);
+            if (attribute_links == 0) {
+                try attribute_prefix.appendSlice(a, span.text);
+            } else {
+                try attribute_suffix.appendSlice(a, span.text);
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), attribute_links);
+    try std.testing.expectEqualStrings("<span title=\"", attribute_prefix.items);
+    try std.testing.expectEqualStrings("\">visible", attribute_suffix.items);
     try std.testing.expectEqualDeep(Fallbacks{ .literal_markup = true }, attribute_report);
 }
 

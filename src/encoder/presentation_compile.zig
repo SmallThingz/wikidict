@@ -5069,9 +5069,26 @@ test "opaque extensions render safely without leaking parser delimiters" {
     }
     var unclosed_math: Renderer = .{ .a = a, .context = .{} };
     const unclosed_spans = try unclosed_math.parseSpans("<math>10^{12}", .{});
-    try std.testing.expectEqualStrings("10^{12}", try flattened(a, unclosed_spans));
-    try std.testing.expect(unclosed_math.fallbacks.unclosed_formatting and unclosed_math.fallbacks.unsupported_element);
-    for (unclosed_spans) |span| try std.testing.expect(span.flags.code and !span.flags.superscript);
+    // No extension hook runs without its closer: the opener stays visible and
+    // the following body uses ordinary inline parsing, not protected math.
+    try std.testing.expectEqualStrings("<math>10^{12}", try flattened(a, unclosed_spans));
+    try std.testing.expect(unclosed_math.fallbacks.unclosed_formatting and !unclosed_math.fallbacks.unsupported_element);
+    for (unclosed_spans) |span| try std.testing.expect(!span.flags.code and !span.flags.superscript and span.provenance != .protected_literal);
+    var active_math: Renderer = .{ .a = a, .context = .{} };
+    const active_math_spans = try active_math.parseSpans("<math>10^{12} ''[[cat|linked]]''", .{});
+    try std.testing.expectEqualStrings("<math>10^{12} linked", try flattened(a, active_math_spans));
+    try std.testing.expect(active_math.fallbacks.unclosed_formatting and !active_math.fallbacks.unsupported_element);
+    var active_math_link = false;
+    for (active_math_spans) |span| {
+        try std.testing.expect(!span.flags.code and !span.flags.superscript and span.provenance != .protected_literal);
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("cat", span.target);
+            try std.testing.expectEqualStrings("linked", span.text);
+            try std.testing.expect(span.flags.italic);
+            active_math_link = true;
+        }
+    }
+    try std.testing.expect(active_math_link);
     const literal_cases = [_]struct { source: []const u8, visible: []const u8 }{
         .{ .source = "<pre>[[literal]]</pre>", .visible = "[[literal]]" },
         .{ .source = "<source>{{literal}}</source>", .visible = "{{literal}}" },
