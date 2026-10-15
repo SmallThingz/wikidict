@@ -683,10 +683,42 @@ test "compiled presentation contains no executable template syntax" {
     const expected_titles = [_][]const u8{ "Engels", "Uitspraak", "Selfstandige naamwoord", "Betekenisse", "Speech", "Caption", "Lêer:Icon.svg", "\u{4e20}", "\u{feff}Literal\u{feff}" };
     try std.testing.expectEqual(expected_titles.len, heading_page.entry.sections.len);
     for (expected_titles, heading_page.entry.sections) |expected, section| try std.testing.expectEqualStrings(expected, section.title);
-    try std.testing.expectEqual(types.BlockKind.definition, heading_page.entry.sections[3].blocks[0].kind);
-    try std.testing.expectEqualStrings("(anatomie) ", heading_page.entry.sections[3].blocks[0].spans[0].text);
-    try std.testing.expectEqualStrings("Rugmurg", heading_page.entry.sections[3].blocks[0].spans[1].text);
-    try std.testing.expectEqualStrings("Body.jpg", heading_page.entry.sections[6].blocks[0].spans[0].text);
+    const RichHeading = struct {
+        fn check(allocator: A, section: anytype, target: []const u8) !void {
+            try std.testing.expectEqual(@as(usize, 2), section.blocks.len);
+            const companion = section.blocks[0];
+            try std.testing.expectEqual(types.BlockKind.heading, companion.kind);
+            try std.testing.expectEqual(section.level, companion.level);
+            var label: std.ArrayList(u8) = .empty;
+            defer label.deinit(allocator);
+            var links: usize = 0;
+            for (companion.spans) |span| {
+                try label.appendSlice(allocator, span.text);
+                try label.appendSlice(allocator, span.trail);
+                if (span.kind == .link) {
+                    links += 1;
+                    try std.testing.expectEqualStrings(target, span.target);
+                    try std.testing.expectEqualStrings(section.title, span.text);
+                    try std.testing.expectEqualStrings("", span.trail);
+                } else {
+                    try std.testing.expect(span.kind == .text);
+                    try std.testing.expectEqualStrings("", span.target);
+                    try std.testing.expectEqualStrings("", trimHeading(span.text));
+                }
+            }
+            try std.testing.expectEqual(@as(usize, 1), links);
+            try std.testing.expectEqualStrings(section.title, trimHeading(label.items));
+        }
+    };
+    try std.testing.expectEqual(@as(u8, 4), heading_page.entry.sections[3].level);
+    try RichHeading.check(a, heading_page.entry.sections[3], "betekenis");
+    try std.testing.expectEqual(types.BlockKind.definition, heading_page.entry.sections[3].blocks[1].kind);
+    try std.testing.expectEqualStrings("(anatomie) ", heading_page.entry.sections[3].blocks[1].spans[0].text);
+    try std.testing.expectEqualStrings("Rugmurg", heading_page.entry.sections[3].blocks[1].spans[1].text);
+    try std.testing.expectEqualStrings("rugmurg", heading_page.entry.sections[3].blocks[1].spans[1].target);
+    try std.testing.expectEqual(@as(u8, 3), heading_page.entry.sections[6].level);
+    try RichHeading.check(a, heading_page.entry.sections[6], "Lêer:Icon.svg");
+    try std.testing.expectEqualStrings("Body.jpg", heading_page.entry.sections[6].blocks[1].spans[0].text);
     try std.testing.expectEqual(@as(usize, 1), heading_page.entry.media.len);
     try std.testing.expectEqualStrings("Body.jpg", heading_page.entry.media[0].file);
     try std.testing.expectEqualStrings("Body.jpg", heading_page.entry.media[0].caption);
