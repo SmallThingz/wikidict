@@ -8825,7 +8825,10 @@ test "grammar syntax oracle numeric references follow MediaWiki accepted ranges"
         const source = try std.fmt.allocPrint(a, "&#x{x};", .{cp});
         var buf: [4]u8 = undefined;
         const n = try std.unicode.utf8Encode(cp, &buf);
-        try std.testing.expectEqualStrings(buf[0..n], try flattened(a, try r.parseSpans(source, .{})));
+        // Accepted LF/HT still decode, but ordinary HTML text displays soft space.
+        const visible = if (cp == 9 or cp == 10) " " else buf[0..n];
+        try std.testing.expectEqualStrings(visible, try flattened(a, try r.parseSpans(source, .{})));
+        try std.testing.expectEqualStrings(buf[0..n], try flattened(a, try r.parseSpans(source, .{ .preserve_whitespace = true })));
     }
     for ([_]u32{ 0, 1, 8, 11, 12, 13, 14, 31, 0x7f, 0x80, 0x9f, 0xd800, 0xdfff, 0xfffe, 0xffff, 0x110000 }) |cp| {
         const source = try std.fmt.allocPrint(a, "&#x{x};", .{cp});
