@@ -161,71 +161,78 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
         const auto loaded = watcher->result();
         watcher->deleteLater();
         if (serial != loadSerial_ || cancelled->load()) return;
-        if (!loaded->error.isEmpty()) {
-            setLoading(false);
-            if (api_) {
+        auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit] {
+            if (serial != loadSerial_ || cancelled->load()) return;
+            if (!loaded->error.isEmpty()) {
+                setLoading(false);
+                if (api_) {
+                    QSignalBlocker kindBlocker(kind_);
+                    QSignalBlocker languageBlocker(language_);
+                    kind_->setCurrentIndex(kind_->findData(api_->kind()));
+                    language_->setCurrentText(api_->language());
+                    resultStatus_->setText(QStringLiteral("Could not open dictionaries: %1").arg(loaded->error));
+                } else {
+                    title_->setText(QStringLiteral("Open your dictionaries"));
+                    meta_->setText(QStringLiteral("Your words stay on this computer."));
+                    reading_->setHtml(QStringLiteral("<p>%1</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>").arg(loaded->error.toHtmlEscaped()));
+                    resultStatus_->setText(QStringLiteral("No dictionary open"));
+                }
+                return;
+            }
+            api_ = std::move(loaded->api);
+            originRoot_ = loaded->originRoot;
+            originEdition_ = loaded->originEdition;
+            searchTitles_ = std::move(loaded->titles);
+            sampleWords_.clear();
+            for (const QJsonObject &entry : loaded->practice) {
+                try { sampleWords_.append(savedWord(entry)); }
+                catch (const std::exception &) { /* Unreadable sampled entries do not prevent dictionary browsing. */ }
+            }
+            {
                 QSignalBlocker kindBlocker(kind_);
                 QSignalBlocker languageBlocker(language_);
                 kind_->setCurrentIndex(kind_->findData(api_->kind()));
+                language_->clear();
+                language_->addItems(loaded->languages);
                 language_->setCurrentText(api_->language());
-                resultStatus_->setText(QStringLiteral("Could not open dictionaries: %1").arg(loaded->error));
-            } else {
-                title_->setText(QStringLiteral("Open your dictionaries"));
-                meta_->setText(QStringLiteral("Your words stay on this computer."));
-                reading_->setHtml(QStringLiteral("<p>%1</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>").arg(loaded->error.toHtmlEscaped()));
-                resultStatus_->setText(QStringLiteral("No dictionary open"));
             }
-            return;
-        }
-        api_ = std::move(loaded->api);
-        originRoot_ = loaded->originRoot;
-        originEdition_ = loaded->originEdition;
-        searchTitles_ = std::move(loaded->titles);
-        sampleWords_.clear();
-        for (const QJsonObject &entry : loaded->practice) {
-            try { sampleWords_.append(savedWord(entry)); }
-            catch (const std::exception &) { /* Unreadable sampled entries do not prevent dictionary browsing. */ }
-        }
-        {
-            QSignalBlocker kindBlocker(kind_);
-            QSignalBlocker languageBlocker(language_);
-            kind_->setCurrentIndex(kind_->findData(api_->kind()));
-            language_->clear();
-            language_->addItems(loaded->languages);
-            language_->setCurrentText(api_->language());
-        }
-        if (resetVisits) { visits_.clear(); visitIndex_ = -1; }
-        currentEntry_ = {};
-        currentJson_.clear();
-        media_->setEntry({});
-        bookmark_->setEnabled(false);
-        sections_->clear();
-        sections_->setEnabled(false);
-        title_->setText(QStringLiteral("Find the word."));
-        meta_->setText(QStringLiteral("%1 · %2").arg(api_->kind() == QStringLiteral("language") ? api_->language() : QStringLiteral("All languages"), kindLabel(api_->kind())));
-        reading_->setHtml(QStringLiteral("<p>Type a word to search. Press Enter to open it, or use the arrow keys to choose a suggestion.</p><p>Ctrl+L focuses search. Alt+Left and Alt+Right revisit words.</p>"));
-        json_->clear();
-        QSettings().setValue(QStringLiteral("reader/root"), QDir(root).absolutePath());
-        QSettings().setValue(QStringLiteral("reader/language"), api_->language());
-        setLoading(false);
-        refreshSearch();
-        if (restoreVisit >= 0 && restoreVisit < visits_.size()) {
-            try {
-                const Visit visit = visits_[restoreVisit];
-                renderResponse(api_->lookup(word), false);
-                if (!currentEntry_.isEmpty()) {
-                    search_->setText(word);
-                    refreshSearch();
-                    collapsedSections_ = visit.collapsed;
-                    refreshReading();
-                    reading_->verticalScrollBar()->setValue(visit.scroll);
-                    visitIndex_ = restoreVisit;
-                    updateNavigation();
-                }
-            } catch (const std::exception &error) { resultStatus_->setText(QString::fromUtf8(error.what())); }
-        } else if (!word.isEmpty()) openWord(word);
-        search_->setFocus();
-        statusBar()->showMessage(QStringLiteral("Opened %1").arg(QDir::toNativeSeparators(root)), 4000);
+            if (resetVisits) { visits_.clear(); visitIndex_ = -1; }
+            currentEntry_ = {};
+            currentJson_.clear();
+            media_->setEntry({});
+            bookmark_->setEnabled(false);
+            sections_->clear();
+            sections_->setEnabled(false);
+            title_->setText(QStringLiteral("Find the word."));
+            meta_->setText(QStringLiteral("%1 · %2").arg(api_->kind() == QStringLiteral("language") ? api_->language() : QStringLiteral("All languages"), kindLabel(api_->kind())));
+            reading_->setHtml(QStringLiteral("<p>Type a word to search. Press Enter to open it, or use the arrow keys to choose a suggestion.</p><p>Ctrl+L focuses search. Alt+Left and Alt+Right revisit words.</p>"));
+            json_->clear();
+            QSettings().setValue(QStringLiteral("reader/root"), QDir(root).absolutePath());
+            QSettings().setValue(QStringLiteral("reader/language"), api_->language());
+            setLoading(false);
+            refreshSearch();
+            if (restoreVisit >= 0 && restoreVisit < visits_.size()) {
+                try {
+                    const Visit visit = visits_[restoreVisit];
+                    renderResponse(api_->lookup(word), false);
+                    if (!currentEntry_.isEmpty()) {
+                        search_->setText(word);
+                        refreshSearch();
+                        collapsedSections_ = visit.collapsed;
+                        refreshReading();
+                        reading_->verticalScrollBar()->setValue(visit.scroll);
+                        visitIndex_ = restoreVisit;
+                        updateNavigation();
+                    }
+                } catch (const std::exception &error) { resultStatus_->setText(QString::fromUtf8(error.what())); }
+            } else if (!word.isEmpty()) openWord(word);
+            search_->setFocus();
+            statusBar()->showMessage(QStringLiteral("Opened %1").arg(QDir::toNativeSeparators(root)), 4000);
+        };
+        // A modal Library worker can change files before its GUI notification.
+        // Keep the actual result and intent unpublished until the dialog closes.
+        if (libraryDialogActive_) deferredDatasetPublication_ = std::move(publish);
+        else publish();
     });
     watcher->setFuture(QtConcurrent::run([root, language, kind, resetVisits, cancelled, expectedRoot, expectedEdition] {
         auto loaded = std::make_shared<LoadedDataset>();
@@ -285,8 +292,13 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
 void MainWindow::chooseRoot() {
     const QString word = currentEntry_.value(QStringLiteral("title")).toString();
     LibraryDialog dialog(this, api_ ? api_->root() : QSettings().value(QStringLiteral("reader/root")).toString());
+    libraryDialogActive_ = true;
     dialog.exec();
+    libraryDialogActive_ = false;
     if (dialog.libraryChanged()) {
+        if (cancelLoad_) cancelLoad_->store(true);
+        ++loadSerial_;
+        deferredDatasetPublication_ = {};
         api_.reset();
         searchTitles_.clear();
         sampleWords_.clear();
@@ -296,6 +308,10 @@ void MainWindow::chooseRoot() {
         visits_.clear();
         visitIndex_ = -1;
         openRoot(dialog.selectedRoot(), word);
+    } else if (deferredDatasetPublication_) {
+        auto publish = std::move(deferredDatasetPublication_);
+        deferredDatasetPublication_ = {};
+        publish();
     }
 }
 

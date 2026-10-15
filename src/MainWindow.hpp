@@ -5,6 +5,7 @@
 #include <QSet>
 #include <QVector>
 #include <memory>
+#include <functional>
 #include <optional>
 #include <atomic>
 
@@ -124,4 +125,6 @@ private:
     bool loading_ = false;
     unsigned loadSerial_ = 0;
     std::shared_ptr<std::atomic_bool> cancelLoad_;
+    bool libraryDialogActive_ = false;
+    std::function<void()> deferredDatasetPublication_;
 };

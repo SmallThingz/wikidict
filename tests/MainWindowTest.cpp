@@ -29,6 +29,10 @@
 #include <QScrollBar>
 #include <QSet>
 #include <QSettings>
+#include <QSemaphore>
+#include <QThreadPool>
+#include <QTreeWidget>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QStackedWidget>
 #include <QStringList>
 #include <QTabBar>
@@ -482,6 +486,161 @@ private slots:
         QCOMPARE(QSettings().value(QStringLiteral("reader/root")).toString(), fixture_);
         QCOMPARE(QSettings().value(QStringLiteral("reader/lastWord")).toString(), QStringLiteral("cat"));
         QVERIFY(window.resultStatus_->text().contains(QStringLiteral("cancelled")));
+    }
+
+
+    void libraryModalDefersQueuedLoadUntilAfterActualRemoval() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-modal-remove-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString root = QDir(directory.path()).absolutePath();
+        std::atomic_bool cancelled = false;
+        for (const QString &file : {
+                QStringLiteral("languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"),
+                QStringLiteral("alias-cases/aliases.wikblb")}) {
+            auto prepared = LibraryStorage::prepareImport(root, fixture_ + QChar('/') + file, {}, -1, cancelled, [](const QString &, qint64, qint64) {});
+            LibraryStorage::commitImport(root, *prepared);
+        }
+        const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        auto restoreSources = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), sources); });
+        MainWindow window(root, QStringLiteral("cat")); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const QByteArray originalJson = window.currentJson_;
+        const QString originalReading = window.reading_->toPlainText();
+        QStringList originalHistory;
+        for (const auto &entry : window.learning_.history()) originalHistory.append(entry.key);
+        window.loadDataset(root, QStringLiteral("English"), QStringLiteral("language"), true, QStringLiteral("Cats"));
+        const auto watchers = window.findChildren<QFutureWatcherBase *>();
+        QVERIFY(!watchers.isEmpty());
+        QPointer<QFutureWatcherBase> pending = watchers.last();
+        pending->blockSignals(true);
+        QTRY_VERIFY_WITH_TIMEOUT(pending->isFinished(), 30000);
+        // Consume the real original notification while blocked, then deliver it once
+        // only after a real removal inside Library's nested event loop.
+        QCoreApplication::sendPostedEvents(pending.data());
+        bool removed = false, deliveredInsideModal = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
+            auto close = qScopeGuard([&] { dialog->done(QDialog::Rejected); });
+            auto *installed = dialog->findChild<QTreeWidget *>(QStringLiteral("installedDictionaries"));
+            auto *remove = dialog->findChild<QPushButton *>(QStringLiteral("removeDictionary"));
+            auto *status = dialog->findChild<QLabel *>(QStringLiteral("libraryStatus"));
+            QVERIFY(installed && remove && status);
+            QTreeWidgetItem *english = nullptr;
+            for (int i = 0; i < installed->topLevelItemCount(); ++i)
+                if (installed->topLevelItem(i)->text(0) == QStringLiteral("English")) english = installed->topLevelItem(i);
+            QVERIFY(english);
+            installed->setCurrentItem(english);
+            bool confirmationClicked = false;
+            QObject confirmationContext;
+            QTimer::singleShot(0, &confirmationContext, [&] {
+                auto *confirmation = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(confirmation);
+                auto *yes = confirmation->button(QMessageBox::Yes);
+                QVERIFY(yes);
+                QTest::mouseClick(yes, Qt::LeftButton);
+                confirmationClicked = true;
+            });
+            QTest::mouseClick(remove, Qt::LeftButton);
+            QVERIFY(confirmationClicked);
+            QTRY_VERIFY2_WITH_TIMEOUT(status->text().startsWith(QStringLiteral("Removed ")), qPrintable(status->text()), 30000);
+            QVERIFY(!QFileInfo::exists(root + QStringLiteral("/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb")));
+            QVERIFY(QFileInfo::exists(root + QStringLiteral("/aliases.wikblb")));
+            removed = true;
+            QVERIFY(pending);
+            pending->blockSignals(false);
+            QVERIFY(QMetaObject::invokeMethod(pending.data(), "finished", Qt::DirectConnection));
+            deliveredInsideModal = true;
+            QCOMPARE(window.currentJson_, originalJson);
+            QCOMPARE(window.reading_->toPlainText(), originalReading);
+            QStringList history;
+            for (const auto &entry : window.learning_.history()) history.append(entry.key);
+            QCOMPARE(history, originalHistory);
+        });
+        window.chooseRoot();
+        QVERIFY(removed && deliveredInsideModal);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        QVERIFY(window.currentEntry_.isEmpty() || !window.currentEntry_.value(QStringLiteral("redirect")).toObject().value(QStringLiteral("followed")).toBool());
+    }
+
+    void unchangedLibraryClosePreservesDisplayedEntry() {
+        const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        auto restoreSources = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), sources); });
+        MainWindow window(fixture_, QStringLiteral("cat")); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const QByteArray json = window.currentJson_;
+        const QString reading = window.reading_->toPlainText();
+        const unsigned serial = window.loadSerial_;
+        QTimer::singleShot(0, &window, [] {
+            if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget())) dialog->done(QDialog::Rejected);
+        });
+        window.chooseRoot();
+        QCOMPARE(window.currentJson_, json);
+        QCOMPARE(window.reading_->toPlainText(), reading);
+        QCOMPARE(window.loadSerial_, serial);
+        QVERIFY(!window.loading_ && window.api_ && window.search_->isEnabled());
+    }
+
+    void unchangedLibraryClosePreservesPendingInitialWord_data() {
+        QTest::addColumn<bool>("queued");
+        QTest::newRow("completed-result-held") << true;
+        QTest::newRow("unfinished-worker") << false;
+    }
+    void unchangedLibraryClosePreservesPendingInitialWord() {
+        QFETCH(bool, queued);
+        const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        auto restoreSources = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), sources); });
+        QThreadPool *pool = QThreadPool::globalInstance();
+        const int originalMaximum = pool->maxThreadCount();
+        QSemaphore entered, release;
+        QFuture<void> blocker;
+        if (!queued) {
+            pool->setMaxThreadCount(1);
+            blocker = QtConcurrent::run([&] { entered.release(); release.acquire(); });
+        }
+        auto unblock = qScopeGuard([&] {
+            if (!queued) { release.release(); blocker.waitForFinished(); pool->setMaxThreadCount(originalMaximum); }
+        });
+        if (!queued) QVERIFY(entered.tryAcquire(1, 30000));
+        MainWindow window(fixture_, QStringLiteral("cat")); window.show();
+        QPointer<QFutureWatcherBase> pending;
+        if (queued) {
+            const auto watchers = window.findChildren<QFutureWatcherBase *>();
+            QVERIFY(!watchers.isEmpty()); pending = watchers.last();
+            pending->blockSignals(true);
+            QTRY_VERIFY_WITH_TIMEOUT(pending->isFinished(), 30000);
+            QCoreApplication::sendPostedEvents(pending.data());
+        }
+        bool inside = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
+            auto close = qScopeGuard([&] { dialog->done(QDialog::Rejected); });
+            if (queued) {
+                QVERIFY(pending); pending->blockSignals(false);
+                QVERIFY(QMetaObject::invokeMethod(pending.data(), "finished", Qt::DirectConnection));
+            }
+            inside = true;
+            QVERIFY(window.loading_ && !window.api_ && window.currentEntry_.isEmpty());
+        });
+        window.chooseRoot();
+        QVERIFY(inside);
+        if (!queued) {
+            QVERIFY(window.loading_ && !window.api_);
+            release.release(); blocker.waitForFinished();
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QCOMPARE(window.originRoot_, QFileInfo(fixture_).canonicalFilePath());
+        QCOMPARE(window.originEdition_, LibraryStorage::editionIdentity(fixture_));
+        QVERIFY(window.search_->isEnabled());
+        QVERIFY(!window.cancelOpening_->isVisible());
     }
 
     void namespaceOnlyFolderOpensWithoutLanguageManifest() {
