@@ -82,6 +82,8 @@ class AliasDeviceTest {
                 library.search("").filter { it.dictionary == redirects.id }.map { it.title })
             val missing = library.read(selected(redirects.id,"Animus"))
             assertEquals("Animus",missing.title);assertFalse(missing.redirect!!.followed)
+            assertEquals(redirects.id,missing.origin!!.dictionary)
+            assertEquals(redirects.id,missing.contentDictionary)
             val foreign = install("arwiktionary-20261001-$englishName",targets)
             assertFalse(library.read(selected(redirects.id,"Animus")).redirect!!.followed)
             val correct = install("bgwiktionary-20261001-$englishName.xz",compressed(targets))
@@ -94,12 +96,20 @@ class AliasDeviceTest {
                 assertEquals(from,entry.redirect.source)
                 assertEquals("Target definition.",entry.clue())
                 assertEquals("bgwiktionary-20261001",entry.edition)
+                assertEquals(hit,entry.origin)
+                assertEquals(correct.id,entry.contentDictionary)
+                assertTrue(entry.isInstalled { id -> library.dictionaries.any { it.id == id } })
             }
             val chain = library.read(selected(redirects.id,"ChainA"))
             assertEquals("ChainB",chain.title);assertTrue(chain.redirect!!.followed)
             assertEquals("Incoming",chain.redirect.fragment)
             assertEquals("gainst#Noun",chain.preamble.single().target)
             assertTrue(chain.sections.isEmpty())
+            assertEquals(redirects.id,chain.contentDictionary)
+            assertEquals(correct.id,chain.origin!!.contextDictionary)
+            val plain = library.read(selected(correct.id,"animus"))
+            assertEquals(correct.id,plain.origin!!.dictionary)
+            assertEquals(correct.id,plain.contentDictionary)
             library.rememberWord(selected(redirects.id,"ChainA"))
             assertEquals(redirects.id,library.lastWord()!!.dictionary)
             val french = targets.copyOf().also { bytes ->
@@ -122,6 +132,9 @@ class AliasDeviceTest {
             assertEquals("Animus",bookmark.title)
             assertEquals(correct.id,library.savedWord(bookmark)!!.contextDictionary)
             library.remove(correct.id).join()
+            assertFalse(englishEntry.isInstalled { id -> library.dictionaries.any { it.id == id } })
+            // A same-file body still depends on its retained selection context.
+            assertFalse(chain.isInstalled { id -> library.dictionaries.any { it.id == id } })
             assertNull(library.lastWord())
             assertNull(library.savedWord(bookmark))
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { learning.removeBookmark(bookmark.key);learning.removeHistory(bookmark.key) }
@@ -154,6 +167,48 @@ class AliasDeviceTest {
             val feature = install("testwiktionary-20261001-supplemental.wikblb",empty)
             assertEquals(0,feature.count)
             assertEquals("supplemental",feature.kind)
+
+            // A non-language alias resolves its current body independently of origin.context.
+            // Use tiny valid DAL1/DPR2 records, following the existing section-link fixture format.
+            fun u32(n: Int) = ByteArray(4) { (n ushr (it * 8)).toByte() }
+            fun vu(value: Int): ByteArray {
+                val out = ByteArrayOutputStream(); var n = value
+                while (n >= 128) { out.write((n and 127) or 128); n = n ushr 7 }
+                out.write(n); return out.toByteArray()
+            }
+            fun field(bytes: ByteArray) = vu(bytes.size) + bytes
+            fun fixed(text: String) = text.toByteArray().let { u32(it.size) + it }
+            fun presentation(label: String): ByteArray {
+                val span = byteArrayOf(0,0,0) + listOf(label,"","","","","").fold(byteArrayOf()) { a,v -> a + fixed(v) }
+                return "DPR2".toByteArray() + u32(0) + u32(0) + u32(1) + span + ByteArray(16)
+            }
+            val source = "Appendix:Dependency alias"
+            val target = "Appendix:Dependency body"
+            val aliasPayload = "DAL1".toByteArray() + u32(100) + byteArrayOf(7,1) + u32(100) + byteArrayOf(7) +
+                listOf(source,source,target,target,target,"").fold(byteArrayOf()) { a,v -> a + field(v.toByteArray()) } + field(presentation("Own fallback"))
+            val aliasBytes = "WIKBLB08".toByteArray() + byteArrayOf(8) + "7\t$source".toByteArray() + byteArrayOf(0) + field(aliasPayload)
+            fun targetBytes(label: String) = "WIKBLB08".toByteArray() + byteArrayOf(7) + target.toByteArray() + byteArrayOf(0) + field(presentation(label))
+            val edition = "dependencywiktionary-20261001"
+            val aliasInfo = install("$edition-aliases.wikblb",aliasBytes)
+            val retainedHit = selected(aliasInfo.id,source)
+            assertNull(retainedHit.contextDictionary)
+            val firstBody = install("$edition-supplemental.wikblb",targetBytes("First body"))
+            val firstEntry = library.read(retainedHit)
+            assertEquals(retainedHit,firstEntry.origin)
+            assertEquals(firstBody.id,firstEntry.contentDictionary)
+            assertEquals("First body",textOf(firstEntry.preamble))
+            assertTrue(firstEntry.redirect!!.followed)
+            library.remove(firstBody.id).join()
+            assertFalse(firstEntry.isInstalled { id -> library.dictionaries.any { it.id == id } })
+            val replacement = install("$edition-supplemental.wikblb",targetBytes("Replacement body"))
+            assertNotEquals(firstBody.id,replacement.id)
+            val replacementEntry = library.read(retainedHit)
+            assertEquals(retainedHit,replacementEntry.origin)
+            assertNull(replacementEntry.origin!!.contextDictionary)
+            assertEquals(replacement.id,replacementEntry.contentDictionary)
+            assertEquals("Replacement body",textOf(replacementEntry.preamble))
+            assertTrue(replacementEntry.isInstalled { id -> library.dictionaries.any { it.id == id } })
+            assertFalse(firstEntry.isInstalled { id -> library.dictionaries.any { it.id == id } })
         } finally {
             library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
         }

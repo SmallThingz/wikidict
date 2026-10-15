@@ -135,6 +135,15 @@ internal class LibraryOperationOwner(private val mutex: Mutex) {
     }
 }
 
+// A committed mutation must become visible before its cancelled owner releases the mutex.
+internal suspend fun publishLibrarySnapshot(db: SQLiteDatabase, publish: (List<DictionaryInfo>) -> Unit) {
+    val values = db.rawQuery("SELECT * FROM dictionaries ORDER BY language", null).use { c -> buildList {
+        while (c.moveToNext()) add(DictionaryInfo(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getInt(4), c.getLong(5), c.getString(6)))
+    } }
+    withContext(NonCancellable + Dispatchers.Main) { publish(values) }
+    currentCoroutineContext().ensureActive()
+}
+
 class LibraryStore private constructor(private val context: Context) {
     companion object {
         @Volatile private var instance: LibraryStore? = null
@@ -171,11 +180,8 @@ class LibraryStore private constructor(private val context: Context) {
         }
         if (opened) resumeDownload()
     } }
-    private suspend fun refresh() {
-        val values = helper.readableDatabase.rawQuery("SELECT * FROM dictionaries ORDER BY language", null).use { c -> buildList {
-            while (c.moveToNext()) add(DictionaryInfo(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getInt(4), c.getLong(5), c.getString(6)))
-        } }
-        withContext(Dispatchers.Main) { dictionaries = values; revision++ }
+    private suspend fun refresh() = publishLibrarySnapshot(helper.readableDatabase) { values ->
+        dictionaries = values; revision++
     }
     fun addSource(url: String) {
         val uri = URI(url.trim()); require(uri.scheme == "https" && uri.host != null && uri.userInfo == null) { "Use an HTTPS catalogue URL" }
@@ -448,13 +454,13 @@ class LibraryStore private constructor(private val context: Context) {
     private fun plain(hit: WordHit): Entry {
         val dictionary = dictionaries.firstOrNull { it.id == hit.dictionary } ?: error("Dictionary was removed")
         return (if(dictionary.kind == "alias") AliasDecoder.decode(payload(hit),hit.recordKey).entry()
-            else BlobDecoder.decode(payload(hit),hit.title,hit.kind,if(hit.kind=="language")hit.language else null,dictionary.code)).copy(edition=dictionary.edition)
+            else BlobDecoder.decode(payload(hit),hit.title,hit.kind,if(hit.kind=="language")hit.language else null,dictionary.code)).copy(edition=dictionary.edition,contentDictionary=dictionary.id)
     }
     suspend fun read(hit: WordHit): Entry = withContext(Dispatchers.IO) {
         val dictionary = dictionaries.firstOrNull { it.id == hit.dictionary } ?: error("Dictionary was removed")
         if (dictionary.kind != "alias") return@withContext plain(hit)
         val alias = AliasDecoder.decode(payload(hit),hit.recordKey)
-        val own = alias.entry().copy(redirect=alias.redirect(false),edition=dictionary.edition,
+        val own = alias.entry().copy(redirect=alias.redirect(false),edition=dictionary.edition,contentDictionary=dictionary.id,
             navigationKind=alias.sourceKind,navigationLanguage=hit.language.takeIf { alias.sourceKind == "language" && it.isNotEmpty() })
         val kind = alias.targetKind ?: return@withContext own
         // Follow only one edge. Another redirect (including a cycle) stays a compiled redirect page.
@@ -464,7 +470,7 @@ class LibraryStore private constructor(private val context: Context) {
                 val nextHit = hit(c)
                 val next = AliasDecoder.decode(payload(nextHit),nextHit.recordKey)
                 require(next.sourceNamespace == alias.targetNamespace && next.sourceTitle == alias.targetTitle && next.sourceKind == kind)
-                return@withContext next.entry().copy(redirect=alias.redirect(true),edition=dictionary.edition,
+                return@withContext next.entry().copy(redirect=alias.redirect(true),edition=dictionary.edition,contentDictionary=dictionary.id,
                     navigationKind=next.sourceKind,navigationLanguage=hit.language.takeIf { hit.kind == "language" && next.sourceKind == "language" && it.isNotEmpty() })
             }
         }

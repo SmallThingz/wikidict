@@ -23,7 +23,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 
 enum class AppScreen { Dictionary, Library, Saved, History, Learn, Settings }
 
@@ -35,41 +36,70 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
     var searching by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Entry?>(null) }
     var anchorRequest by remember { mutableStateOf<EntryAnchorRequest?>(null) }
-    var selectedDictionary by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
-    var selectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
-    fun openDestination(hit: WordHit, target: String = "") {
-        selectionJob?.cancel()
-        selectionJob = scope.launch {
-            loading = true
-            try {
-                val entry = library.read(hit)
+    val navigation = remember(library, learning, scope, snackbar, keyboard) {
+        EntryNavigation(
+            scope = scope,
+            read = library::read,
+            link = library::link,
+            saved = library::savedWord,
+            random = library::random,
+            initial = { library.lastWord() ?: library.search("", 1).firstOrNull() },
+            commit = { hit, entry, target ->
                 selected = entry
                 val fragment = if ('#' in target) target.substringAfter('#')
                     else entry.redirect?.takeIf { it.followed }?.fragment.orEmpty()
                 anchorRequest = fragment.takeIf { it.isNotEmpty() }?.let { EntryAnchorRequest(entry.key, "#$it") }
-                selectedDictionary = hit.dictionary; library.rememberWord(hit); learning.record(entry)
+                library.rememberWord(hit); learning.record(entry)
                 query = ""; searching = false; screen = AppScreen.Dictionary; keyboard?.hide()
+            },
+            loading = { loading = it },
+            error = { snackbar.showSnackbar(it) },
+            installed = { id -> library.dictionaries.any { it.id == id } },
+        )
+    }
+    DisposableEffect(navigation) { onDispose { navigation.cancel() } }
+    val readerUri = remember(uri, navigation) {
+        object : UriHandler {
+            override fun openUri(uriString: String) {
+                navigation.cancel()
+                uri.openUri(uriString)
             }
-            catch(e: kotlinx.coroutines.CancellationException) { throw e }
-            catch(e: Exception) { snackbar.showSnackbar(e.message ?: "Unable to read this word") }
-            finally { loading = false }
         }
     }
-    fun open(hit: WordHit) = openDestination(hit)
+    fun open(hit: WordHit) { navigation.open(hit) }
     LaunchedEffect(library.revision) {
-        if (library.dictionaries.none { it.id == selectedDictionary }) { selected = null; anchorRequest = null }
-        if (library.dictionaries.isEmpty()) { selected = null; screen = AppScreen.Library }
-        else if (selected == null) (library.lastWord() ?: library.search("", 1).firstOrNull())?.let(::open)
+        // Revision zero is the initial database load, not a completed empty library.
+        if (library.revision == 0) return@LaunchedEffect
+        navigation.libraryChanged()
+        if (selected?.isInstalled { id -> library.dictionaries.any { it.id == id } } == false) {
+            selected = null; anchorRequest = null
+        }
+        if (library.dictionaries.isEmpty()) {
+            navigation.cancel()
+            selected = null; anchorRequest = null
+            if (screen == AppScreen.Dictionary && !searching) screen = AppScreen.Library
+        } else if (selected == null && screen == AppScreen.Dictionary && !searching) navigation.openInitialIfIdle()
     }
-    fun openWord(word: SavedWord) { scope.launch { library.savedWord(word)?.let(::open) ?: snackbar.showSnackbar(if(word.dictionary==null) "Choose ${word.title} again from search." else "Install the dictionary for ${word.title}.") } }
-    fun randomWord() { scope.launch { library.random()?.let(::open) } }
+    fun openWord(word: SavedWord) { navigation.openSaved(word) }
+    fun randomWord() { navigation.openRandom() }
+    fun returnTo(destination: AppScreen) {
+        navigation.interrupt {
+            searching = false; query = ""
+            screen = if (destination == AppScreen.Dictionary && library.revision > 0 &&
+                library.dictionaries.isEmpty()) AppScreen.Library else destination
+            keyboard?.hide()
+        }
+        // A recreated search/screen retains its intent, but the decoded entry is not saveable.
+        if (screen == AppScreen.Dictionary && !searching && selected == null &&
+            library.revision > 0 && library.dictionaries.isNotEmpty()) navigation.openInitial()
+    }
     androidx.activity.compose.BackHandler(searching || screen != AppScreen.Dictionary) {
-        searching = false; query = ""; screen = if (screen == AppScreen.Library) AppScreen.Settings else AppScreen.Dictionary; keyboard?.hide()
+        returnTo(if (screen == AppScreen.Library) AppScreen.Settings else AppScreen.Dictionary)
     }
     LaunchedEffect(screen, selected?.key, searching) { dockHidden = false }
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
@@ -81,13 +111,15 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
         Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
             Box(Modifier.navigationBarsPadding().imePadding()) {
                 androidx.compose.animation.Crossfade(searching, label = "dock") { search ->
-                    if (search) SearchDock(query, { query = it }, { searching = false; query = ""; keyboard?.hide() })
+                    if (search) SearchDock(query, { value -> navigation.interrupt { query = value } }, { returnTo(AppScreen.Dictionary) })
                     else Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         listOf(AppScreen.Saved, AppScreen.History, AppScreen.Dictionary, AppScreen.Learn, AppScreen.Settings).forEach { target ->
                             Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                                 DockButton(screenIcon(target), target.name, screen == target || (target == AppScreen.Settings && screen == AppScreen.Library)) {
-                                    if (target == AppScreen.Dictionary) searching = library.dictionaries.isNotEmpty()
-                                    screen = target
+                                    navigation.interrupt {
+                                        if (target == AppScreen.Dictionary) searching = library.dictionaries.isNotEmpty()
+                                        screen = target
+                                    }
                                 }
                             }
                         }
@@ -111,12 +143,16 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                         if (searching) {
                             val matches by produceState<List<WordHit>>(emptyList(), library.revision, query) { value = library.search(query) }
                             WordMatches(matches, ::open)
-                        } else selected?.let { entry -> EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, settings = learning.data.settings, onScrollDirection = { dockHidden = it }, anchorRequest = anchorRequest, onAnchorConsumed = { if (anchorRequest === it) anchorRequest = null }, onLink = { target ->
-                            val bookSource = bookSourcesUrl(entry, target)
-                            if (target.startsWith("File:",true) || target.startsWith("Image:",true) || bookSource != null) {
-                                uri.openUri(bookSource ?: sourcePage(entry,target))
-                            } else scope.launch { library.link(target,entry)?.let { openDestination(it, target) } ?: snackbar.showSnackbar("This word is not in your installed dictionaries.") }
-                        }) } ?: LibraryScreen(library,onImport)
+                        } else selected?.let { entry ->
+                            CompositionLocalProvider(LocalUriHandler provides readerUri) {
+                                EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, settings = learning.data.settings, onScrollDirection = { dockHidden = it }, anchorRequest = anchorRequest, onAnchorConsumed = { if (anchorRequest === it) anchorRequest = null }, onNavigate = { navigation.cancel() }, onLink = { target ->
+                                    val bookSource = bookSourcesUrl(entry, target)
+                                    if (target.startsWith("File:",true) || target.startsWith("Image:",true) || bookSource != null) {
+                                        readerUri.openUri(bookSource ?: sourcePage(entry,target))
+                                    } else navigation.openLink(target, entry)
+                                })
+                            }
+                        } ?: LibraryScreen(library,onImport)
                     }
                     AppScreen.Saved -> SavedScreen(learning, false, ::openWord)
                     AppScreen.History -> SavedScreen(learning, true, ::openWord)
@@ -128,7 +164,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                         }
                         LearnScreen(learning, study, ::openWord, ::randomWord)
                     }
-                    AppScreen.Settings -> SettingsScreen(learning) { screen = AppScreen.Library }
+                    AppScreen.Settings -> SettingsScreen(learning) { navigation.interrupt { screen = AppScreen.Library } }
                 }
             }
             if(loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))

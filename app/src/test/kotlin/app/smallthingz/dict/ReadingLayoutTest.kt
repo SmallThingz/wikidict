@@ -2,6 +2,7 @@ package app.smallthingz.dict
 
 import org.junit.Assert.*
 import org.junit.Test
+import androidx.compose.ui.unit.em
 
 class ReadingLayoutTest {
     @Test fun denseListsAreLazyWithoutLosingTextOrLinkSemantics() {
@@ -121,6 +122,186 @@ class ReadingLayoutTest {
         for (raw in listOf("", " ", "en_US", "en--US", "en,fr", "1en", "en-US-", " en", "en ")) {
             assertNull(raw, spanLanguageTag(raw))
         }
+    }
+
+
+    @Test fun markedPoemSpacingSurvivesCompactionDenseRowsAndTables() {
+        val br = Span("line_break", "", classes = "wikidict-poem")
+        val spaces = Span("text", " \u00a0 ", trail = "  ", classes = "wikidict-poem")
+        val verse = Span("link", "Verse", target = "verse#Noun", trail = " ", classes = "wikidict-poem")
+        val spans = listOf(br, br, spaces, verse, br, br, spaces, br)
+        assertSame(spans, compactSpans(spans))
+        val dense = List(45) { listOf(verse, br) }.flatten() + listOf(br, spaces, br)
+        val table = Table(dense, listOf(listOf(Cell(dense, false, 1, 1))))
+        val rows = readingRows(listOf(Section(3, "Poem", listOf(
+            Block("paragraph", 0, dense), Block("table", 0, emptyList(), table = table)))))
+        assertEquals(3, rows.size)
+        assertEquals(dense, rows[1].block!!.spans)
+        assertEquals(dense, rows[2].block!!.table!!.caption)
+        assertEquals(dense, rows[2].block!!.table!!.rows.single().single().spans)
+        val ordinaryBreak = Span("line_break", "")
+        val boundary = listOf(Span("text", "before"), ordinaryBreak, verse, ordinaryBreak, Span("text", "after"))
+        assertEquals(boundary, compactSpans(boundary))
+        assertEquals("verse#Noun", rows[1].block!!.spans.first().target)
+    }
+
+    @Test fun poemParagraphsUseActualOffsetsRawNewlinesAndLineBoundaries() {
+        val rtl = "wikidict-poem mw-poem-indented wikidict-poem-indent-3 wikidict-poem-dir-rtl"
+        val ltr = "wikidict-poem mw-poem-indented wikidict-poem-indent-1 wikidict-poem-dir-ltr"
+        val parts = listOf(
+            Span("link", "alpha", target = "alpha", classes = rtl, direction = "ltr") to "\u2066alpha\u2069",
+            Span("line_break", "", classes = rtl) to "\n",
+            Span("line_break", "", classes = "wikidict-poem") to "\n",
+            Span("text", "אב\n", classes = ltr, direction = "rtl") to "\u2067אב\n\u2069",
+            Span("text", "ordinary") to "ordinary")
+        val text = StringBuilder()
+        val offsets = parts.map { (span, rendered) ->
+            val start = text.length
+            text.append(rendered)
+            span to (start until text.length)
+        }
+        assertEquals("\u2066alpha\u2069\n\n\u2067אב\n\u2069ordinary", text.toString())
+        assertEquals(listOf(
+            PoemParagraph(0, 8, 3, "rtl"),
+            PoemParagraph(8, 9, 0, null),
+            PoemParagraph(9, 13, 1, "ltr")), poemParagraphs(text.toString(), offsets))
+        val raw = Span("text", "a\nb", classes = rtl)
+        assertEquals(listOf(PoemParagraph(0, 2, 3, "rtl"), PoemParagraph(2, 3, 0, "rtl")),
+            poemParagraphs("a\nb", listOf(raw to (0 until 3))))
+        val separatelyMarked = Span("text", "b", classes = ltr)
+        assertEquals(listOf(PoemParagraph(0, 2, 3, "rtl"), PoemParagraph(2, 3, 1, "ltr")),
+            poemParagraphs("a\nb", listOf(raw.copy(text = "a\n") to (0 until 2),
+                separatelyMarked to (2 until 3))))
+        val trailing = Span("text", "a\n\n", classes = "wikidict-poem")
+        assertEquals(listOf(PoemParagraph(0, 2, 0, null), PoemParagraph(2, 3, 0, null)),
+            poemParagraphs("a\n\n", listOf(trailing to (0 until 3))))
+    }
+
+    @Test fun poemMetadataRejectsMalformedDuplicateAndDisagreeingTokensIndependently() {
+        fun line(first: String, second: String = first): PoemParagraph? =
+            poemParagraphs("ab", listOf(Span("text", "a", classes = first) to (0 until 1),
+                Span("text", "b", classes = second) to (1 until 2))).singleOrNull()
+        val marker = "wikidict-poem"
+        val depth = "$marker wikidict-poem-indent-3"
+        assertEquals(PoemParagraph(0, 2, 3, "rtl"), line("$depth wikidict-poem-dir-rtl"))
+        assertEquals(32, line("$marker wikidict-poem-indent-32")!!.indent)
+        assertNull(line("wikidict-poem-indent-3 wikidict-poem-dir-rtl"))
+        for (bad in listOf("0", "03", "+3", "33", "", "x", "999999999999999999999")) {
+            assertEquals(PoemParagraph(0, 2, 0, "rtl"),
+                line("$marker wikidict-poem-indent-$bad wikidict-poem-dir-rtl"))
+        }
+        for (bad in listOf("wikidict-poem-indent", "wikidict-poem-indentjunk")) {
+            assertEquals(PoemParagraph(0, 2, 0, "rtl"),
+                line("$depth $bad wikidict-poem-dir-rtl"))
+        }
+        for (bad in listOf("wikidict-poem-dir", "wikidict-poem-dirjunk")) {
+            assertEquals(PoemParagraph(0, 2, 3, null),
+                line("$depth wikidict-poem-dir-rtl $bad"))
+        }
+        assertEquals(0, line("$depth wikidict-poem-indent-3")!!.indent)
+        assertEquals(0, line("$depth wikidict-poem-indent-2")!!.indent)
+        assertEquals(0, line(depth, "$marker wikidict-poem-indent-2")!!.indent)
+        assertEquals(0, line(depth, marker)!!.indent)
+        for (suffix in listOf("rtl wikidict-poem-dir-rtl", "rtl wikidict-poem-dir-ltr", "auto", "")) {
+            assertEquals(PoemParagraph(0, 2, 3, null), line("$depth wikidict-poem-dir-$suffix"))
+        }
+        assertEquals(PoemParagraph(0, 2, 3, null),
+            line("$depth wikidict-poem-dir-rtl", "$depth wikidict-poem-dir-ltr"))
+        assertEquals(PoemParagraph(0, 2, 3, null),
+            line("$depth wikidict-poem-dir-rtl", depth))
+        val mixed = Span("link", "Tone", target = "File:Tone.ogg",
+            classes = "wikidict-poem\twikidict-media\nwikidict-poem-indent-3")
+        assertTrue(mixed.hasClassToken("wikidict-media"))
+        assertFalse(mixed.hasClassToken("media"))
+        assertEquals(mixed.copy(classes = "wikidict-poem wikidict-poem-indent-3"),
+            mixed.withoutClassToken("wikidict-media"))
+    }
+
+    @Test fun nativeEgyptianMappingPreservesExplicitPoemDirectionAndOrdinaryInference() {
+        val witness = "𓂜"
+        val cases = listOf(
+            "Latin" to androidx.compose.ui.text.style.TextDirection.Rtl,
+            "אב" to androidx.compose.ui.text.style.TextDirection.Ltr)
+        for ((prefix, direction) in cases) {
+            val text = prefix + witness
+            val paragraph = androidx.compose.ui.text.ParagraphStyle(
+                textDirection = direction,
+                textIndent = androidx.compose.ui.text.style.TextIndent(
+                    2.em, 2.em))
+            val original = androidx.compose.ui.text.AnnotatedString(text,
+                paragraphStyles = listOf(androidx.compose.ui.text.AnnotatedString.Range(paragraph, 0, text.length)))
+            val run = EgyptianTextRun(prefix.length, text.length, witness, false)
+            val mapped = egyptianInlineText(original, listOf(run), rtlFallback = false)
+            assertEquals(prefix + "\u2066" + witness + "\u2069", mapped.text)
+            assertEquals(listOf(androidx.compose.ui.text.AnnotatedString.Range(paragraph, 0, mapped.length)),
+                mapped.paragraphStyles)
+            val inferred = egyptianInlineText(androidx.compose.ui.text.AnnotatedString(text), listOf(run), rtlFallback = false)
+            assertEquals(if (prefix == "Latin") androidx.compose.ui.text.style.TextDirection.Ltr
+                else androidx.compose.ui.text.style.TextDirection.Rtl, inferred.paragraphStyles.single().item.textDirection)
+        }
+    }
+
+    @Test fun composeBuilderParagraphsKeepActualTextAndUtf16Boundaries() {
+        val marker = "wikidict-poem wikidict-poem-indent-2 wikidict-poem-dir-ltr"
+        fun verify(parts: List<Pair<Span, String>>, expectedText: String,
+                   expectedParagraphs: List<PoemParagraph>) {
+            var paragraphs = emptyList<PoemParagraph>()
+            var ranges = emptyList<Pair<Span, IntRange>>()
+            val rendered = androidx.compose.ui.text.buildAnnotatedString {
+                ranges = parts.mapIndexed { index, (span, text) ->
+                    val start = length
+                    append(text)
+                    addStringAnnotation("source", index.toString(), start, length)
+                    span to (start until length)
+                }
+                // This is an AnnotatedString.Builder, whose Object.toString() is not its text.
+                val actualText = toAnnotatedString().text
+                assertEquals(expectedText, actualText)
+                paragraphs = poemParagraphs(actualText, ranges)
+                paragraphs.forEach { paragraph ->
+                    addStyle(androidx.compose.ui.text.ParagraphStyle(
+                        textIndent = androidx.compose.ui.text.style.TextIndent(
+                            paragraph.indent.em, paragraph.indent.em),
+                        textDirection = when (paragraph.direction) {
+                            "ltr" -> androidx.compose.ui.text.style.TextDirection.Ltr
+                            "rtl" -> androidx.compose.ui.text.style.TextDirection.Rtl
+                            else -> androidx.compose.ui.text.style.TextDirection.Content
+                        }), paragraph.start, paragraph.end)
+                }
+            }
+            assertEquals(expectedText, rendered.text)
+            assertEquals(expectedParagraphs, paragraphs)
+            assertEquals(expectedParagraphs.map { it.start to it.end },
+                rendered.paragraphStyles.map { it.start to it.end })
+            assertEquals(parts.size, rendered.getStringAnnotations("source", 0, rendered.length).size)
+            ranges.forEachIndexed { index, (_, range) ->
+                val annotation = rendered.getStringAnnotations("source", range.first, range.last + 1)
+                    .single { it.item == index.toString() }
+                assertEquals(range.first, annotation.start)
+                assertEquals(range.last + 1, annotation.end)
+                assertEquals(parts[index].second, rendered.text.substring(annotation.start, annotation.end))
+            }
+        }
+        // Exact pre-shaping text from the failing device test's long Egyptian case.
+        val long = "𓂜𓐰𓏏𓐱𓏭𓅪𓆑".repeat(12)
+        assertTrue(long.length > 56)
+        verify(listOf(Span("text", long, classes = "Egyp") to long), long, emptyList())
+        verify(emptyList(), "", emptyList())
+        verify(listOf(Span("text", "", classes = marker) to ""), "", emptyList())
+        val unicode = "\u2066𓂜e\u0301  \u2069"
+        verify(listOf(Span("link", "𓂜e\u0301", target = "word#Noun", trail = "  ",
+            classes = marker, direction = "ltr") to unicode), unicode,
+            listOf(PoemParagraph(0, unicode.length, 2, "ltr")))
+        for ((text, expected) in listOf(
+            "a" to listOf(PoemParagraph(0, 1, 2, "ltr")),
+            "a\n" to listOf(PoemParagraph(0, 2, 2, "ltr")),
+            "a\n\n" to listOf(PoemParagraph(0, 2, 2, "ltr"), PoemParagraph(2, 3, 0, "ltr")),
+            "\n\n" to listOf(PoemParagraph(0, 1, 2, "ltr"), PoemParagraph(1, 2, 0, "ltr")),
+            "𓂜\nb" to listOf(PoemParagraph(0, 3, 2, "ltr"), PoemParagraph(3, 4, 0, "ltr"))
+        )) verify(listOf(Span("text", text, classes = marker) to text), text, expected)
+        val markedBreak = Span("line_break", "", classes = marker)
+        verify(listOf(markedBreak to "\n", markedBreak to "\n"), "\n\n",
+            listOf(PoemParagraph(0, 1, 2, "ltr"), PoemParagraph(1, 2, 2, "ltr")))
     }
 
 }

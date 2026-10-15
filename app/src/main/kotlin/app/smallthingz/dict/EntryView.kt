@@ -30,6 +30,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.input.nestedscroll.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -44,7 +45,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
@@ -53,7 +56,7 @@ private val EgyptianFontFamily = FontFamily(Font(R.font.egyptian_hieroglyphs))
 private val spanClassWhitespace = Regex("\\s+")
 
 private class TextCache(val link: State<(String) -> Unit>) {
-    val values = java.util.IdentityHashMap<List<Span>, MutableMap<FontWeight?, AnnotatedString>>()
+    val values = java.util.IdentityHashMap<List<Span>, MutableMap<Pair<FontWeight?, LayoutDirection>, AnnotatedString>>()
 }
 private val LocalEntryMedia = staticCompositionLocalOf<List<Media>> { emptyList() }
 private val LocalEntryEdition = staticCompositionLocalOf { "" }
@@ -64,7 +67,7 @@ private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
 class EntryAnchorRequest(val entryKey: String, val target: String)
 
 @Composable
-fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings(), onScrollDirection: (Boolean) -> Unit = {}, anchorRequest: EntryAnchorRequest? = null, onAnchorConsumed: (EntryAnchorRequest) -> Unit = {}) {
+fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings(), onScrollDirection: (Boolean) -> Unit = {}, anchorRequest: EntryAnchorRequest? = null, onAnchorConsumed: (EntryAnchorRequest) -> Unit = {}, onNavigate: () -> Unit = {}) {
     val uri = LocalUriHandler.current
     val context = LocalContext.current
     DisposableEffect(entry.key) { onDispose { SpeechPlayback.stop() } }
@@ -121,7 +124,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             } else return false
             return true
         }
-        val readerLink: (String) -> Unit = { target -> if (!jumpToAnchor(target)) onLink(target) }
+        val readerLink: (String) -> Unit = { target ->
+            onNavigate()
+            if (!jumpToAnchor(target)) onLink(target)
+        }
         LaunchedEffect(entry.key, anchorRequest) {
             anchorRequest?.takeIf { it.entryKey == entry.key }?.let {
                 jumpToAnchor(it.target)
@@ -147,6 +153,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                             DropdownMenu(contents, { contents = false }, Modifier.heightIn(max = 340.dp)) {
                                 entry.readingRows.forEach { row -> row.heading?.let { section ->
                                     if (section.title.isNotBlank() && section.title != entry.language) DropdownMenuItem(text = { Text(section.title) }, onClick = {
+                                        onNavigate()
                                         contents = false
                                         folded[row.key] = false
                                         val targetIndex = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys).indexOfFirst { it.key == row.key }
@@ -311,9 +318,9 @@ private fun TableView(table: Table, onLink: (String) -> Unit) {
     }
 }
 
-/** Use the same exact marker matching for inline controls and the media footer. */
+/** Use the same class-token matching for inline controls and the media footer. */
 private fun embeddedMedia(spans: List<Span>, available: List<Media>): List<Media> =
-    spans.filter { it.classes == "wikidict-media" && it.target.startsWith("File:") }
+    spans.filter { it.hasClassToken("wikidict-media") && it.target.startsWith("File:") }
         .mapNotNull { span -> available.firstOrNull { it.file == span.target.removePrefix("File:").replace('_', ' ') } }
         .distinctBy { it.file }
 
@@ -347,7 +354,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     if (embedded.isNotEmpty()) {
         Column(modifier) {
             // Captions are compiled spans; the media record contains only a plain summary.
-            val text = remember(spans) { spans.map { if (it.classes == "wikidict-media") it.copy(classes = "") else it } }
+            val text = remember(spans) { spans.map { if (it.hasClassToken("wikidict-media")) it.withoutClassToken("wikidict-media") else it } }
             StyledText(text, weight = weight, style = style, onLink = onLink, preserveWhitespace = preserveWhitespace)
             embedded.forEach { MediaView(it, LocalReaderSettings.current, showFileName = false, edition=LocalEntryEdition.current, showCaption = false) }
         }
@@ -357,9 +364,12 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val codeColor = MaterialTheme.colorScheme.surfaceContainer
     val cache = LocalTextCache.current
     val currentLink = rememberUpdatedState(onLink)
-    val annotated = remember(spans, weight, linkColor, codeColor, cache) {
-        cache?.values?.get(spans)?.get(weight) ?: buildAnnotatedString {
+    val layoutDirection = LocalLayoutDirection.current
+    val cacheKey = weight to layoutDirection
+    val annotated = remember(spans, weight, linkColor, codeColor, cache, layoutDirection) {
+        cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
             val linkStyle = TextLinkStyles(style = SpanStyle(color = linkColor), pressedStyle = SpanStyle(textDecoration = TextDecoration.Underline))
+            val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEach { span ->
                 val start = length
                 when (span.direction) {
@@ -371,6 +381,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
                 append(span.trail)
                 if (span.direction in listOf("rtl", "ltr", "auto")) append('\u2069')
                 val end = length
+                appendedSpans.add(span to (start until end))
                 if (end > start) {
                     val languageTag = spanLanguageTag(span.language)
                     val fontFamily = when {
@@ -401,7 +412,16 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
                     }
                 }
             }
-        }.also { cache?.values?.getOrPut(spans) { mutableMapOf() }?.put(weight, it) }
+            poemParagraphs(toAnnotatedString().text, appendedSpans).forEach { paragraph ->
+                addStyle(ParagraphStyle(
+                    textIndent = TextIndent(paragraph.indent.em, paragraph.indent.em),
+                    textDirection = when (paragraph.direction) {
+                        "ltr" -> TextDirection.Ltr
+                        "rtl" -> TextDirection.Rtl
+                        else -> if (layoutDirection == LayoutDirection.Rtl) TextDirection.Rtl else TextDirection.Ltr
+                    }), paragraph.start, paragraph.end)
+            }
+        }.also { cache?.values?.getOrPut(spans) { mutableMapOf() }?.put(cacheKey, it) }
     }
     val egyptianRuns = remember(spans) { egyptianTextRuns(spans) }
     SelectionContainer {

@@ -106,8 +106,28 @@ class RendererDeviceTest {
         compose.onNodeWithText("Dark").performClick()
         compose.onNodeWithText("Light").performClick()
         compose.onNodeWithContentDescription("Dictionary").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("ca")
+        compose.activityRule.scenario.recreate()
+        compose.waitUntil(15000) { compose.onAllNodes(hasSetTextAction()).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
+        compose.onNode(hasSetTextAction()).assertTextEquals("ca")
+        compose.onAllNodesWithTag("entry-scroll").assertCountEquals(0)
+        compose.onNodeWithContentDescription("Close search").performClick()
+        compose.waitUntil(15000){compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithTag("entry-title").assertTextEquals("cat")
+
+        compose.onNodeWithContentDescription("Dictionary").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("ca")
+        compose.activityRule.scenario.recreate()
+        compose.waitUntil(15000) { compose.onAllNodes(hasSetTextAction()).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
+        compose.onNode(hasSetTextAction()).assertTextEquals("ca")
+        compose.onAllNodesWithTag("entry-scroll").assertCountEquals(0)
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.waitUntil(15000){compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithTag("entry-title").assertTextEquals("cat")
+
         compose.activityRule.scenario.recreate()
         compose.waitUntil(15000){compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithTag("entry-title").assertTextEquals("cat")
     }
     @Test fun checksumFailureDoesNotInstallOrDamageLibrary() = runBlocking {
         val before=library.dictionaries.map{it.id}
@@ -295,7 +315,9 @@ class RendererDeviceTest {
             val info = library.dictionaries.single { it.id !in before }
             val hit = library.search("elephant").first { it.dictionary == info.id && it.title == "elephant" }
             val actual = library.read(hit)
-            assertEquals(expected.copy(origin=null), actual.copy(origin=null))
+            assertEquals(rawHit.dictionary, expected.contentDictionary)
+            assertEquals(hit.dictionary, actual.contentDictionary)
+            assertEquals(expected.copy(origin=null, contentDictionary=null), actual.copy(origin=null, contentDictionary=null))
             assertNotEquals(expected.origin?.dictionary, actual.origin?.dictionary)
             assertEquals(compressed.length(), java.io.File(context.filesDir, "dictionaries/${info.id}.wikblb").length())
             library.remove(info.id).join()

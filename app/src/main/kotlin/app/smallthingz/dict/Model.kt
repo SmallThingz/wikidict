@@ -50,6 +50,8 @@ data class Entry(
     val origin: WordHit? = null,
     val navigationKind: String = kind,
     val navigationLanguage: String? = language,
+    // The body may come from a different immutable blob than the navigation origin.
+    val contentDictionary: String? = null,
 ) {
     val key: String = origin?.takeIf { edition.isNotEmpty() || redirect != null }?.let {
         "${it.dictionary}\u0000${it.contextDictionary.orEmpty()}\u0000${it.recordKey}"
@@ -68,6 +70,12 @@ data class Entry(
         return (fallback ?: "Definition unavailable.").take(420)
     }
 }
+
+internal fun WordHit.isInstalled(installed: (String) -> Boolean): Boolean =
+    installed(dictionary) && (contextDictionary == null || installed(contextDictionary))
+
+internal fun Entry.isInstalled(installed: (String) -> Boolean): Boolean =
+    origin?.isInstalled(installed) == true && contentDictionary?.let(installed) == true
 
 private val previewClassWhitespace = Regex("\\s+")
 

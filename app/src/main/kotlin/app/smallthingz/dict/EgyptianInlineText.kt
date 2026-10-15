@@ -18,7 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -31,7 +31,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.Bidi
 import kotlinx.coroutines.CancellationException
@@ -102,8 +101,14 @@ internal fun egyptianInlineText(original: AnnotatedString, runs: List<EgyptianTe
             val newline = original.text.indexOf('\n', start)
             val textEnd = if (newline < 0) original.length else newline
             val end = if (newline < 0) original.length else newline + 1
-            val bidi = Bidi(original.text.substring(start, textEnd), if (rtlFallback) Bidi.DIRECTION_DEFAULT_RIGHT_TO_LEFT else Bidi.DIRECTION_DEFAULT_LEFT_TO_RIGHT)
-            addStyle(ParagraphStyle(textDirection = if (bidi.baseIsLeftToRight()) TextDirection.Ltr else TextDirection.Rtl), mapped(start), mapped(end))
+            val explicitDirection = original.paragraphStyles.any {
+                it.start <= start && it.end >= end &&
+                    (it.item.textDirection == TextDirection.Ltr || it.item.textDirection == TextDirection.Rtl)
+            }
+            if (!explicitDirection) {
+                val bidi = Bidi(original.text.substring(start, textEnd), if (rtlFallback) Bidi.DIRECTION_DEFAULT_RIGHT_TO_LEFT else Bidi.DIRECTION_DEFAULT_LEFT_TO_RIGHT)
+                addStyle(ParagraphStyle(textDirection = if (bidi.baseIsLeftToRight()) TextDirection.Ltr else TextDirection.Rtl), mapped(start), mapped(end))
+            }
             start = end
         }
     }
@@ -147,7 +152,7 @@ private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<Egypti
     val effectiveStyle = LocalTextStyle.current.merge(style)
     val contentColor = if (effectiveStyle.color != Color.Unspecified) effectiveStyle.color else LocalContentColor.current
     val baseSize = with(density) { (if (effectiveStyle.fontSize.isSp) effectiveStyle.fontSize else 16.sp).toPx() }
-    val viewportWidth = with(density) { LocalConfiguration.current.screenWidthDp.dp.toPx() }.coerceAtLeast(1f)
+    val viewportWidth = LocalWindowInfo.current.containerSize.width.toFloat().coerceAtLeast(1f)
     val annotated = remember(original, runs, fallbackRtl) { egyptianInlineText(original, runs, fallbackRtl) }
     val request = remember(original, runs, effectiveStyle, baseSize) { Any() }
     val produced by produceState<PreparedEgyptianText?>(null, request) {
