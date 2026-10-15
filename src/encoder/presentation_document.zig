@@ -26,6 +26,10 @@ const BehaviorRegistry = @import("namespace_registry").behavior_switches.Registr
 const NamespaceRegistry = @import("namespace_registry").Registry;
 pub const Fallbacks = @import("presentation_fallback.zig").Report;
 pub const ReferenceDefinitions = compiler.ReferenceDefinitions;
+pub const PoemPhase = compiler.PoemPhase;
+pub fn parsePoemPhaseAlloc(a: A, full_output: []const u8, display_title: ?[]const u8, metadata: ?[]const u8) !?*const PoemPhase {
+    return compiler.parsePoemPhaseAlloc(a, full_output, display_title, metadata);
+}
 pub const referenceDefinitionsAlloc = compiler.referenceDefinitionsAlloc;
 pub const preparePageTocSourceAlloc = compiler.preparePageTocSourceAlloc;
 
@@ -147,6 +151,9 @@ const Builder = struct {
     }
 };
 fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions) !Work {
+    return workAllocWithPoem(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, null);
+}
+fn workAllocWithPoem(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase) !Work {
     var renderer: compiler.Renderer = .{
         .a = a,
         .context = .{
@@ -157,6 +164,7 @@ fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, 
             .namespace_catalog = namespace_catalog,
             .behavior_switches = behavior_switches,
             .image_options = image_options,
+            .poem_phase = poem_phase,
         },
     };
     renderer.page_reference_definitions = reference_context.items;
@@ -178,7 +186,7 @@ fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, 
     };
 }
 
-fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, fallbacks: ?*Fallbacks) ![]const compiler.Span {
+fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, fallbacks: ?*Fallbacks, poem_phase: ?*const PoemPhase) ![]const compiler.Span {
     const value = display orelse return &.{};
     if (value.source.len == 0) return &.{};
     var renderer: compiler.Renderer = .{
@@ -190,6 +198,7 @@ fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, li
             .namespace_catalog = namespace_catalog,
             .behavior_switches = behavior_switches,
             .image_options = image_options,
+            .poem_phase = poem_phase,
         },
     };
     const spans = renderer.parseSpans(value.source, .{ .role = .headword }) catch |err| {
@@ -308,7 +317,25 @@ pub fn compileReportedWithOptionsAlloc(
     image_options: ?*const ImageRegistry,
     fallbacks: ?*Fallbacks,
 ) ![]u8 {
-    return compileReportedWithReferencesAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, .{}, fallbacks);
+    return compileReportedWithOptionsAndPoemAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, fallbacks, null);
+}
+
+pub fn compileReportedWithOptionsAndPoemAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: []const u8,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    fallbacks: ?*Fallbacks,
+    poem_phase: ?*const PoemPhase,
+) ![]u8 {
+    return compileReportedWithReferencesAndPoemAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, .{}, fallbacks, poem_phase);
 }
 
 pub fn compileReportedWithReferencesAlloc(
@@ -326,15 +353,34 @@ pub fn compileReportedWithReferencesAlloc(
     reference_context: compiler.ReferenceDefinitions,
     fallbacks: ?*Fallbacks,
 ) ![]u8 {
+    return compileReportedWithReferencesAndPoemAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, fallbacks, null);
+}
+
+pub fn compileReportedWithReferencesAndPoemAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: []const u8,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    reference_context: compiler.ReferenceDefinitions,
+    fallbacks: ?*Fallbacks,
+    poem_phase: ?*const PoemPhase,
+) ![]u8 {
     _ = kind;
     _ = language_code;
-    const work = try workAlloc(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context);
+    const work = try workAllocWithPoem(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;
         report.missing_template = report.missing_template or work.unresolved_templates != 0;
     } else if (work.rendered_templates != 0 or work.unresolved_templates != 0) return error.UncompiledTemplate;
-    const display_spans = try displayTitleSpansAlloc(a, display_title, language orelse "", link_trail, namespace_catalog, behavior_switches, image_options, fallbacks);
+    const display_spans = try displayTitleSpansAlloc(a, display_title, language orelse "", link_trail, namespace_catalog, behavior_switches, image_options, fallbacks, poem_phase);
     try validateSpans(a, display_spans, fallbacks);
     for (@constCast(work.sections)) |*section| {
         if (section.title_spans.len != 0) {
@@ -917,4 +963,106 @@ test "post-expansion generated-comment fixture preserves control semantics and I
     // Only the entity-authored spelling remains a visible complete control.
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "__NOEDITSECTION__"));
     try std.testing.expect(std.mem.indexOf(u8, visible.items, "Ordinary AB") != null);
+}
+
+test "poem lines metadata and protected strip breaks survive ordinary DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<poem>\n::[[cat]]\n\n<nowiki>A\n::[[B]]</nowiki>\n</poem>";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "Poem", .language, "English", "en", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "Poem", .language, .{ .code = "en", .heading = "English" });
+    errdefer {
+        std.debug.print("\nPoem DPR2 lines fallbacks={any}\n", .{report});
+        for (decoded.entry.sections, 0..) |section, section_i| for (section.blocks, 0..) |block, block_i| {
+            std.debug.print("block[{d},{d}] kind={s}\n", .{ section_i, block_i, @tagName(block.kind) });
+            for (block.spans, 0..) |span, span_i| std.debug.print("span[{d}] kind={s} text={s} target={s} classes={s} direction={s}\n", .{ span_i, @tagName(span.kind), span.text, span.target, span.classes, span.direction });
+        };
+        for (decoded.entry.references) |ref| {
+            std.debug.print("reference name={s} group={s}\n", .{ ref.name, ref.group });
+            for (ref.spans) |span| std.debug.print("reference span kind={s} text={s} target={s} classes={s}\n", .{ @tagName(span.kind), span.text, span.target, span.classes });
+        }
+        for (decoded.entry.media) |media| std.debug.print("media file={s} caption={s}\n", .{ media.file, media.caption });
+    }
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "\x7fWDPOEM:") == null);
+    var visible: std.ArrayList(u8) = .empty;
+    var cat = false;
+    var breaks: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .line_break and std.mem.indexOf(u8, span.classes, "wikidict-poem") != null) breaks += 1;
+        if (span.kind == .link and std.mem.eql(u8, span.target, "cat")) {
+            cat = true;
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem-indent-2") != null);
+        }
+        try std.testing.expect(!(span.kind == .link and std.mem.eql(u8, span.target, "B")));
+    };
+    try std.testing.expect(cat);
+    try std.testing.expect(breaks >= 3);
+    // The raw colon regex wraps the line including </nowiki>; its generated
+    // closing span lies after nowiki and is parsed, never protected literal text.
+    try std.testing.expectEqualStrings("cat\n\nA\n<span class=\"mw-poem-indented\" style=\"display: inline-block; margin-inline-start: 2em;\">[[B]]", visible.items);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "wikidict-poem") == null);
+}
+
+test "poem strip items cannot ship in reference identities or media metadata" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The raw handler inserts owned strip items even inside attributes and a
+    // file link. Identity that cannot remain faithful is diagnosed, not guessed.
+    const source = "<poem>start\n<ref name=\"named\nkey\" group=\"group\nkey\">note\n::[[B]]</ref>\n[[File:Tone.ogg|thumb|first\nsecond]]\n[[File:Plain.ogg|hidden timed caption]]\n[[File:bad\nname.ogg|readable caption]]</poem>";
+    var report: Fallbacks = .{};
+    const encoded = try compileReportedAlloc(a, "Poem metadata", .language, "English", "en", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, encoded, "Poem metadata", .language, .{ .code = "en", .heading = "English" });
+    errdefer {
+        std.debug.print("\nPoem DPR2 non-span fallbacks={any}\n", .{report});
+        for (decoded.entry.sections, 0..) |section, section_i| for (section.blocks, 0..) |block, block_i| {
+            std.debug.print("block[{d},{d}] kind={s}\n", .{ section_i, block_i, @tagName(block.kind) });
+            for (block.spans, 0..) |span, span_i| std.debug.print("span[{d}] kind={s} text={s} target={s} classes={s} direction={s}\n", .{ span_i, @tagName(span.kind), span.text, span.target, span.classes, span.direction });
+        };
+        for (decoded.entry.references) |ref| {
+            std.debug.print("reference name={s} group={s}\n", .{ ref.name, ref.group });
+            for (ref.spans) |span| std.debug.print("reference span kind={s} text={s} target={s} classes={s}\n", .{ @tagName(span.kind), span.text, span.target, span.classes });
+        }
+        for (decoded.entry.media) |media| std.debug.print("media file={s} caption={s}\n", .{ media.file, media.caption });
+    }
+    try std.testing.expect(report.unsupported_element);
+    try std.testing.expect(std.mem.indexOf(u8, encoded, "\x7fWDPOEM:") == null);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    const ref = decoded.entry.references[0];
+    try std.testing.expect(std.mem.indexOf(u8, ref.name, "\x7fWDPOEM:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ref.group, "\x7fWDPOEM:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ref.name, "named") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ref.group, "group") != null);
+    var note: std.ArrayList(u8) = .empty;
+    var linked_b = false;
+    for (ref.spans) |span| {
+        try note.appendSlice(a, span.text);
+        linked_b = linked_b or (span.kind == .link and std.mem.eql(u8, span.target, "B"));
+        try std.testing.expect(std.mem.indexOf(u8, span.text, "\x7fWDPOEM:") == null);
+        try std.testing.expect(std.mem.indexOf(u8, span.target, "\x7fWDPOEM:") == null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, note.items, "note") != null);
+    try std.testing.expect(linked_b);
+    var tone = false;
+    var unframed = false;
+    for (decoded.entry.media) |media| {
+        try std.testing.expect(std.mem.indexOf(u8, media.file, "\x7fWDPOEM:") == null);
+        try std.testing.expect(std.mem.indexOf(u8, media.caption, "\x7fWDPOEM:") == null);
+        try std.testing.expect(!std.mem.startsWith(u8, media.file, "bad"));
+        if (std.mem.eql(u8, media.file, "Tone.ogg")) {
+            tone = true;
+            try std.testing.expectEqualStrings("first\nsecond", media.caption);
+        }
+        if (std.mem.eql(u8, media.file, "Plain.ogg")) {
+            unframed = true;
+            try std.testing.expectEqualStrings("Plain.ogg", media.caption);
+        }
+    }
+    try std.testing.expect(tone and unframed);
+    var visible: std.ArrayList(u8) = .empty;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| try visible.appendSlice(a, span.text);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "readable caption") != null);
 }

@@ -142,7 +142,137 @@ fn htmlListItemCount(input: []const u8) i32 {
 }
 pub const media_types = @import("presentation_media.zig");
 pub const Error = A.Error || error{RenderLimit};
+
+// Optional build-only native extension provenance. A phase is validated once
+// against the complete wire output/title before language regrouping. Renderers
+// own copies of referenced strings, not pointers into the page transport arena.
+pub const PoemPhaseItem = struct {
+    token: []const u8,
+    kind: enum { br, space, indent, scope, literal },
+    depth: ?u8 = null,
+    tag: ?[]const u8 = null,
+    body: ?[]const u8 = null,
+};
+const PoemPhaseWire = struct {
+    schema: []const u8,
+    handled: bool,
+    output_sha256: []const u8,
+    display_title_sha256: []const u8,
+    items: []const PoemPhaseItem,
+};
+pub const PoemPhase = struct {
+    items: []const PoemPhaseItem,
+    // Borrowed only during this page's synchronous Writer compilation. JSON
+    // values and Renderer-owned strings have their separate allocator lifetimes.
+    full_output: []const u8,
+};
+const native_poem_prefix = "\x7fWDPOEM:";
+const max_poem_metadata_bytes = 16 * 1024 * 1024;
+fn nativePoemLooking(value: []const u8) bool {
+    var cursor: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, value, cursor, '<')) |lt| {
+        cursor = lt + 1;
+        if (cursor < value.len and value[cursor] == '/') cursor += 1;
+        if (value.len - cursor < 4 or !std.ascii.eqlIgnoreCase(value[cursor..][0..4], "poem")) continue;
+        if (value.len == cursor + 4 or value[cursor + 4] == '>' or value[cursor + 4] == '/' or std.ascii.isWhitespace(value[cursor + 4])) return true;
+    }
+    return false;
+}
+fn nativePoemIndex(value: []const u8) ?usize {
+    if (!std.mem.startsWith(u8, value, native_poem_prefix)) return null;
+    const rest = value[native_poem_prefix.len..];
+    const colon = std.mem.indexOfScalar(u8, rest[0..@min(rest.len, 21)], ':') orelse return null;
+    if (colon == 0 or (colon > 1 and rest[0] == '0')) return null;
+    for (rest[0..colon]) |ch| if (!std.ascii.isDigit(ch)) return null;
+    return std.fmt.parseInt(usize, rest[0..colon], 10) catch null;
+}
+const PoemReferenceMetrics = struct { bytes: usize, depth: usize };
+fn poemReferenceMetrics(value: []const u8, items: []const PoemPhaseItem, before: usize, costs: []const usize, depths: []const usize) !PoemReferenceMetrics {
+    var pos: usize = 0;
+    var bytes: usize = 0;
+    var depth: usize = 0;
+    while (std.mem.indexOfPos(u8, value, pos, native_poem_prefix)) |found| {
+        const index = nativePoemIndex(value[found..]) orelse return error.OrphanPoemMarker;
+        if (index >= items.len or index >= before or !std.mem.startsWith(u8, value[found..], items[index].token)) return error.OrphanPoemMarker;
+        bytes = std.math.add(usize, bytes, found - pos) catch return error.FrameTooLarge;
+        bytes = std.math.add(usize, bytes, costs[index]) catch return error.FrameTooLarge;
+        if (bytes > max_poem_metadata_bytes) return error.FrameTooLarge;
+        depth = @max(depth, depths[index] + 1);
+        if (depth > max_depth) return error.InvalidPoemMetadata;
+        pos = found + items[index].token.len;
+    }
+    bytes = std.math.add(usize, bytes, value.len - pos) catch return error.FrameTooLarge;
+    if (bytes > max_poem_metadata_bytes) return error.FrameTooLarge;
+    return .{ .bytes = bytes, .depth = depth };
+}
+pub fn parsePoemPhaseAlloc(a: A, full_output: []const u8, display_title: ?[]const u8, metadata: ?[]const u8) !?*const PoemPhase {
+    const title = display_title orelse "";
+    if (full_output.len > max_poem_metadata_bytes or title.len > 64 * 1024) return error.FrameTooLarge;
+    const encoded = metadata orelse {
+        if (std.mem.indexOf(u8, full_output, native_poem_prefix) != null or std.mem.indexOf(u8, title, native_poem_prefix) != null) return error.OrphanPoemMarker;
+        if (nativePoemLooking(full_output) or nativePoemLooking(title)) return error.MissingPoemMetadata;
+        return null;
+    };
+    if (encoded.len > max_poem_metadata_bytes) return error.FrameTooLarge;
+    const phase = try a.create(PoemPhaseWire);
+    phase.* = std.json.parseFromSliceLeaky(PoemPhaseWire, a, encoded, .{ .allocate = .alloc_always, .ignore_unknown_fields = false, .duplicate_field_behavior = .@"error" }) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return error.InvalidPoemMetadata,
+    };
+    if (!phase.handled or !std.mem.eql(u8, phase.schema, "wikidict.poem-phase.v1") or phase.items.len > 100_000) return error.InvalidPoemMetadata;
+    var output_hash: [32]u8 = undefined;
+    var title_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(full_output, &output_hash, .{});
+    std.crypto.hash.sha2.Sha256.hash(title, &title_hash, .{});
+    const output_hex = std.fmt.bytesToHex(output_hash, .lower);
+    const title_hex = std.fmt.bytesToHex(title_hash, .lower);
+    if (!std.mem.eql(u8, phase.output_sha256, &output_hex) or !std.mem.eql(u8, phase.display_title_sha256, &title_hex)) return error.InvalidPoemMetadata;
+    const costs = try a.alloc(usize, phase.items.len);
+    const depths = try a.alloc(usize, phase.items.len);
+    var literal_bytes: usize = 0;
+    for (phase.items, 0..) |item, index| {
+        if (item.token.len > 128 or nativePoemIndex(item.token) != index) return error.InvalidPoemMetadata;
+        const rest = item.token[native_poem_prefix.len..];
+        const colon = native_poem_prefix.len + (std.mem.indexOfScalar(u8, rest, ':') orelse return error.InvalidPoemMetadata);
+        const tail = item.token[colon + 1 ..];
+        if (tail.len != 65 or tail[64] != 0x7f) return error.InvalidPoemMetadata;
+        for (tail[0..64]) |ch| if (!std.ascii.isDigit(ch) and (ch < 'a' or ch > 'f')) return error.InvalidPoemMetadata;
+        if (item.kind == .indent) {
+            const depth = item.depth orelse return error.InvalidPoemMetadata;
+            if (depth == 0 or depth > 32) return error.InvalidPoemMetadata;
+        } else if (item.depth != null) return error.InvalidPoemMetadata;
+        costs[index] = if (item.kind == .br or item.kind == .space) 1 else 0;
+        depths[index] = 0;
+        if (item.kind == .literal) {
+            const tag = item.tag orelse return error.InvalidPoemMetadata;
+            const body = item.body orelse return error.InvalidPoemMetadata;
+            if (!oneOf(tag, &.{ "text", "nowiki", "pre", "source", "syntaxhighlight", "poem" })) return error.InvalidPoemMetadata;
+            if (body.len > max_poem_metadata_bytes -| literal_bytes) return error.FrameTooLarge;
+            literal_bytes += body.len;
+            var body_hash: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(body, &body_hash, .{});
+            const body_hex = std.fmt.bytesToHex(body_hash, .lower);
+            if (!std.mem.eql(u8, tail[0..64], &body_hex)) return error.InvalidPoemMetadata;
+            if (std.mem.eql(u8, tag, "text")) {
+                costs[index] = body.len;
+                depths[index] = 1;
+            } else {
+                const metrics = try poemReferenceMetrics(body, phase.items, index, costs, depths);
+                costs[index] = metrics.bytes;
+                depths[index] = metrics.depth;
+            }
+        } else if (item.tag != null or item.body != null) return error.InvalidPoemMetadata;
+    }
+    _ = try poemReferenceMetrics(full_output, phase.items, phase.items.len, costs, depths);
+    const title_metrics = try poemReferenceMetrics(title, phase.items, phase.items.len, costs, depths);
+    if (title_metrics.bytes > 64 * 1024) return error.FrameTooLarge;
+    const result = try a.create(PoemPhase);
+    result.* = .{ .items = phase.items, .full_output = full_output };
+    return result;
+}
+
 pub const Context = struct {
+    poem_phase: ?*const PoemPhase = null,
     image_options: ?*const @import("namespace_registry").image_options.Registry = null,
     behavior_switches: ?*const @import("namespace_registry").behavior_switches.Registry = null,
     namespace_catalog: ?*const @import("namespace_registry").Registry = null,
@@ -176,6 +306,8 @@ pub const Style = struct {
     ruby_parentheses: bool = false,
     // Unmatched pre is ordinary parsed HTML, with preformatted whitespace.
     preserve_whitespace: bool = false,
+    // Build-only generated Poem wrapper; never inferred from lexical classes.
+    poem_indent: ?u8 = null,
 };
 pub const SpanFlags = packed struct(u8) {
     bold: bool = false,
@@ -242,10 +374,37 @@ fn quoteOpaqueEnd(input: []const u8, at: usize, boundaries: QuoteBoundaries) ?us
     }
     return null;
 }
-fn quoteRun(input: []const u8, at: usize) usize {
+const QuoteBehaviorRegistry = @import("namespace_registry").behavior_switches.Registry;
+fn quoteControlEnd(a: A, input: []const u8, at: usize, registry: ?*const QuoteBehaviorRegistry) Error!?usize {
+    const end = (if (registry) |captured| try captured.matchAt(a, input, at) else syntax.behaviorSwitchEnd(input, at)) orelse return null;
+    const toc = if (registry) |captured| try captured.tocMatchAt(a, input, at) else if (std.ascii.eqlIgnoreCase(input[at..end], "__TOC__")) end else null;
+    return if (toc != null and toc.? == end) null else end;
+}
+const QuoteRun = struct { count: usize, end: usize };
+fn quoteRun(a: A, input: []const u8, at: usize, registry: ?*const QuoteBehaviorRegistry) Error!QuoteRun {
     var end = at;
-    while (end < input.len and input[end] == '\'') : (end += 1) {}
-    return end - at;
+    var count: usize = 0;
+    while (end < input.len and input[end] == '\'') {
+        count += 1;
+        end += 1;
+        var next = end;
+        while (next < input.len) {
+            if (try quoteControlEnd(a, input, next, registry)) |skip| next = skip else break;
+        }
+        // Consume empty controls only when another apostrophe joins this run.
+        // Otherwise their exact authored bytes remain for the existing phase.
+        if (next < input.len and input[next] == '\'') end = next;
+    }
+    return .{ .count = count, .end = end };
+}
+fn quoteRemember(previous: *[2]u8, bytes: []const u8) void {
+    if (bytes.len >= 2) {
+        previous.* = .{ bytes[bytes.len - 1], bytes[bytes.len - 2] };
+    } else if (bytes.len == 1) {
+        // Untyped aggregate assignment writes into previous element by element.
+        const prior_first = previous[0];
+        previous.* = .{ bytes[0], prior_first };
+    }
 }
 
 const QuoteState = enum { none, b, i, bi, ib, both };
@@ -291,20 +450,24 @@ fn quoteFinish(out: *std.ArrayList(u8), buffer: *std.ArrayList(u8), a: A, state:
     }
     try out.appendSlice(a, close);
 }
-fn hasWikiQuoteMarkers(input: []const u8, depth: usize, boundaries: QuoteBoundaries) bool {
-    if (depth >= max_depth or std.mem.indexOf(u8, input, "''") == null) return false;
+fn hasWikiQuoteMarkers(a: A, input: []const u8, depth: usize, boundaries: QuoteBoundaries, registry: ?*const QuoteBehaviorRegistry) Error!bool {
+    if (depth >= max_depth or std.mem.indexOfScalar(u8, input, '\'') == null) return false;
     var at: usize = 0;
     while (at < input.len) {
         if (quoteOpaqueEnd(input, at, boundaries)) |end| {
             if (starts(input[at..], "[[")) {
                 const inner = input[at + 2 .. end - 2];
                 if (syntax.delimiter(inner, "|", 0)) |pipe| {
-                    if (hasWikiQuoteMarkers(inner[pipe + 1 ..], depth + 1, QuoteBoundaries.init(inner[pipe + 1 ..]))) return true;
+                    if (try hasWikiQuoteMarkers(a, inner[pipe + 1 ..], depth + 1, QuoteBoundaries.init(inner[pipe + 1 ..]), registry)) return true;
                 }
             }
             at = end;
         } else {
-            if (input[at] == '\'' and quoteRun(input, at) >= 2) return true;
+            if (try quoteControlEnd(a, input, at, registry)) |skip| {
+                at = skip;
+                continue;
+            }
+            if (input[at] == '\'' and (try quoteRun(a, input, at, registry)).count >= 2) return true;
             at += 1;
         }
     }
@@ -312,8 +475,11 @@ fn hasWikiQuoteMarkers(input: []const u8, depth: usize, boundaries: QuoteBoundar
 }
 
 fn normalizeWikiQuotes(a: A, input: []const u8, depth: usize, label_scope: bool) Error![]const u8 {
+    return normalizeWikiQuotesWithControls(a, input, depth, label_scope, null);
+}
+fn normalizeWikiQuotesWithControls(a: A, input: []const u8, depth: usize, label_scope: bool, registry: ?*const QuoteBehaviorRegistry) Error![]const u8 {
     const boundaries = QuoteBoundaries.init(input);
-    if (!hasWikiQuoteMarkers(input, depth, boundaries)) return input;
+    if (!try hasWikiQuoteMarkers(a, input, depth, boundaries, registry)) return input;
     var out: std.ArrayList(u8) = .empty;
     var buffer: std.ArrayList(u8) = .empty;
     var line_start: usize = 0;
@@ -324,25 +490,38 @@ fn normalizeWikiQuotes(a: A, input: []const u8, depth: usize, label_scope: bool)
         var single: ?usize = null;
         var multi: ?usize = null;
         var space: ?usize = null;
+        var previous: [2]u8 = .{ 0, 0 };
         while (end < input.len and (label_scope or input[end] != '\n')) {
             if (quoteOpaqueEnd(input, end, boundaries)) |skip| {
+                quoteRemember(&previous, input[end..skip]);
                 end = skip;
                 continue;
             }
-            const run = quoteRun(input, end);
+            if (try quoteControlEnd(a, input, end, registry)) |skip| {
+                end = skip;
+                continue;
+            }
+            const quote = try quoteRun(a, input, end, registry);
+            const run = quote.count;
             const normalized = if (run == 4) @as(usize, 3) else if (run > 5) @as(usize, 5) else run;
             if (normalized == 2 or normalized == 5) italic_count += 1;
             if (normalized == 3 or normalized == 5) bold_count += 1;
             if (normalized == 3) {
-                const x1: u8 = if (run == 4) '\'' else if (end > line_start) input[end - 1] else 0;
-                const x2: u8 = if (run == 4 and end > line_start) input[end - 1] else if (end > line_start + 1) input[end - 2] else 0;
+                const x1: u8 = if (run == 4) '\'' else previous[0];
+                const x2: u8 = if (run == 4) previous[0] else previous[1];
                 if (x1 == ' ') {
                     if (space == null) space = end;
                 } else if (x2 == ' ') {
                     if (single == null) single = end;
                 } else if (multi == null) multi = end;
             }
-            end += if (run == 0) 1 else run;
+            if (run == 0) {
+                quoteRemember(&previous, input[end .. end + 1]);
+                end += 1;
+            } else {
+                quoteRemember(&previous, if (run == 1) "'" else "''");
+                end = quote.end;
+            }
         }
         const correction: ?usize = if (bold_count % 2 == 1 and italic_count % 2 == 1)
             (if (single) |at| at else if (multi) |at| at else space)
@@ -357,14 +536,20 @@ fn normalizeWikiQuotes(a: A, input: []const u8, depth: usize, label_scope: bool)
                     const inner = input[cursor + 2 .. skip - 2];
                     if (syntax.delimiter(inner, "|", 0)) |pipe| {
                         try sink.appendSlice(a, input[cursor .. cursor + 2 + pipe + 1]);
-                        try sink.appendSlice(a, try normalizeMisnestedHtml(a, try normalizeWikiQuotes(a, inner[pipe + 1 ..], depth + 1, true)));
+                        try sink.appendSlice(a, try normalizeMisnestedHtml(a, try normalizeWikiQuotesWithControls(a, inner[pipe + 1 ..], depth + 1, true, registry)));
                         try sink.appendSlice(a, "]]");
                     } else try sink.appendSlice(a, input[cursor..skip]);
                 } else try sink.appendSlice(a, input[cursor..skip]);
                 cursor = skip;
                 continue;
             }
-            const run = quoteRun(input, cursor);
+            if (try quoteControlEnd(a, input, cursor, registry)) |skip| {
+                try sink.appendSlice(a, input[cursor..skip]);
+                cursor = skip;
+                continue;
+            }
+            const quote = try quoteRun(a, input, cursor, registry);
+            const run = quote.count;
             if (run >= 2) {
                 var normalized = if (run == 4) @as(usize, 3) else if (run > 5) @as(usize, 5) else run;
                 var literal = if (run == 4) @as(usize, 1) else if (run > 5) run - 5 else 0;
@@ -375,7 +560,7 @@ fn normalizeWikiQuotes(a: A, input: []const u8, depth: usize, label_scope: bool)
                 // Encoded extras cannot become fresh quote markers in recursive HTML.
                 for (0..literal) |_| try sink.appendSlice(a, "&#39;");
                 try quoteTransition(&out, &buffer, a, &state, normalized);
-                cursor += run;
+                cursor = quote.end;
             } else {
                 try sink.append(a, input[cursor]);
                 cursor += 1;
@@ -388,7 +573,7 @@ fn normalizeWikiQuotes(a: A, input: []const u8, depth: usize, label_scope: bool)
     return out.toOwnedSlice(a);
 }
 
-pub const Reference = struct { number: usize, group_number: usize, name: []const u8 = "", group: []const u8 = "", body: []const u8 = "", spans: []const Span = &.{} };
+pub const Reference = struct { number: usize, group_number: usize, name: []const u8 = "", group: []const u8 = "", body: []const u8 = "", spans: []const Span = &.{}, poem: bool = false, poem_direction: []const u8 = "" };
 pub const ReferenceDefinition = struct { name: []const u8, group: []const u8 = "", body: []const u8 = "" };
 pub const ReferenceDefinitions = struct { items: []const ReferenceDefinition = &.{}, fallbacks: @import("presentation_fallback.zig").Report = .{} };
 
@@ -1046,6 +1231,265 @@ pub const Renderer = struct {
     spans: std.ArrayList(Span) = .empty,
     in_reference: bool = false,
     semantic_capture: ?*SemanticHints = null,
+    // Confined build-only strip items survive quote/HTML normalization and
+    // deferred reference bodies. Neither item tokens nor source bodies ship.
+    poem_items: std.ArrayList(PoemItem) = .empty,
+    poem_phase_loaded: bool = false,
+    poem_item_dispatches: usize = 0,
+    poem_dispatch_limit: bool = false,
+    poem_definition_dispatches: usize = 0,
+    poem_definitions_complete: bool = false,
+    poem_depth: usize = 0,
+    poem_direction: []const u8 = "",
+    poem_base_style: Style = .{},
+    poem_line_indent: u8 = 0,
+    poem_boundary_pending: bool = false,
+    poem_authored_token: bool = false,
+
+    const poem_prefix = "\x7fWDPOEM:";
+    const PoemItem = struct {
+        token: []const u8,
+        kind: enum { line_break, soft_space, indent, scope, literal },
+        indent: u8 = 0,
+        tag: []const u8 = "",
+        body: []const u8 = "",
+    };
+    pub fn loadPoemPhase(self: *Renderer) Error!void {
+        if (self.poem_phase_loaded) return;
+        self.poem_phase_loaded = true;
+        const phase = self.context.poem_phase orelse return;
+        if (phase.items.len == 0) return;
+        try self.poem_items.ensureTotalCapacity(self.a, phase.items.len);
+        for (phase.items) |item| {
+            self.poem_items.appendAssumeCapacity(.{
+                .token = try self.a.dupe(u8, item.token),
+                .kind = switch (item.kind) {
+                    .br => .line_break,
+                    .space => .soft_space,
+                    .indent => .indent,
+                    .scope => .scope,
+                    .literal => .literal,
+                },
+                .indent = item.depth orelse 0,
+                .tag = if (item.tag) |value| try self.a.dupe(u8, value) else "",
+                .body = if (item.body) |value| try self.a.dupe(u8, value) else "",
+            });
+        }
+        // Follow only emitted page roots, in source order. Authenticated but
+        // discarded items and display-title-only definitions remain unused.
+        var has_poem = false;
+        for (self.poem_items.items) |item| if (item.kind == .literal and std.mem.eql(u8, item.tag, "poem")) {
+            has_poem = true;
+            break;
+        };
+        if (has_poem) {
+            try self.referenceDefinitionsInner(phase.full_output, "", 0);
+            self.poem_definitions_complete = true;
+        }
+    }
+    fn poemItemAt(self: *Renderer, value: []const u8) ?PoemItem {
+        if (!starts(value, poem_prefix)) return null;
+        const rest = value[poem_prefix.len..];
+        const colon = std.mem.indexOfScalar(u8, rest[0..@min(rest.len, 21)], ':') orelse return null;
+        if (colon == 0) return null;
+        for (rest[0..colon]) |ch| if (!std.ascii.isDigit(ch)) return null;
+        const index = std.fmt.parseInt(usize, rest[0..colon], 10) catch return null;
+        if (index >= self.poem_items.items.len) return null;
+        const item = self.poem_items.items[index];
+        return if (starts(value, item.token)) item else null;
+    }
+    fn poemItemBefore(self: *Renderer, value: []const u8, at: usize) ?PoemItem {
+        // Item tokens are under 100 bytes, independent of page/indent size.
+        const begin = at -| 100;
+        const prefix = std.mem.lastIndexOf(u8, value[begin..at], poem_prefix) orelse return null;
+        const item = self.poemItemAt(value[begin + prefix ..]) orelse return null;
+        return if (begin + prefix + item.token.len == at) item else null;
+    }
+    fn poemHasUnregisteredItem(self: *Renderer, input: []const u8) bool {
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, input, at, poem_prefix)) |found| {
+            const item = self.poemItemAt(input[found..]) orelse return true;
+            at = found + item.token.len;
+        }
+        return false;
+    }
+    fn poemToken(self: *Renderer, kind: @FieldType(PoemItem, "kind"), indent: u8, digest: *const [64]u8) Error![]const u8 {
+        if (self.poem_items.items.len >= max_nodes) return error.RenderLimit;
+        const token = try std.fmt.allocPrint(self.a, "{s}{d}:{s}\x7f", .{ poem_prefix, self.poem_items.items.len, digest });
+        try self.poem_items.append(self.a, .{ .token = token, .kind = kind, .indent = indent });
+        return token;
+    }
+    fn poemClasses(self: *Renderer, existing: []const u8, indent: u8) Error![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        var parts = std.mem.tokenizeAny(u8, existing, " \t\r\n\x0b\x0c");
+        while (parts.next()) |part| {
+            if (std.mem.eql(u8, part, "wikidict-poem") or starts(part, "wikidict-poem-indent") or starts(part, "wikidict-poem-dir")) continue;
+            if (out.items.len != 0) try out.append(self.a, ' ');
+            try out.appendSlice(self.a, part);
+        }
+        if (out.items.len != 0) try out.append(self.a, ' ');
+        try out.appendSlice(self.a, "wikidict-poem");
+        if (indent != 0) try out.appendSlice(self.a, try std.fmt.allocPrint(self.a, " wikidict-poem-indent-{d}", .{indent}));
+        if (oneOf(self.poem_direction, &.{ "ltr", "rtl" }))
+            try out.appendSlice(self.a, try std.fmt.allocPrint(self.a, " wikidict-poem-dir-{s}", .{self.poem_direction}));
+        return out.toOwnedSlice(self.a);
+    }
+    fn poemCleanField(self: *Renderer, value: []const u8) Error![]const u8 {
+        if (self.poem_items.items.len == 0) return value;
+        if (std.mem.indexOf(u8, value, poem_prefix) == null) return value;
+        var out: std.ArrayList(u8) = .empty;
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, value, at, poem_prefix)) |found| {
+            try out.appendSlice(self.a, value[at..found]);
+            if (self.poemItemAt(value[found..])) |item| {
+                // Only explicit authored text is lexical identity; generated
+                // instructions cannot become navigation.
+                if (item.kind == .literal and std.mem.eql(u8, item.tag, "text")) {
+                    try out.appendSlice(self.a, item.body);
+                } else {
+                    self.fallbacks.unsupported_element = true;
+                    if (item.kind != .indent) try out.append(self.a, ' ');
+                }
+                at = found + item.token.len;
+            } else {
+                try out.appendSlice(self.a, poem_prefix);
+                at = found + poem_prefix.len;
+            }
+        }
+        try out.appendSlice(self.a, value[at..]);
+        return out.toOwnedSlice(self.a);
+    }
+    fn poemProjection(self: *Renderer, input: []const u8) Error![]const u8 {
+        if (std.mem.count(u8, input, "\n") > max_nodes / 2) return error.RenderLimit;
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(input, &hash, .{});
+        const digest = std.fmt.bytesToHex(hash, .lower);
+        // Stage order is the official handler's raw colon transform, outer-LF
+        // trimming/break insertion, then leading ASCII-space entity conversion.
+        var colon: std.ArrayList(u8) = .empty;
+        var pos: usize = 0;
+        while (pos < input.len) {
+            const end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
+            const line = input[pos..end];
+            var count: usize = 0;
+            while (count < line.len and line[count] == ':') : (count += 1) {}
+            if (count != 0 and count < line.len) {
+                if (count > 32) self.fallbacks.render_limit = true;
+                try colon.appendSlice(self.a, try self.poemToken(.indent, @intCast(@min(count, 32)), &digest));
+                // Exact official spelling is retained if a nested protected
+                // body later displays the wrapper rather than parsing it.
+                try colon.appendSlice(self.a, try std.fmt.allocPrint(self.a, "<span class=\"mw-poem-indented\" style=\"display: inline-block; margin-inline-start: {d}em;\">", .{count}));
+                try colon.appendSlice(self.a, line[count..]);
+                try colon.appendSlice(self.a, "</span>");
+            } else try colon.appendSlice(self.a, line);
+            if (end < input.len) try colon.append(self.a, '\n');
+            pos = if (end < input.len) end + 1 else end;
+        }
+        var transformed: []const u8 = colon.items;
+        if (starts(transformed, "\n")) transformed = transformed[1..];
+        if (std.mem.endsWith(u8, transformed, "\n")) transformed = transformed[0 .. transformed.len - 1];
+        var out: std.ArrayList(u8) = .empty;
+        pos = 0;
+        while (pos < transformed.len) {
+            const end = std.mem.indexOfScalarPos(u8, transformed, pos, '\n') orelse transformed.len;
+            const line = transformed[pos..end];
+            var spaces: usize = 0;
+            while (spaces < line.len and line[spaces] == ' ') : (spaces += 1) {}
+            for (0..spaces) |_| try out.appendSlice(self.a, "&#160;");
+            try out.appendSlice(self.a, line[spaces..]);
+            if (end < transformed.len) {
+                try out.appendSlice(self.a, try self.poemToken(if (std.mem.eql(u8, line, "----")) .soft_space else .line_break, 0, &digest));
+                try out.append(self.a, '\n');
+            }
+            pos = if (end < transformed.len) end + 1 else end;
+        }
+        return out.toOwnedSlice(self.a);
+    }
+    fn poem(self: *Renderer, input: []const u8, style: Style, depth: usize) Error!void {
+        return self.poemWithPhase(input, style, depth, false);
+    }
+    fn poemWithPhase(self: *Renderer, input: []const u8, style: Style, depth: usize, prepared: bool) Error!void {
+        if (self.poem_depth >= max_depth or depth >= max_depth) {
+            self.fallbacks.render_limit = true;
+            try self.protectedLiteral(input, style);
+            return;
+        }
+        if (self.poem_authored_token or self.poemHasUnregisteredItem(input)) {
+            // An authored token-like spelling is never interpreted as an item.
+            self.fallbacks.unsupported_element = true;
+            try self.protectedLiteral(input, style);
+            return;
+        }
+        const projected = if (prepared) input else self.poemProjection(input) catch |err| switch (err) {
+            error.RenderLimit => {
+                self.fallbacks.render_limit = true;
+                try self.protectedLiteral(input, style);
+                return;
+            },
+            else => return err,
+        };
+        const previous_depth = self.poem_depth;
+        const previous_direction = self.poem_direction;
+        const previous_style = self.poem_base_style;
+        const previous_indent = self.poem_line_indent;
+        if (self.spans.items.len != 0 and self.spans.items[self.spans.items.len - 1].kind != .line_break)
+            try self.lineBreak(.{});
+        self.poem_depth += 1;
+        self.poem_direction = style.direction;
+        self.poem_base_style = style;
+        self.poem_base_style.poem_indent = null;
+        self.poem_line_indent = 0;
+        defer {
+            self.poem_depth = previous_depth;
+            self.poem_direction = previous_direction;
+            self.poem_base_style = previous_style;
+            self.poem_line_indent = previous_indent;
+        }
+        // The existing block parser owns lists, headings, rules and tables.
+        // Span-only containment flattens their preserved reading order; its
+        // non-equivalent geometry remains explicitly diagnosed below.
+        const blocks = try self.renderBody(projected);
+        for (blocks, 0..) |block_value, index| {
+            if (index != 0 and self.spans.items.len != 0 and self.spans.items[self.spans.items.len - 1].kind != .line_break)
+                try self.lineBreak(style);
+            if (block_value.kind == .rule) {
+                self.fallbacks.unsupported_element = true;
+                try self.text("────────", style);
+                try self.lineBreak(style);
+                continue;
+            }
+            if (block_value.kind == .table or block_value.depth != 0 or block_value.kind == .heading)
+                self.fallbacks.unsupported_element = true;
+            if (block_value.feature) |feature| {
+                self.fallbacks.unsupported_element = true;
+                try self.text(feature.data, style);
+            }
+            if (block_value.list_path.len != 0) switch (block_value.list_path[block_value.list_path.len - 1]) {
+                '*' => try self.text("• ", style),
+                '#' => {
+                    try self.text(block_value.number, style);
+                    try self.text(". ", style);
+                },
+                else => {},
+            };
+            // Remove the post-HR generated break once (official late exception).
+            var first: usize = 0;
+            if (index != 0 and blocks[index - 1].kind == .rule and block_value.spans.len != 0 and
+                (block_value.spans[0].kind == .line_break or trim(block_value.spans[0].text).len == 0)) first = 1;
+            try self.spans.appendSlice(self.a, block_value.spans[first..]);
+            if (block_value.table) |table| {
+                try self.spans.appendSlice(self.a, table.caption);
+                for (table.rows) |row| {
+                    try self.lineBreak(style);
+                    for (row.cells, 0..) |cell, ci| {
+                        if (ci != 0) try self.text(" · ", style);
+                        try self.spans.appendSlice(self.a, cell.spans);
+                    }
+                }
+            }
+        }
+        self.poem_boundary_pending = true;
+    }
 
     fn markUnclosed(self: *Renderer, input: []const u8, tag: syntax.Tag, comptime site: []const u8) void {
         self.fallbacks.unclosed_formatting = true;
@@ -1091,7 +1535,23 @@ pub const Renderer = struct {
         }
         self.media_depth += 1;
         defer self.media_depth -= 1;
-        const file = try self.a.dupe(u8, std.mem.trim(u8, raw, " \t\r\n"));
+        var identity = raw;
+        if (std.mem.indexOf(u8, raw, poem_prefix) != null) {
+            var at: usize = 0;
+            while (std.mem.indexOfPos(u8, raw, at, poem_prefix)) |found| {
+                const item = self.poemItemAt(raw[found..]) orelse {
+                    self.fallbacks.unsupported_element = true;
+                    return;
+                };
+                if (item.kind != .literal or !std.mem.eql(u8, item.tag, "text")) {
+                    self.fallbacks.unsupported_element = true;
+                    return;
+                }
+                at = found + item.token.len;
+            }
+            identity = try self.poemCleanField(raw);
+        }
+        const file = try self.a.dupe(u8, std.mem.trim(u8, identity, " \t\r\n"));
         std.mem.replaceScalar(u8, file, '_', ' ');
         const kind = authoritative_kind orelse media_types.referencedKind(file) orelse return;
         for (self.media.items) |item| if (std.mem.eql(u8, item.file, file)) return;
@@ -1113,7 +1573,141 @@ pub const Renderer = struct {
         self.nodes += 1;
         return true;
     }
-    pub inline fn text(self: *Renderer, value: []const u8, s: Style) Error!void {
+    pub fn text(self: *Renderer, value: []const u8, original: Style) Error!void {
+        try self.loadPoemPhase();
+        if (self.poem_dispatch_limit) return;
+        // Ordinary pages retain the original single-span emission path.
+        if (self.poem_items.items.len == 0 and self.poem_depth == 0 and !self.poem_boundary_pending)
+            return self.textRaw(value, original);
+        var style = original;
+        if (self.poem_boundary_pending and value.len != 0) {
+            self.poem_boundary_pending = false;
+            if (original.kind != .line_break and self.spans.items.len != 0 and self.spans.items[self.spans.items.len - 1].kind != .line_break)
+                try self.textRaw("\n", .{ .kind = .line_break });
+            self.poem_line_indent = 0;
+        }
+        var at: usize = 0;
+        while (at < value.len) {
+            const found = std.mem.indexOfPos(u8, value, at, poem_prefix) orelse break;
+            try self.poemText(value[at..found], style);
+            if (self.poemItemAt(value[found..])) |item| {
+                if (self.poem_item_dispatches >= max_nodes) {
+                    self.fallbacks.render_limit = true;
+                    self.poem_dispatch_limit = true;
+                    try self.textRaw("[render output truncated]", style);
+                    return;
+                }
+                self.poem_item_dispatches += 1;
+                at = found + item.token.len;
+                if (item.kind == .line_break) {
+                    var break_style = style;
+                    break_style.kind = .line_break;
+                    try self.poemText("\n", break_style);
+                    // The accompanying source-formatting LF is not a second
+                    // semantic break, including inside nowiki/pre/source.
+                    if (at < value.len and value[at] == '\n') at += 1;
+                    style.poem_indent = null;
+                } else if (item.kind == .literal) {
+                    var literal_style = style;
+                    if (std.mem.eql(u8, item.tag, "poem")) {
+                        try self.inlineText(item.body, literal_style, self.poem_depth + 1);
+                    } else if (std.mem.eql(u8, item.tag, "text")) {
+                        try self.poemText(item.body, literal_style);
+                    } else {
+                        literal_style.code = !std.mem.eql(u8, item.tag, "nowiki");
+                        literal_style.preserve_whitespace = !std.mem.eql(u8, item.tag, "nowiki");
+                        literal_style.provenance = .protected_literal;
+                        if (oneOf(item.tag, &.{ "source", "syntaxhighlight" }))
+                            try self.text(item.body, literal_style)
+                        else
+                            try self.protectedLiteral(item.body, literal_style);
+                    }
+                } else if (item.kind == .soft_space) {
+                    // Core nowiki collapses this unspecialized LF as HTML
+                    // whitespace; actual pre/source literal contexts retain LF.
+                    if (style.preserve_whitespace) {
+                        var break_style = style;
+                        break_style.kind = .line_break;
+                        try self.poemText("\n", break_style);
+                        style.poem_indent = null;
+                    } else try self.poemText(" ", style);
+                    if (at < value.len and value[at] == '\n') at += 1;
+                }
+            } else {
+                try self.poemText(poem_prefix, style);
+                at = found + poem_prefix.len;
+            }
+        }
+        try self.poemText(value[at..], style);
+    }
+    fn poemText(self: *Renderer, value: []const u8, original: Style) Error!void {
+        if (value.len == 0) return;
+        var style = original;
+        if (self.poem_depth != 0) {
+            const parent = self.poem_base_style;
+            style.bold = style.bold or parent.bold;
+            style.italic = style.italic or parent.italic;
+            style.code = style.code or parent.code;
+            style.small = style.small or parent.small;
+            style.superscript = style.superscript or parent.superscript;
+            style.subscript = style.subscript or parent.subscript;
+            style.strike = style.strike or parent.strike;
+            style.underline = style.underline or parent.underline;
+            if (style.language.len == 0) style.language = parent.language;
+            if (style.direction.len == 0) style.direction = parent.direction;
+            if (parent.classes.len != 0) style.classes = try std.fmt.allocPrint(self.a, "{s} {s}", .{ parent.classes, style.classes });
+            if (style.poem_indent) |indent| self.poem_line_indent = indent;
+            style.classes = try self.poemClasses(style.classes, self.poem_line_indent);
+        }
+        // A nowiki item captured before Poem projection has no registered
+        // break for its raw LF. It remains HTML whitespace after unstripping.
+        // Registered breaks have already been dispatched with line_break kind;
+        // pre/source contexts preserve their literal whitespace.
+        if (self.poem_depth != 0 and style.kind != .line_break and
+            style.provenance == .protected_literal and !style.preserve_whitespace and
+            std.mem.indexOfAny(u8, value, "\r\n") != null)
+        {
+            var normalized: std.ArrayList(u8) = .empty;
+            var whitespace = false;
+            for (value) |ch| {
+                if (ch == '\n' or ch == '\r' or ch == '\t') {
+                    if (!whitespace) try normalized.append(self.a, ' ');
+                    whitespace = true;
+                } else {
+                    try normalized.append(self.a, ch);
+                    whitespace = ch == ' ';
+                }
+            }
+            return self.textRaw(try normalized.toOwnedSlice(self.a), style);
+        }
+        if (self.poem_depth != 0 and style.kind != .line_break) {
+            var at: usize = 0;
+            while (std.mem.indexOfScalarPos(u8, value, at, '\n')) |lf| {
+                try self.textRaw(value[at..lf], style);
+                var break_style = style;
+                break_style.kind = .line_break;
+                try self.textRaw("\n", break_style);
+                self.poem_line_indent = 0;
+                style.poem_indent = null;
+                style.classes = try self.poemClasses(style.classes, 0);
+                at = lf + 1;
+            }
+            try self.textRaw(value[at..], style);
+        } else try self.textRaw(value, style);
+        if (style.kind == .line_break) self.poem_line_indent = 0;
+    }
+    fn textRaw(self: *Renderer, value: []const u8, original: Style) Error!void {
+        var s = original;
+        if (self.poem_items.items.len != 0) {
+            const target = try self.poemCleanField(s.target);
+            if (target.ptr != s.target.ptr) {
+                s.kind = .text;
+                s.target = "";
+            }
+            s.classes = try self.poemCleanField(s.classes);
+            s.language = try self.poemCleanField(s.language);
+            s.direction = try self.poemCleanField(s.direction);
+        }
         if (value.len == 0) return;
         if (!self.spend()) {
             if (!self.span_limit_marker) {
@@ -1139,6 +1733,8 @@ pub const Renderer = struct {
         return out.toOwnedSlice() catch return error.OutOfMemory;
     }
     fn plain(self: *Renderer, value: []const u8, style: Style) Error!void {
+        // Consume item+formatting LF before ordinary whitespace normalization.
+        if (self.poem_items.items.len != 0 and std.mem.indexOf(u8, value, poem_prefix) != null) return self.text(value, style);
         if (style.preserve_whitespace or std.mem.indexOfAny(u8, value, "\r\n") == null) return self.text(value, style);
         var out: std.ArrayList(u8) = .empty;
         var whitespace = false;
@@ -1188,6 +1784,231 @@ pub const Renderer = struct {
         }
         try self.plain(link_value.text, link_style);
     }
+    fn externalControlEnd(self: *Renderer, input: []const u8, at: usize) Error!?usize {
+        const end = (if (self.context.behavior_switches) |registry|
+            try registry.matchAt(self.a, input, at)
+        else
+            syntax.behaviorSwitchEnd(input, at)) orelse return null;
+        const toc_end = if (self.context.behavior_switches) |registry|
+            try registry.tocMatchAt(self.a, input, at)
+        else if (std.ascii.eqlIgnoreCase(input[at..end], "__TOC__")) end else null;
+        return if (toc_end != null and toc_end.? == end) null else end;
+    }
+    fn externalProtocolThroughControls(self: *Renderer, input: []const u8, start: usize, relative: bool) Error!?usize {
+        // All supported protocol spellings are shorter than this fixed probe.
+        // Controls advance only the raw cursor; entities are never decoded here.
+        var bytes: [32]u8 = undefined;
+        var count: usize = 0;
+        var cursor = start;
+        while (cursor < input.len and count < bytes.len) {
+            if (try self.externalControlEnd(input, cursor)) |end| {
+                cursor = end;
+                continue;
+            }
+            const ch = input[cursor];
+            if (!std.ascii.isAlphabetic(ch) and ch != ':' and ch != '/') return null;
+            bytes[count] = ch;
+            count += 1;
+            cursor += 1;
+            if (ir.hasExternalProtocol(bytes[0..count])) {
+                if (!relative and std.mem.eql(u8, bytes[0..count], "//")) return null;
+                return cursor;
+            }
+        }
+        return null;
+    }
+    fn externalEntityBoundaryEnd(self: *Renderer, input: []const u8, start: usize, bracketed: bool) Error!?usize {
+        if (input[start] != '&') return null;
+        var bytes: [64]u8 = undefined;
+        var count: usize = 0;
+        var cursor = start;
+        while (cursor < input.len and count < bytes.len) {
+            if (try self.externalControlEnd(input, cursor)) |end| {
+                cursor = end;
+                continue;
+            }
+            const ch = input[cursor];
+            if (ch <= 32 or ch >= 127 or ch == '<' or ch == '>' or ch == '[' or ch == ']') return null;
+            bytes[count] = ch;
+            count += 1;
+            cursor += 1;
+            if (ch == ';') {
+                const entity_bytes = bytes[0..count];
+                if (std.mem.eql(u8, entity_bytes, "&lt;") or std.mem.eql(u8, entity_bytes, "&gt;")) return cursor;
+                if (bracketed) return null;
+                if (std.mem.eql(u8, entity_bytes, "&nbsp;")) return cursor;
+                if (entity_bytes.len > 3 and entity_bytes[1] == '#') {
+                    const hex = entity_bytes.len > 4 and (entity_bytes[2] == 'x' or entity_bytes[2] == 'X');
+                    const digits = entity_bytes[if (hex) @as(usize, 3) else 2 .. entity_bytes.len - 1];
+                    if (digits.len == 0) return null;
+                    for (digits) |digit| if (!(if (hex) std.ascii.isHex(digit) else std.ascii.isDigit(digit))) return null;
+                    const cp = std.fmt.parseInt(u21, digits, if (hex) 16 else 10) catch return null;
+                    if (cp == 60 or cp == 62 or cp == 160) return cursor;
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+    fn externalBoundaryBefore(input: []const u8, index: usize) bool {
+        if (index == 0 or input[index - 1] < 128) return ir.linkBoundaryBefore(input, index);
+        // DocIR expects a complete preceding scalar. Refuse malformed prefixes
+        // locally rather than passing a partial or oversized slice to its API.
+        var start = index - 1;
+        while (start != 0 and input[start] & 0xc0 == 0x80 and index - start < 4) : (start -= 1) {}
+        return std.unicode.utf8ValidateSlice(input[start..index]) and ir.linkBoundaryBefore(input, index);
+    }
+    fn externalSourceControls(self: *Renderer, input: []const u8) Error![]const u8 {
+        // Project only a recognized external-URL lexical candidate. The rest
+        // of the inline source remains byte-exact, including earlier-phase
+        // template/tag/quote syntax. DocIR still owns URL parsing and trimming.
+        var out: std.ArrayList(u8) = .empty;
+        var emitted: usize = 0;
+        var cursor: usize = 0;
+        var leading_controls: ?usize = null;
+        var toc_protocol_start: ?usize = null;
+        var no_more_nowiki_close = false;
+        var no_more_pre_close = false;
+        while (cursor < input.len) {
+            if (input[cursor] == '<') {
+                leading_controls = null;
+                if (starts(input[cursor..], "<!--")) {
+                    cursor = if (std.mem.indexOfPos(u8, input, cursor + 4, "-->")) |end| end + 3 else input.len;
+                    continue;
+                }
+                if (syntax.nowikiRegionAtCached(input, cursor, &no_more_nowiki_close)) |region| {
+                    cursor = region.end;
+                    continue;
+                }
+                if (syntax.tagAtCached(input, cursor, &no_more_nowiki_close)) |tag| {
+                    if (!tag.closing and !tag.self_closing and syntax.isOpaqueTag(tag.name) and !tag.is("nowiki")) {
+                        if (!tag.is("pre") or !no_more_pre_close) {
+                            if (syntax.matchingTag(input, tag)) |pair| {
+                                cursor = pair.end;
+                                continue;
+                            }
+                            if (tag.is("pre")) no_more_pre_close = true;
+                        }
+                        // Unmatched pre resumes parsed inline text; other opaque
+                        // bodies retain their existing literal/extension ownership.
+                        if (!tag.is("pre")) {
+                            cursor = input.len;
+                            continue;
+                        }
+                    }
+                    cursor = tag.end; // Never modify HTML attributes or names.
+                    continue;
+                }
+            }
+            if (try self.externalControlEnd(input, cursor)) |end| {
+                if (leading_controls == null) leading_controls = cursor;
+                cursor = end;
+                continue;
+            }
+            const retained_control = if (self.context.behavior_switches) |registry|
+                try registry.matchAt(self.a, input, cursor)
+            else
+                syntax.behaviorSwitchEnd(input, cursor);
+            if (retained_control) |end| {
+                // A TOC immediately before an absolute protocol is the same
+                // official markup boundary, including after lexical word text.
+                if ((try self.externalProtocolThroughControls(input, end, false)) != null) {
+                    try out.appendSlice(self.a, input[emitted..cursor]);
+                    try out.appendSlice(self.a, "<meta property=\"mw:PageProp/toc\" />");
+                    emitted = end;
+                    toc_protocol_start = end;
+                }
+                leading_controls = null;
+                cursor = end;
+                continue;
+            }
+            const begin = leading_controls orelse cursor;
+            const bracketed = begin != 0 and input[begin - 1] == '[' and
+                (begin < 2 or input[begin - 2] != '[');
+            // Prove a bounded ASCII protocol before asking about its preceding
+            // word boundary; ordinary non-URL text needs no boundary decode.
+            const protocol = try self.externalProtocolThroughControls(input, cursor, bracketed);
+            const eligible = protocol != null and (bracketed or
+                (toc_protocol_start != null and toc_protocol_start.? == begin) or externalBoundaryBefore(input, begin));
+            const protocol_end = if (eligible) protocol else null;
+            if (protocol_end) |address_start| {
+                var end = address_start;
+                var toc_end: ?usize = null;
+                while (end < input.len) {
+                    if (try self.externalControlEnd(input, end)) |next| {
+                        end = next;
+                        continue;
+                    }
+                    // A first TOC is not removable and cannot join URL bytes.
+                    const control = if (self.context.behavior_switches) |registry|
+                        try registry.matchAt(self.a, input, end)
+                    else
+                        syntax.behaviorSwitchEnd(input, end);
+                    if (control) |next| {
+                        toc_end = next;
+                        break;
+                    }
+                    const ch = input[end];
+                    if (ch <= 32 or ch == 127 or ch == '[' or ch == ']' or ch == '<' or ch == '>' or ch == '"') break;
+                    if (ch >= 128) {
+                        const n = std.unicode.utf8ByteSequenceLength(ch) catch break;
+                        if (end + n > input.len or !std.unicode.utf8ValidateSlice(input[end .. end + n])) break;
+                        if (isbnSpaceLen(input[end..]) != 0) break;
+                        end += n;
+                        continue;
+                    }
+                    if (ch == '&') if (try self.externalEntityBoundaryEnd(input, end, bracketed)) |boundary_end| {
+                        // Include a control-reconstituted delimiter, but never
+                        // project the following ordinary text as URL source.
+                        end = boundary_end;
+                        break;
+                    };
+                    end += 1;
+                }
+                var copy_start = begin;
+                var scan = begin;
+                var changed = false;
+                while (scan < end) {
+                    if (try self.externalControlEnd(input[0..end], scan)) |next| {
+                        if (!changed) {
+                            try out.appendSlice(self.a, input[emitted..begin]);
+                            changed = true;
+                        }
+                        try out.appendSlice(self.a, input[copy_start..scan]);
+                        copy_start = next;
+                        scan = next;
+                    } else scan += 1;
+                }
+                if (toc_end) |next| {
+                    if (!changed) try out.appendSlice(self.a, input[emitted..begin]);
+                    try out.appendSlice(self.a, input[copy_start..end]);
+                    // The official first-TOC placeholder is an invisible markup
+                    // boundary before external-link parsing, never URL bytes.
+                    try out.appendSlice(self.a, "<meta property=\"mw:PageProp/toc\" />");
+                    emitted = next;
+                    toc_protocol_start = next;
+                    cursor = next;
+                } else {
+                    if (changed) {
+                        try out.appendSlice(self.a, input[copy_start..end]);
+                        emitted = end;
+                    }
+                    cursor = end;
+                }
+                leading_controls = null;
+                continue;
+            }
+            leading_controls = null;
+            // Registry/control matching above runs at the authored scalar start.
+            // Keep failed candidate traversal on complete UTF-8 boundaries.
+            const width = std.unicode.utf8ByteSequenceLength(input[cursor]) catch 1;
+            cursor += if (width <= input.len - cursor and std.unicode.utf8ValidateSlice(input[cursor .. cursor + width])) width else 1;
+        }
+        if (emitted == 0) return input;
+        try out.appendSlice(self.a, input[emitted..]);
+        return try out.toOwnedSlice(self.a);
+    }
+
     // Behavior switches act on authored source before link-title decoding.
     // Preserve protected bodies/attributes and entity-authored spellings.
     fn withoutBehaviorControls(self: *Renderer, value: []const u8) Error![]const u8 {
@@ -1536,7 +2357,11 @@ pub const Renderer = struct {
             return i;
         };
         var resolved_body = body;
-        if (name.len != 0) for (self.page_reference_definitions) |definition| {
+        // Authenticated native phase definitions include opaque Poem bodies
+        // in emitted page order. The legacy raw table cannot see those bodies.
+        // Ordinary/legacy calls retain the exact previous table and precedence.
+        const page_definitions = if (self.poem_definitions_complete) self.ref_defs.items else self.page_reference_definitions;
+        if (name.len != 0) for (page_definitions) |definition| {
             if (definition.body.len != 0 and std.mem.eql(u8, definition.name, name) and std.mem.eql(u8, definition.group, group)) {
                 resolved_body = definition.body;
                 break;
@@ -1559,7 +2384,7 @@ pub const Renderer = struct {
                 if (std.mem.eql(u8, ref.group, group)) group_number += 1;
             }
         }
-        try self.refs.append(self.a, .{ .number = index + 1, .group_number = group_number, .name = name, .group = group, .body = resolved_body });
+        try self.refs.append(self.a, .{ .number = index + 1, .group_number = group_number, .name = name, .group = group, .body = resolved_body, .poem = self.poem_depth != 0, .poem_direction = self.poem_direction });
         return index;
     }
     fn reference(self: *Renderer, name: []const u8, group: []const u8, body: []const u8, style: Style) Error!void {
@@ -1592,7 +2417,37 @@ pub const Renderer = struct {
             return;
         }
         var pos: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, content, pos, '<')) |open| {
+        var next_tag = std.mem.indexOfScalar(u8, content, '<');
+        var next_item = if (self.poem_items.items.len != 0) std.mem.indexOf(u8, content, poem_prefix) else null;
+        while (true) {
+            if (next_tag) |at| if (at < pos) {
+                next_tag = std.mem.indexOfScalarPos(u8, content, pos, '<');
+            };
+            if (next_item) |at| if (at < pos) {
+                next_item = std.mem.indexOfPos(u8, content, pos, poem_prefix);
+            };
+            const open = next_tag orelse content.len;
+            const marker = next_item orelse content.len;
+            if (open == content.len and marker == content.len) break;
+            if (marker < open) {
+                const item = self.poemItemAt(content[marker..]) orelse {
+                    pos = marker + poem_prefix.len;
+                    continue;
+                };
+                pos = marker + item.token.len;
+                if (item.kind != .literal or !std.mem.eql(u8, item.tag, "poem")) continue;
+                if (self.poem_definition_dispatches >= max_nodes) {
+                    self.fallbacks.render_limit = true;
+                    return;
+                }
+                self.poem_definition_dispatches += 1;
+                const inner_open = std.mem.indexOfScalar(u8, item.body, '<') orelse continue;
+                const inner_tag = syntax.tagAt(item.body, inner_open) orelse continue;
+                if (!inner_tag.is("poem") or inner_tag.closing or inner_tag.self_closing) continue;
+                const inner_pair = syntax.matchingTag(item.body, inner_tag) orelse continue;
+                try self.referenceDefinitionsInner(item.body[inner_tag.end..inner_pair.inner_end], default_group, depth + 1);
+                continue;
+            }
             if (starts(content[open..], "<!--")) {
                 pos = syntax.protectedEnd(content, open) orelse content.len;
                 continue;
@@ -1646,17 +2501,24 @@ pub const Renderer = struct {
     pub fn finishReferences(self: *Renderer) Error![]const Reference {
         self.in_reference = true;
         defer self.in_reference = false;
-        for (self.refs.items) |*ref| ref.spans = try self.parseSpans(if (ref.body.len != 0) ref.body else "Reference text unavailable", .{});
-        return self.refs.items;
-    }
-    fn inlineLines(self: *Renderer, input: []const u8, style: Style, depth: usize) Error!void {
-        var lines = std.mem.splitScalar(u8, input, '\n');
-        var first_line = true;
-        while (lines.next()) |line| {
-            if (!first_line) try self.lineBreak(style);
-            first_line = false;
-            try self.inlineText(std.mem.trimEnd(u8, line, "\r"), style, depth + 1);
+        for (self.refs.items) |*ref| {
+            const previous_depth = self.poem_depth;
+            const previous_direction = self.poem_direction;
+            const previous_style = self.poem_base_style;
+            const previous_indent = self.poem_line_indent;
+            self.poem_depth = if (ref.poem) 1 else 0;
+            self.poem_direction = ref.poem_direction;
+            self.poem_base_style = .{};
+            self.poem_line_indent = 0;
+            defer {
+                self.poem_depth = previous_depth;
+                self.poem_direction = previous_direction;
+                self.poem_base_style = previous_style;
+                self.poem_line_indent = previous_indent;
+            }
+            ref.spans = try self.parseSpans(if (ref.body.len != 0) ref.body else "Reference text unavailable", .{});
         }
+        return self.refs.items;
     }
     fn gallery(self: *Renderer, input: []const u8, style: Style, _: usize) Error!void {
         var lines = std.mem.splitScalar(u8, input, '\n');
@@ -1835,10 +2697,13 @@ pub const Renderer = struct {
         } else if (tag.is("imagemap")) {
             if (!try self.imageMap(content, style, depth + 1)) self.fallbacks.unsupported_element = true;
         } else if (tag.is("poem")) {
-            try self.inlineLines(content, style, depth + 1);
+            const opening = @intFromPtr(tag.name.ptr) - @intFromPtr(input.ptr) - 1;
+            const prepared = if (self.poemItemBefore(input, opening)) |item| item.kind == .scope else false;
+            try self.poemWithPhase(content, try self.htmlLanguageDirection(tag, style), depth + 1, prepared);
         } else if (oneOf(tag.name, &.{ "pre", "source", "syntaxhighlight", "math", "ce", "chem", "score", "timeline", "hiero" })) {
             var literal_style = style;
             literal_style.code = true;
+            literal_style.preserve_whitespace = oneOf(tag.name, &.{ "pre", "source", "syntaxhighlight" });
             if (tag.is("source") or tag.is("syntaxhighlight")) {
                 literal_style.provenance = .protected_literal;
                 try self.text(content, literal_style);
@@ -2102,7 +2967,7 @@ pub const Renderer = struct {
     }
     fn semanticAttribute(self: *Renderer, tag: syntax.Tag, name: []const u8) Error!?[]const u8 {
         const normalized = try self.normalizedTag(tag);
-        return try self.entityText(normalized.attr(name) orelse return null);
+        return try self.poemCleanField(try self.entityText(normalized.attr(name) orelse return null));
     }
 
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool) Error!?usize {
@@ -2114,6 +2979,9 @@ pub const Renderer = struct {
         }
         if (tag.is("wbr")) return tag.end;
         if ((tag.is("meta") or tag.is("link")) and !tag.closing) {
+            if (tag.is("meta")) if (try self.semanticAttribute(tag, "property")) |property| {
+                if (std.mem.eql(u8, property, "mw:PageProp/toc")) return tag.end;
+            };
             if ((try self.semanticAttribute(tag, "itemprop")) == null) return null;
             if (tag.is("meta")) {
                 if ((try self.semanticAttribute(tag, "content")) == null) return null;
@@ -2164,6 +3032,13 @@ pub const Renderer = struct {
             try self.inlineText(input[tag.end..pair.inner_end], s, depth + 1);
             return pair.end;
         }
+        if (tag.is("poem") and !tag.closing and self.context.poem_phase != null) {
+            const item = self.poemItemBefore(input, at);
+            if (item == null or item.?.kind != .scope) {
+                try self.literal(input[at..tag.end], style);
+                return tag.end;
+            }
+        }
         if (syntax.isOpaqueTag(tag.name) and !tag.closing and !tag.is("nowiki")) return try self.opaqueExtension(input, tag, style, depth);
         if (tag.is("hr")) {
             if (!tag.closing) {
@@ -2210,7 +3085,12 @@ pub const Renderer = struct {
         if (matched == null) self.markUnclosed(input, tag, "known-html");
         // Unclosed layout containers have no inline style to scope. Consume
         // them iteratively, including long runs of malformed openers.
-        if (matched == null and oneOf(tag.name, &.{ "div", "span", "p", "center", "ul", "ol", "dl" })) return tag.end;
+        if (matched == null and oneOf(tag.name, &.{ "div", "span", "p", "center", "ul", "ol", "dl" })) {
+            // Raw Poem formatting may put its wrapper close outside a ref body.
+            // Only a registered generated indent may scope that body's remainder.
+            const generated_indent = tag.is("span") and if (self.poemItemBefore(input, at)) |item| item.kind == .indent else false;
+            if (!generated_indent) return tag.end;
+        }
         const pair = matched orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
         var s = style;
         if (oneOf(tag.name, &.{ "b", "strong" })) s.bold = true;
@@ -2255,6 +3135,20 @@ pub const Renderer = struct {
         const content = input[tag.end..pair.inner_end];
         // This attribute is emitted only after the runtime validates captured
         // AUDIO metadata. Keep canonical file, caption and language independent.
+        if (tag.is("span")) if (self.poemItemBefore(input, at)) |item| {
+            if (item.kind == .indent) {
+                s.poem_indent = item.indent;
+                if (item.indent == 32) if ((try self.semanticAttribute(tag, "style"))) |css| {
+                    const prefix = "margin-inline-start: ";
+                    if (std.mem.indexOf(u8, css, prefix)) |start| {
+                        const rest = css[start + prefix.len ..];
+                        const end = std.mem.indexOf(u8, rest, "em;") orelse rest.len;
+                        const requested = std.fmt.parseInt(usize, rest[0..end], 10) catch 33;
+                        if (requested > 32) self.fallbacks.render_limit = true;
+                    }
+                };
+            }
+        };
         if (tag.is("span")) if ((try self.semanticAttribute(tag, "data-phonos-audio"))) |raw_file| {
             try self.mediaFileKind(raw_file, content, .audio);
         };
@@ -2320,12 +3214,13 @@ pub const Renderer = struct {
         try out.appendSlice(self.a, value[start..]);
         return try out.toOwnedSlice(self.a);
     }
-    pub fn inlineText(self: *Renderer, input: []const u8, inherited: Style, depth: usize) Error!void {
+    pub fn inlineText(self: *Renderer, source: []const u8, inherited: Style, depth: usize) Error!void {
         if (depth > max_depth) {
             self.fallbacks.render_limit = true;
             try self.text("[render nesting limit]", inherited);
             return;
         }
+        const input = try self.externalSourceControls(source);
         var it: ir.InlineIterator = .{
             .input = input,
             .bold = inherited.bold,
@@ -2599,10 +3494,33 @@ pub const Renderer = struct {
         }
     }
     pub fn parseSpans(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
+        try self.loadPoemPhase();
+        if (self.context.poem_phase == null and self.poem_depth == 0 and !self.in_reference and std.mem.indexOf(u8, input, poem_prefix) != null)
+            self.poem_authored_token = true;
+        if (self.poem_depth != 0) self.poem_line_indent = style.poem_indent orelse 0;
         const parent = self.spans;
         self.spans = try .initCapacity(self.a, 4);
         defer self.spans = parent;
-        try self.inlineText(try normalizeMisnestedHtml(self.a, try normalizeWikiQuotes(self.a, input, 0, false)), style, 0);
+        var inherited = style;
+        if (self.poem_depth != 0) {
+            const outer = self.poem_base_style;
+            if (inherited.kind == .text and (outer.kind == .link or outer.kind == .external_link)) {
+                inherited.kind = outer.kind;
+                inherited.target = outer.target;
+            }
+            if (inherited.role == .normal) inherited.role = outer.role;
+            if (inherited.language.len == 0) inherited.language = outer.language;
+            if (inherited.direction.len == 0) inherited.direction = outer.direction;
+            inherited.bold = inherited.bold or outer.bold;
+            inherited.italic = inherited.italic or outer.italic;
+            inherited.code = inherited.code or outer.code;
+            inherited.small = inherited.small or outer.small;
+            inherited.superscript = inherited.superscript or outer.superscript;
+            inherited.subscript = inherited.subscript or outer.subscript;
+            inherited.strike = inherited.strike or outer.strike;
+            inherited.underline = inherited.underline or outer.underline;
+        }
+        try self.inlineText(try normalizeMisnestedHtml(self.a, try normalizeWikiQuotesWithControls(self.a, input, 0, false, self.context.behavior_switches)), inherited, 0);
         return try self.spans.toOwnedSlice(self.a);
     }
     fn appendBlockBudgeted(self: *Renderer, list: *std.ArrayList(Block), value: Block) Error!void {
@@ -2619,8 +3537,8 @@ pub const Renderer = struct {
         self.spans = .empty;
         defer self.spans = parent;
         if (decode_entities) {
-            try self.protectedLiteral(raw, .{ .code = true });
-        } else try self.text(raw, .{ .code = true, .provenance = .protected_literal });
+            try self.protectedLiteral(raw, .{ .code = true, .preserve_whitespace = true });
+        } else try self.text(raw, .{ .code = true, .provenance = .protected_literal, .preserve_whitespace = true });
         try self.appendBlockBudgeted(list, .{ .kind = .preformatted, .spans = try self.spans.toOwnedSlice(self.a) });
     }
     fn block(self: *Renderer, list: *std.ArrayList(Block), kind: Kind, raw: []const u8, path: []const u8, number: []const u8, level: u8) Error!void {
@@ -2683,6 +3601,9 @@ pub const Renderer = struct {
         return ends_with_list;
     }
     pub fn renderBody(self: *Renderer, input: []const u8) Error![]const Block {
+        try self.loadPoemPhase();
+        if (self.context.poem_phase == null and self.poem_depth == 0 and !self.in_reference and std.mem.indexOf(u8, input, poem_prefix) != null)
+            self.poem_authored_token = true;
         return self.renderBodyWithInlineStart(try preparePageTocSourceAlloc(self.a, input, self.context.behavior_switches), false);
     }
     fn renderBodyWithInlineStart(self: *Renderer, input: []const u8, initial_inline: bool) Error![]const Block {
@@ -2788,9 +3709,15 @@ pub const Renderer = struct {
                         return profile.matchAt(std.heap.page_allocator, value, at) catch null;
                     }
                 }.match,
+                .toc_match = struct {
+                    fn match(raw: ?*const anyopaque, value: []const u8, at: usize) ?usize {
+                        const profile: *const @import("namespace_registry").behavior_switches.Registry = @ptrCast(@alignCast(raw.?));
+                        return profile.tocMatchAt(std.heap.page_allocator, value, at) catch null;
+                    }
+                }.match,
             } else null;
             const anchored_inline = start < inline_line_end;
-            const heading = if (anchored_inline) null else headingLine(syntax.headingControlPrefix(line, control_matcher));
+            const heading = if (anchored_inline) null else headingLineControlled(line, control_matcher);
             var multiline_data: ?[]const u8 = null;
             if (starts(clean, "{{multitrans|")) if (syntax.balanced(clean, 0)) |pair| {
                 if (pair.end == clean.len) {
@@ -2803,8 +3730,11 @@ pub const Renderer = struct {
                 }
             };
             const list_line = line[if (anchored_inline) 0 else syntax.leadingBehaviorControlOffset(line, control_matcher)..];
-            var prefix: usize = 0;
-            while (!anchored_inline and prefix < list_line.len and std.mem.indexOfScalar(u8, "#*:;", list_line[prefix]) != null) : (prefix += 1) {}
+            const list_prefix: syntax.ControlListPrefix = if (anchored_inline)
+                .{ .path = "", .body_start = 0 }
+            else
+                try syntax.controlListPrefixAlloc(self.a, list_line, control_matcher);
+            const prefix = list_prefix.path.len;
             const table_indent: ?[]const u8 = if (anchored_inline) null else wikiTableIndent(clean);
             const html_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) and
@@ -2957,11 +3887,11 @@ pub const Renderer = struct {
                 continue;
             }
             if (prefix != 0) {
-                const path = list_line[0..prefix];
+                const path = list_prefix.path;
                 resetChangedListCounters(&counts, previous_list_path, path);
                 previous_list_path = path;
-                const body = std.mem.trimStart(u8, list_line[prefix..], " \t");
-                if (path[path.len - 1] == ';') if (inlineDefinitionSplit(try normalizeWikiQuotes(self.a, body, 0, false))) |pair| {
+                const body = std.mem.trimStart(u8, list_line[list_prefix.body_start..], " \t");
+                if (path[path.len - 1] == ';') if (inlineDefinitionSplit(try normalizeWikiQuotesWithControls(self.a, body, 0, false, self.context.behavior_switches))) |pair| {
                     const detail_path = try self.a.dupe(u8, path);
                     detail_path[detail_path.len - 1] = ':';
                     try self.block(&blocks, .term, pair.term, path, "", 0);
@@ -3508,8 +4438,14 @@ pub const Renderer = struct {
                     return profile.matchAt(std.heap.page_allocator, value, at) catch null;
                 }
             }.match,
+            .toc_match = struct {
+                fn match(raw: ?*const anyopaque, value: []const u8, at: usize) ?usize {
+                    const profile: *const @import("namespace_registry").behavior_switches.Registry = @ptrCast(@alignCast(raw.?));
+                    return profile.tocMatchAt(std.heap.page_allocator, value, at) catch null;
+                }
+            }.match,
         } else null;
-        return headingLine(syntax.headingControlPrefix(line, control_matcher));
+        return headingLineControlled(line, control_matcher);
     }
 
     fn cellSpans(self: *Renderer, source: []const u8) Error![]const Span {
@@ -3637,21 +4573,14 @@ pub const Renderer = struct {
 };
 const Heading = struct { level: u8, title: []const u8 };
 fn headingLine(line: []const u8) ?Heading {
-    var left: usize = 0;
-    while (left < line.len and line[left] == '=') : (left += 1) {}
-    if (left == 0) return null;
-    var right = line.len;
-    while (right != 0 and line[right - 1] == '=') : (right -= 1) {}
-    const right_width = line.len - right;
-    if (right_width == 0) return null;
+    return headingLineControlled(line, null);
+}
 
-    // MediaWiki uses the shorter delimiter run as the heading level.
-    // Any unmatched equals remain visible at the corresponding title edge.
-    const level: usize = @min(6, @min(left, right_width));
-    if (line.len < level * 2) return null;
-    const title = trim(line[level .. line.len - level]);
+fn headingLineControlled(line: []const u8, matcher: ?syntax.ControlMatcher) ?Heading {
+    const heading = syntax.controlHeading(line, matcher) orelse return null;
+    const title = trim(heading.title);
     if (title.len == 0) return null;
-    return .{ .level = @intCast(level), .title = title };
+    return .{ .level = heading.level, .title = title };
 }
 const CellContent = struct { text: []const u8, colspan: u16 = 1, rowspan: u16 = 1 };
 
@@ -9975,4 +10904,885 @@ test "page-body TOC treats unmatched pre remainder as active and closed pre as p
     // quoted pseudo-tags; the later active TOC must still be removed.
     try std.testing.expectEqualStrings("__TOC__ <pre><span title=\"</pre>\"> ISBN 9780306406157", try preparePageTocSourceAlloc(a, "__TOC__ <pre><span title=\"</pre>\"> ISBN 97803__TOC__06406157", null));
     try std.testing.expectEqualStrings("__TOC__ <pre>A <pre> ISBN 9780306406157", try preparePageTocSourceAlloc(a, "__TOC__ <pre>A <pre> ISBN 97803__TOC__06406157", null));
+}
+
+test "poem raw projection preserves verse depth blank stanzas and container boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("before<poem>\n::[[cat]]\n\n  third\n</poem>after", .{});
+    try std.testing.expectEqualStrings("before\ncat\n\n\xc2\xa0\xc2\xa0third\nafter", try plainText(a, spans));
+    var cat = false;
+    var breaks: usize = 0;
+    for (spans) |span| {
+        try std.testing.expect(std.mem.indexOf(u8, span.text, Renderer.poem_prefix) == null);
+        try std.testing.expect(std.mem.indexOf(u8, span.target, Renderer.poem_prefix) == null);
+        if (std.mem.eql(u8, span.target, "cat")) {
+            cat = true;
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem-indent-2") != null);
+        }
+        if (span.kind == .line_break and std.mem.indexOf(u8, span.classes, "wikidict-poem") != null) breaks += 1;
+        if (std.mem.eql(u8, span.text, "after")) try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem") == null);
+    }
+    try std.testing.expect(cat);
+    try std.testing.expectEqual(@as(usize, 2), breaks);
+    var empty: Renderer = .{ .a = a, .context = .{} };
+    const empty_spans = try empty.parseSpans("before<poem></poem>after", .{});
+    try std.testing.expectEqualStrings("before\nafter", try plainText(a, empty_spans));
+    try std.testing.expectEqual(@as(usize, 0), empty.poem_items.items.len);
+    var trailing: Renderer = .{ .a = a, .context = .{} };
+    const final = try trailing.parseSpans("<poem>a\n\n</poem>", .{});
+    try std.testing.expectEqualStrings("a\n", try plainText(a, final));
+    try std.testing.expect(final[final.len - 1].kind == .line_break);
+    var raw: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("::", try raw.poemProjection("::"));
+    const projected = try raw.poemProjection(":::::::::::::::::::::::::::::::::body");
+    try std.testing.expect(raw.fallbacks.render_limit);
+    try std.testing.expect(std.mem.indexOf(u8, projected, "margin-inline-start: 33em;") != null);
+    try std.testing.expectEqual(@as(u8, 32), raw.poem_items.items[raw.poem_items.items.len - 1].indent);
+}
+
+test "poem generated breaks survive protected bodies normalization and deferred references" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const source = "<poem><nowiki>first\n::[[cat]]\nlast<br></nowiki>\n<pre>pre\nnext</pre>\n<ref name=x>'''note'''\n::[[B]]</ref></poem>";
+    const spans = try r.parseSpans(source, .{ .italic = true, .direction = "rtl" });
+    const visible = try plainText(a, spans);
+    errdefer {
+        std.debug.print("\nPoem protected/deferred visible={s}\n", .{visible});
+        for (spans, 0..) |span, i| std.debug.print("span[{d}] kind={s} text={s} target={s} classes={s} direction={s} italic={any} bold={any}\n", .{ i, @tagName(span.kind), span.text, span.target, span.classes, span.direction, span.flags.italic, span.flags.bold });
+        for (r.refs.items, 0..) |ref, i| {
+            std.debug.print("ref[{d}] name={s} body={s}\n", .{ i, ref.name, ref.body });
+            for (ref.spans) |span| std.debug.print("ref span kind={s} text={s} target={s} classes={s} bold={any}\n", .{ @tagName(span.kind), span.text, span.target, span.classes, span.flags.bold });
+        }
+        std.debug.print("Poem protected/deferred fallbacks={any}\n", .{r.fallbacks});
+    }
+    try std.testing.expect(std.mem.indexOf(u8, visible, "first\n<span class=\"mw-poem-indented\" style=\"display: inline-block; margin-inline-start: 2em;\">[[cat]]</span>\nlast<br>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "pre\nnext") != null);
+    for (spans) |span| {
+        try std.testing.expect(!(span.kind == .link and std.mem.eql(u8, span.target, "cat")));
+        try std.testing.expect(std.mem.indexOf(u8, span.text, Renderer.poem_prefix) == null);
+        if (span.kind != .line_break) try std.testing.expect(span.flags.italic);
+        if (std.mem.indexOf(u8, span.classes, "wikidict-poem") != null)
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem-dir-rtl") != null);
+    }
+    const refs = try r.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), refs.len);
+    try std.testing.expectEqualStrings("note\nB", try plainText(a, refs[0].spans));
+    var note_bold = false;
+    var linked_b = false;
+    for (refs[0].spans) |span| {
+        try std.testing.expect(std.mem.indexOf(u8, span.text, Renderer.poem_prefix) == null);
+        if (std.mem.eql(u8, span.text, "note")) note_bold = span.flags.bold;
+        if (span.kind == .link and std.mem.eql(u8, span.target, "B")) {
+            linked_b = true;
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem-indent-2") != null);
+        }
+    }
+    try std.testing.expect(note_bold and linked_b);
+    var hr: Renderer = .{ .a = a, .context = .{} };
+    const protected_hr = try hr.parseSpans("<poem><nowiki>A\n----\nB</nowiki></poem>", .{});
+    try std.testing.expectEqualStrings("A\n---- B", try plainText(a, protected_hr));
+    var list: Renderer = .{ .a = a, .context = .{} };
+    const list_spans = try list.parseSpans("<poem>* [[cat]]\n# [[dog]]\n-----\nafter</poem>", .{});
+    const list_text = try plainText(a, list_spans);
+    try std.testing.expect(std.mem.indexOf(u8, list_text, "• cat") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_text, "1. dog") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_text, "────────") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_text, "after") != null);
+    try std.testing.expect(list.fallbacks.unsupported_element);
+}
+
+test "poem registered nested items limits and reserved families remain distinct" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    // An outer projection legitimately supplies items to a recursive Poem.
+    const outer = try r.poemProjection("one\ntwo");
+    try std.testing.expect(!r.poemHasUnregisteredItem(outer));
+    try r.poem(outer, .{}, 1);
+    try std.testing.expect(!r.fallbacks.unsupported_element);
+    try std.testing.expect(std.mem.indexOf(u8, try plainText(a, r.spans.items), Renderer.poem_prefix) == null);
+    // Nested handler application retains both actual generated breaks; this
+    // does not claim the independent opaque-tag matcher balances nested tags.
+    try std.testing.expectEqualStrings("one\n\ntwo", try plainText(a, r.spans.items));
+    var limit: Renderer = .{ .a = a, .context = .{}, .poem_depth = max_depth };
+    try limit.poem("[[body]]", .{}, 0);
+    try std.testing.expect(limit.fallbacks.render_limit);
+    try std.testing.expectEqualStrings("[[body]]", try plainText(a, limit.spans.items));
+    var authored: Renderer = .{ .a = a, .context = .{} };
+    try authored.poem("authored \x7fWDPOEM:0:literal\x7f", .{}, 0);
+    try std.testing.expect(authored.fallbacks.unsupported_element);
+    try std.testing.expectEqual(@as(usize, 0), authored.poem_items.items.len);
+    r.poem_direction = "rtl";
+    const classes = try r.poemClasses("IPA\x0bwikidict-poem-indent\x0cwikidict-poem-indent-03 wikidict-poem-dir+rtl wikidict-poem-dir-ltr wikidict-poem", 2);
+    try std.testing.expectEqualStrings("IPA wikidict-poem wikidict-poem-indent-2 wikidict-poem-dir-rtl", classes);
+    // Raw-LF fallback resets depth only and keeps the enclosing direction.
+    r.poem_depth = 1;
+    r.spans = .empty;
+    try r.text("a\nb", .{ .poem_indent = 2, .direction = "ltr" });
+    try std.testing.expectEqualStrings("a\nb", try plainText(a, r.spans.items));
+    try std.testing.expect(std.mem.indexOf(u8, r.spans.items[0].classes, "wikidict-poem-indent-2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r.spans.items[2].classes, "wikidict-poem-indent-") == null);
+    try std.testing.expect(std.mem.indexOf(u8, r.spans.items[2].classes, "wikidict-poem-dir-rtl") != null);
+    try std.testing.expectEqualStrings("ltr", r.spans.items[2].direction);
+}
+
+test "poem unspecialized HR newline follows whitespace context and inherited link scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "pre", "source", "syntaxhighlight" }) |tag| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "<poem><{s}>A\n----\nB</{s}></poem>", .{ tag, tag });
+        const spans = try r.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("A\n----\nB", try plainText(a, spans));
+    }
+    // code=true alone is deliberately NOT a preformatted-context proof.
+    var ordinary: Renderer = .{ .a = a, .context = .{}, .poem_depth = 1 };
+    const projected = try ordinary.poemProjection("----\nB");
+    try ordinary.text(projected, .{ .code = true });
+    try std.testing.expectEqualStrings("---- B", try plainText(a, ordinary.spans.items));
+    var label: Renderer = .{ .a = a, .context = .{} };
+    const label_spans = try label.parseSpans("<poem>::plain [https://example.test label]</poem>", .{ .kind = .link, .target = "A", .role = .example, .direction = "rtl" });
+    var found = false;
+    for (label_spans) |span| {
+        if (span.kind == .line_break) continue;
+        try std.testing.expectEqual(Role.example, span.role);
+        try std.testing.expectEqualStrings("A", span.target);
+        try std.testing.expect(span.kind == .link);
+        try std.testing.expectEqualStrings("rtl", span.direction);
+        found = found or std.mem.eql(u8, span.text, "label");
+    }
+    try std.testing.expect(found);
+}
+
+fn poemPhaseTestRecord(a: A, output: []const u8, title: []const u8, items: []const PoemPhaseItem) ![]const u8 {
+    var oh: [32]u8 = undefined;
+    var th: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(output, &oh, .{});
+    std.crypto.hash.sha2.Sha256.hash(title, &th, .{});
+    const output_hex = std.fmt.bytesToHex(oh, .lower);
+    const title_hex = std.fmt.bytesToHex(th, .lower);
+    return std.json.Stringify.valueAlloc(a, PoemPhaseWire{ .schema = "wikidict.poem-phase.v1", .handled = true, .output_sha256 = &output_hex, .display_title_sha256 = &title_hex, .items = items }, .{});
+}
+fn poemPhaseTestToken(a: A, index: usize) ![]const u8 {
+    return std.fmt.allocPrint(a, "{s}{d}:" ++ "0000000000000000000000000000000000000000000000000000000000000000" ++ "\x7f", .{ native_poem_prefix, index });
+}
+fn poemPhaseTestLiteralToken(a: A, index: usize, body: []const u8) ![]const u8 {
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(body, &hash, .{});
+    const hex = std.fmt.bytesToHex(hash, .lower);
+    return std.fmt.allocPrint(a, "{s}{d}:{s}\x7f", .{ native_poem_prefix, index, hex });
+}
+test "native Poem metadata binds output title and rejects noncanonical provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const token = try poemPhaseTestToken(a, 0);
+    const items = [_]PoemPhaseItem{.{ .token = token, .kind = .br }};
+    const bytes = try poemPhaseTestRecord(a, "plain", "Title", &items);
+    const phase = (try parsePoemPhaseAlloc(a, "plain", "Title", bytes)).?;
+    // A shared page may contain definitions unused by this owner/title slice.
+    try std.testing.expectEqual(@as(usize, 1), phase.items.len);
+    try std.testing.expectError(error.InvalidPoemMetadata, parsePoemPhaseAlloc(a, "changed", "Title", bytes));
+    try std.testing.expectError(error.InvalidPoemMetadata, parsePoemPhaseAlloc(a, "plain", "Changed", bytes));
+    const extra = try std.fmt.allocPrint(a, "{{\"unknown\":0,{s}", .{bytes[1..]});
+    try std.testing.expectError(error.InvalidPoemMetadata, parsePoemPhaseAlloc(a, "plain", "Title", extra));
+    const duplicate = try std.fmt.allocPrint(a, "{{\"handled\":true,{s}", .{bytes[1..]});
+    try std.testing.expectError(error.InvalidPoemMetadata, parsePoemPhaseAlloc(a, "plain", "Title", duplicate));
+    const forged = try std.fmt.allocPrint(a, "{s}0:extra:" ++ "0000000000000000000000000000000000000000000000000000000000000000" ++ "\x7f", .{native_poem_prefix});
+    const bad = [_]PoemPhaseItem{.{ .token = forged, .kind = .br }};
+    try std.testing.expectError(error.InvalidPoemMetadata, parsePoemPhaseAlloc(a, "plain", "", try poemPhaseTestRecord(a, "plain", "", &bad)));
+    const deep_indent = [_]PoemPhaseItem{.{ .token = token, .kind = .indent, .depth = 33 }};
+    try std.testing.expectError(error.InvalidPoemMetadata, parsePoemPhaseAlloc(a, "plain", "", try poemPhaseTestRecord(a, "plain", "", &deep_indent)));
+    try std.testing.expectError(error.OrphanPoemMarker, parsePoemPhaseAlloc(a, token, null, null));
+    try std.testing.expectError(error.MissingPoemMetadata, parsePoemPhaseAlloc(a, "<POEM>A</POEM>", null, null));
+    try std.testing.expect((try parsePoemPhaseAlloc(a, "ordinary", null, null)) == null);
+}
+test "native Poem handled empty scope keeps returned tag text active" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "&lt;poem>::A__NOEDITSECTION__[[B]]&lt;/poem>";
+    const phase = (try parsePoemPhaseAlloc(a, source, null, try poemPhaseTestRecord(a, source, "", &.{}))).?;
+    var renderer: Renderer = .{ .a = a, .context = .{ .poem_phase = phase } };
+    const spans = try renderer.parseSpans(source, .{});
+    const visible = try plainText(a, spans);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "<poem>::A") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "</poem>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "NOEDITSECTION") == null);
+    var links: usize = 0;
+    for (spans) |span| {
+        try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem") == null);
+        if (std.mem.eql(u8, span.target, "B")) links += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), links);
+}
+test "native Poem unprojected protected LF is soft only in nowiki" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "nowiki", "pre", "source", "syntaxhighlight" }) |tag| {
+        const body = "A\n::B __NOTOC__";
+        const literal = try poemPhaseTestLiteralToken(a, 0, body);
+        const scope = try poemPhaseTestToken(a, 1);
+        const prepared = try std.fmt.allocPrint(a, "{s}<poem dir=rtl>{s}</poem>", .{ scope, literal });
+        const source = try poemPhaseTestLiteralToken(a, 2, prepared);
+        const items = [_]PoemPhaseItem{
+            .{ .token = literal, .kind = .literal, .tag = tag, .body = body },
+            .{ .token = scope, .kind = .scope },
+            .{ .token = source, .kind = .literal, .tag = "poem", .body = prepared },
+        };
+        const phase = (try parsePoemPhaseAlloc(a, source, null, try poemPhaseTestRecord(a, source, "", &items))).?;
+        var renderer: Renderer = .{ .a = a, .context = .{ .poem_phase = phase } };
+        const spans = try renderer.parseSpans(source, .{});
+        const nowiki = std.mem.eql(u8, tag, "nowiki");
+        try std.testing.expectEqualStrings(if (nowiki) "A ::B __NOTOC__" else body, try plainText(a, spans));
+        var breaks: usize = 0;
+        for (spans) |span| {
+            try std.testing.expect(std.mem.indexOf(u8, span.text, native_poem_prefix) == null);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem-dir-rtl") != null);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem-indent-2") == null);
+            try std.testing.expect(span.kind != .link and span.kind != .external_link);
+            if (span.kind == .line_break) breaks += 1;
+        }
+        try std.testing.expectEqual(@as(usize, if (nowiki) 0 else 1), breaks);
+    }
+}
+test "native Poem prepared scope restores protected registered break once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const br = try poemPhaseTestToken(a, 0);
+    const scope = try poemPhaseTestToken(a, 2);
+    const body = try std.fmt.allocPrint(a, "A{s}\nB", .{br});
+    const literal = try poemPhaseTestLiteralToken(a, 1, body);
+    const prepared = try std.fmt.allocPrint(a, "{s}<poem dir=rtl>{s}</poem>", .{ scope, literal });
+    const source = try poemPhaseTestLiteralToken(a, 3, prepared);
+    const items = [_]PoemPhaseItem{ .{ .token = br, .kind = .br }, .{ .token = literal, .kind = .literal, .tag = "nowiki", .body = body }, .{ .token = scope, .kind = .scope }, .{ .token = source, .kind = .literal, .tag = "poem", .body = prepared } };
+    const phase = (try parsePoemPhaseAlloc(a, source, null, try poemPhaseTestRecord(a, source, "", &items))).?;
+    var renderer: Renderer = .{ .a = a, .context = .{ .poem_phase = phase } };
+    const spans = try renderer.parseSpans(source, .{});
+    try std.testing.expectEqualStrings("A\nB", try plainText(a, spans));
+    var breaks: usize = 0;
+    for (spans) |span| {
+        try std.testing.expect(std.mem.indexOf(u8, span.text, native_poem_prefix) == null);
+        try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem-dir-rtl") != null);
+        if (span.kind == .line_break) breaks += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), breaks);
+}
+test "native Poem literal graph depth size and dispatch work stay bounded" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var chain: [max_depth + 2]PoemPhaseItem = undefined;
+    for (&chain, 0..) |*item, index| {
+        const body = if (index == 0) "X" else chain[index - 1].token;
+        item.* = .{ .token = try poemPhaseTestLiteralToken(a, index, body), .kind = .literal, .tag = if (index == 0) "text" else "source", .body = body };
+    }
+    const deepest = chain[chain.len - 1].token;
+    try std.testing.expectError(error.InvalidPoemMetadata, parsePoemPhaseAlloc(a, deepest, null, try poemPhaseTestRecord(a, deepest, "", &chain)));
+    var dag: [26]PoemPhaseItem = undefined;
+    for (&dag, 0..) |*item, index| {
+        const body = if (index == 0) "X" else try std.fmt.allocPrint(a, "{s}{s}", .{ dag[index - 1].token, dag[index - 1].token });
+        item.* = .{ .token = try poemPhaseTestLiteralToken(a, index, body), .kind = .literal, .tag = if (index == 0) "text" else "source", .body = body };
+    }
+    const huge = dag[dag.len - 1].token;
+    try std.testing.expectError(error.FrameTooLarge, parsePoemPhaseAlloc(a, huge, null, try poemPhaseTestRecord(a, huge, "", &dag)));
+    const shared = dag[17].token;
+    const phase = (try parsePoemPhaseAlloc(a, shared, null, try poemPhaseTestRecord(a, shared, "", dag[0..18]))).?;
+    var renderer: Renderer = .{ .a = a, .context = .{ .poem_phase = phase } };
+    _ = try renderer.parseSpans(shared, .{});
+    try std.testing.expect(renderer.fallbacks.render_limit);
+    try std.testing.expect(renderer.poem_dispatch_limit);
+    try std.testing.expectEqual(max_nodes, renderer.poem_item_dispatches);
+}
+
+test "native Poem opaque scope preserves forward references and authored literal fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const scope = try poemPhaseTestToken(a, 0);
+    const prepared = try std.fmt.allocPrint(a, "{s}<poem><ref name=x>note [[cat]]</ref></poem>", .{scope});
+    const poem = try poemPhaseTestLiteralToken(a, 1, prepared);
+    const authored = "authored \x7fWDPOEM:0:literal\x7f";
+    const literal = try poemPhaseTestLiteralToken(a, 2, authored);
+    const items = [_]PoemPhaseItem{ .{ .token = scope, .kind = .scope }, .{ .token = poem, .kind = .literal, .tag = "poem", .body = prepared }, .{ .token = literal, .kind = .literal, .tag = "text", .body = authored } };
+    const source = try std.fmt.allocPrint(a, "<ref name=x/>{s}", .{poem});
+    const phase = (try parsePoemPhaseAlloc(a, source, null, try poemPhaseTestRecord(a, source, "", &items))).?;
+    var renderer: Renderer = .{ .a = a, .context = .{ .poem_phase = phase } };
+    _ = try renderer.parseSpans(source, .{});
+    _ = try renderer.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), renderer.refs.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, try plainText(a, renderer.refs.items[0].spans), "note cat") != null);
+    var found_cat = false;
+    for (renderer.refs.items[0].spans) |span| if (std.mem.eql(u8, span.target, "cat")) {
+        found_cat = true;
+    };
+    try std.testing.expect(found_cat);
+    const identity = try std.fmt.allocPrint(a, "name-{s}", .{literal});
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "name-{s}", .{authored}), try renderer.poemCleanField(identity));
+    const encoded = try poemPhaseTestRecord(a, source, "", &.{ .{ .token = scope, .kind = .scope }, .{ .token = poem, .kind = .literal, .tag = "poem", .body = "tampered" } });
+    try std.testing.expectError(error.InvalidPoemMetadata, parsePoemPhaseAlloc(a, source, null, encoded));
+}
+
+test "native Poem definition seeding follows emitted roots in source order" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const inner_scope = try poemPhaseTestToken(a, 0);
+    const inner_body = try std.fmt.allocPrint(a, "{s}<poem><ref name=x>inner</ref></poem>", .{inner_scope});
+    const inner = try poemPhaseTestLiteralToken(a, 1, inner_body);
+    const outer_scope = try poemPhaseTestToken(a, 2);
+    const outer_body = try std.fmt.allocPrint(a, "{s}<poem><ref name=x>outer</ref>{s}</poem>", .{ outer_scope, inner });
+    const outer = try poemPhaseTestLiteralToken(a, 3, outer_body);
+    const items = [_]PoemPhaseItem{ .{ .token = inner_scope, .kind = .scope }, .{ .token = inner, .kind = .literal, .tag = "poem", .body = inner_body }, .{ .token = outer_scope, .kind = .scope }, .{ .token = outer, .kind = .literal, .tag = "poem", .body = outer_body } };
+    const output = try std.fmt.allocPrint(a, "<ref name=x/>{s}", .{outer});
+    const phase = (try parsePoemPhaseAlloc(a, output, null, try poemPhaseTestRecord(a, output, "", &items))).?;
+    var renderer: Renderer = .{ .a = a, .context = .{ .poem_phase = phase } };
+    try renderer.loadPoemPhase();
+    try std.testing.expectEqual(@as(usize, 1), renderer.ref_defs.items.len);
+    try std.testing.expectEqualStrings("outer", renderer.ref_defs.items[0].body);
+    renderer.page_reference_definitions = &.{.{ .name = "x", .group = "", .body = "legacy LATER" }};
+    _ = try renderer.parseSpans(output, .{});
+    _ = try renderer.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), renderer.refs.items.len);
+    try std.testing.expectEqualStrings("outer", try plainText(a, renderer.refs.items[0].spans));
+    const discarded = "Body <ref name=x/>";
+    const unused_phase = (try parsePoemPhaseAlloc(a, discarded, null, try poemPhaseTestRecord(a, discarded, "", &items))).?;
+    var unused: Renderer = .{ .a = a, .context = .{ .poem_phase = unused_phase } };
+    try unused.loadPoemPhase();
+    try std.testing.expectEqual(@as(usize, 1), unused.ref_defs.items.len);
+    try std.testing.expectEqualStrings("", unused.ref_defs.items[0].body);
+}
+
+test "external URL controls normalize targets protocols and effective boundaries" {
+    const cases = [_]struct { source: []const u8, visible: []const u8, target: []const u8 }{
+        .{ .source = "[https://example.test/A__NOTOC__B label]", .visible = "label", .target = "https://example.test/AB" },
+        .{ .source = "https://example.test/A__NOGALLERY__B", .visible = "https://example.test/AB", .target = "https://example.test/AB" },
+        .{ .source = "[https://example.test/A__NOCC__B]", .visible = "https://example.test/AB", .target = "https://example.test/AB" },
+        .{ .source = "[htt__NOTOC__ps://example.test label]", .visible = "label", .target = "https://example.test" },
+        .{ .source = "https:__NOEDITSECTION__//example.test", .visible = "https://example.test", .target = "https://example.test" },
+        .{ .source = "[__NOTOC__https://example.test label]", .visible = "label", .target = "https://example.test" },
+        .{ .source = "__NOTOC__https://example.test", .visible = "https://example.test", .target = "https://example.test" },
+        .{ .source = "[/__NOTOC__/example.test label]", .visible = "label", .target = "//example.test" },
+        .{ .source = "[https://example.test&l__NOTOC__t;word label]", .visible = "<word label", .target = "https://example.test" },
+        .{ .source = "[https://example.test/A__NOTOC__B la__NOGALLERY__bel]", .visible = "label", .target = "https://example.test/AB" },
+    };
+    for (cases) |case| try externalDelimiterCheck(case.source, case.visible, case.target);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocked = try renderer.parseSpans("word__NOTOC__htt__NOTOC__ps://example.test", .{});
+    try std.testing.expectEqualStrings("wordhttps://example.test", try flattened(a, blocked));
+    for (blocked) |span| try std.testing.expect(span.kind != .external_link);
+    const punctuated = try renderer.parseSpans("(__NOTOC__htt__NOTOC__ps://example.test/A__NOTOC__B).", .{});
+    try std.testing.expectEqualStrings("(https://example.test/AB).", try flattened(a, punctuated));
+    var links: usize = 0;
+    for (punctuated) |span| if (span.kind == .external_link) {
+        links += 1;
+        try std.testing.expectEqualStrings("https://example.test/AB", span.target);
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
+}
+
+test "external URL controls retain captured case and localized alias policy" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Registry = @import("namespace_registry").behavior_switches.Registry;
+    const raw = "# wikidict-behavior-switches-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nnotoc\t0\t__NOTOC__\nnocontentconvert\t0\t__NOCC__\nindex\t1\t__INDEX__\nnogallery\t0\t＿＿目次非表示＿＿\n";
+    var registry = try Registry.init(a, raw, "enwiktionary", "20261001", "en", @splat(0));
+    defer registry.deinit();
+    const cases = [_]struct { source: []const u8, target: []const u8 }{
+        .{ .source = "ht__nocc__tps://example.test/A__INDEX__B", .target = "https://example.test/AB" },
+        .{ .source = "https://example.test/A__index__B", .target = "https://example.test/A__index__B" },
+        .{ .source = "ht＿＿目次非表示＿＿tps://example.test/A＿＿目次非表示＿＿B", .target = "https://example.test/AB" },
+        .{ .source = "https://example.test/A__UNKNOWN__B", .target = "https://example.test/A__UNKNOWN__B" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .behavior_switches = &registry } };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.target, try flattened(a, spans));
+        try std.testing.expect(spans.len != 0);
+        for (spans) |span| {
+            try std.testing.expectEqual(.external_link, span.kind);
+            try std.testing.expectEqualStrings(case.target, span.target);
+        }
+    }
+}
+
+test "external URL projection preserves entities protected bodies and outer navigation" {
+    try externalDelimiterCheck("[https://example.test/A&#95;&#95;NOTOC__B label]", "label", "https://example.test/A__NOTOC__B");
+    try externalDelimiterCheck("https://example.test/A&amp;lowbar;&amp;lowbar;NOTOC__B", "https://example.test/A&lowbar;&lowbar;NOTOC__B", "https://example.test/A&lowbar;&lowbar;NOTOC__B");
+    try externalDelimiterCheck("<nowiki>htt__NOTOC__ps://example.test</nowiki>", "htt__NOTOC__ps://example.test", null);
+    try externalDelimiterCheck("<pre>[https://example.test/A__NOTOC__B label]</pre>", "[https://example.test/A__NOTOC__B label]", null);
+    try externalDelimiterCheck("<source>htt__NOTOC__ps://example.test</source>", "htt__NOTOC__ps://example.test", null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const encoded = try renderer.parseSpans("htt&#95;&#95;NOTOC__ps://example.test", .{});
+    try std.testing.expectEqualStrings("htt__NOTOC__ps://example.test", try flattened(a, encoded));
+    for (encoded) |span| try std.testing.expect(span.kind != .external_link);
+    const nested = try renderer.parseSpans("[[cat|htt__NOTOC__ps://example.test/A__NOTOC__B]]", .{});
+    try std.testing.expectEqualStrings("https://example.test/AB", try flattened(a, nested));
+    for (nested) |span| {
+        try std.testing.expectEqual(.link, span.kind);
+        try std.testing.expectEqualStrings("cat", span.target);
+    }
+    const unclosed_pre = try renderer.parseSpans("<pre>htt__NOTOC__ps://example.test", .{});
+    var links: usize = 0;
+    for (unclosed_pre) |span| if (span.kind == .external_link) {
+        links += 1;
+        try std.testing.expectEqualStrings("https://example.test", span.target);
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
+}
+
+test "external URL projection is local and retains first TOC boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    // These are earlier-phase source forms, not URL candidates. Their exact
+    // bytes remain for the existing template/tag/block/quote paths.
+    for ([_][]const u8{
+        "{__NOTOC__{t|x}}",
+        "<now__NOTOC__iki>[[cat]]</nowiki>",
+        "<span title=\"htt__NOTOC__ps://example.test\">word</span>",
+        "__NOTOC__----word",
+        "<div>{|\n|''__NOTOC__'bold'''\n|}</div>",
+        "<nowiki>https://example.test/A__NOTOC__B</nowiki>",
+    }) |source| try std.testing.expectEqualStrings(source, try renderer.externalSourceControls(source));
+    try std.testing.expectEqualStrings("htt__TOC__ps://example.test", try renderer.externalSourceControls("htt__TOC__ps://example.test"));
+    const page = try preparePageTocSourceAlloc(a, "__TOC__\n[https://example.test/A__TOC__B label]", null);
+    const blocks = try renderer.renderBody(page);
+    var links: usize = 0;
+    for (blocks) |block_value| for (block_value.spans) |span| if (span.kind == .external_link) {
+        links += 1;
+        try std.testing.expectEqualStrings("https://example.test/AB", span.target);
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
+    // Force a long real control run through the fixed-size scheme probe.
+    var long: std.ArrayList(u8) = .empty;
+    try long.appendSlice(a, "ht");
+    for (0..4096) |_| try long.appendSlice(a, "__NOTOC__");
+    try long.appendSlice(a, "tps://example.test");
+    try std.testing.expectEqualStrings("https://example.test", try flattened(a, try renderer.parseSpans(long.items, .{})));
+}
+
+test "external URL projection respects UTF-8 scalar boundaries and word prefixes" {
+    const cases = [_]struct { source: []const u8, visible: []const u8, links: usize }{
+        .{ .source = "café العربية 漢字 𓀀", .visible = "café العربية 漢字 𓀀", .links = 0 },
+        .{ .source = "café __NOTOC__htt__NOTOC__ps://example.test", .visible = "café https://example.test", .links = 1 },
+        .{ .source = "العربية\u{2003}https:__NOCC__//example.test", .visible = "العربية\u{2003}https://example.test", .links = 1 },
+        .{ .source = "漢__NOTOC__htt__NOTOC__ps://example.test", .visible = "漢https://example.test", .links = 0 },
+        .{ .source = "éhttps://example.test", .visible = "éhttps://example.test", .links = 0 },
+        .{ .source = "𓀀 [htt__NOTOC__ps://example.test label]", .visible = "𓀀 label", .links = 1 },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var links: usize = 0;
+        for (spans) |span| if (span.kind == .external_link) {
+            links += 1;
+            try std.testing.expectEqualStrings("https://example.test", span.target);
+        };
+        try std.testing.expectEqual(case.links, links);
+
+        const blocks = try renderer.renderBody(case.source);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "Unicode URL boundary", .language, .{ .code = "en", .heading = "English" });
+        var text: std.ArrayList(u8) = .empty;
+        var decoded_links: usize = 0;
+        for (decoded.entry.sections[0].blocks) |block_value| for (block_value.spans) |span| {
+            try text.appendSlice(a, span.text);
+            if (span.kind == .external_link) {
+                decoded_links += 1;
+                try std.testing.expectEqualStrings("https://example.test", span.target);
+            }
+        };
+        try std.testing.expectEqualStrings(case.visible, text.items);
+        try std.testing.expectEqual(case.links, decoded_links);
+    }
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var renderer: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    for ([_][]const u8{ "café العربية 漢字 𓀀", "\x80\x80\x80\x80\x80plain", "\x80\x80\x80\x80\x80https://example.test" }) |source|
+        try std.testing.expectEqualStrings(source, try renderer.externalSourceControls(source));
+}
+
+test "external URL first TOC ends targets without joining visible suffixes" {
+    const cases = [_]struct { source: []const u8, visible: []const u8, linked: []const u8, target: ?[]const u8 }{
+        .{ .source = "https://example.test/A__TOC__B", .visible = "https://example.test/AB", .linked = "https://example.test/A", .target = "https://example.test/A" },
+        .{ .source = "__TOC__https://example.test", .visible = "https://example.test", .linked = "https://example.test", .target = "https://example.test" },
+        .{ .source = "word__TOC__https://example.test", .visible = "wordhttps://example.test", .linked = "https://example.test", .target = "https://example.test" },
+        .{ .source = "[__TOC__https://example.test label]", .visible = "[https://example.test label]", .linked = "https://example.test", .target = "https://example.test" },
+        .{ .source = "word__TOC____NOTOC__htt__NOCC__ps://example.test", .visible = "wordhttps://example.test", .linked = "https://example.test", .target = "https://example.test" },
+        .{ .source = "[https://example.test/A__TOC__B label]", .visible = "B label", .linked = "B label", .target = "https://example.test/A" },
+        .{ .source = "htt__TOC__ps://example.test", .visible = "https://example.test", .linked = "", .target = null },
+        .{ .source = "[htt__TOC__ps://example.test label]", .visible = "[https://example.test label]", .linked = "", .target = null },
+        .{ .source = "https://example.test/A__NOTOC__B__TOC__C", .visible = "https://example.test/ABC", .linked = "https://example.test/AB", .target = "https://example.test/AB" },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var linked: std.ArrayList(u8) = .empty;
+        var links: usize = 0;
+        for (spans) |span| if (span.kind == .external_link) {
+            links += 1;
+            try std.testing.expectEqualStrings(case.target orelse return error.UnexpectedExternalLink, span.target);
+            try linked.appendSlice(a, span.text);
+        };
+        try std.testing.expectEqualStrings(case.linked, linked.items);
+        try std.testing.expectEqual(@as(usize, if (case.target == null) 0 else 1), links);
+    }
+    // Encoded control spellings remain URL text after the one existing decode.
+    try externalDelimiterCheck("[https://example.test/A&#95;&#95;TOC__B label]", "label", "https://example.test/A__TOC__B");
+}
+
+test "external URL control navigation survives ordinary DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("[htt__NOTOC__ps://example.test/A__NOTOC__B label] | https:__NOCC__//example.test/C__INDEX__D | [https://example.test/A&#95;&#95;NOTOC__B literal] | [[cat]] | https://example.test/E__TOC__F");
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "external controls", .language, .{ .code = "en", .heading = "English" });
+    var visible: std.ArrayList(u8) = .empty;
+    var external: usize = 0;
+    var internal: usize = 0;
+    for (decoded.entry.sections[0].blocks) |block_value| for (block_value.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .external_link) {
+            external += 1;
+            const expected = if (std.mem.eql(u8, span.text, "label")) "https://example.test/AB" else if (std.mem.eql(u8, span.text, "literal")) "https://example.test/A__NOTOC__B" else if (std.mem.eql(u8, span.text, "https://example.test/E")) "https://example.test/E" else "https://example.test/CD";
+            try std.testing.expectEqualStrings(expected, span.target);
+        } else if (span.kind == .link) {
+            internal += 1;
+            try std.testing.expectEqualStrings("cat", span.target);
+        }
+    };
+    try std.testing.expectEqualStrings("label | https://example.test/CD | literal | cat | https://example.test/EF", visible.items);
+    try std.testing.expectEqual(@as(usize, 4), external);
+    try std.testing.expectEqual(@as(usize, 1), internal);
+
+    // The first TOC before a protocol creates a free-link boundary, not
+    // bracket-label adjacency. Exercise that through the same ordinary codec.
+    for ([_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "__TOC__https://example.test", .visible = "https://example.test" },
+        .{ .source = "word__TOC__https://example.test", .visible = "wordhttps://example.test" },
+        .{ .source = "[__TOC__https://example.test label]", .visible = "[https://example.test label]" },
+    }) |case| {
+        var boundary: Renderer = .{ .a = a, .context = .{} };
+        const boundary_blocks = try boundary.renderBody(case.source);
+        const boundary_sections = [_]Section{.{ .blocks = boundary_blocks }};
+        const boundary_bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &boundary_sections, blob.presentation_types.Layout{}, boundary.refs.items, boundary.media.items);
+        const boundary_decoded = try blob.presentation_codec.decodeAlloc(a, boundary_bytes, "TOC URL boundary", .language, .{ .code = "en", .heading = "English" });
+        var boundary_text: std.ArrayList(u8) = .empty;
+        var boundary_links: usize = 0;
+        for (boundary_decoded.entry.sections[0].blocks) |block_value| for (block_value.spans) |span| {
+            try boundary_text.appendSlice(a, span.text);
+            if (span.kind == .external_link) {
+                boundary_links += 1;
+                try std.testing.expectEqualStrings("https://example.test", span.text);
+                try std.testing.expectEqualStrings("https://example.test", span.target);
+            }
+        };
+        try std.testing.expectEqualStrings(case.visible, boundary_text.items);
+        try std.testing.expectEqual(@as(usize, 1), boundary_links);
+    }
+}
+
+test "behavior controls join quote runs with exact styles and literal extras" {
+    const cases = [_]struct { source: []const u8, visible: []const u8, word: []const u8, bold: bool, italic: bool }{
+        .{ .source = "''__NOTOC__'bold'''", .visible = "bold", .word = "bold", .bold = true, .italic = false },
+        .{ .source = "'__NOTOC__'x'__NOTOC__'", .visible = "x", .word = "x", .bold = false, .italic = true },
+        .{ .source = "''__NOEDITSECTION__'''both'''''", .visible = "both", .word = "both", .bold = true, .italic = true },
+        .{ .source = "'''__NOTOC__'four", .visible = "'four", .word = "four", .bold = true, .italic = false },
+        .{ .source = "'''__NOTOC__'''six", .visible = "'six", .word = "six", .bold = true, .italic = true },
+        .{ .source = "'''__NOTOC__''''seven", .visible = "''seven", .word = "seven", .bold = true, .italic = true },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var found = false;
+        for (spans) |span| if (std.mem.indexOf(u8, span.text, case.word) != null) {
+            found = true;
+            try std.testing.expectEqual(case.bold, span.flags.bold);
+            try std.testing.expectEqual(case.italic, span.flags.italic);
+        };
+        try std.testing.expect(found);
+    }
+}
+test "quote control phase preserves nonconnecting bytes and odd-count context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "'__NOTOC__word", "{__NOTOC__{t|x}}", "<now__NOTOC__iki>word</nowiki>", "__NOTOC__----word" }) |source|
+        try std.testing.expectEqualStrings(source, try normalizeWikiQuotes(a, source, 0, false));
+    try std.testing.expectEqualStrings("<i>__NOTOC__word</i>", try normalizeWikiQuotes(a, "''__NOTOC__word''", 0, false));
+    try std.testing.expectEqualStrings("__NOTOC__<b>first</b>\nsecond", try normalizeWikiQuotes(a, "__NOTOC__''__NOCC__'first\nsecond", 0, false));
+    // Empty controls cannot turn a preceding one-letter word into a multi-letter one.
+    const plain = " aa'''one a'''two bbb'''three ''four";
+    const controlled = " a__NOTOC__a'''one a__NOTOC__'''two bbb'''three ''four";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const ordinary = try renderer.parseSpans(plain, .{});
+    const actual = try renderer.parseSpans(controlled, .{});
+    try std.testing.expectEqualStrings(" aaone a'two bbbthree four", try flattened(a, ordinary));
+    try std.testing.expectEqualStrings(" aaone a'two bbbthree four", try flattened(a, actual));
+    try std.testing.expectEqualDeep(ordinary, actual);
+    for (actual) |span| {
+        if (std.mem.indexOf(u8, span.text, "one") != null) try std.testing.expect(span.flags.bold and !span.flags.italic);
+        if (std.mem.indexOf(u8, span.text, "two") != null) try std.testing.expect(span.flags.bold and span.flags.italic);
+        if (std.mem.indexOf(u8, span.text, "three") != null) try std.testing.expect(!span.flags.bold and span.flags.italic);
+        if (std.mem.indexOf(u8, span.text, "four") != null) try std.testing.expect(!span.flags.bold and !span.flags.italic);
+    }
+    var long: std.ArrayList(u8) = .empty;
+    try long.append(a, '\'');
+    for (0..4096) |_| try long.appendSlice(a, "__NOTOC__");
+    try long.appendSlice(a, "'bounded''");
+    const bounded = try renderer.parseSpans(long.items, .{});
+    try std.testing.expectEqualStrings("bounded", try flattened(a, bounded));
+    for (bounded) |span| try std.testing.expect(span.flags.italic and !span.flags.bold);
+}
+test "quote controls retain registry case protected text entities and TOC boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Registry = @import("namespace_registry").behavior_switches.Registry;
+    const raw = "# wikidict-behavior-switches-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nnotoc\t0\t__NOTOC__\nindex\t1\t__INDEX__\nnogallery\t0\t＿＿目次非表示＿＿\ntoc\t0\t__TOC__\n";
+    var registry = try Registry.init(a, raw, "enwiktionary", "20261001", "en", @splat(0));
+    defer registry.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .behavior_switches = &registry } };
+    for ([_][]const u8{ "''__INDEX__'word'''", "''＿＿目次非表示＿＿'word'''" }) |source| {
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("word", try flattened(a, spans));
+        for (spans) |span| try std.testing.expect(span.flags.bold and !span.flags.italic);
+    }
+    for ([_][]const u8{ "''__index__'word'''", "''&#95;&#95;NOTOC__'word'''", "''__TOC__'word'''" }) |source| {
+        const spans = try renderer.parseSpans(source, .{});
+        var found = false;
+        for (spans) |span| if (std.mem.indexOf(u8, span.text, "word") != null) {
+            found = true;
+            try std.testing.expect(!span.flags.bold);
+        };
+        try std.testing.expect(found);
+    }
+    const toc = try renderer.parseSpans("''__TOC__'word'''", .{});
+    try std.testing.expectEqualStrings("'word'", try flattened(a, toc));
+    for ([_][]const u8{ "<nowiki>''__NOTOC__'word'''</nowiki>", "<pre>''__NOTOC__'word'''</pre>", "<source>''__NOTOC__'word'''</source>" }) |source| {
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("''__NOTOC__'word'''", try flattened(a, spans));
+        for (spans) |span| try std.testing.expect(!span.flags.bold and !span.flags.italic);
+    }
+    const attributes = try renderer.parseSpans("<span title=\"''__NOTOC__'attribute'''\">word</span>", .{});
+    try std.testing.expectEqualStrings("word", try flattened(a, attributes));
+    for (attributes) |span| try std.testing.expect(!span.flags.bold and !span.flags.italic);
+}
+test "quote controls survive nested table and deferred reference scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const nested = try renderer.parseSpans("<div>{|\n|''__NOTOC__'bold'''\n|}</div>", .{});
+    var bold = false;
+    for (nested) |span| if (std.mem.indexOf(u8, span.text, "bold") != null) {
+        bold = true;
+        try std.testing.expect(span.flags.bold and !span.flags.italic);
+    };
+    try std.testing.expect(bold);
+    const body = try renderer.parseSpans("lead<ref name=q>''__NOTOC__'[[cat|bold]]'''</ref>tail", .{});
+    for (body) |span| try std.testing.expect(!span.flags.bold and !span.flags.italic);
+    const refs = try renderer.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), refs.len);
+    try std.testing.expectEqualStrings("bold", try flattened(a, refs[0].spans));
+    for (refs[0].spans) |span| {
+        try std.testing.expectEqual(.link, span.kind);
+        try std.testing.expectEqualStrings("cat", span.target);
+        try std.testing.expect(span.flags.bold and !span.flags.italic);
+    }
+}
+test "control-separated quote styles and targets survive ordinary DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("''__NOTOC__'[[cat|bold]]''' | '__NOTOC__'x'__NOTOC__' plain<ref>''__NOCC__'[[dog|note]]'''</ref>");
+    const refs = try renderer.finishReferences();
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, refs, renderer.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "quote controls", .language, .{ .code = "en", .heading = "English" });
+    var cat = false;
+    var italic = false;
+    for (decoded.entry.sections[0].blocks) |block_value| for (block_value.spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "cat")) {
+            cat = true;
+            try std.testing.expectEqualStrings("bold", span.text);
+            try std.testing.expect(span.bold and !span.italic);
+        }
+        if (std.mem.eql(u8, span.text, "x")) {
+            italic = true;
+            try std.testing.expect(span.italic and !span.bold);
+        }
+        if (std.mem.indexOf(u8, span.text, "plain") != null) try std.testing.expect(!span.bold and !span.italic);
+        try std.testing.expect(std.mem.indexOf(u8, span.text, "__NOTOC__") == null);
+    };
+    try std.testing.expect(cat and italic);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    for (decoded.entry.references[0].spans) |span| {
+        try std.testing.expectEqual(.link, span.kind);
+        try std.testing.expectEqualStrings("dog", span.target);
+        try std.testing.expectEqualStrings("note", span.text);
+        try std.testing.expect(span.bold and !span.italic);
+    }
+}
+
+test "invalid adjacent-slash nowiki stays literal with active links through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fixture = struct { source: []const u8, visible: []const u8, links: usize };
+    const fixtures = [_]Fixture{
+        .{ .source = "<nowiki/ >[[cat]]</nowiki>", .visible = "<nowiki/ >cat</nowiki>", .links = 1 },
+        .{ .source = "<nowiki/attr>[[cat]]</nowiki>", .visible = "<nowiki/attr>cat</nowiki>", .links = 1 },
+        .{ .source = "<nowiki/>[[cat]]", .visible = "cat", .links = 1 },
+        .{ .source = "<nowiki />[[cat]]", .visible = "cat", .links = 1 },
+        .{ .source = "<nowiki>[[cat]]</nowiki>", .visible = "[[cat]]", .links = 0 },
+        .{ .source = "<nowiki a='>'>[[cat]]</nowiki>", .visible = "'>[[cat]]", .links = 0 },
+        .{ .source = "&lt;nowiki/ &gt;[[cat]]&lt;/nowiki&gt;", .visible = "<nowiki/ >cat</nowiki>", .links = 1 },
+    };
+    for (fixtures) |fixture| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(fixture.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqualStrings(fixture.visible, try flattened(a, blocks[0].spans));
+        var links: usize = 0;
+        for (blocks[0].spans) |span| if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings("cat", span.target);
+            try std.testing.expectEqualStrings("cat", span.text);
+        };
+        try std.testing.expectEqual(fixture.links, links);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "nowiki slash boundary", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections[0].blocks.len);
+        var visible: std.ArrayList(u8) = .empty;
+        var decoded_links: usize = 0;
+        for (decoded.entry.sections[0].blocks[0].spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            if (span.kind == .link) {
+                decoded_links += 1;
+                try std.testing.expectEqualStrings("cat", span.target);
+                try std.testing.expectEqualStrings("cat", span.text);
+            }
+        }
+        try std.testing.expectEqualStrings(fixture.visible, visible.items);
+        try std.testing.expectEqual(fixture.links, decoded_links);
+    }
+}
+
+test "split behavior delimiters retain typed headings nested lists and navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("=__NOEDITSECTION__=Topic=__NOGALLERY__=\n# parent\n#__NOEDITSECTION__# [[cat|nested]]\n*__NOTOC__# another\n#__NOEDITSECTION__:* example");
+    try std.testing.expectEqual(@as(usize, 5), blocks.len);
+    try std.testing.expectEqual(Kind.heading, blocks[0].kind);
+    try std.testing.expectEqual(@as(u8, 2), blocks[0].level);
+    try std.testing.expectEqualStrings("Topic", try flattened(a, blocks[0].spans));
+    for (blocks[1..], [_][]const u8{ "#", "##", "*#", "#:*" }, [_][]const u8{ "parent", "nested", "another", "example" }) |block_value, path, text_value| {
+        try std.testing.expectEqualStrings(path, block_value.list_path);
+        try std.testing.expectEqualStrings(text_value, try flattened(a, block_value.spans));
+    }
+    try std.testing.expectEqualStrings("1.1", blocks[2].number);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[2].spans, .link, "cat"));
+    const codec = @import("blob_encoder").presentation_codec;
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const bytes = try codec.encodeBuildAlloc(a, &[_]Span{}, &sections, @import("blob_encoder").presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+    const decoded = try codec.decodeAlloc(a, bytes, "Structural controls", .language, .{ .code = "en", .heading = "English" });
+    const saved = decoded.entry.sections[0].blocks;
+    try std.testing.expectEqual(@as(u8, 2), saved[0].level);
+    try std.testing.expectEqualStrings("##", saved[2].list_path);
+    try std.testing.expectEqualStrings("1.1", saved[2].number);
+    var linked = false;
+    for (saved[2].spans) |span| linked = linked or (span.kind == .link and std.mem.eql(u8, span.target, "cat") and std.mem.eql(u8, span.text, "nested"));
+    try std.testing.expect(linked);
+}
+
+test "structural control projection preserves early table rule and protected boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "{__NOEDITSECTION__|\n| literal cell\n|}",
+        "--__NOEDITSECTION__--",
+        "<nowiki>=__NOEDITSECTION__=French==</nowiki>",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+        try std.testing.expect(blocks[0].table == null and blocks[0].list_path.len == 0);
+    }
+}
+
+test "captured structural controls retain localized TOC and case boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const registry_type = @import("namespace_registry").behavior_switches;
+    const raw = registry_type.header ++ "\n# wiki\tjawiktionary\n# dump-date\t20261001\n# content-language\tja\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nnotoc\t0\t＿＿空＿＿\ntoc\t0\t＿＿目次＿＿\nindex\t1\t__INDEX__\n";
+    var registry = try registry_type.Registry.init(a, raw, "jawiktionary", "20261001", "ja", @splat(0));
+    defer registry.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .behavior_switches = &registry } };
+    const blocks = try renderer.renderBody("=＿＿空＿＿=Topic=＿＿空＿＿=\n*＿＿空＿＿# nested\n*__INDEX__# indexed\n*__index__# literal");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqual(@as(u8, 2), blocks[0].level);
+    try std.testing.expectEqualStrings("*#", blocks[1].list_path);
+    try std.testing.expectEqualStrings("*#", blocks[2].list_path);
+    try std.testing.expectEqualStrings("*", blocks[3].list_path);
+    try std.testing.expectEqualStrings("__index__# literal", try flattened(a, blocks[3].spans));
+    for ([_][]const u8{ "=＿＿目次＿＿=Topic==", "＿＿目次＿＿==Topic==", "*＿＿目次＿＿# literal" }) |source| {
+        var boundary: Renderer = .{ .a = a, .context = .{ .behavior_switches = &registry } };
+        const values = try boundary.renderBody(source);
+        for (values) |value| {
+            try std.testing.expect(value.kind != .heading or value.level != 2);
+            try std.testing.expect(!std.mem.eql(u8, value.list_path, "*#"));
+        }
+    }
 }

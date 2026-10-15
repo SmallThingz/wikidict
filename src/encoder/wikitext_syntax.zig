@@ -38,11 +38,28 @@ pub fn behaviorSwitchEnd(text: []const u8, start: usize) ?usize {
 pub const ControlMatcher = struct {
     ctx: ?*const anyopaque,
     match: *const fn (?*const anyopaque, []const u8, usize) ?usize,
+    toc_match: ?*const fn (?*const anyopaque, []const u8, usize) ?usize = null,
 
     pub fn end(self: ControlMatcher, text: []const u8, at: usize) ?usize {
         return self.match(self.ctx, text, at);
     }
+
+    pub fn emptyEnd(self: ControlMatcher, text: []const u8, at: usize) ?usize {
+        const matched = self.end(text, at) orelse return null;
+        const toc = if (self.toc_match) |match_toc|
+            match_toc(self.ctx, text, at)
+        else if (std.ascii.eqlIgnoreCase(text[at..matched], "__TOC__")) matched else null;
+        return if (toc != null and toc.? == matched) null else matched;
+    }
 };
+
+/// Only empty active controls can join a later-phase structural delimiter.
+/// A retained first TOC is a real boundary; page preprocessing removes later TOCs.
+pub fn emptyBehaviorControlEnd(text: []const u8, at: usize, matcher: ?ControlMatcher) ?usize {
+    if (matcher) |value| return value.emptyEnd(text, at);
+    const matched = behaviorSwitchEnd(text, at) orelse return null;
+    return if (std.ascii.eqlIgnoreCase(text[at..matched], "__TOC__")) null else matched;
+}
 
 /// Leading active controls and a complete suffix after a heading delimiter are invisible.
 /// Scan original bytes, retaining protected bodies, attributes and entities.
@@ -51,7 +68,7 @@ pub const ControlMatcher = struct {
 pub fn leadingBehaviorControlOffset(raw: []const u8, matcher: ?ControlMatcher) usize {
     var at: usize = 0;
     while (at < raw.len) {
-        const end = if (matcher) |m| m.end(raw, at) else behaviorSwitchEnd(raw, at);
+        const end = emptyBehaviorControlEnd(raw, at, matcher);
         const next = end orelse break;
         if (next <= at or next > raw.len) break;
         at = next;
@@ -80,7 +97,7 @@ pub fn headingControlPrefix(raw: []const u8, matcher: ?ControlMatcher) []const u
             }
             return line;
         }
-        const end = if (matcher) |m| m.end(line, at) else behaviorSwitchEnd(line, at);
+        const end = emptyBehaviorControlEnd(line, at, matcher);
         if (end) |first_end| {
             const prefix = std.mem.trimEnd(u8, line[0..at], " \t");
             if (prefix.len != 0 and prefix[prefix.len - 1] == '=') {
@@ -90,7 +107,7 @@ pub fn headingControlPrefix(raw: []const u8, matcher: ?ControlMatcher) []const u
                         cursor += 1;
                         continue;
                     }
-                    const next = if (matcher) |m| m.end(line, cursor) else behaviorSwitchEnd(line, cursor);
+                    const next = emptyBehaviorControlEnd(line, cursor, matcher);
                     cursor = next orelse break;
                 }
                 if (cursor == line.len) return prefix;
@@ -99,6 +116,104 @@ pub fn headingControlPrefix(raw: []const u8, matcher: ?ControlMatcher) []const u
         } else at += 1;
     }
     return line;
+}
+
+pub const ControlHeading = struct { level: u8, title: []const u8 };
+
+const EqualsRun = struct {
+    count: usize = 0,
+    end: usize,
+    first_ends: [6]usize = undefined,
+    last_starts: [6]usize = undefined,
+};
+
+fn controlEqualsRun(line: []const u8, start: usize, matcher: ?ControlMatcher) EqualsRun {
+    var result: EqualsRun = .{ .end = start };
+    while (result.end < line.len and line[result.end] == '=') {
+        const at = result.end;
+        result.last_starts[result.count % 6] = at;
+        if (result.count < 6) result.first_ends[result.count] = at + 1;
+        result.count += 1;
+        result.end += 1;
+        var next = result.end;
+        while (emptyBehaviorControlEnd(line, next, matcher)) |end| {
+            if (end <= next or end > line.len) break;
+            next = end;
+        }
+        // Keep controls in the title/body unless they really join another '='.
+        if (next < line.len and line[next] == '=') result.end = next;
+    }
+    return result;
+}
+
+/// A borrowed raw title slice; only delimiter positions are projected.
+/// Protected markup, whitespace and the first TOC cannot join delimiter bytes.
+pub fn controlHeading(raw: []const u8, matcher: ?ControlMatcher) ?ControlHeading {
+    const line = headingControlPrefix(raw, matcher);
+    if (line.len < 3 or line[0] != '=') return null;
+    const opening = controlEqualsRun(line, 0, matcher);
+    if (opening.end == line.len) {
+        // Preserve the existing capped-six delimiter contract for a line made
+        // entirely of equals: only unmatched equals can form its title.
+        if (opening.count <= 12) return null;
+        return .{ .level = 6, .title = line[opening.first_ends[5]..opening.last_starts[(opening.count - 6) % 6]] };
+    }
+    var closing: ?EqualsRun = null;
+    var at = opening.end;
+    var no_more_nowiki_close = false;
+    while (at < line.len) {
+        if (protectedEndCached(line, at, &no_more_nowiki_close)) |end| {
+            at = end;
+            continue;
+        }
+        if (line[at] == '<') if (tagAtCached(line, at, &no_more_nowiki_close)) |tag| {
+            at = tag.end;
+            continue;
+        };
+        if (line[at] == '=') {
+            const run = controlEqualsRun(line, at, matcher);
+            if (run.end == line.len) {
+                closing = run;
+                break;
+            }
+            at = run.end;
+        } else at += 1;
+    }
+    const suffix = closing orelse return null;
+    const level = @min(6, @min(opening.count, suffix.count));
+    const start = opening.first_ends[level - 1];
+    const end = suffix.last_starts[(suffix.count - level) % 6];
+    if (start > end) return null;
+    const title = std.mem.trim(u8, line[start..end], " \t");
+    if (title.len == 0) return null;
+    return .{ .level = @intCast(level), .title = title };
+}
+
+pub const ControlListPrefix = struct { path: []const u8, body_start: usize };
+
+/// Return the existing raw path when unchanged; changed paths belong to allocator.
+pub fn controlListPrefixAlloc(a: std.mem.Allocator, line: []const u8, matcher: ?ControlMatcher) std.mem.Allocator.Error!ControlListPrefix {
+    var path: std.ArrayList(u8) = .empty;
+    errdefer path.deinit(a);
+    var changed = false;
+    var at: usize = 0;
+    while (at < line.len and std.mem.indexOfScalar(u8, "#*:;", line[at]) != null) {
+        if (changed) try path.append(a, line[at]);
+        at += 1;
+        var next = at;
+        while (emptyBehaviorControlEnd(line, next, matcher)) |end| {
+            if (end <= next or end > line.len) break;
+            next = end;
+        }
+        if (next != at and next < line.len and std.mem.indexOfScalar(u8, "#*:;", line[next]) != null) {
+            if (!changed) {
+                try path.appendSlice(a, line[0..at]);
+                changed = true;
+            }
+            at = next;
+        }
+    }
+    return .{ .path = if (changed) try path.toOwnedSlice(a) else line[0..at], .body_start = at };
 }
 
 pub const Pair = struct { inner_end: usize, end: usize };
@@ -174,6 +289,9 @@ fn rawNowikiOpeningAt(text: []const u8, start: usize) ?Tag {
     const name_end = name_start + "nowiki".len;
     if (name_end > text.len or !std.ascii.eqlIgnoreCase(text[name_start..name_end], "nowiki")) return null;
     if (name_end < text.len and !std.ascii.isWhitespace(text[name_end]) and text[name_end] != '/' and text[name_end] != '>') return null;
+    // The extension-name boundary admits an adjacent slash only as '/>'.
+    if (name_end < text.len and text[name_end] == '/' and
+        (name_end + 1 >= text.len or text[name_end + 1] != '>')) return null;
     const gt = std.mem.indexOfScalarPos(u8, text, name_end, '>') orelse return null;
     const attrs = std.mem.trimEnd(u8, text[name_end..gt], " \t\r\n");
     const self_closing = std.mem.endsWith(u8, attrs, "/");
@@ -824,4 +942,70 @@ test "failed attribute lookahead cannot invalidate an earlier closed nowiki" {
     try std.testing.expectEqual(source.len, delimiter(later_pipe, "|", 0).?);
     const lines = "<span title=\"<nowiki>hidden\nline</nowiki><nowiki>unclosed\nvisible";
     try std.testing.expectEqualStrings("<span title=\"<nowiki>hidden\nline</nowiki><nowiki>unclosed", lines[0..logicalEnd(lines, 0)]);
+}
+
+test "nowiki adjacent slash requires immediate closing angle" {
+    for ([_][]const u8{ "<nowiki/ >[[cat]]</nowiki>", "<NoWiKi/\t>[[cat]]</nowiki>", "<nowiki/attr>[[cat]]</nowiki>" }) |source| {
+        var missing = false;
+        try std.testing.expect(tagAt(source, 0) == null);
+        try std.testing.expect(nowikiRegionAtCached(source, 0, &missing) == null);
+        try std.testing.expect(!missing);
+        try std.testing.expect(protectedEnd(source, 0) == null);
+    }
+    for ([_][]const u8{ "<nowiki/>", "<NoWiKi />" }) |source| {
+        const region = nowikiRegionAt(source, 0).?;
+        try std.testing.expect(region.self_closing);
+        try std.testing.expectEqual(source.len, region.end);
+    }
+    const quoted = "<nowiki a='>'>[[cat]]</nowiki>";
+    const region = nowikiRegionAt(quoted, 0).?;
+    try std.testing.expect(!region.self_closing);
+    try std.testing.expectEqualStrings("'>[[cat]]", quoted[region.opening_end..region.inner_end]);
+}
+
+test "structural controls join empty heading and list delimiter runs only" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "=__NOEDITSECTION__=French==",
+        "==French=__NOGALLERY__=",
+        "=__NOEDITSECTION__=French=__NOTOC__=",
+    }) |source| {
+        const heading = controlHeading(source, null).?;
+        try std.testing.expectEqual(@as(u8, 2), heading.level);
+        try std.testing.expectEqualStrings("French", heading.title);
+    }
+    try std.testing.expect(controlHeading("============", null) == null);
+    const equals_only = controlHeading("=============", null).?;
+    try std.testing.expectEqual(@as(u8, 6), equals_only.level);
+    try std.testing.expectEqualStrings("=", equals_only.title);
+    const extra = controlHeading("===__NOEDITSECTION__=Title==", null).?;
+    try std.testing.expectEqual(@as(u8, 2), extra.level);
+    try std.testing.expectEqualStrings("=__NOEDITSECTION__=Title", extra.title);
+    for ([_][]const u8{
+        "=__TOC__=French==",
+        "=__UNKNOWN__=French==",
+        "=__NOEDITSECTION__ =French==",
+        "=<nowiki>__NOEDITSECTION__</nowiki>=French==",
+        "=&#95;&#95;NOEDITSECTION&#95;&#95;=French==",
+    }) |source| try std.testing.expectEqual(@as(u8, 1), controlHeading(source, null).?.level);
+    try std.testing.expect(controlHeading("__TOC__==French==", null) == null);
+    const nested = try controlListPrefixAlloc(a, "*__NOEDITSECTION__#__NOTOC__:", null);
+    try std.testing.expectEqualStrings("*#:", nested.path);
+    try std.testing.expectEqual(@as(usize, "*__NOEDITSECTION__#__NOTOC__:".len), nested.body_start);
+    for ([_][]const u8{
+        "*__TOC__# literal",
+        "*__UNKNOWN__# literal",
+        "*__NOEDITSECTION__ # literal",
+        "*<nowiki>__NOEDITSECTION__</nowiki># literal",
+        "*&#95;&#95;NOEDITSECTION&#95;&#95;# literal",
+    }) |source| {
+        const prefix = try controlListPrefixAlloc(a, source, null);
+        try std.testing.expectEqualStrings("*", prefix.path);
+        try std.testing.expectEqual(@as(usize, 1), prefix.body_start);
+    }
+    const body = "*__NOEDITSECTION__ body";
+    const unchanged = try controlListPrefixAlloc(a, body, null);
+    try std.testing.expectEqualStrings("__NOEDITSECTION__ body", body[unchanged.body_start..]);
 }

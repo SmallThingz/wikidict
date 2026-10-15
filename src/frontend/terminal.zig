@@ -283,8 +283,8 @@ pub const Session = struct {
         term.iflag.ICRNL = false;
         term.iflag.INLCR = false;
         term.oflag.OPOST = false;
-        term.cc[@intFromEnum(L.V.MIN)] = 1;
-        term.cc[@intFromEnum(L.V.TIME)] = 0;
+        term.cc[@backingInt(L.V.MIN)] = 1;
+        term.cc[@backingInt(L.V.TIME)] = 0;
         const action: std.posix.Sigaction = .{ .handler = .{ .handler = onSignal }, .mask = std.mem.zeroes(std.posix.sigset_t), .flags = 0 };
         for (signals, 0..) |sig, i| std.posix.sigaction(sig, &action, &session.old[i]);
         errdefer for (signals, 0..) |sig, i| std.posix.sigaction(sig, &session.old[i], null);
@@ -414,18 +414,56 @@ pub const TextStyle = struct {
         if (self.link) try w.writeAll("\x1b[36m");
     }
 };
-pub const RenderRow = struct { bytes: []const u8, carry: TextStyle };
+pub const PoemLine = struct { offset: usize, lead_bytes: usize = 0, lead_cells: usize = 0, left: usize = 0, continuation_left: usize = 0, right: usize = 0 };
+pub const RenderRow = struct { bytes: []const u8, carry: TextStyle, left: usize = 0, right: usize = 0 };
 pub fn wrapStyled(a: std.mem.Allocator, text: []const u8, columns: usize) ![]RenderRow {
-    const slices = try wrap(a, text, columns);
-    defer a.free(slices);
-    const rows = try a.alloc(RenderRow, slices.len);
-    var style: TextStyle = .{};
-    for (slices, rows) |slice, *row| {
-        row.* = .{ .bytes = slice, .carry = style };
-        style.scan(slice);
-    }
-    return rows;
+    return wrapStyledProjected(a, text, columns, &.{});
 }
+/// Rows continue borrowing the original text; section offsets remain valid.
+pub fn wrapStyledProjected(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: []const PoemLine) ![]RenderRow {
+    var rows: std.ArrayList(RenderRow) = .empty;
+    errdefer rows.deinit(a);
+    var style: TextStyle = .{};
+    var line_offset: usize = 0;
+    var metadata_index: usize = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        while (metadata_index < poem_lines.len and poem_lines[metadata_index].offset < line_offset) metadata_index += 1;
+        const poem = if (metadata_index < poem_lines.len and poem_lines[metadata_index].offset == line_offset) poem_lines[metadata_index] else null;
+        var rest = line;
+        var first = true;
+        while (true) {
+            const requested_left = if (poem) |p| if (first) p.left else p.continuation_left else 0;
+            const lead_cells = if (poem) |p| if (first) p.lead_cells else 0 else 0;
+            const left = @min(requested_left, columns -| (lead_cells + 2));
+            const right = @min(if (poem) |p| p.right else 0, columns -| (left + lead_cells + 2));
+            const available = @max(columns -| (left + right), 2);
+            var end = prefixBytes(rest, available);
+            if (rest.len != 0 and end == 0) end = @min(rest.len, std.unicode.utf8ByteSequenceLength(rest[0]) catch 1);
+            if (end < rest.len) if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
+                const lead_bytes = if (poem) |p| if (first) p.lead_bytes else 0 else 0;
+                if (space > end / 2 and (poem == null or space > lead_bytes)) end = space;
+            };
+            const slice = rest[0..end];
+            try rows.append(a, .{ .bytes = slice, .carry = style, .left = left, .right = right });
+            style.scan(slice);
+            rest = rest[end..];
+            if (poem == null and rest.len != 0 and rest[0] == ' ') rest = rest[1..];
+            if (rest.len == 0) break;
+            first = false;
+        }
+        line_offset += line.len + 1;
+    }
+    return rows.toOwnedSlice(a);
+}
+pub fn writeRenderRow(w: *std.Io.Writer, row: RenderRow, columns: usize, base: []const u8) !void {
+    const left = @min(row.left, columns);
+    const right = @min(row.right, columns - left);
+    try w.splatByteAll(' ', left);
+    try row.carry.write(w);
+    try writeStyled(w, row.bytes[0..prefixBytes(row.bytes, columns - left - right)], base);
+}
+
 test "styled wrapping preserves generated emphasis across Unicode cell boundaries" {
     initLocale();
     const rows = try wrapStyled(std.testing.allocator, "\x1b[1;36m猫abcd\x1b[0m", 3);
@@ -451,4 +489,28 @@ pub fn writeStyled(w: *std.Io.Writer, text: []const u8, base: []const u8) !void 
         } else pos += 1;
     }
     try w.writeAll(text[start..]);
+}
+
+test "Poem terminal wrapping preserves spaces blank lines and bounded borrowed offsets" {
+    initLocale();
+    const text = "abcdef\n\n  z\n";
+    const metadata = [_]PoemLine{ .{ .offset = 0, .left = 2, .continuation_left = 2 }, .{ .offset = 7 }, .{ .offset = 8 } };
+    const rows = try wrapStyledProjected(std.testing.allocator, text, 5, &metadata);
+    defer std.testing.allocator.free(rows);
+    try std.testing.expectEqual(@as(usize, 5), rows.len);
+    try std.testing.expectEqualStrings("abc", rows[0].bytes);
+    try std.testing.expectEqualStrings("def", rows[1].bytes);
+    try std.testing.expectEqual(@as(usize, 2), rows[0].left);
+    try std.testing.expectEqual(@as(usize, 2), rows[1].left);
+    try std.testing.expectEqualStrings("", rows[2].bytes);
+    try std.testing.expectEqualStrings("  z", rows[3].bytes);
+    try std.testing.expectEqualStrings("", rows[4].bytes);
+    const clipped = try wrapStyledProjected(std.testing.allocator, "猫xy", 3, &.{.{ .offset = 0, .left = 32, .continuation_left = 32 }});
+    defer std.testing.allocator.free(clipped);
+    try std.testing.expectEqual(@as(usize, 1), clipped[0].left);
+    for (clipped) |row| try std.testing.expect(cellWidth(row.bytes) + row.left <= 3);
+    var rendered: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer rendered.deinit();
+    try writeRenderRow(&rendered.writer, rows[1], 5, "");
+    try std.testing.expectEqualStrings("  def", rendered.written());
 }

@@ -9,6 +9,7 @@ pub const Expansion = struct {
     source: []const u8,
     display_title: ?[]const u8 = null,
     unsupported_parser_function: bool = false,
+    poem_metadata: ?[]const u8 = null,
 };
 
 pub const Failure = protocol.ErrorReply;
@@ -21,7 +22,7 @@ pub fn operationalFailure(failure: Failure) ?anyerror {
     // Asset loading, protocol validation and bootstrap are compiler operations,
     // not per-page MediaWiki semantics. Never publish empty pages for them.
     if (!std.mem.eql(u8, failure.stage, "expand")) return error.BundleInfrastructureFailed;
-    inline for (&.{ "BundleRootChanged", "BundleDumpChanged", "BundleTimeChanged", "InvalidPageIndex", "InvalidPageTitleIndex", "PageIndexChanged", "InvalidProgramMetadata" }) |name|
+    inline for (&.{ "BundleRootChanged", "BundleDumpChanged", "BundleTimeChanged", "InvalidPageIndex", "InvalidPageTitleIndex", "PageIndexChanged", "InvalidProgramMetadata", "InvalidPoemMetadata", "MissingPoemMetadata", "OrphanPoemMarker", "FrameTooLarge" }) |name|
         if (std.mem.eql(u8, failure.error_name, name)) return error.BundleInfrastructureFailed;
     return null;
 }
@@ -286,6 +287,7 @@ pub const Worker = struct {
                 },
                 .output => |success| return .{
                     .source = success.output,
+                    .poem_metadata = success.poem_metadata,
                     .unsupported_parser_function = success.unsupported_parser_function,
                     .display_title = if (success.display_title.len == 0) null else success.display_title,
                 },
@@ -338,4 +340,10 @@ test "startup accepts readiness or bootstrap failure and rejects page output" {
     try std.testing.expectError(error.InvalidResponse, validateReplyPhase(.{ .failure = .{ .stage = "expand", .error_name = "OutOfMemory", .detail = "" } }, true));
     try std.testing.expectError(error.InvalidResponse, validateReplyPhase(.ready, false));
     try validateReplyPhase(.skip, false);
+}
+
+test "Poem provenance failures are operational rather than semantic fallback" {
+    inline for (&.{ "InvalidPoemMetadata", "MissingPoemMetadata", "OrphanPoemMarker", "FrameTooLarge" }) |name| {
+        try std.testing.expectEqual(error.BundleInfrastructureFailed, operationalFailure(.{ .stage = "expand", .error_name = name, .detail = "" }).?);
+    }
 }

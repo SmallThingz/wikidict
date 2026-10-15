@@ -37,11 +37,19 @@ fn nowikiRegionEndCached(text: []const u8, start: usize, no_more_close: ?*bool) 
 }
 
 pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
+    return stripDecodedCommentsPolicy(a, text, false);
+}
+pub fn stripDecodedCommentsPreservingPoem(a: std.mem.Allocator, text: []const u8) ![]u8 {
+    return stripDecodedCommentsPolicy(a, text, true);
+}
+fn stripDecodedCommentsPolicy(a: std.mem.Allocator, text: []const u8, preserve_poem: bool) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     var pos: usize = 0;
     var line_start: usize = 0;
     var line_has_content = false;
+    var no_more_poem_close = false;
+    var no_more_poem_gt = false;
     var no_more_nowiki_close = false;
     var no_more_close: [opaque_parser_tags.len + 1]bool = @splat(false);
     while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |open| {
@@ -53,6 +61,23 @@ pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
             } else if (byte != ' ' and byte != '\t' and byte != '\r') line_has_content = true;
         }
         try out.appendSlice(a, prefix);
+        // Ordinary raw Poem is formatted before recursive parsing strips comments.
+        if (preserve_poem) {
+            if (poemRegionAtCached(text, open, &no_more_poem_close, &no_more_poem_gt, null)) |region| {
+                if (region.self_closing or region.inner_end < region.end) {
+                    const protected = text[open..region.end];
+                    for (protected, 0..) |byte, at| {
+                        if (byte == '\n') {
+                            line_start = out.items.len + at + 1;
+                            line_has_content = false;
+                        } else if (byte != ' ' and byte != '\t' and byte != '\r') line_has_content = true;
+                    }
+                    try out.appendSlice(a, protected);
+                    pos = region.end;
+                    continue;
+                }
+            }
+        }
         if (std.mem.startsWith(u8, text[open..], "<!--")) {
             const close = findCiPos(text, open + 4, "-->") orelse {
                 pos = text.len;
@@ -554,11 +579,68 @@ pub fn rawTagEnd(s: []const u8, start: usize) ?usize {
     return null;
 }
 
+pub const PoemRegion = struct {
+    open: usize,
+    opening_end: usize,
+    inner_end: usize,
+    end: usize,
+    self_closing: bool,
+};
+pub const ExpansionNode = union(enum) { construct: Construct, poem: PoemRegion };
+
+// A direct forward-cursor lookup; speculative lookahead never shares these caches.
+fn poemRegionAtCached(s: []const u8, start: usize, no_more_close: *bool, no_more_gt: *bool, unmatched_opening_end: ?*?usize) ?PoemRegion {
+    if (start >= s.len or s[start] != '<') return null;
+    const name_end = start + 1 + "poem".len;
+    if (name_end > s.len or !std.ascii.eqlIgnoreCase(s[start + 1 .. name_end], "poem") or
+        !isTagNameBoundary(s, name_end) or
+        (name_end < s.len and s[name_end] == '/' and (name_end + 1 >= s.len or s[name_end + 1] != '>'))) return null;
+    const opening_end = (if (no_more_gt.*) null else decodedTagEnd(s, start)) orelse {
+        no_more_gt.* = true;
+        return null;
+    };
+    if (opening_end >= 2 and s[opening_end - 2] == '/')
+        return .{ .open = start, .opening_end = opening_end, .inner_end = opening_end, .end = opening_end, .self_closing = true };
+    if (no_more_close.*) {
+        if (unmatched_opening_end) |value| value.* = opening_end;
+        return null;
+    }
+    const end = inclusionCloseEnd(s, opening_end, "poem") orelse {
+        no_more_close.* = true;
+        if (unmatched_opening_end) |value| value.* = opening_end;
+        return null;
+    };
+    const closing_open = opening_end + (std.mem.lastIndexOfScalar(u8, s[opening_end..end], '<') orelse unreachable);
+    return .{ .open = start, .opening_end = opening_end, .inner_end = closing_open, .end = end, .self_closing = false };
+}
+pub fn findNextExpansionNode(s: []const u8, start: usize) ?ExpansionNode {
+    return findNextExpansionNodeMode(s, start, true);
+}
 pub fn findNextConstructOutsideLiteralTags(s: []const u8, start: usize) ?Construct {
+    const node = findNextExpansionNodeMode(s, start, false) orelse return null;
+    return switch (node) {
+        .construct => |value| value,
+        .poem => unreachable,
+    };
+}
+fn findNextExpansionNodeMode(s: []const u8, start: usize, include_poem: bool) ?ExpansionNode {
     var i = start;
     var no_more_nowiki_close = false;
+    var no_more_poem_close = false;
+    var no_more_poem_gt = false;
     while (i + 1 < s.len) {
         if (s[i] == '<') {
+            if (include_poem) {
+                var unmatched_opening_end: ?usize = null;
+                if (poemRegionAtCached(s, i, &no_more_poem_close, &no_more_poem_gt, &unmatched_opening_end)) |region|
+                    return .{ .poem = region };
+                if (unmatched_opening_end) |end| {
+                    // Official recovery emits the entire opener literally;
+                    // attributes are not expanded, while the body stays active.
+                    i = end;
+                    continue;
+                }
+            }
             if (nowikiRegionEndCached(s, i, &no_more_nowiki_close)) |end| {
                 i = end;
                 continue;
@@ -598,7 +680,7 @@ pub fn findNextConstructOutsideLiteralTags(s: []const u8, start: usize) ?Constru
             }
         }
         if (s[i] == '{' and s[i + 1] == '{') {
-            if (findBraceConstruct(s, i)) |construct| return construct;
+            if (findBraceConstruct(s, i)) |construct| return .{ .construct = construct };
         }
         i += 1;
     }
@@ -1029,4 +1111,70 @@ test "comment normalization caches repeated missing code-extension closers witho
     const first_closer = try stripDecodedComments(a, "<pre><pre>A<!--literal--></pre><!--outside-->B");
     defer a.free(first_closer);
     try std.testing.expectEqualStrings("<pre><pre>A<!--literal--></pre>B", first_closer);
+}
+
+test "expansion nodes dispatch raw poem before its inner constructs without changing legacy scan" {
+    const source = "x<poem>{{T}}</poem>{{after}}";
+    const node = findNextExpansionNode(source, 0).?;
+    const region = node.poem;
+    try std.testing.expectEqual(@as(usize, 1), region.open);
+    try std.testing.expectEqualStrings("{{T}}", source[region.opening_end..region.inner_end]);
+    try std.testing.expectEqualStrings("{{after}}", source[region.end..]);
+    try std.testing.expect(!region.self_closing);
+    try std.testing.expectEqual(@as(usize, 7), findNextConstructOutsideLiteralTags(source, 0).?.open);
+    try std.testing.expectEqual(@as(usize, 19), findNextExpansionNode(source, region.end).?.construct.open);
+    try std.testing.expectEqual(@as(usize, 0), findNextExpansionNode("{{before}}<poem>x</poem>", 0).?.construct.open);
+}
+test "expansion poem regions preserve first strict closer selfclosing and protected boundaries" {
+    const source = "<nowiki><poem>hidden</poem></nowiki><PoEm a='>'>first</poem extra>second</PoEm >{{after}}";
+    const region = findNextExpansionNode(source, 0).?.poem;
+    try std.testing.expectEqualStrings("'>first</poem extra>second", source[region.opening_end..region.inner_end]);
+    try std.testing.expectEqualStrings("{{after}}", source[region.end..]);
+    const empty = findNextExpansionNode("<poem/>{{after}}", 0).?.poem;
+    try std.testing.expect(empty.self_closing);
+    try std.testing.expectEqual(@as(usize, 7), empty.end);
+    try std.testing.expect(std.meta.activeTag(findNextExpansionNode("< poem>{{visible}}</poem>", 0).?) == .construct);
+    const unmatched = findNextExpansionNode("<poem>{{active}}", 0).?.construct;
+    try std.testing.expectEqual(@as(usize, 6), unmatched.open);
+    const spaced = "<poem / >body</poem>{{after}}";
+    const paired = findNextExpansionNode(spaced, 0).?.poem;
+    try std.testing.expect(!paired.self_closing);
+    try std.testing.expectEqualStrings("body", spaced[paired.opening_end..paired.inner_end]);
+    try std.testing.expectEqualStrings("{{after}}", spaced[paired.end..]);
+    try std.testing.expectEqual(@as(usize, 9), findNextExpansionNode("<poem / >{{active}}", 0).?.construct.open);
+    try std.testing.expectEqual(@as(usize, 8), findNextExpansionNode("<poem/ >{{active}}", 0).?.construct.open);
+    const attribute_then_body = findNextExpansionNode("<poem a=\"{{A}}\">{{B}}", 0).?.construct;
+    try std.testing.expectEqual(@as(usize, 16), attribute_then_body.open);
+    const after_missing = findNextExpansionNode("<poem a=\"{{A}}\"><poem b=\"{{C}}\">{{B}}", 0).?.construct;
+    try std.testing.expectEqual(@as(usize, 32), after_missing.open);
+    const resumed = "<poem>{{active}}<poem/>";
+    const first = findNextExpansionNode(resumed, 0).?.construct;
+    try std.testing.expectEqual(@as(usize, 6), first.open);
+    try std.testing.expect(findNextExpansionNode(resumed, first.close + 2).?.poem.self_closing);
+}
+test "authored comment policy preserves only actual matched raw poem before hook" {
+    const source = "<!--before--><poem>A<!--inline-->\n<!--line-->\n::B<nowiki><!--literal--></nowiki></poem><!--after-->{{T}}";
+    const preserved = try stripDecodedCommentsPreservingPoem(std.testing.allocator, source);
+    defer std.testing.allocator.free(preserved);
+    try std.testing.expectEqualStrings("<poem>A<!--inline-->\n<!--line-->\n::B<nowiki><!--literal--></nowiki></poem>{{T}}", preserved);
+    const ordinary = try stripDecodedComments(std.testing.allocator, source);
+    defer std.testing.allocator.free(ordinary);
+    try std.testing.expectEqualStrings("<poem>A\n::B<nowiki><!--literal--></nowiki></poem>{{T}}", ordinary);
+    const unmatched = try stripDecodedCommentsPreservingPoem(std.testing.allocator, "<poem>A<!--gone-->{{T}}");
+    defer std.testing.allocator.free(unmatched);
+    try std.testing.expectEqualStrings("<poem>A{{T}}", unmatched);
+}
+test "poem preserving input policy bounds missing closer scans and retains transclusion raw body" {
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(std.testing.allocator);
+    for (0..256) |_| try input.appendSlice(std.testing.allocator, "<poem><!--gone-->");
+    try input.appendSlice(std.testing.allocator, "<poem/>{{T}}");
+    const stripped = try stripDecodedCommentsPreservingPoem(std.testing.allocator, input.items);
+    defer std.testing.allocator.free(stripped);
+    try std.testing.expect(std.mem.indexOf(u8, stripped, "<!--") == null);
+    const node = findNextExpansionNode(stripped, 0).?.poem;
+    try std.testing.expect(node.self_closing);
+    const transcluded = try transcludeDecodedForParsingAlloc(std.testing.allocator, "<noinclude>excluded</noinclude><poem>A<!--kept-->\n{{T}}</poem>");
+    defer std.testing.allocator.free(transcluded);
+    try std.testing.expectEqualStrings("<poem>A<!--kept-->\n{{T}}</poem>", transcluded);
 }

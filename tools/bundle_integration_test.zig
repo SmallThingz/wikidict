@@ -2049,6 +2049,7 @@ pub fn main(init: std.process.Init) !void {
     try startupHandshakeProbe(&h, dir);
     try failureMetadataProbe(&h, dir);
     try expansionFallbackProbe(&h, argv[6], verifier, bin, dir);
+    try poemPhaseProbe(&h, pipeline, argv[6], verifier, bin, dir);
     h.checks += 1;
 
     const dump = try std.fs.path.join(a, &.{ dir, "fixture.xml" });
@@ -2204,4 +2205,334 @@ pub fn main(init: std.process.Init) !void {
         "BUNDLE_INTEGRATION_PASS checks={d}: destination refusal, incomplete failure marker, verified pre-expanded Lua/templates, data-only final tree. Artifacts: {s}\n",
         .{ h.checks, dir },
     );
+}
+
+// These probes use the real compiled worker and the production success-record
+// codec. The saved .reply files are framed worker records, not a second cache
+// format. Replaying them through Writer must agree with normal blob_build.
+const poem_collision_token = "\x7fWDPOEM:0:23519a43c66b4c342f25b32e09797ec5f3fc0be388cd8243fb3449afbdce4013\x7f";
+const PoemPhaseCase = struct {
+    title: []const u8,
+    body: []const u8,
+    breaks: ?usize = null,
+    text: ?[]const u8 = null,
+    indent2: ?bool = null,
+    no_poem: bool = false,
+    empty_phase: bool = false,
+};
+const poem_phase_cases = [_]PoemPhaseCase{
+    .{ .title = "PoemRawLines", .body = "<poem>A\n[[cat]]</poem>", .breaks = 1, .text = "A\ncat", .indent2 = false },
+    .{ .title = "PoemTemplateLines", .body = "<poem>{{PhaseLines}}</poem>", .breaks = 0, .text = "A cat", .indent2 = false },
+    .{ .title = "PoemTagLines", .body = "{{#tag:poem|{{PhaseLines}}}}", .breaks = 1, .text = "A\ncat", .indent2 = false },
+    .{ .title = "PoemTemplateIndent", .body = "<poem>{{PhaseIndent}}</poem>", .indent2 = false },
+    .{ .title = "PoemTagIndent", .body = "{{#tag:poem|{{PhaseIndent}}}}", .indent2 = true },
+    .{ .title = "PoemTemplateSpaces", .body = "<poem>{{PhaseSpaces}}</poem>", .text = "B", .indent2 = false },
+    .{ .title = "PoemTagSpaces", .body = "{{#tag:poem|{{PhaseSpaces}}}}", .text = "\xc2\xa0\xc2\xa0B", .indent2 = false },
+    .{ .title = "PoemRawProtected", .body = "<poem><nowiki>A\nB</nowiki></poem>", .breaks = 1, .indent2 = false },
+    .{ .title = "PoemTagProtected", .body = "{{#tag:poem|<nowiki>A\nB</nowiki>}}", .breaks = 0, .indent2 = false },
+    .{ .title = "PoemTemplateProtected", .body = "<poem>{{PhaseProtected}}</poem>", .breaks = 0, .indent2 = false },
+    .{ .title = "PoemTagTemplateProtected", .body = "{{#tag:poem|{{PhaseProtected}}}}", .breaks = 0, .indent2 = false },
+    .{ .title = "PoemNested", .body = "<poem>Outer\n{{#tag:poem|::[[cat]]}}\nTail</poem>", .text = "Outer\ncat\nTail", .indent2 = true },
+    .{ .title = "PoemReference", .body = "<poem>Body<ref>{{#tag:poem|::[[cat]]}}</ref>\nTail</poem><references/>", .indent2 = true },
+    .{ .title = "PoemGeneratedTag", .body = "{{#invoke:PhasePoem|generated}}", .no_poem = true, .empty_phase = true },
+    .{ .title = "PoemExplicitFrame", .body = "{{#invoke:PhasePoem|explicit}}", .indent2 = true },
+    .{ .title = "PoemOwners", .body = "<poem>:English verse</poem>\n==French==\n<poem>::French verse</poem>", .indent2 = false },
+    .{ .title = "PoemTitleOnly", .body = "{{DISPLAYTITLE:{{#tag:poem|PoemTitleOnly}}}}\nBody", .no_poem = true },
+    .{ .title = "PoemTagQuotedProtected", .body = "{{#tag:poem|<nowiki a='>'>raw</nowiki>}}", .text = "'>raw", .breaks = 0 },
+    .{ .title = "PoemInvalidProtectedOpener", .body = "<poem><nowiki/ >{{PhaseLines}}</nowiki></poem>", .breaks = 0 },
+    .{ .title = "PoemValidEmptyProtected", .body = "<poem>A<nowiki/>B</poem>", .text = "AB", .breaks = 0 },
+    .{ .title = "PoemSelfClosingBoundary", .body = "A<poem/>B" },
+    .{ .title = "PoemPairedEmptyBoundary", .body = "A<poem></poem>B" },
+    .{ .title = "PoemGeneratedTagInside", .body = "<poem>Head {{#invoke:PhasePoem|generated}} End</poem>", .text = "Head <poem>::cat Tail</poem> End", .breaks = 0, .indent2 = false },
+    .{ .title = "PoemNestedTagOpacity", .body = "{{#tag:poem|{{#tag:poem|::[[cat]]\nTail}}}}", .text = "cat\nTail", .breaks = 1, .indent2 = true },
+    .{ .title = "PoemForwardReference", .body = "<ref name=x/>\n<poem><ref name=x>note [[cat]]</ref></poem><references/>" },
+    .{ .title = "PoemReturnedTitle", .body = "{{#invoke:PhasePoem|title_generated}}", .text = "Body", .no_poem = true },
+    .{ .title = "PoemDiscardedReference", .body = "{{#invoke:PhasePoem|discarded_reference}}", .no_poem = true },
+    .{ .title = "PoemFirstReference", .body = "<poem><ref name=x>FIRST [[cat]]</ref></poem><ref name=x>LATER [[dog]]</ref><references/>" },
+    .{ .title = "PoemNestedInvoke", .body = "{{#invoke:PhasePoemWrapper|run}}", .text = "cat\nTail", .breaks = 1, .indent2 = true },
+    .{ .title = "PoemAuthoredTokenCollision", .body = "<poem>A\nB</poem><poem>" ++ poem_collision_token ++ "</poem>", .text = "A\nB\n" ++ poem_collision_token, .breaks = 1 },
+    .{ .title = "PoemPlainControl", .body = "Plain body", .text = "Plain body", .no_poem = true },
+};
+fn poemFixtureSource(a: std.mem.Allocator, body: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(a, "==English==\n{s}", .{body});
+}
+fn poemFixtureLanguage(_: ?*const anyopaque, heading: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, heading, "English")) return "en";
+    if (std.mem.eql(u8, heading, "French")) return "fr";
+    return null;
+}
+fn poemHasClass(classes: []const u8, wanted: []const u8) bool {
+    var words = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0b\x0c");
+    while (words.next()) |word| if (std.mem.eql(u8, word, wanted)) return true;
+    return false;
+}
+const PoemObserved = struct {
+    text: std.ArrayList(u8) = .empty,
+    marked: usize = 0,
+    breaks: usize = 0,
+    indent2: usize = 0,
+    cat_links: usize = 0,
+    reference_cat_links: usize = 0,
+    ordinary_body_breaks: usize = 0,
+    marked_end: bool = false,
+    fn spans(self: *PoemObserved, h: *Harness, values: []const encoder.presentation_types.Span, body: bool, reference: bool) !void {
+        for (values) |span| {
+            const marked = poemHasClass(span.classes, "wikidict-poem");
+            if (marked) self.marked += 1;
+            if (marked and std.mem.indexOf(u8, span.text, "End") != null) self.marked_end = true;
+            if (marked and span.kind == .line_break) self.breaks += 1;
+            if (poemHasClass(span.classes, "wikidict-poem-indent-2")) self.indent2 += 1;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "cat")) {
+                self.cat_links += 1;
+                if (reference) self.reference_cat_links += 1;
+            }
+            if (body) {
+                if (span.kind == .line_break and !marked) self.ordinary_body_breaks += 1;
+                if (span.kind == .line_break) try self.text.append(h.a, '\n') else try self.text.appendSlice(h.a, span.text);
+                try self.text.appendSlice(h.a, span.trail);
+            }
+        }
+    }
+    fn entry(h: *Harness, entry_value: encoder.presentation_types.Entry) !PoemObserved {
+        var observed: PoemObserved = .{};
+        try observed.spans(h, entry_value.preamble_spans, true, false);
+        for (entry_value.sections) |section| for (section.blocks) |block| {
+            try observed.spans(h, block.spans, true, false);
+            if (block.table) |table| {
+                try observed.spans(h, table.caption, true, false);
+                for (table.rows) |row| for (row.cells) |cell| try observed.spans(h, cell.spans, true, false);
+            }
+        };
+        for (entry_value.references) |reference| try observed.spans(h, reference.spans, false, true);
+        // Display title is independently inspected for orphan bytes by the
+        // complete DPR2 payload check; it is not part of the body text oracle.
+        return observed;
+    }
+};
+fn readPoemRecord(h: *Harness, root: []const u8, heading: []const u8, title: []const u8) !struct { payload: []const u8, stored: encoder.presentation_types.Stored } {
+    const path = try encoder.blob_builder.languageBlobPathAlloc(h.a, root, heading);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(h.io, path, h.a, .limited(2 * 1024 * 1024));
+    const blob = try encoder.blob_format.inspect(bytes);
+    var index = try blob.buildTrustedIndexAlloc(h.a);
+    defer index.deinit(h.a);
+    const record = (try index.find(title)) orelse return error.MissingPoemFixture;
+    // Only this exact fixture deliberately authors the private-prefix spelling.
+    // Its typed text and marked/ordinary break oracle below distinguishes literal
+    // source bytes from leaked or reactivated generated instructions.
+    if (!std.mem.eql(u8, title, "PoemAuthoredTokenCollision")) try h.require(std.mem.indexOf(u8, record.payload, "\x7fWDPOEM:") == null, "no private Poem token survives in any DPR2 field");
+    try h.require(std.mem.indexOf(u8, record.payload, "wikidict.poem-phase.v1") == null, "build-time phase metadata is not shipped in DPR2");
+    return .{ .payload = record.payload, .stored = try encoder.presentation_codec.decodeAlloc(h.a, record.payload, record.title, .language, try blob.languageMetadata()) };
+}
+fn rejectPoemRecordMetadata(h: *Harness, parent: []const u8, name: []const u8, source_value: []const u8, title_value: ?[]const u8, metadata: ?[]const u8, expected: anyerror) !void {
+    const root = try std.fs.path.join(h.a, &.{ parent, name });
+    var writer = try encoder.blob_builder.Writer.init(h.io, h.a, root);
+    defer writer.deinit();
+    writer.language_codes = .{ .get_fn = poemFixtureLanguage };
+    writer.addExpandedPageWithReasonsAndPoem(h.a, .{ .id = 0, .kind = .language }, "InvalidPoem", source_value, source_value, title_value, &.{}, metadata) catch |err| {
+        try h.require(err == expected, name);
+        try h.require(writer.stats.language_records == 0 and writer.stats.fallback_pages == 0, "invalid phase fails before any compiled record or fallback publication");
+        h.checks += 1;
+        return;
+    };
+    return error.InvalidPoemMetadataWasAccepted;
+}
+fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const protocol = @import("bundle_protocol");
+    const root = try std.fs.path.join(h.a, &.{ dir, "poem-phase-dictionary" });
+    const replay_root = try std.fs.path.join(h.a, &.{ dir, "poem-phase-replayed" });
+    const records = try std.fs.path.join(h.a, &.{ dir, "poem-phase-records" });
+    try std.Io.Dir.cwd().createDirPath(h.io, records);
+    const dump = try std.fs.path.join(h.a, &.{ dir, "poem-phase.xml" });
+    const namespaces = try std.fs.path.join(h.a, &.{ dir, "poem-phase-namespaces.tsv" });
+    const languages = try std.fs.path.join(h.a, &.{ dir, "poem-phase-languages.tsv" });
+    const redirects = try std.fs.path.join(h.a, &.{ dir, "poem-phase-page-redirects.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = namespaces, .data = @import("namespace_registry").english_test_fixture });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = languages, .data = "# wikidict-language-registry-v2\n# content-language\ten\n# mediawiki\nen\tEnglish\ten\teng\nfr\tFrench\tfr\tfra\n# iso-639-3\n" });
+    // The normal alias importer verifies page-id and XML target against this
+    // fixture snapshot, just as the existing full pipeline fixture does.
+    try std.Io.Dir.cwd().writeFile(h.io, .{
+        .sub_path = redirects,
+        .data = "# wikidict-page-redirects-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# sql-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n" ++
+            "107\t0\t4d697373696e67506f656d546172676574\t\t\n# end\t1\n",
+    });
+    var pages: std.ArrayList(Page) = .empty;
+    for (poem_phase_cases, 0..) |case, i| try pages.append(h.a, .{ .title = case.title, .ns = 0, .id = @intCast(i + 1), .body = try poemFixtureSource(h.a, case.body) });
+    try pages.appendSlice(h.a, &.{
+        .{ .title = "Template:PhaseLines", .ns = 10, .id = 101, .body = "A\n[[cat]]" },
+        .{ .title = "Template:PhaseIndent", .ns = 10, .id = 102, .body = "::B" },
+        .{ .title = "Template:PhaseSpaces", .ns = 10, .id = 103, .body = "  B" },
+        .{ .title = "Template:PhaseProtected", .ns = 10, .id = 104, .body = "<nowiki>A\n::B __NOTOC__</nowiki>" },
+        .{ .title = "Module:PhasePoem", .ns = 828, .id = 105, .body = "return {generated=function() return '<po'..'em>::[[cat]]\\nTail</poem>' end,explicit=function(frame) return frame:extensionTag('poem','::[[cat]]\\nTail') end,title_generated=function(frame) frame:callParserFunction('DISPLAYTITLE','<po'..'em>PoemReturnedTitle</poem>'); return 'Body' end,discarded_reference=function(frame) frame:extensionTag('poem','<ref name=x>hidden [[cat]]</ref>'); return 'Body <ref name=x/>' end}" },
+        .{ .title = "Module:languages/canonical names", .ns = 828, .id = 106, .body = "return { [\"English\"] = \"en\", [\"French\"] = \"fr\" }" },
+        .{ .title = "Module:PhasePoemWrapper", .ns = 828, .id = 108, .body = "return {run=function(frame) return frame:callParserFunction{name='#invoke',args={'PhasePoem','explicit'}} end}" },
+        .{ .title = "PoemAlias", .ns = 0, .id = 107, .body = "#REDIRECT [[MissingPoemTarget]]\n{{#tag:poem|::[[cat]]}}", .redirect = "MissingPoemTarget" },
+    });
+    try writePages(h.io, h.a, dump, pages.items);
+    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespaces, "--language-registry-snapshot", languages, "--page-redirects-snapshot", redirects, "--expander-only", "--now-unix", "1791072000", "--llvm-workers", "1" }, 0);
+    const worker_root = try std.fs.path.join(h.a, &.{ root, ".bundle-expander" });
+    const executable = try std.fs.path.join(h.a, &.{ worker_root, "dict-bundle-expander" });
+    var replay = try encoder.blob_builder.Writer.init(h.io, h.a, replay_root);
+    defer replay.deinit();
+    const codes: encoder.blob_builder.LanguageCodes = .{ .get_fn = poemFixtureLanguage };
+    replay.language_codes = codes;
+    var first_source: ?[]const u8 = null;
+    var first_title: ?[]const u8 = null;
+    var first_metadata: ?[]const u8 = null;
+    {
+        var worker = expander.Worker.init(h.io, worker_root, executable, dump);
+        defer worker.deinit();
+        worker.now_unix = 1791072000;
+        for (poem_phase_cases, 0..) |case, i| {
+            const raw = pages.items[i].body;
+            const previous_generation = worker.generation;
+            if (std.mem.eql(u8, case.title, "PoemPlainControl")) {
+                try h.require(previous_generation != 0 and worker.child != null, "error-reset control reuses the actual native worker");
+                const failing_source = "==English==\n<poem>allocated before failure</poem>{{#tag:UnsupportedPoemReset|x}}";
+                try std.testing.expectError(error.ExpansionFailed, worker.expand(h.a, i, case.title, failing_source));
+                const failure = worker.last_failure orelse return error.MissingPoemFailure;
+                try h.require(std.mem.eql(u8, failure.stage, "expand") and std.mem.eql(u8, failure.error_name, "UnsupportedExtensionTag"), "native expansion reports its genuine post-Poem error rather than a synthetic successful fallback");
+                try h.require(worker.child != null and worker.generation == previous_generation, "recoverable expansion error keeps the same native worker process");
+            }
+            const expanded = (try worker.expand(h.a, i, case.title, raw)) orelse return error.UnexpectedSkip;
+            if (std.mem.eql(u8, case.title, "PoemPlainControl")) try h.require(worker.last_failure == null and worker.generation == previous_generation, "ordinary next request clears error and Poem page state without a worker restart");
+            try h.require(!expanded.unsupported_parser_function, "Poem fixture uses supported native functions");
+            var encoded: std.Io.Writer.Allocating = .init(h.a);
+            defer encoded.deinit();
+            try protocol.writeSuccessWithPoem(&encoded.writer, expanded.source, expanded.display_title orelse "", expanded.unsupported_parser_function, expanded.poem_metadata);
+            const record_path = try std.fmt.allocPrint(h.a, "{s}/{s}.reply", .{ records, case.title });
+            try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = record_path, .data = encoded.written() });
+            const saved = try std.Io.Dir.cwd().readFileAlloc(h.io, record_path, h.a, .limited(protocol.max_frame_bytes + 4));
+            try h.require(saved.len >= 5 and std.mem.readInt(u32, saved[0..4], .little) == saved.len - 4, "saved success record retains exact framing");
+            const reply = try protocol.decodeReply(saved[4..]);
+            if (reply != .output) return error.UnexpectedPoemReply;
+            const output = reply.output;
+            try h.require(std.mem.eql(u8, output.output, expanded.source) and std.mem.eql(u8, output.display_title, expanded.display_title orelse ""), "saved native output/title round-trip exactly");
+            if (expanded.poem_metadata) |metadata| {
+                try h.require(saved[4] == 4 and output.poem_metadata != null and std.mem.eql(u8, metadata, output.poem_metadata.?), "optional phase bytes survive saved kind4 record");
+                const parsed = try std.json.parseFromSlice(std.json.Value, h.a, metadata, .{});
+                defer parsed.deinit();
+                const object = parsed.value.object;
+                try h.require(std.mem.eql(u8, object.get("schema").?.string, "wikidict.poem-phase.v1") and object.get("handled").?.bool, "worker emits the current handled phase schema");
+                if (case.empty_phase) try h.require(object.get("items").?.array.items.len == 0 and std.mem.indexOf(u8, output.output, "&lt;poem>") != null and std.mem.indexOf(u8, output.output, "&lt;/poem>") != null and std.mem.indexOf(u8, output.output, "&amp;lt;poem>") == null, "zero-hook generated tag persists an explicit handled-empty phase");
+                if (std.mem.eql(u8, case.title, "PoemTitleOnly")) try h.require(std.mem.indexOf(u8, output.output, "\x7fWDPOEM:") == null and std.mem.indexOf(u8, output.display_title, "\x7fWDPOEM:") != null, "display-title-only phase is not inferred from normal output tokens");
+                if (std.mem.eql(u8, case.title, "PoemReturnedTitle")) try h.require(object.get("items").?.array.items.len == 0 and std.mem.eql(u8, output.display_title, "&lt;poem>PoemReturnedTitle&lt;/poem>") and std.mem.indexOf(u8, output.output, "WDPOEM:") == null, "direct Lua DISPLAYTITLE return is escaped exactly once and persists handled-empty even without body tokens");
+                if (std.mem.eql(u8, case.title, "PoemDiscardedReference")) try h.require(object.get("items").?.array.items.len != 0 and std.mem.indexOf(u8, output.output, "WDPOEM:") == null, "discarded extensionTag result leaves authenticated unused items but no emitted scope");
+                if (std.mem.eql(u8, case.title, "PoemAuthoredTokenCollision")) {
+                    const items = object.get("items").?.array.items;
+                    try h.require(items.len != 0 and std.mem.eql(u8, items[0].object.get("kind").?.string, "br") and std.mem.eql(u8, items[0].object.get("token").?.string, poem_collision_token), "authored bytes exactly collide with an earlier genuine generated break token");
+                }
+                if (first_metadata == null) {
+                    first_source = output.output;
+                    first_title = if (output.display_title.len == 0) null else output.display_title;
+                    first_metadata = output.poem_metadata;
+                }
+            } else {
+                try h.require(std.mem.eql(u8, case.title, "PoemPlainControl") and saved[4] == 0 and output.poem_metadata == null, "ordinary no-Poem expansion retains old success0 bytes");
+            }
+            try replay.addExpandedPageWithReasonsAndPoem(h.a, .{ .id = 0, .kind = .language }, case.title, output.output, raw, if (output.display_title.len == 0) null else output.display_title, &.{}, output.poem_metadata);
+        }
+    }
+    _ = try replay.finish(codes);
+    // The same prepared native worker now flows through the real ExpansionSlot
+    // consumer, including its page arena lifetime; this is not a replay shim.
+    _ = try h.run(&.{ blob_builder, dump, root, "--expander-root", worker_root, "--workers", "1", "--expansion-timeout-ms", "60000", "--now-unix", "1791072000" }, 0);
+    try std.Io.Dir.cwd().deleteTree(h.io, worker_root);
+    try std.Io.Dir.cwd().deleteFile(h.io, try std.fs.path.join(h.a, &.{ root, ".incomplete" }));
+    _ = try h.run(&.{ verifier, root }, 0);
+    _ = try h.run(&.{ verifier, replay_root }, 0);
+    for (poem_phase_cases) |case| {
+        const normal = try readPoemRecord(h, root, "English", case.title);
+        const saved = try readPoemRecord(h, replay_root, "English", case.title);
+        try h.require(std.mem.eql(u8, normal.payload, saved.payload), "saved success record and normal page-slot path publish identical DPR2");
+        const seen = try PoemObserved.entry(h, normal.stored.entry);
+        if (case.breaks) |count| try h.require(seen.breaks == count, case.title);
+        if (case.text) |expected| try h.require(std.mem.eql(u8, expected, seen.text.items), case.title);
+        if (case.indent2) |wanted| try h.require((seen.indent2 != 0) == wanted, case.title);
+        if (case.no_poem) try h.require(seen.marked == 0, case.title);
+        if (std.mem.eql(u8, case.title, "PoemAuthoredTokenCollision")) try h.require(seen.ordinary_body_breaks == 1 and std.mem.count(u8, seen.text.items, poem_collision_token) == 1, "literal authored token remains visible exactly once beside one real marked break and the ordinary container boundary");
+        if (std.mem.indexOf(u8, case.title, "Lines") != null) try h.require(seen.cat_links == 1, "both phase orders retain exact cat navigation");
+        if (std.mem.eql(u8, case.title, "PoemGeneratedTag") or std.mem.eql(u8, case.title, "PoemGeneratedTagInside")) {
+            try h.require(std.mem.indexOf(u8, seen.text.items, "<poem>") != null and std.mem.indexOf(u8, seen.text.items, "</poem>") != null and seen.cat_links == 1, "zero-hook returned tags remain visible literal text while their lexical link body stays active");
+            if (std.mem.eql(u8, case.title, "PoemGeneratedTagInside")) try h.require(seen.marked_end, "returned closing Poem tag does not terminate its genuine prepared outer scope");
+        }
+        if (std.mem.eql(u8, case.title, "PoemReference")) try h.require(seen.reference_cat_links == 1, "deferred reference uses the same registered phase context");
+        if (std.mem.eql(u8, case.title, "PoemForwardReference") or std.mem.eql(u8, case.title, "PoemFirstReference")) {
+            try h.require(normal.stored.entry.references.len == 1, "forward reference and opaque Poem definition publish one same-owner reference");
+            const reference = normal.stored.entry.references[0];
+            try h.require(std.mem.eql(u8, reference.name, "x"), "forward reference resolves its actual named definition");
+            var reference_seen: PoemObserved = .{};
+            try reference_seen.spans(h, reference.spans, true, true);
+            const expected_reference = if (std.mem.eql(u8, case.title, "PoemFirstReference")) "FIRST cat" else "note cat";
+            try h.require(std.mem.eql(u8, reference_seen.text.items, expected_reference) and reference_seen.reference_cat_links == 1, "emitted Poem definition retains exact forward resolution and first-definition precedence over a later ordinary definition");
+        }
+        if (std.mem.eql(u8, case.title, "PoemDiscardedReference")) {
+            try h.require(normal.stored.entry.references.len == 1, "discarded opaque definition does not publish an additional reference");
+            const reference = normal.stored.entry.references[0];
+            try h.require(std.mem.eql(u8, reference.name, "x"), "only the emitted unresolved reference is retained");
+            var reference_seen: PoemObserved = .{};
+            try reference_seen.spans(h, reference.spans, true, true);
+            try h.require(std.mem.eql(u8, reference_seen.text.items, "Reference text unavailable") and seen.cat_links == 0 and std.mem.indexOf(u8, normal.payload, "hidden") == null, "unused authenticated Poem items cannot resolve a visible reference or leak their body and navigation");
+        }
+        if (std.mem.eql(u8, case.title, "PoemInvalidProtectedOpener")) try h.require(std.mem.indexOf(u8, seen.text.items, "<nowiki/ >") != null and std.mem.indexOf(u8, seen.text.items, "</nowiki>") != null and seen.cat_links == 1, "invalid protected opener remains visible while its template expands without retroactive Poem formatting");
+        if (std.mem.indexOf(u8, case.title, "TemplateProtected") != null) try h.require(std.mem.indexOf(u8, seen.text.items, "__NOTOC__") != null, "generated protected control text remains literal");
+    }
+    const self_closing = try readPoemRecord(h, root, "English", "PoemSelfClosingBoundary");
+    const paired_empty = try readPoemRecord(h, root, "English", "PoemPairedEmptyBoundary");
+    var self_entry = self_closing.stored.entry;
+    var paired_entry = paired_empty.stored.entry;
+    self_entry.title = "PoemEmptyBoundary";
+    paired_entry.title = "PoemEmptyBoundary";
+    const self_json = try std.json.Stringify.valueAlloc(h.a, self_entry, .{});
+    const paired_json = try std.json.Stringify.valueAlloc(h.a, paired_entry, .{});
+    try h.require(std.mem.eql(u8, self_json, paired_json), "selfclosing and paired empty Poem retain identical typed boundaries between lexical text");
+
+    const french = try readPoemRecord(h, root, "French", "PoemOwners");
+    const french_saved = try readPoemRecord(h, replay_root, "French", "PoemOwners");
+    try h.require(std.mem.eql(u8, french.payload, french_saved.payload), "replayed full-page phase survives owner regrouping");
+    const french_seen = try PoemObserved.entry(h, french.stored.entry);
+    try h.require(french_seen.indent2 != 0 and std.mem.indexOf(u8, french_seen.text.items, "French verse") != null and std.mem.indexOf(u8, french_seen.text.items, "English verse") == null, "owner fragments tolerate unused registered items without leaking another owner body");
+
+    const alias_export = try h.run(&.{ bin, "export", "PoemAlias", "--root", root }, 0);
+    const alias_json = try std.json.parseFromSlice(std.json.Value, h.a, alias_export, .{});
+    defer alias_json.deinit();
+    try h.require(hasSemanticLink(alias_json.value, "cat", "cat") and std.mem.indexOf(u8, alias_export, "wikidict-poem-indent-2") != null, "actual alias-tail page-slot consumer preserves its registered Poem body and navigation");
+    try h.require(std.mem.indexOf(u8, alias_export, "WDPOEM:") == null and std.mem.indexOf(u8, alias_export, "wikidict.poem-phase.v1") == null, "alias export contains only compiled presentation");
+
+    const phase = first_metadata orelse return error.MissingPoemMetadata;
+    const expanded_source = first_source.?;
+    try rejectPoemRecordMetadata(h, records, "missing-private-phase", expanded_source, first_title, null, error.OrphanPoemMarker);
+    try rejectPoemRecordMetadata(h, records, "missing-generated-phase", "==English==\n<poem>raw</poem>", null, null, error.MissingPoemMetadata);
+    const duplicate_handled = try std.fmt.allocPrint(h.a, "{{\"handled\":true,{s}", .{phase[1..]});
+    try rejectPoemRecordMetadata(h, records, "duplicate-phase-field", expanded_source, first_title, duplicate_handled, error.InvalidPoemMetadata);
+    const schema_at = std.mem.indexOf(u8, phase, "wikidict.poem-phase.v1") orelse return error.InvalidPoemMetadata;
+    const wrong_version = try std.fmt.allocPrint(h.a, "{s}wikidict.poem-phase.v999{s}", .{ phase[0..schema_at], phase[schema_at + "wikidict.poem-phase.v1".len ..] });
+    try rejectPoemRecordMetadata(h, records, "unknown-phase-version", expanded_source, first_title, wrong_version, error.InvalidPoemMetadata);
+    const unknown_field = try std.fmt.allocPrint(h.a, "{{\"unrecognized\":1,{s}", .{phase[1..]});
+    try rejectPoemRecordMetadata(h, records, "unknown-phase-field", expanded_source, first_title, unknown_field, error.InvalidPoemMetadata);
+    try rejectPoemRecordMetadata(h, records, "truncated-phase-json", expanded_source, first_title, phase[0 .. phase.len - 1], error.InvalidPoemMetadata);
+    try rejectPoemRecordMetadata(h, records, "changed-output-hash", try std.fmt.allocPrint(h.a, "{s}changed", .{expanded_source}), first_title, phase, error.InvalidPoemMetadata);
+    try rejectPoemRecordMetadata(h, records, "changed-title-hash", expanded_source, "Changed title", phase, error.InvalidPoemMetadata);
+    // A real registered token copied twice in the metadata is ambiguous even
+    // though its bytes and output/title hashes are otherwise authentic.
+    var parsed_phase = try std.json.parseFromSlice(std.json.Value, h.a, phase, .{});
+    defer parsed_phase.deinit();
+    const items = parsed_phase.value.object.getPtr("items").?;
+    if (items.array.items.len == 0) return error.MissingPoemFixtureItems;
+    var literal_tampered = false;
+    for (items.array.items) |*item| {
+        if (!std.mem.eql(u8, item.object.get("kind").?.string, "literal")) continue;
+        const body = item.object.getPtr("body") orelse continue;
+        const original_body = body.*;
+        body.* = .{ .string = "changed literal body" };
+        const changed_body = try std.json.Stringify.valueAlloc(h.a, parsed_phase.value, .{});
+        body.* = original_body;
+        try rejectPoemRecordMetadata(h, records, "changed-literal-token-body-hash", expanded_source, first_title, changed_body, error.InvalidPoemMetadata);
+        literal_tampered = true;
+        break;
+    }
+    try h.require(literal_tampered, "actual opaque native Poem record contains a hashed literal body");
+    try items.array.append(items.array.items[0]);
+    const duplicate_token = try std.json.Stringify.valueAlloc(h.a, parsed_phase.value, .{});
+    try rejectPoemRecordMetadata(h, records, "duplicate-phase-token", expanded_source, first_title, duplicate_token, error.InvalidPoemMetadata);
+    h.checks += poem_phase_cases.len;
 }

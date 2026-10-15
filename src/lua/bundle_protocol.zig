@@ -5,7 +5,8 @@ pub const max_source_bytes: usize = 16 * 1024 * 1024;
 pub const max_display_title_bytes: usize = 64 * 1024;
 pub const max_path_bytes: usize = 4096;
 pub const max_title_bytes: usize = 4096;
-const request_version: u8 = 2;
+const request_version: u8 = 3;
+pub const max_poem_metadata_bytes: usize = 16 * 1024 * 1024;
 const request_header_len: usize = 1 + 8 + 8 + 4 * 4;
 const success_header_len: usize = 1 + 4 * 2 + 1;
 const error_header_len: usize = 1 + 4 * 3;
@@ -23,6 +24,7 @@ pub const SuccessReply = struct {
     output: []const u8,
     display_title: []const u8,
     unsupported_parser_function: bool = false,
+    poem_metadata: ?[]const u8 = null,
 };
 
 pub const ErrorReply = struct {
@@ -114,19 +116,32 @@ pub fn decodeRequest(bytes: []const u8) !Request {
 }
 
 pub fn writeSuccess(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool) !void {
+    return writeSuccessWithPoem(w, output, display_title, unsupported_parser_function, null);
+}
+
+pub fn writeSuccessWithPoem(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool, poem_metadata: ?[]const u8) !void {
+    if (poem_metadata) |metadata| {
+        if (metadata.len == 0 or metadata.len > max_poem_metadata_bytes or !std.unicode.utf8ValidateSlice(metadata)) return error.InvalidPoemMetadata;
+    }
     if (output.len > max_source_bytes or display_title.len > max_display_title_bytes) return error.FrameTooLarge;
-    const payload_len = try checkedFramePayload(&.{ success_header_len, output.len, display_title.len });
+    const payload_len = try checkedFramePayload(&.{ success_header_len, if (poem_metadata != null) @as(usize, 4) else 0, output.len, display_title.len, if (poem_metadata) |metadata| metadata.len else 0 });
     var outer: [4]u8 = undefined;
     std.mem.writeInt(u32, &outer, payload_len, .little);
     var header: [success_header_len]u8 = undefined;
-    header[0] = 0;
+    header[0] = if (poem_metadata != null) 4 else 0;
     try putU32(header[1..5], output.len);
     try putU32(header[5..9], display_title.len);
     header[9] = @intFromBool(unsupported_parser_function);
     try w.writeAll(&outer);
     try w.writeAll(&header);
+    if (poem_metadata) |metadata| {
+        var length: [4]u8 = undefined;
+        try putU32(&length, metadata.len);
+        try w.writeAll(&length);
+    }
     try w.writeAll(output);
     try w.writeAll(display_title);
+    if (poem_metadata) |metadata| try w.writeAll(metadata);
     try w.flush();
 }
 
@@ -162,8 +177,8 @@ pub fn writeError(w: *std.Io.Writer, stage: []const u8, error_name: []const u8, 
 }
 
 pub fn decodeReply(bytes: []const u8) !Reply {
-    if (bytes.len == 0) return error.InvalidFrame;
-    if (bytes[0] == 0) {
+    if (bytes.len == 0 or bytes.len > max_frame_bytes) return error.InvalidFrame;
+    if (bytes[0] == 0 or bytes[0] == 4) {
         if (bytes.len < success_header_len) return error.InvalidFrame;
         var cursor: usize = 1;
         const output_len = try takeU32(bytes, &cursor);
@@ -171,12 +186,16 @@ pub fn decodeReply(bytes: []const u8) !Reply {
         if (output_len > max_source_bytes or display_title_len > max_display_title_bytes) return error.InvalidFrame;
         const diagnostic = (try take(bytes, &cursor, 1))[0];
         if (diagnostic > 1) return error.InvalidFrame;
+        const metadata_len = if (bytes[0] == 4) try takeU32(bytes, &cursor) else 0;
+        if (bytes[0] == 4 and (metadata_len == 0 or metadata_len > max_poem_metadata_bytes)) return error.InvalidFrame;
         const success: SuccessReply = .{
             .unsupported_parser_function = diagnostic == 1,
             .output = try take(bytes, &cursor, output_len),
             .display_title = try take(bytes, &cursor, display_title_len),
+            .poem_metadata = if (bytes[0] == 4) try take(bytes, &cursor, metadata_len) else null,
         };
         if (cursor != bytes.len) return error.InvalidFrame;
+        if (success.poem_metadata) |metadata| if (!std.unicode.utf8ValidateSlice(metadata)) return error.InvalidFrame;
         return .{ .output = success };
     }
     if (bytes[0] == 3) {
@@ -281,4 +300,62 @@ test "ready reply has one explicit strictly decoded payload" {
     try std.testing.expect((try decodeReply(bytes.written()[4..])) == .ready);
     try std.testing.expectError(error.InvalidFrame, decodeReply(&.{ 3, 0 }));
     try std.testing.expectError(error.InvalidFrame, decodeReply(&.{4}));
+}
+
+test "Poem success framing preserves legacy bytes and handled empty metadata" {
+    var legacy: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer legacy.deinit();
+    var ordinary: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer ordinary.deinit();
+    try writeSuccess(&legacy.writer, "body", "title", true);
+    try writeSuccessWithPoem(&ordinary.writer, "body", "title", true, null);
+    try std.testing.expectEqualSlices(u8, legacy.written(), ordinary.written());
+    try std.testing.expect((try decodeReply(ordinary.written()[4..])).output.poem_metadata == null);
+    var modern: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer modern.deinit();
+    const metadata = "{\"schema\":\"wikidict.poem-phase.v1\",\"handled\":true,\"items\":[]}";
+    try writeSuccessWithPoem(&modern.writer, "<poem>literal</poem>", "", false, metadata);
+    const decoded = (try decodeReply(modern.written()[4..])).output;
+    try std.testing.expectEqualStrings(metadata, decoded.poem_metadata.?);
+    try std.testing.expectEqualStrings("<poem>literal</poem>", decoded.output);
+}
+
+test "Poem success rejects truncated unknown oversized and invalid UTF8 metadata" {
+    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer bytes.deinit();
+    try writeSuccessWithPoem(&bytes.writer, "body", "", false, "{}");
+    const payload = bytes.written()[4..];
+    for (0..payload.len) |end| try std.testing.expectError(error.InvalidFrame, decodeReply(payload[0..end]));
+    const bad = try std.testing.allocator.dupe(u8, payload);
+    defer std.testing.allocator.free(bad);
+    std.mem.writeInt(u32, bad[10..14], 0xffff_ffff, .little);
+    try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
+    std.mem.writeInt(u32, bad[10..14], @intCast(max_poem_metadata_bytes + 1), .little);
+    try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
+    std.mem.writeInt(u32, bad[10..14], 0, .little);
+    try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
+    @memcpy(bad, payload);
+    bad[bad.len - 1] = 0xff;
+    try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
+    bad[0] = 5;
+    try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
+    try std.testing.expectError(error.InvalidPoemMetadata, writeSuccessWithPoem(&bytes.writer, "", "", false, ""));
+    try std.testing.expectError(error.InvalidPoemMetadata, writeSuccessWithPoem(&bytes.writer, "", "", false, &.{0xff}));
+    try std.testing.expectError(error.FrameTooLarge, checkedFramePayload(&.{ success_header_len + 4, max_source_bytes, max_poem_metadata_bytes }));
+    try std.testing.expectEqual(@as(u32, max_frame_bytes), try checkedFramePayload(&.{max_frame_bytes}));
+    try std.testing.expectError(error.FrameTooLarge, checkedFramePayload(&.{ max_frame_bytes, 1 }));
+    try std.testing.expectError(error.FrameTooLarge, checkedFramePayload(&.{ std.math.maxInt(usize), 1 }));
+}
+
+test "bundle request version rejects old native workers" {
+    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer bytes.deinit();
+    try writeRequest(&bytes.writer, .{ .root = "root", .dump = "dump", .now_unix = 1, .page_ordinal = 0, .title = "x", .source = "body" });
+    const payload = try std.testing.allocator.dupe(u8, bytes.written()[4..]);
+    defer std.testing.allocator.free(payload);
+    try std.testing.expectEqual(@as(u8, 3), payload[0]);
+    payload[0] = 2;
+    try std.testing.expectError(error.InvalidFrame, decodeRequest(payload));
+    payload[0] = 4;
+    try std.testing.expectError(error.InvalidFrame, decodeRequest(payload));
 }

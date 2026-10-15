@@ -401,11 +401,11 @@ const ExpansionSlot = struct {
         if (self.expansion) |expanded| {
             const extra_reasons: []const []const u8 = if (expanded.unsupported_parser_function) &.{"unsupported_parser_function"} else &.{};
             if (self.job.alias_record) |alias| {
-                try writer.addAliasExpanded(self.arena.allocator(), alias, expanded.source, expanded.display_title, .{}, extra_reasons);
+                try writer.addAliasExpandedWithPoem(self.arena.allocator(), alias, expanded.source, expanded.display_title, .{}, extra_reasons, expanded.poem_metadata);
                 return true;
             }
             const fallback_before = writer.stats.fallback_pages;
-            writer.addExpandedPageWithReasons(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title, extra_reasons) catch |err| {
+            writer.addExpandedPageWithReasonsAndPoem(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title, extra_reasons, expanded.poem_metadata) catch |err| {
                 diagnostics.printLine(
                     "blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n",
                     .{ self.job.title, self.job.ordinal, self.job.ns.id, self.job.source.len, expanded.source.len, @errorName(err) },
@@ -1677,7 +1677,6 @@ test "Arabic vocalized linked declaration preserves Belcika Kurdish body through
     try std.testing.expect(std.mem.indexOf(u8, text.items, "بِلْ") == null);
     try std.testing.expect(std.mem.indexOf(u8, text.items, "بلْجِيكَا") != null);
     try std.testing.expect(std.mem.indexOf(u8, text.items, "وَهِيَ دَوْلَةٌ أُورُبِيَّةٌ") != null);
-
 }
 
 test "AN artiga source headers and exact Occitan alias preserve four owned definitions" {
@@ -1686,8 +1685,7 @@ test "AN artiga source headers and exact Occitan alias preserve four owned defin
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var namespaces = try @import("namespace_registry").Registry.init(a,
-        "# wikidict-namespace-registry-v1\n# wiki\tanwiktionary\n# dump-date\t20261001\n# content-language\tan\n" ++
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tanwiktionary\n# dump-date\t20261001\n# content-language\tan\n" ++
         "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
         "6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
         "10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
@@ -1747,7 +1745,9 @@ test "AN artiga source headers and exact Occitan alias preserve four owned defin
             for (block.spans) |span| {
                 if (std.mem.indexOf(u8, span.text, "Terreno ") != null) native_body = true;
                 for ([_][]const u8{ "artigar", "rancar", "cremar", "broza", "aladrar" }) |target|
-                    if (std.mem.eql(u8, span.target, target)) { native_links += 1; };
+                    if (std.mem.eql(u8, span.target, target)) {
+                        native_links += 1;
+                    };
                 if (std.mem.eql(u8, span.target, "artica")) foreign_links += 1;
             }
         };
@@ -1818,14 +1818,14 @@ test "Aal exact Arabic noun subtrees preserve exclusive English German bodies an
     const cases = [_]Expected{
         .{ .heading = "الإنجليزية", .code = "en", .title = "Aal", .required = &.{ "شجيرة", "الهند" }, .excluded = &.{ "die Aale", "glatt wie ein Aal", "ثعبان الماء" } },
         .{ .heading = "الألمانية", .code = "de", .title = "Aal", .required = &.{ "اسم مذكر", "ثعبان الماء", "die Aale", "glatt wie ein Aal", "مراوغ مثل الثعبان" }, .excluded = &.{ "شجيرة", "الهند" } },
-        .{ .heading = "الإنجليزية", .code = "en", .title = "scopes", .required = &.{ "EN_SENTINEL" }, .excluded = &.{ "UNDECLARED_SENTINEL", "UNKNOWN_SENTINEL", "CONFLICT_FIRST", "CONFLICT_SECOND" } },
-        .{ .heading = "Unclassified", .code = "", .title = "scopes", .required = &.{ "UNDECLARED_SENTINEL", "UNKNOWN_SENTINEL", "CONFLICT_FIRST", "CONFLICT_SECOND" }, .excluded = &.{ "EN_SENTINEL" } },
-        .{ .heading = "Unclassified", .code = "", .title = "role", .required = &.{ "ROLE_ONLY_SENTINEL" }, .excluded = &.{} },
-        .{ .heading = "العربية", .code = "ar", .title = "native", .required = &.{ "NATIVE_UNSECTIONED_SENTINEL" }, .excluded = &.{} },
-        .{ .heading = "الإنجليزية", .code = "en", .title = "Beeb", .required = &.{ "هيئة الإذاعة البريطانية" }, .excluded = &.{ "DE_PREFIX_OWNER_SENTINEL", "die Aale", "UNKNOWN_SENTINEL" } },
-        .{ .heading = "الألمانية", .code = "de", .title = "aalen-prefix-conflict", .required = &.{ "DE_PREFIX_OWNER_SENTINEL" }, .excluded = &.{ "هيئة الإذاعة البريطانية", "شجيرة", "UNKNOWN_SENTINEL" } },
-        .{ .heading = "الألمانية", .code = "de", .title = "prefix-reset", .required = &.{ "KNOWN_PREFIX_SENTINEL" }, .excluded = &.{ "UNKNOWN_PREFIX_RESET_SENTINEL" } },
-        .{ .heading = "Unclassified", .code = "", .title = "prefix-reset", .required = &.{ "UNKNOWN_PREFIX_RESET_SENTINEL" }, .excluded = &.{ "KNOWN_PREFIX_SENTINEL" } },
+        .{ .heading = "الإنجليزية", .code = "en", .title = "scopes", .required = &.{"EN_SENTINEL"}, .excluded = &.{ "UNDECLARED_SENTINEL", "UNKNOWN_SENTINEL", "CONFLICT_FIRST", "CONFLICT_SECOND" } },
+        .{ .heading = "Unclassified", .code = "", .title = "scopes", .required = &.{ "UNDECLARED_SENTINEL", "UNKNOWN_SENTINEL", "CONFLICT_FIRST", "CONFLICT_SECOND" }, .excluded = &.{"EN_SENTINEL"} },
+        .{ .heading = "Unclassified", .code = "", .title = "role", .required = &.{"ROLE_ONLY_SENTINEL"}, .excluded = &.{} },
+        .{ .heading = "العربية", .code = "ar", .title = "native", .required = &.{"NATIVE_UNSECTIONED_SENTINEL"}, .excluded = &.{} },
+        .{ .heading = "الإنجليزية", .code = "en", .title = "Beeb", .required = &.{"هيئة الإذاعة البريطانية"}, .excluded = &.{ "DE_PREFIX_OWNER_SENTINEL", "die Aale", "UNKNOWN_SENTINEL" } },
+        .{ .heading = "الألمانية", .code = "de", .title = "aalen-prefix-conflict", .required = &.{"DE_PREFIX_OWNER_SENTINEL"}, .excluded = &.{ "هيئة الإذاعة البريطانية", "شجيرة", "UNKNOWN_SENTINEL" } },
+        .{ .heading = "الألمانية", .code = "de", .title = "prefix-reset", .required = &.{"KNOWN_PREFIX_SENTINEL"}, .excluded = &.{"UNKNOWN_PREFIX_RESET_SENTINEL"} },
+        .{ .heading = "Unclassified", .code = "", .title = "prefix-reset", .required = &.{"UNKNOWN_PREFIX_RESET_SENTINEL"}, .excluded = &.{"KNOWN_PREFIX_SENTINEL"} },
     };
     for (cases) |expected| {
         var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;

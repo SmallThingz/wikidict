@@ -73,6 +73,7 @@ const State = struct {
     loaded: ?usize = null,
     text: []const u8 = &.{},
     rows: []term.RenderRow = &.{},
+    poem_lines: std.ArrayList(term.PoemLine) = .empty,
     wrap_width: usize = 0,
     screen: term.Size = .{},
 
@@ -85,6 +86,7 @@ const State = struct {
         self.filtered.deinit(self.a);
         self.expanded.deinit(self.a);
         self.section_indices.deinit(self.a);
+        self.poem_lines.deinit(self.a);
         self.a.free(self.rows);
         self.a.free(self.text);
     }
@@ -176,6 +178,7 @@ const State = struct {
         self.expanded.clearRetainingCapacity();
         self.a.free(self.text);
         self.text = &.{};
+        self.poem_lines.clearRetainingCapacity();
         self.a.free(self.rows);
         self.rows = &.{};
         self.notice = "Dictionary opened.";
@@ -643,6 +646,9 @@ const State = struct {
         if (index == null or index != self.loaded or self.text.len == 0) {
             var formatted: std.Io.Writer.Allocating = .init(self.a);
             defer formatted.deinit();
+            var poem_lines: std.ArrayList(term.PoemLine) = .empty;
+            defer poem_lines.deinit(self.a);
+            var projection: output.PoemProjection = .{ .frame = &formatted, .allocator = self.a, .lines = &poem_lines };
             if (index) |i| {
                 var source_record = try self.db.recordAlloc(self.a, i);
                 defer source_record.deinit();
@@ -699,8 +705,8 @@ const State = struct {
                         var preferences = r.data;
                         preferences.details = self.details;
                         const selected = if (self.section_indices.items.len == 0) 0 else self.section_indices.items[self.section];
-                        self.section_offset = try output.entryTextFolded(&formatted, doc.entry, self.color, preferences, self.expanded.items, selected);
-                    } else try output.entryTextWithDetails(&formatted.writer, doc.entry, self.color, self.details);
+                        self.section_offset = try output.entryTextFoldedProjected(&formatted, doc.entry, self.color, preferences, self.expanded.items, selected, &projection);
+                    } else try output.entryTextWithDetailsProjected(&formatted.writer, doc.entry, self.color, self.details, &projection);
                 }
             } else try formatted.writer.writeAll(if (self.searchPending()) "Searching dictionary...\n\nKeep typing to refine the search; Ctrl-U clears it." else switch (self.nav) {
                 .saved => "No saved words yet.\n\nOpen a word, then press s to save it.\nPress / to find a word.",
@@ -716,12 +722,15 @@ const State = struct {
             self.rows = &.{};
             self.a.free(self.text);
             self.text = text;
+            self.poem_lines.deinit(self.a);
+            self.poem_lines = poem_lines;
+            poem_lines = .empty;
             self.loaded = index;
             self.wrap_width = 0;
             self.scroll = 0;
         }
         if (self.wrap_width != width) {
-            const rows = try term.wrapStyled(self.a, self.text, width);
+            const rows = try term.wrapStyledProjected(self.a, self.text, width, self.poem_lines.items);
             self.a.free(self.rows);
             self.rows = rows;
             self.wrap_width = width;
@@ -863,8 +872,7 @@ const State = struct {
                     if (self.scroll + i >= self.rows.len) break;
                     const row = self.rows[self.scroll + i];
                     try w.print("\x1b[{d};{d}H{s}", .{ 7 + i, content_col, p.base });
-                    try row.carry.write(w);
-                    try term.writeStyled(w, row.bytes[0..term.prefixBytes(row.bytes, content_width)], p.base);
+                    try term.writeRenderRow(w, row, content_width, p.base);
                     try w.writeAll(p.base);
                 }
             }

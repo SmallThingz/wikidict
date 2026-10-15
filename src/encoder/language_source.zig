@@ -186,7 +186,7 @@ pub const Iterator = struct {
             self.cursor = if (newline == self.source.len) self.source.len else newline + 1;
 
             if (!self.balance.isOpen() and line_start >= self.balance.protected_until) {
-                const heading = parseHeading(syntax.headingControlPrefix(line, self.control_matcher));
+                const heading = parseHeadingControlled(line, self.control_matcher);
                 const marker = if (heading == null) self.languageMarker(line) else null;
                 const hyphen_marker = if (marker != null) blk: {
                     const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -240,7 +240,7 @@ pub const ArabicNounSubtree = struct { present: bool = false, code: ?[]const u8 
 
 pub fn arabicNounSubtree(section: Section, matcher: ?syntax.ControlMatcher) ArabicNounSubtree {
     const newline = std.mem.indexOfScalar(u8, section.source, '\n') orelse return .{};
-    const outer = parseHeading(syntax.headingControlPrefix(section.source[0..newline], matcher)) orelse return .{};
+    const outer = parseHeadingControlled(section.source[0..newline], matcher) orelse return .{};
     if (outer.level != 2 or !std.mem.eql(u8, outer.title, section.heading)) return .{};
     var balance: Balance = .{};
     var cursor = newline + 1;
@@ -252,7 +252,7 @@ pub fn arabicNounSubtree(section: Section, matcher: ?syntax.ControlMatcher) Arab
         const end = std.mem.indexOfScalarPos(u8, section.source, cursor, '\n') orelse section.source.len;
         const line = section.source[cursor..end];
         if (!balance.isOpen() and cursor >= balance.protected_until) {
-            if (parseHeading(syntax.headingControlPrefix(line, matcher))) |heading| {
+            if (parseHeadingControlled(line, matcher)) |heading| {
                 if (heading.level <= 2) return .{};
                 if (heading.level == 3) {
                     const label = std.mem.trim(u8, heading.title, " \t\r");
@@ -368,19 +368,12 @@ fn validMarkerCode(code: []const u8) bool {
 }
 
 fn parseHeading(raw: []const u8) ?ParsedHeading {
-    const line = std.mem.trimEnd(u8, raw, " \t");
-    if (line.len < 3 or line[0] != '=') return null;
-    var left: usize = 0;
-    while (left < line.len and line[left] == '=') : (left += 1) {}
-    var right = line.len;
-    while (right != 0 and line[right - 1] == '=') : (right -= 1) {}
-    const right_width = line.len - right;
-    if (right_width == 0) return null;
-    const level: usize = @min(6, @min(left, right_width));
-    if (line.len < level * 2) return null;
-    const title = std.mem.trim(u8, line[level .. line.len - level], " \t");
-    if (title.len == 0) return null;
-    return .{ .level = @intCast(level), .title = title };
+    return parseHeadingControlled(raw, null);
+}
+
+fn parseHeadingControlled(raw: []const u8, matcher: ?syntax.ControlMatcher) ?ParsedHeading {
+    const heading = syntax.controlHeading(raw, matcher) orelse return null;
+    return .{ .level = heading.level, .title = heading.title };
 }
 
 /// Literal page category links, excluding comments, template arguments and

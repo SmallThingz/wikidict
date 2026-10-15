@@ -148,6 +148,23 @@ const LazyTemplateArgs = struct {
     depth: usize,
 };
 
+const poem_prefix = "\x7fWDPOEM:";
+const max_poem_metadata_bytes = 16 * 1024 * 1024;
+const PoemItem = struct {
+    token: []const u8,
+    kind: enum { br, space, indent, scope, literal },
+    depth: ?u8 = null,
+    tag: ?[]const u8 = null,
+    body: ?[]const u8 = null,
+};
+const PoemMetadata = struct {
+    schema: []const u8 = "wikidict.poem-phase.v1",
+    handled: bool = true,
+    output_sha256: []const u8,
+    display_title_sha256: []const u8,
+    items: []const PoemItem,
+};
+
 pub const Expander = struct {
     runtime: *rt.Context,
     env_slot: u32,
@@ -175,6 +192,12 @@ pub const Expander = struct {
     fake_heading_count: usize = 0,
     display_title: ?[]const u8 = null,
     unsupported_parser_function: bool = false,
+    poem_metadata: ?[]const u8 = null,
+    poem_handled_empty: bool = false,
+    poem_items: std.ArrayList(PoemItem) = .empty,
+    poem_literal_bytes: usize = 0,
+    poem_argument_depth: usize = 0,
+    poem_hook_depth: usize = 0,
     strip_counter: u32 = 0,
     strip_values: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
     page_line: std.ArrayList(u8) = .empty,
@@ -238,6 +261,12 @@ pub const Expander = struct {
         self.fake_heading_count = 0;
         self.display_title = null;
         self.unsupported_parser_function = false;
+        self.poem_metadata = null;
+        self.poem_handled_empty = false;
+        self.poem_items = .empty;
+        self.poem_literal_bytes = 0;
+        self.poem_argument_depth = 0;
+        self.poem_hook_depth = 0;
         self.strip_counter = 0;
         self.strip_values = .empty;
         self.page_line = .empty;
@@ -466,20 +495,26 @@ pub const Expander = struct {
         defer self.releasePageModuleTemplates();
         if (work_stats.current()) |work| work.comment_bytes +|= source.len;
         const comments_start = work_stats.cpuNow();
-        const stripped = try preprocess.stripDecodedComments(self.runtime.allocator, source);
+        const stripped = try preprocess.stripDecodedCommentsPreservingPoem(self.runtime.allocator, source);
         if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(comments_start);
         defer self.runtime.allocator.free(stripped);
         const params = try self.runtime.newTable();
-        const expanded = try self.expandPageWikitext(stripped, params, title);
-        // Sanitizer removes generated comments after expansion and before
-        // behavior controls, headings and links. Do not re-expand the result.
-        if (std.mem.indexOf(u8, expanded, "<!--") == null) return expanded;
-        defer self.runtime.allocator.free(expanded);
-        if (work_stats.current()) |work| work.comment_bytes +|= expanded.len;
-        const generated_comments_start = work_stats.cpuNow();
-        const normalized = try preprocess.stripExpandedComments(self.runtime.allocator, expanded);
-        if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(generated_comments_start);
-        return normalized;
+        var output = try self.expandPageWikitext(stripped, params, title);
+        errdefer self.runtime.allocator.free(output);
+        if (std.mem.indexOf(u8, output, "<!--") != null) {
+            if (work_stats.current()) |work| work.comment_bytes +|= output.len;
+            const start = work_stats.cpuNow();
+            const normalized = try preprocess.stripExpandedComments(self.runtime.allocator, output);
+            self.runtime.allocator.free(output);
+            output = normalized;
+            if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(start);
+        }
+        const normalized = try self.normalizeUnknownPoemAlloc(output);
+        if (normalized.ptr != output.ptr) self.runtime.allocator.free(output);
+        output = normalized;
+        if (self.display_title) |display| self.display_title = try self.normalizeUnknownPoemAlloc(display);
+        try self.finishPoemMetadata(output);
+        return output;
     }
 
     fn observePageLine(self: *Expander, raw: []const u8) void {
@@ -522,34 +557,44 @@ pub const Expander = struct {
             work.scan_bytes +|= text.len;
         }
         var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.runtime.allocator);
         var pos: usize = 0;
-        while (preprocess.findNextConstructOutsideLiteralTags(text, pos)) |construct| {
+        while (preprocess.findNextExpansionNode(text, pos)) |node| {
             if (work_stats.current()) |work| work.constructs +|= 1;
-            const literal = text[pos..construct.open];
+            const open = switch (node) {
+                .construct => |v| v.open,
+                .poem => |v| v.open,
+            };
+            const literal = text[pos..open];
             try self.observePageOutput(literal);
-            try out.appendSlice(self.runtime.allocator, literal);
-            const expanded = switch (construct.kind) {
-                .parameter => blk: {
-                    const value = try self.expandParameter(text[construct.open + 3 .. construct.close], params, host_title, 1);
-                    pos = construct.close + 3;
-                    break :blk value;
+            try self.appendPoemLiteral(&out, literal, false);
+            var template = false;
+            const expanded = switch (node) {
+                .poem => |region| blk: {
+                    pos = region.end;
+                    break :blk try self.expandPoemNode(text, region, params, host_title, 1, false);
                 },
-                .template => blk: {
-                    const value = try self.expandConstruct(text[construct.open + 2 .. construct.close], params, host_title, 1);
-                    pos = construct.close + 2;
-                    break :blk value;
+                .construct => |construct| switch (construct.kind) {
+                    .parameter => blk: {
+                        pos = construct.close + 3;
+                        break :blk try self.expandParameter(text[construct.open + 3 .. construct.close], params, host_title, 1);
+                    },
+                    .template => blk: {
+                        pos = construct.close + 2;
+                        template = true;
+                        break :blk try self.expandConstruct(text[construct.open + 2 .. construct.close], params, host_title, 1);
+                    },
                 },
             };
-            if (construct.kind == .template and implicitBlockNewline(text, construct.open, expanded)) {
+            if (template and implicitBlockNewline(text, open, expanded)) {
                 try self.observePageOutput("\n");
                 try out.append(self.runtime.allocator, '\n');
             }
             try self.observePageOutput(expanded);
             try out.appendSlice(self.runtime.allocator, expanded);
         }
-        const tail = text[pos..];
-        try self.observePageOutput(tail);
-        try out.appendSlice(self.runtime.allocator, tail);
+        try self.observePageOutput(text[pos..]);
+        try self.appendPoemLiteral(&out, text[pos..], false);
         return out.toOwnedSlice(self.runtime.allocator);
     }
 
@@ -675,33 +720,343 @@ pub const Expander = struct {
         return self.expandTemplateSource(title, raw, args, depth);
     }
 
+    fn poemToken(self: *Expander, kind: @FieldType(PoemItem, "kind"), indent: u8, digest: *const [64]u8) anyerror![]const u8 {
+        if (self.poem_items.items.len >= 100000) return error.InvalidPoemMetadata;
+        const a = self.page_allocator orelse self.runtime.allocator;
+        const token = try std.fmt.allocPrint(a, "{s}{d}:{s}\x7f", .{ poem_prefix, self.poem_items.items.len, digest });
+        if (token.len > 128) return error.InvalidPoemMetadata;
+        try self.poem_items.append(a, .{ .token = token, .kind = kind, .depth = if (kind == .indent) indent else null });
+        return token;
+    }
+    fn poemLiteral(self: *Expander, tag: []const u8, body: []const u8) anyerror![]const u8 {
+        if (!std.unicode.utf8ValidateSlice(body)) return error.InvalidPoemMetadata;
+        if (body.len > max_poem_metadata_bytes -| self.poem_literal_bytes) return error.FrameTooLarge;
+        const a = self.page_allocator orelse self.runtime.allocator;
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(body, &hash, .{});
+        const digest = std.fmt.bytesToHex(hash, .lower);
+        const token = try self.poemToken(.literal, 0, &digest);
+        const item = &self.poem_items.items[self.poem_items.items.len - 1];
+        item.tag = try a.dupe(u8, tag);
+        item.body = try a.dupe(u8, body);
+        self.poem_literal_bytes += body.len;
+        return token;
+    }
+    fn nativePoemItemLen(self: *const Expander, value: []const u8) ?usize {
+        if (!std.mem.startsWith(u8, value, poem_prefix)) return null;
+        var at = poem_prefix.len;
+        const first = at;
+        var index: usize = 0;
+        while (at < value.len and std.ascii.isDigit(value[at])) : (at += 1) {
+            if (at - first >= 6) return null;
+            index = index * 10 + value[at] - '0';
+        }
+        if (at == first or (at - first > 1 and value[first] == '0') or at >= value.len or value[at] != ':') return null;
+        if (index >= self.poem_items.items.len) return null;
+        const token = self.poem_items.items[index].token;
+        return if (std.mem.startsWith(u8, value, token)) token.len else null;
+    }
+    fn poemProjection(self: *Expander, input: []const u8) anyerror![]const u8 {
+        if (std.mem.count(u8, input, "\n") > 50000) return error.InvalidPoemMetadata;
+        const a = self.page_allocator orelse self.runtime.allocator;
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(input, &hash, .{});
+        const digest = std.fmt.bytesToHex(hash, .lower);
+        var colon: std.ArrayList(u8) = .empty;
+        var pos: usize = 0;
+        while (pos < input.len) {
+            const end = std.mem.indexOfScalarPos(u8, input, pos, '\n') orelse input.len;
+            const line = input[pos..end];
+            var count: usize = 0;
+            while (count < line.len and line[count] == ':') : (count += 1) {}
+            if (count != 0 and count < line.len) {
+                try colon.appendSlice(a, try self.poemToken(.indent, @intCast(@min(count, 32)), &digest));
+                try colon.appendSlice(a, try std.fmt.allocPrint(a, "<span class=\"mw-poem-indented\" style=\"display: inline-block; margin-inline-start: {d}em;\">", .{count}));
+                try colon.appendSlice(a, line[count..]);
+                try colon.appendSlice(a, "</span>");
+            } else try colon.appendSlice(a, line);
+            if (end < input.len) try colon.append(a, '\n');
+            pos = if (end < input.len) end + 1 else end;
+        }
+        var transformed: []const u8 = colon.items;
+        if (std.mem.startsWith(u8, transformed, "\n")) transformed = transformed[1..];
+        if (std.mem.endsWith(u8, transformed, "\n")) transformed = transformed[0 .. transformed.len - 1];
+        var out: std.ArrayList(u8) = .empty;
+        pos = 0;
+        while (pos < transformed.len) {
+            const end = std.mem.indexOfScalarPos(u8, transformed, pos, '\n') orelse transformed.len;
+            const line = transformed[pos..end];
+            var spaces: usize = 0;
+            while (spaces < line.len and line[spaces] == ' ') : (spaces += 1) {}
+            for (0..spaces) |_| try out.appendSlice(a, "&#160;");
+            try out.appendSlice(a, line[spaces..]);
+            if (end < transformed.len) {
+                try out.appendSlice(a, try self.poemToken(if (std.mem.eql(u8, line, "----")) .space else .br, 0, &digest));
+                try out.append(a, '\n');
+            }
+            pos = if (end < transformed.len) end + 1 else end;
+        }
+        return out.toOwnedSlice(a);
+    }
+    fn poemJsonStringSize(value: []const u8) usize {
+        var n: usize = 2;
+        for (value) |byte| n +|= if (byte < 0x20) @as(usize, 6) else if (byte == '"' or byte == '\\') @as(usize, 2) else 1;
+        return n;
+    }
+    fn poemLooking(value: []const u8) bool {
+        var cursor: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, value, cursor, '<')) |lt| {
+            cursor = lt + 1;
+            if (cursor < value.len and value[cursor] == '/') cursor += 1;
+            if (value.len - cursor < 4 or !std.ascii.eqlIgnoreCase(value[cursor..][0..4], "poem")) continue;
+            if (value.len == cursor + 4 or value[cursor + 4] == '>' or value[cursor + 4] == '/' or std.ascii.isWhitespace(value[cursor + 4])) return true;
+        }
+        return false;
+    }
+    // The hook result itself is a general strip item (Parser3974-4057),
+    // so authentic prepared markup lives only in the registered table here.
+    // Any remaining raw Poem tag is sanitizer-unknown text, not a new hook.
+    // Protect existing literal regions and escape only its '<', once.
+    fn normalizeUnknownPoemAlloc(self: *Expander, value: []const u8) anyerror![]const u8 {
+        if (!poemLooking(value)) return value;
+        const a = self.page_allocator orelse self.runtime.allocator;
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        var pos: usize = 0;
+        var copied: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, value, pos, '<')) |open| {
+            pos = open + 1;
+            var name = pos;
+            if (name < value.len and value[name] == '/') name += 1;
+            if (value.len - name >= 4 and std.ascii.eqlIgnoreCase(value[name..][0..4], "poem")) {
+                const end = name + 4;
+                if (end == value.len or value[end] == '>' or value[end] == '/' or std.ascii.isWhitespace(value[end])) {
+                    try out.appendSlice(a, value[copied..open]);
+                    try out.appendSlice(a, "&lt;");
+                    copied = open + 1;
+                    self.poem_handled_empty = true;
+                    continue;
+                }
+            }
+            // Ref bodies remain active recursive parser content. Literal
+            // extension bodies retain their authored angles and whitespace.
+            var end_name = name;
+            while (end_name < value.len and std.ascii.isAlphanumeric(value[end_name])) : (end_name += 1) {}
+            const tag = value[name..end_name];
+            if (!std.ascii.eqlIgnoreCase(tag, "ref") and !std.ascii.eqlIgnoreCase(tag, "references"))
+                if (preprocess.opaqueParserRegionEnd(value, open)) |end| {
+                    pos = end;
+                };
+        }
+        if (copied == 0) return value;
+        try out.appendSlice(a, value[copied..]);
+        return out.toOwnedSlice(a);
+    }
+    fn finishPoemMetadata(self: *Expander, output: []const u8) anyerror!void {
+        const title = self.display_title orelse "";
+        self.poem_metadata = null;
+        if (self.poem_items.items.len == 0 and !self.poem_handled_empty and !poemLooking(output) and !poemLooking(title)) return;
+        if (self.poem_items.items.len > 100000 or self.poem_literal_bytes > max_poem_metadata_bytes) return error.InvalidPoemMetadata;
+        // An upper bound including every emitted key/separator and exact string
+        // escaping is checked before JSON allocation, then actual bytes checked.
+        var bound: usize = 512;
+        for (self.poem_items.items) |item| {
+            bound +|= 96 + poemJsonStringSize(item.token);
+            if (item.tag) |tag| bound +|= poemJsonStringSize(tag);
+            if (item.body) |body| bound +|= poemJsonStringSize(body);
+            if (bound > max_poem_metadata_bytes) return error.FrameTooLarge;
+        }
+        var output_hash: [32]u8 = undefined;
+        var title_hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(output, &output_hash, .{});
+        std.crypto.hash.sha2.Sha256.hash(title, &title_hash, .{});
+        const output_hex = std.fmt.bytesToHex(output_hash, .lower);
+        const title_hex = std.fmt.bytesToHex(title_hash, .lower);
+        const metadata: PoemMetadata = .{ .output_sha256 = &output_hex, .display_title_sha256 = &title_hex, .items = self.poem_items.items };
+        const bytes = try std.json.Stringify.valueAlloc(self.page_allocator orelse self.runtime.allocator, metadata, .{ .emit_null_optional_fields = false });
+        if (bytes.len == 0 or bytes.len > max_poem_metadata_bytes) return error.FrameTooLarge;
+        self.poem_metadata = bytes;
+    }
+
+    // Source-node literals are copied here; expanded return strings bypass this
+    // extension scan. Internal projected tokens are trusted only by the exact
+    // recursive parse that created them, never by another template source.
+    fn appendPoemLiteral(self: *Expander, out: *std.ArrayList(u8), text: []const u8, prepared: bool) anyerror!void {
+        const a = self.runtime.allocator;
+        if (self.poem_argument_depth == 0 and std.mem.indexOf(u8, text, poem_prefix) == null)
+            return preprocess.appendParsingText(a, out, text);
+        var no_more_close: [4]bool = @splat(false);
+        var no_more_gt = false;
+        var pos: usize = 0;
+        var copied: usize = 0;
+        while (pos < text.len) {
+            if (std.mem.startsWith(u8, text[pos..], poem_prefix)) {
+                if (prepared) if (self.nativePoemItemLen(text[pos..])) |len| {
+                    pos += len;
+                    continue;
+                };
+                try preprocess.appendParsingText(a, out, text[copied..pos]);
+                const end = pos + poem_prefix.len;
+                try out.appendSlice(a, try self.poemLiteral("text", text[pos..end]));
+                pos = end;
+                copied = pos;
+                continue;
+            }
+            if (self.poem_argument_depth != 0 and text[pos] == '<') {
+                const before = pos;
+                for ([_][]const u8{ "nowiki", "pre", "source", "syntaxhighlight" }, 0..) |name, slot| {
+                    if (text.len - pos > name.len + 1 and std.ascii.eqlIgnoreCase(text[pos + 1 ..][0..name.len], name)) {
+                        const after = pos + 1 + name.len;
+                        if (text[after] != '>' and !std.ascii.isWhitespace(text[after]) and !(text[after] == '/' and after + 1 < text.len and text[after + 1] == '>')) continue;
+                        if (no_more_gt) continue;
+                        const open_end = if (std.mem.indexOfScalarPos(u8, text, after, '>')) |end| end + 1 else blk: {
+                            no_more_gt = true;
+                            break :blk @as(usize, 0);
+                        };
+                        if (open_end == 0) continue;
+                        const self_close = text[open_end - 2] == '/';
+                        var inner_end = open_end;
+                        var region_end = open_end;
+                        if (!self_close) {
+                            if (no_more_close[slot]) continue;
+                            var search = open_end;
+                            var found = false;
+                            while (std.mem.indexOfScalarPos(u8, text, search, '<')) |lt| {
+                                search = lt + 1;
+                                if (text.len - lt < name.len + 3 or text[lt + 1] != '/' or !std.ascii.eqlIgnoreCase(text[lt + 2 ..][0..name.len], name)) continue;
+                                var end = lt + 2 + name.len;
+                                while (end < text.len and std.ascii.isWhitespace(text[end])) : (end += 1) {}
+                                if (end == text.len or text[end] != '>') continue;
+                                inner_end = lt;
+                                region_end = end + 1;
+                                found = true;
+                                break;
+                            }
+                            if (!found) {
+                                no_more_close[slot] = true;
+                                continue;
+                            }
+                        }
+                        try preprocess.appendParsingText(a, out, text[copied..pos]);
+                        // Sanitize authored prefix collisions inside this literal
+                        // body without recapturing its markup or losing prior
+                        // generated BR items inserted by the outer raw hook.
+                        var body: std.ArrayList(u8) = .empty;
+                        const argument_depth = self.poem_argument_depth;
+                        self.poem_argument_depth = 0;
+                        defer self.poem_argument_depth = argument_depth;
+                        try self.appendPoemLiteral(&body, if (self_close) "" else text[open_end..inner_end], prepared);
+                        try out.appendSlice(a, try self.poemLiteral(name, body.items));
+                        pos = region_end;
+                        copied = pos;
+                        break;
+                    }
+                }
+                if (pos != before) continue;
+            }
+            pos += 1;
+        }
+        try preprocess.appendParsingText(a, out, text[copied..]);
+    }
+    // Raw source cannot confer instruction provenance by spelling a token
+    // registered by an earlier extension. Only an outer projection or an
+    // already-expanded #tag value may carry actual registered items through.
+    fn poemSourceItemsAlloc(self: *Expander, source: []const u8, trusted_items: bool) anyerror![]const u8 {
+        if (std.mem.indexOf(u8, source, poem_prefix) == null) return source;
+        const a = self.runtime.allocator;
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, source, pos, poem_prefix)) |found| {
+            try out.appendSlice(a, source[pos..found]);
+            if (trusted_items) if (self.nativePoemItemLen(source[found..])) |len| {
+                try out.appendSlice(a, source[found .. found + len]);
+                pos = found + len;
+                continue;
+            };
+            // Carry only the reserved prefix. The remaining authored bytes,
+            // including any LF/leading colon, retain raw-hook phase semantics.
+            try out.appendSlice(a, try self.poemLiteral("text", poem_prefix));
+            pos = found + poem_prefix.len;
+        }
+        try out.appendSlice(a, source[pos..]);
+        return out.toOwnedSlice(a);
+    }
+    fn expandPoemNode(self: *Expander, source: []const u8, region: preprocess.PoemRegion, params: *rt.Table, title: []const u8, depth: usize, trusted_items: bool) anyerror![]const u8 {
+        const opening = if (region.self_closing) try std.fmt.allocPrint(self.runtime.allocator, "{s}>", .{source[region.open .. region.opening_end - 2]}) else source[region.open..region.opening_end];
+        return self.expandPoemPrepared(opening, if (region.self_closing) "" else source[region.opening_end..region.inner_end], "</poem>", params, title, depth, trusted_items);
+    }
+    fn expandPoemValue(self: *Expander, body: []const u8, attrs: ?*rt.Table, params: *rt.Table, title: []const u8, depth: usize) anyerror![]const u8 {
+        const serialized = try self.serializeExtension("poem", .{ .string = "" }, attrs);
+        const opening_end = std.mem.indexOfScalar(u8, serialized, '>') orelse return error.InvalidPoemMetadata;
+        return self.expandPoemPrepared(serialized[0 .. opening_end + 1], body, "</poem>", params, title, depth, true);
+    }
+    fn expandPoemPrepared(self: *Expander, opening: []const u8, body: []const u8, closing: []const u8, params: *rt.Table, title: []const u8, depth: usize, trusted_items: bool) anyerror![]const u8 {
+        if (depth > self.max_depth or self.poem_hook_depth >= self.max_depth) return error.TemplateDepth;
+        self.poem_hook_depth += 1;
+        defer self.poem_hook_depth -= 1;
+        const source = try self.poemSourceItemsAlloc(body, trusted_items);
+        const projected = try self.poemProjection(source);
+        const stripped = try preprocess.stripDecodedCommentsPreservingPoem(self.runtime.allocator, projected);
+        self.poem_argument_depth += 1;
+        defer self.poem_argument_depth -= 1;
+        const expanded = try self.expandWikitextMode(stripped, params, title, depth + 1, true, true);
+        const comments = if (std.mem.indexOf(u8, expanded, "<!--") == null) expanded else try preprocess.stripExpandedComments(self.runtime.allocator, expanded);
+        const normalized = try self.normalizeUnknownPoemAlloc(comments);
+        // The hook trims its half-parsed result before the outer block pass.
+        // Keep PHP trim's exact default byte set; NBSP and form feed survive.
+        // Registered protected bodies and generated breaks remain opaque items.
+        const finished = std.mem.trim(u8, normalized, " \t\r\n\x00\x0b");
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(body, &hash, .{});
+        const digest = std.fmt.bytesToHex(hash, .lower);
+        const scope = try self.poemToken(.scope, 0, &digest);
+        const prepared = try std.fmt.allocPrint(self.runtime.allocator, "{s}{s}{s}{s}", .{ scope, opening, finished, closing });
+        return self.poemLiteral("poem", prepared);
+    }
+
     fn expandWikitext(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        return self.expandWikitextMode(text, params, host_title, depth, true, false);
+    }
+    fn expandWikitextMode(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize, allow_poem: bool, prepared: bool) anyerror![]const u8 {
         if (depth > self.max_depth) return error.TemplateDepth;
         if (work_stats.current()) |work| {
             work.scan_calls +|= 1;
             work.scan_bytes +|= text.len;
         }
         var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.runtime.allocator);
         var pos: usize = 0;
-        while (preprocess.findNextConstructOutsideLiteralTags(text, pos)) |construct| {
+        while (true) {
+            const node: preprocess.ExpansionNode = if (allow_poem)
+                preprocess.findNextExpansionNode(text, pos) orelse break
+            else if (preprocess.findNextConstructOutsideLiteralTags(text, pos)) |construct|
+                .{ .construct = construct }
+            else
+                break;
+            const open = switch (node) {
+                .construct => |v| v.open,
+                .poem => |v| v.open,
+            };
+            try self.appendPoemLiteral(&out, text[pos..open], prepared);
             if (work_stats.current()) |work| work.constructs +|= 1;
-            try preprocess.appendParsingText(self.runtime.allocator, &out, text[pos..construct.open]);
-            switch (construct.kind) {
-                .parameter => {
-                    const expanded = try self.expandParameter(text[construct.open + 3 .. construct.close], params, host_title, depth + 1);
-                    try out.appendSlice(self.runtime.allocator, expanded);
-                    pos = construct.close + 3;
+            switch (node) {
+                .poem => |region| {
+                    try out.appendSlice(self.runtime.allocator, try self.expandPoemNode(text, region, params, host_title, depth + 1, prepared));
+                    pos = region.end;
                 },
-                .template => {
-                    const expanded = try self.expandConstruct(text[construct.open + 2 .. construct.close], params, host_title, depth + 1);
-                    if (implicitBlockNewline(text, construct.open, expanded))
-                        try out.append(self.runtime.allocator, '\n');
+                .construct => |construct| {
+                    const expanded = switch (construct.kind) {
+                        .parameter => try self.expandParameter(text[construct.open + 3 .. construct.close], params, host_title, depth + 1),
+                        .template => try self.expandConstruct(text[construct.open + 2 .. construct.close], params, host_title, depth + 1),
+                    };
+                    if (construct.kind == .template and implicitBlockNewline(text, construct.open, expanded)) try out.append(self.runtime.allocator, '\n');
                     try out.appendSlice(self.runtime.allocator, expanded);
-                    pos = construct.close + 2;
+                    pos = construct.close + if (construct.kind == .parameter) @as(usize, 3) else 2;
                 },
             }
         }
-        try preprocess.appendParsingText(self.runtime.allocator, &out, text[pos..]);
+        try self.appendPoemLiteral(&out, text[pos..], prepared);
         return out.toOwnedSlice(self.runtime.allocator);
     }
 
@@ -1951,7 +2306,9 @@ pub const Expander = struct {
             params,
         );
         return switch (outcome) {
-            .generated => |generated| self.expandWikitext(generated, params, host_title, depth + 1),
+            // Lua values may contain registered results from explicit frame
+            // APIs. Preserve those items while returned tag text stays unhooked.
+            .generated => |generated| self.expandWikitextMode(generated, params, host_title, depth + 1, false, true),
             .error_markup => |markup| markup,
         };
     }
@@ -1959,6 +2316,11 @@ pub const Expander = struct {
     fn expandTagParser(self: *Expander, raw_tag: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const tag = std.mem.trim(u8, try self.expandWikitext(raw_tag, params, host_title, depth + 1), " \t\r\n");
         const canonical = canonicalExtensionTag(tag) orelse return error.UnsupportedExtensionTag;
+        const poem_argument = std.mem.eql(u8, canonical, "poem");
+        if (poem_argument) self.poem_argument_depth += 1;
+        defer {
+            if (poem_argument) self.poem_argument_depth -= 1;
+        }
         const content: ?Value = if (raw_args.len == 0)
             .{ .string = "" }
         else
@@ -1976,6 +2338,7 @@ pub const Expander = struct {
             }
             attrs = table;
         }
+        if (poem_argument) return self.expandPoemValue(if (content) |value| try self.scalarText(value) else "", attrs, params, host_title, depth + 1);
         return self.serializeExtension(canonical, content, attrs);
     }
 
@@ -2517,7 +2880,7 @@ pub const Expander = struct {
 
     fn hostFramePreprocess(raw: ?*anyopaque, a: std.mem.Allocator, source: []const u8, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        const stripped = try preprocess.stripDecodedComments(a, source);
+        const stripped = try preprocess.stripDecodedCommentsPreservingPoem(a, source);
         defer a.free(stripped);
         if (stripped.len >= 2 and stripped[0] == '=' and stripped[stripped.len - 1] == '=' and
             std.mem.indexOf(u8, stripped, nowiki_marker_prefix) != null)
@@ -2536,7 +2899,12 @@ pub const Expander = struct {
 
     fn hostFrameExtensionTag(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, content: ?Value, attrs: ?*rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        if (std.ascii.eqlIgnoreCase(name, "poem")) {
+            const params = try self.runtime.newTable();
+            return self.expandPoemValue(if (content) |value| try self.scalarText(value) else "", attrs, params, self.host.current_title, self.poem_hook_depth + 1);
+        }
         if (std.ascii.eqlIgnoreCase(name, "nowiki")) {
+            if (self.poem_argument_depth != 0) return self.poemLiteral("nowiki", if (content) |value| try self.scalarText(value) else "");
             const text = if (content) |value| if (value == .string) value.string else "" else "";
             const id = self.strip_counter;
             self.strip_counter +%= 1;
@@ -3192,6 +3560,9 @@ const TestProvider = struct {
         if (std.mem.eql(u8, title, "Template:Lazy")) return "used={{{used}}}";
         if (std.mem.eql(u8, title, "Template:LazyForward")) return "{{Lazy|used={{{1}}}|unused={{{2}}}}}";
         if (std.mem.eql(u8, title, "Template:Space Name")) return "space-template";
+        if (std.mem.eql(u8, title, "Template:PoemLateSpaces")) return "  B  ";
+        if (std.mem.eql(u8, title, "Template:PoemLateTrimBytes")) return " \t\r\n\x00\x0bB \t\r\n\x00\x0b";
+        if (std.mem.eql(u8, title, "Template:PoemLateKeepBytes")) return "\x0c\xc2\xa0B\xc2\xa0\x0c";
         if (std.mem.eql(u8, title, "Wiktionary:Sandbox/Child")) return "relative-project-child";
         if (std.mem.eql(u8, title, "Template:/Child")) return "literal-template-slash-child";
         if (std.mem.eql(u8, title, "Template:Parent")) return "{{/Child}}";
@@ -3872,7 +4243,41 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     const other_magic = try expander.expandFragment("Page", "{{PAGEID:Other_page}}|{{REVISIONID:Other page}}|{{REVISIONTIMESTAMP:Other page}}|{{REVISIONUSER:Other_page}}|{{PAGEID:Missing page}}", 1_670_803_200);
     try std.testing.expectEqualStrings("99|990|20250607080910|Other editor|", other_magic);
     const got = try expander.expandFragment("Appendix:Page/Sub", source, 1_670_803_200);
-    try std.testing.expectEqualStrings("Hi Bob Y|ABCD|space-template|space-template|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|<poem>one\ntwo</poem>|ok", got);
+    // Poem is general strip output: exact authenticated items, not raw tag text.
+    try std.testing.expectEqual(@as(usize, 3), expander.poem_items.items.len);
+    const poem_br = expander.poem_items.items[0];
+    const poem_scope = expander.poem_items.items[1];
+    const poem_literal = expander.poem_items.items[2];
+    try std.testing.expect(poem_br.kind == .br and poem_scope.kind == .scope and poem_literal.kind == .literal);
+    try std.testing.expectEqualStrings("poem", poem_literal.tag.?);
+    var poem_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("one\ntwo", &poem_hash, .{});
+    const poem_hex = std.fmt.bytesToHex(poem_hash, .lower);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(runtime.allocator, "{s}0:{s}\x7f", .{ poem_prefix, poem_hex }), poem_br.token);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(runtime.allocator, "{s}1:{s}\x7f", .{ poem_prefix, poem_hex }), poem_scope.token);
+    const expected_poem_body = try std.fmt.allocPrint(runtime.allocator, "{s}<poem>one{s}\ntwo</poem>", .{ poem_scope.token, poem_br.token });
+    try std.testing.expectEqualStrings(expected_poem_body, poem_literal.body.?);
+    std.crypto.hash.sha2.Sha256.hash(expected_poem_body, &poem_hash, .{});
+    const literal_hex = std.fmt.bytesToHex(poem_hash, .lower);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(runtime.allocator, "{s}2:{s}\x7f", .{ poem_prefix, literal_hex }), poem_literal.token);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(runtime.allocator, "Hi Bob Y|ABCD|space-template|space-template|main-transclusion|project-transclusion|Hi Z Y|yes|yes|14|E|W|HÉ|øøé|2022|<ref name=\"n\">body</ref>|<math>x+y</math>|{s}|ok", .{poem_literal.token}), got);
+    var poem_metadata = try std.json.parseFromSlice(PoemMetadata, runtime.allocator, expander.poem_metadata.?, .{});
+    defer poem_metadata.deinit();
+    try std.testing.expectEqualStrings("wikidict.poem-phase.v1", poem_metadata.value.schema);
+    try std.testing.expect(poem_metadata.value.handled);
+    try std.testing.expectEqual(@as(usize, 3), poem_metadata.value.items.len);
+    for (poem_metadata.value.items, expander.poem_items.items) |wire_item, retained_item| {
+        try std.testing.expect(wire_item.kind == retained_item.kind);
+        try std.testing.expectEqualStrings(retained_item.token, wire_item.token);
+    }
+    try std.testing.expectEqualStrings(expected_poem_body, poem_metadata.value.items[2].body.?);
+    std.crypto.hash.sha2.Sha256.hash(got, &poem_hash, .{});
+    const output_hex = std.fmt.bytesToHex(poem_hash, .lower);
+    try std.testing.expectEqualStrings(&output_hex, poem_metadata.value.output_sha256);
+    try std.testing.expect(expander.display_title == null);
+    std.crypto.hash.sha2.Sha256.hash("", &poem_hash, .{});
+    const title_hex = std.fmt.bytesToHex(poem_hash, .lower);
+    try std.testing.expectEqualStrings(&title_hex, poem_metadata.value.display_title_sha256);
     TestModule.multi_tail_evaluations = 0;
     const bounded_invoke = try expander.expandFragment("Page", "{{#invoke:Test|multi}}|{{#invoke:Test|empty}}|{{#invoke:Test|nil_return}}|{{#invoke:Test|number}}", 1_670_803_200);
     try std.testing.expectEqualStrings("firstsecond|||12", bounded_invoke);
@@ -3954,10 +4359,76 @@ test "native AOT wikitext expands templates parser functions and invoke" {
         "<math>{{Hello|M|1}}</math>|<syntaxhighlight>{{Hello|S|1}}</syntaxhighlight>|<ref>{{Hello|R|1}}</ref>|<poem>{{Hello|P|1}}</poem>",
         1_670_803_200,
     );
-    try std.testing.expectEqualStrings(
-        "<math>{{Hello|M|1}}</math>|<syntaxhighlight>{{Hello|S|1}}</syntaxhighlight>|<ref>Hi R Y</ref>|<poem>Hi P Y</poem>",
-        extension_bodies,
-    );
+    try std.testing.expect(std.mem.startsWith(u8, extension_bodies, "<math>{{Hello|M|1}}</math>|<syntaxhighlight>{{Hello|S|1}}</syntaxhighlight>|<ref>Hi R Y</ref>|"));
+    try std.testing.expectEqual(@as(usize, 2), expander.poem_items.items.len);
+    const template_scope = expander.poem_items.items[0];
+    const template_poem = expander.poem_items.items[1];
+    try std.testing.expect(template_scope.kind == .scope and template_poem.kind == .literal);
+    try std.testing.expectEqualStrings("poem", template_poem.tag.?);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(runtime.allocator, "{s}<poem>Hi P Y</poem>", .{template_scope.token}), template_poem.body.?);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(runtime.allocator, "<math>{{{{Hello|M|1}}}}</math>|<syntaxhighlight>{{{{Hello|S|1}}}}</syntaxhighlight>|<ref>Hi R Y</ref>|{s}", .{template_poem.token}), extension_bodies);
+    try std.testing.expect(expander.poem_metadata != null);
+    // Ordinary templates expand after the raw Poem transforms. The hook's
+    // late trim removes only boundary PHP whitespace before block parsing.
+    for ([_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "<poem>{{PoemLateSpaces}}</poem>", .expected = "B" },
+        .{ .source = "<poem>{{PoemLateTrimBytes}}</poem>", .expected = "B" },
+        .{ .source = "<poem>{{PoemLateKeepBytes}}</poem>", .expected = "\x0c\xc2\xa0B\xc2\xa0\x0c" },
+        .{ .source = "<poem>  B  </poem>", .expected = "&#160;&#160;B" },
+    }) |case| {
+        const result = try expander.expandFragment("Page", case.source, 1_670_803_200);
+        try std.testing.expectEqual(@as(usize, 2), expander.poem_items.items.len);
+        const scope_item = expander.poem_items.items[0];
+        const literal_item = expander.poem_items.items[1];
+        try std.testing.expect(scope_item.kind == .scope and literal_item.kind == .literal);
+        try std.testing.expectEqualStrings("poem", literal_item.tag.?);
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(runtime.allocator, "{s}<poem>{s}</poem>", .{ scope_item.token, case.expected }), literal_item.body.?);
+        try std.testing.expectEqualStrings(literal_item.token, result);
+        try std.testing.expect(expander.poem_metadata != null);
+    }
+    const protected_trim = try expander.expandFragment("Page", "<poem><nowiki>  B  </nowiki></poem>", 1_670_803_200);
+    try std.testing.expectEqual(@as(usize, 3), expander.poem_items.items.len);
+    const protected_item = expander.poem_items.items[0];
+    const protected_scope = expander.poem_items.items[1];
+    const protected_poem = expander.poem_items.items[2];
+    try std.testing.expect(protected_item.kind == .literal and protected_scope.kind == .scope and protected_poem.kind == .literal);
+    try std.testing.expectEqualStrings("nowiki", protected_item.tag.?);
+    try std.testing.expectEqualStrings("  B  ", protected_item.body.?);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(runtime.allocator, "{s}<poem>{s}</poem>", .{ protected_scope.token, protected_item.token }), protected_poem.body.?);
+    try std.testing.expectEqualStrings(protected_poem.token, protected_trim);
+    const trailing_break = try expander.expandFragment("Page", "<poem>A\n\n</poem>", 1_670_803_200);
+    try std.testing.expectEqual(@as(usize, 3), expander.poem_items.items.len);
+    const trailing_br = expander.poem_items.items[0];
+    const trailing_scope = expander.poem_items.items[1];
+    const trailing_poem = expander.poem_items.items[2];
+    try std.testing.expect(trailing_br.kind == .br and trailing_scope.kind == .scope and trailing_poem.kind == .literal);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(runtime.allocator, "{s}<poem>A{s}</poem>", .{ trailing_scope.token, trailing_br.token }), trailing_poem.body.?);
+    try std.testing.expectEqualStrings(trailing_poem.token, trailing_break);
+    // The existing Lua fixture forwards its already-expanded argument. A real
+    // registered extension result must not become an authored-prefix carrier
+    // when the outer invoke processes that generated return value.
+    const returned_poem = try expander.expandFragment("Page", "{{#invoke:Test|run|x={{#tag:poem|::[[B]]\nTail}}}}", 1_670_803_200);
+    try std.testing.expectEqual(@as(usize, 4), expander.poem_items.items.len);
+    const returned_indent = expander.poem_items.items[0];
+    const returned_br = expander.poem_items.items[1];
+    const returned_scope = expander.poem_items.items[2];
+    const returned_literal = expander.poem_items.items[3];
+    try std.testing.expect(returned_indent.kind == .indent and returned_indent.depth == 2 and returned_br.kind == .br and returned_scope.kind == .scope and returned_literal.kind == .literal);
+    try std.testing.expectEqualStrings("poem", returned_literal.tag.?);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(runtime.allocator, "{s}<poem>{s}<span class=\"mw-poem-indented\" style=\"display: inline-block; margin-inline-start: 2em;\">[[B]]</span>{s}\nTail</poem>", .{ returned_scope.token, returned_indent.token, returned_br.token }), returned_literal.body.?);
+    try std.testing.expectEqualStrings(returned_literal.token, returned_poem);
+    try std.testing.expect(expander.poem_metadata != null);
+    const collision_token = "\x7fWDPOEM:0:23519a43c66b4c342f25b32e09797ec5f3fc0be388cd8243fb3449afbdce4013\x7f";
+    const collision_source = try std.fmt.allocPrint(runtime.allocator, "<poem>A\nB</poem><poem>{s}</poem>", .{collision_token});
+    _ = try expander.expandFragment("Page", collision_source, 1_670_803_200);
+    var authored_prefix_carried = false;
+    var generated_break = false;
+    for (expander.poem_items.items) |item| {
+        if (item.kind == .literal and std.mem.eql(u8, item.tag orelse "", "text") and std.mem.eql(u8, item.body orelse "", poem_prefix)) authored_prefix_carried = true;
+        if (item.kind == .br and std.mem.eql(u8, item.token, collision_token)) generated_break = true;
+    }
+    try std.testing.expect(authored_prefix_carried and generated_break);
+    try std.testing.expect(expander.poem_metadata != null);
     try std.testing.expect(runtime.current_frame == null);
     var symbolic_expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_call_symbol = TestProvider.resolveCallSymbol, .get_template_symbol = TestProvider.getTemplateSymbol }, .install_scribunto = installTestInvoke };
     const symbolic = try symbolic_expander.expandFragment("Page", "{{PAGENAME}}|{{@template|Bob|1}}|{{#invoke:@module|@function|x=symbolic}}", 1_670_803_200);

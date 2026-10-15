@@ -896,6 +896,13 @@ fn classificationControlHeadingAlloc(a: std.mem.Allocator, codes: LanguageCodes,
         else
             syntax.behaviorSwitchEnd(value, scan);
         if (matched) |end| {
+            const toc = if (codes.behavior_switches) |registry|
+                try registry.tocMatchAt(a, value, scan)
+            else if (std.ascii.eqlIgnoreCase(value[scan..end], "__TOC__")) end else null;
+            if (toc != null and toc.? == end) {
+                scan = end;
+                continue;
+            }
             try out.appendSlice(a, value[emitted..scan]);
             emitted = end;
             scan = end;
@@ -953,6 +960,15 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
                 if (markers.codes.behavior_switches) |registry|
                     return registry.matchAt(std.heap.page_allocator, line, at) catch null;
                 return blobs.wikitext_syntax.behaviorSwitchEnd(line, at);
+            }
+        }.match,
+        .toc_match = struct {
+            fn match(raw: ?*const anyopaque, line: []const u8, at: usize) ?usize {
+                const markers: *const LanguageMarkers = @ptrCast(@alignCast(raw.?));
+                if (markers.codes.behavior_switches) |registry|
+                    return registry.tocMatchAt(std.heap.page_allocator, line, at) catch null;
+                const end = blobs.wikitext_syntax.behaviorSwitchEnd(line, at) orelse return null;
+                return if (std.ascii.eqlIgnoreCase(line[at..end], "__TOC__")) end else null;
             }
         }.match,
     };
@@ -1151,6 +1167,7 @@ fn processMain(
     display_title: ?[]const u8,
     stats: *BuildStats,
     fallbacks: *presentation_document.Fallbacks,
+    poem_phase: ?*const presentation_document.PoemPhase,
 ) !void {
     // MediaWiki's first body TOC is page-scoped, before language-owner regrouping.
     const source = try presentation_document.preparePageTocSourceAlloc(page_allocator, source_raw, codes.behavior_switches);
@@ -1159,7 +1176,7 @@ fn processMain(
 
     if (fallbacks.expansion_error and source.len == 0) {
         const language = codes.content() orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
-        const payload = try presentation_document.compileReportedWithOptionsAlloc(
+        const payload = try presentation_document.compileReportedWithOptionsAndPoemAlloc(
             page_allocator,
             title,
             .language,
@@ -1172,6 +1189,7 @@ fn processMain(
             codes.behavior_switches,
             codes.image_options,
             fallbacks,
+            poem_phase,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
         stats.language_records += 1;
@@ -1231,7 +1249,7 @@ fn processMain(
         // expansion changed the boundaries, retain the whole page without
         // guessing which rendered bytes belong to the unknown language.
         fallbacks.unresolved_language_heading = true;
-        const payload = try presentation_document.compileReportedWithOptionsAlloc(
+        const payload = try presentation_document.compileReportedWithOptionsAndPoemAlloc(
             page_allocator,
             title,
             .language,
@@ -1244,6 +1262,7 @@ fn processMain(
             codes.behavior_switches,
             codes.image_options,
             fallbacks,
+            poem_phase,
         );
         try spools.appendLanguage(page_allocator, "Unclassified", title, payload);
         stats.language_records += 1;
@@ -1356,7 +1375,7 @@ fn processMain(
             break :native language;
         };
         const language = explicit orelse native_default orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
-        const payload = try presentation_document.compileReportedWithOptionsAlloc(
+        const payload = try presentation_document.compileReportedWithOptionsAndPoemAlloc(
             page_allocator,
             title,
             .language,
@@ -1369,6 +1388,7 @@ fn processMain(
             codes.behavior_switches,
             codes.image_options,
             fallbacks,
+            poem_phase,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
         stats.language_records += 1;
@@ -1394,7 +1414,7 @@ fn processMain(
             try std.mem.concat(page_allocator, u8, &.{ page_prefix, group.source.items })
         else
             group.source.items;
-        const payload = try presentation_document.compileReportedWithReferencesAlloc(
+        const payload = try presentation_document.compileReportedWithReferencesAndPoemAlloc(
             page_allocator,
             title,
             .language,
@@ -1408,6 +1428,7 @@ fn processMain(
             codes.image_options,
             reference_context,
             fallbacks,
+            poem_phase,
         );
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
         stats.language_records += 1;
@@ -1427,12 +1448,13 @@ fn processNamespace(
     display_title: ?[]const u8,
     stats: *BuildStats,
     fallbacks: *presentation_document.Fallbacks,
+    poem_phase: ?*const presentation_document.PoemPhase,
 ) !void {
     const kind = ns.kind;
     // Supplemental namespaces share one file, so keep their full localized
     // names to avoid collisions between identically named namespace suffixes.
     const local_title = if (kind == .supplemental) title else localNamespaceTitle(title);
-    const payload = try presentation_document.compileReportedWithOptionsAlloc(
+    const payload = try presentation_document.compileReportedWithOptionsAndPoemAlloc(
         page_allocator,
         local_title,
         kind,
@@ -1445,6 +1467,7 @@ fn processNamespace(
         behavior_switches,
         image_options,
         fallbacks,
+        poem_phase,
     );
     switch (kind) {
         .thesaurus => {
@@ -1541,13 +1564,24 @@ pub const Writer = struct {
         return self.addAliasExpanded(a, record, "", null, .{}, &.{});
     }
     pub fn addAliasExpanded(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8) !void {
+        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, null);
+    }
+
+    pub fn addAliasExpandedWithPoem(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_metadata: ?[]const u8) !void {
+        var phase_arena = std.heap.ArenaAllocator.init(a);
+        defer phase_arena.deinit();
+        const phase = try presentation_document.parsePoemPhaseAlloc(phase_arena.allocator(), tail, display_title, poem_metadata);
+        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, phase);
+    }
+
+    fn addAliasExpandedInternal(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_phase: ?*const presentation_document.PoemPhase) !void {
         if (self.finished) return error.WriterFinished;
         var fallbacks = initial_fallbacks;
         const destination = if (record.fragment.len == 0) record.target_title else try std.fmt.allocPrint(a, "{s}#{s}", .{ record.target_title, record.fragment });
         const link: blobs.presentation_types.Span = .{ .kind = .link, .text = destination, .target = destination };
         var entry: blobs.presentation_types.Entry = .{ .title = record.source_title, .kind = .alias, .preamble_spans = &.{link} };
         if (tail.len != 0) {
-            const tail_payload = try presentation_document.compileReportedWithOptionsAlloc(a, record.source_title, .alias, null, "", tail, if (display_title) |value| .{ .source = value, .page_title = record.source_title } else null, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, &fallbacks);
+            const tail_payload = try presentation_document.compileReportedWithOptionsAndPoemAlloc(a, record.source_title, .alias, null, "", tail, if (display_title) |value| .{ .source = value, .page_title = record.source_title } else null, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, &fallbacks, poem_phase);
             entry = (try blobs.presentation_codec.decodeAlloc(a, tail_payload, record.source_title, .alias, null)).entry;
             const preamble = try a.alloc(blobs.presentation_types.Span, entry.preamble_spans.len + 2);
             preamble[0] = link;
@@ -1567,19 +1601,26 @@ pub const Writer = struct {
     }
 
     pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, display_title: ?[]const u8) !void {
-        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, .{}, &.{});
+        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, .{}, &.{}, null);
     }
 
     pub fn addExpandedPage(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8) !void {
-        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, &.{});
+        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, &.{}, null);
     }
 
     pub fn addExpandedPageWithReasons(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8, extra_reasons: []const []const u8) !void {
-        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, extra_reasons);
+        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, extra_reasons, null);
+    }
+
+    pub fn addExpandedPageWithReasonsAndPoem(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8, extra_reasons: []const []const u8, poem_metadata: ?[]const u8) !void {
+        var phase_arena = std.heap.ArenaAllocator.init(page_allocator);
+        defer phase_arena.deinit();
+        const phase = try presentation_document.parsePoemPhaseAlloc(phase_arena.allocator(), source, display_title, poem_metadata);
+        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, extra_reasons, phase);
     }
 
     pub fn addPageWithFallback(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks) !void {
-        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, &.{});
+        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, &.{}, null);
     }
 
     pub fn addExpansionFailure(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, reasons: []const []const u8) !void {
@@ -1587,7 +1628,7 @@ pub const Writer = struct {
         // synthesize. Retain an empty data-only record and put the exact cause
         // in the build report instead of inventing visible reader content.
         const source = "";
-        return self.addPageInternal(page_allocator, ns, title, source, null, null, .{ .expansion_error = true }, reasons);
+        return self.addPageInternal(page_allocator, ns, title, source, null, null, .{ .expansion_error = true }, reasons, null);
     }
 
     pub fn addPageWithFallbackReasons(
@@ -1600,7 +1641,7 @@ pub const Writer = struct {
         initial_fallbacks: presentation_document.Fallbacks,
         extra_reasons: []const []const u8,
     ) !void {
-        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, extra_reasons);
+        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, extra_reasons, null);
     }
 
     fn addPageInternal(
@@ -1613,13 +1654,14 @@ pub const Writer = struct {
         display_title: ?[]const u8,
         initial_fallbacks: presentation_document.Fallbacks,
         extra_reasons: []const []const u8,
+        poem_phase: ?*const presentation_document.PoemPhase,
     ) !void {
         if (self.finished) return error.WriterFinished;
         var fallbacks = initial_fallbacks;
         if (ns.kind == .language) {
-            try processMain(page_allocator, &self.spools, self.language_codes, title, source, raw_source, display_title, &self.stats, &fallbacks);
+            try processMain(page_allocator, &self.spools, self.language_codes, title, source, raw_source, display_title, &self.stats, &fallbacks, poem_phase);
         } else {
-            try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, ns, title, source, display_title, &self.stats, &fallbacks);
+            try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, ns, title, source, display_title, &self.stats, &fallbacks, poem_phase);
         }
         try self.reportFallback(page_allocator, ns, title, fallbacks, extra_reasons);
     }
@@ -4053,5 +4095,57 @@ test "page-body TOC order crosses preamble headings and language owner regroupin
         try std.testing.expectEqualStrings(case.visible, std.mem.trim(u8, visible.items, " \t\r\n"));
         try std.testing.expectEqual(@as(usize, 1), lexical_links);
         try std.testing.expectEqual(@as(usize, 1), isbn_links);
+    }
+}
+
+test "split heading controls preserve actual owner publication and first TOC boundaries" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const out_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, out_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const positives = [_]struct { title: []const u8, source: []const u8 }{
+        .{ .title = "split-open", .source = "==English==\n# [[cat|English sense]]\n=__NOEDITSECTION__=French==\n# [[chat|French sense]]\n" },
+        .{ .title = "split-close", .source = "==English==\n# [[cat|English sense]]\n==French=__NOGALLERY__=\n# [[chat|French sense]]\n" },
+        .{ .title = "split-both", .source = "==English==\n# [[cat|English sense]]\n=__NOEDITSECTION__=French=__NOTOC__=\n# [[chat|French sense]]\n" },
+        .{ .title = "later-toc", .source = "==English==\n__TOC__\n# [[cat|English sense]]\n=__TOC__=French=__TOC__=\n# [[chat|French sense]]\n" },
+    };
+    for (positives) |case| try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, case.title, case.source, case.source, null, &.{});
+    const negatives = [_]struct { title: []const u8, source: []const u8 }{
+        .{ .title = "first-toc", .source = "==English==\n# [[cat|English sense]]\n__TOC__==French==\n# [[chat|literal French sense]]\n" },
+        .{ .title = "protected-split", .source = "==English==\n# [[cat|English sense]]\n=<nowiki>__NOEDITSECTION__</nowiki>=French==\n# [[chat|literal French sense]]\n" },
+        .{ .title = "space-split", .source = "==English==\n# [[cat|English sense]]\n=__NOEDITSECTION__ =French==\n# [[chat|literal French sense]]\n" },
+    };
+    for (negatives) |case| try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, case.title, case.source, case.source, null, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, positives.len * 2 + negatives.len), stats.language_records);
+    inline for (.{ .{ "English", "cat", "English sense", "chat" }, .{ "French", "chat", "French sense", "cat" } }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, out_root, owner[0]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        for (positives) |case| {
+            const record = (try index.find(case.title)).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            var matched: usize = 0;
+            for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, owner[1]) and std.mem.eql(u8, span.text, owner[2])) matched += 1;
+                try std.testing.expect(span.kind != .link or !std.mem.eql(u8, span.target, owner[3]));
+            };
+            try std.testing.expectEqual(@as(usize, 1), matched);
+        }
+        for (negatives) |case| {
+            const record = try index.find(case.title);
+            if (std.mem.eql(u8, owner[0], "French")) {
+                try std.testing.expect(record == null);
+            } else try std.testing.expect(record != null);
+        }
     }
 }
