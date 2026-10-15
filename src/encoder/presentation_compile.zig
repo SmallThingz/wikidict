@@ -2562,7 +2562,13 @@ pub const Renderer = struct {
         const decoded = decodeEntity(input, &buf, true) orelse return null;
         var entity_style = style;
         if (entity_style.provenance == .parsed) entity_style.provenance = .entity_literal;
-        try self.text(if (decoded.scratch) try self.a.dupe(u8, decoded.bytes) else decoded.bytes, entity_style);
+        // References decode after block/Poem line handling. Their LF/HT are
+        // ordinary HTML whitespace, not newly authored semantic line breaks.
+        // Actual preformatted styles retain both code points unchanged.
+        const soft_space = !style.preserve_whitespace and decoded.bytes.len == 1 and
+            (decoded.bytes[0] == '\n' or decoded.bytes[0] == '\t');
+        const value: []const u8 = if (soft_space) " " else if (decoded.scratch) try self.a.dupe(u8, decoded.bytes) else decoded.bytes;
+        try self.text(value, entity_style);
         return decoded.consumed;
     }
     fn protectedLiteral(self: *Renderer, input: []const u8, style: Style) Error!void {
@@ -5059,6 +5065,10 @@ pub const Renderer = struct {
         return self.renderBody(input);
     }
     fn parseSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
+        // HTML captions, like cells and wiki captions, are local inline domains.
+        const previous_target = self.body_link_target;
+        self.body_link_target = "";
+        defer self.body_link_target = previous_target;
         const previous = self.body_language_direction;
         self.body_language_direction = .{ .language = style.language, .direction = style.direction };
         defer self.body_language_direction = previous;
@@ -15646,5 +15656,245 @@ test "media caption occurrences register references once across files galleries 
         const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "caption references", .language, .{ .code = "en", .heading = "English" });
         try Check.values(a, decoded.entry.sections[0].blocks, decoded.entry.references, case.notes, case.markers);
         try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
+    }
+}
+
+test "HTML table captions isolate outer navigation while retaining inline language style and pre state through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Word = struct { text: []const u8, target: []const u8 = "", bold: bool = false };
+    const Check = struct {
+        fn spans(alloc: A, values: anytype, expected: []const Word) !void {
+            var text: std.ArrayList(u8) = .empty;
+            var targets: std.ArrayList([]const u8) = .empty;
+            var linked: std.ArrayList(bool) = .empty;
+            var bold: std.ArrayList(bool) = .empty;
+            var pending_space = false;
+            for (values) |span| {
+                if (span.target.len != 0) {
+                    try std.testing.expect(span.kind == .link);
+                    var allowed_target = false;
+                    for (expected) |word| {
+                        if (word.target.len != 0 and std.mem.eql(u8, span.target, word.target)) {
+                            allowed_target = true;
+                            break;
+                        }
+                    }
+                    try std.testing.expect(allowed_target);
+                }
+                const parts = if (@hasField(@TypeOf(span), "trail"))
+                    [_][]const u8{ span.text, span.trail }
+                else
+                    [_][]const u8{ span.text, "" };
+                if (span.kind == .line_break) pending_space = text.items.len != 0;
+                for (parts) |part| for (part) |byte| {
+                    if (std.ascii.isWhitespace(byte)) {
+                        pending_space = text.items.len != 0;
+                        continue;
+                    }
+                    if (pending_space) {
+                        try text.append(alloc, ' ');
+                        try targets.append(alloc, "");
+                        try linked.append(alloc, false);
+                        try bold.append(alloc, false);
+                        pending_space = false;
+                    }
+                    try text.append(alloc, byte);
+                    try targets.append(alloc, span.target);
+                    try linked.append(alloc, span.kind == .link);
+                    try bold.append(alloc, if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold);
+                    const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                    try std.testing.expect(!code);
+                };
+            }
+            var wanted: std.ArrayList(u8) = .empty;
+            for (expected, 0..) |word, i| {
+                if (i != 0) try wanted.append(alloc, ' ');
+                try wanted.appendSlice(alloc, word.text);
+            }
+            try std.testing.expectEqualStrings(wanted.items, text.items);
+            var offset: usize = 0;
+            for (expected, 0..) |word, i| {
+                if (i != 0) offset += 1;
+                for (word.text) |_| {
+                    try std.testing.expectEqualStrings(word.target, targets.items[offset]);
+                    try std.testing.expectEqual(word.target.len != 0, linked.items[offset]);
+                    try std.testing.expectEqual(word.bold, bold.items[offset]);
+                    offset += 1;
+                }
+            }
+        }
+        fn captionLanguage(values: anytype, language: []const u8, direction: []const u8) !void {
+            for (values) |span| {
+                try std.testing.expectEqualStrings(language, span.language);
+                try std.testing.expectEqualStrings(direction, span.direction);
+            }
+        }
+        fn blocks(alloc: A, values: anytype, styled: bool) !void {
+            try std.testing.expectEqual(@as(usize, 3), values.len);
+            try std.testing.expect(values[0].kind == .paragraph);
+            try spans(alloc, values[0].spans, &.{.{ .text = "lead", .target = "Target" }});
+            try std.testing.expect(values[1].kind == .table);
+            const table = values[1].table.?;
+            try spans(alloc, table.caption, &.{.{ .text = "cap", .bold = styled }});
+            try captionLanguage(table.caption, if (styled) "fr" else "", if (styled) "rtl" else "");
+            try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+            try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+            try spans(alloc, table.rows[0].cells[0].spans, &.{.{ .text = "cell" }});
+            try std.testing.expect(values[2].kind == .paragraph);
+            try spans(alloc, values[2].spans, &.{ .{ .text = "end", .target = "Target" }, .{ .text = "outside" } });
+        }
+        fn explicit(alloc: A, values: anytype) !void {
+            try std.testing.expectEqual(@as(usize, 2), values.len);
+            try std.testing.expect(values[0].kind == .table);
+            const table = values[0].table.?;
+            try spans(alloc, table.caption, &.{ .{ .text = "cap", .bold = true }, .{ .text = "explicit", .target = "cat" } });
+            try captionLanguage(table.caption, "fr", "rtl");
+            try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+            try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+            try spans(alloc, table.rows[0].cells[0].spans, &.{.{ .text = "cell" }});
+            try captionLanguage(table.rows[0].cells[0].spans, "de", "ltr");
+            try spans(alloc, values[1].spans, &.{.{ .text = "outside" }});
+            try captionLanguage(values[1].spans, "", "");
+        }
+    };
+    // Current explicit legacy capture01: both table spellings isolate cap/cell
+    // while the admitted outer target resumes for end and stops before outside.
+    const cases = [_][]const u8{
+        "[[Target|lead\n<table><caption>cap</caption><tr><td>cell</td></tr></table>\nend]] outside",
+        "[[Target|lead\n{|\n|+ cap\n|-\n| cell\n|}\nend]] outside",
+        "[[Target|lead\n<table><caption lang=fr dir=rtl><b>cap</b></caption><tr><td>cell</td></tr></table>\nend]] outside",
+        "<table lang=de dir=ltr><caption lang=fr dir=rtl><b>cap</b> [[cat|explicit]]</caption><tr><td>cell</td></tr></table>\noutside",
+    };
+    for (cases, 0..) |source, index| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        if (index == 3) try Check.explicit(a, blocks) else try Check.blocks(a, blocks, index == 2);
+        try std.testing.expectEqualStrings("", renderer.body_link_target);
+        try std.testing.expect(renderer.body_language_direction == null);
+        try std.testing.expect(!renderer.fallbacks.literal_markup);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "HTML caption boundary", .language, .{ .code = "en", .heading = "English" });
+        if (index == 3) try Check.explicit(a, decoded.entry.sections[0].blocks) else try Check.blocks(a, decoded.entry.sections[0].blocks, index == 2);
+    }
+    // Entering a local caption must not reset an existing preformatted mode.
+    var pre: Renderer = .{ .a = a, .context = .{}, .parsed_pre = true, .body_link_target = "Outer" };
+    const pre_spans = try pre.parseSpansWithLanguageDirection("a\nb", .{ .language = "fr", .direction = "rtl" });
+    try std.testing.expectEqualStrings("a\nb", try plainText(a, pre_spans));
+    for (pre_spans) |span| {
+        try std.testing.expectEqualStrings("", span.target);
+        try std.testing.expect(span.flags.code);
+        try std.testing.expectEqualStrings("fr", span.language);
+        try std.testing.expectEqualStrings("rtl", span.direction);
+    }
+    const PreSection = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const pre_blocks = [_]Block{.{ .kind = .preformatted, .spans = pre_spans }};
+    const pre_sections = [_]PreSection{.{ .blocks = &pre_blocks }};
+    const blob = @import("blob_encoder");
+    const pre_bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &pre_sections, blob.presentation_types.Layout{}, pre.refs.items, pre.media.items);
+    const pre_decoded = try blob.presentation_codec.decodeAlloc(a, pre_bytes, "HTML caption pre state", .language, .{ .code = "en", .heading = "English" });
+    const decoded_pre = pre_decoded.entry.sections[0].blocks[0];
+    try std.testing.expect(decoded_pre.kind == .preformatted);
+    var decoded_text: std.ArrayList(u8) = .empty;
+    for (decoded_pre.spans) |span| {
+        try decoded_text.appendSlice(a, span.text);
+        try decoded_text.appendSlice(a, span.trail);
+        try std.testing.expectEqualStrings("", span.target);
+        try std.testing.expect(span.code);
+        try std.testing.expectEqualStrings("fr", span.language);
+        try std.testing.expectEqualStrings("rtl", span.direction);
+    }
+    try std.testing.expectEqualStrings("a\nb", decoded_text.items);
+    try std.testing.expect(pre.parsed_pre);
+    try std.testing.expectEqualStrings("Outer", pre.body_link_target);
+    try std.testing.expect(pre.body_language_direction == null);
+}
+
+test "encoded LF and tab remain soft outside preformatted text through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn blocks(alloc: std.mem.Allocator, values: anytype, expected: []const u8, body_code: bool, expected_breaks: ?usize) !void {
+            var body: std.ArrayList(u8) = .empty;
+            var links: usize = 0;
+            var breaks: usize = 0;
+            for (values) |block_value| for (block_value.spans) |span| {
+                const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                const trail = if (@hasField(@TypeOf(span), "trail")) span.trail else "";
+                try std.testing.expectEqualStrings("", trail);
+                if (span.kind == .link) {
+                    links += 1;
+                    try std.testing.expectEqualStrings("word", span.text);
+                    try std.testing.expectEqualStrings("cat", span.target);
+                    try std.testing.expect(!code);
+                } else {
+                    try std.testing.expect(span.kind == .text or span.kind == .line_break);
+                    try std.testing.expectEqualStrings("", span.target);
+                    if (links == 0) {
+                        if (span.kind == .line_break) {
+                            breaks += 1;
+                            try body.append(alloc, '\n');
+                        } else {
+                            try body.appendSlice(alloc, span.text);
+                            if (std.mem.trim(u8, span.text, " \t\r\n").len != 0)
+                                try std.testing.expectEqual(body_code, code);
+                        }
+                    } else {
+                        try std.testing.expectEqualStrings("", std.mem.trim(u8, span.text, " \t\r\n"));
+                    }
+                }
+            };
+            try std.testing.expectEqual(@as(usize, 1), links);
+            try std.testing.expectEqualStrings(expected, std.mem.trim(u8, body.items, " \t\r\n"));
+            if (expected_breaks) |count| try std.testing.expectEqual(count, breaks);
+        }
+    };
+    // Current official legacy captures keep encoded LF/HT in normal p text,
+    // including Poem. Only the actual authored Poem LF creates a br. Numeric
+    // CR remains literal source spelling; syntaxhighlight never decodes these.
+    const cases = [_]struct { source: []const u8, body: []const u8, code: bool = false, breaks: ?usize = null }{
+        .{
+            .source = "plain a&#10;b c&#9;d e&#13;f g&NewLine;h i&Tab;j; nowiki <nowiki>a&#10;b c&#9;d e&#13;f g&NewLine;h i&Tab;j</nowiki> [[cat|word]]",
+            .body = "plain a b c d e&#13;f g h i j; nowiki a b c d e&#13;f g h i j",
+            .breaks = 0,
+        },
+        .{
+            .source = "<pre/ >a&#10;b c&#9;d e&#13;f g&NewLine;h i&Tab;j <nowiki>k&#10;l m&#9;n</nowiki>\nactual LF</pre> [[cat|word]]",
+            .body = "a\nb c\td e&#13;f g\nh i\tj k\nl m\tn\nactual LF",
+            .code = true,
+        },
+        .{
+            .source = "<poem>a&#10;b c&#9;d e&#13;f g&NewLine;h i&Tab;j\n<nowiki>k&#10;l m&#9;n</nowiki> [[cat|word]]</poem>",
+            .body = "a b c d e&#13;f g h i j\nk l m n",
+            .breaks = 1,
+        },
+        .{
+            .source = "<syntaxhighlight lang=\"text\">a&#10;b c&#9;d e&#13;f g&NewLine;h i&Tab;j\nactual LF</syntaxhighlight> [[cat|word]]",
+            .body = "a&#10;b c&#9;d e&#13;f g&NewLine;h i&Tab;j\nactual LF",
+            .code = true,
+        },
+        .{
+            .source = "<nowiki>a&amp;#10;b &amp;NewLine; [[fake]]</nowiki> [[cat|word]]",
+            .body = "a&#10;b &NewLine; [[fake]]",
+            .breaks = 0,
+        },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try Check.blocks(a, blocks, case.body, case.code, case.breaks);
+        try std.testing.expect(!renderer.fallbacks.any());
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const payload = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, payload, "encoded whitespace", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+        try Check.blocks(a, decoded.entry.sections[0].blocks, case.body, case.code, case.breaks);
     }
 }
