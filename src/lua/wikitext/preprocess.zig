@@ -25,9 +25,7 @@ fn nowikiRegionEndCached(text: []const u8, start: usize, no_more_close: ?*bool) 
     if (name_end > text.len or !std.ascii.eqlIgnoreCase(text[name_start..name_end], "nowiki") or
         !isTagNameBoundary(text, name_end)) return null;
     const open_end = decodedTagEnd(text, start) orelse return null;
-    var before_gt = open_end - 1;
-    while (before_gt > start and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
-    if (before_gt > start and text[before_gt - 1] == '/') return open_end;
+    if (open_end >= 2 and text[open_end - 2] == '/') return open_end;
     if (no_more_close) |missing| if (missing.*) return null;
     const end = inclusionCloseEnd(text, open_end, "nowiki");
     if (end == null) {
@@ -116,10 +114,8 @@ fn stripDecodedCommentsPolicy(a: std.mem.Allocator, text: []const u8, preserve_p
                 std.ascii.eqlIgnoreCase(tag.name, "syntaxhighlight");
             if (std.ascii.eqlIgnoreCase(tag.name, "pre") or code_extension) {
                 if (rawTagEnd(text, open)) |opening_end| {
-                    var before_gt = opening_end - 1;
-                    while (before_gt > open and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
                     var end = opening_end;
-                    if (!(before_gt > open and text[before_gt - 1] == '/')) {
+                    if (text[opening_end - 2] != '/') {
                         // Strict first-closer misses remain absent in the suffix.
                         // Keep each tag's slot separate, and bypass self-closing.
                         const close_end = if (no_more_close[tag.close_cache_slot]) null else inclusionCloseEnd(text, opening_end, tag.name);
@@ -204,9 +200,7 @@ pub fn stripExpandedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
                 if (inclusionTagAt(text, pos)) |tag| {
                     if (std.ascii.eqlIgnoreCase(tag.name, "pre") or std.ascii.eqlIgnoreCase(tag.name, "source") or std.ascii.eqlIgnoreCase(tag.name, "syntaxhighlight")) {
                         if (rawTagEnd(text, pos)) |opening_end| {
-                            var before_gt = opening_end - 1;
-                            while (before_gt > pos and std.ascii.isWhitespace(text[before_gt - 1])) : (before_gt -= 1) {}
-                            if (before_gt > pos and text[before_gt - 1] == '/') {
+                            if (text[opening_end - 2] == '/') {
                                 protected_end = opening_end;
                             } else if (!no_more_close[tag.close_cache_slot]) {
                                 protected_end = inclusionCloseEnd(text, opening_end, tag.name);
@@ -420,8 +414,9 @@ fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, 
 pub fn appendParsingText(a: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
     var pos: usize = 0;
     var copied: usize = 0;
+    var opaque_scan: OpaqueParserScan = .{};
     while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |lt| {
-        if (opaqueParserRegionEnd(text, lt)) |end| {
+        if (opaque_scan.end(text, lt)) |end| {
             pos = end;
             continue;
         }
@@ -469,6 +464,11 @@ fn matchingBraceWidth(open_count: usize, close_count: usize) u8 {
 }
 
 fn findBraceConstruct(s: []const u8, start: usize) ?Construct {
+    var cache: OpaqueParserScan = .{};
+    return findBraceConstructCached(s, start, &cache);
+}
+
+fn findBraceConstructCached(s: []const u8, start: usize, forward_cache: *OpaqueParserScan) ?Construct {
     if (start >= s.len or s[start] != '{') return null;
     const root_count = repeatedByteRun(s, start, '{');
     if (root_count < 2) return null;
@@ -477,8 +477,12 @@ fn findBraceConstruct(s: []const u8, start: usize) ?Construct {
     var depth: usize = 1;
     stack[0] = .{ .count = root_count, .root = true };
     var i = start + root_count;
+    // Only a complete root commits positive lookahead as the caller advances.
+    // Failed lookahead retains only absence facts guarded by their source offset.
+    var opaque_scan = forward_cache.*;
+    defer forward_cache.mergeAbsence(&opaque_scan);
     while (i < s.len) {
-        if (opaqueParserRegionEnd(s, i)) |region_end| {
+        if (opaque_scan.end(s, i)) |region_end| {
             i = region_end;
             continue;
         }
@@ -503,6 +507,7 @@ fn findBraceConstruct(s: []const u8, start: usize) ?Construct {
                     stack[depth] = .{ .count = remainder, .root = piece.root };
                     depth += 1;
                 } else if (piece.root) {
+                    forward_cache.* = opaque_scan;
                     return .{
                         .open = start + @intFromBool(remainder == 1),
                         .close = i,
@@ -558,7 +563,8 @@ fn isLiteralParserTag(name: []const u8) bool {
 
 fn isTagNameBoundary(s: []const u8, pos: usize) bool {
     if (pos >= s.len) return true;
-    return s[pos] == '>' or s[pos] == '/' or std.ascii.isWhitespace(s[pos]);
+    return s[pos] == '>' or std.ascii.isWhitespace(s[pos]) or
+        (s[pos] == '/' and pos + 1 < s.len and s[pos + 1] == '>');
 }
 
 pub fn rawTagEnd(s: []const u8, start: usize) ?usize {
@@ -623,105 +629,129 @@ pub fn findNextConstructOutsideLiteralTags(s: []const u8, start: usize) ?Constru
         .poem => unreachable,
     };
 }
-fn findNextExpansionNodeMode(s: []const u8, start: usize, include_poem: bool) ?ExpansionNode {
-    var i = start;
-    var no_more_nowiki_close = false;
-    var no_more_poem_close = false;
-    var no_more_poem_gt = false;
-    while (i + 1 < s.len) {
-        if (s[i] == '<') {
-            if (include_poem) {
-                var unmatched_opening_end: ?usize = null;
-                if (poemRegionAtCached(s, i, &no_more_poem_close, &no_more_poem_gt, &unmatched_opening_end)) |region|
-                    return .{ .poem = region };
-                if (unmatched_opening_end) |end| {
-                    // Official recovery emits the entire opener literally;
-                    // attributes are not expanded, while the body stays active.
+// Retain this state across successive nodes of one unchanged input only.
+// Speculative brace parsing owns independent caches and never publishes misses.
+pub const ExpansionScan = struct {
+    opaque_scan: OpaqueParserScan = .{},
+    no_more_poem_close: bool = false,
+    no_more_poem_gt: bool = false,
+    pub fn next(self: *ExpansionScan, s: []const u8, start: usize, include_poem: bool) ?ExpansionNode {
+        var i = start;
+        while (i + 1 < s.len) {
+            if (s[i] == '<') {
+                if (include_poem) {
+                    var unmatched_opening_end: ?usize = null;
+                    if (poemRegionAtCached(s, i, &self.no_more_poem_close, &self.no_more_poem_gt, &unmatched_opening_end)) |region|
+                        return .{ .poem = region };
+                    if (unmatched_opening_end) |end| {
+                        // Official recovery emits the entire opener literally;
+                        // attributes are not expanded, while the body stays active.
+                        i = end;
+                        continue;
+                    }
+                }
+                if (self.opaque_scan.literalEnd(s, i)) |end| {
                     i = end;
                     continue;
                 }
             }
-            if (nowikiRegionEndCached(s, i, &no_more_nowiki_close)) |end| {
-                i = end;
-                continue;
+            if (s[i] == '{' and s[i + 1] == '{') {
+                if (findBraceConstructCached(s, i, &self.opaque_scan)) |construct| return .{ .construct = construct };
             }
-            var p = i + 1;
-            while (p < s.len and std.ascii.isWhitespace(s[p])) : (p += 1) {}
-            const name_start = p;
-            while (p < s.len and (std.ascii.isAlphanumeric(s[p]) or s[p] == '-')) : (p += 1) {}
-            if (p > name_start and isTagNameBoundary(s, p) and isLiteralParserTag(s[name_start..p]) and
-                !std.ascii.eqlIgnoreCase(s[name_start..p], "nowiki"))
-            {
-                const name = s[name_start..p];
-                const open_end = rawTagEnd(s, i) orelse return null;
-                var before_gt = open_end - 1;
-                while (before_gt > i and std.ascii.isWhitespace(s[before_gt - 1])) : (before_gt -= 1) {}
-                if (before_gt > i and s[before_gt - 1] == '/') {
-                    i = open_end;
-                    continue;
-                }
-                var search = open_end;
-                var closed = false;
-                while (std.mem.indexOfScalarPos(u8, s, search, '<')) |lt| {
-                    if (lt + 2 + name.len <= s.len and s[lt + 1] == '/' and
-                        std.ascii.eqlIgnoreCase(s[lt + 2 .. lt + 2 + name.len], name))
-                    {
-                        const after = lt + 2 + name.len;
-                        if (after >= s.len or s[after] == '>' or std.ascii.isWhitespace(s[after])) {
-                            i = rawTagEnd(s, lt) orelse return null;
-                            closed = true;
-                            break;
-                        }
-                    }
-                    search = lt + 1;
-                }
-                if (!closed) return null;
-                continue;
-            }
+            i += 1;
         }
-        if (s[i] == '{' and s[i + 1] == '{') {
-            if (findBraceConstruct(s, i)) |construct| return .{ .construct = construct };
-        }
-        i += 1;
+        return null;
     }
-    return null;
+};
+
+fn findNextExpansionNodeMode(s: []const u8, start: usize, include_poem: bool) ?ExpansionNode {
+    var scan: ExpansionScan = .{};
+    return scan.next(s, start, include_poem);
 }
 
 pub fn findTemplateOpenOutsideLiteralTags(s: []const u8, start: usize) ?usize {
     return if (findNextConstructOutsideLiteralTags(s, start)) |construct| construct.open else null;
 }
 
-pub fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
-    if (start >= s.len or s[start] != '<') return null;
-    if (std.mem.startsWith(u8, s[start..], "<!--")) {
-        const close = std.mem.indexOfPos(u8, s, start + 4, "-->") orelse return s.len;
-        return close + 3;
-    }
-    if (nowikiRegionEnd(s, start)) |end| return end;
-    var p = start + 1;
-    if (p >= s.len or s[p] == '/') return null;
-    while (p < s.len and std.ascii.isWhitespace(s[p])) : (p += 1) {}
-    const name_start = p;
-    while (p < s.len and (std.ascii.isAlphanumeric(s[p]) or s[p] == '-')) : (p += 1) {}
-    if (p == name_start) return null;
-    if (!isTagNameBoundary(s, p)) return null;
-    const name = s[name_start..p];
-    if (!isOpaqueParserTag(name) or std.ascii.eqlIgnoreCase(name, "nowiki")) return null;
-    const open_end = rawTagEnd(s, start) orelse return s.len;
-    var before_gt = open_end - 1;
-    while (before_gt > start and std.ascii.isWhitespace(s[before_gt - 1])) : (before_gt -= 1) {}
-    if (before_gt > start and s[before_gt - 1] == '/') return open_end;
+// Caches belong to one monotonically forward scan of one input only.
+// Unmatched extension openers are literal nodes, not protected EOF bodies.
+pub const OpaqueParserScan = struct {
+    no_more_gt_from: ?usize = null,
+    no_more_close_from: [opaque_parser_tags.len]?usize = @splat(null),
+    next_close_end: [opaque_parser_tags.len]?usize = @splat(null),
 
-    var search = open_end;
-    while (std.mem.indexOfScalarPos(u8, s, search, '<')) |lt| {
-        if (lt + 2 + name.len <= s.len and s[lt + 1] == '/' and std.ascii.eqlIgnoreCase(s[lt + 2 .. lt + 2 + name.len], name)) {
-            const after = lt + 2 + name.len;
-            if (after >= s.len or s[after] == '>' or std.ascii.isWhitespace(s[after]))
-                return rawTagEnd(s, lt) orelse s.len;
-        }
-        search = lt + 1;
+    fn remember(current: *?usize, from: usize) void {
+        current.* = if (current.*) |previous| @min(previous, from) else from;
     }
-    return s.len;
+
+    // A failed speculative parse may publish only offset-qualified absences.
+    // Earlier probes still perform their own search; positive lookahead is not merged.
+    fn mergeAbsence(self: *OpaqueParserScan, other: *const OpaqueParserScan) void {
+        if (other.no_more_gt_from) |from| remember(&self.no_more_gt_from, from);
+        for (other.no_more_close_from, 0..) |missing, slot| {
+            if (missing) |from| remember(&self.no_more_close_from[slot], from);
+        }
+    }
+
+    pub fn end(self: *OpaqueParserScan, s: []const u8, start: usize) ?usize {
+        return self.endMode(s, start, false);
+    }
+
+    fn literalEnd(self: *OpaqueParserScan, s: []const u8, start: usize) ?usize {
+        return self.endMode(s, start, true);
+    }
+
+    fn endMode(self: *OpaqueParserScan, s: []const u8, start: usize, literal_only: bool) ?usize {
+        if (start >= s.len or s[start] != '<') return null;
+        if (std.mem.startsWith(u8, s[start..], "<!--")) {
+            const close = std.mem.indexOfPos(u8, s, start + 4, "-->") orelse return s.len;
+            return close + 3;
+        }
+        var p = start + 1;
+        if (p >= s.len or s[p] == '/') return null;
+        const name_start = p;
+        while (p < s.len and (std.ascii.isAlphanumeric(s[p]) or s[p] == '-')) : (p += 1) {}
+        if (p == name_start or !isTagNameBoundary(s, p)) return null;
+        const name = s[name_start..p];
+        const slot = opaqueParserTagIndex(name) orelse return null;
+        const no_gt = if (self.no_more_gt_from) |from| start >= from else false;
+        const open_end = (if (no_gt) null else decodedTagEnd(s, start)) orelse {
+            remember(&self.no_more_gt_from, start);
+            return null;
+        };
+        // Use nowiki's specialized closed-region matcher; a missing closer
+        // still leaves the complete opener literal and the body active.
+        if (std.ascii.eqlIgnoreCase(name, "nowiki")) {
+            var missing = if (self.no_more_close_from[slot]) |from| open_end >= from else false;
+            const found = nowikiRegionEndCached(s, start, &missing);
+            if (missing and found == null) remember(&self.no_more_close_from[slot], open_end);
+            return found orelse open_end;
+        }
+        if (open_end >= 2 and s[open_end - 2] == '/')
+            return if (literal_only and !isLiteralParserTag(name)) null else open_end;
+        var closed_end: ?usize = null;
+        const no_close = if (self.no_more_close_from[slot]) |from| open_end >= from else false;
+        if (!no_close) {
+            if (self.next_close_end[slot]) |known| {
+                if (known > open_end) closed_end = known;
+            }
+            if (closed_end == null) {
+                closed_end = inclusionCloseEnd(s, open_end, name);
+                self.next_close_end[slot] = closed_end;
+                if (closed_end == null) remember(&self.no_more_close_from[slot], open_end);
+            }
+        }
+        if (closed_end) |closed|
+            return if (literal_only and !isLiteralParserTag(name)) null else closed;
+        // Emit the entire unmatched opener literally, then resume the body.
+        // Its attribute templates must not be expanded.
+        return open_end;
+    }
+};
+
+pub fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
+    var scan: OpaqueParserScan = .{};
+    return scan.end(s, start);
 }
 
 pub fn findTopDelimiter(s: []const u8, needle: u8) ?usize {
@@ -736,12 +766,17 @@ pub fn findTopParserColon(s: []const u8) ?ParserColon {
 }
 
 fn findTopDelimiterImpl(s: []const u8, needle: u8, fullwidth_colon: bool) ?usize {
+    var scan: OpaqueParserScan = .{};
+    return findTopDelimiterFrom(s, needle, fullwidth_colon, 0, &scan);
+}
+
+fn findTopDelimiterFrom(s: []const u8, needle: u8, fullwidth_colon: bool, start: usize, opaque_scan: *OpaqueParserScan) ?usize {
     var braces: [128]usize = undefined;
     var brace_depth: usize = 0;
     var square: usize = 0;
-    var i: usize = 0;
+    var i = start;
     while (i < s.len) {
-        if (opaqueParserRegionEnd(s, i)) |region_end| {
+        if (opaque_scan.end(s, i)) |region_end| {
             i = region_end;
             continue;
         }
@@ -789,13 +824,11 @@ fn findTopDelimiterImpl(s: []const u8, needle: u8, fullwidth_colon: bool) ?usize
 
 pub fn splitWikitextTop(a: std.mem.Allocator, s: []const u8, delimiter: u8, out: *std.ArrayList([]const u8)) !void {
     var start: usize = 0;
-    var pos: usize = 0;
-    while (pos < s.len) {
-        const rel = findTopDelimiter(s[pos..], delimiter) orelse break;
-        const cut = pos + rel;
+    var opaque_scan: OpaqueParserScan = .{};
+    while (start < s.len) {
+        const cut = findTopDelimiterFrom(s, delimiter, false, start, &opaque_scan) orelse break;
         try out.append(a, s[start..cut]);
         start = cut + 1;
-        pos = start;
     }
     try out.append(a, s[start..]);
 }
@@ -1057,7 +1090,8 @@ test "nowiki preprocessing requires immediate name and first valid closer" {
     const stripped = try stripDecodedComments(a, unclosed);
     defer a.free(stripped);
     try std.testing.expectEqualStrings("<nowiki>A{{visible}}", stripped);
-    try std.testing.expect(opaqueParserRegionEnd(unclosed, 0) == null);
+    try std.testing.expect(nowikiRegionEnd(unclosed, 0) == null);
+    try std.testing.expectEqual(@as(usize, 8), opaqueParserRegionEnd(unclosed, 0).?);
     try std.testing.expectEqual(@as(usize, 20), findTemplateOpenOutsideLiteralTags(unclosed, 0).?);
     const malformed_open = "< nowiki>{{visible}}</nowiki>";
     try std.testing.expect(opaqueParserRegionEnd(malformed_open, 0) == null);
@@ -1068,10 +1102,11 @@ test "nowiki preprocessing requires immediate name and first valid closer" {
     try std.testing.expectEqualStrings(closed, preserved);
     try std.testing.expectEqual(closed.len - "{{visible}}".len, opaqueParserRegionEnd(closed, 0).?);
     try std.testing.expectEqual(closed.len - "{{visible}}".len, findTemplateOpenOutsideLiteralTags(closed, 0).?);
+    try std.testing.expect(nowikiRegionEnd("<nowiki / >{{visible}}", 0) == null);
     try std.testing.expectEqual(@as(usize, 11), opaqueParserRegionEnd("<nowiki / >{{visible}}", 0).?);
     try std.testing.expectEqual(@as(usize, 11), findTemplateOpenOutsideLiteralTags("<nowiki / >{{visible}}", 0).?);
-    // The other literal extension recovery policy is deliberately unchanged.
-    try std.testing.expect(findTemplateOpenOutsideLiteralTags("<math>{{hidden}}", 0) == null);
+    // An unmatched literal extension also leaves its body active.
+    try std.testing.expectEqual(@as(usize, 6), findTemplateOpenOutsideLiteralTags("<math>{{hidden}}", 0).?);
 }
 
 test "missing nowiki closer cache retains later self-closing markers" {
@@ -1177,4 +1212,135 @@ test "poem preserving input policy bounds missing closer scans and retains trans
     const transcluded = try transcludeDecodedForParsingAlloc(std.testing.allocator, "<noinclude>excluded</noinclude><poem>A<!--kept-->\n{{T}}</poem>");
     defer std.testing.allocator.free(transcluded);
     try std.testing.expectEqualStrings("<poem>A<!--kept-->\n{{T}}</poem>", transcluded);
+}
+
+test "unmatched literal extension openers resume active body constructs" {
+    const a = std.testing.allocator;
+    for (opaque_parser_tags) |name| {
+        if (!isLiteralParserTag(name)) continue;
+        const input = try std.fmt.allocPrint(a, "<{s} data='{{{{hidden}}}}'>{{{{visible}}}}", .{name});
+        defer a.free(input);
+        try std.testing.expectEqual(std.mem.indexOf(u8, input, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(input, 0).?);
+        const closed = try std.fmt.allocPrint(a, "<{s}>{{{{hidden}}}}</{s}>{{{{visible}}}}", .{ name, name });
+        defer a.free(closed);
+        try std.testing.expectEqual(std.mem.indexOf(u8, closed, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(closed, 0).?);
+    }
+    try std.testing.expectEqual(@as(usize, 6), findTemplateOpenOutsideLiteralTags("<math {{visible}}", 0).?);
+    try std.testing.expect(findTemplateOpenOutsideLiteralTags("<!--{{hidden}}", 0) == null);
+    const braced = "{{Hello|<math>x|tail}}";
+    try std.testing.expectEqual(braced.len - 2, findNextConstructOutsideLiteralTags(braced, 0).?.close);
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, "<math>x|tail", '|').?, findTopDelimiter("<math>x|tail", '|').?);
+    const paired = "<math>x|y</math>|tail";
+    try std.testing.expectEqual(std.mem.lastIndexOfScalar(u8, paired, '|').?, findTopDelimiter(paired, '|').?);
+}
+
+test "unmatched extension scan caches misses without hiding another closed family" {
+    const a = std.testing.allocator;
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(a);
+    for (0..2048) |_| try input.appendSlice(a, "<math data='literal'>");
+    try input.appendSlice(a, "<source>{{hidden}}</source>{{visible}}");
+    try std.testing.expectEqual(std.mem.indexOf(u8, input.items, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(input.items, 0).?);
+    var missing_gt: std.ArrayList(u8) = .empty;
+    defer missing_gt.deinit(a);
+    for (0..2048) |_| try missing_gt.appendSlice(a, "<math ");
+    try missing_gt.appendSlice(a, "{{visible}}");
+    try std.testing.expectEqual(std.mem.indexOf(u8, missing_gt.items, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(missing_gt.items, 0).?);
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(a);
+    try appendParsingText(a, &out, "<math>body<noinclude/>tail");
+    try std.testing.expectEqualStrings("<math>bodytail", out.items);
+}
+
+test "successive expansion nodes retain unmatched extension misses across calls" {
+    const a = std.testing.allocator;
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(a);
+    for (0..1024) |_| try input.appendSlice(a, "<math>{{visible}}");
+    for ([_]bool{ false, true }) |include_poem| {
+        var scan: ExpansionScan = .{};
+        var pos: usize = 0;
+        var count: usize = 0;
+        while (scan.next(input.items, pos, include_poem)) |node| {
+            const construct = node.construct;
+            try std.testing.expectEqual(pos + "<math>".len, construct.open);
+            pos = construct.close + 2;
+            count += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1024), count);
+        try std.testing.expectEqual(input.items.len, pos);
+    }
+    const nonliteral = "<ref data='{{hidden}}'>{{visible}}";
+    try std.testing.expectEqual(std.mem.indexOf(u8, nonliteral, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(nonliteral, 0).?);
+    const closed = "<ref data='{{active}}'>{{body}}</ref>";
+    try std.testing.expectEqual(std.mem.indexOf(u8, closed, "{{active}}").?, findTemplateOpenOutsideLiteralTags(closed, 0).?);
+}
+
+test "complete brace roots commit scan misses while failed lookahead retains earlier closed scopes" {
+    const a = std.testing.allocator;
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(a);
+    for (0..1024) |_| try input.appendSlice(a, "{{Hello|<math>x|1}}");
+    var scan: ExpansionScan = .{};
+    var pos: usize = 0;
+    var count: usize = 0;
+    while (scan.next(input.items, pos, true)) |node| {
+        const construct = node.construct;
+        try std.testing.expectEqual(pos, construct.open);
+        pos = construct.close + 2;
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1024), count);
+    try std.testing.expectEqual(input.items.len, pos);
+    const failed = "{{broken <math>{{hidden}}</math> {{visible}} <math>tail";
+    var independent: ExpansionScan = .{};
+    const visible = independent.next(failed, 0, true).?.construct;
+    try std.testing.expectEqual(std.mem.indexOf(u8, failed, "{{visible}}").?, visible.open);
+    const no_gt = "{{broken <math>{{hidden}}</math> {{visible}} <math ";
+    var separate: ExpansionScan = .{};
+    try std.testing.expectEqual(std.mem.indexOf(u8, no_gt, "{{visible}}").?, separate.next(no_gt, 0, true).?.construct.open);
+    var failed_roots: std.ArrayList(u8) = .empty;
+    defer failed_roots.deinit(a);
+    for (0..1024) |_| try failed_roots.appendSlice(a, "{{broken <math>tail ");
+    var repeated: ExpansionScan = .{};
+    try std.testing.expect(repeated.next(failed_roots.items, 0, true) == null);
+}
+
+test "extension short tags require adjacent slash and preserve paired literal bodies" {
+    for ([_][]const u8{ "math", "pre", "source", "syntaxhighlight", "nowiki" }) |name| {
+        const a = std.testing.allocator;
+        const paired = try std.fmt.allocPrint(a, "<{s} / >{{{{hidden}}}}</{s}>{{{{visible}}}}", .{ name, name });
+        defer a.free(paired);
+        try std.testing.expectEqual(std.mem.indexOf(u8, paired, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(paired, 0).?);
+        const malformed = try std.fmt.allocPrint(a, "<{s}/ >{{{{visible}}}}</{s}>", .{ name, name });
+        defer a.free(malformed);
+        try std.testing.expectEqual(std.mem.indexOf(u8, malformed, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(malformed, 0).?);
+    }
+    const spaced = "< math>{{visible}}</math>";
+    try std.testing.expectEqual(std.mem.indexOf(u8, spaced, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(spaced, 0).?);
+    const a = std.testing.allocator;
+    const comments = "<pre / ><!--literal--></pre><!--outside--><nowiki / ><!--literal--></nowiki>";
+    const stripped = try stripDecodedComments(a, comments);
+    defer a.free(stripped);
+    try std.testing.expectEqualStrings("<pre / ><!--literal--></pre><nowiki / ><!--literal--></nowiki>", stripped);
+    const expanded = try stripExpandedComments(a, comments);
+    defer a.free(expanded);
+    try std.testing.expectEqualStrings(stripped, expanded);
+}
+
+test "parameter splitting retains one extension scan across absolute delimiter positions" {
+    const a = std.testing.allocator;
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(a);
+    try input.appendSlice(a, "head|<math>a|b</math>|");
+    for (0..1024) |_| try input.appendSlice(a, "<math>x|");
+    try input.appendSlice(a, "tail");
+    var pieces: std.ArrayList([]const u8) = .empty;
+    defer pieces.deinit(a);
+    try splitWikitextTop(a, input.items, '|', &pieces);
+    try std.testing.expectEqual(@as(usize, 1027), pieces.items.len);
+    try std.testing.expectEqualStrings("head", pieces.items[0]);
+    try std.testing.expectEqualStrings("<math>a|b</math>", pieces.items[1]);
+    for (pieces.items[2..1026]) |piece| try std.testing.expectEqualStrings("<math>x", piece);
+    try std.testing.expectEqualStrings("tail", pieces.items[1026]);
 }

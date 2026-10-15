@@ -559,7 +559,8 @@ pub const Expander = struct {
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(self.runtime.allocator);
         var pos: usize = 0;
-        while (preprocess.findNextExpansionNode(text, pos)) |node| {
+        var expansion_scan: preprocess.ExpansionScan = .{};
+        while (expansion_scan.next(text, pos, true)) |node| {
             if (work_stats.current()) |work| work.constructs +|= 1;
             const open = switch (node) {
                 .construct => |v| v.open,
@@ -824,6 +825,7 @@ pub const Expander = struct {
         errdefer out.deinit(a);
         var pos: usize = 0;
         var copied: usize = 0;
+        var opaque_scan: preprocess.OpaqueParserScan = .{};
         while (std.mem.indexOfScalarPos(u8, value, pos, '<')) |open| {
             pos = open + 1;
             var name = pos;
@@ -844,7 +846,7 @@ pub const Expander = struct {
             while (end_name < value.len and std.ascii.isAlphanumeric(value[end_name])) : (end_name += 1) {}
             const tag = value[name..end_name];
             if (!std.ascii.eqlIgnoreCase(tag, "ref") and !std.ascii.eqlIgnoreCase(tag, "references"))
-                if (preprocess.opaqueParserRegionEnd(value, open)) |end| {
+                if (opaque_scan.end(value, open)) |end| {
                     pos = end;
                 };
         }
@@ -1027,13 +1029,8 @@ pub const Expander = struct {
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(self.runtime.allocator);
         var pos: usize = 0;
-        while (true) {
-            const node: preprocess.ExpansionNode = if (allow_poem)
-                preprocess.findNextExpansionNode(text, pos) orelse break
-            else if (preprocess.findNextConstructOutsideLiteralTags(text, pos)) |construct|
-                .{ .construct = construct }
-            else
-                break;
+        var expansion_scan: preprocess.ExpansionScan = .{};
+        while (expansion_scan.next(text, pos, allow_poem)) |node| {
             const open = switch (node) {
                 .construct => |v| v.open,
                 .poem => |v| v.open,
@@ -2421,10 +2418,11 @@ pub const Expander = struct {
 
     fn nextLstSection(self: *Expander, text: []const u8, start: usize) ?LstSection {
         var p = start;
+        var opaque_scan: preprocess.OpaqueParserScan = .{};
         while (p < text.len) {
             if (text[p] == '<') {
                 if (self.lstSectionAt(text, p)) |section| return section;
-                if (preprocess.opaqueParserRegionEnd(text, p)) |end| {
+                if (opaque_scan.end(text, p)) |end| {
                     p = end;
                     continue;
                 }
@@ -6227,4 +6225,54 @@ test "native AOT generated comments normalize after invoke while authored litera
     // Normalization does not decode entity-authored pseudo-comments or recurse
     // into newly generated template syntax.
     try std.testing.expectEqualStrings("&lt;!--literal--&gt;__NOEDITSECTION__", try expander.expandFragment("Page", "&lt;!--literal--&gt;__NOEDITSECTION__", 1_670_803_200));
+}
+
+test "native AOT unmatched extension openers expand later templates while matched bodies stay literal" {
+    const Source = struct {
+        fn get(_: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "Template:FrenchAfterMissing")) return "==French==\n# [[fr]]";
+            return TestProvider.get(null, a, title);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = Source.get, .exists = TestProvider.exists } };
+    for ([_][]const u8{ "math", "pre", "source", "syntaxhighlight", "nowiki" }) |name| {
+        const input = try std.fmt.allocPrint(a, "==English==\n# [[en]]\n<{s}>\n{{{{FrenchAfterMissing}}}}", .{name});
+        const expected = try std.fmt.allocPrint(a, "==English==\n# [[en]]\n<{s}>\n==French==\n# [[fr]]", .{name});
+        try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", input, 1_670_803_200));
+        const paired = try std.fmt.allocPrint(a, "<{s}>{{{{FrenchAfterMissing}}}}</{s}>", .{ name, name });
+        try std.testing.expectEqualStrings(paired, try expander.expandFragment("Page", paired, 1_670_803_200));
+        const spaced_pair = try std.fmt.allocPrint(a, "<{s} / >{{{{FrenchAfterMissing}}}}</{s}>", .{ name, name });
+        try std.testing.expectEqualStrings(spaced_pair, try expander.expandFragment("Page", spaced_pair, 1_670_803_200));
+    }
+    for ([_][]const u8{ "math", "ref", "gallery", "nowiki" }) |name| {
+        const attributes = try std.fmt.allocPrint(a, "<{s} data='{{{{Hello|ATTR|1}}}}'>\n{{{{FrenchAfterMissing}}}}", .{name});
+        const expected = try std.fmt.allocPrint(a, "<{s} data='{{{{Hello|ATTR|1}}}}'>\n==French==\n# [[fr]]", .{name});
+        try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", attributes, 1_670_803_200));
+    }
+    try std.testing.expectEqualStrings("<ref>==French==\n# [[fr]]</ref>", try expander.expandFragment("Page", "<ref>{{FrenchAfterMissing}}</ref>", 1_670_803_200));
+    var alternating: std.ArrayList(u8) = .empty;
+    var expected: std.ArrayList(u8) = .empty;
+    for (0..512) |_| {
+        try alternating.appendSlice(a, "<math>{{Hello|x|1}}");
+        try expected.appendSlice(a, "<math>Hi x Y");
+    }
+    try std.testing.expectEqualStrings(expected.items, try expander.expandFragment("Page", alternating.items, 1_670_803_200));
+    var roots: std.ArrayList(u8) = .empty;
+    var roots_expected: std.ArrayList(u8) = .empty;
+    for (0..512) |_| {
+        try roots.appendSlice(a, "{{Hello|<math>x|1}}");
+        try roots_expected.appendSlice(a, "Hi <math>x Y");
+    }
+    try std.testing.expectEqualStrings(roots_expected.items, try expander.expandFragment("Page", roots.items, 1_670_803_200));
+    var failed_roots: std.ArrayList(u8) = .empty;
+    for (0..512) |_| try failed_roots.appendSlice(a, "{{broken <math>tail ");
+    try std.testing.expectEqualStrings(failed_roots.items, try expander.expandFragment("Page", failed_roots.items, 1_670_803_200));
 }

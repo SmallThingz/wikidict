@@ -4149,3 +4149,53 @@ test "split heading controls preserve actual owner publication and first TOC bou
         }
     }
 }
+
+test "unmatched extension openers preserve published language owners" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const out_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, out_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    for ([_][]const u8{ "pre", "source", "syntaxhighlight", "ref", "math", "gallery", "poem" }) |tag| {
+        const source = try std.fmt.allocPrint(a, "==English==\n# [[cat|English sense]]\n<{s}>unclosed\n==French==\n# [[chat|French sense]]\n", .{tag});
+        try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, tag, source, source, null, &.{});
+        const closed = try std.fmt.allocPrint(a, "==English==\n# [[cat|English sense]]\n<{s}>\n==French==\n# [[chat|literal French sense]]\n</{s}>\n", .{ tag, tag });
+        const closed_title = try std.fmt.allocPrint(a, "closed-{s}", .{tag});
+        try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, closed_title, closed, closed, null, &.{});
+    }
+    // Inclusion preprocessing can remove a raw tail; it must not publish its
+    // raw French heading as a rendered owner.
+    const inclusion_raw = "==English==\n# [[cat|English sense]]\n<includeonly>\n==French==\n# [[chat|excluded French sense]]\n";
+    const inclusion_expanded = "==English==\n# [[cat|English sense]]\n";
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "included-tail", inclusion_expanded, inclusion_raw, null, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 22), stats.language_records);
+    inline for (.{ .{ "English", "cat", "English sense", "chat" }, .{ "French", "chat", "French sense", "cat" } }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, out_root, owner[0]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        for ([_][]const u8{ "pre", "source", "syntaxhighlight", "ref", "math", "gallery", "poem" }) |tag| {
+            const record = (try index.find(tag)).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            var matched: usize = 0;
+            for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, owner[1]) and std.mem.eql(u8, span.text, owner[2])) matched += 1;
+                try std.testing.expect(span.kind != .link or !std.mem.eql(u8, span.target, owner[3]));
+            };
+            try std.testing.expectEqual(@as(usize, 1), matched);
+            const closed_title = try std.fmt.allocPrint(a, "closed-{s}", .{tag});
+            const closed_record = try index.find(closed_title);
+            if (std.mem.eql(u8, owner[0], "French")) try std.testing.expect(closed_record == null) else try std.testing.expect(closed_record != null);
+        }
+        const inclusion_record = try index.find("included-tail");
+        if (std.mem.eql(u8, owner[0], "French")) try std.testing.expect(inclusion_record == null) else try std.testing.expect(inclusion_record != null);
+    }
+}

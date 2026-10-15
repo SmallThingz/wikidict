@@ -78,20 +78,21 @@ pub fn leadingBehaviorControlOffset(raw: []const u8, matcher: ?ControlMatcher) u
 
 pub fn headingControlPrefix(raw: []const u8, matcher: ?ControlMatcher) []const u8 {
     var no_more_nowiki_close = false;
+    var opaque_scan: OpaqueScan = .{};
     const line = std.mem.trimEnd(u8, raw[leadingBehaviorControlOffset(raw, matcher)..], " \t");
     if (line.len == 0 or line[0] != '=') return line;
     var at: usize = 0;
     while (at < line.len) {
-        if (protectedEndCached(line, at, &no_more_nowiki_close)) |end| {
+        if (opaque_scan.protectedEnd(line, at, &no_more_nowiki_close)) |end| {
             at = end;
             continue;
         }
-        if (line[at] == '<') if (tagAtCached(line, at, &no_more_nowiki_close)) |tag| {
+        if (line[at] == '<') if (opaque_scan.tagAt(line, at, &no_more_nowiki_close)) |tag| {
             at = tag.end;
             continue;
         };
         if (starts(line[at..], "{{") or starts(line[at..], "[[")) {
-            if (balanced(line, at)) |pair| {
+            if (balancedWithOpaqueScan(line, at, &opaque_scan)) |pair| {
                 at = pair.end;
                 continue;
             }
@@ -161,12 +162,13 @@ pub fn controlHeading(raw: []const u8, matcher: ?ControlMatcher) ?ControlHeading
     var closing: ?EqualsRun = null;
     var at = opening.end;
     var no_more_nowiki_close = false;
+    var opaque_scan: OpaqueScan = .{};
     while (at < line.len) {
-        if (protectedEndCached(line, at, &no_more_nowiki_close)) |end| {
+        if (opaque_scan.protectedEnd(line, at, &no_more_nowiki_close)) |end| {
             at = end;
             continue;
         }
-        if (line[at] == '<') if (tagAtCached(line, at, &no_more_nowiki_close)) |tag| {
+        if (line[at] == '<') if (opaque_scan.tagAt(line, at, &no_more_nowiki_close)) |tag| {
             at = tag.end;
             continue;
         };
@@ -229,15 +231,60 @@ pub fn isMultilineContainerTag(name: []const u8) bool {
     }
     return false;
 }
+const opaque_tag_names = [_][]const u8{
+    "nowiki",  "pre",      "gallery",      "indicator",       "ref",             "references", "templatestyles",
+    "math",    "ce",       "chem",         "score",           "syntaxhighlight", "source",     "timeline",
+    "hiero",   "poem",     "categorytree", "charinsert",      "graph",           "mapframe",   "maplink",
+    "section", "inputbox", "imagemap",     "dynamicpagelist",
+};
 pub fn isOpaqueTag(name: []const u8) bool {
-    inline for (&.{
-        "nowiki",  "pre",      "gallery",      "indicator",       "ref",             "references", "templatestyles",
-        "math",    "ce",       "chem",         "score",           "syntaxhighlight", "source",     "timeline",
-        "hiero",   "poem",     "categorytree", "charinsert",      "graph",           "mapframe",   "maplink",
-        "section", "inputbox", "imagemap",     "dynamicpagelist",
-    }) |tag| if (std.ascii.eqlIgnoreCase(name, tag)) return true;
+    for (opaque_tag_names) |tag| if (std.ascii.eqlIgnoreCase(name, tag)) return true;
     return false;
 }
+// One cache belongs to one input. A missing closer is final only for that
+// tag family at or after the observed raw offset, including after lookahead.
+pub const OpaqueScan = struct {
+    missing: u32 = 0,
+    missing_from: [opaque_tag_names.len]usize = @splat(std.math.maxInt(usize)),
+    last_angle_known: bool = false,
+    last_angle_end: usize = 0,
+    pub fn tagAt(self: *OpaqueScan, text: []const u8, start: usize, no_more_nowiki_close: ?*bool) ?Tag {
+        if (!self.last_angle_known) {
+            self.last_angle_end = if (std.mem.lastIndexOfScalar(u8, text, '>')) |at| at + 1 else 0;
+            self.last_angle_known = true;
+        }
+        if (start >= self.last_angle_end) return null;
+        return tagAtWithOpaqueScan(text, start, no_more_nowiki_close, self);
+    }
+    fn nowikiRegion(self: *OpaqueScan, text: []const u8, start: usize) ?NowikiRegion {
+        if (start >= self.last_angle_end) return null;
+        const opening = rawNowikiOpeningAt(text, start) orelse return null;
+        const found = self.pair(text, opening) orelse return null;
+        return .{ .opening_end = opening.end, .inner_end = found.inner_end, .end = found.end, .self_closing = opening.self_closing };
+    }
+    pub fn pair(self: *OpaqueScan, text: []const u8, tag: Tag) ?Pair {
+        if (tag.self_closing) return .{ .inner_end = tag.end, .end = tag.end };
+        for (opaque_tag_names, 0..) |name, index| if (tag.is(name)) {
+            const mask = @as(u32, 1) << @as(u5, @intCast(index));
+            if (self.missing & mask != 0 and tag.end >= self.missing_from[index]) return null;
+            const found = opaquePair(text, tag) orelse {
+                self.missing |= mask;
+                self.missing_from[index] = @min(self.missing_from[index], tag.end);
+                return null;
+            };
+            return found;
+        };
+        return null;
+    }
+    pub fn protectedEnd(self: *OpaqueScan, text: []const u8, start: usize, no_more_nowiki_close: ?*bool) ?usize {
+        if (start >= text.len) return null;
+        if (starts(text[start..], "<!--")) return if (std.mem.indexOfPos(u8, text, start + 4, "-->")) |end| end + 3 else text.len;
+        const tag = self.tagAt(text, start, no_more_nowiki_close) orelse return null;
+        if (!tag.closing and tag.is("nowiki")) return if (self.pair(text, tag)) |found| found.end else null;
+        if (tag.closing or !isOpaqueTag(tag.name)) return null;
+        return if (self.pair(text, tag)) |found| found.end else tag.end;
+    }
+};
 pub const Tag = struct {
     name: []const u8,
     attrs: []const u8,
@@ -294,7 +341,7 @@ fn rawNowikiOpeningAt(text: []const u8, start: usize) ?Tag {
         (name_end + 1 >= text.len or text[name_end + 1] != '>')) return null;
     const gt = std.mem.indexOfScalarPos(u8, text, name_end, '>') orelse return null;
     const attrs = std.mem.trimEnd(u8, text[name_end..gt], " \t\r\n");
-    const self_closing = std.mem.endsWith(u8, attrs, "/");
+    const self_closing = gt > name_end and text[gt - 1] == '/';
     return .{ .name = text[name_start..name_end], .attrs = if (self_closing) attrs[0 .. attrs.len - 1] else attrs, .end = gt + 1, .closing = false, .self_closing = self_closing };
 }
 pub fn nowikiRegionAt(text: []const u8, start: usize) ?NowikiRegion {
@@ -318,6 +365,9 @@ pub fn tagAt(text: []const u8, start: usize) ?Tag {
 }
 // A missing-closer cache belongs to one monotonically forward scan of one input.
 pub fn tagAtCached(text: []const u8, start: usize, no_more_nowiki_close: ?*bool) ?Tag {
+    return tagAtWithOpaqueScan(text, start, no_more_nowiki_close, null);
+}
+fn tagAtWithOpaqueScan(text: []const u8, start: usize, no_more_nowiki_close: ?*bool, opaque_scan: ?*OpaqueScan) ?Tag {
     if (start >= text.len or text[start] != '<') return null;
     var i = start + 1;
     const closing = i < text.len and text[i] == '/';
@@ -327,6 +377,8 @@ pub fn tagAtCached(text: []const u8, start: usize, no_more_nowiki_close: ?*bool)
     if (i == name_start or !std.ascii.isAlphabetic(text[name_start])) return null;
     const name = text[name_start..i];
     if (i < text.len and !std.ascii.isWhitespace(text[i]) and text[i] != '/' and text[i] != '>') return null;
+    if (!closing and isOpaqueTag(name) and i < text.len and text[i] == '/' and
+        (i + 1 >= text.len or text[i + 1] != '>')) return null;
     if (!closing and std.ascii.eqlIgnoreCase(name, "nowiki")) return rawNowikiOpeningAt(text, start);
     const attr_start = i;
     // Attribute lookahead is speculative: on failure the caller resumes
@@ -337,11 +389,12 @@ pub fn tagAtCached(text: []const u8, start: usize, no_more_nowiki_close: ?*bool)
         const ch = text[i];
         if (ch == '>') {
             const attrs = std.mem.trimEnd(u8, text[attr_start..i], " \t\r\n");
-            const self_closing = std.mem.endsWith(u8, attrs, "/");
+            const self_closing = if (isOpaqueTag(name)) i > attr_start and text[i - 1] == '/' else std.mem.endsWith(u8, attrs, "/");
             return .{ .name = name, .attrs = if (self_closing) attrs[0 .. attrs.len - 1] else attrs, .end = i + 1, .closing = closing, .self_closing = self_closing };
         }
         if (ch == '<') {
-            if (nowikiRegionAtCached(text, i, missing)) |region| {
+            const region_at = if (opaque_scan) |cache| cache.nowikiRegion(text, i) else nowikiRegionAtCached(text, i, missing);
+            if (region_at) |region| {
                 i = region.end - 1;
                 continue;
             }
@@ -371,10 +424,14 @@ fn opaquePair(text: []const u8, tag: Tag) ?Pair {
     return null;
 }
 pub fn matchingTag(text: []const u8, tag: Tag) ?Pair {
+    var opaque_scan: OpaqueScan = .{};
+    return matchingTagWithOpaqueScan(text, tag, &opaque_scan);
+}
+pub fn matchingTagWithOpaqueScan(text: []const u8, tag: Tag, opaque_scan: *OpaqueScan) ?Pair {
     if (tag.self_closing) return .{ .inner_end = tag.end, .end = tag.end };
     // MediaWiki extension bodies are opaque: an opening tag of the same name
     // inside the body is literal text, not a nested extension.
-    if (isOpaqueTag(tag.name)) return opaquePair(text, tag);
+    if (isOpaqueTag(tag.name)) return opaque_scan.pair(text, tag);
     var i = tag.end;
     var nesting: usize = 1;
     var no_more_nowiki_close = false;
@@ -383,16 +440,15 @@ pub fn matchingTag(text: []const u8, tag: Tag) ?Pair {
             i = if (std.mem.indexOfPos(u8, text, open + 4, "-->")) |end| end + 3 else text.len;
             continue;
         }
-        if (tagAt(text, open)) |next| {
+        if (opaque_scan.tagAt(text, open, &no_more_nowiki_close)) |next| {
             // Closing-looking text inside nowiki/ref/math/etc. cannot close the
             // surrounding ordinary HTML element.
             if (!next.closing and next.is("nowiki")) {
-                i = if (nowikiRegionAtCached(text, open, &no_more_nowiki_close)) |region| region.end else next.end;
+                i = if (opaque_scan.pair(text, next)) |pair| pair.end else next.end;
                 continue;
             }
             if (!next.closing and isOpaqueTag(next.name)) {
-                const pair = opaquePair(text, next) orelse return null;
-                i = pair.end;
+                i = if (opaque_scan.pair(text, next)) |pair| pair.end else next.end;
                 continue;
             }
             if (std.ascii.eqlIgnoreCase(next.name, tag.name)) {
@@ -408,16 +464,17 @@ pub fn protectedEnd(text: []const u8, start: usize) ?usize {
     return protectedEndCached(text, start, null);
 }
 pub fn protectedEndCached(text: []const u8, start: usize, no_more_nowiki_close: ?*bool) ?usize {
-    if (start >= text.len) return null;
     if (rawNowikiOpeningAt(text, start) != null)
         return if (nowikiRegionAtCached(text, start, no_more_nowiki_close)) |region| region.end else null;
-    if (starts(text[start..], "<!--")) return if (std.mem.indexOfPos(u8, text, start + 4, "-->")) |end| end + 3 else text.len;
-    const tag = tagAtCached(text, start, no_more_nowiki_close) orelse return null;
-    if (tag.closing or !isOpaqueTag(tag.name)) return null;
-    return if (matchingTag(text, tag)) |pair| pair.end else text.len;
+    var opaque_scan: OpaqueScan = .{};
+    return opaque_scan.protectedEnd(text, start, no_more_nowiki_close);
 }
 /// Stack-based matching prevents pipes in links/parameters from becoming template delimiters.
 pub fn balanced(text: []const u8, start: usize) ?Pair {
+    var opaque_scan: OpaqueScan = .{};
+    return balancedWithOpaqueScan(text, start, &opaque_scan);
+}
+pub fn balancedWithOpaqueScan(text: []const u8, start: usize, opaque_scan: *OpaqueScan) ?Pair {
     var no_more_nowiki_close = false;
     if (start + 2 <= text.len and starts(text[start..], "[[")) {
         var i = start + 2;
@@ -439,13 +496,13 @@ pub fn balanced(text: []const u8, start: usize) ?Pair {
     var i = start;
     while (i < text.len) {
         if (text[i] == '<') {
-            if (protectedEndCached(text, i, &no_more_nowiki_close)) |end| {
+            if (opaque_scan.protectedEnd(text, i, &no_more_nowiki_close)) |end| {
                 i = end;
                 continue;
             }
             // Attribute delimiters are HTML syntax only inside a root link frame.
             // Template and parameter braces retain their existing semantics.
-            if (n == 1 and stack[0] == .link) if (tagAtCached(text, i, &no_more_nowiki_close)) |tag| {
+            if (n == 1 and stack[0] == .link) if (opaque_scan.tagAt(text, i, &no_more_nowiki_close)) |tag| {
                 i = tag.end;
                 continue;
             };
@@ -480,6 +537,10 @@ pub fn logicalEnd(text: []const u8, start: usize) usize {
     return logicalEndCached(text, start, null);
 }
 pub fn logicalEndCached(text: []const u8, start: usize, no_more_nowiki_close: ?*bool) usize {
+    var opaque_scan: OpaqueScan = .{};
+    return logicalEndWithOpaqueScan(text, start, no_more_nowiki_close, &opaque_scan);
+}
+pub fn logicalEndWithOpaqueScan(text: []const u8, start: usize, no_more_nowiki_close: ?*bool, opaque_scan: *OpaqueScan) usize {
     var local_missing = false;
     const missing = no_more_nowiki_close orelse &local_missing;
     var i = start;
@@ -490,18 +551,18 @@ pub fn logicalEndCached(text: []const u8, start: usize, no_more_nowiki_close: ?*
         i += relative;
         var skip_to: ?usize = null;
         if (text[i] == '<') {
-            if (protectedEndCached(text, i, missing)) |end| {
+            if (opaque_scan.protectedEnd(text, i, missing)) |end| {
                 skip_to = end;
-            } else if (tagAtCached(text, i, missing)) |tag| {
+            } else if (opaque_scan.tagAt(text, i, missing)) |tag| {
                 skip_to = tag.end;
                 if (!tag.closing and isMultilineContainerTag(tag.name)) {
-                    if (matchingTag(text, tag)) |pair| skip_to = pair.end;
+                    if (matchingTagWithOpaqueScan(text, tag, opaque_scan)) |pair| skip_to = pair.end;
                 }
             }
         } else if ((text[i] == '{' and starts(text[i..], "{{")) or
             (text[i] == '[' and starts(text[i..], "[[")))
         {
-            if (balanced(text, i)) |pair| skip_to = pair.end;
+            if (balancedWithOpaqueScan(text, i, opaque_scan)) |pair| skip_to = pair.end;
         }
         if (skip_to) |end| {
             i = end;
@@ -514,6 +575,7 @@ pub fn logicalEndCached(text: []const u8, start: usize, no_more_nowiki_close: ?*
 }
 fn delimiterByte(text: []const u8, needle: u8, start: usize) ?usize {
     var no_more_nowiki_close = false;
+    var opaque_scan: OpaqueScan = .{};
     const interesting = [_]u8{ needle, '<', '{', '[' };
     var i = start;
     while (i < text.len) {
@@ -521,17 +583,17 @@ fn delimiterByte(text: []const u8, needle: u8, start: usize) ?usize {
         i += relative;
         if (text[i] == needle) return i;
         if (text[i] == '<') {
-            if (protectedEndCached(text, i, &no_more_nowiki_close)) |end| {
+            if (opaque_scan.protectedEnd(text, i, &no_more_nowiki_close)) |end| {
                 i = end;
                 continue;
             }
-            if (tagAtCached(text, i, &no_more_nowiki_close)) |tag| {
+            if (opaque_scan.tagAt(text, i, &no_more_nowiki_close)) |tag| {
                 i = tag.end;
                 continue;
             }
         }
         if (starts(text[i..], "{{") or starts(text[i..], "[[")) {
-            if (balanced(text, i)) |pair| {
+            if (balancedWithOpaqueScan(text, i, &opaque_scan)) |pair| {
                 i = pair.end;
                 continue;
             }
@@ -543,22 +605,23 @@ fn delimiterByte(text: []const u8, needle: u8, start: usize) ?usize {
 }
 pub fn delimiter(text: []const u8, needle: []const u8, start: usize) ?usize {
     var no_more_nowiki_close = false;
+    var opaque_scan: OpaqueScan = .{};
     if (needle.len == 1) return delimiterByte(text, needle[0], start);
     var i = start;
     while (i < text.len) {
         if (starts(text[i..], needle)) return i;
         if (text[i] == '<') {
-            if (protectedEndCached(text, i, &no_more_nowiki_close)) |end| {
+            if (opaque_scan.protectedEnd(text, i, &no_more_nowiki_close)) |end| {
                 i = end;
                 continue;
             }
-            if (tagAtCached(text, i, &no_more_nowiki_close)) |tag| {
+            if (opaque_scan.tagAt(text, i, &no_more_nowiki_close)) |tag| {
                 i = tag.end;
                 continue;
             }
         }
         if (starts(text[i..], "{{") or starts(text[i..], "[[")) {
-            if (balanced(text, i)) |pair| {
+            if (balancedWithOpaqueScan(text, i, &opaque_scan)) |pair| {
                 i = pair.end;
                 continue;
             }
@@ -913,7 +976,7 @@ test "nowiki source regions preserve raw offsets and active unclosed remainder" 
     try std.testing.expectEqualStrings("tail", closed[region.end..]);
     try std.testing.expect(nowikiRegionAt("< nowiki>literal</nowiki>", 0) == null);
     try std.testing.expect(protectedEnd("<nowiki>[[active]]", 0) == null);
-    try std.testing.expectEqual(@as(?usize, "<pre>[[inactive]]".len), protectedEnd("<pre>[[inactive]]", 0));
+    try std.testing.expectEqual(@as(?usize, "<pre>".len), protectedEnd("<pre>[[active]]", 0));
     const ordinary = "<span title=\"<nowiki>raw > \" </nowiki>suffix\">word</span>";
     const tag = tagAt(ordinary, 0).?;
     try std.testing.expectEqualStrings("word</span>", ordinary[tag.end..]);
@@ -1008,4 +1071,64 @@ test "structural controls join empty heading and list delimiter runs only" {
     const body = "*__NOEDITSECTION__ body";
     const unchanged = try controlListPrefixAlloc(a, body, null);
     try std.testing.expectEqualStrings("__NOEDITSECTION__ body", body[unchanged.body_start..]);
+}
+
+test "unmatched opaque scopes resume outer tags delimiters and logical lines" {
+    for (opaque_tag_names) |name| {
+        if (std.ascii.eqlIgnoreCase(name, "nowiki")) continue;
+        const source = try std.fmt.allocPrint(std.testing.allocator, "<div><{s}>[[cat]]</div>tail", .{name});
+        defer std.testing.allocator.free(source);
+        const outer = matchingTag(source, tagAt(source, 0).?).?;
+        try std.testing.expectEqualStrings("tail", source[outer.end..]);
+        try std.testing.expectEqual(@as(?usize, 5 + name.len + 2), protectedEnd(source, 5));
+        const lines = try std.fmt.allocPrint(std.testing.allocator, "<{s}>active\n== Heading ==", .{name});
+        defer std.testing.allocator.free(lines);
+        try std.testing.expectEqual(std.mem.indexOfScalar(u8, lines, '\n').?, logicalEnd(lines, 0));
+        const templ = try std.fmt.allocPrint(std.testing.allocator, "{{{{T|<{s}>active|second}}}}tail", .{name});
+        defer std.testing.allocator.free(templ);
+        try std.testing.expectEqualStrings("tail", templ[balanced(templ, 0).?.end..]);
+    }
+    const closed = "<div><source></div>hidden</source></div>tail";
+    try std.testing.expectEqualStrings("tail", closed[matchingTag(closed, tagAt(closed, 0).?).?.end..]);
+    try std.testing.expectEqual(@as(?usize, 15), protectedEnd("<!-- unfinished", 0));
+}
+
+test "opaque missing closer cache is family local forward and selfclosing safe" {
+    var bytes: std.ArrayList(u8) = .empty;
+    defer bytes.deinit(std.testing.allocator);
+    for (0..4000) |_| try bytes.appendSlice(std.testing.allocator, "<source><pre><math>");
+    try bytes.appendSlice(std.testing.allocator, "<ref>closed</ref><source/>[[cat]]");
+    var scan: OpaqueScan = .{};
+    var at: usize = 0;
+    var missing_nowiki = false;
+    while (at < bytes.items.len and bytes.items[at] == '<') {
+        const end = scan.protectedEnd(bytes.items, at, &missing_nowiki).?;
+        try std.testing.expect(end > at);
+        at = end;
+    }
+    try std.testing.expectEqualStrings("[[cat]]", bytes.items[at..]);
+    try std.testing.expectEqual(@as(u32, 3), @popCount(scan.missing));
+}
+
+test "opaque selfclosing needs adjacent slash and later misses do not poison earlier pairs" {
+    for ([_][]const u8{ "nowiki", "pre", "source", "math", "ref" }) |name| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "<{s} / >[[hidden]]</{s}>tail", .{ name, name });
+        defer std.testing.allocator.free(source);
+        const tag = tagAt(source, 0).?;
+        try std.testing.expect(!tag.self_closing);
+        const pair = matchingTag(source, tag).?;
+        try std.testing.expectEqualStrings("[[hidden]]", source[tag.end..pair.inner_end]);
+        try std.testing.expectEqualStrings("tail", source[pair.end..]);
+        const invalid = try std.fmt.allocPrint(std.testing.allocator, "<{s}/ >[[active]]</{s}>", .{ name, name });
+        defer std.testing.allocator.free(invalid);
+        try std.testing.expect(tagAt(invalid, 0) == null);
+        try std.testing.expect(protectedEnd(invalid, 0) == null);
+    }
+    const source = "<source>closed</source><source>missing";
+    var scan: OpaqueScan = .{};
+    const later = std.mem.lastIndexOf(u8, source, "<source>").?;
+    try std.testing.expect(scan.pair(source, tagAt(source, later).?) == null);
+    const earlier = scan.pair(source, tagAt(source, 0).?).?;
+    try std.testing.expectEqualStrings("closed", source[8..earlier.inner_end]);
+    try std.testing.expect(tagAt("<div / >", 0).?.self_closing);
 }

@@ -39,12 +39,13 @@ pub fn explicitLanguageDeclaration(raw: []const u8, content_language: []const u8
 /// expansion cannot erase the language argument.
 pub fn classificationHeading(raw: []const u8) []const u8 {
     var search: usize = 0;
+    var protection: ProtectionScan = .{};
     while (search < raw.len) {
-        if (syntax.protectedEnd(raw, search)) |end| {
+        if (protection.protectedEnd(raw, search)) |end| {
             search = end;
             continue;
         }
-        if (raw[search] == '<') if (syntax.tagAt(raw, search)) |tag| {
+        if (raw[search] == '<') if (protection.tagAt(raw, search)) |tag| {
             search = tag.end;
             continue;
         };
@@ -53,7 +54,7 @@ pub fn classificationHeading(raw: []const u8) []const u8 {
             continue;
         }
         const open = search;
-        const pair = syntax.balanced(raw, open) orelse break;
+        const pair = syntax.balancedWithOpaqueScan(raw, open, &protection.opaque_scan) orelse break;
         const body = raw[open + 2 .. pair.inner_end];
         const pipe = syntax.delimiter(body, "|", 0) orelse {
             search = pair.end;
@@ -86,18 +87,19 @@ fn hebrewLanguageCategory(source: []const u8) ?[]const u8 {
 
 fn hebrewGrammarTemplate(source: []const u8) bool {
     var cursor: usize = 0;
+    var protection: ProtectionScan = .{};
     while (cursor < source.len) {
         const rest = source[cursor..];
-        if (syntax.protectedEnd(source, cursor)) |end| {
+        if (protection.protectedEnd(source, cursor)) |end| {
             cursor = end;
             continue;
         }
-        if (rest[0] == '<') if (syntax.tagAt(source, cursor)) |tag| {
+        if (rest[0] == '<') if (protection.tagAt(source, cursor)) |tag| {
             cursor = tag.end;
             continue;
         };
         if (std.mem.startsWith(u8, rest, "{{") or std.mem.startsWith(u8, rest, "[[")) {
-            const pair = syntax.balanced(source, cursor) orelse return false;
+            const pair = syntax.balancedWithOpaqueScan(source, cursor, &protection.opaque_scan) orelse return false;
             if (std.mem.startsWith(u8, rest, "{{") and !std.mem.startsWith(u8, rest, "{{{")) {
                 const body = source[cursor + 2 .. pair.inner_end];
                 const end = syntax.delimiter(body, "|", 0) orelse body.len;
@@ -275,12 +277,26 @@ pub fn arabicNounSubtree(section: Section, matcher: ?syntax.ControlMatcher) Arab
     return .{ .present = declarations != 0, .code = if (declarations == 1 and !invalid) code else null };
 }
 
+const ProtectionScan = struct {
+    opaque_scan: syntax.OpaqueScan = .{},
+    no_more_nowiki_close: bool = false,
+
+    fn protectedEnd(self: *ProtectionScan, source: []const u8, start: usize) ?usize {
+        return self.opaque_scan.protectedEnd(source, start, &self.no_more_nowiki_close);
+    }
+
+    fn tagAt(self: *ProtectionScan, source: []const u8, start: usize) ?syntax.Tag {
+        return self.opaque_scan.tagAt(source, start, &self.no_more_nowiki_close);
+    }
+};
+
 const Balance = struct {
     templates: usize = 0,
     links: usize = 0,
     comments: usize = 0,
     tables: usize = 0,
     protected_until: usize = 0,
+    protection: ProtectionScan = .{},
 
     fn update(self: *Balance, source: []const u8, line_start: usize, line_end: usize) void {
         const line = source[line_start..line_end];
@@ -300,8 +316,8 @@ const Balance = struct {
             }
             if (line[i] == '<' and !std.mem.startsWith(u8, line[i..], "<!--")) {
                 const absolute = line_start + i;
-                const token_end: ?usize = syntax.protectedEnd(source, absolute) orelse
-                    if (self.templates == 0) (if (syntax.tagAt(source, absolute)) |tag| tag.end else null) else null;
+                const token_end: ?usize = self.protection.protectedEnd(source, absolute) orelse
+                    if (self.templates == 0) (if (self.protection.tagAt(source, absolute)) |tag| tag.end else null) else null;
                 if (token_end) |end| {
                     self.protected_until = end;
                     if (end >= line_end) return;
@@ -382,6 +398,7 @@ pub const CategoryIterator = struct {
     source: []const u8,
     cursor: usize = 0,
     templates: usize = 0,
+    protection: ProtectionScan = .{},
 
     pub fn next(self: *CategoryIterator) ?[]const u8 {
         while (self.cursor < self.source.len) {
@@ -396,7 +413,7 @@ pub const CategoryIterator = struct {
                 continue;
             }
             if (rest[0] == '<') {
-                if (syntax.protectedEnd(self.source, start)) |end| {
+                if (self.protection.protectedEnd(self.source, start)) |end| {
                     self.cursor = end;
                     continue;
                 }
@@ -420,7 +437,7 @@ pub const CategoryIterator = struct {
                 }
                 if (self.cursor != start) continue;
                 if (self.templates == 0) {
-                    if (syntax.tagAt(self.source, start)) |tag| {
+                    if (self.protection.tagAt(self.source, start)) |tag| {
                         self.cursor = tag.end;
                         continue;
                     }
@@ -747,4 +764,49 @@ test "unclosed nowiki leaves category and language boundaries active" {
     try std.testing.expectEqualStrings("English", active.next().?.heading);
     try std.testing.expectEqualStrings("French", active.next().?.heading);
     try std.testing.expect(active.next() == null);
+}
+
+test "unmatched extension openers leave later owner headings active" {
+    const tags = [_][]const u8{ "nowiki", "pre", "gallery", "indicator", "ref", "references", "templatestyles", "math", "ce", "chem", "score", "syntaxhighlight", "source", "timeline", "hiero", "poem", "categorytree", "charinsert", "graph", "mapframe", "maplink", "section", "inputbox", "imagemap", "dynamicpagelist" };
+    for (tags) |tag| {
+        const protected_body = if (std.mem.eql(u8, tag, "nowiki")) "" else "<nowiki>\n==German==\n</nowiki>\n";
+        const source = try std.fmt.allocPrint(std.testing.allocator, "==English==\n<{s} title=\"==German==\">unclosed\n<{s}>again\n{s}==French==\n# chat\n", .{ tag, tag, protected_body });
+        defer std.testing.allocator.free(source);
+        var active = Iterator.init(source);
+        try std.testing.expectEqualStrings("English", active.next().?.heading);
+        try std.testing.expectEqualStrings("French", active.next().?.heading);
+        try std.testing.expect(active.next() == null);
+        const closed_source = try std.fmt.allocPrint(std.testing.allocator, "==English==\n<{s}>\n==German==\n</{s}>\n==French==\n# chat\n", .{ tag, tag });
+        defer std.testing.allocator.free(closed_source);
+        var closed = Iterator.init(closed_source);
+        try std.testing.expectEqualStrings("English", closed.next().?.heading);
+        try std.testing.expectEqualStrings("French", closed.next().?.heading);
+        try std.testing.expect(closed.next() == null);
+    }
+    var comment = Iterator.init("==English==\n<!-- unclosed\n==French==\n# chat\n");
+    try std.testing.expectEqualStrings("English", comment.next().?.heading);
+    try std.testing.expect(comment.next() == null);
+}
+
+test "unmatched extension openers retain active language classification evidence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const tags = [_][]const u8{ "nowiki", "pre", "gallery", "indicator", "ref", "references", "templatestyles", "math", "ce", "chem", "score", "syntaxhighlight", "source", "timeline", "hiero", "poem", "categorytree", "charinsert", "graph", "mapframe", "maplink", "section", "inputbox", "imagemap", "dynamicpagelist" };
+    for (tags) |tag| {
+        const opening = try std.mem.concat(a, u8, &.{ "<", tag, ">" });
+        const closing = try std.mem.concat(a, u8, &.{ "</", tag, ">" });
+        const category = try std.mem.concat(a, u8, &.{ opening, "[[קטגוריה:שפה ספרדית]]" });
+        try std.testing.expectEqualStrings("ספרדית", classificationSection(.{ .heading = "lemma", .source = category }));
+        const closed_category = try std.mem.concat(a, u8, &.{ category, closing });
+        try std.testing.expectEqualStrings("lemma", classificationSection(.{ .heading = "lemma", .source = closed_category }));
+        const grammar = try std.mem.concat(a, u8, &.{ opening, "{{ניתוח דקדוקי|x}}" });
+        try std.testing.expectEqualStrings("עברית", classificationSection(.{ .heading = "lemma", .source = grammar }));
+        const closed_grammar = try std.mem.concat(a, u8, &.{ grammar, closing });
+        try std.testing.expectEqualStrings("lemma", classificationSection(.{ .heading = "lemma", .source = closed_grammar }));
+        const heading = try std.mem.concat(a, u8, &.{ "Lemma ", opening, "({{Sprache|Deutsch}})" });
+        try std.testing.expectEqualStrings("Deutsch", classificationHeading(heading));
+        const closed_heading = try std.mem.concat(a, u8, &.{ heading, closing });
+        try std.testing.expectEqualStrings(closed_heading, classificationHeading(closed_heading));
+    }
 }
