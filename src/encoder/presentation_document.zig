@@ -27,10 +27,149 @@ const NamespaceRegistry = @import("namespace_registry").Registry;
 pub const Fallbacks = @import("presentation_fallback.zig").Report;
 pub const ReferenceDefinitions = compiler.ReferenceDefinitions;
 pub const PoemPhase = compiler.PoemPhase;
+pub const FragmentPreContext = compiler.FragmentPreContext;
+pub const QuoteSeed = compiler.QuoteSeed;
+pub const QuoteContext = compiler.Context;
+pub const bodyQuoteCutSeedsWithContextAlloc = compiler.bodyQuoteCutSeedsWithContextAlloc;
+pub const linkQuoteCutSeedsWithContextAlloc = compiler.linkQuoteCutSeedsWithContextAlloc;
+pub const bodyQuoteCutSeedsAlloc = compiler.bodyQuoteCutSeedsAlloc;
+pub const linkQuoteCutSeedsAlloc = compiler.linkQuoteCutSeedsAlloc;
+pub const SourceFragment = struct {
+    source: []const u8,
+    pre: FragmentPreContext = .{},
+};
+
+pub const ObservedPreScope = struct {
+    opening_start: usize,
+    body_start: usize,
+    body_end: usize,
+    resume_at: usize,
+    matched: bool,
+    kind: FragmentPreContext.Kind = .pre,
+    formatting: compiler.SpanFlags = .{},
+    target: []const u8 = "",
+    link_quotes: ?compiler.LinkQuoteObservation = null,
+    parent: ?usize = null,
+    depth: usize = 1,
+};
+pub const PreparedBodySource = struct {
+    source: []const u8,
+    fallbacks: Fallbacks,
+};
+pub fn prepareBodySourceAlloc(a: A, title: []const u8, source: []const u8) !PreparedBodySource {
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv() } };
+    const prepared = try renderer.prepareBodySource(source);
+    return .{ .source = prepared, .fallbacks = renderer.fallbacks };
+}
+pub const PreObservation = struct {
+    scopes: []const ObservedPreScope,
+    refused_link_openings: []const usize = &.{},
+    unclosed_formatting: bool,
+};
+pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase) !PreObservation {
+    const Collector = struct {
+        a: A,
+        source: []const u8,
+        renderer: ?*const compiler.Renderer = null,
+        scopes: std.ArrayList(ObservedPreScope) = .empty,
+        refused_link_openings: std.ArrayList(usize) = .empty,
+        fn enter(raw: ?*anyopaque, domain: []const u8, origin: ?usize, opening_start: usize, body_start: usize, body_end: usize, resume_at: usize, matched: bool, kind: FragmentPreContext.Kind, formatting: compiler.SpanFlags, target: []const u8) compiler.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            const base = origin orelse return;
+            if (base > self.source.len or domain.len > self.source.len - base or
+                domain.ptr != self.source[base..].ptr)
+                return error.InvalidPreContext;
+            if (kind == .refused_link) {
+                if (opening_start > domain.len or domain.len - opening_start < 2 or
+                    domain[opening_start] != '[' or domain[opening_start + 1] != '[' or
+                    body_start != opening_start or body_end != opening_start or resume_at != opening_start or
+                    matched or target.len != 0 or !std.meta.eql(formatting, compiler.SpanFlags{}))
+                    return error.InvalidPreContext;
+                try self.refused_link_openings.append(self.a, base + opening_start);
+                return;
+            }
+            if (opening_start >= body_start or body_start > body_end or body_end > resume_at or resume_at > domain.len)
+                return error.InvalidPreContext;
+            const absolute_open = base + opening_start;
+            var parent: ?usize = if (self.scopes.items.len == 0) null else self.scopes.items.len - 1;
+            if (parent) |previous| if (self.scopes.items[previous].opening_start >= absolute_open) return error.InvalidPreContext;
+            while (parent) |index| {
+                const candidate = self.scopes.items[index];
+                if (absolute_open >= candidate.body_start and base + resume_at <= candidate.body_end) break;
+                parent = candidate.parent;
+            }
+            const depth = if (parent) |index| self.scopes.items[index].depth + 1 else 1;
+            // This event is emitted before descending into its body. Bound the
+            // stored ancestry by the actual renderer call depth, whose entry
+            // already enforces the renderer max_depth limit.
+            if (depth > self.renderer.?.body_depth) return error.InvalidPreContext;
+            const link_quotes = if (kind == .link)
+                self.renderer.?.link_quote_observation orelse return error.InvalidPreContext
+            else
+                null;
+            const owned_target = try self.a.dupe(u8, target);
+            errdefer self.a.free(owned_target);
+            try self.scopes.append(self.a, .{
+                .opening_start = absolute_open,
+                .body_start = base + body_start,
+                .body_end = base + body_end,
+                .resume_at = base + resume_at,
+                .matched = matched,
+                .kind = kind,
+                .formatting = formatting,
+                .target = owned_target,
+                .link_quotes = link_quotes,
+                .parent = parent,
+                .depth = depth,
+            });
+        }
+    };
+    var collected: Collector = .{ .a = a, .source = source };
+    errdefer {
+        for (collected.scopes.items) |scope| a.free(scope.target);
+        collected.scopes.deinit(a);
+        collected.refused_link_openings.deinit(a);
+    }
+    // The probe's blocks, spans, references and media never escape this arena.
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var renderer: compiler.Renderer = .{
+        .a = arena.allocator(),
+        .context = .{
+            .title = title,
+            .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv(),
+            .language = "English",
+            .link_trail = link_trail,
+            .namespace_catalog = namespace_catalog,
+            .behavior_switches = behavior_switches,
+            .image_options = image_options,
+            .poem_phase = poem_phase,
+        },
+    };
+    renderer.page_reference_definitions = reference_context.items;
+    collected.renderer = &renderer;
+    _ = try renderer.renderBodyWithPreObserver(source, .{ .ctx = &collected, .enter = Collector.enter });
+    // A truncated probe cannot establish a complete page scope map.
+    if (renderer.truncated or renderer.fallbacks.render_limit) return error.RenderLimit;
+    std.mem.sort(usize, collected.refused_link_openings.items, {}, std.sort.asc(usize));
+    var unique: usize = 0;
+    for (collected.refused_link_openings.items) |opening| {
+        if (unique == 0 or collected.refused_link_openings.items[unique - 1] != opening) {
+            collected.refused_link_openings.items[unique] = opening;
+            unique += 1;
+        }
+    }
+    collected.refused_link_openings.items = collected.refused_link_openings.items[0..unique];
+    const refused_link_openings = try collected.refused_link_openings.toOwnedSlice(a);
+    errdefer a.free(refused_link_openings);
+    return .{ .scopes = try collected.scopes.toOwnedSlice(a), .refused_link_openings = refused_link_openings, .unclosed_formatting = renderer.fallbacks.unclosed_formatting };
+}
+
 pub fn parsePoemPhaseAlloc(a: A, full_output: []const u8, display_title: ?[]const u8, metadata: ?[]const u8) !?*const PoemPhase {
     return compiler.parsePoemPhaseAlloc(a, full_output, display_title, metadata);
 }
 pub const referenceDefinitionsAlloc = compiler.referenceDefinitionsAlloc;
+pub const mayHaveMultilineLinks = compiler.mayHaveMultilineLinks;
 pub const preparePageTocSourceAlloc = compiler.preparePageTocSourceAlloc;
 
 fn requireCompiledText(text: []const u8) !void {
@@ -133,7 +272,19 @@ const Builder = struct {
     }
 
     fn render(self: *Builder, source: []const u8) !void {
-        const rendered = try self.renderer.renderBody(source);
+        try self.consume(try self.renderer.renderBody(source));
+    }
+
+    fn renderFragments(self: *Builder, fragments: []const SourceFragment) !void {
+        var rendered: std.ArrayList(compiler.Block) = .empty;
+        defer rendered.deinit(self.a);
+        for (fragments) |fragment| {
+            try rendered.appendSlice(self.a, try self.renderer.renderBodyWithFragmentPre(fragment.source, fragment.pre));
+        }
+        try self.consume(try rendered.toOwnedSlice(self.a));
+    }
+
+    fn consume(self: *Builder, rendered: []const compiler.Block) !void {
         var section_start: usize = 0;
         for (rendered, 0..) |item, i| {
             if (item.kind == .heading) {
@@ -154,6 +305,9 @@ fn workAlloc(a: A, title: []const u8, language: []const u8, source: []const u8, 
     return workAllocWithPoem(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, null);
 }
 fn workAllocWithPoem(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase) !Work {
+    return workAllocWithPoemFragments(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, &.{});
+}
+fn workAllocWithPoemFragments(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment) !Work {
     var renderer: compiler.Renderer = .{
         .a = a,
         .context = .{
@@ -174,7 +328,7 @@ fn workAllocWithPoem(a: A, title: []const u8, language: []const u8, source: []co
         .renderer = &renderer,
         .title = if (language.len == 0) title else language,
     };
-    try builder.render(source);
+    if (fragments.len == 0) try builder.render(source) else try builder.renderFragments(fragments);
     return .{
         .sections = try builder.sections.toOwnedSlice(a),
         .references = try renderer.finishReferences(),
@@ -372,9 +526,28 @@ pub fn compileReportedWithReferencesAndPoemAlloc(
     fallbacks: ?*Fallbacks,
     poem_phase: ?*const PoemPhase,
 ) ![]u8 {
+    return compileReportedWithReferencesAndPoemFragmentsAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, fallbacks, poem_phase, &.{});
+}
+pub fn compileReportedWithReferencesAndPoemFragmentsAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: []const u8,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    reference_context: compiler.ReferenceDefinitions,
+    fallbacks: ?*Fallbacks,
+    poem_phase: ?*const PoemPhase,
+    fragments: []const SourceFragment,
+) ![]u8 {
     _ = kind;
     _ = language_code;
-    const work = try workAllocWithPoem(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase);
+    const work = try workAllocWithPoemFragments(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;
@@ -400,8 +573,29 @@ pub fn compileReportedWithReferencesAndPoemAlloc(
         try validateSpans(a, caption_spans, fallbacks);
         @constCast(work.media)[index].caption = try compiler.plainText(a, caption_spans);
     }
+    // DPR2 section titles remain stable plain labels for TOC/folding. A linked
+    // title also retains its final validated spans in the first ordinary heading
+    // block. Readers may use this exact companion for their existing header and
+    // consume it only when they actually render those spans there.
+    for (@constCast(work.sections)) |*section| {
+        if (section.title.len == 0) continue;
+        var navigable = false;
+        for (section.title_spans) |span| {
+            if ((span.kind == .link or span.kind == .external_link) and span.target.len != 0 and span.text.len != 0) {
+                navigable = true;
+                break;
+            }
+        }
+        if (navigable) {
+            const blocks = try a.alloc(compiler.Block, section.blocks.len + 1);
+            blocks[0] = .{ .kind = .heading, .spans = section.title_spans, .level = section.level };
+            @memcpy(blocks[1..], section.blocks);
+            section.blocks = blocks;
+        }
+    }
     // Build semantic layout only after recovery has normalized all build-only
-    // template spans to their final data-only representation.
+    // template spans and inserted the addressable heading companion. Existing
+    // block indices therefore refer to the final serialized array, including 0.
     const layout = try semantic.build(a, work.sections);
     return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);
 }
@@ -1081,4 +1275,70 @@ test "poem strip items cannot ship in reference identities or media metadata" {
     var visible: std.ArrayList(u8) = .empty;
     for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| try visible.appendSlice(a, span.text);
     try std.testing.expect(std.mem.indexOf(u8, visible.items, "readable caption") != null);
+}
+
+test "linked section heading companions retain labels and final organization indices through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "=== [[NounTargetA|Noun]] ===\n# first definition\n#: first example\n=== [[NounTargetB|Noun]] ===\n# second definition\n#: second example\n";
+    const encoded = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.organization.lexemes.len);
+    for (decoded.entry.sections, decoded.entry.organization.lexemes, [_][]const u8{ "NounTargetA", "NounTargetB" }, 0..) |section, lexeme, target, i| {
+        try std.testing.expectEqualStrings("Noun", section.title);
+        try std.testing.expectEqual(@as(u8, 3), section.level);
+        try std.testing.expectEqual(@as(usize, 3), section.blocks.len);
+        const heading = section.blocks[0];
+        try std.testing.expect(heading.kind == .heading);
+        try std.testing.expectEqual(section.level, heading.level);
+        try std.testing.expectEqual(@as(usize, 1), heading.spans.len);
+        try std.testing.expect(heading.spans[0].kind == .link);
+        try std.testing.expectEqualStrings("Noun", heading.spans[0].text);
+        try std.testing.expectEqualStrings(target, heading.spans[0].target);
+        try std.testing.expectEqual(i, lexeme.section);
+        try std.testing.expectEqualSlices(usize, &.{0}, lexeme.introduction);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+        try std.testing.expectEqualSlices(usize, &.{2}, lexeme.definitions[0].examples);
+        try std.testing.expect(section.blocks[lexeme.definitions[0].block].kind == .definition);
+        try std.testing.expect(section.blocks[lexeme.definitions[0].examples[0]].kind == .example);
+        try std.testing.expectEqual(@as(usize, 0), lexeme.other_blocks.len);
+        try std.testing.expectEqualStrings(if (i == 0) "first definition" else "second definition", section.blocks[1].spans[0].text);
+        try std.testing.expectEqualStrings(if (i == 0) "first example" else "second example", section.blocks[2].spans[0].text);
+    }
+}
+
+test "linked owner and edge-spaced heading companions preserve exact limited-trim labels through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, label: []const u8, target: []const u8 }{
+        .{ .source = "== [[EnglishTarget|English]] ==\nbody", .label = "English", .target = "EnglishTarget" },
+        .{ .source = "== [[SpaceTarget|\u{a0} \tFrench \u{a0}]] ==\nbody", .label = "French", .target = "SpaceTarget" },
+        .{ .source = "== [[BreakTarget|French<br>]] ==\nbody", .label = "French", .target = "BreakTarget" },
+        .{ .source = "== [[WideTarget|\u{2003}French\u{2003}]] ==\nbody", .label = "\u{2003}French\u{2003}", .target = "WideTarget" },
+    };
+    for (cases) |case| {
+        const encoded = try compileAlloc(a, "entry", .language, "English", "en", case.source, null);
+        const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+        const section = decoded.entry.sections[0];
+        try std.testing.expectEqualStrings(case.label, section.title);
+        try std.testing.expectEqual(@as(u8, 2), section.level);
+        try std.testing.expect(section.blocks[0].kind == .heading);
+        try std.testing.expectEqual(section.level, section.blocks[0].level);
+        var text: std.ArrayList(u8) = .empty;
+        var linked = false;
+        for (section.blocks[0].spans) |span| {
+            if (span.kind == .line_break) try text.append(a, '\n') else try text.appendSlice(a, span.text);
+            try std.testing.expectEqualStrings("", span.trail);
+            linked = linked or (span.kind == .link and std.mem.eql(u8, span.target, case.target));
+        }
+        try std.testing.expect(linked);
+        try std.testing.expectEqualStrings(section.title, trimHeading(text.items));
+        try std.testing.expectEqual(@as(usize, 2), section.blocks.len);
+        try std.testing.expectEqualStrings("body", section.blocks[1].spans[0].text);
+    }
 }

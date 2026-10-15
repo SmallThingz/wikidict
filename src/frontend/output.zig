@@ -344,13 +344,88 @@ fn blocksTextProjected(w: *std.Io.Writer, blocks: []const model.Block, color: bo
     }
 }
 
+// Match the producer's data-only rich heading companion without allocating or
+// interpreting source. Section names and all block/layout indices stay intact.
+const HeadingBytes = struct {
+    spans: []const model.Span,
+    index: usize = 0,
+    phase: u2 = 0,
+    offset: usize = 0,
+    fn next(self: *HeadingBytes) ?u8 {
+        while (self.index < self.spans.len) {
+            const span = self.spans[self.index];
+            const part = if (span.kind == .line_break)
+                (if (self.phase == 0) "\n" else "")
+            else if (self.phase == 0) span.text else span.trail;
+            if (self.offset < part.len) {
+                const byte = part[self.offset];
+                self.offset += 1;
+                return byte;
+            }
+            self.offset = 0;
+            self.phase += 1;
+            if (self.phase == 2) {
+                self.phase = 0;
+                self.index += 1;
+            }
+        }
+        return null;
+    }
+};
+fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
+    if (section.title.len == 0 or section.blocks.len == 0) return null;
+    const first = section.blocks[0];
+    if (first.kind != .heading or first.level != section.level) return null;
+    var navigable = false;
+    for (first.spans) |span| {
+        if (span.kind == .line_break and span.trail.len != 0) return null;
+        if ((span.kind == .link or span.kind == .external_link) and
+            span.target.len != 0 and (span.text.len != 0 or span.trail.len != 0)) navigable = true;
+    }
+    if (!navigable) return null;
+    var cursor: HeadingBytes = .{ .spans = first.spans };
+    var offset: usize = 0;
+    var begin: ?usize = null;
+    var end: usize = 0;
+    while (cursor.next()) |byte| {
+        const start = offset;
+        offset += 1;
+        var edge = byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n';
+        if (byte == 0xc2) {
+            var lookahead = cursor;
+            if (lookahead.next() == 0xa0) {
+                cursor = lookahead;
+                offset += 1;
+                edge = true;
+            }
+        }
+        if (!edge) {
+            if (begin == null) begin = start;
+            end = offset;
+        }
+    }
+    const start = begin orelse return null;
+    if (end - start != section.title.len) return null;
+    cursor = .{ .spans = first.spans };
+    for (0..start) |_| _ = cursor.next();
+    for (section.title) |byte| if (cursor.next() != byte) return null;
+    return first.spans;
+}
+fn sectionLabelProjected(w: *std.Io.Writer, section: model.Section, color: bool, projection: ?*PoemProjection) !void {
+    if (sectionHeadingCompanion(section)) |spans|
+        try spansTextProjected(w, spans, color, projection)
+    else
+        try terminalText(w, section.title);
+}
+
 fn sectionTextProjected(w: *std.Io.Writer, section: model.Section, color: bool, projection: ?*PoemProjection) !void {
     try w.writeByte('\n');
     if (color) try w.writeAll("\x1b[1m");
-    try terminalText(w, section.title);
+    try sectionLabelProjected(w, section, color, projection);
     if (color) try w.writeAll("\x1b[0m");
     try w.writeByte('\n');
-    try blocksTextProjected(w, section.blocks, color, projection);
+    const first: usize = if (sectionHeadingCompanion(section) != null) 1 else 0;
+    try blocksTextProjected(w, section.blocks[first..], color, projection);
 }
 
 pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
@@ -389,7 +464,7 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
                 };
                 continue;
             }
-            if (std.mem.eql(u8, section.title, entry.language orelse ""))
+            if (std.mem.eql(u8, section.title, entry.language orelse "") and sectionHeadingCompanion(section) == null)
                 try blocksTextProjected(w, section.blocks, color, projection)
             else
                 try sectionTextProjected(w, section, color, projection);
@@ -402,24 +477,51 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
                 break;
             };
             if (seen) continue;
-            try w.writeByte('\n');
-            if (color) try w.writeAll("\x1b[1m");
-            try terminalText(w, lexeme.kind);
-            if (lexeme.language.len != 0 and !std.mem.eql(u8, lexeme.language, entry.language orelse "")) {
-                try w.writeAll(" / ");
-                try terminalText(w, lexeme.language);
+            var per_part_headers = false;
+            if (details) for (organization.lexemes) |part| {
+                if (std.mem.eql(u8, part.kind, lexeme.kind) and std.mem.eql(u8, part.language, lexeme.language) and
+                    sectionHeadingCompanion(entry.sections[part.section]) != null)
+                {
+                    per_part_headers = true;
+                    break;
+                }
+            };
+            if (!per_part_headers) {
+                try w.writeByte('\n');
+                if (color) try w.writeAll("\x1b[1m");
+                try terminalText(w, lexeme.kind);
+                if (lexeme.language.len != 0 and !std.mem.eql(u8, lexeme.language, entry.language orelse "")) {
+                    try w.writeAll(" / ");
+                    try terminalText(w, lexeme.language);
+                }
+                if (color) try w.writeAll("\x1b[0m");
+                try w.writeByte('\n');
             }
-            if (color) try w.writeAll("\x1b[0m");
-            try w.writeByte('\n');
             for (organization.lexemes) |part| {
                 if (!std.mem.eql(u8, part.kind, lexeme.kind) or !std.mem.eql(u8, part.language, lexeme.language)) continue;
                 const section = entry.sections[part.section];
+                const companion = sectionHeadingCompanion(section);
+                const rendered_companion = per_part_headers and companion != null;
+                if (per_part_headers) {
+                    try w.writeByte('\n');
+                    if (color) try w.writeAll("\x1b[1m");
+                    if (companion) |spans| try spansTextProjected(w, spans, color, projection) else try terminalText(w, part.kind);
+                    if (part.language.len != 0 and !std.mem.eql(u8, part.language, entry.language orelse "")) {
+                        try w.writeAll(" / ");
+                        try terminalText(w, part.language);
+                    }
+                    if (color) try w.writeAll("\x1b[0m");
+                    try w.writeByte('\n');
+                }
                 if (details) if (part.etymology) |e| {
                     try w.writeAll("  [");
                     try terminalText(w, entry.sections[e].title);
                     try w.writeAll("]\n");
                 };
-                if (details) for (part.introduction) |i| try blocksTextProjected(w, section.blocks[i..][0..1], color, projection);
+                if (details) for (part.introduction) |i| {
+                    if (rendered_companion and i == 0) continue;
+                    try blocksTextProjected(w, section.blocks[i..][0..1], color, projection);
+                };
                 for (part.definitions) |sense| {
                     try blocksTextProjected(w, section.blocks[sense.block..][0..1], color, projection);
                     if (details) for (sense.examples) |i| try blocksTextProjected(w, section.blocks[i..][0..1], color, projection);
@@ -429,7 +531,10 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
                     }
                 }
                 if (details) {
-                    for (part.other_blocks) |i| try blocksTextProjected(w, section.blocks[i..][0..1], color, projection);
+                    for (part.other_blocks) |i| {
+                        if (rendered_companion and i == 0) continue;
+                        try blocksTextProjected(w, section.blocks[i..][0..1], color, projection);
+                    }
                     for (part.related_sections) |i| try sectionTextProjected(w, entry.sections[i], color, projection);
                 }
             }
@@ -552,11 +657,12 @@ pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.E
         if (selected == index) selected_offset = frame.written().len;
         if (color and selected == index) try w.writeAll("\x1b[1m");
         try w.writeAll(if (selected == index) "> " else "  ");
-        try terminalText(w, section.title);
+        try sectionLabelProjected(w, section, color, projection);
         if (closed) try w.writeAll(if (meaning) "  [+ notes]" else "  [+]");
         if (color) try w.writeAll("\x1b[0m");
         try w.writeByte('\n');
-        for (section.blocks) |block| if (!closed or (meaning and block.kind == .definition)) try blocksTextProjected(w, &.{block}, color, projection);
+        const first: usize = if (sectionHeadingCompanion(section) != null) 1 else 0;
+        for (section.blocks[first..]) |block| if (!closed or (meaning and block.kind == .definition)) try blocksTextProjected(w, &.{block}, color, projection);
     }
     if (preferences.details) try entryMetadataProjected(w, entry, color, projection) else if (entry.media.len != 0 or entry.references.len != 0) try w.writeAll("\n  d: media and references\n");
     return selected_offset;
@@ -744,4 +850,175 @@ test "Poem ordinary boundary break retains ending indentation and resets followi
     try std.testing.expectEqual(@as(usize, 2), rows[0].left);
     try std.testing.expectEqualStrings("verse", rows[0].bytes);
     try std.testing.expectEqual(@as(usize, 0), rows[1].left);
+}
+
+test "rich heading companion matcher preserves exact title level Unicode and trails" {
+    const linked = [_]model.Span{.{ .kind = .link, .text = " \t\xc2\xa0词", .trail = "s\r\n", .target = "SpaceTarget" }};
+    const good = [_]model.Block{.{ .kind = .heading, .depth = 0, .level = 3, .spans = &linked }};
+    var section: model.Section = .{ .level = 3, .title = "词s", .blocks = &good };
+    try std.testing.expect(sectionHeadingCompanion(section) != null);
+    section.level = 2;
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+    section.level = 3;
+    section.title = "词S";
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+    section.title = "词s";
+    const wide = [_]model.Span{.{ .kind = .external_link, .text = "\xe2\x80\x83词s\xe2\x80\x83", .target = "https://example.test/" }};
+    const wide_blocks = [_]model.Block{.{ .kind = .heading, .depth = 0, .level = 3, .spans = &wide }};
+    section.blocks = &wide_blocks;
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+    section.title = "\xe2\x80\x83词s\xe2\x80\x83";
+    try std.testing.expect(sectionHeadingCompanion(section) != null);
+    const break_spans = [_]model.Span{ .{ .kind = .link, .text = "French", .target = "BreakTarget" }, .{ .kind = .line_break, .text = "ignored" } };
+    const break_blocks = [_]model.Block{.{ .kind = .heading, .depth = 0, .level = 3, .spans = &break_spans }};
+    section = .{ .level = 3, .title = "French", .blocks = &break_blocks };
+    try std.testing.expect(sectionHeadingCompanion(section) != null);
+    var bad_break = break_spans;
+    bad_break[1].trail = "hidden";
+    const bad_blocks = [_]model.Block{.{ .kind = .heading, .depth = 0, .level = 3, .spans = &bad_break }};
+    section.blocks = &bad_blocks;
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+    const later = [_]model.Block{ .{ .kind = .paragraph }, good[0] };
+    section = .{ .level = 3, .title = "词s", .blocks = &later };
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+    const plain = [_]model.Span{.{ .text = "词s" }};
+    const no_link = [_]model.Block{.{ .kind = .heading, .depth = 0, .level = 3, .spans = &plain }};
+    section.blocks = &no_link;
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+    const trailing = [_]model.Span{.{ .kind = .link, .trail = "词s", .target = "TrailTarget" }};
+    const trailing_blocks = [_]model.Block{.{ .kind = .heading, .depth = 0, .level = 3, .spans = &trailing }};
+    section = .{ .level = 3, .title = "词s", .blocks = &trailing_blocks };
+    try std.testing.expect(sectionHeadingCompanion(section) != null);
+    var wrong_depth = good;
+    wrong_depth[0].depth = 3;
+    wrong_depth[0].level = 0;
+    section.blocks = &wrong_depth;
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+}
+
+test "detailed and folded rich headings render once without losing owner links or bodies" {
+    const rich = [_]model.Span{.{ .kind = .link, .text = "English", .target = "EnglishTarget" }};
+    const body = [_]model.Span{.{ .text = "Retained definition" }};
+    const blocks = [_]model.Block{ .{ .kind = .heading, .depth = 0, .level = 2, .spans = &rich }, .{ .kind = .definition, .spans = &body } };
+    const sections = [_]model.Section{.{ .level = 2, .title = "English", .blocks = &blocks }};
+    const entry: model.Entry = .{ .title = "cat", .kind = .language, .language = "English", .sections = &sections };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryText(&out.writer, entry, true);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "\x1b[36mEnglish"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Retained definition"));
+    try std.testing.expectEqualStrings("English", entry.sections[0].title);
+    try std.testing.expectEqual(@as(u8, 2), entry.sections[0].level);
+    for ([_]bool{ false, true }) |closed| {
+        out.clearRetainingCapacity();
+        const toggles: []const usize = if (closed) &.{0} else &.{};
+        _ = try entryTextFolded(&out, entry, true, .{ .details = true }, toggles, 0);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "\x1b[36mEnglish"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Retained definition"));
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "> ") != null);
+    }
+    out.clearRetainingCapacity();
+    try entryTextWithDetails(&out.writer, entry, false, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "English\n1. Retained definition") != null);
+}
+
+test "organized rich homonyms preserve each target heading and shifted sense indices" {
+    const heading_a = [_]model.Span{.{ .kind = .link, .text = "Noun", .target = "NounTargetA" }};
+    const heading_b = [_]model.Span{.{ .kind = .link, .text = "Noun", .target = "NounTargetB" }};
+    const definition_a = [_]model.Span{.{ .text = "first definition" }};
+    const definition_b = [_]model.Span{.{ .text = "second definition" }};
+    const example_a = [_]model.Span{.{ .text = "first example" }};
+    const example_b = [_]model.Span{.{ .text = "second example" }};
+    const blocks_a = [_]model.Block{ .{ .kind = .heading, .depth = 0, .level = 3, .spans = &heading_a }, .{ .kind = .definition, .spans = &definition_a }, .{ .kind = .example, .spans = &example_a } };
+    const blocks_b = [_]model.Block{ .{ .kind = .heading, .depth = 0, .level = 3, .spans = &heading_b }, .{ .kind = .definition, .spans = &definition_b }, .{ .kind = .example, .spans = &example_b } };
+    const sections = [_]model.Section{ .{ .level = 3, .title = "Noun", .blocks = &blocks_a }, .{ .level = 3, .title = "Noun", .blocks = &blocks_b } };
+    const senses = [_]model.Sense{.{ .block = 1, .examples = &.{2} }};
+    const lexemes = [_]model.Lexeme{ .{ .language = "English", .kind = "Noun", .section = 0, .introduction = &.{0}, .definitions = &senses }, .{ .language = "English", .kind = "Noun", .section = 1, .introduction = &.{0}, .definitions = &senses } };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for ([_]usize{ 1, 2 }) |parts| {
+        const entry: model.Entry = .{ .title = "cat", .kind = .language, .language = "English", .sections = sections[0..parts], .organization = .{ .lexemes = lexemes[0..parts] } };
+        out.clearRetainingCapacity();
+        try entryText(&out.writer, entry, true);
+        try std.testing.expectEqual(parts, std.mem.count(u8, out.written(), "Noun"));
+        try std.testing.expectEqual(parts, std.mem.count(u8, out.written(), "\x1b[36mNoun"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "first definition"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "first example"));
+        if (parts == 2) {
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "second definition"));
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "second example"));
+        }
+        try std.testing.expectEqual(@as(usize, 1), entry.organization.lexemes[0].definitions[0].block);
+        try std.testing.expectEqual(@as(usize, 2), entry.organization.lexemes[0].definitions[0].examples[0]);
+        out.clearRetainingCapacity();
+        try entryTextWithDetails(&out.writer, entry, false, false);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Noun"));
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "first definition") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "first example") == null);
+        out.clearRetainingCapacity();
+        try json(&out.writer, .{ .operation = .search, .query = "cat", .kind = .language, .language = "English", .record_count = 1, .total_matches = 1, .entries = &.{entry} });
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "NounTargetA") != null);
+        if (parts == 2) try std.testing.expect(std.mem.indexOf(u8, out.written(), "NounTargetB") != null);
+    }
+}
+
+test "plain organized headings and unmatched first blocks keep existing output" {
+    const definition = [_]model.Span{.{ .text = "ordinary definition" }};
+    const blocks = [_]model.Block{.{ .kind = .definition, .spans = &definition }};
+    const sections = [_]model.Section{.{ .level = 3, .title = "Noun", .blocks = &blocks }};
+    const senses = [_]model.Sense{.{ .block = 0 }};
+    const lexemes = [_]model.Lexeme{.{ .language = "English", .kind = "Noun", .section = 0, .definitions = &senses }};
+    const entry: model.Entry = .{ .title = "cat", .kind = .language, .language = "English", .sections = &sections, .organization = .{ .lexemes = &lexemes } };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expectEqualStrings("cat  / English\n\nNoun\n1. ordinary definition\n", out.written());
+    const mismatch_heading = [_]model.Span{.{ .kind = .link, .text = "Different", .target = "OtherTarget" }};
+    const mismatched_blocks = [_]model.Block{ .{ .kind = .heading, .depth = 0, .level = 3, .spans = &mismatch_heading }, blocks[0] };
+    out.clearRetainingCapacity();
+    try sectionTextProjected(&out.writer, .{ .level = 3, .title = "Noun", .blocks = &mismatched_blocks }, false, null);
+    try std.testing.expectEqualStrings("\nNoun\nDifferent\n1. ordinary definition\n", out.written());
+}
+
+test "DPR2 rich heading wire fields preserve level trails targets and indexed body" {
+    const codec = @import("blob_encoder").presentation_codec;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const heading = [_]model.Span{.{ .kind = .link, .text = "Noun", .trail = "s", .target = "WireTarget" }};
+    const definition = [_]model.Span{.{ .text = "wire definition" }};
+    const example = [_]model.Span{.{ .text = "wire example" }};
+    const blocks = [_]model.Block{
+        .{ .kind = .heading, .depth = 0, .level = 3, .spans = &heading },
+        .{ .kind = .definition, .spans = &definition },
+        .{ .kind = .example, .spans = &example },
+    };
+    const sections = [_]model.Section{.{ .level = 3, .title = "Nouns", .blocks = &blocks }};
+    const senses = [_]model.Sense{.{ .block = 1, .examples = &.{2} }};
+    const lexemes = [_]model.Lexeme{.{ .language = "English", .kind = "Nouns", .section = 0, .introduction = &.{0}, .definitions = &senses }};
+    const bytes = try codec.encodeAlloc(a, .{ .entry = model.Entry{ .title = "cat", .kind = .language, .language = "English", .language_code = "en", .sections = &sections, .organization = .{ .lexemes = &lexemes } } });
+    const decoded = try codec.decodeAlloc(a, bytes, "cat", .language, .{ .code = "en", .heading = "English" });
+    const section = decoded.entry.sections[0];
+    try std.testing.expectEqual(@as(u8, 0), section.blocks[0].depth);
+    try std.testing.expectEqual(@as(u8, 3), section.blocks[0].level);
+    try std.testing.expectEqual(@as(u8, 3), section.level);
+    try std.testing.expectEqualStrings("WireTarget", section.blocks[0].spans[0].target);
+    try std.testing.expectEqualStrings("s", section.blocks[0].spans[0].trail);
+    try std.testing.expect(sectionHeadingCompanion(section) != null);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes[0].definitions[0].block);
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.organization.lexemes[0].definitions[0].examples[0]);
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryText(&out.writer, decoded.entry, false);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Nouns"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "wire definition"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "wire example"));
+    out.clearRetainingCapacity();
+    _ = try entryTextFolded(&out, decoded.entry, false, .{ .details = true }, &.{}, 0);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Nouns"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "wire definition"));
+    out.clearRetainingCapacity();
+    try entryTextWithDetails(&out.writer, decoded.entry, false, false);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Nouns"));
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "wire example") == null);
 }

@@ -10,6 +10,9 @@ pub fn build(b: *std.Build) void {
     const test_optimize: std.builtin.Optimize = .safe;
     const namespace_registry_mod = namespaceRegistryModule(b, target, optimize);
     const namespace_registry_test_mod = namespaceRegistryModule(b, target, test_optimize);
+    // Reuse the registry graph's exact Unicode modules in reader consumers.
+    const unicode_lower_mod = namespace_registry_mod.import_table.get("unicode_lower").?;
+    const unicode_lower_test_mod = namespace_registry_test_mod.import_table.get("unicode_lower").?;
     const language_metadata_parser_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/parser/root.zig"),
         .target = target,
@@ -221,12 +224,15 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "build-dictionary", "Pre-expand templates/modules and emit data-only dictionary blobs", addRunArtifactCommand(b, pipeline_exe, &.{}), &.{});
     const blob_files_mod = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
+    // Encoder and readers share one module identity for this source file.
+    encoder_mod.addImport("blob_files", blob_files_mod);
+    encoder_mod_test.addImport("blob_files", blob_files_mod_test);
     const blob_query_exe = addCliExecutable(b, "dict", b.path("src/frontend/main.zig"), target, optimize, &.{
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
         .{ .name = "blob_files", .module = blob_files_mod },
         .{ .name = "blob_storage", .module = storage_mod },
-        .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("src/shared/html_entities.zig"), .target = target, .optimize = optimize }) },
+        .{ .name = "unicode_lower", .module = unicode_lower_mod },
     });
     // Locale-aware terminal cell widths use libc; lld supports current host crt objects.
     blob_query_exe.root_module.link_libc = true;
@@ -246,7 +252,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "blob_decoder", .module = blob_decoder_mod },
             .{ .name = "blob_files", .module = blob_files_mod },
             .{ .name = "blob_storage", .module = storage_mod },
-            .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("src/shared/html_entities.zig"), .target = target, .optimize = optimize }) },
+            .{ .name = "unicode_lower", .module = unicode_lower_mod },
         },
     });
     const ffi_lib = b.addLibrary(.{ .name = "dictffi", .root_module = ffi_mod, .linkage = .dynamic, .use_llvm = true, .use_lld = true });
@@ -349,10 +355,11 @@ pub fn build(b: *std.Build) void {
             .optimize = test_optimize,
             .imports = &.{
                 .{ .name = "blob_encoder", .module = blob_encoder_mod_test },
+                .{ .name = "encoder", .module = encoder_mod_test },
                 .{ .name = "blob_decoder", .module = blob_decoder_mod_test },
                 .{ .name = "blob_files", .module = blob_files_mod_test },
                 .{ .name = "blob_storage", .module = storage_test },
-                .{ .name = "html_entities", .module = b.createModule(.{ .root_source_file = b.path("src/shared/html_entities.zig"), .target = target, .optimize = test_optimize }) },
+                .{ .name = "unicode_lower", .module = unicode_lower_test_mod },
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },

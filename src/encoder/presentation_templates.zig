@@ -3,7 +3,7 @@
 const std = @import("std");
 const syntax = @import("blob_encoder").wikitext_syntax;
 const Template = syntax.Template;
-const Error = std.mem.Allocator.Error || error{RenderLimit};
+const Error = std.mem.Allocator.Error || error{ RenderLimit, InvalidPreContext };
 fn is(name: []const u8, choices: []const []const u8) bool {
     for (choices) |choice| if (std.ascii.eqlIgnoreCase(name, choice)) return true;
     return false;

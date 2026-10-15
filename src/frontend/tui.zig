@@ -436,7 +436,7 @@ const State = struct {
                     return true;
                 }
                 if (event.key == .enter and self.count() != 0) {
-                    const lower = @import("unicode_lower.zig");
+                    const lower = @import("unicode_lower");
                     const typed = try lower.lowerAlloc(self.a, std.mem.trim(u8, self.answer_query[0..self.answer_len], " \t\r\n"));
                     defer self.a.free(typed);
                     const expected = try lower.lowerAlloc(self.a, try self.db.titleAt(self.recordIndex(self.selected)));

@@ -1,7 +1,7 @@
 //! Incremental case-insensitive search over indexed titles; payloads stay unopened.
 const std = @import("std");
 const store = @import("store.zig");
-const unicode = @import("unicode_lower.zig");
+const unicode = @import("unicode_lower");
 
 pub const default_retained_matches: usize = 4096;
 pub const max_retained_matches: usize = 128 * 1024;

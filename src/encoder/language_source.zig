@@ -138,6 +138,24 @@ pub fn classificationSection(section: Section) []const u8 {
     return section.heading;
 }
 
+// A full-source renderer observation proves which balanced links expose
+// page headings. Category sort keys and file captions keep their local scope.
+pub const LinkHeadingScopes = struct {
+    source: []const u8,
+    openings: []const usize,
+
+    fn admits(self: LinkHeadingScopes, source: []const u8, opening: usize) bool {
+        if (source.ptr != self.source.ptr or source.len != self.source.len) return false;
+        var low: usize = 0;
+        var high = self.openings.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            if (self.openings[middle] < opening) low = middle + 1 else high = middle;
+        }
+        return low < self.openings.len and self.openings[low] == opening;
+    }
+};
+
 pub const Iterator = struct {
     source: []const u8,
     cursor: usize = 0,
@@ -151,6 +169,7 @@ pub const Iterator = struct {
     heading_filter: ?MarkerFilter = null,
     mixed_levels: bool = false,
     all_heading_levels: bool = false,
+    link_headings: ?LinkHeadingScopes = null,
     control_matcher: ?syntax.ControlMatcher = null,
 
     pub const MarkerFilter = struct {
@@ -180,6 +199,7 @@ pub const Iterator = struct {
 
     pub fn next(self: *Iterator) ?Section {
         if (self.done) return null;
+        self.balance.link_headings = self.link_headings;
         while (self.cursor < self.source.len) {
             const line_start = self.cursor;
             const newline = std.mem.indexOfScalarPos(u8, self.source, line_start, '\n') orelse self.source.len;
@@ -292,8 +312,7 @@ const ProtectionScan = struct {
 };
 
 const Balance = struct {
-    templates: usize = 0,
-    links: usize = 0,
+    link_headings: ?LinkHeadingScopes = null,
     comments: usize = 0,
     tables: usize = 0,
     protected_until: usize = 0,
@@ -318,7 +337,7 @@ const Balance = struct {
             if (line[i] == '<' and !std.mem.startsWith(u8, line[i..], "<!--")) {
                 const absolute = line_start + i;
                 const token_end: ?usize = self.protection.protectedEnd(source, absolute) orelse
-                    if (self.templates == 0) (if (self.protection.tagAt(source, absolute)) |tag| tag.end else null) else null;
+                    if (self.protection.tagAt(source, absolute)) |tag| tag.end else null;
                 if (token_end) |end| {
                     self.protected_until = end;
                     if (end >= line_end) return;
@@ -336,30 +355,27 @@ const Balance = struct {
                 i += 2;
                 continue;
             }
-            if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "{{")) {
-                self.templates += 1;
-                i += 1;
-                continue;
-            }
-            if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "}}")) {
-                if (self.templates != 0) self.templates -= 1;
-                i += 1;
-                continue;
-            }
-            if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "[[")) {
-                self.links += 1;
-                i += 1;
-                continue;
-            }
-            if (i + 2 <= line.len and std.mem.eql(u8, line[i .. i + 2], "]]")) {
-                if (self.links != 0) self.links -= 1;
-                i += 1;
+            if (std.mem.startsWith(u8, line[i..], "{{") or std.mem.startsWith(u8, line[i..], "[[")) {
+                // Failed roots stay literal, allowing complete inner roots to
+                // recover. Complete template/parameter roots protect headings;
+                // only an observed ordinary link exposes its page-level label.
+                // In particular category sort keys and file captions do not
+                // manufacture owners from their locally parsed headings.
+                if (syntax.balancedWithOpaqueScan(source, line_start + i, &self.protection.opaque_scan)) |pair| {
+                    const exposed = std.mem.startsWith(u8, line[i..], "[[") and
+                        if (self.link_headings) |scopes| scopes.admits(source, line_start + i) else false;
+                    if (!exposed) {
+                        self.protected_until = pair.end;
+                        if (pair.end >= line_end) return;
+                        i = pair.end - line_start - 1;
+                    }
+                }
             }
         }
     }
 
     fn isOpen(self: Balance) bool {
-        return self.templates != 0 or self.links != 0 or self.comments != 0 or self.tables != 0;
+        return self.comments != 0 or self.tables != 0;
     }
 };
 
@@ -652,6 +668,7 @@ test "language boundaries ignore protected bodies and quoted tag delimiters" {
     for ([_][]const u8{ "==English==\n[[open\n==French==\n", "==English==\n{{open|\n==French==\n" }) |source| {
         var it = Iterator.init(source);
         try std.testing.expectEqualStrings("English", it.next().?.heading);
+        try std.testing.expectEqualStrings("French", it.next().?.heading);
         try std.testing.expect(it.next() == null);
     }
 }
@@ -844,5 +861,90 @@ test "pre HTML fallback exposes categories while genuine core pairs remain prote
     for ([_][]const u8{ "<pre>[[Category:English nouns]]</pre>", "<pre / >[[Category:English nouns]]</pre>", "<nowiki><pre/ foo>[[Category:English nouns]]</pre></nowiki>", "<!-- <pre/ foo>[[Category:English nouns]]</pre> -->" }) |source| {
         var hidden: CategoryIterator = .{ .source = source };
         try std.testing.expect(hidden.next() == null);
+    }
+}
+
+test "unmatched template and link roots resume real language headings" {
+    const prefix = "==English==\n# first\n";
+    const suffix = "==French==\n# second\n";
+    for ([_][]const u8{
+        "{{open|\n",                                   "[[open\n",
+        "{{open|\n{{inner|\n==German==\nhidden\n}}\n", "[[open\n{{inner|\n==German==\nhidden\n}}\n",
+        "{{open|\n<nowiki>}}</nowiki>\n",              "[[open\n<!-- ]] -->\n",
+    }) |middle| {
+        const source = try std.mem.concat(std.testing.allocator, u8, &.{ prefix, middle, suffix });
+        defer std.testing.allocator.free(source);
+        var it = Iterator.init(source);
+        try std.testing.expectEqualStrings("English", it.next().?.heading);
+        try std.testing.expectEqualStrings("French", it.next().?.heading);
+        try std.testing.expect(it.next() == null);
+    }
+    // Matched template/parameter bodies retain their physical headings.
+    for ([_][]const u8{
+        "{{closed|\n==French==\nhidden\n}}\n",
+        "{{{value|\n==French==\nhidden\n}}}\n",
+    }) |middle| {
+        const source = try std.mem.concat(std.testing.allocator, u8, &.{ prefix, middle, "# after\n" });
+        defer std.testing.allocator.free(source);
+        var it = Iterator.init(source);
+        try std.testing.expectEqualStrings("English", it.next().?.heading);
+        try std.testing.expect(it.next() == null);
+    }
+    const malformed = "{{open|\n==French==\n";
+    try std.testing.expectEqual(@as(usize, 7), syntax.logicalEnd(malformed, 0));
+}
+
+test "unmatched owner root recovery keeps bounded overflow and complete inner scopes" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+    try source.appendSlice(std.testing.allocator, "==English==\n");
+    for (0..1024) |_| try source.appendSlice(std.testing.allocator, "{{open|\n{{closed|\n==German==\nhidden\n}}\n==French==\n# second\n");
+    var it = Iterator.init(source.items);
+    try std.testing.expectEqualStrings("English", it.next().?.heading);
+    for (0..1024) |_| try std.testing.expectEqualStrings("French", it.next().?.heading);
+    try std.testing.expect(it.next() == null);
+    var closed = Iterator.init("==English==\n{{closed|\n==French==\nhidden\n}}\n");
+    try std.testing.expectEqualStrings("English", closed.next().?.heading);
+    try std.testing.expect(closed.next() == null);
+}
+
+test "observed ordinary links expose headings while nested complete templates remain protected" {
+    for ([_][]const u8{
+        "==English==\n[[Target|\n==French==\nhidden\n]]\n",
+        "==English==\n[[Target|\n{{closed|\n==German==\nhidden\n}}\n==French==\nbody\n]]\n",
+        "==English==\n[[Target|\n{{{value|\n==German==\nhidden\n}}}\n==French==\nbody\n]]\n",
+    }) |source| {
+        var it = Iterator.init(source);
+        const openings = [_]usize{std.mem.indexOf(u8, source, "[[Target|").?};
+        it.link_headings = .{ .source = source, .openings = &openings };
+        const english = it.next().?;
+        const french = it.next().?;
+        try std.testing.expectEqualStrings("English", english.heading);
+        try std.testing.expectEqualStrings("French", french.heading);
+        try std.testing.expect(std.mem.startsWith(u8, french.source, "==French==\n"));
+        try std.testing.expect(std.mem.endsWith(u8, french.source, "]]\n"));
+        try std.testing.expect(it.next() == null);
+    }
+}
+
+test "balanced link heading admission is source-bound and conservative" {
+    const source = "==English==\n[[Target|\n==French==\nbody\n]]\n";
+    var without = Iterator.init(source);
+    try std.testing.expectEqualStrings("English", without.next().?.heading);
+    try std.testing.expect(without.next() == null);
+    const offsets = [_]usize{std.mem.indexOf(u8, source, "[[").?};
+    const copy = try std.testing.allocator.dupe(u8, source);
+    defer std.testing.allocator.free(copy);
+    var mismatched = Iterator.init(source);
+    mismatched.link_headings = .{ .source = copy, .openings = &offsets };
+    try std.testing.expectEqualStrings("English", mismatched.next().?.heading);
+    try std.testing.expect(mismatched.next() == null);
+    for ([_][]const u8{
+        "==English==\n[[Category:English nouns|\n==French==\nhidden\n]]\nOutside\n",
+        "==English==\n[[File:Example.jpg|thumb|\n==French==\ncaption\n]]\nOutside\n",
+    }) |local| {
+        var it = Iterator.init(local);
+        try std.testing.expectEqualStrings("English", it.next().?.heading);
+        try std.testing.expect(it.next() == null);
     }
 }

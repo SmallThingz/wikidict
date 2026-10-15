@@ -1132,10 +1132,261 @@ fn unsectionedExpandedLanguage(codes: LanguageCodes, source: []const u8) ?Resolv
     return found;
 }
 
+const PageSourceFragment = struct {
+    source: []const u8,
+    original_start: ?usize = null,
+};
+
 const PageLanguageGroup = struct {
     language: ResolvedLanguage,
     source: std.ArrayList(u8) = .empty,
+    fragments: std.ArrayList(PageSourceFragment) = .empty,
+
+    fn appendSource(self: *PageLanguageGroup, a: std.mem.Allocator, fragment: PageSourceFragment) !void {
+        try self.source.appendSlice(a, fragment.source);
+        if (fragment.source.len != 0) try self.fragments.append(a, fragment);
+    }
 };
+
+fn preCandidate(input: []const u8) bool {
+    var at: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, input, at, '<')) |opening| {
+        at = opening + 1;
+        if (input.len - at >= 3 and std.ascii.eqlIgnoreCase(input[at .. at + 3], "pre")) return true;
+    }
+    return false;
+}
+
+fn freeObservedScopes(a: std.mem.Allocator, scopes: []const presentation_document.ObservedPreScope) void {
+    for (scopes) |scope| a.free(scope.target);
+    if (scopes.len != 0) a.free(scopes);
+}
+
+fn freePreObservation(a: std.mem.Allocator, observation: presentation_document.PreObservation) void {
+    freeObservedScopes(a, observation.scopes);
+    a.free(observation.refused_link_openings);
+}
+
+fn linkOpeningsAlloc(a: std.mem.Allocator, scopes: []const presentation_document.ObservedPreScope, refused_link_openings: []const usize) ![]const usize {
+    var openings: std.ArrayList(usize) = .empty;
+    errdefer openings.deinit(a);
+    for (scopes) |scope| if (scope.kind == .link) try openings.append(a, scope.opening_start);
+    try openings.appendSlice(a, refused_link_openings);
+    std.mem.sort(usize, openings.items, {}, std.sort.asc(usize));
+    var unique: usize = 0;
+    for (openings.items) |opening| {
+        if (unique == 0 or openings.items[unique - 1] != opening) {
+            openings.items[unique] = opening;
+            unique += 1;
+        }
+    }
+    openings.items = openings.items[0..unique];
+    return openings.toOwnedSlice(a);
+}
+
+fn refusedOpeningInFragments(source: []const u8, fragments: []const PageSourceFragment, refused_openings: []const usize) !bool {
+    for (fragments) |fragment| {
+        const start = fragment.original_start orelse continue;
+        if (start > source.len or fragment.source.len > source.len - start or fragment.source.ptr != source[start..].ptr)
+            return error.InvalidPreContext;
+        const index = firstQuoteCutAtOrAfter(refused_openings, start);
+        if (index < refused_openings.len and refused_openings[index] < start + fragment.source.len) return true;
+    }
+    return false;
+}
+
+fn lastPreOpeningBefore(scopes: []const presentation_document.ObservedPreScope, at: usize) ?usize {
+    var low: usize = 0;
+    var high: usize = scopes.len;
+    while (low < high) {
+        const middle = low + (high - low) / 2;
+        if (scopes[middle].opening_start < at) low = middle + 1 else high = middle;
+    }
+    return if (low == 0) null else low - 1;
+}
+
+const ScopeQuoteCuts = struct {
+    positions: []const usize = &.{},
+    seeds: []const presentation_document.QuoteSeed = &.{},
+    fn at(self: @This(), position: usize) !presentation_document.QuoteSeed {
+        const index = firstQuoteCutAtOrAfter(self.positions, position);
+        if (index == self.positions.len or self.positions[index] != position) return error.InvalidPreContext;
+        return self.seeds[index];
+    }
+    fn deinit(self: @This(), a: std.mem.Allocator) void {
+        a.free(self.positions);
+        a.free(self.seeds);
+    }
+};
+const PageQuoteCuts = struct {
+    outer: ScopeQuoteCuts = .{},
+    links: []ScopeQuoteCuts = &.{},
+    fn deinit(self: @This(), a: std.mem.Allocator) void {
+        self.outer.deinit(a);
+        for (self.links) |cuts| cuts.deinit(a);
+        a.free(self.links);
+    }
+};
+fn firstQuoteCutAtOrAfter(cuts: []const usize, position: usize) usize {
+    var low: usize = 0;
+    var high = cuts.len;
+    while (low < high) {
+        const middle = low + (high - low) / 2;
+        if (cuts[middle] < position) low = middle + 1 else high = middle;
+    }
+    return low;
+}
+fn enclosingLinkScope(scopes: []const presentation_document.ObservedPreScope, position: usize) ?usize {
+    var cursor = lastPreOpeningBefore(scopes, position);
+    while (cursor) |index| {
+        const scope = scopes[index];
+        if (scope.kind == .link and scope.opening_start < position and position < scope.resume_at) return index;
+        cursor = scope.parent;
+    }
+    return null;
+}
+fn appendQuoteCut(a: std.mem.Allocator, cuts: *std.ArrayList(usize), position: usize) !void {
+    if (cuts.items.len != 0) {
+        const previous = cuts.items[cuts.items.len - 1];
+        if (position < previous) return error.InvalidPreContext;
+        if (position == previous) return;
+    }
+    try cuts.append(a, position);
+}
+fn pageQuoteCutsAlloc(a: std.mem.Allocator, source: []const u8, sections: []const language_source.Section, scopes: []const presentation_document.ObservedPreScope, context: presentation_document.QuoteContext) !PageQuoteCuts {
+    var positions: std.ArrayList(usize) = .empty;
+    defer positions.deinit(a);
+    try appendQuoteCut(a, &positions, 0);
+    for (sections) |section| {
+        const base = @intFromPtr(source.ptr);
+        const pointer = @intFromPtr(section.source.ptr);
+        if (pointer < base or pointer - base > source.len or section.source.len > source.len - (pointer - base)) return error.InvalidPreContext;
+        const start = pointer - base;
+        try appendQuoteCut(a, &positions, start);
+        try appendQuoteCut(a, &positions, start + section.source.len);
+    }
+    try appendQuoteCut(a, &positions, source.len);
+    var outside: std.ArrayList(usize) = .empty;
+    defer outside.deinit(a);
+    for (positions.items) |position| if (enclosingLinkScope(scopes, position) == null) try outside.append(a, position);
+    const outer_positions = try outside.toOwnedSlice(a);
+    errdefer a.free(outer_positions);
+    const outer_seeds = try presentation_document.bodyQuoteCutSeedsWithContextAlloc(a, source, outer_positions, context);
+    errdefer a.free(outer_seeds);
+    if (outer_positions.len != outer_seeds.len) return error.InvalidPreContext;
+    const links = try a.alloc(ScopeQuoteCuts, scopes.len);
+    @memset(links, .{});
+    errdefer {
+        for (links) |cuts| cuts.deinit(a);
+        a.free(links);
+    }
+    for (scopes, links) |scope, *output| {
+        if (scope.kind != .link) continue;
+        const observed = scope.link_quotes orelse return error.InvalidPreContext;
+        var cuts: std.ArrayList(usize) = .empty;
+        defer cuts.deinit(a);
+        try appendQuoteCut(a, &cuts, scope.body_start);
+        var cursor = firstQuoteCutAtOrAfter(positions.items, scope.body_start);
+        while (cursor < positions.items.len and positions.items[cursor] <= scope.body_end) : (cursor += 1)
+            try appendQuoteCut(a, &cuts, positions.items[cursor]);
+        try appendQuoteCut(a, &cuts, scope.body_end);
+        const relative = try a.alloc(usize, cuts.items.len);
+        defer a.free(relative);
+        for (cuts.items, relative) |absolute, *offset| offset.* = absolute - scope.body_start;
+        const seeds = try presentation_document.linkQuoteCutSeedsWithContextAlloc(a, source[scope.body_start..scope.body_end], relative, observed.entry, context);
+        errdefer a.free(seeds);
+        if (seeds.len != cuts.items.len) return error.InvalidPreContext;
+        output.* = .{ .positions = try cuts.toOwnedSlice(a), .seeds = seeds };
+    }
+    return .{ .outer = .{ .positions = outer_positions, .seeds = outer_seeds }, .links = links };
+}
+
+fn fragmentPreContextAlloc(a: std.mem.Allocator, start: usize, end: usize, scopes: []const presentation_document.ObservedPreScope, quotes: PageQuoteCuts) !presentation_document.FragmentPreContext {
+    var initial: std.ArrayList(presentation_document.FragmentPreContext.Initial) = .empty;
+    errdefer initial.deinit(a);
+    var trailing: std.ArrayList(presentation_document.FragmentPreContext.Trailing) = .empty;
+    errdefer trailing.deinit(a);
+    var newest_open: ?usize = null;
+    var newest_close: usize = 0;
+    var cursor = lastPreOpeningBefore(scopes, start);
+    // Source-backed body scopes are properly nested. Only ancestors of the
+    // last opening can contain this cut, so ordinary earlier roots are skipped.
+    while (cursor) |index| {
+        const scope = scopes[index];
+        if (scope.body_start <= start and start < scope.body_end) {
+            try initial.append(a, .{
+                .body_end = @min(scope.body_end, end) - start,
+                .resume_at = @min(scope.resume_at, end) - start,
+                .kind = scope.kind,
+                .formatting = scope.formatting,
+                .target = scope.target,
+                .quote = if (scope.kind == .link) try quotes.links[index].at(start) else null,
+                .resume_quote = if (scope.kind == .link) (scope.link_quotes orelse return error.InvalidPreContext).resume_quote else null,
+            });
+            if (scope.kind == .pre) newest_open = @max(newest_open orelse 0, scope.body_start);
+        }
+        if (scope.kind == .pre and scope.matched and scope.resume_at <= start) newest_close = @max(newest_close, scope.resume_at);
+        cursor = scope.parent;
+    }
+    cursor = lastPreOpeningBefore(scopes, end);
+    while (cursor) |index| {
+        const scope = scopes[index];
+        if (scope.opening_start >= start and scope.body_start <= end and scope.body_end >= end)
+            try trailing.append(a, .{ .opening_start = scope.opening_start - start, .body_start = scope.body_start - start, .kind = scope.kind, .formatting = scope.formatting, .target = scope.target, .quote = if (scope.kind == .link) (scope.link_quotes orelse return error.InvalidPreContext).entry else null });
+        cursor = scope.parent;
+    }
+    // Initial ancestors were appended inner-first. Trailing opens need the
+    // opposite order so the adapter consumes their actual tag intervals.
+    std.mem.reverse(presentation_document.FragmentPreContext.Trailing, trailing.items);
+    const initial_owned = try initial.toOwnedSlice(a);
+    errdefer a.free(initial_owned);
+    const trailing_owned = try trailing.toOwnedSlice(a);
+    errdefer a.free(trailing_owned);
+    return .{
+        .quote = if (enclosingLinkScope(scopes, start)) |index| try quotes.links[index].at(start) else try quotes.outer.at(start),
+        .initial = initial_owned,
+        .trailing = trailing_owned,
+        .initial_block_pre = if (newest_open) |opened| opened > newest_close else false,
+    };
+}
+
+fn ownerSourceFragmentsAlloc(a: std.mem.Allocator, source: []const u8, fragments: []const PageSourceFragment, prefix: []const u8, scopes: []const presentation_document.ObservedPreScope, quotes: PageQuoteCuts) ![]const presentation_document.SourceFragment {
+    var ranges: std.ArrayList(PageSourceFragment) = .empty;
+    defer ranges.deinit(a);
+    if (prefix.len != 0) try ranges.append(a, .{ .source = prefix, .original_start = 0 });
+    for (fragments) |fragment| {
+        if (ranges.items.len != 0) {
+            const previous = &ranges.items[ranges.items.len - 1];
+            if (previous.original_start) |left| if (fragment.original_start) |right| {
+                if (left + previous.source.len == right) {
+                    previous.source = source[left .. right + fragment.source.len];
+                    continue;
+                }
+            };
+        }
+        try ranges.append(a, fragment);
+    }
+    const result = try a.alloc(presentation_document.SourceFragment, ranges.items.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (result[0..initialized]) |fragment| {
+            a.free(fragment.pre.initial);
+            a.free(fragment.pre.trailing);
+        }
+        a.free(result);
+    }
+    for (ranges.items, result) |range, *fragment| {
+        fragment.* = .{
+            .source = range.source,
+            .pre = if (range.original_start) |start|
+                try fragmentPreContextAlloc(a, start, start + range.source.len, scopes, quotes)
+            else
+                .{},
+        };
+        initialized += 1;
+    }
+    return result;
+}
 
 fn groupIndex(groups: []PageLanguageGroup, language: ResolvedLanguage) ?usize {
     for (groups, 0..) |group, index| {
@@ -1217,8 +1468,16 @@ fn processMain(
     poem_phase: ?*const presentation_document.PoemPhase,
 ) !void {
     // MediaWiki's first body TOC is page-scoped, before language-owner regrouping.
-    const source = try presentation_document.preparePageTocSourceAlloc(page_allocator, source_raw, codes.behavior_switches);
-    defer if (source.ptr != source_raw.ptr) page_allocator.free(source);
+    const may_cross_pre = preCandidate(source_raw);
+    const may_cross_link = presentation_document.mayHaveMultilineLinks(source_raw);
+    const body_source: presentation_document.PreparedBodySource = if (may_cross_pre or may_cross_link)
+        try presentation_document.prepareBodySourceAlloc(page_allocator, title, source_raw)
+    else
+        .{ .source = source_raw, .fallbacks = .{} };
+    defer if (body_source.source.ptr != source_raw.ptr) page_allocator.free(body_source.source);
+    fallbacks.merge(body_source.fallbacks);
+    const source = try presentation_document.preparePageTocSourceAlloc(page_allocator, body_source.source, codes.behavior_switches);
+    defer if (source.ptr != body_source.source.ptr) page_allocator.free(source);
     stats.main_pages += 1;
 
     if (fallbacks.expansion_error and source.len == 0) {
@@ -1252,8 +1511,19 @@ fn processMain(
     }
     var page_sections: std.ArrayList(language_source.Section) = .empty;
     defer page_sections.deinit(page_allocator);
+    const reference_context = try presentation_document.referenceDefinitionsAlloc(page_allocator, source);
+    // Ordinary navigation admission is established by the actual renderer,
+    // before ownership cuts. The same raw-domain map later carries rendering.
+    const early_observation: presentation_document.PreObservation = if (may_cross_link)
+        try presentation_document.observePreScopesAlloc(page_allocator, title, source, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, reference_context, poem_phase)
+    else
+        .{ .scopes = &.{}, .unclosed_formatting = false };
+    defer freePreObservation(page_allocator, early_observation);
+    const expanded_link_openings = try linkOpeningsAlloc(page_allocator, early_observation.scopes, early_observation.refused_link_openings);
+    defer page_allocator.free(expanded_link_openings);
     const expanded_markers: LanguageMarkers = .{ .codes = &codes };
     var sections = languageSections(source, &expanded_markers);
+    if (may_cross_link) sections.link_headings = .{ .source = source, .openings = expanded_link_openings };
     while (sections.next()) |section| try appendClassifiedSection(page_allocator, codes, &page_sections, &owned_headings, section);
 
     var raw_sections: std.ArrayList(language_source.Section) = .empty;
@@ -1275,6 +1545,24 @@ fn processMain(
         // without banning a code that another edition uses as a language.
         const raw_markers: LanguageMarkers = .{ .codes = &codes, .represented = if (named_boundaries) represented.items else null };
         var raw_it = languageSections(raw, &raw_markers);
+        var raw_observation: presentation_document.PreObservation = .{ .scopes = &.{}, .unclosed_formatting = false };
+        defer freePreObservation(page_allocator, raw_observation);
+        var raw_link_openings: []const usize = &.{};
+        defer if (raw_link_openings.len != 0) page_allocator.free(raw_link_openings);
+        if (presentation_document.mayHaveMultilineLinks(raw)) {
+            const raw_prepared = try presentation_document.prepareBodySourceAlloc(page_allocator, title, raw);
+            defer if (raw_prepared.source.ptr != raw.ptr) page_allocator.free(raw_prepared.source);
+            const raw_toc = try presentation_document.preparePageTocSourceAlloc(page_allocator, raw_prepared.source, codes.behavior_switches);
+            defer if (raw_toc.ptr != raw_prepared.source.ptr) page_allocator.free(raw_toc);
+            // Authored raw text remains the corroboration authority. A changed
+            // preparation domain cannot lend offsets to the original Iterator.
+            if (std.mem.eql(u8, raw, raw_toc)) {
+                const raw_references = try presentation_document.referenceDefinitionsAlloc(page_allocator, raw);
+                raw_observation = try presentation_document.observePreScopesAlloc(page_allocator, title, raw, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, raw_references, null);
+                raw_link_openings = try linkOpeningsAlloc(page_allocator, raw_observation.scopes, raw_observation.refused_link_openings);
+                raw_it.link_headings = .{ .source = raw, .openings = raw_link_openings };
+            }
+        }
         while (raw_it.next()) |section| try appendClassifiedSection(page_allocator, codes, &raw_sections, &owned_headings, section);
     }
     var raw_aligned = raw_sections.items.len != 0 and raw_sections.items.len == page_sections.items.len;
@@ -1324,11 +1612,16 @@ fn processMain(
 
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
     defer {
-        for (groups.items) |*group| group.source.deinit(page_allocator);
+        for (groups.items) |*group| {
+            group.source.deinit(page_allocator);
+            group.fragments.deinit(page_allocator);
+        }
         groups.deinit(page_allocator);
     }
     var pending: std.ArrayList(u8) = .empty;
     defer pending.deinit(page_allocator);
+    var pending_fragments: std.ArrayList(PageSourceFragment) = .empty;
+    defer pending_fragments.deinit(page_allocator);
     var current: ?usize = null;
     // Mixed-depth language boundaries can reveal an uncertain region even
     // when raw and expanded section counts agree. Keep it separate; pages
@@ -1370,21 +1663,23 @@ fn processMain(
         if (resolved) |language| {
             const group_index = groupIndex(groups.items, language) orelse blk: {
                 try groups.append(page_allocator, .{ .language = language });
-                if (shared_prefix) |prefix| try groups.items[groups.items.len - 1].source.appendSlice(page_allocator, prefix);
+                if (shared_prefix) |prefix| try groups.items[groups.items.len - 1].appendSource(page_allocator, .{ .source = prefix });
                 break :blk groups.items.len - 1;
             };
             current = group_index;
             if (pending.items.len != 0) {
-                try groups.items[group_index].source.appendSlice(page_allocator, pending.items);
+                for (pending_fragments.items) |fragment| try groups.items[group_index].appendSource(page_allocator, fragment);
                 pending.clearRetainingCapacity();
+                pending_fragments.clearRetainingCapacity();
             }
-            try groups.items[group_index].source.appendSlice(page_allocator, section.source);
+            try groups.items[group_index].appendSource(page_allocator, .{ .source = section.source, .original_start = @intFromPtr(section.source.ptr) - @intFromPtr(source.ptr) });
         } else if (current) |group_index| {
             fallbacks.unresolved_language_heading = true;
-            try groups.items[group_index].source.appendSlice(page_allocator, section.source);
+            try groups.items[group_index].appendSource(page_allocator, .{ .source = section.source, .original_start = @intFromPtr(section.source.ptr) - @intFromPtr(source.ptr) });
         } else {
             fallbacks.unresolved_language_heading = true;
             try pending.appendSlice(page_allocator, section.source);
+            try pending_fragments.append(page_allocator, .{ .source = section.source, .original_start = @intFromPtr(section.source.ptr) - @intFromPtr(source.ptr) });
         }
     }
 
@@ -1446,8 +1741,9 @@ fn processMain(
     // Page-level material before the first resolved language belongs with the
     // first language instead of becoming a synthetic language of its own.
     if (pending.items.len != 0) {
-        try groups.items[0].source.appendSlice(page_allocator, pending.items);
+        for (pending_fragments.items) |fragment| try groups.items[0].appendSource(page_allocator, fragment);
         pending.clearRetainingCapacity();
+        pending_fragments.clearRetainingCapacity();
     }
 
     // Preserve ordinary page context only for one unambiguous language.
@@ -1456,13 +1752,48 @@ fn processMain(
     const preserve_prefix = shared_prefix == null and page_prefix.len != 0 and
         groups.items.len == 1 and groups.items[0].language.code.len != 0 and
         !fallbacks.unresolved_language_heading;
-    const reference_context = try presentation_document.referenceDefinitionsAlloc(page_allocator, source);
+    const pre_observation: presentation_document.PreObservation = if (may_cross_link)
+        early_observation
+    else if (may_cross_pre and groups.items.len > 1)
+        try presentation_document.observePreScopesAlloc(page_allocator, title, source, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, reference_context, poem_phase)
+    else
+        .{ .scopes = &.{}, .unclosed_formatting = false };
+    defer if (!may_cross_link) freePreObservation(page_allocator, pre_observation);
+    fallbacks.unclosed_formatting = fallbacks.unclosed_formatting or pre_observation.unclosed_formatting;
+    const quote_cuts: PageQuoteCuts = if (pre_observation.scopes.len != 0)
+        try pageQuoteCutsAlloc(page_allocator, source, page_sections.items, pre_observation.scopes, .{
+            .title = title,
+            .language = "English",
+            .link_trail = codes.link_trail,
+            .namespace_catalog = codes.namespace_catalog,
+            .behavior_switches = codes.behavior_switches,
+            .image_options = codes.image_options,
+            .poem_phase = poem_phase,
+        })
+    else
+        .{};
+    defer quote_cuts.deinit(page_allocator);
     for (groups.items) |group| {
+        // Only expanded source facts inside a real emitted owner range can
+        // preserve this exact page-level diagnostic after an ownership cut.
+        if (try refusedOpeningInFragments(source, group.fragments.items, pre_observation.refused_link_openings))
+            fallbacks.literal_markup = true;
         const group_source = if (preserve_prefix)
             try std.mem.concat(page_allocator, u8, &.{ page_prefix, group.source.items })
         else
             group.source.items;
-        const payload = try presentation_document.compileReportedWithReferencesAndPoemAlloc(
+        const fragments = if (pre_observation.scopes.len != 0)
+            try ownerSourceFragmentsAlloc(page_allocator, source, group.fragments.items, if (preserve_prefix) page_prefix else "", pre_observation.scopes, quote_cuts)
+        else
+            &.{};
+        defer {
+            for (fragments) |fragment| {
+                page_allocator.free(fragment.pre.initial);
+                page_allocator.free(fragment.pre.trailing);
+            }
+            if (fragments.len != 0) page_allocator.free(fragments);
+        }
+        const payload = try presentation_document.compileReportedWithReferencesAndPoemFragmentsAlloc(
             page_allocator,
             title,
             .language,
@@ -1477,6 +1808,7 @@ fn processMain(
             reference_context,
             fallbacks,
             poem_phase,
+            fragments,
         );
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
         stats.language_records += 1;
@@ -4407,4 +4739,601 @@ test "Arabic meanings category refuses uncorroborated ambiguous protected and ne
     const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, foreign_metadata);
     try std.testing.expectEqualStrings("fr", decoded.entry.language_code);
     try std.testing.expect(std.mem.indexOf(u8, record.payload, "Foreign definition") != null);
+}
+
+test "Writer language fragments preserve parsed pre scope through DPR2" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const out_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, out_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const cases = [_]struct { title: []const u8, source: []const u8, french_code: bool, retained_state: bool = false, quoted: bool = false, inherited_bold: bool = false, nested: bool = false, whitespace: bool = false, unclosed: bool = false }{
+        .{ .title = "fragment-pre", .source = "==English==\n<pre/ >\n[[cat]]\n==French==\n[[chat]]</pre> [[chien]]\n==English==\n[[dog]]\n", .french_code = true },
+        .{ .title = "inline-fragment-pre", .source = "==English==\nprefix <pre/ >[[cat]]\n==French==\n[[chat]]</pre> [[chien]]\n==English==\n[[dog]]\n", .french_code = true },
+        .{ .title = "protected-fragment-pre", .source = "==English==\n<pre/ >\n[[cat]]\n==French==\n<nowiki></pre></nowiki><source></pre></source>[[chat]]</pre> [[chien]]\n==English==\n[[dog]]\n", .french_code = true },
+        .{ .title = "stateful-fragment-pre", .source = "==English==\n<pre/ >\n[[cat]]<ref name=keep>alpha</ref>[[File:One.png]]\n==French==\n[[chat]]</pre> [[chien]]\n==English==\n[[dog]]<ref name=keep/><ref>beta</ref>[[File:Two.png]]\n", .french_code = true, .retained_state = true },
+        .{ .title = "page-prefix-pre", .source = "<pre/ >\n==English==\n[[cat]]\n==French==\n[[chat]]</pre> [[chien]]\n==English==\n[[dog]]\n", .french_code = true },
+        .{ .title = "quoted-prefix-pre", .source = "==English==\n'''bold <pre/ >[[cat]]\n==French==\n[[chat]]</pre> [[chien]]\n==English==\n[[dog]]\n", .french_code = true, .quoted = true },
+        .{ .title = "inherited-bold-pre", .source = "==English==\n<b>\n<pre/ >\n[[cat]]\n==French==\n[[chat]]\n</pre>\n</b>[[chien]]\n==English==\n[[dog]]\n", .french_code = true, .inherited_bold = true },
+        .{ .title = "nested-block-pre", .source = "==English==\n<pre/ >outer\n<pre/ >[[cat]]\n==French==\n[[chat]]</pre>\n* [[middle]]\n</pre> [[chien]]\n==English==\n[[dog]]\n", .french_code = true, .nested = true },
+        .{ .title = "whitespace-fragment-pre", .source = "==English==\n<pre/ >\n[[cat]]  \tA  \n\n==French==\n[[chat]]  \tB  \n</pre> [[chien]]\n==English==\n[[dog]]\n", .french_code = true, .whitespace = true },
+        .{ .title = "malformed-fragment-pre", .source = "==English==\n<pre/ >\n[[cat]]\n==French==\n[[chat]]</pre> [[chien]]\n==English==\n[[dog]]<math>bad\n", .french_code = true, .unclosed = true },
+        // A table cell is a local inline domain in the complete renderer.
+        // Its parsed pre cannot extend to the later page-level closing tag.
+        // That cell-local opener is genuinely unclosed in its own domain.
+        .{ .title = "cell-local-pre", .source = "==English==\n<table><tr><td><pre/ >[[cat]]</td></tr></table>\n==French==\n[[chat]]</pre> [[chien]]\n==English==\n[[dog]]\n", .french_code = false, .unclosed = true },
+    };
+    for (cases) |case| try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, case.title, case.source, case.source, null, &.{});
+    const opaque_source = "==English==\n<pre>\n==French==\n[[chat]]\n</pre>\n[[dog]]\n";
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "opaque-pre-control", opaque_source, opaque_source, null, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(cases.len * 2 + 1, stats.language_records);
+    var fallback_map = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ out_root, "fallback-pages.jsonl" }));
+    defer fallback_map.deinit();
+    var lines = std.mem.splitScalar(u8, fallback_map.bytes, '\n');
+    var diagnosed_malformed = false;
+    var diagnosed_cell = false;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        defer parsed.deinit();
+        const reported_title = parsed.value.object.get("title").?.string;
+        var unclosed = false;
+        for (parsed.value.object.get("reasons").?.array.items) |reason|
+            unclosed = unclosed or std.mem.eql(u8, reason.string, "unclosed_formatting");
+        for (cases) |case| if (std.mem.eql(u8, case.title, reported_title)) {
+            try std.testing.expectEqual(case.unclosed, unclosed);
+            if (case.unclosed and std.mem.eql(u8, case.title, "malformed-fragment-pre")) diagnosed_malformed = true;
+            if (case.unclosed and std.mem.eql(u8, case.title, "cell-local-pre")) diagnosed_cell = true;
+        };
+    }
+    try std.testing.expect(diagnosed_malformed);
+    try std.testing.expect(diagnosed_cell);
+    for ([_][]const u8{ "English", "French" }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, out_root, owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        for (cases) |case| {
+            const record = (try index.find(case.title)).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            const english = std.mem.eql(u8, owner, "English");
+            if (case.retained_state and english) {
+                try std.testing.expectEqual(@as(usize, 2), decoded.entry.references.len);
+                try std.testing.expectEqualStrings("keep", decoded.entry.references[0].name);
+                try std.testing.expectEqual(@as(usize, 1), decoded.entry.references[0].number);
+                try std.testing.expectEqual(@as(usize, 2), decoded.entry.references[1].number);
+                var reference_text: std.ArrayList(u8) = .empty;
+                for (decoded.entry.references[0].spans) |span| try reference_text.appendSlice(a, span.text);
+                try std.testing.expectEqualStrings("alpha", reference_text.items);
+                reference_text.clearRetainingCapacity();
+                for (decoded.entry.references[1].spans) |span| try reference_text.appendSlice(a, span.text);
+                try std.testing.expectEqualStrings("beta", reference_text.items);
+                try std.testing.expectEqual(@as(usize, 2), decoded.entry.media.len);
+                try std.testing.expectEqualStrings("One.png", decoded.entry.media[0].file);
+                try std.testing.expectEqualStrings("Two.png", decoded.entry.media[1].file);
+            }
+            const expected = if (english) [_][]const u8{ "cat", "dog" } else [_][]const u8{ "chat", "chien" };
+            var counts = [_]usize{ 0, 0 };
+            var middle_count: usize = 0;
+            var code_text: std.ArrayList(u8) = .empty;
+            for (decoded.entry.sections) |section| for (section.blocks) |block_value| {
+                for (block_value.spans) |span| {
+                    if (span.code) try code_text.appendSlice(a, span.text);
+                    if (span.kind == .link and std.mem.eql(u8, span.target, "middle")) {
+                        try std.testing.expect(case.nested and !english);
+                        try std.testing.expect(block_value.kind == .list_item);
+                        try std.testing.expect(span.code);
+                        middle_count += 1;
+                    }
+                    if (span.kind != .link) continue;
+                    for (expected, 0..) |target, i| if (std.mem.eql(u8, span.target, target)) {
+                        counts[i] += 1;
+                        try std.testing.expectEqual(i == 0 and (english or case.french_code), span.code);
+                        try std.testing.expectEqual(i == 0 and (case.inherited_bold or (english and case.quoted)), span.bold);
+                    };
+                    if (english) try std.testing.expect(!std.mem.eql(u8, span.target, "chat") and !std.mem.eql(u8, span.target, "chien")) else try std.testing.expect(!std.mem.eql(u8, span.target, "cat") and !std.mem.eql(u8, span.target, "dog"));
+                }
+                if (block_value.table) |table| for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
+                    if (span.kind == .link and std.mem.eql(u8, span.target, "cat")) {
+                        try std.testing.expect(english);
+                        try std.testing.expect(span.code);
+                        counts[0] += 1;
+                    }
+                };
+            };
+            try std.testing.expectEqual(@as(usize, 1), counts[0]);
+            try std.testing.expectEqual(@as(usize, 1), counts[1]);
+            try std.testing.expectEqual(@as(usize, if (case.nested and !english) 1 else 0), middle_count);
+            if (case.whitespace) try std.testing.expect(std.mem.indexOf(u8, code_text.items, if (english) "cat  \tA  \n\n" else "chat  \tB  \n") != null);
+        }
+        const opaque_record = try index.find("opaque-pre-control");
+        if (std.mem.eql(u8, owner, "French")) try std.testing.expect(opaque_record == null) else try std.testing.expect(opaque_record != null);
+    }
+}
+
+test "unmatched template and link roots retain distinct published language bodies through DPR2" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TestLanguages.codes();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const english = "==English==\n# [[cat|English definition]]\n";
+    const french = "==French==\n# [[chat|French definition]]\n===Verb===\n# [[v|French verb tail]]\n";
+    const active = [_]struct { title: []const u8, middle: []const u8, following: []const u8 = french }{
+        .{ .title = "broken-template", .middle = "{{open|\n" },
+        .{ .title = "broken-link", .middle = "[[open\n" },
+        .{ .title = "broken-template-inner", .middle = "{{open|\n{{closed|\n==French==\n# [[hidden|Hidden French definition]]\n}}\n" },
+        .{ .title = "broken-link-inner", .middle = "[[open\n{{closed|\n==French==\nHidden French definition\n}}\n" },
+        .{ .title = "broken-template-protected", .middle = "{{open|\n<nowiki>}}</nowiki>\n" },
+        .{ .title = "broken-link-comment", .middle = "[[open\n<!-- ]] -->\n" },
+        .{ .title = "balanced-link-heading", .middle = "[[Target|\n", .following = "==French==\n]]\n# [[chat|French definition]]\n===Verb===\n# [[v|French verb tail]]\n" },
+        .{ .title = "balanced-link-inner-template", .middle = "[[Target|\n{{closed|\n==German==\nHidden German definition\n}}\n", .following = "==French==\n]]\n# [[chat|French definition]]\n===Verb===\n# [[v|French verb tail]]\n" },
+    };
+    for (active) |case| {
+        const source = try std.mem.concat(a, u8, &.{ english, case.middle, case.following });
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, source, source, null);
+    }
+    const protected = [_]struct { title: []const u8, middle: []const u8 }{
+        .{ .title = "balanced-template", .middle = "{{closed|\n==French==\nHidden French definition\n}}\n" },
+        .{ .title = "balanced-parameter", .middle = "{{{value|\n==French==\nHidden French definition\n}}}\n" },
+    };
+    for (protected) |case| {
+        const source = try std.mem.concat(a, u8, &.{ english, case.middle, "# English tail\n" });
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, source, source, null);
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, active.len * 2 + protected.len), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    inline for (.{ .{ "English", "en", "cat", "chat" }, .{ "French", "fr", "chat", "cat" } }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, owner[0]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(owner[1], metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        for (active) |case| {
+            const record = (try index.find(case.title)).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            try std.testing.expectEqualStrings(owner[1], decoded.entry.language_code);
+            var expected_link = false;
+            var verb = false;
+            for (decoded.entry.sections) |section| {
+                verb = verb or std.mem.eql(u8, section.title, "Verb");
+                for (section.blocks) |block| for (block.spans) |span| if (span.kind == .link) {
+                    expected_link = expected_link or std.mem.eql(u8, span.target, owner[2]);
+                    try std.testing.expect(!std.mem.eql(u8, span.target, owner[3]));
+                };
+            }
+            try std.testing.expect(expected_link);
+            if (std.mem.eql(u8, owner[1], "fr")) {
+                try std.testing.expect(verb);
+                try std.testing.expect(std.mem.indexOf(u8, record.payload, "French verb tail") != null);
+                try std.testing.expect(std.mem.indexOf(u8, record.payload, "Hidden French definition") == null);
+            }
+        }
+        for (protected) |case| {
+            if (std.mem.eql(u8, owner[1], "fr")) try std.testing.expect((try index.find(case.title)) == null) else {
+                const record = (try index.find(case.title)).?;
+                const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+                try std.testing.expectEqualStrings("en", decoded.entry.language_code);
+                try std.testing.expect(std.mem.indexOf(u8, record.payload, "English tail") != null);
+            }
+        }
+    }
+}
+
+test "Writer ordinary multiline links retain heading navigation without category or caption owners" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TestLanguages.codes();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const ordinary = [_]struct { title: []const u8, authored: []const u8, target: []const u8 }{
+        .{ .title = "ordinary-linked-owner", .authored = "Target", .target = "Target" },
+        .{ .title = "escaped-category-linked-owner", .authored = ":Category:English_nouns", .target = "Category:English nouns" },
+        .{ .title = "escaped-file-linked-owner", .authored = ":File:Example.jpg", .target = "File:Example.jpg" },
+    };
+    for (ordinary) |case| {
+        const source = try std.fmt.allocPrint(a, "==English==\nEnglish only\n[[{s}|\n==French==\nFrench body\n]]\nOutside body\n", .{case.authored});
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, source, source, null);
+    }
+    const local = [_]struct { title: []const u8, source: []const u8, file: bool }{
+        .{ .title = "category-local-heading", .source = "==English==\nEnglish only\n[[Category:English nouns|\n==French==\nHidden sort key\n]]\nOutside body\n", .file = false },
+        .{ .title = "caption-local-heading", .source = "==English==\nEnglish only\n[[File:Example.jpg|thumb|80px|\n==French==\nCaption body\n]]\nOutside body\n", .file = true },
+    };
+    for (local) |case| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, case.source, case.source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, ordinary.len * 2 + local.len), stats.language_records);
+    for ([_][]const u8{ "English", "French" }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const french = std.mem.eql(u8, owner, "French");
+        for (ordinary) |case| {
+            const record = (try index.find(case.title)).?;
+            const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            try std.testing.expectEqual(@as(usize, 0), page.entry.media.len);
+            var heading_count: usize = 0;
+            var linked_body = false;
+            var outside = false;
+            for (page.entry.sections) |section| {
+                for (section.blocks) |block| for (block.spans) |span| {
+                    if (std.mem.eql(u8, span.text, "French")) {
+                        try std.testing.expect(french);
+                        try std.testing.expectEqualStrings("French", section.title);
+                        try std.testing.expectEqual(@as(u8, 2), section.level);
+                        try std.testing.expect(block.kind == .heading);
+                        try std.testing.expectEqual(@as(u8, 2), block.level);
+                        try std.testing.expect(span.kind == .link);
+                        try std.testing.expectEqualStrings(case.target, span.target);
+                        heading_count += 1;
+                    }
+                    if (std.mem.indexOf(u8, span.text, "French body") != null) {
+                        try std.testing.expect(french);
+                        try std.testing.expect(span.kind == .link);
+                        try std.testing.expectEqualStrings(case.target, span.target);
+                        linked_body = true;
+                    }
+                    if (std.mem.indexOf(u8, span.text, "Outside body") != null) {
+                        try std.testing.expect(french);
+                        try std.testing.expect(span.kind == .text);
+                        outside = true;
+                    }
+                    if (!french) try std.testing.expect(std.mem.indexOf(u8, span.text, "English only") != null or span.text.len == 0);
+                };
+            }
+            try std.testing.expectEqual(@as(usize, if (french) 1 else 0), heading_count);
+            try std.testing.expectEqual(french, linked_body);
+            try std.testing.expectEqual(french, outside);
+        }
+        for (local) |case| {
+            if (french) {
+                try std.testing.expect((try index.find(case.title)) == null);
+                continue;
+            }
+            const record = (try index.find(case.title)).?;
+            const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            try std.testing.expect(std.mem.indexOf(u8, record.payload, "Outside body") != null);
+            try std.testing.expect(std.mem.indexOf(u8, record.payload, "Hidden sort key") == null);
+            try std.testing.expectEqual(@as(usize, if (case.file) 1 else 0), page.entry.media.len);
+            if (case.file) {
+                try std.testing.expectEqualStrings("Example.jpg", page.entry.media[0].file);
+                try std.testing.expect(std.mem.indexOf(u8, page.entry.media[0].caption, "Caption body") != null);
+            }
+        }
+    }
+}
+
+test "Writer publishes authored table group literals with cells links and fallback evidence" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const cases = [_]struct { title: []const u8, source: []const u8, outside: []const u8, cell: []const u8, label: []const u8, rows: usize }{
+        .{
+            .title = "authored-table-groups",
+            .source = "==English==\n<table>before<thead><tr><th>head</th></tr></thead><tbody><tr><td>[[cat|body]]</td></tr></tbody><tfoot><tr><td>tail</td></tr></tfoot>after</table>",
+            .outside = "before<thead></thead><tbody></tbody><tfoot></tfoot>after",
+            .cell = "body",
+            .label = "body",
+            .rows = 3,
+        },
+        .{
+            .title = "authored-cell-group",
+            .source = "==English==\n<table>before<TBODY data-x='keep  &amp; value'><tr><td>in<TFOOT title=\"cell\">[[cat|cell]]</TFOOT>out</td></tr></TBODY>after</table>",
+            .outside = "before<TBODY data-x='keep  & value'></TBODY>after",
+            .cell = "in<TFOOT title=\"cell\">cell</TFOOT>out",
+            .label = "cell",
+            .rows = 1,
+        },
+        .{
+            .title = "authored-translations-group",
+            .source = "==English==\n<table class=\"translations\"><tbody><tr><td>[[cat|inside]]</td></tr></tbody></table>",
+            .outside = "<tbody></tbody>",
+            .cell = "inside",
+            .label = "inside",
+            .rows = 1,
+        },
+    };
+    for (cases) |case| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, case.source, case.source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 3), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "English"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("en", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    for (cases, 0..) |case, case_index| {
+        const record = (try index.find(case.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings("en", decoded.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+        const blocks = decoded.entry.sections[0].blocks;
+        try std.testing.expectEqual(@as(usize, 2), blocks.len);
+        try std.testing.expectEqual(blobs.presentation_types.BlockKind.paragraph, blocks[0].kind);
+        var outside: std.ArrayList(u8) = .empty;
+        for (blocks[0].spans) |span| {
+            try std.testing.expectEqual(blobs.presentation_types.InlineKind.text, span.kind);
+            try outside.appendSlice(a, span.text);
+            try std.testing.expectEqualStrings("", span.target);
+            try std.testing.expectEqualStrings("", span.trail);
+        }
+        try std.testing.expectEqualStrings(case.outside, outside.items);
+        const table = blocks[1].table.?;
+        try std.testing.expectEqual(case.rows, table.rows.len);
+        for (table.rows) |row| try std.testing.expectEqual(@as(usize, 1), row.cells.len);
+        const linked_row: usize = if (case_index == 0) 1 else 0;
+        var cell_text: std.ArrayList(u8) = .empty;
+        var links: usize = 0;
+        for (table.rows[linked_row].cells[0].spans) |span| {
+            try cell_text.appendSlice(a, span.text);
+            try cell_text.appendSlice(a, span.trail);
+            if (span.kind == .link) {
+                links += 1;
+                try std.testing.expectEqualStrings("cat", span.target);
+                try std.testing.expectEqualStrings(case.label, span.text);
+            }
+        }
+        try std.testing.expectEqualStrings(case.cell, cell_text.items);
+        try std.testing.expectEqual(@as(usize, 1), links);
+        if (case_index == 0) {
+            try std.testing.expect(table.rows[0].cells[0].header);
+            try std.testing.expectEqualStrings("head", table.rows[0].cells[0].spans[0].text);
+            try std.testing.expectEqualStrings("tail", table.rows[2].cells[0].spans[0].text);
+        }
+    }
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    var lines = std.mem.tokenizeScalar(u8, report, '\n');
+    for (cases) |case| {
+        const line = lines.next() orelse return error.TestUnexpectedResult;
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings(case.title, parsed.value.object.get("title").?.string);
+        const reasons = parsed.value.object.get("reasons").?.array.items;
+        try std.testing.expectEqual(@as(usize, 1), reasons.len);
+        try std.testing.expectEqualStrings("literal_markup", reasons[0].string);
+    }
+    try std.testing.expect(lines.next() == null);
+}
+
+test "Writer quote scopes preserve linked owner styles and outside suffix through DPR2" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TestLanguages.codes();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const source = "==English==\n'''before [[Target|''one\n==French==\nbody'']] after''' plain";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "quoted linked owner", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    const expected = [_]struct { text: []const u8, french: bool, bold: bool, italic: bool, linked: bool }{
+        .{ .text = "before", .french = false, .bold = true, .italic = false, .linked = false },
+        .{ .text = "one", .french = false, .bold = true, .italic = true, .linked = true },
+        .{ .text = "French", .french = true, .bold = true, .italic = true, .linked = true },
+        .{ .text = "body", .french = true, .bold = true, .italic = true, .linked = true },
+        .{ .text = "after", .french = true, .bold = true, .italic = false, .linked = false },
+        .{ .text = "plain", .french = true, .bold = false, .italic = false, .linked = false },
+    };
+    var seen: [expected.len]usize = @splat(0);
+    for ([_][]const u8{ "English", "French" }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("quoted linked owner")).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(if (std.mem.eql(u8, owner, "French")) "fr" else "en", decoded.entry.language_code);
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            const visible = std.mem.trim(u8, span.text, " \t\r\n");
+            for (expected, 0..) |item, item_index| {
+                if (!std.mem.eql(u8, item.text, visible)) continue;
+                try std.testing.expectEqual(item.french, std.mem.eql(u8, owner, "French"));
+                try std.testing.expectEqual(item.bold, span.bold);
+                try std.testing.expectEqual(item.italic, span.italic);
+                try std.testing.expect(!span.code);
+                try std.testing.expectEqualStrings("", span.trail);
+                if (item.linked) {
+                    try std.testing.expect(span.kind == .link);
+                    try std.testing.expectEqualStrings("Target", span.target);
+                } else {
+                    try std.testing.expect(span.kind == .text);
+                    try std.testing.expectEqualStrings("", span.target);
+                }
+                if (std.mem.eql(u8, item.text, "French")) {
+                    try std.testing.expectEqualStrings("French", section.title);
+                    try std.testing.expectEqual(@as(u8, 2), section.level);
+                    try std.testing.expect(block.kind == .heading);
+                    try std.testing.expectEqual(@as(u8, 2), block.level);
+                }
+                seen[item_index] += 1;
+            }
+        };
+    }
+    for (seen) |count| try std.testing.expectEqual(@as(usize, 1), count);
+}
+
+test "Writer refused ordinary roots expose language owners without inheriting navigation through DPR2" {
+    const compiler = @import("presentation_compile.zig");
+    const Part = struct { text: []const u8, target: []const u8 = "", bold: bool = false };
+    const Check = struct {
+        parts: []const Part,
+        part: usize = 0,
+        byte: usize = 0,
+        forbidden: []const u8,
+        fn advance(self: *@This()) void {
+            while (self.part < self.parts.len and self.byte == self.parts[self.part].text.len) {
+                self.part += 1;
+                self.byte = 0;
+            }
+        }
+        fn spans(self: *@This(), values: anytype, allowed: []const []const u8) !void {
+            for (values) |span| {
+                try std.testing.expect(!std.mem.eql(u8, span.target, self.forbidden));
+                if (span.target.len != 0) {
+                    try std.testing.expect(span.kind == .link);
+                    var found = false;
+                    for (allowed) |target| if (std.mem.eql(u8, target, span.target)) {
+                        found = true;
+                        break;
+                    };
+                    try std.testing.expect(found);
+                }
+                if (comptime @hasField(@TypeOf(span), "trail")) try std.testing.expectEqualStrings("", span.trail);
+                for (span.text) |byte| {
+                    if (std.ascii.isWhitespace(byte)) continue;
+                    self.advance();
+                    try std.testing.expect(self.part < self.parts.len);
+                    const expected = self.parts[self.part];
+                    try std.testing.expectEqual(expected.text[self.byte], byte);
+                    try std.testing.expectEqualStrings(expected.target, span.target);
+                    if (expected.target.len == 0) try std.testing.expect(span.kind == .text) else try std.testing.expect(span.kind == .link);
+                    const bold = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                    const italic = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic;
+                    const code = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                    try std.testing.expectEqual(expected.bold, bold);
+                    try std.testing.expect(!italic and !code);
+                    self.byte += 1;
+                }
+            }
+        }
+        fn finish(self: *@This()) !void {
+            self.advance();
+            try std.testing.expectEqual(self.parts.len, self.part);
+        }
+    };
+    const rows = [_]struct { title: []const u8, source: []const u8, forbidden: []const u8, nested: bool }{
+        .{ .title = "refused-owner", .source = "==English==\n[[First|one\nfirst]]\n[[Target|lead\n==French==\nbody [[cat|explicit]]\nend]] '''after''' plain", .forbidden = "Target", .nested = false },
+        .{ .title = "refused-inner-owner", .source = "==English==\n[[Outer|lead [[Inner|one\n==French==\nbody]] tail]] outside", .forbidden = "Outer", .nested = true },
+    };
+    const english = [_]Part{ .{ .text = "one", .target = "First" }, .{ .text = "first", .target = "First" }, .{ .text = "[[Target|lead" } };
+    const french = [_]Part{ .{ .text = "body" }, .{ .text = "explicit", .target = "cat" }, .{ .text = "end]]" }, .{ .text = "after", .bold = true }, .{ .text = "plain" } };
+    const nested_english = [_]Part{ .{ .text = "[[Outer|lead" }, .{ .text = "one", .target = "Inner" } };
+    const nested_french = [_]Part{ .{ .text = "French", .target = "Inner" }, .{ .text = "body", .target = "Inner" }, .{ .text = "tail]]" }, .{ .text = "outside" } };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TestLanguages.codes();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    for (rows) |row| {
+        var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = row.title, .language = "English", .link_trail = codes.link_trail, .namespace_catalog = codes.namespace_catalog, .behavior_switches = codes.behavior_switches, .image_options = codes.image_options } };
+        const blocks = try renderer.renderBody(row.source);
+        const prefix = [_]Part{.{ .text = "English" }};
+        const plain_french = [_]Part{.{ .text = "French" }};
+        var expected: std.ArrayList(Part) = .empty;
+        try expected.appendSlice(a, &prefix);
+        try expected.appendSlice(a, if (row.nested) &nested_english else &english);
+        if (!row.nested) try expected.appendSlice(a, &plain_french);
+        try expected.appendSlice(a, if (row.nested) &nested_french else &french);
+        var native: Check = .{ .parts = expected.items, .forbidden = row.forbidden };
+        var headings: usize = 0;
+        for (blocks) |block| {
+            var allowed: []const []const u8 = if (row.nested) &.{"Inner"} else &.{ "First", "cat" };
+            if (block.kind == .heading) {
+                headings += 1;
+                try std.testing.expectEqual(@as(u8, 2), block.level);
+                const title = try compiler.plainText(a, block.spans);
+                allowed = if (row.nested and std.mem.eql(u8, title, "French")) &.{"Inner"} else &.{};
+            } else try std.testing.expect(block.kind == .paragraph);
+            try native.spans(block.spans, allowed);
+        }
+        try native.finish();
+        try std.testing.expectEqual(@as(usize, 2), headings);
+        try std.testing.expect(renderer.fallbacks.literal_markup);
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row.title, row.source, row.source, null);
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 2), stats.fallback_pages);
+    for ([_][]const u8{ "English", "French" }) |owner| {
+        const is_french = std.mem.eql(u8, owner, "French");
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(if (is_french) "fr" else "en", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        for (rows) |row| {
+            const record = (try index.find(row.title)).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            try std.testing.expectEqualStrings(metadata.code, decoded.entry.language_code);
+            try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+            const section = decoded.entry.sections[0];
+            try std.testing.expectEqualStrings(owner, section.title);
+            try std.testing.expectEqual(@as(u8, 2), section.level);
+            const parts: []const Part = if (row.nested) (if (is_french) &nested_french else &nested_english) else (if (is_french) &french else &english);
+            var decoded_check: Check = .{ .parts = parts, .forbidden = row.forbidden };
+            var companions: usize = 0;
+            for (section.blocks) |block| {
+                const allowed: []const []const u8 = if (row.nested) &.{"Inner"} else if (is_french) &.{"cat"} else &.{"First"};
+                if (block.kind == .heading) {
+                    try std.testing.expect(row.nested and is_french);
+                    try std.testing.expectEqual(@as(u8, 2), block.level);
+                    companions += 1;
+                } else try std.testing.expect(block.kind == .paragraph);
+                try decoded_check.spans(block.spans, allowed);
+            }
+            try decoded_check.finish();
+            try std.testing.expectEqual(@as(usize, if (row.nested and is_french) 1 else 0), companions);
+        }
+    }
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    var lines = std.mem.tokenizeScalar(u8, report, '\n');
+    for (rows) |row| {
+        const line = lines.next() orelse return error.TestUnexpectedResult;
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings(row.title, parsed.value.object.get("title").?.string);
+        const reasons = parsed.value.object.get("reasons").?.array.items;
+        try std.testing.expectEqual(@as(usize, 1), reasons.len);
+        try std.testing.expectEqualStrings("literal_markup", reasons[0].string);
+    }
+    try std.testing.expect(lines.next() == null);
 }

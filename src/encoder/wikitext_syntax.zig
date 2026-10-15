@@ -243,7 +243,7 @@ pub fn isOpaqueTag(name: []const u8) bool {
 }
 // Sanitizer ignores a lexical '/>' on allowed paired HTML. Core pre is a
 // registered strip hook instead; only its invalid-name HTML fallback is paired.
-fn pairedHtmlTag(name: []const u8) bool {
+pub fn pairedHtmlTag(name: []const u8) bool {
     inline for (&.{
         "b",      "bdi",  "del",  "i",   "ins",    "u",          "font", "big",  "small", "sub",   "sup",
         "h1",     "h2",   "h3",   "h4",  "h5",     "h6",         "cite", "code", "em",    "s",     "strike",
