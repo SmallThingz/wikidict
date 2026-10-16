@@ -8150,22 +8150,31 @@ test "nested block formatting restores parent flags and keeps unclosed reports" 
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
     const blocks = try r.renderBody("<small>\n<strong>\n# first\n# second</strong>\n\nEnd\n</small>\nAfter");
-    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    // The soft newline after the balanced outer closer continues End's paragraph.
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
     for (blocks[0..2], 0..) |block_value, index| {
         try std.testing.expectEqual(Kind.definition, block_value.kind);
+        try std.testing.expectEqualStrings(if (index == 0) "first" else "second", try flattened(a, block_value.spans));
+        try std.testing.expectEqualStrings("#", block_value.list_path);
         try std.testing.expectEqualStrings(if (index == 0) "1" else "2", block_value.number);
+        try std.testing.expectEqual(@as(u8, 1), block_value.depth);
         for (block_value.spans) |span| {
             try std.testing.expect(span.flags.small);
             try std.testing.expect(span.flags.bold);
         }
     }
-    try std.testing.expectEqualStrings("End", try flattened(a, blocks[2].spans));
+    try std.testing.expectEqual(Kind.paragraph, blocks[2].kind);
+    try std.testing.expectEqualStrings("End After", try flattened(a, blocks[2].spans));
+    var visible_offset: usize = 0;
     for (blocks[2].spans) |span| {
-        try std.testing.expect(span.flags.small);
         try std.testing.expect(!span.flags.bold);
+        for (span.text) |_| {
+            if (visible_offset < "End".len) try std.testing.expect(span.flags.small);
+            if (visible_offset >= "End ".len) try std.testing.expect(!span.flags.small);
+            visible_offset += 1;
+        }
     }
-    try std.testing.expectEqualStrings("After", try flattened(a, blocks[3].spans));
-    for (blocks[3].spans) |span| try std.testing.expect(!span.flags.small and !span.flags.bold);
+    try std.testing.expectEqual("End After".len, visible_offset);
     try std.testing.expect(!r.fallbacks.unclosed_formatting);
     var unmatched: Renderer = .{ .a = a, .context = .{} };
     const unfinished = try unmatched.renderBody("<small>\n* notice");
