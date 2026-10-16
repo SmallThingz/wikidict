@@ -566,6 +566,90 @@ private slots:
         QVERIFY(window.currentEntry_.isEmpty() || !window.currentEntry_.value(QStringLiteral("redirect")).toObject().value(QStringLiteral("followed")).toBool());
     }
 
+    void removingLastDictionaryClearsVisibleEntryAndSearchState() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-last-dictionary-remove-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString root = QDir(directory.path()).absolutePath();
+        std::atomic_bool cancelled = false;
+        {
+            auto prepared = LibraryStorage::prepareImport(root, fixture_ + QStringLiteral(
+                "/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"),
+                {}, -1, cancelled, [](const QString &, qint64, qint64) {});
+            LibraryStorage::commitImport(root, *prepared);
+        }
+        const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        auto restoreSources = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), sources); });
+        MainWindow window(root, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QVERIFY(!window.json_->toPlainText().isEmpty());
+        QVERIFY(window.results_->count() > 0);
+        QVERIFY(window.sections_->count() > 1);
+        QVERIFY(window.sections_->isEnabled());
+        QVERIFY(window.bookmark_->isEnabled());
+        const QString query = window.search_->text();
+        QStringList history;
+        for (const auto &entry : window.learning_.history()) history.append(entry.key);
+        window.entryTabs_->setCurrentWidget(window.json_);
+
+        bool removed = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
+            auto close = qScopeGuard([&] { dialog->done(QDialog::Rejected); });
+            auto *installed = dialog->findChild<QTreeWidget *>(QStringLiteral("installedDictionaries"));
+            auto *remove = dialog->findChild<QPushButton *>(QStringLiteral("removeDictionary"));
+            auto *status = dialog->findChild<QLabel *>(QStringLiteral("libraryStatus"));
+            QVERIFY(installed && remove && status);
+            QCOMPARE(installed->topLevelItemCount(), 1);
+            QCOMPARE(installed->topLevelItem(0)->text(0), QStringLiteral("English"));
+            installed->setCurrentItem(installed->topLevelItem(0));
+            bool confirmationClicked = false;
+            QObject confirmationContext;
+            QTimer::singleShot(0, &confirmationContext, [&] {
+                auto *confirmation = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                QVERIFY(confirmation);
+                auto *yes = confirmation->button(QMessageBox::Yes);
+                QVERIFY(yes);
+                QTest::mouseClick(yes, Qt::LeftButton);
+                confirmationClicked = true;
+            });
+            QTest::mouseClick(remove, Qt::LeftButton);
+            QVERIFY(confirmationClicked);
+            QTRY_VERIFY2_WITH_TIMEOUT(status->text().startsWith(QStringLiteral("Removed ")), qPrintable(status->text()), 30000);
+            QVERIFY(!QFileInfo::exists(root + QStringLiteral(
+                "/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb")));
+            removed = true;
+        });
+        window.chooseRoot();
+        QVERIFY(removed);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && !window.api_, 30000);
+        QVERIFY(window.currentEntry_.isEmpty());
+        QVERIFY(window.currentJson_.isEmpty());
+        QVERIFY(window.json_->toPlainText().isEmpty());
+        QCOMPARE(window.search_->text(), query);
+        QCOMPARE(window.results_->count(), 0);
+        QCOMPARE(window.sections_->count(), 0);
+        QVERIFY(!window.sections_->isEnabled());
+        QVERIFY(!window.bookmark_->isEnabled());
+        QVERIFY(!window.search_->isEnabled());
+        QVERIFY(!window.results_->isEnabled());
+        QVERIFY(!window.random_->isEnabled());
+        QVERIFY(!window.listen_->isEnabled());
+        QVERIFY(!window.moreResults_->isEnabled());
+        QVERIFY(!window.back_->isEnabled());
+        QVERIFY(!window.forward_->isEnabled());
+        QCOMPARE(window.title_->text(), QStringLiteral("Open your dictionaries"));
+        QCOMPARE(window.resultStatus_->text(), QStringLiteral("No dictionary open"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Open Library")));
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        QStringList remainingHistory;
+        for (const auto &entry : window.learning_.history()) remainingHistory.append(entry.key);
+        QCOMPARE(remainingHistory, history);
+    }
+
     void unchangedLibraryClosePreservesDisplayedEntry() {
         const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
         QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
@@ -1107,6 +1191,76 @@ private slots:
         QTRY_VERIFY(window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
         QCOMPARE(title(window), QStringLiteral("dog"));
         QCOMPARE(window.results_->count(), 0);
+    }
+
+    void keyboardTraversalUsesActualFocusAndKeepsBackReachable() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        window.search_->setText(QStringLiteral("dog"));
+        QTRY_COMPARE(window.resultsQuery_, QStringLiteral("dog"));
+        QTRY_VERIFY(window.results_->count() > 0);
+        auto dogResultRow = [&window] {
+            for (int row = 0; row < window.results_->count(); ++row)
+                if (window.results_->item(row)->data(Qt::UserRole).toString() == QStringLiteral("dog"))
+                    return row;
+            return -1;
+        };
+        QTRY_VERIFY(dogResultRow() >= 0);
+        const int dogRow = dogResultRow();
+
+        // Send Qt test events only to the actual focus owner. This does not prove
+        // physical keyboard delivery or a visible focus indicator.
+        auto focusedKey = [&window](Qt::Key key, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+            QWidget *owner = QApplication::focusWidget();
+            if (!owner || !window.isAncestorOf(owner) || !owner->isEnabled())
+                return false;
+            QTest::keyClick(owner, key, modifiers);
+            QCoreApplication::processEvents();
+            return true;
+        };
+        window.search_->setFocus(Qt::TabFocusReason);
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.search_));
+        QVERIFY(focusedKey(Qt::Key_Tab));
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.results_));
+        QVERIFY(focusedKey(Qt::Key_Backtab, Qt::ShiftModifier));
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.search_));
+
+        QVERIFY(focusedKey(Qt::Key_Down));
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.results_));
+        QCOMPARE(window.results_->currentRow(), 0);
+        QVERIFY(focusedKey(Qt::Key_Escape));
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.search_));
+        QVERIFY(focusedKey(Qt::Key_Down));
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.results_));
+        QCOMPARE(window.results_->currentRow(), 0);
+        for (int row = 0; row < dogRow; ++row) {
+            QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.results_));
+            QVERIFY(focusedKey(Qt::Key_Down));
+            QCOMPARE(window.results_->currentRow(), row + 1);
+        }
+        QCOMPARE(window.results_->currentItem()->data(Qt::UserRole).toString(), QStringLiteral("dog"));
+        QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.results_));
+        QVERIFY(focusedKey(Qt::Key_Return));
+        QTRY_COMPARE(title(window), QStringLiteral("dog"));
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.results_));
+        QTRY_VERIFY(window.back_->isEnabled());
+
+        // Do not assume a platform-specific number of intermediate tab stops.
+        window.search_->setFocus(Qt::TabFocusReason);
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.search_));
+        for (int step = 0; step < 64 && QApplication::focusWidget() != window.back_; ++step)
+            QVERIFY(focusedKey(Qt::Key_Tab));
+        QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.back_));
+        QVERIFY(window.back_->isEnabled());
+        QVERIFY(focusedKey(Qt::Key_Space));
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QTRY_VERIFY(window.forward_->isEnabled());
+        QTRY_VERIFY(QApplication::focusWidget() &&
+            window.isAncestorOf(QApplication::focusWidget()) &&
+            QApplication::focusWidget()->isEnabled());
     }
 
     void backAndForwardRestoreScrollAndFolds() {

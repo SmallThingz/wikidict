@@ -261,6 +261,12 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     language_->setCurrentText(api_->language());
                     resultStatus_->setText(QStringLiteral("Could not open dictionaries: %1").arg(loaded->error));
                 } else {
+                    // No reader owns the previous entry or its suggestions anymore.
+                    json_->clear();
+                    results_->clear();
+                    sections_->clear();
+                    sections_->setEnabled(false);
+                    bookmark_->setEnabled(false);
                     title_->setText(QStringLiteral("Open your dictionaries"));
                     meta_->setText(QStringLiteral("Your words stay on this computer."));
                     reading_->setHtml(QStringLiteral("<p>%1</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>").arg(loaded->error.toHtmlEscaped()));
