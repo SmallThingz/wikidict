@@ -59,6 +59,7 @@ class EntryNavigationTest {
         var saved: suspend (SavedWord) -> WordHit? = { null }
         var random: suspend () -> WordHit? = { null }
         var initial: suspend () -> WordHit? = { null }
+        var showError: suspend (String) -> Unit = {}
         var screen = "Dictionary"
         var title: String? = null
         var target = ""
@@ -80,7 +81,7 @@ class EntryNavigationTest {
                 screen = "Dictionary"
             },
             { loading = it; loadingEvents += it },
-            { errors += it },
+            { errors += it; showError(it) },
             installed = { it in dictionaries },
         )
     }
@@ -256,6 +257,44 @@ class EntryNavigationTest {
             } finally {
                 h.navigation.cancel()
                 lookup.releaseIfPending(null)
+                next.releaseIfPending(entry("new"))
+            }
+        }
+    }
+
+    @Test fun currentErrorStopsLoadingBeforeDismissalAndCannotClearNewIntent() = runBlocking {
+        withTimeout(5_000) {
+            val dismissal = Completion<Unit>()
+            val next = Completion<Entry>()
+            val h = Harness(this)
+            h.showError = { dismissal.await() }
+            val first = h.navigation.openLink("absent", entry("source"))
+            try {
+                dismissal.started.await()
+                assertEquals(listOf("This word is not in your installed dictionaries."), h.errors)
+                assertFalse(h.loading)
+                assertTrue(first.isActive)
+                assertNull(h.navigation.openInitialIfIdle())
+                assertTrue(h.reads.isEmpty())
+                assertTrue(h.history.isEmpty())
+                h.read = { next.await() }
+                val latest = h.navigation.open(hit("new"))
+                next.started.await()
+                assertTrue(h.loading)
+                assertTrue(first.isCancelled)
+                dismissal.succeed(Unit)
+                first.join()
+                assertTrue(dismissal.delivered)
+                assertTrue(h.loading)
+                assertTrue(h.history.isEmpty())
+                next.succeed(entry("new"))
+                latest.join()
+                assertEquals(listOf("new"), h.history)
+                assertEquals("new", h.title)
+                assertFalse(h.loading)
+            } finally {
+                h.navigation.cancel()
+                dismissal.releaseIfPending(Unit)
                 next.releaseIfPending(entry("new"))
             }
         }

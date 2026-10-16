@@ -89,6 +89,7 @@ internal class EntryNavigation(
             } catch (e: Exception) {
                 if (generation === token && currentCoroutineContext().isActive &&
                     pendingHit?.isInstalled(installed) != false) {
+                    loading(false)
                     error(e.message ?: "Unable to read this word")
                 }
             } finally {

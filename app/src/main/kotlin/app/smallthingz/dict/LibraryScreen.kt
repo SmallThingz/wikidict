@@ -28,7 +28,7 @@ fun LibraryScreen(library: LibraryStore, onImport: ()->Unit) {
             item { Column {
                 Row(verticalAlignment=Alignment.CenterVertically) {
                     Text(label,Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)
-                    IconButton(onClick={library.cancel()}) { Icon(Icons.Outlined.Close,"Cancel download") }
+                    IconButton(onClick={library.cancel()}) { Icon(Icons.Outlined.Close,"Cancel operation") }
                 }
                 library.transferDetail?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
                 if (library.busy != null) {
