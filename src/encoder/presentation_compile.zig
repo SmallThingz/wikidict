@@ -5783,16 +5783,16 @@ pub const Renderer = struct {
             const line = trim(raw_line);
             pos = if (end < input.len) end + 1 else end;
             if (wikiTableIndent(line) != null) {
-                // A nested table belongs to the pending caption or current cell;
-                // keep its whole source there until the enclosing boundary.
-                const nested_source = if (caption_pending) &caption_source else &cell_source;
+                // Keep a nested table with its caption or cell. With neither owner,
+                // retain it as fostered source until the enclosing boundary.
+                const nested_source = if (caption_pending) &caption_source else if (current != null) &cell_source else &outside_source;
                 if (nested_source.items.len != 0) try nested_source.append(self.a, '\n');
                 try nested_source.appendSlice(self.a, raw_line);
                 nested_tables += 1;
                 continue;
             }
             if (nested_tables != 0) {
-                const nested_source = if (caption_pending) &caption_source else &cell_source;
+                const nested_source = if (caption_pending) &caption_source else if (current != null) &cell_source else &outside_source;
                 if (nested_source.items.len != 0) try nested_source.append(self.a, '\n');
                 try nested_source.appendSlice(self.a, raw_line);
                 if (starts(line, "|}")) nested_tables -= 1;
@@ -10006,6 +10006,73 @@ test "wiki table boundary: colon-indented retain nested and unterminated content
     try std.testing.expectEqualStrings(":", recovered[0].list_path);
     try std.testing.expectEqualStrings("cell", try flattened(a, recovered[0].table.?.rows[0].cells[0].spans));
     try std.testing.expect(unclosed.fallbacks.malformed_table);
+}
+
+test "wiki table unowned nested source survives a later caption through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn spans(values: anytype, word: []const u8, target: []const u8, bold: bool, italic: bool) !void {
+            var visible: std.ArrayList(u8) = .empty;
+            defer visible.deinit(std.testing.allocator);
+            var links: usize = 0;
+            for (values) |span| {
+                try visible.appendSlice(std.testing.allocator, span.text);
+                if (comptime @hasField(@TypeOf(span), "trail"))
+                    try visible.appendSlice(std.testing.allocator, span.trail);
+                if (target.len == 0 or span.kind != .link or !std.mem.eql(u8, span.target, target)) continue;
+                links += 1;
+                try std.testing.expectEqualStrings(word, span.text);
+                const actual_bold = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                const actual_italic = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic;
+                try std.testing.expectEqual(bold, actual_bold);
+                try std.testing.expectEqual(italic, actual_italic);
+            }
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, word));
+            try std.testing.expectEqual(@as(usize, if (target.len == 0) 0 else 1), links);
+            for ([_][]const u8{ "{|", "|+", "|}" }) |marker|
+                try std.testing.expect(std.mem.indexOf(u8, visible.items, marker) == null);
+        }
+        fn blocks(values: anytype, rich: bool) !void {
+            try std.testing.expectEqual(@as(usize, 2), values.len);
+            try std.testing.expect(values[0].kind == .table and values[1].kind == .table);
+            const child = values[0].table.?;
+            const outer = values[1].table.?;
+            try std.testing.expectEqual(@as(usize, 0), child.caption.len);
+            try std.testing.expectEqual(@as(usize, 1), child.rows.len);
+            try std.testing.expectEqual(@as(usize, 1), child.rows[0].cells.len);
+            try std.testing.expectEqual(@as(usize, 0), outer.rows.len);
+            try spans(child.rows[0].cells[0].spans, if (rich) "Nested word" else "nested", if (rich) "nested" else "", rich, false);
+            try spans(outer.caption, if (rich) "Caption word" else "caption", if (rich) "caption" else "", false, rich);
+        }
+        fn notes(values: anytype, rich: bool) !void {
+            try std.testing.expectEqual(@as(usize, if (rich) 2 else 0), values.len);
+            if (!rich) return;
+            try spans(values[0].spans, "Nested note", "", false, false);
+            try spans(values[1].spans, "Caption note", "", false, false);
+        }
+    };
+    const cases = [_]struct { source: []const u8, rich: bool }{
+        .{ .source = "{|\n{|\n| nested\n|}\n|+ caption\n|}", .rich = false },
+        .{ .source = "{|\n{|\n| '''[[nested|Nested word]]''' <ref>Nested note</ref>\n|}\n|+ ''[[caption|Caption word]]'' <ref>Caption note</ref>\n|}", .rich = true },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try Check.blocks(blocks, case.rich);
+        const refs = try renderer.finishReferences();
+        try Check.notes(refs, case.rich);
+        for (refs, 0..) |reference, i| try std.testing.expectEqual(i + 1, reference.number);
+        try std.testing.expect(!renderer.fallbacks.any());
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, refs, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "unowned nested table", .language, .{ .code = "en", .heading = "English" });
+        try Check.blocks(decoded.entry.sections[0].blocks, case.rich);
+        try Check.notes(decoded.entry.references, case.rich);
+    }
 }
 
 test "wiki table boundary: caption-only tables retain links and continuation references" {
