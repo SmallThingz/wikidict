@@ -168,6 +168,9 @@ pub const InlineIterator = struct {
     bold: bool = false,
     italic: bool = false,
     renderer_boundaries: bool = false,
+    // Renderer-owned internal link labels preserve external-looking source
+    // while their surrounding inline HTML/quote scope remains continuous.
+    recognize_external_links: bool = true,
     internal_close_scanned: bool = false,
     last_internal_close: ?usize = null,
     link_trail: LinkTrail = .{},
@@ -186,6 +189,7 @@ pub const InlineIterator = struct {
     }
 
     fn nextFreeExternal(self: *InlineIterator) usize {
+        if (!self.recognize_external_links) return self.input.len;
         if (!self.free_external_scanned or self.next_free_external < self.cursor) {
             self.next_free_external = freeExternalStart(self.input, self.cursor) orelse self.input.len;
             self.free_external_scanned = true;
@@ -257,26 +261,28 @@ pub const InlineIterator = struct {
                 },
                 .not_link, .invalid => {},
             }
-            if (parseExternalLinkAt(self.input, self.cursor)) |link| {
-                self.cursor = link.end;
-                return .{
-                    .kind = .external_link,
-                    .text = link.label,
-                    .target = link.target,
-                    .external_label_prefix = link.label_prefix,
-                    .bold = self.bold,
-                    .italic = self.italic,
-                };
-            }
-            if (parseFreeExternalLinkAt(self.input, self.cursor)) |link| {
-                self.cursor = link.end;
-                return .{
-                    .kind = .external_link,
-                    .text = link.label,
-                    .target = link.target,
-                    .bold = self.bold,
-                    .italic = self.italic,
-                };
+            if (self.recognize_external_links) {
+                if (parseExternalLinkAt(self.input, self.cursor)) |link| {
+                    self.cursor = link.end;
+                    return .{
+                        .kind = .external_link,
+                        .text = link.label,
+                        .target = link.target,
+                        .external_label_prefix = link.label_prefix,
+                        .bold = self.bold,
+                        .italic = self.italic,
+                    };
+                }
+                if (parseFreeExternalLinkAt(self.input, self.cursor)) |link| {
+                    self.cursor = link.end;
+                    return .{
+                        .kind = .external_link,
+                        .text = link.label,
+                        .target = link.target,
+                        .bold = self.bold,
+                        .italic = self.italic,
+                    };
+                }
             }
             if (parseLineBreakAt(self.input, self.cursor)) |end| {
                 self.cursor = end;
@@ -377,7 +383,7 @@ pub const InlineIterator = struct {
                         },
                     }
                 }
-                if (rest[0] == '[' and rest.len > 1 and rest[1] != '[' and
+                if (self.recognize_external_links and rest[0] == '[' and rest.len > 1 and rest[1] != '[' and
                     hasExternalProtocol(rest[1..]))
                 {
                     if (parseExternalLinkAt(self.input, self.cursor) != null) break;
@@ -783,6 +789,69 @@ fn parseInlineLinkAtDetailed(input: []const u8, start: usize, link_trail: LinkTr
     return parseInlineLinkAtPair(input, start, pair, link_trail);
 }
 
+// Only presence matters to Sanitizer's conditional meta/link admission.
+// Skip complete quoted values so a required name inside another value cannot
+// admit a tag; bare required attributes are present with an empty value.
+fn labelAttributeWhitespace(byte: u8) bool {
+    return switch (byte) {
+        0x09, 0x0a, 0x0c, 0x0d, 0x20 => true,
+        else => false,
+    };
+}
+fn labelTagHasAttribute(tag: syntax.Tag, key: []const u8) bool {
+    var pos: usize = 0;
+    while (pos < tag.attrs.len) {
+        while (pos < tag.attrs.len and (labelAttributeWhitespace(tag.attrs[pos]) or tag.attrs[pos] == '/')) : (pos += 1) {}
+        const start = pos;
+        if (pos < tag.attrs.len and tag.attrs[pos] == '=') pos += 1;
+        while (pos < tag.attrs.len and !labelAttributeWhitespace(tag.attrs[pos]) and tag.attrs[pos] != '=' and tag.attrs[pos] != '/') : (pos += 1) {}
+        if (pos == start) break;
+        if (std.ascii.eqlIgnoreCase(tag.attrs[start..pos], key)) return true;
+        while (pos < tag.attrs.len and labelAttributeWhitespace(tag.attrs[pos])) : (pos += 1) {}
+        if (pos == tag.attrs.len or tag.attrs[pos] != '=') continue;
+        pos += 1;
+        while (pos < tag.attrs.len and labelAttributeWhitespace(tag.attrs[pos])) : (pos += 1) {}
+        if (pos == tag.attrs.len) break;
+        const quote = tag.attrs[pos];
+        if (quote == '\'' or quote == '"') {
+            pos += 1;
+            while (pos < tag.attrs.len and tag.attrs[pos] != quote) : (pos += 1) {}
+            if (pos < tag.attrs.len) pos += 1;
+        } else {
+            while (pos < tag.attrs.len and !labelAttributeWhitespace(tag.attrs[pos])) : (pos += 1) {}
+        }
+    }
+    return false;
+}
+fn labelTagAttributesArmored(tag: syntax.Tag) bool {
+    if (syntax.pairedHtmlTag(tag.name) or tag.is("pre")) return true;
+    inline for (&.{ "br", "wbr", "hr", "li", "dt", "dd" }) |name| if (tag.is(name)) return true;
+    if (tag.is("meta") or tag.is("link")) {
+        return labelTagHasAttribute(tag, "itemprop") and labelTagHasAttribute(tag, if (tag.is("meta")) "content" else "href");
+    }
+    return false;
+}
+// Protected extension bodies/comments have already been stripped upstream.
+// Retained HTML attributes are discarded or armor [ as &#91;. Escaped unknown
+// or conditionally invalid tags remain ordinary text with their raw [ intact.
+fn alternateLabelHasOpenBracket(input: []const u8) bool {
+    var opaque_scan: syntax.OpaqueScan = .{};
+    var no_more_nowiki_close = false;
+    var pos: usize = 0;
+    while (std.mem.indexOfAnyPos(u8, input, pos, "<[")) |at| {
+        if (input[at] == '[') return true;
+        if (opaque_scan.protectedEnd(input, at, &no_more_nowiki_close)) |end| {
+            pos = end;
+        } else if (opaque_scan.tagAt(input, at, &no_more_nowiki_close)) |tag| {
+            if (!labelTagAttributesArmored(tag) and std.mem.indexOfScalar(u8, input[at..tag.end], '[') != null) return true;
+            pos = tag.end;
+        } else {
+            pos = at + 1;
+        }
+    }
+    return false;
+}
+
 fn parseInlineLinkAtPair(input: []const u8, start: usize, pair: syntax.Pair, link_trail: LinkTrail) InlineLinkParse {
     const inside = input[start + 2 .. pair.inner_end];
     if (inside.len == 0) return .invalid;
@@ -791,13 +860,22 @@ fn parseInlineLinkAtPair(input: []const u8, start: usize, pair: syntax.Pair, lin
     const target = std.mem.trim(u8, raw_target, " \t");
     if (target.len == 0) return .invalid;
     const raw_label = if (pipe) |index| inside[index + 1 ..] else target;
-    const label = if (raw_label.len == 0) target else raw_label;
-    const trail_end = link_trail.end(input, pair.end);
+    var label = if (raw_label.len == 0) target else raw_label;
+    var close_end = pair.end;
+    // MediaWiki returns one leading extra ] to a nonempty alternate label
+    // containing a phase-visible [. Protected bodies are still raw here.
+    if (pipe != null and raw_label.len != 0 and close_end < input.len and input[close_end] == ']' and
+        alternateLabelHasOpenBracket(raw_label))
+    {
+        label = input[pair.inner_end - raw_label.len .. pair.inner_end + 1];
+        close_end += 1;
+    }
+    const trail_end = link_trail.end(input, close_end);
     return .{ .link = .{
         .end = trail_end,
         .target = target,
         .label = label,
-        .trail = input[pair.end..trail_end],
+        .trail = input[close_end..trail_end],
         .has_pipe = pipe != null,
         .empty_label = pipe != null and raw_label.len == 0,
     } };

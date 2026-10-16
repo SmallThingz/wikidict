@@ -764,7 +764,7 @@ fn normalizeWikiQuotesSeededWithContext(a: A, input: []const u8, depth: usize, l
                     const inner = input[cursor + 2 .. skip - 2];
                     if (syntax.delimiter(inner, "|", 0)) |pipe| {
                         try sink.appendSlice(a, input[cursor .. cursor + 2 + pipe + 1]);
-                        try sink.appendSlice(a, try normalizeMisnestedHtml(a, try normalizeWikiQuotesSeededWithContext(a, inner[pipe + 1 ..], depth + 1, true, context, null)));
+                        try sink.appendSlice(a, try normalizeMisnestedHtmlDepth(a, try normalizeWikiQuotesSeededWithContext(a, inner[pipe + 1 ..], depth + 1, true, context, null), depth + 1, false));
                         try sink.appendSlice(a, "]]");
                     } else try sink.appendSlice(a, input[cursor..skip]);
                 } else try sink.appendSlice(a, input[cursor..skip]);
@@ -929,9 +929,9 @@ const max_html_normalization_frames = max_depth * 4;
 
 // External links are parsed after quotes upstream. Their brackets therefore
 // participate in formatting repair, while authored HTML anchors remain literal.
-fn htmlNormalizationToken(input: []const u8, at: usize) ?HtmlNormalizationToken {
-    if (input[at] == ']') return .{ .frame = .{ .name = "!external", .opener = "", .formatting = true }, .closing = true, .end = at + 1 };
-    if (input[at] == '[') {
+fn htmlNormalizationToken(input: []const u8, at: usize, recognize_external_links: bool) ?HtmlNormalizationToken {
+    if (recognize_external_links and input[at] == ']') return .{ .frame = .{ .name = "!external", .opener = "", .formatting = true }, .closing = true, .end = at + 1 };
+    if (recognize_external_links and input[at] == '[') {
         if (at + 1 >= input.len or input[at + 1] == '[' or !ir.hasExternalProtocol(input[at + 1 ..])) return null;
         var iterator: ir.InlineIterator = .{ .input = input[at..], .renderer_boundaries = true };
         const token = iterator.next() orelse return null;
@@ -956,7 +956,7 @@ fn htmlNormalizationMatch(frames: []const HtmlNormalizationFrame, token: HtmlNor
     }
     return null;
 }
-fn hasMisnestedHtml(input: []const u8, depth: usize) bool {
+fn hasMisnestedHtml(input: []const u8, depth: usize, recognize_external_links: bool) bool {
     var no_more_nowiki_close = false;
     var opaque_scan: syntax.OpaqueScan = .{};
     if (depth >= max_depth) return false;
@@ -974,7 +974,7 @@ fn hasMisnestedHtml(input: []const u8, depth: usize) bool {
             if (boundaries.canClose(input, at)) if (syntax.balancedWithOpaqueScan(input, at, &opaque_scan)) |pair| {
                 const inner = input[at + 2 .. pair.inner_end];
                 if (syntax.delimiter(inner, "|", 0)) |pipe| {
-                    if (hasMisnestedHtml(inner[pipe + 1 ..], depth + 1)) return true;
+                    if (hasMisnestedHtml(inner[pipe + 1 ..], depth + 1, false)) return true;
                 }
                 pos = pair.end;
                 continue;
@@ -988,7 +988,7 @@ fn hasMisnestedHtml(input: []const u8, depth: usize) bool {
                 continue;
             }
         };
-        const token = htmlNormalizationToken(input, at) orelse {
+        const token = htmlNormalizationToken(input, at, recognize_external_links) orelse {
             pos = at + 1;
             continue;
         };
@@ -1016,12 +1016,12 @@ fn appendHtmlFrameClose(a: A, out: *std.ArrayList(u8), frame: HtmlNormalizationF
     try out.append(a, '>');
 }
 fn normalizeMisnestedHtml(a: A, input: []const u8) Error![]const u8 {
-    return normalizeMisnestedHtmlDepth(a, input, 0);
+    return normalizeMisnestedHtmlDepth(a, input, 0, true);
 }
-fn normalizeMisnestedHtmlDepth(a: A, input: []const u8, depth: usize) Error![]const u8 {
+fn normalizeMisnestedHtmlDepth(a: A, input: []const u8, depth: usize, recognize_external_links: bool) Error![]const u8 {
     var no_more_nowiki_close = false;
     var opaque_scan: syntax.OpaqueScan = .{};
-    if (!hasMisnestedHtml(input, depth)) return input;
+    if (!hasMisnestedHtml(input, depth, recognize_external_links)) return input;
     const boundaries = QuoteBoundaries.init(input);
     var out: std.ArrayList(u8) = .empty;
     var frames: [max_html_normalization_frames]HtmlNormalizationFrame = undefined;
@@ -1039,7 +1039,7 @@ fn normalizeMisnestedHtmlDepth(a: A, input: []const u8, depth: usize) Error![]co
                 const inner = input[at + 2 .. pair.inner_end];
                 if (syntax.delimiter(inner, "|", 0)) |pipe| {
                     try out.appendSlice(a, input[at .. at + 2 + pipe + 1]);
-                    try out.appendSlice(a, try normalizeMisnestedHtmlDepth(a, inner[pipe + 1 ..], depth + 1));
+                    try out.appendSlice(a, try normalizeMisnestedHtmlDepth(a, inner[pipe + 1 ..], depth + 1, false));
                     try out.appendSlice(a, "]]");
                 } else try out.appendSlice(a, input[at..pair.end]);
                 pos = pair.end;
@@ -1056,7 +1056,7 @@ fn normalizeMisnestedHtmlDepth(a: A, input: []const u8, depth: usize) Error![]co
                 continue;
             }
         };
-        const token = htmlNormalizationToken(input, at) orelse {
+        const token = htmlNormalizationToken(input, at, recognize_external_links) orelse {
             try out.append(a, input[at]);
             pos = at + 1;
             continue;
@@ -3664,6 +3664,10 @@ pub const Renderer = struct {
             .bold = inherited.bold,
             .italic = inherited.italic,
             .renderer_boundaries = true,
+            // Internal labels are hidden behind MediaWiki link holders before
+            // external-link recognition. Keep one continuous inline flow for
+            // HTML/quotes across literal bracket/URL text in that label.
+            .recognize_external_links = inherited.kind != .link,
             .link_trail = self.context.link_trail,
         };
         var no_more_nowiki_close = false;
@@ -3733,7 +3737,7 @@ pub const Renderer = struct {
                         const literal_style = s;
                         self.fallbacks.literal_markup = true;
                         try self.plain("[[", literal_style);
-                        try self.inlineText(input[raw_start + 2 .. it.cursor], literal_style, depth + 1);
+                        try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, input[raw_start + 2 .. it.cursor], depth + 1, true), literal_style, depth + 1);
                         continue;
                     }
                     // An authored inner opener is a separate link. Keep the
@@ -3766,7 +3770,7 @@ pub const Renderer = struct {
                         if (token.link_has_pipe) {
                             const label_start = @intFromPtr(token.text.ptr) - @intFromPtr(input.ptr);
                             try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..label_start])), literal_style);
-                            try self.inlineText(input[label_start..it.cursor], literal_style, depth + 1);
+                            try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, input[label_start..it.cursor], depth + 1, true), literal_style, depth + 1);
                         } else {
                             try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..it.cursor])), literal_style);
                         }
@@ -3794,7 +3798,7 @@ pub const Renderer = struct {
                                 try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..label_start])), literal_style);
                                 // Invalid outer syntax still leaves authored label
                                 // emphasis, HTML and inner links eligible for parsing.
-                                try self.inlineText(input[label_start..it.cursor], literal_style, depth + 1);
+                                try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, input[label_start..it.cursor], depth + 1, true), literal_style, depth + 1);
                             } else {
                                 try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..it.cursor])), literal_style);
                             }
@@ -3842,8 +3846,10 @@ pub const Renderer = struct {
                             self.fallbacks.literal_markup = true;
                             // Only the outer opener is literal. Parse the entire label
                             // together so emphasis and HTML can span the inner link.
+                            // This refused outer has no internal-link holder: external
+                            // brackets participate in the ordinary formatting phase.
                             try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..label_start])), literal_style);
-                            try self.inlineText(input[label_start..it.cursor], literal_style, depth + 1);
+                            try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, input[label_start..it.cursor], depth + 1, true), literal_style, depth + 1);
                             continue;
                         }
                     }
@@ -4008,7 +4014,7 @@ pub const Renderer = struct {
             inherited.strike = inherited.strike or outer.strike;
             inherited.underline = inherited.underline or outer.underline;
         }
-        try self.inlineText(try normalizeMisnestedHtml(self.a, try normalizeWikiQuotesSeededWithContext(self.a, try self.prepareUnmatchedOpaque(input), 0, false, self.context, quote_seed)), inherited, 0);
+        try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, try normalizeWikiQuotesSeededWithContext(self.a, try self.prepareUnmatchedOpaque(input), 0, false, self.context, quote_seed), 0, inherited.kind != .link), inherited, 0);
         return try self.spans.toOwnedSlice(self.a);
     }
     fn appendBlockBudgeted(self: *Renderer, list: *std.ArrayList(Block), value: Block) Error!void {
@@ -4355,7 +4361,7 @@ pub const Renderer = struct {
                                 const admission = try self.bodyLinkAdmission(input[at .. at + it.cursor]);
                                 if (admission.target != null or admission.refused) {
                                     const body_start = @intFromPtr(token.text.ptr) - @intFromPtr(input.ptr);
-                                    return .{ .opening_start = at, .body_start = body_start, .body_end = pair.inner_end, .resume_at = at + it.cursor, .target = admission.target orelse "", .trail = token.trail, .refused = admission.refused };
+                                    return .{ .opening_start = at, .body_start = body_start, .body_end = body_start + token.text.len, .resume_at = at + it.cursor, .target = admission.target orelse "", .trail = token.trail, .refused = admission.refused };
                                 }
                             }
                         }
@@ -5371,7 +5377,36 @@ pub const Renderer = struct {
         }
         return null;
     }
+    // Refuse an unclosed table-level caption before cells or fostered text can
+    // register references/media. Mirror htmlTable's row boundaries so captions
+    // inside an already consumed cell/row are not a new table-level admission.
+    fn htmlTableCaptionsComplete(input: []const u8) bool {
+        var pos: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, input, pos, '<')) |open| {
+            if (syntax.protectedEnd(input, open)) |end| {
+                pos = end;
+                continue;
+            }
+            const tag = syntax.tagAt(input, open) orelse {
+                pos = open + 1;
+                continue;
+            };
+            pos = tag.end;
+            const implicit_row = tag.is("td") or tag.is("th");
+            if (tag.closing or !(tag.is("tr") or tag.is("caption") or implicit_row)) continue;
+            const pair = if (implicit_row)
+                optionalTableEndFrom(input, "tr", open, true)
+            else if (tag.is("tr"))
+                optionalTableEnd(input, tag)
+            else
+                syntax.matchingTag(input, tag) orelse return false;
+            pos = pair.end;
+        }
+        return true;
+    }
+
     fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block), defer_zero_rowspans: bool, style: Style) Error!?Table {
+        if (!htmlTableCaptionsComplete(input)) return null;
         var rows: std.ArrayList(Row) = .empty;
         var caption: std.ArrayList(Span) = .empty;
         var pos: usize = 0;
@@ -5665,26 +5700,34 @@ pub const Renderer = struct {
                     if (split_at == line.len) break;
                     offset = split_at + 2;
                 }
-            } else if (starts(line, "<tr")) {
+            } else if (if (syntax.tagAt(line, 0)) |tag| !tag.closing and tag.is("tr") else false) {
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
-                if (try self.semanticTagAt(line, 0)) |tag| {
+                // A trailing malformed caption must not leave partial effects
+                // from this row fragment or the preceding fostered source.
+                var recover_raw_row = !htmlTableCaptionsComplete(line);
+                if (!recover_raw_row) if (try self.semanticTagAt(line, 0)) |tag| {
                     if (tag.is("tr") and !tag.closing) {
                         const pair = optionalTableEnd(line, tag);
-                        if (nextHtmlTableCell(line[0..pair.inner_end], tag.end) == null) {
-                            // No cells commit this row. Keep its source for the
-                            // same later fostering or full-body rowless recovery,
-                            // without registering references before recovery.
-                            try self.finishCell(&cells, &cell_source, &current);
-                            if (outside_source.items.len != 0) try outside_source.append(self.a, '\n');
-                            try outside_source.appendSlice(self.a, raw_line);
-                            continue;
-                        }
+                        recover_raw_row = nextHtmlTableCell(line[0..pair.inner_end], tag.end) == null;
                     }
+                };
+                if (recover_raw_row) {
+                    // No cells commit this row. Keep its source for the
+                    // same later fostering or full-body rowless recovery,
+                    // without registering references before recovery.
+                    try self.finishCell(&cells, &cell_source, &current);
+                    if (outside_source.items.len != 0) try outside_source.append(self.a, '\n');
+                    try outside_source.appendSlice(self.a, raw_line);
+                    continue;
                 }
                 try self.flushWikiTableFostered(&fostered, &outside_source);
                 try self.finishCell(&cells, &cell_source, &current);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
                 if (try self.htmlTable(line, &fostered, true, self.body_language_direction orelse .{})) |table| {
+                    // Reuse the already-rendered caption, including its effects
+                    // and scoped spans, in the same source order as wiki captions.
+                    try self.appendTableCaption(&caption, table.caption);
+                    if (table.caption.len != 0) has_caption = true;
                     try rows.appendSlice(self.a, table.rows);
                 }
             } else if (caption_pending) {
@@ -16388,4 +16431,589 @@ test "single-cell layout grid keeps a fresh cell quote domain" {
     for (translated_seen) |count| try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqualStrings("de", translations.body_language_direction.?.language);
     try std.testing.expectEqualStrings("ltr", translations.body_language_direction.?.direction);
+}
+
+test "HTML table caption admission preserves earlier effects and rejects late side effects" {
+    const Check = struct {
+        fn effects(a: A, references: anytype, media: anytype, notes: []const []const u8, files: []const []const u8) !void {
+            try std.testing.expectEqual(notes.len, references.len);
+            for (references, notes) |reference_value, note| {
+                var text: std.ArrayList(u8) = .empty;
+                for (reference_value.spans) |span| {
+                    try text.appendSlice(a, span.text);
+                    if (@hasField(@TypeOf(span), "trail")) try text.appendSlice(a, span.trail);
+                }
+                try std.testing.expectEqualStrings(note, text.items);
+            }
+            try std.testing.expectEqual(files.len, media.len);
+            for (media, files) |item, file| try std.testing.expectEqualStrings(file, item.file);
+        }
+        fn ordered(a: A, blocks: anytype, words: []const []const u8) !void {
+            var visible: std.ArrayList(u8) = .empty;
+            for (blocks) |block_value| {
+                for (block_value.spans) |span| {
+                    try visible.appendSlice(a, span.text);
+                    if (@hasField(@TypeOf(span), "trail")) try visible.appendSlice(a, span.trail);
+                }
+                if (block_value.table) |table| {
+                    for (table.caption) |span| {
+                        try visible.appendSlice(a, span.text);
+                        if (@hasField(@TypeOf(span), "trail")) try visible.appendSlice(a, span.trail);
+                    }
+                    for (table.rows) |row| for (row.cells) |cell_value| for (cell_value.spans) |span| {
+                        try visible.appendSlice(a, span.text);
+                        if (@hasField(@TypeOf(span), "trail")) try visible.appendSlice(a, span.trail);
+                    };
+                }
+            }
+            var after: usize = 0;
+            for (words) |word| {
+                const at = std.mem.indexOf(u8, visible.items, word) orelse return error.TestUnexpectedResult;
+                try std.testing.expect(at >= after);
+                after = at + word.len;
+                try std.testing.expect(std.mem.indexOfPos(u8, visible.items, after, word) == null);
+            }
+        }
+        fn hybridGrid(blocks: anytype) !void {
+            var tables: usize = 0;
+            for (blocks) |block_value| if (block_value.table) |table| {
+                tables += 1;
+                try std.testing.expectEqual(@as(usize, 3), table.rows.len);
+                try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+                try std.testing.expectEqual(@as(usize, 2), table.rows[1].cells.len);
+                try std.testing.expectEqual(@as(usize, 1), table.rows[2].cells.len);
+                for (table.rows, 0..) |row, ri| for (row.cells, 0..) |cell_value, ci| {
+                    try std.testing.expectEqual(ri == 0, cell_value.header);
+                    try std.testing.expectEqual(@as(u16, if (ri == 0) 2 else 1), cell_value.colspan);
+                    try std.testing.expectEqual(@as(u16, if (ri == 1 and ci == 0) 2 else 1), cell_value.rowspan);
+                };
+                var header_actions: usize = 0;
+                for (table.rows[0].cells[0].spans) |span| if (std.mem.eql(u8, span.target, "cat")) {
+                    header_actions += 1;
+                    try std.testing.expectEqualStrings("fr", span.language);
+                    try std.testing.expectEqualStrings("rtl", span.direction);
+                };
+                var cell_actions: usize = 0;
+                for (table.rows[1].cells[0].spans) |span| if (std.mem.eql(u8, span.target, "dog")) {
+                    cell_actions += 1;
+                    try std.testing.expectEqualStrings("", span.language);
+                    try std.testing.expectEqualStrings("", span.direction);
+                };
+                try std.testing.expectEqual(@as(usize, 1), header_actions);
+                try std.testing.expectEqual(@as(usize, 1), cell_actions);
+            };
+            try std.testing.expectEqual(@as(usize, 1), tables);
+        }
+        fn roundtrip(a: A, renderer: *Renderer, blocks: []const Block, notes: []const []const u8, files: []const []const u8, words: []const []const u8, mixed_case_grid: bool) !void {
+            try ordered(a, blocks, words);
+            if (mixed_case_grid) try hybridGrid(blocks);
+            const references = try renderer.finishReferences();
+            try effects(a, references, renderer.media.items, notes, files);
+            const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+            const sections = [_]Section{.{ .blocks = blocks }};
+            const blob = @import("blob_encoder");
+            const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, renderer.media.items);
+            const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "table caption admission", .language, .{ .code = "en", .heading = "English" });
+            try effects(a, decoded.entry.references, decoded.entry.media, notes, files);
+            try ordered(a, decoded.entry.sections[0].blocks, words);
+            if (mixed_case_grid) try hybridGrid(decoded.entry.sections[0].blocks);
+        }
+    };
+    const earlier = "kept<ref name=kept>kept note</ref>[[File:Kept.jpg|thumb|kept media]]\n";
+    const later = "\nkept again<ref name=kept/>\n<references/>";
+    const cell = "<tr><td>cell<ref name=kept>ignored replacement</ref><ref>discarded note</ref>[[File:Discarded.jpg|thumb|discarded media]]</td></tr>";
+    const invalid = [_][]const u8{
+        "<table>" ++ cell ++ "<caption>unclosed</table>",
+        "<table><caption>unclosed" ++ cell ++ "</table>",
+    };
+    for (invalid) |table_source| {
+        errdefer std.debug.print("unclosed caption source: {s}\n", .{table_source});
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(try std.fmt.allocPrint(a, "{s}{s}{s}", .{ earlier, table_source, later }));
+        var literal_tables: usize = 0;
+        for (blocks) |block_value| {
+            try std.testing.expect(block_value.table == null);
+            if (block_value.kind != .preformatted) continue;
+            literal_tables += 1;
+            try std.testing.expectEqualStrings(table_source, try flattened(a, block_value.spans));
+            for (block_value.spans) |span| {
+                try std.testing.expect(span.flags.code);
+                try std.testing.expectEqualStrings("", span.target);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), literal_tables);
+        try Check.roundtrip(a, &renderer, blocks, &.{"kept note"}, &.{"Kept.jpg"}, &.{}, false);
+    }
+
+    const valid_caption = "<caption>caption<ref>caption note</ref>[[File:Caption.jpg|thumb|caption media]]</caption>";
+    const valid_cell = "<tr><td>cell<ref>cell note</ref>[[File:Cell.jpg|thumb|cell media]]</td></tr>";
+    const valid = [_]struct { source: []const u8, notes: []const []const u8, files: []const []const u8 }{
+        .{ .source = "<table>" ++ valid_caption ++ valid_cell ++ "</table>", .notes = &.{ "kept note", "caption note", "cell note" }, .files = &.{ "Kept.jpg", "Caption.jpg", "Cell.jpg" } },
+        .{ .source = "<table>" ++ valid_cell ++ valid_caption ++ "</table>", .notes = &.{ "kept note", "cell note", "caption note" }, .files = &.{ "Kept.jpg", "Cell.jpg", "Caption.jpg" } },
+        .{ .source = "<table><tr><td><nowiki><caption></nowiki><!-- <caption> --><source><caption></source>cell<ref>cell note</ref>[[File:Cell.jpg|thumb|cell media]]</td></tr></table>", .notes = &.{ "kept note", "cell note" }, .files = &.{ "Kept.jpg", "Cell.jpg" } },
+    };
+    for (valid) |case| {
+        errdefer std.debug.print("complete/protected caption source: {s}\n", .{case.source});
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(try std.fmt.allocPrint(a, "{s}{s}{s}", .{ earlier, case.source, later }));
+        var tables: usize = 0;
+        for (blocks) |block_value| {
+            try std.testing.expect(block_value.kind != .preformatted);
+            if (block_value.table) |table| {
+                tables += 1;
+                try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+                try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), tables);
+        try Check.roundtrip(a, &renderer, blocks, case.notes, case.files, &.{}, false);
+    }
+
+    // A failed hybrid HTML row must remain buffered until either a later row
+    // commits the wiki table, or the existing rowless recovery renders it once.
+    const fostered = "fostered-prefix<ref>outside note</ref>[[File:Outside.jpg|thumb|asset caption<ref>media note</ref>]]\n";
+    const bad_row = "<tr><td>bad-cell</td></tr><caption>unclosed-caption\n";
+    const hybrid = [_]struct { source: []const u8, tables: usize, words: []const []const u8 }{
+        .{ .source = "{|\n" ++ fostered ++ bad_row ++ "|}", .tables = 0, .words = &.{ "fostered-prefix", "asset caption", "bad-cell", "unclosed-caption" } },
+        .{ .source = "{|\n" ++ fostered ++ "<track>prefix</track>" ++ bad_row ++ "|}", .tables = 0, .words = &.{ "fostered-prefix", "asset caption", "bad-cell", "unclosed-caption" } },
+        .{ .source = "{|\n" ++ fostered ++ bad_row ++ "<tr><td>committed-cell</td></tr>\n|}", .tables = 1, .words = &.{ "fostered-prefix", "asset caption", "bad-cell", "unclosed-caption", "committed-cell" } },
+        .{ .source = "{|\n" ++ fostered ++ "|}", .tables = 0, .words = &.{ "fostered-prefix", "asset caption" } },
+    };
+    for (hybrid) |case| {
+        errdefer std.debug.print("hybrid row caption source: {s}\n", .{case.source});
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(try std.fmt.allocPrint(a, "{s}{s}{s}", .{ earlier, case.source, later }));
+        var tables: usize = 0;
+        for (blocks) |block_value| if (block_value.table) |table| {
+            tables += 1;
+            try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+            try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+            try std.testing.expectEqualStrings("committed-cell", try flattened(a, table.rows[0].cells[0].spans));
+        };
+        try std.testing.expectEqual(case.tables, tables);
+        try Check.roundtrip(a, &renderer, blocks, &.{ "kept note", "outside note", "media note" }, &.{ "Kept.jpg", "Outside.jpg" }, case.words, false);
+    }
+
+    const case_rows = [_][]const u8{
+        "<TR lang=fr dir=rtl><TH colspan=2>[[cat|header]]<ref>header note</ref>[[File:Row.jpg|thumb|row asset]]</TH></TR>\n<TR><TD rowspan=2>[[dog|cell]]<ref>cell note</ref></TD><TD>tail</TD></TR>\n<TR><TD>last</TD></TR>\n",
+        "<tR lang=fr dir=rtl><tH colspan=2>[[cat|header]]<ref>header note</ref>[[File:Row.jpg|thumb|row asset]]</tH></tR>\n<tR><tD rowspan=2>[[dog|cell]]<ref>cell note</ref></tD><Td>tail</Td></tR>\n<Tr><td>last</td></Tr>\n",
+    };
+    for (case_rows) |rows_source| {
+        errdefer std.debug.print("case-insensitive hybrid source: {s}\n", .{rows_source});
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "{s}{{|\n{s}{s}|}}{s}", .{ earlier, fostered, rows_source, later });
+        const blocks = try renderer.renderBody(source);
+        try Check.roundtrip(a, &renderer, blocks, &.{ "kept note", "outside note", "media note", "header note", "cell note" }, &.{ "Kept.jpg", "Outside.jpg", "Row.jpg" }, &.{ "fostered-prefix", "asset caption", "header", "row asset", "cell", "tail", "last" }, true);
+    }
+}
+
+test "internal label keeps nested external source and formatting through DPR2" {
+    const Check = struct {
+        fn values(a: A, spans: anytype, expected: []const u8, target: []const u8, linked_end: usize, external: bool, bold_text: ?[]const u8) !void {
+            const bold_start = if (bold_text) |value| std.mem.indexOf(u8, expected, value) orelse return error.TestUnexpectedResult else expected.len;
+            const bold_end = bold_start + (if (bold_text) |value| value.len else 0);
+            var text: std.ArrayList(u8) = .empty;
+            var offset: usize = 0;
+            for (spans) |span| {
+                const bold = if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                try std.testing.expect(!code);
+                const parts = [_][]const u8{ span.text, if (@hasField(@TypeOf(span), "trail")) span.trail else "" };
+                for (parts) |part| {
+                    try text.appendSlice(a, part);
+                    for (part) |_| {
+                        try std.testing.expect(offset < expected.len);
+                        try std.testing.expectEqualStrings(if (offset < linked_end) target else "", span.target);
+                        if (offset < linked_end) {
+                            if (external) try std.testing.expect(span.kind == .external_link) else try std.testing.expect(span.kind == .link);
+                        } else try std.testing.expect(span.kind == .text);
+                        try std.testing.expectEqual(offset >= bold_start and offset < bold_end, bold);
+                        offset += 1;
+                    }
+                }
+            }
+            try std.testing.expectEqualStrings(expected, text.items);
+            try std.testing.expectEqual(expected.len, offset);
+        }
+        fn refused(a: A, spans: anytype, prefix: []const u8, has_inner: bool, misnested: bool) !void {
+            const expected = try std.fmt.allocPrint(a, "{s}label tail{s}{s}]] after", .{ prefix, if (misnested) " end" else "", if (has_inner) " one" else "" });
+            const label_start = prefix.len;
+            const label_end = label_start + "label".len;
+            const bold_end = label_start + "label tail".len;
+            const italic_end = if (misnested) label_start + "label tail end".len else label_start;
+            const inner_start = label_start + (if (misnested) "label tail end ".len else "label tail ".len);
+            const inner_end = inner_start + "one".len;
+            var visible: std.ArrayList(u8) = .empty;
+            var offset: usize = 0;
+            for (spans) |span| {
+                const bold = if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                const italic = if (@hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic;
+                const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                try std.testing.expect(!code);
+                const parts = [_][]const u8{ span.text, if (@hasField(@TypeOf(span), "trail")) span.trail else "" };
+                for (parts) |part| {
+                    try visible.appendSlice(a, part);
+                    for (part) |_| {
+                        try std.testing.expect(offset < expected.len);
+                        const external = offset >= label_start and offset < label_end;
+                        const inner = has_inner and offset >= inner_start and offset < inner_end;
+                        try std.testing.expectEqualStrings(if (external) "https://example.test" else if (inner) "Inner" else "", span.target);
+                        if (external) try std.testing.expect(span.kind == .external_link) else if (inner) try std.testing.expect(span.kind == .link) else try std.testing.expect(span.kind == .text);
+                        try std.testing.expectEqual(offset >= label_start and offset < bold_end, bold);
+                        try std.testing.expectEqual(offset >= label_start and offset < italic_end, italic);
+                        offset += 1;
+                    }
+                }
+            }
+            try std.testing.expectEqualStrings(expected, visible.items);
+            try std.testing.expectEqual(expected.len, offset);
+        }
+        fn wire(a: A, spans: []const Span, expected: []const u8, target: []const u8, linked_end: usize, external: bool, bold_text: ?[]const u8) !void {
+            try values(a, spans, expected, target, linked_end, external, bold_text);
+            const blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+            const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+            const sections = [_]Section{.{ .blocks = &blocks }};
+            const blob = @import("blob_encoder");
+            const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, &.{}, &.{});
+            const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "nested external internal label", .language, .{ .code = "en", .heading = "English" });
+            try values(a, decoded.entry.sections[0].blocks[0].spans, expected, target, linked_end, external, bold_text);
+        }
+    };
+    // Separate the external close from the internal pair; adjacent triple
+    // brackets are not this fixture's parsing authority.
+    const cases = [_]struct { source: []const u8, text: []const u8, bold: ?[]const u8 = null }{
+        .{ .source = "[[Target|[https://example.test <b>שָׁלוֹם</b>] tail]] after", .text = "[https://example.test שָׁלוֹם] tail after", .bold = "שָׁלוֹם" },
+        .{ .source = "[[Target|[https://example.test '''é'''] tail]] after", .text = "[https://example.test é] tail after", .bold = "é" },
+        .{ .source = "[[Target|[https://example.test <b>&amp;copy;</b>] tail]] after", .text = "[https://example.test &copy;] tail after", .bold = "&copy;" },
+        .{ .source = "[[Target|[https://example.test label]]]s after", .text = "[https://example.test label]s after" },
+        .{ .source = "[[Target|[https://example.test <b>é</b>]]]s after", .text = "[https://example.test é]s after", .bold = "é" },
+        .{ .source = "[[Target|[https://example.test] tail]] after", .text = "[https://example.test] tail after" },
+        .{ .source = "[[Target|[https://example.test ] tail]] after", .text = "[https://example.test ] tail after" },
+        .{ .source = "[[Target|[https://example.test?q=&lt;x&gt;] tail]] after", .text = "[https://example.test?q=<x>] tail after" },
+        .{ .source = "[[Target|[https://example.test?q=&lt;x&gt; <b>é</b>] tail]] after", .text = "[https://example.test?q=<x> é] tail after", .bold = "é" },
+        .{ .source = "[[Target|[https://example.test https://example.test] tail]] after", .text = "[https://example.test https://example.test] tail after" },
+        .{ .source = "[[Target|[https://example.test <nowiki><b>literal</b> &amp;copy;</nowiki>] tail]] after", .text = "[https://example.test <b>literal</b> &copy;] tail after" },
+        .{ .source = "[[Target|https://example.test tail]] after", .text = "https://example.test tail after" },
+
+        .{ .source = "[[Target|[https://example.test <b>label] tail</b>]] after", .text = "[https://example.test label] tail after", .bold = "label] tail" },
+        .{ .source = "[[Target|[https://example.test '''é] tail''']] after", .text = "[https://example.test é] tail after", .bold = "é] tail" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("nested external label source: {s}\n", .{case.source});
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const linked_end = std.mem.indexOf(u8, case.text, " after") orelse return error.TestUnexpectedResult;
+        try Check.wire(a, blocks[0].spans, case.text, "Target", linked_end, false, case.bold);
+        try std.testing.expect(!renderer.fallbacks.any());
+    }
+
+    // One phase-visible opening bracket absorbs one adjacent closer before
+    // the ordinary letter trail. Protected bodies and ordinary labels do not.
+    const adjacent = [_]struct { source: []const u8, label: []const u8, trail: []const u8, rest: []const u8 }{
+        .{ .source = "[[Target|[https://example.test label]]]s after", .label = "[https://example.test label]", .trail = "s", .rest = " after" },
+        .{ .source = "[[Target|<span title=\"[\">label</span>]]]s after", .label = "<span title=\"[\">label</span>", .trail = "", .rest = "]s after" },
+        .{ .source = "[[Target|<span bogus=\"[\">label</span>]]]s after", .label = "<span bogus=\"[\">label</span>", .trail = "", .rest = "]s after" },
+        .{ .source = "[[Target|<pre/ title=\"[\">label</pre>]]]s after", .label = "<pre/ title=\"[\">label</pre>", .trail = "", .rest = "]s after" },
+        .{ .source = "[[Target|x</pre title=\"[\">]]]s after", .label = "x</pre title=\"[\">", .trail = "", .rest = "]s after" },
+        .{ .source = "[[Target|<meta itemprop content=\"[\">label]]]s after", .label = "<meta itemprop content=\"[\">label", .trail = "", .rest = "]s after" },
+        .{ .source = "[[Target|<meta itemprop\x0bcontent=\"[\">label]]]s after", .label = "<meta itemprop\x0bcontent=\"[\">label]", .trail = "s", .rest = " after" },
+        .{ .source = "[[Target|<link itemprop href=\"[\">label]]]s after", .label = "<link itemprop href=\"[\">label", .trail = "", .rest = "]s after" },
+        .{ .source = "[[Target|<meta title=\"[\">label]]]s after", .label = "<meta title=\"[\">label]", .trail = "s", .rest = " after" },
+        .{ .source = "[[Target|<meta data-note=\"itemprop content\" title=\"[\">label]]]s after", .label = "<meta data-note=\"itemprop content\" title=\"[\">label]", .trail = "s", .rest = " after" },
+        .{ .source = "[[Target|<bogus title=\"[\">label</bogus>]]]s after", .label = "<bogus title=\"[\">label</bogus>]", .trail = "s", .rest = " after" },
+        .{ .source = "[[Target|label]]]s after", .label = "label", .trail = "", .rest = "]s after" },
+        .{ .source = "[[Target|<nowiki>[literal</nowiki>]]]s after", .label = "<nowiki>[literal</nowiki>", .trail = "", .rest = "]s after" },
+        .{ .source = "[[Target|<source>[literal</source>]]]s after", .label = "<source>[literal</source>", .trail = "", .rest = "]s after" },
+        .{ .source = "[[Target|<!-- [ -->label]]]s after", .label = "<!-- [ -->label", .trail = "", .rest = "]s after" },
+        .{ .source = "[[Target|&#91;literal]]]s after", .label = "&#91;literal", .trail = "", .rest = "]s after" },
+    };
+    for (adjacent) |case| {
+        var iterator: ir.InlineIterator = .{ .input = case.source, .renderer_boundaries = true };
+        const token = iterator.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(token.kind == .link);
+        try std.testing.expectEqualStrings("Target", token.target);
+        try std.testing.expectEqualStrings(case.label, token.text);
+        try std.testing.expectEqualStrings(case.trail, token.trail);
+        try std.testing.expectEqualStrings(case.rest, case.source[iterator.cursor..]);
+    }
+    const negative = [_]struct { source: []const u8, text: []const u8, linked_end: usize }{
+        .{ .source = "[[Target|<span title=\"[\">label</span>]]]s after", .text = "label]s after", .linked_end = "label".len },
+        .{ .source = "[[Target|<span bogus=\"[\">label</span>]]]s after", .text = "label]s after", .linked_end = "label".len },
+        .{ .source = "[[Target|<meta itemprop=x content=y title=\"[\">label]]]s after", .text = "label]s after", .linked_end = "label".len },
+        .{ .source = "[[Target|<meta title=\"[\">label]]]s after", .text = "<meta title=\"[\">label]s after", .linked_end = "<meta title=\"[\">label]s".len },
+        .{ .source = "[[Target|<bogus title=\"[\">label</bogus>]]]s after", .text = "<bogus title=\"[\">label</bogus>]s after", .linked_end = "<bogus title=\"[\">label</bogus>]s".len },
+        .{ .source = "[[Target|label]]]s after", .text = "label]s after", .linked_end = "label".len },
+        .{ .source = "[[Target|<nowiki>[literal</nowiki>]]]s after", .text = "[literal]s after", .linked_end = "[literal".len },
+        .{ .source = "[[Target|<!-- [ -->label]]]s after", .text = "label]s after", .linked_end = "label".len },
+        .{ .source = "[[Target|&#91;literal]]]s after", .text = "[literal]s after", .linked_end = "[literal".len },
+    };
+    for (negative) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try Check.wire(a, blocks[0].spans, case.text, "Target", case.linked_end, false, null);
+    }
+    // A block-spanning label uses the parsed label extent, including the
+    // absorbed closer, rather than the earlier raw balanced-pair endpoint.
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody("[[Target|[https://example.test\nlabel]]]s after");
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const expected = "[https://example.test label]s after";
+        try Check.wire(a, blocks[0].spans, expected, "Target", expected.len - " after".len, false, null);
+    }
+    // The direct inherited-link API must select the same normalization phase.
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans("[https://example.test <b>label] tail</b>", .{ .kind = .link, .target = "Target" });
+        const expected = "[https://example.test label] tail";
+        try Check.wire(a, spans, expected, "Target", expected.len, false, "label] tail");
+        try std.testing.expect(!renderer.fallbacks.any());
+    }
+    // A nested internal link refuses the outer. Its external link remains
+    // active, so formatting crosses the real external close in ordinary mode.
+    const refused_cases = [_]struct { source: []const u8, prefix: []const u8, inner: bool = false, misnested: bool = false, check_literal: bool = true }{
+        .{ .source = "[[Outer|[https://example.test <b>label] tail</b> [[Inner|one]]]] after", .prefix = "[[Outer|", .inner = true },
+        .{ .source = "[[Outer|[https://example.test '''label] tail''' [[Inner|one]]]] after", .prefix = "[[Outer|", .inner = true },
+        .{ .source = "[[Outer|[https://example.test <b><i>label] tail</b> end</i> [[Inner|one]]]] after", .prefix = "[[Outer|", .inner = true, .misnested = true },
+        .{ .source = "[[Bad\nTitle|[https://example.test <b>label] tail</b>]] after", .prefix = "[[Bad Title|" },
+        .{ .source = "[[Bad\rTitle|[https://example.test <b>label] tail</b>]] after", .prefix = "[[Bad Title|" },
+        .{ .source = "[[__NOEDITSECTION__|[https://example.test <b>label] tail</b>]] after", .prefix = "[[|", .check_literal = false },
+        .{ .source = "[[<nowiki>Bad</nowiki>|[https://example.test <b>label] tail</b>]] after", .prefix = "[[Bad|" },
+    };
+    for (refused_cases) |case| {
+        errdefer std.debug.print("refused outer external phase source: {s}\n", .{case.source});
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try Check.refused(a, blocks[0].spans, case.prefix, case.inner, case.misnested);
+        if (case.check_literal) try std.testing.expect(renderer.fallbacks.literal_markup);
+        try std.testing.expect(!renderer.fallbacks.unclosed_formatting);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, &.{}, &.{});
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "refused outer external phase", .language, .{ .code = "en", .heading = "English" });
+        try Check.refused(a, decoded.entry.sections[0].blocks[0].spans, case.prefix, case.inner, case.misnested);
+    }
+    // Many raw openers share a single close. Internal-label mode must walk
+    // their text without repeatedly probing the remaining external token.
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var source: std.ArrayList(u8) = .empty;
+        var expected: std.ArrayList(u8) = .empty;
+        try source.appendSlice(a, "[[Target|");
+        for (0..1024) |_| {
+            try source.appendSlice(a, "[https://example.test ");
+            try expected.appendSlice(a, "[https://example.test ");
+        }
+        try source.appendSlice(a, "<b>label] tail</b>]] after");
+        try expected.appendSlice(a, "label] tail after");
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source.items);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try Check.wire(a, blocks[0].spans, expected.items, "Target", expected.items.len - " after".len, false, "label] tail");
+        try std.testing.expect(!renderer.fallbacks.any());
+    }
+    // Ordinary external labels and bare internal URLs keep their existing path.
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody("[https://example.test <b>é</b>] after");
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try Check.wire(a, blocks[0].spans, "é after", "https://example.test", "é".len, true, "é");
+    }
+    // Existing external-parent API behavior is pinned, not newly asserted as
+    // upstream nested-anchor semantics.
+    const external_parent = [_]struct { source: []const u8, text: []const u8 }{
+        .{ .source = "[https://inner.test <b>label</b>]", .text = "<b>label</b>" },
+        .{ .source = "[https://inner.test]", .text = "https://inner.test" },
+        .{ .source = "[https://inner.test?q=&lt;x&gt; label]", .text = "<x> label" },
+        .{ .source = "https://inner.test", .text = "https://inner.test" },
+    };
+    for (external_parent) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{ .kind = .external_link, .target = "https://outer.test" });
+        try Check.wire(a, spans, case.text, "https://outer.test", case.text.len, true, null);
+    }
+}
+
+test "hybrid HTML captions retain visible content and effects through DPR2" {
+    const Case = struct {
+        source: []const u8,
+        caption: []const u8,
+        cell: []const u8 = "cell[2]",
+        notes: []const []const u8,
+        files: []const []const u8 = &.{ "Kept.jpg", "Cap.jpg" },
+        exact_grid: bool = true,
+        styled_caption: bool = true,
+    };
+    const Check = struct {
+        fn text(a: A, spans: anytype) ![]const u8 {
+            var out: std.ArrayList(u8) = .empty;
+            for (spans) |span| {
+                if (span.kind == .line_break) try out.append(a, '\n') else try out.appendSlice(a, span.text);
+                if (@hasField(@TypeOf(span), "trail")) try out.appendSlice(a, span.trail);
+            }
+            return out.items;
+        }
+        fn blocks(a: A, values: anytype, case: Case) !void {
+            var tables: usize = 0;
+            var outside: usize = 0;
+            for (values) |block_value| {
+                if (block_value.table) |table| {
+                    tables += 1;
+                    try std.testing.expectEqualStrings(case.caption, try text(a, table.caption));
+                    // The raw-row fixture asserts content, not upstream's
+                    // ambiguous implicit-empty-row geometry. |- is explicit.
+                    if (case.exact_grid) {
+                        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+                        try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+                        const cell = table.rows[0].cells[0];
+                        try std.testing.expect(cell.header);
+                        try std.testing.expectEqual(@as(u16, 2), cell.colspan);
+                        try std.testing.expectEqual(@as(u16, 1), cell.rowspan);
+                    }
+                    var cell_texts: usize = 0;
+                    for (table.rows) |row| for (row.cells) |cell| {
+                        const visible = try text(a, cell.spans);
+                        if (std.mem.eql(u8, visible, case.cell)) {
+                            cell_texts += 1;
+                            var actions: usize = 0;
+                            for (cell.spans) |span| if (std.mem.eql(u8, span.target, "Cell")) {
+                                actions += 1;
+                                try std.testing.expectEqualStrings("cell", span.text);
+                                try std.testing.expect(span.kind == .link);
+                                try std.testing.expectEqualStrings("", span.language);
+                                try std.testing.expectEqualStrings("", span.direction);
+                            };
+                            try std.testing.expectEqual(@as(usize, 1), actions);
+                        }
+                    };
+                    try std.testing.expectEqual(@as(usize, 1), cell_texts);
+                    var caption_actions: usize = 0;
+                    var asset_actions: usize = 0;
+                    for (table.caption) |span| {
+                        const bold = if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                        const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                        try std.testing.expect(!code);
+                        if (std.mem.eql(u8, span.target, "Caption")) {
+                            caption_actions += 1;
+                            try std.testing.expectEqualStrings("caption", span.text);
+                            try std.testing.expect(span.kind == .link);
+                            try std.testing.expect(bold);
+                            try std.testing.expectEqualStrings("fr", span.language);
+                            try std.testing.expectEqualStrings("rtl", span.direction);
+                        }
+                        if (std.mem.eql(u8, span.target, "File:Cap.jpg")) {
+                            asset_actions += 1;
+                            try std.testing.expectEqualStrings("asset", span.text);
+                            try std.testing.expect(span.kind == .link);
+                            try std.testing.expect(!bold);
+                            try std.testing.expectEqualStrings("fr", span.language);
+                            try std.testing.expectEqualStrings("rtl", span.direction);
+                            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-media-file-4361702e6a7067") != null);
+                        }
+                    }
+                    try std.testing.expectEqual(@as(usize, if (case.styled_caption) 1 else 0), caption_actions);
+                    try std.testing.expectEqual(@as(usize, if (case.styled_caption) 1 else 0), asset_actions);
+                }
+                for (block_value.spans) |span| if (std.mem.indexOf(u8, span.text, "outside") != null) {
+                    outside += 1;
+                    try std.testing.expectEqualStrings("", span.target);
+                    try std.testing.expectEqualStrings("", span.language);
+                    try std.testing.expectEqualStrings("", span.direction);
+                };
+            }
+            try std.testing.expectEqual(@as(usize, 1), tables);
+            try std.testing.expectEqual(@as(usize, 1), outside);
+        }
+        fn effects(a: A, references: anytype, media: anytype, case: Case) !void {
+            try std.testing.expectEqual(case.notes.len, references.len);
+            for (references, case.notes) |reference_value, expected| try std.testing.expectEqualStrings(expected, try text(a, reference_value.spans));
+            try std.testing.expectEqual(case.files.len, media.len);
+            for (media, case.files) |item, file| try std.testing.expectEqualStrings(file, item.file);
+        }
+    };
+    const earlier = "kept<ref name=kept>kept note</ref>[[File:Kept.jpg|thumb|kept asset]]\n";
+    const later = "\noutside<ref name=kept/>\n<references/>";
+    const row = "<tr><th colspan=2>[[Cell|cell]]<ref>cell note</ref></th></tr>";
+    const caption = "<caption lang=fr dir=rtl><b>[[Caption|caption]]</b><ref>caption note</ref>[[File:Cap.jpg|thumb|asset]]</caption>";
+    const cases = [_]Case{
+        .{ .source = "{|\n" ++ row ++ caption ++ "\n|}", .caption = "caption[3]asset", .notes = &.{ "kept note", "cell note", "caption note" }, .exact_grid = false },
+        .{ .source = "{|\n|-\n" ++ row ++ caption ++ "\n|}", .caption = "caption[3]asset", .notes = &.{ "kept note", "cell note", "caption note" } },
+        .{
+            .source = "{|\n|+ [[Wiki|wiki]]<ref>wiki note</ref>\n|-\n" ++ row ++ caption ++ "\n|+ [[After|after caption]]<ref>after note</ref>\n|}",
+            .caption = "wiki[2]\ncaption[4]asset\nafter caption[5]",
+            .cell = "cell[3]",
+            .notes = &.{ "kept note", "wiki note", "cell note", "caption note", "after note" },
+        },
+        .{
+            .source = "{|\n|+ [[Wiki|wiki]]<ref>wiki note</ref>\n|-\n" ++ row ++ "<caption></caption>\n|}",
+            .caption = "wiki[2]",
+            .cell = "cell[3]",
+            .notes = &.{ "kept note", "wiki note", "cell note" },
+            .files = &.{"Kept.jpg"},
+            .styled_caption = false,
+        },
+        .{
+            .source = "{|\n|-\n<tr><th colspan=2>[[Cell|cell]]<ref>cell note</ref><nowiki><caption>fake</caption></nowiki></th></tr>" ++ caption ++ "\n|}",
+            .caption = "caption[3]asset",
+            .cell = "cell[2]<caption>fake</caption>",
+            .notes = &.{ "kept note", "cell note", "caption note" },
+        },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("hybrid retained caption source: {s}\n", .{case.source});
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const values = try renderer.renderBody(try std.fmt.allocPrint(a, "{s}{s}{s}", .{ earlier, case.source, later }));
+        try Check.blocks(a, values, case);
+        const references = try renderer.finishReferences();
+        try Check.effects(a, references, renderer.media.items, case);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = values }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "hybrid retained caption", .language, .{ .code = "en", .heading = "English" });
+        try Check.blocks(a, decoded.entry.sections[0].blocks, case);
+        try Check.effects(a, decoded.entry.references, decoded.entry.media, case);
+    }
 }
