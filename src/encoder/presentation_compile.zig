@@ -384,6 +384,9 @@ pub const Style = struct {
     preserve_whitespace: bool = false,
     // Build-only generated Poem wrapper; never inferred from lexical classes.
     poem_indent: ?u8 = null,
+    // Poem recursively parses its body before an enclosing internal holder.
+    // Navigation remains inherited; a newly created holder clears this phase.
+    poem_independent_parse: bool = false,
 };
 pub const SpanFlags = packed struct(u8) {
     bold: bool = false,
@@ -1651,18 +1654,22 @@ pub const Renderer = struct {
         const previous_direction = self.poem_direction;
         const previous_style = self.poem_base_style;
         const previous_indent = self.poem_line_indent;
+        const previous_body_link_target = self.body_link_target;
         if (self.spans.items.len != 0 and self.spans.items[self.spans.items.len - 1].kind != .line_break)
             try self.lineBreak(.{});
         self.poem_depth += 1;
         self.poem_direction = style.direction;
         self.poem_base_style = style;
         self.poem_base_style.poem_indent = null;
+        self.poem_base_style.poem_independent_parse = true;
         self.poem_line_indent = 0;
+        self.body_link_target = "";
         defer {
             self.poem_depth = previous_depth;
             self.poem_direction = previous_direction;
             self.poem_base_style = previous_style;
             self.poem_line_indent = previous_indent;
+            self.body_link_target = previous_body_link_target;
         }
         // The existing block parser owns lists, headings, rules and tables.
         // Span-only containment flattens their preserved reading order; its
@@ -2657,6 +2664,7 @@ pub const Renderer = struct {
         if (resolved_target.len != 0 and (!external or safeUrl(resolved_target))) {
             s.kind = if (external) .external_link else .link;
             s.target = resolved_target;
+            if (!external) s.poem_independent_parse = false;
         }
         if (external and std.mem.eql(u8, label, target)) {
             const decoded_label = try self.entityText(label);
@@ -3667,7 +3675,7 @@ pub const Renderer = struct {
             // Internal labels are hidden behind MediaWiki link holders before
             // external-link recognition. Keep one continuous inline flow for
             // HTML/quotes across literal bracket/URL text in that label.
-            .recognize_external_links = inherited.kind != .link,
+            .recognize_external_links = inherited.kind != .link or inherited.poem_independent_parse,
             .link_trail = self.context.link_trail,
         };
         var no_more_nowiki_close = false;
@@ -3927,8 +3935,16 @@ pub const Renderer = struct {
                     if (inherited.kind == .link or inherited.kind == .external_link) {
                         if (token.external_label_prefix.len != 0 or std.mem.eql(u8, token.text, token.target))
                             try self.literal(label, s)
-                        else
-                            try self.text(label, s);
+                        else if (inherited.poem_independent_parse and token.text.len != 0 and
+                            token.text.len < it.cursor - token_start and
+                            @intFromPtr(token.text.ptr) > @intFromPtr(input.ptr) + token_start and
+                            @intFromPtr(token.text.ptr) < @intFromPtr(input.ptr) + it.cursor and
+                            token.text.len <= @intFromPtr(input.ptr) + it.cursor - @intFromPtr(token.text.ptr))
+                        {
+                            // Only an authored label strictly inside this consumed
+                            // token recurses. Bare/unlabelled URLs keep the path above.
+                            try self.inlineText(token.text, s, depth + 1);
+                        } else try self.text(label, s);
                     } else try self.link(label, token.target, s, depth + 1, true);
                 },
                 .template => try self.resolveTemplate(token.text, s, depth),
@@ -3991,6 +4007,7 @@ pub const Renderer = struct {
         if (self.body_link_target.len != 0 and inherited.kind == .text) {
             inherited.kind = .link;
             inherited.target = self.body_link_target;
+            inherited.poem_independent_parse = false;
         }
         if (self.parsed_pre) {
             inherited.code = true;
@@ -4001,6 +4018,7 @@ pub const Renderer = struct {
             if (inherited.kind == .text and (outer.kind == .link or outer.kind == .external_link)) {
                 inherited.kind = outer.kind;
                 inherited.target = outer.target;
+                inherited.poem_independent_parse = outer.poem_independent_parse;
             }
             if (inherited.role == .normal) inherited.role = outer.role;
             if (inherited.language.len == 0) inherited.language = outer.language;
@@ -4014,7 +4032,7 @@ pub const Renderer = struct {
             inherited.strike = inherited.strike or outer.strike;
             inherited.underline = inherited.underline or outer.underline;
         }
-        try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, try normalizeWikiQuotesSeededWithContext(self.a, try self.prepareUnmatchedOpaque(input), 0, false, self.context, quote_seed), 0, inherited.kind != .link), inherited, 0);
+        try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, try normalizeWikiQuotesSeededWithContext(self.a, try self.prepareUnmatchedOpaque(input), 0, false, self.context, quote_seed), 0, inherited.kind != .link or inherited.poem_independent_parse), inherited, 0);
         return try self.spans.toOwnedSlice(self.a);
     }
     fn appendBlockBudgeted(self: *Renderer, list: *std.ArrayList(Block), value: Block) Error!void {
@@ -12465,6 +12483,7 @@ test "poem unspecialized HR newline follows whitespace context and inherited lin
     try std.testing.expectEqualStrings("---- B", try plainText(a, ordinary.spans.items));
     var label: Renderer = .{ .a = a, .context = .{} };
     const label_spans = try label.parseSpans("<poem>::plain [https://example.test label]</poem>", .{ .kind = .link, .target = "A", .role = .example, .direction = "rtl" });
+    try std.testing.expectEqualStrings("plain label", try plainText(a, label_spans));
     var found = false;
     for (label_spans) |span| {
         if (span.kind == .line_break) continue;
@@ -12472,6 +12491,16 @@ test "poem unspecialized HR newline follows whitespace context and inherited lin
         try std.testing.expectEqualStrings("A", span.target);
         try std.testing.expect(span.kind == .link);
         try std.testing.expectEqualStrings("rtl", span.direction);
+        var poem = false;
+        var indent = false;
+        var direction = false;
+        var classes = std.mem.tokenizeAny(u8, span.classes, " \t\r\n");
+        while (classes.next()) |class| {
+            poem = poem or std.mem.eql(u8, class, "wikidict-poem");
+            indent = indent or std.mem.eql(u8, class, "wikidict-poem-indent-2");
+            direction = direction or std.mem.eql(u8, class, "wikidict-poem-dir-rtl");
+        }
+        try std.testing.expect(poem and indent and direction);
         found = found or std.mem.eql(u8, span.text, "label");
     }
     try std.testing.expect(found);
@@ -17015,5 +17044,135 @@ test "hybrid HTML captions retain visible content and effects through DPR2" {
         const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "hybrid retained caption", .language, .{ .code = "en", .heading = "English" });
         try Check.blocks(a, decoded.entry.sections[0].blocks, case);
         try Check.effects(a, decoded.entry.references, decoded.entry.media, case);
+    }
+}
+
+test "native Poem independent parse restores external labels and resets new holders through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn spans(alloc: A, values: anytype, expected: []const u8, target: []const u8, bold: bool, role: []const u8, direction: []const u8) !void {
+            var text: std.ArrayList(u8) = .empty;
+            for (values) |span| {
+                try std.testing.expect(span.kind != .line_break);
+                try text.appendSlice(alloc, span.text);
+                try std.testing.expect(span.kind == .link);
+                try std.testing.expectEqualStrings(target, span.target);
+                try std.testing.expectEqualStrings(role, @tagName(span.role));
+                try std.testing.expectEqualStrings(direction, span.direction);
+                try std.testing.expectEqual(bold, if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold);
+                try std.testing.expect(!(if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code));
+                try std.testing.expect(std.mem.indexOf(u8, span.text, native_poem_prefix) == null);
+                var poem = false;
+                var classes = std.mem.tokenizeAny(u8, span.classes, " \t\r\n");
+                while (classes.next()) |class| poem = poem or std.mem.eql(u8, class, "wikidict-poem");
+                try std.testing.expect(poem);
+            }
+            try std.testing.expectEqualStrings(expected, text.items);
+        }
+        fn multiline(alloc: A, blocks: anytype, expected: []const u8, target: []const u8) !void {
+            const S = @TypeOf(blocks[0].spans[0]);
+            var owned: std.ArrayList(S) = .empty;
+            var all: std.ArrayList(u8) = .empty;
+            for (blocks, 0..) |block_value, index| {
+                if (index != 0) try all.append(alloc, '\n');
+                try std.testing.expect(block_value.table == null);
+                for (block_value.spans) |span| {
+                    if (span.kind == .line_break) {
+                        try all.append(alloc, '\n');
+                        continue;
+                    }
+                    try all.appendSlice(alloc, span.text);
+                    if (std.mem.indexOf(u8, span.classes, "wikidict-poem") != null) {
+                        try owned.append(alloc, span);
+                    } else {
+                        try std.testing.expect(span.kind == .link);
+                        try std.testing.expectEqualStrings("A", span.target);
+                    }
+                }
+            }
+            try spans(alloc, owned.items, expected, target, false, "normal", "");
+            var words = std.mem.tokenizeAny(u8, all.items, " \t\r\n");
+            var normalized: std.ArrayList(u8) = .empty;
+            while (words.next()) |word| {
+                if (normalized.items.len != 0) try normalized.append(alloc, ' ');
+                try normalized.appendSlice(alloc, word);
+            }
+            const complete = try std.fmt.allocPrint(alloc, "head {s} tail", .{expected});
+            try std.testing.expectEqualStrings(complete, normalized.items);
+        }
+    };
+    const cases = [_]struct { body: []const u8, visible: []const u8, target: []const u8 = "A", bold: bool = false }{
+        .{ .body = "[https://example.test label]", .visible = "label" },
+        .{ .body = "[https://example.test <b>label</b>]", .visible = "label", .bold = true },
+        .{ .body = "[https://example.test <b>label] tail</b>", .visible = "label tail", .bold = true },
+        .{ .body = "[[B|[https://inner.test kept] tail]]", .visible = "[https://inner.test kept] tail", .target = "B" },
+        .{ .body = "https://example.test", .visible = "https://example.test" },
+        .{ .body = "[https://example.test]", .visible = "https://example.test" },
+        .{ .body = "[https://example.test ]", .visible = "https://example.test" },
+    };
+    for (cases) |case| {
+        const scope = try poemPhaseTestToken(a, 0);
+        const prepared = try std.fmt.allocPrint(a, "{s}<poem>{s}</poem>", .{ scope, case.body });
+        const token = try poemPhaseTestLiteralToken(a, 1, prepared);
+        const output = try std.fmt.allocPrint(a, "[[A|{s}]]", .{token});
+        const items = [_]PoemPhaseItem{
+            .{ .token = scope, .kind = .scope },
+            .{ .token = token, .kind = .literal, .tag = "poem", .body = prepared },
+        };
+        const phase = (try parsePoemPhaseAlloc(a, output, null, try poemPhaseTestRecord(a, output, "", &items))).?;
+        var renderer: Renderer = .{ .a = a, .context = .{ .poem_phase = phase } };
+        const spans = try renderer.parseSpans(output, .{ .role = .example, .direction = "rtl" });
+        try Check.spans(a, spans, case.visible, case.target, case.bold, "example", "rtl");
+        try std.testing.expectEqual(@as(usize, 0), renderer.poem_depth);
+        try std.testing.expect(!renderer.poem_base_style.poem_independent_parse);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+        const sections = [_]Section{.{ .blocks = &blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "Poem phase", .language, .{ .code = "en", .heading = "English" });
+        try Check.spans(a, decoded.entry.sections[0].blocks[0].spans, case.visible, case.target, case.bold, "example", "rtl");
+        const outside_holder = try renderer.parseSpans("[[C|[https://outside.test raw] tail]]", .{});
+        try std.testing.expectEqualStrings("[https://outside.test raw] tail", try plainText(a, outside_holder));
+        for (outside_holder) |span| {
+            try std.testing.expect(span.kind == .link);
+            try std.testing.expectEqualStrings("C", span.target);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem") == null);
+        }
+        const outside = try renderer.parseSpans("[https://outside.test ordinary]", .{});
+        try std.testing.expectEqualStrings("ordinary", try plainText(a, outside));
+        for (outside) |span| {
+            try std.testing.expect(span.kind == .external_link);
+            try std.testing.expectEqualStrings("https://outside.test", span.target);
+        }
+    }
+
+    // The real multiline body-link dispatcher must relinquish its outer target
+    // only during the independent body, then resume the A-linked suffix.
+    for ([_]struct { body: []const u8, visible: []const u8, target: []const u8 }{
+        .{ .body = "[https://example.test label]", .visible = "label", .target = "A" },
+        .{ .body = "[[B|[https://inner.test kept] tail]]", .visible = "[https://inner.test kept] tail", .target = "B" },
+    }) |case| {
+        const scope = try poemPhaseTestToken(a, 0);
+        const prepared = try std.fmt.allocPrint(a, "{s}<poem>{s}</poem>", .{ scope, case.body });
+        const token = try poemPhaseTestLiteralToken(a, 1, prepared);
+        const output = try std.fmt.allocPrint(a, "[[A|head\n{s}\ntail]]", .{token});
+        const items = [_]PoemPhaseItem{
+            .{ .token = scope, .kind = .scope },
+            .{ .token = token, .kind = .literal, .tag = "poem", .body = prepared },
+        };
+        const phase = (try parsePoemPhaseAlloc(a, output, null, try poemPhaseTestRecord(a, output, "", &items))).?;
+        var renderer: Renderer = .{ .a = a, .context = .{ .poem_phase = phase } };
+        const blocks = try renderer.renderBody(output);
+        try Check.multiline(a, blocks, case.visible, case.target);
+        try std.testing.expectEqualStrings("", renderer.body_link_target);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "multiline Poem phase", .language, .{ .code = "en", .heading = "English" });
+        try Check.multiline(a, decoded.entry.sections[0].blocks, case.visible, case.target);
     }
 }
