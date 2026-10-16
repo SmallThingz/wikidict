@@ -4,18 +4,88 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
+import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class DownloadLifecycleTest {
+    @Test fun importedDictionaryHashPreservesDigestAcrossShortReads() = runBlocking {
+        var reads = 0
+        var closed = false
+        val input = object : ByteArrayInputStream("abc".toByteArray()) {
+            override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                reads++
+                return super.read(bytes, offset, minOf(length, 1))
+            }
+            override fun close() { closed = true; super.close() }
+        }
+        val digest = input.use { hashImportedDictionary(it) }
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", digest)
+        assertEquals(4, reads)
+        assertTrue(closed)
+    }
+
+    @Test fun importedDictionaryHashCancellationStopsBeforeAnotherRead() = runBlocking {
+        var reads = 0
+        var returned = false
+        var closed = false
+        val hashing = launch(start = CoroutineStart.UNDISPATCHED) {
+            val owner = currentCoroutineContext().job
+            val input = object : ByteArrayInputStream("abcdef".toByteArray()) {
+                override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                    reads++
+                    val count = super.read(bytes, offset, minOf(length, 1))
+                    if (reads == 1) owner.cancel(CancellationException("cancel during hash"))
+                    return count
+                }
+                override fun close() { closed = true; super.close() }
+            }
+            input.use { hashImportedDictionary(it) }
+            returned = true
+        }
+        hashing.join()
+        assertTrue(hashing.isCancelled)
+        assertEquals(1, reads)
+        assertFalse(returned)
+        assertTrue(closed)
+    }
+
+
+    @Test fun importedDictionaryHashCancellationAtEofDoesNotReturnDigest() = runBlocking {
+        var reads = 0
+        var returned = false
+        var closed = false
+        val hashing = launch(start = CoroutineStart.UNDISPATCHED) {
+            val owner = currentCoroutineContext().job
+            val input = object : ByteArrayInputStream("abc".toByteArray()) {
+                override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                    reads++
+                    val count = super.read(bytes, offset, length)
+                    if (count < 0) owner.cancel(CancellationException("cancel at hash EOF"))
+                    return count
+                }
+                override fun close() { closed = true; super.close() }
+            }
+            input.use { hashImportedDictionary(it) }
+            returned = true
+        }
+        hashing.join()
+        assertTrue(hashing.isCancelled)
+        assertEquals(2, reads)
+        assertFalse(returned)
+        assertTrue(closed)
+    }
+
     @Test fun cancelTargetsActiveImportWhileRefreshWaits() = runBlocking {
         withTimeout(5_000) {
             val operations = LibraryOperationOwner(Mutex())

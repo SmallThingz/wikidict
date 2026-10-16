@@ -41,6 +41,19 @@ object Catalog {
         }.take(10001).toList().also { require(it.size <= 10000); require(it.map { x -> x.url }.distinct().size == it.size) }
     }
 }
+internal suspend fun hashImportedDictionary(input: InputStream): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(256*1024)
+    while (true) {
+        currentCoroutineContext().ensureActive()
+        val count = input.read(buffer)
+        if (count < 0) break
+        digest.update(buffer, 0, count)
+    }
+    currentCoroutineContext().ensureActive()
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
 // A watcher owns the ID it started with, not whichever download is current later.
 internal fun removeOwnedDownload(id: Long, lock: Any, currentId: () -> Long, remove: (Long) -> Unit, clear: () -> Unit) {
     remove(id)
@@ -339,7 +352,7 @@ class LibraryStore private constructor(private val context: Context) {
                 val buffer = ByteArray(256*1024); var total = 0L; val max = directory.usableSpace - 32*1024*1024
                 while (true) { currentCoroutineContext().ensureActive(); val n = source.read(buffer); if (n < 0) break; total += n; require(total <= max); out.write(buffer,0,n) }
             } }
-            val hash = temp.inputStream().use { stream -> val d=MessageDigest.getInstance("SHA-256"); val b=ByteArray(256*1024); while(true){val n=stream.read(b);if(n<0)break;d.update(b,0,n)};d.digest().joinToString(""){"%02x".format(it)} }
+            val hash = temp.inputStream().use { hashImportedDictionary(it) }
             install(temp, hash, name())
         } finally { temp.delete() }
     }
@@ -384,6 +397,7 @@ class LibraryStore private constructor(private val context: Context) {
             }
             }
             require(count > 0 || kind != "language") { "Dictionary has no entries" }
+            currentCoroutineContext().ensureActive()
             require(temp.renameTo(final)) { "Cannot install dictionary" }
             placedFile = true
             db.execSQL("INSERT INTO dictionaries VALUES(?,CAST(? AS TEXT),CAST(? AS TEXT),?,?,?,?)", arrayOf<Any>(id,language.toByteArray(Charsets.UTF_8),code.toByteArray(Charsets.UTF_8),kind,count,final.length(),edition))

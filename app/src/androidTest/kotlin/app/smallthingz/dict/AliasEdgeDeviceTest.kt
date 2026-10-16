@@ -2,12 +2,21 @@ package app.smallthingz.dict
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** These synthetic files were independently replayed through the current core C ABI. */
 @RunWith(AndroidJUnit4::class)
@@ -104,6 +113,62 @@ class AliasEdgeDeviceTest {
             assertNotNull(library.error);assertEquals(valid,library.dictionaries.map { it.id })
         } finally {
             library.dictionaries.map { it.id }.filter { it !in before }.forEach { library.remove(it).join() }
+        }
+    }
+
+    @Test fun cancelledEmptyAuxiliaryImportPreservesInstalledDictionary() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        assumeTrue(context.packageName.endsWith(".validation"))
+        val library = LibraryStore.get(context)
+        library.refreshCatalogs().join()
+        val before = library.dictionaries.map { it.id }.toSet()
+        val edition = "cancel${UUID.randomUUID().toString().replace("-", "")}wiktionary-20261001"
+        val directory = File(context.filesDir, "dictionaries")
+        val owner = AtomicReference<Job>()
+        val ownerReady = CountDownLatch(1)
+        val cancelledAtName = AtomicBoolean(false)
+        var importing: Job? = null
+        try {
+            library.importFile(name = {
+                "$edition-ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"
+            }) { instrumentation.context.assets.open("compiled-alias-targets.wikblb") }.join()
+            assertNull(library.error)
+            val installed = library.dictionaries.single { it.id !in before }
+            assertEquals(edition, installed.edition)
+            val hit = library.search("animus", 500).single { it.dictionary == installed.id && it.title == "animus" }
+            assertEquals("animus", library.read(hit).title)
+            val installedFile = File(directory, "${installed.id}.wikblb")
+            val installedBytes = installedFile.readBytes()
+            val expectedIds = library.dictionaries.map { it.id }.toSet()
+            val partialsBefore = directory.listFiles().orEmpty().filter { it.extension == "part" }.map { it.name }.toSet()
+
+            val pending = library.importFile(name = {
+                check(ownerReady.await(5, TimeUnit.SECONDS)) { "Import owner was not published" }
+                // The checksum has returned. Cancel this exact owner before install starts.
+                checkNotNull(owner.get()).cancel(CancellationException("cancel before auxiliary publication"))
+                cancelledAtName.set(true)
+                "$edition-supplemental.wikblb"
+            }) { ByteArrayInputStream("WIKBLB08".toByteArray() + byteArrayOf(7)) }
+            importing = pending
+            owner.set(pending)
+            ownerReady.countDown()
+            withTimeout(10_000) { pending.join() }
+
+            assertTrue(cancelledAtName.get())
+            assertTrue(pending.isCancelled)
+            assertNull(library.error)
+            assertNull(library.busy)
+            assertNull(library.transferDetail)
+            assertEquals(expectedIds, library.dictionaries.map { it.id }.toSet())
+            assertArrayEquals(installedBytes, installedFile.readBytes())
+            assertEquals("animus", library.read(hit).title)
+            assertEquals(partialsBefore, directory.listFiles().orEmpty().filter { it.extension == "part" }.map { it.name }.toSet())
+        } finally {
+            ownerReady.countDown()
+            importing?.cancel()
+            importing?.join()
+            library.dictionaries.filter { it.edition == edition && it.id !in before }.forEach { library.remove(it.id).join() }
         }
     }
 }
