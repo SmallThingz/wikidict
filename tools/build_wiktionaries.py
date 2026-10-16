@@ -1699,10 +1699,11 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
             return mode
 
 
-def validate_fallback_report(path):
+def validate_fallback_report(path, namespace_counts=None):
     if not path.is_file():
         raise ValueError(f'Missing fallback report: {path}')
     count = 0
+    counts = {}
     seen = set()
     with path.open(encoding='utf-8') as lines:
         for line_number, line in enumerate(lines, 1):
@@ -1733,6 +1734,11 @@ def validate_fallback_report(path):
                 raise ValueError(f'Duplicate fallback page at {path}:{line_number}: {namespace}:{title}')
             seen.add(key)
             count += 1
+            counts[namespace] = counts.get(namespace, 0) + 1
+    if namespace_counts is not None:
+        # Commit the output only after the complete report is valid.
+        namespace_counts.clear()
+        namespace_counts.update(counts)
     return count
 
 BUILD_IDENTITY_NAME = '.build-inputs.json'
@@ -1869,7 +1875,7 @@ def validate_verified_publication_inventory(staging, verified_compressed=None):
     return expected,checked
 
 
-def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None):
+def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fallback_counts=None):
     if type(expected_rows) is not int or expected_rows<0:raise ValueError('Missing expected namespace row count')
     path=root/'namespace-coverage.json'
     try:report=read_small_json(path,8*1024*1024)
@@ -1908,6 +1914,10 @@ def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None):
         if row.get('alias_pages',0)>row['expanded_pages']+row['fallback_pages'] or (kind is None and row.get('alias_pages',0)):raise ValueError('Invalid alias coverage subset')
         if (kind is None and row['input_rows']!=row['compile_only_rows']) or (kind is not None and row['compile_only_rows']!=0):raise ValueError('Invalid namespace coverage disposition')
         if (kind=='language')!=(ns==0) or (ns==0)!=(name==''):raise ValueError('Invalid main namespace coverage')
+        if fallback_counts is not None and row['fallback_pages']!=fallback_counts.get(ns,0):
+            raise ValueError(f'Namespace fallback counts differ from fallback report: {ns}')
+    if fallback_counts is not None and set(fallback_counts)-seen:
+        raise ValueError('Fallback report names namespace absent from coverage')
     if totals['input_rows']!=expected_rows:raise ValueError('Namespace coverage does not match selected rows')
     return totals
 
@@ -1930,8 +1940,9 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     recorded_now=read_small_json(staging/NOW_UNIX_NAME) if (staging/NOW_UNIX_NAME).is_file() else None
     validate_now_unix(recorded_now)
     coverage=validate_page_coverage(staging,require_total=True)
-    fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl')
-    namespace_totals=validate_namespace_coverage(staging,coverage['pages_seen'],namespace_snapshot)
+    fallback_counts = {}
+    fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl', fallback_counts)
+    namespace_totals=validate_namespace_coverage(staging,coverage['pages_seen'],namespace_snapshot,fallback_counts)
     if namespace_snapshot is not None and namespace_totals['fallback_pages']!=fallback_pages:raise ValueError('Namespace fallback totals differ from fallback report')
     for part in staging.rglob('*.xz.part'):
         unlink_artifact(part)
@@ -2034,8 +2045,9 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         coverage=validate_page_coverage(target,require_total=True)
         if type(metadata.get('input_pages')) is not int or metadata['input_pages']!=coverage['pages_seen']:
             raise ValueError('Existing output page total differs from coverage')
-        namespace_totals=validate_namespace_coverage(target,metadata['input_pages'],namespace)
-        fallback_pages=validate_fallback_report(target/'fallback-pages.jsonl')
+        fallback_counts = {}
+        fallback_pages=validate_fallback_report(target/'fallback-pages.jsonl', fallback_counts)
+        namespace_totals=validate_namespace_coverage(target,metadata['input_pages'],namespace,fallback_counts)
         if (type(metadata.get('fallback_pages')) is not int or metadata['fallback_pages']!=fallback_pages or
                 namespace_totals['fallback_pages']!=fallback_pages or
                 metadata.get('namespace_coverage_totals')!=namespace_totals):

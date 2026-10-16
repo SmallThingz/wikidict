@@ -1158,7 +1158,12 @@ fn preCandidate(input: []const u8) bool {
 }
 
 fn freeObservedScopes(a: std.mem.Allocator, scopes: []const presentation_document.ObservedPreScope) void {
-    for (scopes) |scope| a.free(scope.target);
+    for (scopes) |scope| {
+        a.free(scope.target);
+        a.free(scope.attributes.classes);
+        a.free(scope.attributes.language);
+        a.free(scope.attributes.direction);
+    }
     if (scopes.len != 0) a.free(scopes);
 }
 
@@ -1319,6 +1324,7 @@ fn fragmentPreContextAlloc(a: std.mem.Allocator, start: usize, end: usize, scope
                 .resume_at = @min(scope.resume_at, end) - start,
                 .kind = scope.kind,
                 .formatting = scope.formatting,
+                .attributes = scope.attributes,
                 .target = scope.target,
                 .quote = if (scope.kind == .link) try quotes.links[index].at(start) else null,
                 .resume_quote = if (scope.kind == .link) (scope.link_quotes orelse return error.InvalidPreContext).resume_quote else null,
@@ -1332,7 +1338,7 @@ fn fragmentPreContextAlloc(a: std.mem.Allocator, start: usize, end: usize, scope
     while (cursor) |index| {
         const scope = scopes[index];
         if (scope.opening_start >= start and scope.body_start <= end and scope.body_end >= end)
-            try trailing.append(a, .{ .opening_start = scope.opening_start - start, .body_start = scope.body_start - start, .kind = scope.kind, .formatting = scope.formatting, .target = scope.target, .quote = if (scope.kind == .link) (scope.link_quotes orelse return error.InvalidPreContext).entry else null });
+            try trailing.append(a, .{ .opening_start = scope.opening_start - start, .body_start = scope.body_start - start, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .target = scope.target, .quote = if (scope.kind == .link) (scope.link_quotes orelse return error.InvalidPreContext).entry else null });
         cursor = scope.parent;
     }
     // Initial ancestors were appended inner-first. Trailing opens need the
@@ -1468,7 +1474,7 @@ fn processMain(
     poem_phase: ?*const presentation_document.PoemPhase,
 ) !void {
     // MediaWiki's first body TOC is page-scoped, before language-owner regrouping.
-    const may_cross_pre = preCandidate(source_raw);
+    const may_cross_pre = preCandidate(source_raw) or presentation_document.mayHaveFormattingScopes(source_raw);
     const may_cross_link = presentation_document.mayHaveMultilineLinks(source_raw);
     const body_source: presentation_document.PreparedBodySource = if (may_cross_pre or may_cross_link)
         try presentation_document.prepareBodySourceAlloc(page_allocator, title, source_raw)
@@ -5336,4 +5342,114 @@ test "Writer refused ordinary roots expose language owners without inheriting na
         try std.testing.expectEqualStrings("literal_markup", reasons[0].string);
     }
     try std.testing.expect(lines.next() == null);
+}
+
+test "Writer attributed formatting crosses language owners and restores scope through DPR2" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TestLanguages.codes();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const source = "==English==\nlead\n<b class=\"Egyp IPA nyms\" lang=egy dir=rtl>\nalpha [[cat]]\n==French==\nbeta [[chat]]\n<i lang=\"\" dir=ltr>reset [[chien]]</i>\n==English==\ndelta [[dog]]\n</b> trailer [[wolf]]\nsoft [[fox]]\n\nOutside [[bear]]";
+    const observation = try presentation_document.observePreScopesAlloc(a, "attributed owner scope", source, .{}, null, null, null, .{}, null);
+    defer freePreObservation(a, observation);
+    var attributed_scope = false;
+    for (observation.scopes) |scope| {
+        if (std.mem.indexOf(u8, scope.attributes.classes, "Egyp") == null) continue;
+        try std.testing.expect(scope.attributes.role == .pronunciation);
+        try std.testing.expect(scope.attributes.relation_note);
+        if (scope.attributes.language.len == 0) {
+            try std.testing.expectEqualStrings("ltr", scope.attributes.direction);
+        } else {
+            try std.testing.expectEqualStrings("egy", scope.attributes.language);
+            try std.testing.expectEqualStrings("rtl", scope.attributes.direction);
+            attributed_scope = true;
+        }
+    }
+    try std.testing.expect(attributed_scope);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "attributed owner scope", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    const expected = [_]struct { text: []const u8, owner: []const u8, target: []const u8 = "", scoped: bool = false, reset: bool = false }{
+        .{ .text = "lead", .owner = "English" },
+        .{ .text = "alpha", .owner = "English", .scoped = true },
+        .{ .text = "cat", .owner = "English", .target = "cat", .scoped = true },
+        .{ .text = "beta", .owner = "French", .scoped = true },
+        .{ .text = "chat", .owner = "French", .target = "chat", .scoped = true },
+        .{ .text = "reset", .owner = "French", .scoped = true, .reset = true },
+        .{ .text = "chien", .owner = "French", .target = "chien", .scoped = true, .reset = true },
+        .{ .text = "delta", .owner = "English", .scoped = true },
+        .{ .text = "dog", .owner = "English", .target = "dog", .scoped = true },
+        .{ .text = "trailer", .owner = "English" },
+        .{ .text = "wolf", .owner = "English", .target = "wolf" },
+        .{ .text = "soft", .owner = "English" },
+        .{ .text = "fox", .owner = "English", .target = "fox" },
+        .{ .text = "Outside", .owner = "English" },
+        .{ .text = "bear", .owner = "English", .target = "bear" },
+    };
+    var seen: [expected.len]usize = @splat(0);
+    var joined_suffix = false;
+    for ([_][]const u8{ "English", "French" }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("attributed owner scope")).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(if (std.mem.eql(u8, owner, "French")) "fr" else "en", decoded.entry.language_code);
+        for (decoded.entry.sections) |section| for (section.blocks) |block| {
+            var delta = false;
+            var trailer = false;
+            var soft = false;
+            for (block.spans) |span| {
+                var words = std.mem.tokenizeAny(u8, span.text, " \t\r\n");
+                while (words.next()) |word| {
+                    delta = delta or std.mem.eql(u8, word, "delta");
+                    trailer = trailer or std.mem.eql(u8, word, "trailer");
+                    soft = soft or std.mem.eql(u8, word, "soft");
+                    for (expected, 0..) |item, item_index| {
+                        if (!std.mem.eql(u8, item.text, word)) continue;
+                        errdefer std.debug.print("OWNER-SPAN owner={s} word={s} bold={} italic={} code={} role={s} classes={s} lang={s} dir={s} target={s}\n", .{ owner, word, span.bold, span.italic, span.code, @tagName(span.role), span.classes, span.language, span.direction, span.target });
+                        try std.testing.expectEqualStrings(item.owner, owner);
+                        try std.testing.expectEqualStrings(item.target, span.target);
+                        try std.testing.expect(if (item.target.len != 0) span.kind == .link else span.kind == .text);
+                        try std.testing.expectEqual(item.scoped, span.bold);
+                        try std.testing.expectEqual(item.reset, span.italic);
+                        try std.testing.expect(!span.code);
+                        try std.testing.expectEqualStrings(if (item.scoped and !item.reset) "egy" else "", span.language);
+                        try std.testing.expectEqualStrings(if (!item.scoped) "" else if (item.reset) "ltr" else "rtl", span.direction);
+                        try std.testing.expectEqualStrings(if (item.scoped) "pronunciation" else "normal", @tagName(span.role));
+                        var egyp = false;
+                        var ipa = false;
+                        var nyms = false;
+                        var classes = std.mem.tokenizeAny(u8, span.classes, " \t\r\n");
+                        while (classes.next()) |class| {
+                            egyp = egyp or std.mem.eql(u8, class, "Egyp");
+                            ipa = ipa or std.mem.eql(u8, class, "IPA");
+                            nyms = nyms or std.mem.eql(u8, class, "nyms");
+                        }
+                        try std.testing.expectEqual(item.scoped, egyp);
+                        try std.testing.expectEqual(item.scoped, ipa);
+                        try std.testing.expectEqual(item.scoped, nyms);
+                        seen[item_index] += 1;
+                    }
+                }
+            }
+            if (delta and trailer and soft) {
+                try std.testing.expect(block.kind == .paragraph);
+                joined_suffix = true;
+            }
+        };
+    }
+    for (seen) |count| try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expect(joined_suffix);
 }

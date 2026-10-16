@@ -176,10 +176,17 @@ pub const Error = A.Error || error{ RenderLimit, InvalidPreContext };
 
 // Build-only coordinates in an already page-TOC-prepared owner fragment.
 // The source owner map, rather than a new tag search here, proves these scopes.
+pub const FormattingAttributes = struct {
+    classes: []const u8 = "",
+    role: Role = .normal,
+    relation_note: bool = false,
+    language: []const u8 = "",
+    direction: []const u8 = "",
+};
 pub const FragmentPreContext = struct {
     pub const Kind = enum { pre, formatting, link, refused_link };
-    pub const Initial = struct { body_end: usize, resume_at: usize, kind: FragmentPreContext.Kind = .pre, formatting: SpanFlags = .{}, target: []const u8 = "", quote: ?QuoteSeed = null, resume_quote: ?QuoteSeed = null };
-    pub const Trailing = struct { opening_start: usize, body_start: usize, kind: FragmentPreContext.Kind = .pre, formatting: SpanFlags = .{}, target: []const u8 = "", quote: ?QuoteSeed = null };
+    pub const Initial = struct { body_end: usize, resume_at: usize, kind: FragmentPreContext.Kind = .pre, formatting: SpanFlags = .{}, target: []const u8 = "", attributes: FormattingAttributes = .{}, quote: ?QuoteSeed = null, resume_quote: ?QuoteSeed = null };
+    pub const Trailing = struct { opening_start: usize, body_start: usize, kind: FragmentPreContext.Kind = .pre, formatting: SpanFlags = .{}, target: []const u8 = "", attributes: FormattingAttributes = .{}, quote: ?QuoteSeed = null };
     initial: []const Initial = &.{},
     trailing: []const Trailing = &.{},
     initial_block_pre: bool = false,
@@ -188,6 +195,25 @@ pub const FragmentPreContext = struct {
 
 // Sparse gate for the existing full-page observer. Complete single-line
 // roots are skipped once; malformed overlap is bounded by the shared stack.
+// This is only an observation hint. The existing renderer decides whether a
+// matched formatting wrapper owns a body scope, and which headings it crosses.
+pub fn mayHaveFormattingScopes(input: []const u8) bool {
+    var opaque_scan: syntax.OpaqueScan = .{};
+    var cursor: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |opening| {
+        if (opaque_scan.protectedEnd(input, opening, null)) |end| {
+            cursor = end;
+            continue;
+        }
+        if (opaque_scan.tagAt(input, opening, null)) |tag| {
+            cursor = tag.end;
+            if (tag.closing or tag.self_closing) continue;
+            if (Renderer.blockFormattingFlags(tag) != null) return true;
+        } else cursor = opening + 1;
+    }
+    return false;
+}
+
 pub fn mayHaveMultilineLinks(source: []const u8) bool {
     var scan: syntax.OpaqueScan = .{};
     var at: usize = 0;
@@ -216,7 +242,7 @@ pub fn mayHaveMultilineLinks(source: []const u8) bool {
 
 pub const PreScopeObserver = struct {
     ctx: ?*anyopaque,
-    enter: *const fn (?*anyopaque, []const u8, ?usize, usize, usize, usize, usize, bool, FragmentPreContext.Kind, SpanFlags, []const u8) Error!void,
+    enter: *const fn (?*anyopaque, []const u8, ?usize, usize, usize, usize, usize, bool, FragmentPreContext.Kind, SpanFlags, []const u8, FormattingAttributes) Error!void,
 };
 
 // Optional build-only native extension provenance. A phase is validated once
@@ -1434,6 +1460,7 @@ pub const Renderer = struct {
     body_link_target: []const u8 = "",
     // Only an active structural parent supplies this lexical lang/dir base.
     body_language_direction: ?Style = null,
+    body_formatting_attributes: FormattingAttributes = .{},
     body_paragraph_join: ?*BodyParagraphJoin = null,
     navigation_target_probe: ?*?[]const u8 = null,
     navigation_refused_probe: ?*bool = null,
@@ -3418,6 +3445,49 @@ pub const Renderer = struct {
         return try self.poemCleanField(try self.entityText(normalized.attr(name) orelse return null));
     }
 
+    fn htmlInlineStyle(self: *Renderer, tag: syntax.Tag, style: Style) Error!Style {
+        var s = style;
+        if (oneOf(tag.name, &.{ "b", "strong" })) s.bold = true;
+        if (oneOf(tag.name, &.{ "i", "em", "cite", "var", "dfn" })) s.italic = true;
+        if (tag.is("u") or tag.is("ins")) s.underline = true;
+        if (oneOf(tag.name, &.{ "s", "del", "strike" })) s.strike = true;
+        if (tag.is("sup")) s.superscript = true;
+        if (tag.is("sub")) s.subscript = true;
+        if (tag.is("small")) s.small = true;
+        if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) s.code = true;
+        if ((try self.semanticAttribute(tag, "class"))) |classes| {
+            const decoded_classes = classes;
+            var safe_classes: std.ArrayList(u8) = .empty;
+            defer safe_classes.deinit(self.a);
+            var tokens = std.mem.tokenizeAny(u8, decoded_classes, " \t\r\n");
+            while (tokens.next()) |class| {
+                var safe = class.len != 0;
+                for (class) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) {
+                    safe = false;
+                    break;
+                };
+                // Media ownership is compiler-generated metadata, never an authored CSS capability.
+                if (!safe or std.mem.startsWith(u8, class, "wikidict-media-file-")) continue;
+                if (safe_classes.items.len != 0) try safe_classes.append(self.a, ' ');
+                try safe_classes.appendSlice(self.a, class);
+                if (std.mem.eql(u8, class, "scribunto-error")) self.fallbacks.rendered_lua_error = true;
+                if (std.mem.eql(u8, class, "ext-phonos-error")) self.fallbacks.rendered_extension_error = true;
+                if (std.mem.eql(u8, class, "headword-line") or std.mem.eql(u8, class, "headword")) s.role = .headword;
+                if (s.role != .headword and (std.mem.eql(u8, class, "label-content") or std.mem.eql(u8, class, "qualifier-content"))) s.role = .label;
+                if (std.mem.eql(u8, class, "IPA")) s.role = .pronunciation;
+                if (std.mem.eql(u8, class, "nyms")) {
+                    if (self.semantic_capture) |hints| hints.relation_note = true;
+                }
+            }
+            if (safe_classes.items.len != 0) {
+                s.classes = if (s.classes.len == 0)
+                    try self.a.dupe(u8, safe_classes.items)
+                else
+                    try std.fmt.allocPrint(self.a, "{s} {s}", .{ s.classes, safe_classes.items });
+            }
+        }
+        return self.htmlLanguageDirection(tag, s);
+    }
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
         const raw_tag = opaque_scan.tagAt(input, at, no_more_nowiki_close) orelse return null;
@@ -3543,47 +3613,7 @@ pub const Renderer = struct {
             if (!generated_indent) return tag.end;
         }
         const pair = matched orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
-        var s = style;
-        if (oneOf(tag.name, &.{ "b", "strong" })) s.bold = true;
-        if (oneOf(tag.name, &.{ "i", "em", "cite", "var", "dfn" })) s.italic = true;
-        if (tag.is("u") or tag.is("ins")) s.underline = true;
-        if (oneOf(tag.name, &.{ "s", "del", "strike" })) s.strike = true;
-        if (tag.is("sup")) s.superscript = true;
-        if (tag.is("sub")) s.subscript = true;
-        if (tag.is("small")) s.small = true;
-        if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) s.code = true;
-        if ((try self.semanticAttribute(tag, "class"))) |classes| {
-            const decoded_classes = classes;
-            var safe_classes: std.ArrayList(u8) = .empty;
-            defer safe_classes.deinit(self.a);
-            var tokens = std.mem.tokenizeAny(u8, decoded_classes, " \t\r\n");
-            while (tokens.next()) |class| {
-                var safe = class.len != 0;
-                for (class) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) {
-                    safe = false;
-                    break;
-                };
-                // Media ownership is compiler-generated metadata, never an authored CSS capability.
-                if (!safe or std.mem.startsWith(u8, class, "wikidict-media-file-")) continue;
-                if (safe_classes.items.len != 0) try safe_classes.append(self.a, ' ');
-                try safe_classes.appendSlice(self.a, class);
-                if (std.mem.eql(u8, class, "scribunto-error")) self.fallbacks.rendered_lua_error = true;
-                if (std.mem.eql(u8, class, "ext-phonos-error")) self.fallbacks.rendered_extension_error = true;
-                if (std.mem.eql(u8, class, "headword-line") or std.mem.eql(u8, class, "headword")) s.role = .headword;
-                if (s.role != .headword and (std.mem.eql(u8, class, "label-content") or std.mem.eql(u8, class, "qualifier-content"))) s.role = .label;
-                if (std.mem.eql(u8, class, "IPA")) s.role = .pronunciation;
-                if (std.mem.eql(u8, class, "nyms")) {
-                    if (self.semantic_capture) |hints| hints.relation_note = true;
-                }
-            }
-            if (safe_classes.items.len != 0) {
-                s.classes = if (s.classes.len == 0)
-                    try self.a.dupe(u8, safe_classes.items)
-                else
-                    try std.fmt.allocPrint(self.a, "{s} {s}", .{ s.classes, safe_classes.items });
-            }
-        }
-        s = try self.htmlLanguageDirection(tag, s);
+        var s = try self.htmlInlineStyle(tag, style);
         const content = input[tag.end..pair.inner_end];
         // This attribute is emitted only after the runtime validates captured
         // AUDIO metadata. Keep canonical file, caption and language independent.
@@ -4058,12 +4088,12 @@ pub const Renderer = struct {
         self.spans = .empty;
         defer self.spans = parent;
         if (decode_entities) {
-            try self.protectedLiteral(raw, .{ .code = true, .preserve_whitespace = true });
-        } else try self.text(raw, .{ .code = true, .provenance = .protected_literal, .preserve_whitespace = true });
+            try self.protectedLiteral(raw, self.bodyFormattingStyle(.{ .code = true, .preserve_whitespace = true }));
+        } else try self.text(raw, self.bodyFormattingStyle(.{ .code = true, .provenance = .protected_literal, .preserve_whitespace = true }));
         try self.appendBlockBudgeted(list, .{ .kind = .preformatted, .spans = try self.spans.toOwnedSlice(self.a) });
     }
     fn block(self: *Renderer, list: *std.ArrayList(Block), kind: Kind, raw: []const u8, path: []const u8, number: []const u8, level: u8) Error!void {
-        var hints: SemanticHints = .{};
+        var hints: SemanticHints = .{ .relation_note = self.body_formatting_attributes.relation_note };
         const parent_capture = self.semantic_capture;
         self.semantic_capture = &hints;
         defer self.semantic_capture = parent_capture;
@@ -4071,7 +4101,7 @@ pub const Renderer = struct {
             const parent = self.spans;
             self.spans = .empty;
             defer self.spans = parent;
-            try self.literal(raw, .{ .code = true });
+            try self.literal(raw, self.bodyFormattingStyle(.{ .code = true }));
             break :blk try self.spans.toOwnedSlice(self.a);
         } else try self.parseBodySpans(raw, .{ .heading = kind == .heading });
         if (spans.len == 0 and kind != .heading and kind != .blank and kind != .rule) return;
@@ -4103,9 +4133,9 @@ pub const Renderer = struct {
         try self.block(list, kind, value, "", "", 0);
     }
     fn blockFormattingFlags(tag: syntax.Tag) ?SpanFlags {
-        // Attribute-bearing wrappers still need the ordinary inline HTML path,
-        // which retains their language, classes, direction and semantic role.
-        if (tag.closing or tag.self_closing or tag.attrs.len != 0) return null;
+        // Flags identify formatting wrappers; their attributes use the same
+        // sanitized style helper as the ordinary inline HTML path.
+        if (tag.closing or tag.self_closing) return null;
         if (oneOf(tag.name, &.{ "b", "strong" })) return .{ .bold = true };
         if (oneOf(tag.name, &.{ "i", "em", "cite", "var", "dfn" })) return .{ .italic = true };
         if (oneOf(tag.name, &.{ "u", "ins" })) return .{ .underline = true };
@@ -4116,20 +4146,43 @@ pub const Renderer = struct {
         if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) return .{ .code = true };
         return null;
     }
-    fn endsAfterLaterWikiListLine(input: []const u8) bool {
-        // Reuse logical lines so markers inside comments, nowiki or balanced
-        // template/link payloads cannot create a new block boundary.
-        var at = syntax.logicalEnd(input, 0);
-        if (at == input.len) return false;
-        at += 1;
-        var ends_with_list = false;
-        while (at < input.len) {
-            const end = syntax.logicalEnd(input, at);
-            if (trim(input[at..end]).len != 0)
-                ends_with_list = end > at and std.mem.indexOfScalar(u8, "#*:;", input[at]) != null;
-            at = if (end < input.len) end + 1 else end;
+    fn formattingBlankBoundary(input: []const u8, leading: bool) bool {
+        var count: usize = 0;
+        var offset: usize = 0;
+        while (offset < input.len) : (offset += 1) {
+            const byte = input[if (leading) offset else input.len - offset - 1];
+            if (byte == '\n') {
+                count += 1;
+                if (count == 2) return true;
+            } else if (byte != ' ' and byte != '\t' and byte != '\r') break;
         }
-        return ends_with_list;
+        return false;
+    }
+    fn formattingAttributes(self: *Renderer) FormattingAttributes {
+        var value = self.body_formatting_attributes;
+        if (self.body_language_direction) |style| {
+            value.language = style.language;
+            value.direction = style.direction;
+        }
+        return value;
+    }
+    fn restoreFormattingAttributes(self: *Renderer, value: FormattingAttributes) void {
+        self.body_formatting_attributes = value;
+        self.body_language_direction = .{ .language = value.language, .direction = value.direction };
+    }
+    fn formattingSeparator(self: *Renderer) Span {
+        const value = self.formattingAttributes();
+        return .{ .text = " ", .flags = self.block_formatting, .classes = value.classes, .role = value.role, .language = value.language, .direction = value.direction };
+    }
+    fn formattingVisibleEndsSpace(spans: []const Span) bool {
+        var at = spans.len;
+        while (at != 0) {
+            at -= 1;
+            if (spans[at].kind == .line_break) return true;
+            const visible_text = spans[at].text;
+            if (visible_text.len != 0) return std.ascii.isWhitespace(visible_text[visible_text.len - 1]);
+        }
+        return false;
     }
     pub fn renderBody(self: *Renderer, input: []const u8) Error![]const Block {
         try self.loadPoemPhase();
@@ -4219,12 +4272,17 @@ pub const Renderer = struct {
         const previous_pre = self.parsed_pre;
         const previous_block_pre = self.pre_block;
         const previous_formatting = self.block_formatting;
+        const previous_attributes = self.formattingAttributes();
+        const previous_attribute_storage = self.body_formatting_attributes;
+        const previous_language_direction = self.body_language_direction;
         const previous_link = self.body_link_target;
         defer {
             self.body_link_target = previous_link;
             self.parsed_pre = previous_pre;
             self.pre_block = previous_block_pre;
             self.block_formatting = previous_formatting;
+            self.body_formatting_attributes = previous_attribute_storage;
+            self.body_language_direction = previous_language_direction;
         }
         self.body_link_target = previous_link;
         for (context.initial) |scope| if (scope.kind == .link) {
@@ -4234,6 +4292,7 @@ pub const Renderer = struct {
         self.pre_block = context.initial_block_pre;
         self.parsed_pre = inherited_pre != 0;
         self.block_formatting = if (context.initial.len != 0) context.initial[0].formatting else previous_formatting;
+        if (context.initial.len != 0) self.restoreFormattingAttributes(context.initial[0].attributes);
         if (context.initial.len == 0 and context.trailing.len == 0)
             return self.renderBodySlice(input, false, false, null, context.quote);
         var active_quote: ?QuoteSeed = context.quote;
@@ -4249,6 +4308,7 @@ pub const Renderer = struct {
         var trailing_at: usize = 0;
         var open_pre = inherited_pre;
         var join_inline = false;
+        var join_separator: ?bool = null;
         while (initial_at < context.initial.len or trailing_at < context.trailing.len) {
             const close_at = if (initial_at < context.initial.len) context.initial[initial_at].body_end else input.len;
             const open_at = if (trailing_at < context.trailing.len) context.trailing[trailing_at].opening_start else input.len;
@@ -4256,7 +4316,7 @@ pub const Renderer = struct {
             const boundary = if (closing) close_at else open_at;
             if (boundary == input.len) break; // end/end is a continuing scope, not a real closer.
             self.parsed_pre = open_pre != 0;
-            try self.appendFragmentPreSlice(&blocks, input, cursor, boundary, join_inline, try quotes.at(self.a, cursor - quote_base, self.context.behavior_switches));
+            try self.appendFragmentPreSlice(&blocks, input, cursor, boundary, join_inline, join_separator, try quotes.at(self.a, cursor - quote_base, self.context.behavior_switches));
             const resume_at = if (closing) context.initial[initial_at].resume_at else context.trailing[trailing_at].body_start;
             const same_line = boundary != 0 and input[boundary - 1] != '\n' and std.mem.indexOfScalar(u8, input[boundary..resume_at], '\n') == null;
             if (closing) {
@@ -4278,6 +4338,7 @@ pub const Renderer = struct {
                     self.pre_block = false;
                 }
                 self.block_formatting = if (initial_at < context.initial.len) context.initial[initial_at].formatting else previous_formatting;
+                self.restoreFormattingAttributes(if (initial_at < context.initial.len) context.initial[initial_at].attributes else previous_attributes);
             } else {
                 const scope = context.trailing[trailing_at];
                 trailing_at += 1;
@@ -4292,39 +4353,46 @@ pub const Renderer = struct {
                     self.pre_block = true;
                 }
                 self.block_formatting = scope.formatting;
+                self.restoreFormattingAttributes(scope.attributes);
             }
+            const formatting_scope = if (closing) context.initial[initial_at - 1].kind == .formatting else context.trailing[trailing_at - 1].kind == .formatting;
+            const formatting_join = formatting_scope and blocks.items.len != 0 and blocks.items[blocks.items.len - 1].kind == .paragraph and
+                !formattingBlankBoundary(input[cursor..boundary], false) and !formattingBlankBoundary(input[resume_at..], true);
+            const body_space = boundary > cursor and std.ascii.isWhitespace(input[boundary - 1]);
             cursor = resume_at;
-            join_inline = closing and same_line and (open_pre != 0 or context.initial[initial_at - 1].kind == .link);
+            join_inline = formatting_join or (closing and same_line and (open_pre != 0 or context.initial[initial_at - 1].kind == .link));
+            join_separator = if (formatting_join) body_space or (cursor < input.len and std.ascii.isWhitespace(input[cursor])) else null;
             // The actual block closer consumes its following LF. It does not
             // synthesize an ordinary blank paragraph at the fragment boundary.
             if (closing and open_pre == 0 and cursor < input.len and input[cursor] == '\n') {
                 cursor += 1;
-                join_inline = false;
+                if (!formatting_join) join_inline = false;
+                if (formatting_join) join_separator = true;
             }
         }
         self.parsed_pre = open_pre != 0;
-        try self.appendFragmentPreSlice(&blocks, input, cursor, input.len, join_inline, try quotes.at(self.a, cursor - quote_base, self.context.behavior_switches));
+        try self.appendFragmentPreSlice(&blocks, input, cursor, input.len, join_inline, join_separator, try quotes.at(self.a, cursor - quote_base, self.context.behavior_switches));
         return blocks.toOwnedSlice(self.a);
     }
 
-    fn appendFragmentPreSlice(self: *Renderer, blocks: *std.ArrayList(Block), source: []const u8, start: usize, end: usize, join_inline: bool, seed: QuoteSeed) Error!void {
+    fn appendFragmentPreSlice(self: *Renderer, blocks: *std.ArrayList(Block), source: []const u8, start: usize, end: usize, join_inline: bool, join_separator: ?bool, seed: QuoteSeed) Error!void {
         if (start == end) return;
         const initial_inline = start != 0 and source[start - 1] != '\n';
         const terminal_inline = end < source.len and source[end - 1] != '\n';
         const rendered = try self.renderBodySlice(source[start..end], initial_inline, terminal_inline, null, seed);
         var first: usize = 0;
         if (join_inline and blocks.items.len != 0 and rendered.len != 0 and
-            (rendered[0].kind == .paragraph or rendered[0].kind == .preformatted))
+            (rendered[0].kind == .paragraph or (join_separator == null and rendered[0].kind == .preformatted)))
         {
             const previous = &blocks.items[blocks.items.len - 1];
             if (previous.kind != .heading and previous.kind != .rule and previous.kind != .blank and previous.table == null) {
                 const leading = rendered[0];
-                const separator = !self.parsed_pre and start < end and source[start] != '\n' and std.ascii.isWhitespace(source[start]);
+                const separator = if (join_separator) |requested| requested and !formattingVisibleEndsSpace(previous.spans) else (!self.parsed_pre and start < end and source[start] != '\n' and std.ascii.isWhitespace(source[start]));
                 const spans = try self.a.alloc(Span, previous.spans.len + @intFromBool(separator) + leading.spans.len);
                 @memcpy(spans[0..previous.spans.len], previous.spans);
                 var next = previous.spans.len;
                 if (separator) {
-                    spans[next] = .{ .text = " ", .flags = self.block_formatting };
+                    spans[next] = self.formattingSeparator();
                     next += 1;
                 }
                 @memcpy(spans[next..], leading.spans);
@@ -4423,7 +4491,7 @@ pub const Renderer = struct {
                 pending.index = index;
                 try pending.spans.appendSlice(self.a, blocks.items[index].spans);
             }
-            if (separator) try pending.spans.append(self.a, .{ .text = " ", .flags = self.block_formatting });
+            if (separator) try pending.spans.append(self.a, self.formattingSeparator());
             try pending.spans.appendSlice(self.a, extra);
             blocks.items[index].spans = pending.spans.items;
         } else {
@@ -4432,7 +4500,7 @@ pub const Renderer = struct {
             @memcpy(spans[0..previous.len], previous);
             var next = previous.len;
             if (separator) {
-                spans[next] = .{ .text = " ", .flags = self.block_formatting };
+                spans[next] = self.formattingSeparator();
                 next += 1;
             }
             @memcpy(spans[next..], extra);
@@ -4574,6 +4642,7 @@ pub const Renderer = struct {
         var pos: usize = 0;
         var para: ?usize = null;
         var link_inline_join: ?bool = null;
+        var formatting_join_pending = false;
         var counts: [32]usize = @splat(0);
         var previous_list_path: []const u8 = "";
         var line_opaque: syntax.OpaqueScan = .{};
@@ -4643,22 +4712,43 @@ pub const Renderer = struct {
                     if (syntax.matchingTag(rest, tag)) |pair| {
                         const closing_line_end = std.mem.indexOfScalarPos(u8, rest, pair.end, '\n') orelse rest.len;
                         const first_line_inline = trim(clean[tag.end..]).len != 0;
-                        if (!first_line_inline or endsAfterLaterWikiListLine(rest[tag.end..pair.inner_end]) or bodyPreCandidate(rest[tag.end..pair.inner_end]) or mayHaveMultilineLinks(rest[tag.end..pair.inner_end])) {
-                            const join_inline_paragraph = para != null and first_line_inline;
+                        if (!first_line_inline or std.mem.indexOfScalar(u8, rest[tag.end..pair.inner_end], '\n') != null or bodyPreCandidate(rest[tag.end..pair.inner_end]) or mayHaveMultilineLinks(rest[tag.end..pair.inner_end])) {
+                            const body = rest[tag.end..pair.inner_end];
+                            const joining_format = formatting_join_pending;
+                            const join_separator = if (joining_format) link_inline_join orelse false else true;
+                            const join_inline_paragraph = (para != null or joining_format) and !formattingBlankBoundary(body, true);
                             if (para) |p| {
                                 try self.bodyRawParagraph(&blocks, input, input[p..start], null, &body_quotes, &link_inline_join);
+                                formatting_join_pending = false;
                                 para = null;
+                            }
+                            formatting_join_pending = false;
+                            if (joining_format) link_inline_join = null;
+                            const parent_attributes = self.formattingAttributes();
+                            const parent_attribute_storage = self.body_formatting_attributes;
+                            const parent_language_direction = self.body_language_direction;
+                            var scoped_hints: SemanticHints = .{ .relation_note = parent_attributes.relation_note };
+                            const scoped_style = blk: {
+                                const previous_capture = self.semantic_capture;
+                                self.semantic_capture = &scoped_hints;
+                                defer self.semantic_capture = previous_capture;
+                                break :blk try self.htmlInlineStyle(tag, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
+                            };
+                            self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = scoped_hints.relation_note, .language = scoped_style.language, .direction = scoped_style.direction });
+                            defer {
+                                self.body_formatting_attributes = parent_attribute_storage;
+                                self.body_language_direction = parent_language_direction;
                             }
                             const parent_formatting = self.block_formatting;
                             self.block_formatting = @bitCast(@as(u8, @bitCast(parent_formatting)) | @as(u8, @bitCast(flags)));
                             defer self.block_formatting = parent_formatting;
                             if (self.pre_scope_observer) |observer|
-                                try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, .formatting, self.block_formatting, "");
+                                try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, .formatting, self.block_formatting, "", self.formattingAttributes());
                             // Removing an inline opener must not move its same-line
                             // text to a wiki line start. Later physical lines retain
                             // normal list/heading/preformatted interpretation.
                             const scoped_quote = try self.rawBodyQuoteSeed(input, rest[tag.end..pair.inner_end], &body_quotes);
-                            const scoped_blocks = try self.renderBodySlice(rest[tag.end..pair.inner_end], first_line_inline, false, if (origin) |base| base + offset + tag.end else null, scoped_quote);
+                            const scoped_blocks = try self.renderBodySlice(body, first_line_inline, body.len != 0 and body[body.len - 1] != '\n', if (origin) |base| base + offset + tag.end else null, scoped_quote);
                             var scoped_start: usize = 0;
                             // An inline opener following a soft newline continues the
                             // active paragraph. Merge its first paragraph without
@@ -4666,29 +4756,27 @@ pub const Renderer = struct {
                             if (join_inline_paragraph and blocks.items.len != 0 and scoped_blocks.len != 0 and
                                 blocks.items[blocks.items.len - 1].kind == .paragraph and scoped_blocks[0].kind == .paragraph)
                             {
-                                // The established formatting join replaces this
-                                // span slice directly; finish any link accumulator first.
-                                try paragraph_join.finish(self.a);
+                                var leading: std.ArrayList(Span) = .empty;
                                 const previous = &blocks.items[blocks.items.len - 1];
-                                const leading = scoped_blocks[0];
-                                const spans = try self.a.alloc(Span, previous.spans.len + 1 + leading.spans.len);
-                                @memcpy(spans[0..previous.spans.len], previous.spans);
-                                spans[previous.spans.len] = .{ .text = " ", .flags = parent_formatting };
-                                @memcpy(spans[previous.spans.len + 1 ..], leading.spans);
-                                previous.spans = spans;
-                                previous.text = try std.fmt.allocPrint(self.a, "{s} {s}", .{ previous.text, leading.text });
-                                previous.relation_note = previous.relation_note or leading.relation_note;
+                                if (join_separator and !formattingVisibleEndsSpace(previous.spans))
+                                    try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction });
+                                try leading.appendSlice(self.a, scoped_blocks[0].spans);
+                                try self.appendParagraphSpans(&blocks, blocks.items.len - 1, leading.items, false);
+                                blocks.items[blocks.items.len - 1].relation_note = previous.relation_note or scoped_blocks[0].relation_note;
                                 scoped_start = 1;
                             }
                             try blocks.appendSlice(self.a, scoped_blocks[scoped_start..]);
+                            formatting_join_pending = scoped_blocks.len != 0 and scoped_blocks[scoped_blocks.len - 1].kind == .paragraph and !formattingBlankBoundary(body, false);
                             if (trim(rest[pair.end..closing_line_end]).len == 0) {
                                 pos = offset + closing_line_end;
                                 if (pos < input.len) pos += 1;
+                                if (formatting_join_pending) link_inline_join = !formattingVisibleEndsSpace(blocks.items[blocks.items.len - 1].spans);
                             } else {
                                 // The actual closer ends these flags. Keep its
                                 // same-line suffix inline in the enclosing body.
                                 pos = offset + pair.end;
                                 inline_line_end = offset + closing_line_end;
+                                if (formatting_join_pending) link_inline_join = ((body.len != 0 and std.ascii.isWhitespace(body[body.len - 1])) or std.ascii.isWhitespace(input[pos])) and !formattingVisibleEndsSpace(blocks.items[blocks.items.len - 1].spans);
                             }
                             @memset(&counts, 0);
                             previous_list_path = "";
@@ -4705,6 +4793,7 @@ pub const Renderer = struct {
                     if (syntax.matchingTag(clean, tag)) |pair| {
                         if (para) |p| {
                             try self.bodyRawParagraph(&blocks, input, input[p..start], null, &body_quotes, &link_inline_join);
+                            formatting_join_pending = false;
                             para = null;
                         }
                         pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
@@ -4753,7 +4842,7 @@ pub const Renderer = struct {
                     const resume_at = if (pre.pair) |pair| pair.end else input.len;
                     if (pre.pair == null) self.markUnclosed(input, pre.tag, "block-pre");
                     if (self.pre_scope_observer) |observer|
-                        try observer.enter(observer.ctx, input, origin, pre.opening_start, pre.tag.end, body_end, resume_at, pre.pair != null, .pre, self.block_formatting, "");
+                        try observer.enter(observer.ctx, input, origin, pre.opening_start, pre.tag.end, body_end, resume_at, pre.pair != null, .pre, self.block_formatting, "", self.formattingAttributes());
                     const previous_pre = self.parsed_pre;
                     const previous_block_pre = self.pre_block;
                     self.parsed_pre = true;
@@ -4784,7 +4873,7 @@ pub const Renderer = struct {
                         // This is only an original-source opening fact. It is
                         // never a target, formatting or fragment-wrapper scope.
                         if (origin != null) if (self.pre_scope_observer) |observer|
-                            try observer.enter(observer.ctx, input, origin, opening, opening, opening, opening, false, .refused_link, .{}, "");
+                            try observer.enter(observer.ctx, input, origin, opening, opening, opening, opening, false, .refused_link, .{}, "", self.formattingAttributes());
                         if (para == null) para = start;
                         // Retain every literal prefix byte in para, but resume
                         // scanning after the proven outer opener. Real inner
@@ -4816,7 +4905,7 @@ pub const Renderer = struct {
                     self.link_quote_observation = .{ .entry = body_seed, .resume_quote = resume_quote };
                     defer self.link_quote_observation = previous_observation;
                     if (self.pre_scope_observer) |observer|
-                        try observer.enter(observer.ctx, input, origin, link_scope.opening_start, link_scope.body_start, link_scope.body_end, link_scope.resume_at, true, .link, self.block_formatting, link_scope.target);
+                        try observer.enter(observer.ctx, input, origin, link_scope.opening_start, link_scope.body_start, link_scope.body_end, link_scope.resume_at, true, .link, self.block_formatting, link_scope.target, self.formattingAttributes());
                     const previous_target = self.body_link_target;
                     self.body_link_target = link_scope.target;
                     const first_line_end = std.mem.indexOfScalarPos(u8, input, link_scope.body_start, '\n') orelse input.len;
@@ -4866,8 +4955,13 @@ pub const Renderer = struct {
                 }
                 continue;
             }
+            if (formatting_join_pending and para == null) {
+                formatting_join_pending = false;
+                link_inline_join = null;
+            }
             if (para) |p| {
                 try self.bodyRawParagraph(&blocks, input, input[p..start], if (p == 0) initial_quote else null, &body_quotes, &link_inline_join);
+                formatting_join_pending = false;
                 para = null;
             }
             if (prefix == 0) {
@@ -4911,7 +5005,7 @@ pub const Renderer = struct {
                         } else try self.block(&blocks, .preformatted, clean[0..pair.end], "", "", 0);
                     }
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
-                    try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, self.body_language_direction orelse .{});
+                    try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
                 } else {
                     const parent_language_direction = self.body_language_direction;
                     const scoped_style = try self.htmlLanguageDirection(tag, parent_language_direction orelse .{});
@@ -4936,6 +5030,8 @@ pub const Renderer = struct {
                 continue;
             }
             if (clean.len == 0) {
+                if (formatting_join_pending) link_inline_join = null;
+                formatting_join_pending = false;
                 @memset(&counts, 0);
                 continue;
             }
@@ -5005,7 +5101,7 @@ pub const Renderer = struct {
                     const body_end = if (matched_pair) |pair| offset + pair.inner_end else input.len;
                     const resume_at = if (matched_pair) |pair| offset + pair.end else input.len;
                     if (self.pre_scope_observer) |observer|
-                        try observer.enter(observer.ctx, input, origin, offset, body_start, body_end, resume_at, matched_pair != null, .pre, self.block_formatting, "");
+                        try observer.enter(observer.ctx, input, origin, offset, body_start, body_end, resume_at, matched_pair != null, .pre, self.block_formatting, "", self.formattingAttributes());
                     const previous_pre = self.parsed_pre;
                     const previous_block_pre = self.pre_block;
                     self.parsed_pre = true;
@@ -5103,6 +5199,7 @@ pub const Renderer = struct {
                 defer self.next_quote_seed = previous_seed;
                 try self.bodyRawBlock(&blocks, input, input[p..], &body_quotes, .paragraph, "", "", 0);
             } else try self.bodyRawParagraph(&blocks, input, input[p..], if (p == 0) initial_quote else null, &body_quotes, &link_inline_join);
+            formatting_join_pending = false;
         }
         try paragraph_join.finish(self.a);
         return try blocks.toOwnedSlice(self.a);
@@ -5110,12 +5207,20 @@ pub const Renderer = struct {
     fn parseBodySpans(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
         // Structural entry points opt into the current DOM parent. Recursive
         // inline parsers already carry an effective style, including lang="".
+        return self.parseSpans(input, self.bodyFormattingStyle(style));
+    }
+    fn bodyFormattingStyle(self: *Renderer, style: Style) Style {
         var effective = style;
+        if (effective.classes.len == 0) effective.classes = self.body_formatting_attributes.classes;
+        if (effective.role == .normal) effective.role = self.body_formatting_attributes.role;
+        if (self.body_formatting_attributes.relation_note) if (self.semantic_capture) |hints| {
+            hints.relation_note = true;
+        };
         if (self.body_language_direction) |base| {
             if (effective.language.len == 0) effective.language = base.language;
             if (effective.direction.len == 0) effective.direction = base.direction;
         }
-        return self.parseSpans(input, effective);
+        return effective;
     }
     fn renderBodyWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Block {
         const previous = self.body_language_direction;
@@ -5131,7 +5236,7 @@ pub const Renderer = struct {
         const previous = self.body_language_direction;
         self.body_language_direction = .{ .language = style.language, .direction = style.direction };
         defer self.body_language_direction = previous;
-        return self.parseSpans(input, .{ .language = style.language, .direction = style.direction });
+        return self.parseBodySpans(input, .{ .language = style.language, .direction = style.direction });
     }
     fn cellSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
         const previous = self.body_language_direction;
@@ -5271,7 +5376,7 @@ pub const Renderer = struct {
         const spans = try self.parseSpans(styled, style);
         if (!keep_empty and trim(try plainText(self.a, spans)).len == 0) return;
         const effective_path = if (kind == .list_detail and (path[path.len - 1] == '*' or path[path.len - 1] == '#')) try std.fmt.allocPrint(self.a, "{s}:", .{path}) else path;
-        try self.appendBlockBudgeted(blocks, .{ .kind = kind, .spans = spans, .depth = @intCast(@min(effective_path.len, 255)), .list_path = effective_path, .number = number });
+        try self.appendBlockBudgeted(blocks, .{ .kind = kind, .spans = spans, .depth = @intCast(@min(effective_path.len, 255)), .list_path = effective_path, .number = number, .relation_note = self.body_formatting_attributes.relation_note });
     }
     fn htmlTableFostered(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, joinable: *bool, formatting: *std.ArrayList([]const u8)) Error!void {
         // HTML moves non-cell table content before the table. Preserve that
@@ -7937,11 +8042,22 @@ test "balanced formatting wrapper preserves implicit block newline and list styl
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    // Trailing paragraph continuity is deliberately outside the new list-only path.
+    // Balanced multiline formatting keeps its scope and joins the soft paragraph continuation.
     var trailing: Renderer = .{ .a = a, .context = .{} };
     const trailing_blocks = try trailing.renderBody("<s>one\n* later\nlast paragraph\n</s>\nafter");
-    try std.testing.expectEqualStrings("last paragraph  after", try flattened(a, trailing_blocks[trailing_blocks.len - 1].spans));
-    try std.testing.expect(trailing.fallbacks.unclosed_formatting);
+    try std.testing.expectEqual(@as(usize, 3), trailing_blocks.len);
+    const trailing_spans = trailing_blocks[2].spans;
+    try std.testing.expectEqualStrings("last paragraph after", try flattened(a, trailing_spans));
+    try std.testing.expect(!trailing.fallbacks.unclosed_formatting);
+    var trailing_offset: usize = 0;
+    for (trailing_spans) |span| {
+        for (span.text) |_| {
+            if (trailing_offset < "last paragraph".len) try std.testing.expect(span.flags.strike);
+            if (trailing_offset >= "last paragraph ".len) try std.testing.expect(!span.flags.strike);
+            trailing_offset += 1;
+        }
+    }
+    try std.testing.expectEqual("last paragraph after".len, trailing_offset);
 
     var r: Renderer = .{ .a = a, .context = .{} };
     const blocks = try r.renderBody("<small>\n* هذه الصفحة معتمدة على [[مرجع|كتاب]]\n* <b>notice</b></small>\nAfter");
@@ -13670,7 +13786,7 @@ test "root inline pre observes raw body scopes and preserves first-line quote st
         opening: usize = 0,
         body: usize = 0,
         end: usize = 0,
-        fn enter(raw: ?*anyopaque, _: []const u8, origin: ?usize, opening: usize, body: usize, end: usize, _: usize, matched: bool, kind: FragmentPreContext.Kind, _: SpanFlags, _: []const u8) Error!void {
+        fn enter(raw: ?*anyopaque, _: []const u8, origin: ?usize, opening: usize, body: usize, end: usize, _: usize, matched: bool, kind: FragmentPreContext.Kind, _: SpanFlags, _: []const u8, _: FormattingAttributes) Error!void {
             if (kind != .pre) return;
             const self: *@This() = @ptrCast(@alignCast(raw.?));
             if (origin) |base| {
@@ -13783,7 +13899,7 @@ test "fragment pre carries clipped quote and observed formatting without false d
     const Observation = struct {
         pre: usize = 0,
         formatting: usize = 0,
-        fn enter(raw: ?*anyopaque, _: []const u8, origin: ?usize, _: usize, _: usize, _: usize, _: usize, matched: bool, kind: FragmentPreContext.Kind, flags: SpanFlags, _: []const u8) Error!void {
+        fn enter(raw: ?*anyopaque, _: []const u8, origin: ?usize, _: usize, _: usize, _: usize, _: usize, matched: bool, kind: FragmentPreContext.Kind, flags: SpanFlags, _: []const u8, _: FormattingAttributes) Error!void {
             const self: *@This() = @ptrCast(@alignCast(raw.?));
             if (origin == null or !matched or !flags.bold) return error.InvalidPreContext;
             if (kind == .pre) self.pre += 1 else self.formatting += 1;
@@ -14059,7 +14175,7 @@ test "multiline ordinary link scopes remain inside body cell and list domains" {
     const Observation = struct {
         count: usize = 0,
         refusals: usize = 0,
-        fn enter(raw: ?*anyopaque, domain: []const u8, origin: ?usize, opening: usize, body: usize, end: usize, resume_at: usize, matched: bool, kind: FragmentPreContext.Kind, flags: SpanFlags, target: []const u8) Error!void {
+        fn enter(raw: ?*anyopaque, domain: []const u8, origin: ?usize, opening: usize, body: usize, end: usize, resume_at: usize, matched: bool, kind: FragmentPreContext.Kind, flags: SpanFlags, target: []const u8, _: FormattingAttributes) Error!void {
             const self: *@This() = @ptrCast(@alignCast(raw.?));
             if (kind == .link) self.count += 1;
             if (kind == .refused_link) {
@@ -14243,7 +14359,7 @@ test "matched block formatting observes pre and resumes same-line suffix outside
         const Observation = struct {
             formatting: usize = 0,
             pre: usize = 0,
-            fn enter(raw: ?*anyopaque, domain: []const u8, origin: ?usize, opening: usize, body: usize, end: usize, resume_at: usize, matched: bool, kind: FragmentPreContext.Kind, flags: SpanFlags, _: []const u8) Error!void {
+            fn enter(raw: ?*anyopaque, domain: []const u8, origin: ?usize, opening: usize, body: usize, end: usize, resume_at: usize, matched: bool, kind: FragmentPreContext.Kind, flags: SpanFlags, _: []const u8, _: FormattingAttributes) Error!void {
                 const self: *@This() = @ptrCast(@alignCast(raw.?));
                 if (origin == null or !matched or !flags.bold or opening >= body or body > end or end >= resume_at or resume_at > domain.len)
                     return error.InvalidPreContext;
@@ -17278,4 +17394,249 @@ test "recursive media registration keeps canonical uniqueness cap and caption ef
     try std.testing.expectEqual(@as(usize, 0), refused.refs.items.len);
     try std.testing.expectEqual(@as(usize, 0), refused.media.items.len);
     try std.testing.expectEqual(@as(usize, 0), refused.media_caption_spans.items.len);
+}
+
+const FormattingScopeTest = struct {
+    fn text(a: A, spans: anytype) ![]const u8 {
+        var result: std.ArrayList(u8) = .empty;
+        for (spans) |span| {
+            if (span.kind == .line_break) try result.append(a, '\n') else try result.appendSlice(a, span.text);
+            if (@hasField(@TypeOf(span), "trail")) try result.appendSlice(a, span.trail);
+        }
+        return result.toOwnedSlice(a);
+    }
+    fn shapes(a: A, blocks: anytype, kinds: []const []const u8, values: []const []const u8) !void {
+        try std.testing.expectEqual(kinds.len, blocks.len);
+        for (blocks, kinds, values) |block_value, kind, value| {
+            try std.testing.expectEqualStrings(kind, @tagName(block_value.kind));
+            try std.testing.expect(block_value.table == null);
+            try std.testing.expectEqualStrings(value, try text(a, block_value.spans));
+            if (block_value.kind == .definition) {
+                try std.testing.expectEqualStrings("#", block_value.list_path);
+                try std.testing.expectEqualStrings("1", block_value.number);
+                try std.testing.expectEqual(@as(u8, 1), block_value.depth);
+            }
+            if (block_value.kind == .heading) try std.testing.expectEqual(@as(u8, 2), block_value.level);
+        }
+    }
+    fn word(a: A, blocks: anytype, needle: []const u8, expected: Style) !void {
+        var whole: std.ArrayList(u8) = .empty;
+        for (blocks, 0..) |block_value, index| {
+            if (index != 0) try whole.append(a, '\n');
+            try whole.appendSlice(a, try text(a, block_value.spans));
+        }
+        const begin = std.mem.indexOf(u8, whole.items, needle) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(std.mem.indexOfPos(u8, whole.items, begin + needle.len, needle) == null);
+        var offset: usize = 0;
+        var checked: usize = 0;
+        for (blocks, 0..) |block_value, index| {
+            if (index != 0) offset += 1;
+            for (block_value.spans) |span| {
+                const len = span.text.len + if (@hasField(@TypeOf(span), "trail")) span.trail.len else @as(usize, 0);
+                if (span.kind == .line_break) {
+                    offset += 1;
+                    continue;
+                }
+                const end = offset + len;
+                if (end > begin and offset < begin + needle.len) {
+                    try std.testing.expectEqualStrings(@tagName(expected.kind), @tagName(span.kind));
+                    try std.testing.expectEqualStrings(expected.target, span.target);
+                    try std.testing.expectEqualStrings(expected.language, span.language);
+                    try std.testing.expectEqualStrings(expected.direction, span.direction);
+                    try std.testing.expectEqualStrings(@tagName(expected.role), @tagName(span.role));
+                    try std.testing.expectEqual(expected.small, if (@hasField(@TypeOf(span), "flags")) span.flags.small else span.small);
+                    try std.testing.expectEqual(expected.bold, if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold);
+                    try std.testing.expectEqual(expected.italic, if (@hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic);
+                    try std.testing.expectEqual(expected.code, if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code);
+                    if (expected.classes.len == 0) {
+                        try std.testing.expectEqualStrings("", span.classes);
+                    } else {
+                        var wanted = std.mem.tokenizeAny(u8, expected.classes, " \t\r\n");
+                        while (wanted.next()) |class| {
+                            var found = false;
+                            var actual = std.mem.tokenizeAny(u8, span.classes, " \t\r\n");
+                            while (actual.next()) |token| found = found or std.mem.eql(u8, class, token);
+                            try std.testing.expect(found);
+                        }
+                    }
+                    checked += @min(end, begin + needle.len) - @max(offset, begin);
+                }
+                offset = end;
+            }
+        }
+        try std.testing.expectEqual(needle.len, checked);
+    }
+    fn encode(a: A, r: *Renderer, blocks: []const Block) !@import("blob_encoder").presentation_types.Stored {
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, try r.finishReferences(), r.media.items);
+        return blob.presentation_codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+    }
+};
+test "matched multiline formatting keeps scoped attributes and paragraph flow through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { source: []const u8, kinds: []const []const u8, texts: []const []const u8 };
+    const cases = [_]Case{
+        .{ .source = "<small class=note>\n# [[cat|item]]\n</small>", .kinds = &.{"definition"}, .texts = &.{"item"} },
+        .{ .source = "<small class=\"note\"/>\n# [[cat|item]]\n</small>", .kinds = &.{"definition"}, .texts = &.{"item"} },
+        .{ .source = "<small>prefix\n# [[cat|item]]\ntrailer</small> tail", .kinds = &.{ "paragraph", "definition", "paragraph" }, .texts = &.{ "prefix", "item", "trailer tail" } },
+        .{ .source = "<small>prefix\n# [[cat|item]]\ntrailer</small>\nnext", .kinds = &.{ "paragraph", "definition", "paragraph" }, .texts = &.{ "prefix", "item", "trailer next" } },
+        .{ .source = "<small>prefix\n# [[cat|item]]\ntrailer\n\n</small>tail", .kinds = &.{ "paragraph", "definition", "paragraph", "paragraph" }, .texts = &.{ "prefix", "item", "trailer", "tail" } },
+        .{ .source = "<small>prefix\n==French==</small>", .kinds = &.{"paragraph"}, .texts = &.{"prefix ==French=="} },
+        .{ .source = "<small class=note>\n==French==\nbody\n</small> Outside", .kinds = &.{ "heading", "paragraph" }, .texts = &.{ "French", "body Outside" } },
+        .{ .source = "<small class=note><nowiki>prefix\n# [[cat]]\n==French==</nowiki></small> tail", .kinds = &.{"paragraph"}, .texts = &.{"prefix # [[cat]] ==French== tail"} },
+        .{ .source = "<small class=note>\n code\n</small> tail", .kinds = &.{ "preformatted", "paragraph" }, .texts = &.{ "code", "tail" } },
+        .{ .source = "<small>one\n</small>tail", .kinds = &.{"paragraph"}, .texts = &.{"one tail"} },
+        .{ .source = "<small>one\n\n</small>tail", .kinds = &.{ "paragraph", "paragraph" }, .texts = &.{ "one", "tail" } },
+        .{ .source = "<small>one\nlast </small>tail", .kinds = &.{"paragraph"}, .texts = &.{"one last tail"} },
+    };
+    for (cases, 0..) |case, index| {
+        errdefer std.debug.print("formatting case {d}: {s}\n", .{ index, case.source });
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(case.source);
+        try FormattingScopeTest.shapes(a, blocks, case.kinds, case.texts);
+        const saved = try FormattingScopeTest.encode(a, &r, blocks);
+        try FormattingScopeTest.shapes(a, saved.entry.sections[0].blocks, case.kinds, case.texts);
+        try std.testing.expect(!r.fallbacks.any());
+        if (index < 2) {
+            for ([_]bool{ false, true }) |decoded| {
+                if (decoded) try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "item", .{ .small = true, .classes = "note", .kind = .link, .target = "cat" }) else try FormattingScopeTest.word(a, blocks, "item", .{ .small = true, .classes = "note", .kind = .link, .target = "cat" });
+            }
+        }
+        if (index == 2 or index == 3 or index == 4) {
+            try FormattingScopeTest.word(a, blocks, "trailer", .{ .small = true });
+            try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "trailer", .{ .small = true });
+            const suffix = if (index == 3) "next" else "tail";
+            try FormattingScopeTest.word(a, blocks, suffix, .{});
+            try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, suffix, .{});
+        }
+    }
+    // Native link trails are emitted as their own visible text spans. The
+    // final s must take precedence over protected label-ending whitespace.
+    var trailed: Renderer = .{ .a = a, .context = .{} };
+    const trail_blocks = try trailed.renderBody("<small>one\n[[A|label<nowiki> </nowiki>]]s\n</small>tail");
+    const trail_saved = try FormattingScopeTest.encode(a, &trailed, trail_blocks);
+    try FormattingScopeTest.shapes(a, trail_blocks, &.{"paragraph"}, &.{"one label s tail"});
+    try FormattingScopeTest.shapes(a, trail_saved.entry.sections[0].blocks, &.{"paragraph"}, &.{"one label s tail"});
+    try FormattingScopeTest.word(a, trail_blocks, "s", .{ .kind = .link, .target = "A", .small = true });
+    try FormattingScopeTest.word(a, trail_saved.entry.sections[0].blocks, "s", .{ .kind = .link, .target = "A", .small = true });
+    try FormattingScopeTest.word(a, trail_saved.entry.sections[0].blocks, "tail", .{});
+    var styled: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try styled.renderBody("before\n<small class=\"note IPA nyms\" lang=fr dir=rtl>prefix\n# [[cat|item]]<ref>one</ref> [[File:One.jpg|thumb|photo<ref>two</ref>]]\ntrailer</small> tail\nnext\n\noutside");
+    const kinds = [_][]const u8{ "paragraph", "definition", "paragraph", "paragraph" };
+    const texts = [_][]const u8{ "before prefix", "item[1] photo[2]", "trailer tail next", "outside" };
+    try FormattingScopeTest.shapes(a, blocks, &kinds, &texts);
+    const saved = try FormattingScopeTest.encode(a, &styled, blocks);
+    try FormattingScopeTest.shapes(a, saved.entry.sections[0].blocks, &kinds, &texts);
+    for (blocks[0..3]) |block_value| try std.testing.expect(block_value.relation_note);
+    try std.testing.expect(!blocks[3].relation_note);
+    try std.testing.expectEqual(@as(usize, 2), saved.entry.references.len);
+    try std.testing.expectEqualStrings("one", try FormattingScopeTest.text(a, saved.entry.references[0].spans));
+    try std.testing.expectEqualStrings("two", try FormattingScopeTest.text(a, saved.entry.references[1].spans));
+    try std.testing.expectEqual(@as(usize, 1), saved.entry.media.len);
+    try std.testing.expectEqualStrings("One.jpg", saved.entry.media[0].file);
+    try std.testing.expectEqualStrings("photo[2]", saved.entry.media[0].caption);
+    for ([_][]const u8{ "before", "tail", "next", "outside" }) |word| {
+        try FormattingScopeTest.word(a, blocks, word, .{});
+        try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, word, .{});
+    }
+    const inherited: Style = .{ .small = true, .classes = "note IPA nyms", .language = "fr", .direction = "rtl", .role = .pronunciation };
+    try FormattingScopeTest.word(a, blocks, "prefix", inherited);
+    try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "prefix", inherited);
+    var item_style = inherited;
+    item_style.kind = .link;
+    item_style.target = "cat";
+    try FormattingScopeTest.word(a, blocks, "item", item_style);
+    try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "item", item_style);
+    try FormattingScopeTest.word(a, blocks, "trailer", inherited);
+    try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "trailer", inherited);
+    try std.testing.expect(styled.body_language_direction == null);
+    try std.testing.expectEqualStrings("", styled.body_formatting_attributes.classes);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(styled.block_formatting)));
+    const plain = try styled.renderBody("plain");
+    try FormattingScopeTest.word(a, plain, "plain", .{});
+    var nested: Renderer = .{ .a = a, .context = .{} };
+    const nested_blocks = try nested.renderBody("<small class=note lang=fr dir=rtl>prefix\n<b lang=\"\" dir=ltr>bold\n# [[cat|item]]\ntrailer</b> after\n</small> outside");
+    const nested_saved = try FormattingScopeTest.encode(a, &nested, nested_blocks);
+    const nested_kinds = [_][]const u8{ "paragraph", "definition", "paragraph" };
+    const nested_texts = [_][]const u8{ "prefix bold", "item", "trailer after outside" };
+    try FormattingScopeTest.shapes(a, nested_blocks, &nested_kinds, &nested_texts);
+    try FormattingScopeTest.shapes(a, nested_saved.entry.sections[0].blocks, &nested_kinds, &nested_texts);
+    for ([_][]const u8{ "bold", "trailer" }) |word| {
+        try FormattingScopeTest.word(a, nested_blocks, word, .{ .small = true, .bold = true, .classes = "note", .direction = "ltr" });
+        try FormattingScopeTest.word(a, nested_saved.entry.sections[0].blocks, word, .{ .small = true, .bold = true, .classes = "note", .direction = "ltr" });
+    }
+    try FormattingScopeTest.word(a, nested_blocks, "after", .{ .small = true, .classes = "note", .language = "fr", .direction = "rtl" });
+    try FormattingScopeTest.word(a, nested_saved.entry.sections[0].blocks, "outside", .{});
+    var holder: Renderer = .{ .a = a, .context = .{} };
+    const holder_blocks = try holder.renderBody("<small class=note>\n# [[A|[https://example.test label] tail]]\n</small> after");
+    const holder_saved = try FormattingScopeTest.encode(a, &holder, holder_blocks);
+    try FormattingScopeTest.word(a, holder_blocks, "https://example.test", .{ .kind = .link, .target = "A", .small = true, .classes = "note" });
+    try FormattingScopeTest.word(a, holder_saved.entry.sections[0].blocks, "https://example.test", .{ .kind = .link, .target = "A", .small = true, .classes = "note" });
+    try FormattingScopeTest.word(a, holder_blocks, "after", .{});
+    try std.testing.expect(!holder.fallbacks.any());
+}
+test "formatting attributes survive fragment boundaries and restore parent scope through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const attrs: FormattingAttributes = .{ .classes = "note IPA", .role = .pronunciation, .relation_note = true, .language = "fr", .direction = "rtl" };
+    for ([_][]const u8{ "trailer</small> tail", "trailer</small>\nnext", "trailer</small>\n\nnext" }, 0..) |source, index| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const end = std.mem.indexOf(u8, source, "</small>").?;
+        const initial = [_]FragmentPreContext.Initial{.{ .body_end = end, .resume_at = end + "</small>".len, .kind = .formatting, .formatting = .{ .small = true }, .attributes = attrs }};
+        const blocks = try r.renderBodyWithFragmentPre(source, .{ .initial = &initial });
+        const saved = try FormattingScopeTest.encode(a, &r, blocks);
+        const kinds: []const []const u8 = if (index == 2) &.{ "paragraph", "paragraph" } else &.{"paragraph"};
+        const values: []const []const u8 = if (index == 0) &.{"trailer tail"} else if (index == 1) &.{"trailer next"} else &.{ "trailer", "next" };
+        try FormattingScopeTest.shapes(a, blocks, kinds, values);
+        try FormattingScopeTest.shapes(a, saved.entry.sections[0].blocks, kinds, values);
+        try FormattingScopeTest.word(a, blocks, "trailer", .{ .small = true, .classes = "note IPA", .role = .pronunciation, .language = "fr", .direction = "rtl" });
+        try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "trailer", .{ .small = true, .classes = "note IPA", .role = .pronunciation, .language = "fr", .direction = "rtl" });
+        const suffix = if (index == 0) "tail" else "next";
+        try FormattingScopeTest.word(a, blocks, suffix, .{});
+        try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, suffix, .{});
+        try std.testing.expect(r.body_language_direction == null);
+        try std.testing.expectEqualStrings("", r.body_formatting_attributes.classes);
+        try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(r.block_formatting)));
+    }
+    const source = "before<small class=note>inside";
+    const opening = std.mem.indexOf(u8, source, "<small").?;
+    const tag = syntax.tagAt(source, opening).?;
+    const trailing = [_]FragmentPreContext.Trailing{.{ .opening_start = opening, .body_start = tag.end, .kind = .formatting, .formatting = .{ .small = true }, .attributes = .{ .classes = "note" } }};
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBodyWithFragmentPre(source, .{ .trailing = &trailing });
+    const saved = try FormattingScopeTest.encode(a, &r, blocks);
+    try FormattingScopeTest.shapes(a, blocks, &.{"paragraph"}, &.{"beforeinside"});
+    try FormattingScopeTest.shapes(a, saved.entry.sections[0].blocks, &.{"paragraph"}, &.{"beforeinside"});
+    try FormattingScopeTest.word(a, blocks, "before", .{});
+    try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "inside", .{ .small = true, .classes = "note" });
+    try std.testing.expect(r.body_language_direction == null);
+    try std.testing.expectEqualStrings("", r.body_formatting_attributes.classes);
+
+    // Formatting continuation may not turn a leading-space block into an
+    // ordinary paragraph. Legacy parsed-pre/link joins retain their own policy.
+    const leading = "before\n<b class=note>\n pre";
+    const leading_open = std.mem.indexOf(u8, leading, "<b").?;
+    const leading_tag = syntax.tagAt(leading, leading_open).?;
+    const leading_context = [_]FragmentPreContext.Trailing{.{ .opening_start = leading_open, .body_start = leading_tag.end, .kind = .formatting, .formatting = .{ .bold = true }, .attributes = .{ .classes = "note" } }};
+    var pre: Renderer = .{ .a = a, .context = .{} };
+    const pre_blocks = try pre.renderBodyWithFragmentPre(leading, .{ .trailing = &leading_context });
+    const pre_saved = try FormattingScopeTest.encode(a, &pre, pre_blocks);
+    try FormattingScopeTest.shapes(a, pre_blocks, &.{ "paragraph", "preformatted" }, &.{ "before", "pre" });
+    try FormattingScopeTest.shapes(a, pre_saved.entry.sections[0].blocks, &.{ "paragraph", "preformatted" }, &.{ "before", "pre" });
+    try FormattingScopeTest.word(a, pre_blocks, "pre", .{ .bold = true, .code = true, .classes = "note" });
+    try FormattingScopeTest.word(a, pre_saved.entry.sections[0].blocks, "before", .{});
+
+    const spaced = "trailer </small>tail";
+    const spaced_end = std.mem.indexOf(u8, spaced, "</small>").?;
+    const spaced_context = [_]FragmentPreContext.Initial{.{ .body_end = spaced_end, .resume_at = spaced_end + "</small>".len, .kind = .formatting, .formatting = .{ .small = true }, .attributes = attrs }};
+    var spaced_renderer: Renderer = .{ .a = a, .context = .{} };
+    const spaced_blocks = try spaced_renderer.renderBodyWithFragmentPre(spaced, .{ .initial = &spaced_context });
+    const spaced_saved = try FormattingScopeTest.encode(a, &spaced_renderer, spaced_blocks);
+    try FormattingScopeTest.shapes(a, spaced_blocks, &.{"paragraph"}, &.{"trailer tail"});
+    try FormattingScopeTest.shapes(a, spaced_saved.entry.sections[0].blocks, &.{"paragraph"}, &.{"trailer tail"});
 }

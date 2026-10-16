@@ -1967,7 +1967,127 @@ class BuildTest(unittest.TestCase):
             self.assertFalse((final/'old').exists())
 
 
+class FallbackNamespaceHistogramTests(unittest.TestCase):
+    @staticmethod
+    def row(namespace, name, kind, expanded=0, fallback=0, aliases=0):
+        return dict(id=namespace, name=name, kind=kind,
+                    input_rows=expanded + fallback, compile_only_rows=0,
+                    source_unavailable_rows=0, dispatched_rows=expanded + fallback,
+                    expanded_pages=expanded, fallback_pages=fallback,
+                    duplicate_rows=0, alias_pages=aliases)
+
+    def test_fallback_namespace_histogram_valid_aliases_and_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rows = [self.row(0, '', 'language', expanded=1),
+                    self.row(114, 'Citations', 'citations', fallback=1, aliases=1)]
+            (root/'namespace-coverage.json').write_text(json.dumps(dict(version=1, namespaces=rows)))
+            path = root/'fallback-pages.jsonl'
+            path.write_text(json.dumps(dict(namespace=114, title='Citations:alias', reasons=['literal_markup']))+'\n')
+            # A fallback alias counts as a fallback page, without subtraction.
+            self.assertEqual(1, b.validate_fallback_report(path))
+            counts = {999: 37}
+            self.assertEqual(1, b.validate_fallback_report(path, counts))
+            self.assertEqual({114: 1}, counts)
+            totals = b.validate_namespace_coverage(root, 2, fallback_counts=counts)
+            self.assertEqual((1, 1), (totals['fallback_pages'], totals['alias_pages']))
+            path.write_text('')
+            rows[1].update(expanded_pages=1, fallback_pages=0)
+            (root/'namespace-coverage.json').write_text(json.dumps(dict(version=1, namespaces=rows)))
+            self.assertEqual(0, b.validate_fallback_report(path, counts))
+            self.assertEqual({}, counts)
+            self.assertEqual(0, b.validate_namespace_coverage(root, 2, fallback_counts=counts)['fallback_pages'])
+            (root/'namespace-coverage.json').write_text(json.dumps(dict(version=1, namespaces=[])))
+            self.assertEqual(0, b.validate_namespace_coverage(root, 0, fallback_counts={})['input_rows'])
+
+    def test_fallback_namespace_histogram_output_committed_after_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'fallback-pages.jsonl'
+            page = json.dumps(dict(namespace=0, title='same', reasons=['literal_markup']))+'\n'
+            path.write_text(page+page)
+            counts = {999: 37}
+            with self.assertRaisesRegex(ValueError, 'Duplicate fallback page'):
+                b.validate_fallback_report(path, counts)
+            self.assertEqual({999: 37}, counts)
+
+
 class PublicationResumeTests(unittest.TestCase):
+    def fallback_namespace_fixture(self, root):
+        item, target, workspace = self.prepare(root, publish=False)
+        staging = target.with_name(item['date']+'.building')
+        folder = root/item['wiki']/item['date']
+        namespace = folder/'namespace-registry.tsv'
+        with namespace.open('a') as out:
+            out.write('114\tCitations\tCitations\tcase-sensitive\t0\t0\t0\t\tcitations\tentries\n')
+        snapshots = {'namespace-registry': namespace, 'language-registry': folder/'language-registry.tsv'}
+        hashes = b.verified_auxiliary_hashes(snapshots)
+        identity = b.build_input_identity([item], 'zig', hashes, None, None)
+        (staging/b.AUXILIARY_SHA_NAME).write_text(json.dumps(hashes))
+        b.persist_build_identity(staging, identity)
+        coverage = json.loads((staging/'page-coverage.json').read_text())
+        coverage.update(pages_seen=3, expected_input_pages=3)
+        (staging/'page-coverage.json').write_text(json.dumps(coverage))
+        rows = [FallbackNamespaceHistogramTests.row(0, '', 'language', expanded=1),
+                FallbackNamespaceHistogramTests.row(114, 'Citations', 'citations', fallback=1)]
+        compile_only = FallbackNamespaceHistogramTests.row(10, 'Template', None)
+        compile_only.update(input_rows=1, compile_only_rows=1)
+        rows.append(compile_only)
+        (staging/'namespace-coverage.json').write_text(json.dumps(dict(
+            version=1, registry_sha256=b.sha256_file(namespace), namespaces=rows)))
+        (staging/'fallback-pages.jsonl').write_text(json.dumps(dict(
+            namespace=114, title='Citations:fixture', reasons=['literal_markup']))+'\n')
+        # Construct this controlled raw fixture's seal after its final metadata.
+        (staging/b.VERIFIED_INVENTORY_NAME).unlink()
+        b.seal_verified_publication_inventory(staging)
+        return item, target, workspace, staging, namespace, hashes, identity
+
+    def test_fallback_namespace_histogram_refuses_publication_same_total(self):
+        for wrong_namespace in (0, 10, 999):
+            with self.subTest(namespace=wrong_namespace), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with patch.object(b, 'PROJECT', root):
+                    item, target, workspace, staging, namespace, hashes, identity = self.fallback_namespace_fixture(root)
+                    # Both old grand totals are still one. Only ownership is wrong:
+                    # selected-main zero, compile-only Template, or unknown ns.
+                    report = staging/'fallback-pages.jsonl'
+                    record = json.loads(report.read_text())
+                    record['namespace'] = wrong_namespace
+                    report.write_text(json.dumps(record)+'\n')
+                    self.assertEqual(1, b.validate_fallback_report(report))
+                    with patch.object(b, 'compress_many') as compress:
+                        with self.assertRaisesRegex(ValueError, '(Namespace fallback counts differ|Fallback report names namespace)'):
+                            b._publish_verified_staging(staging, target, item['wiki'], item['date'], 1,
+                                auxiliary_hashes=hashes, build_identity=identity, namespace_snapshot=namespace)
+                        compress.assert_not_called()
+                    self.assertFalse((target/'complete.json').exists())
+                    self.assertTrue((workspace/'sentinel').exists())
+                    self.assertTrue((staging/b.VERIFIED_MARKER).exists())
+
+    def test_fallback_namespace_histogram_refuses_existing_output_same_total(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(b, 'PROJECT', root):
+                item, target, workspace, staging, namespace, hashes, identity = self.fallback_namespace_fixture(root)
+                b._publish_verified_staging(staging, target, item['wiki'], item['date'], 1,
+                    auxiliary_hashes=hashes, build_identity=identity, namespace_snapshot=namespace)
+                # Valid multi-namespace publication is a positive control first.
+                complete = target/'complete.json'
+                metadata = json.loads(complete.read_text())
+                self.assertEqual(1, metadata['fallback_pages'])
+                report = target/'fallback-pages.jsonl'
+                record = json.loads(report.read_text()); record['namespace'] = 0
+                report.write_text(json.dumps(record)+'\n')
+                # Make the inventory agree, so histogram ownership must refuse it.
+                metadata['publication_files'] = b.publication_inventory(target)
+                complete.write_text(json.dumps(metadata))
+                before = complete.read_bytes()
+                with patch.object(b, 'run_checked') as native:
+                    with self.assertRaisesRegex(ValueError, 'Namespace fallback counts differ'):
+                        b.build([item], root, root/'output', 'zig', 1)
+                    native.assert_not_called()
+                self.assertEqual(before, complete.read_bytes())
+                self.assertTrue((workspace/'sentinel').exists())
+
     def prepare(self, root, publish=True):
         folder=root/'testwiktionary/20260901'
         snapshots=write_namespace_fixture(folder)

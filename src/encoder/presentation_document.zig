@@ -28,6 +28,7 @@ pub const Fallbacks = @import("presentation_fallback.zig").Report;
 pub const ReferenceDefinitions = compiler.ReferenceDefinitions;
 pub const PoemPhase = compiler.PoemPhase;
 pub const FragmentPreContext = compiler.FragmentPreContext;
+pub const FormattingAttributes = compiler.FormattingAttributes;
 pub const QuoteSeed = compiler.QuoteSeed;
 pub const QuoteContext = compiler.Context;
 pub const bodyQuoteCutSeedsWithContextAlloc = compiler.bodyQuoteCutSeedsWithContextAlloc;
@@ -47,6 +48,7 @@ pub const ObservedPreScope = struct {
     matched: bool,
     kind: FragmentPreContext.Kind = .pre,
     formatting: compiler.SpanFlags = .{},
+    attributes: FormattingAttributes = .{},
     target: []const u8 = "",
     link_quotes: ?compiler.LinkQuoteObservation = null,
     parent: ?usize = null,
@@ -73,7 +75,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
         renderer: ?*const compiler.Renderer = null,
         scopes: std.ArrayList(ObservedPreScope) = .empty,
         refused_link_openings: std.ArrayList(usize) = .empty,
-        fn enter(raw: ?*anyopaque, domain: []const u8, origin: ?usize, opening_start: usize, body_start: usize, body_end: usize, resume_at: usize, matched: bool, kind: FragmentPreContext.Kind, formatting: compiler.SpanFlags, target: []const u8) compiler.Error!void {
+        fn enter(raw: ?*anyopaque, domain: []const u8, origin: ?usize, opening_start: usize, body_start: usize, body_end: usize, resume_at: usize, matched: bool, kind: FragmentPreContext.Kind, formatting: compiler.SpanFlags, target: []const u8, attributes: FormattingAttributes) compiler.Error!void {
             const self: *@This() = @ptrCast(@alignCast(raw.?));
             const base = origin orelse return;
             if (base > self.source.len or domain.len > self.source.len - base or
@@ -109,6 +111,12 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
                 null;
             const owned_target = try self.a.dupe(u8, target);
             errdefer self.a.free(owned_target);
+            const owned_classes = try self.a.dupe(u8, attributes.classes);
+            errdefer self.a.free(owned_classes);
+            const owned_language = try self.a.dupe(u8, attributes.language);
+            errdefer self.a.free(owned_language);
+            const owned_direction = try self.a.dupe(u8, attributes.direction);
+            errdefer self.a.free(owned_direction);
             try self.scopes.append(self.a, .{
                 .opening_start = absolute_open,
                 .body_start = base + body_start,
@@ -117,6 +125,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
+                .attributes = .{ .classes = owned_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction },
                 .target = owned_target,
                 .link_quotes = link_quotes,
                 .parent = parent,
@@ -126,7 +135,12 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
     };
     var collected: Collector = .{ .a = a, .source = source };
     errdefer {
-        for (collected.scopes.items) |scope| a.free(scope.target);
+        for (collected.scopes.items) |scope| {
+            a.free(scope.target);
+            a.free(scope.attributes.classes);
+            a.free(scope.attributes.language);
+            a.free(scope.attributes.direction);
+        }
         collected.scopes.deinit(a);
         collected.refused_link_openings.deinit(a);
     }
@@ -170,6 +184,7 @@ pub fn parsePoemPhaseAlloc(a: A, full_output: []const u8, display_title: ?[]cons
 }
 pub const referenceDefinitionsAlloc = compiler.referenceDefinitionsAlloc;
 pub const mayHaveMultilineLinks = compiler.mayHaveMultilineLinks;
+pub const mayHaveFormattingScopes = compiler.mayHaveFormattingScopes;
 pub const preparePageTocSourceAlloc = compiler.preparePageTocSourceAlloc;
 
 fn requireCompiledText(text: []const u8) !void {
