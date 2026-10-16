@@ -3929,7 +3929,8 @@ pub const Renderer = struct {
                         media_style.classes = try self.mediaCaptionClasses(try self.mediaClasses(file_name), s.classes);
                         try self.mediaLabel(label_value, media_style, s.heading, selected_label.authored_caption, parsed);
                     } else {
-                        if (label_value.len == 0) label_value = pipeTrickLabel(target);
+                        const generated_label = label_value.len == 0;
+                        if (generated_label) label_value = pipeTrickLabel(target);
                         if (safeInternalTarget(target)) {
                             if (self.navigation_target_probe) |result| {
                                 // A media caption or malformed outer label can
@@ -3943,8 +3944,8 @@ pub const Renderer = struct {
                                     return;
                                 }
                             }
-                            if (!token.link_has_pipe) {
-                                // The decoded default label is title text, not another wikitext input.
+                            if (!token.link_has_pipe or generated_label) {
+                                // Decoded default and generated labels are title text, not another wikitext input.
                                 var link_style = s;
                                 link_style.kind = .link;
                                 link_style.target = target;
@@ -7300,6 +7301,45 @@ test "pipe trick strips syntactic colon prefixes and final disambiguators" {
     const literal_entities = try r.parseSpans("A&amp;amp;B &#39;&#39;word&#39;&#39; <nowiki>&#39;&#39;word&#39;&#39;</nowiki>", .{});
     try std.testing.expectEqualStrings("A&amp;B ''word'' ''word''", try flattened(a, literal_entities));
     for (literal_entities) |span| try std.testing.expect(!span.flags.italic);
+
+    // Pipe-trick labels use the already decoded title once, including in DPR2.
+    const Generated = struct {
+        fn check(values: anytype, expected_label: []const u8, expected_target: []const u8, inherited_style: Style) !void {
+            var visible: std.ArrayList(u8) = .empty;
+            defer visible.deinit(std.testing.allocator);
+            try std.testing.expect(values.len != 0);
+            for (values) |span| {
+                try visible.appendSlice(std.testing.allocator, span.text);
+                try std.testing.expect(span.kind == .link);
+                try std.testing.expectEqualStrings(expected_target, span.target);
+                const actual_bold = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                const actual_italic = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic;
+                const actual_small = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.small else span.small;
+                try std.testing.expectEqual(inherited_style.bold, actual_bold);
+                try std.testing.expectEqual(inherited_style.italic, actual_italic);
+                try std.testing.expectEqual(inherited_style.small, actual_small);
+                try std.testing.expectEqualStrings(inherited_style.language, span.language);
+                try std.testing.expectEqualStrings(inherited_style.direction, span.direction);
+            }
+            try std.testing.expectEqualStrings(expected_label, visible.items);
+        }
+    };
+    const generated_cases = [_]struct { source: []const u8, label: []const u8, target: []const u8 }{
+        .{ .source = "[[&#39;&#39;word&#39;&#39; (term)|]]", .label = "''word''", .target = "''word'' (term)" },
+        .{ .source = "[[R&amp;amp;D (term)|]]", .label = "R&amp;D", .target = "R&amp;D (term)" },
+    };
+    const inherited_styles = [_]Style{ .{}, .{ .bold = true, .italic = true, .small = true, .language = "fr", .direction = "rtl" } };
+    const GeneratedSection = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const generated_blob = @import("blob_encoder");
+    for (generated_cases) |case| for (inherited_styles) |inherited_style| {
+        const generated_spans = try r.parseSpans(case.source, inherited_style);
+        try Generated.check(generated_spans, case.label, case.target, inherited_style);
+        const generated_blocks = [_]Block{.{ .kind = .paragraph, .spans = generated_spans }};
+        const generated_sections = [_]GeneratedSection{.{ .blocks = &generated_blocks }};
+        const generated_bytes = try generated_blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &generated_sections, generated_blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+        const generated_decoded = try generated_blob.presentation_codec.decodeAlloc(a, generated_bytes, "literal generated link labels", .language, .{ .code = "en", .heading = "English" });
+        try Generated.check(generated_decoded.entry.sections[0].blocks[0].spans, case.label, case.target, inherited_style);
+    };
 
     // Retained Arabic plural expansion wraps an already linked argument.
     // The live MediaWiki oracle preserves the outer brackets as text and
