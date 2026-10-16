@@ -1850,6 +1850,15 @@ pub const Renderer = struct {
             return null;
         }
         const caption_spans = if (caption_style) |capture| try self.captureMediaCaption(caption, capture) else try self.parseSpans(caption, .{});
+        // Caption parsing can register nested media. Recheck the same canonical
+        // identity and budget before committing this metadata record. Preserve
+        // the captured occurrence so its caller never repeats caption effects.
+        for (self.media.items) |item| if (std.mem.eql(u8, item.file, file))
+            return if (caption_style != null) caption_spans else null;
+        if (self.media.items.len >= 128) {
+            self.fallbacks.render_limit = true;
+            return if (caption_style != null) caption_spans else null;
+        }
         const description = try plainText(self.a, caption_spans);
         try self.media.append(self.a, .{ .file = file, .kind = kind, .caption = description });
         try self.media_caption_spans.append(self.a, caption_spans);
@@ -17175,4 +17184,98 @@ test "native Poem independent parse restores external labels and resets new hold
         const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "multiline Poem phase", .language, .{ .code = "en", .heading = "English" });
         try Check.multiline(a, decoded.entry.sections[0].blocks, case.visible, case.target);
     }
+}
+
+test "recursive media registration keeps canonical uniqueness cap and caption effects through DPR2" {
+    const Check = struct {
+        fn values(a: A, blocks: anytype, references: anytype, media: anytype, visible: []const u8, notes: []const []const u8, files: []const []const u8, markers: []const usize) !void {
+            try std.testing.expectEqual(notes.len, references.len);
+            var text: std.ArrayList(u8) = .empty;
+            var marker: usize = 0;
+            for (blocks) |block_value| for (block_value.spans) |span| {
+                try text.appendSlice(a, span.text);
+                if (@hasField(@TypeOf(span), "trail")) try text.appendSlice(a, span.trail);
+                if (span.role == .reference) {
+                    try std.testing.expect(marker < markers.len);
+                    try std.testing.expect(span.kind == .link);
+                    try std.testing.expect(if (@hasField(@TypeOf(span), "flags")) span.flags.superscript else span.superscript);
+                    try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "#reference-{d}", .{markers[marker]}), span.target);
+                    try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "[{d}]", .{markers[marker]}), span.text);
+                    marker += 1;
+                }
+            };
+            try std.testing.expectEqualStrings(visible, text.items);
+            try std.testing.expectEqual(markers.len, marker);
+            for (references, notes) |reference_value, note| {
+                var body: std.ArrayList(u8) = .empty;
+                for (reference_value.spans) |span| {
+                    try body.appendSlice(a, span.text);
+                    if (@hasField(@TypeOf(span), "trail")) try body.appendSlice(a, span.trail);
+                }
+                try std.testing.expectEqualStrings(note, body.items);
+            }
+            try std.testing.expectEqual(files.len, media.len);
+            for (media, files, 0..) |item, file, index| {
+                try std.testing.expectEqualStrings(file, item.file);
+                for (media[0..index]) |previous| try std.testing.expect(!std.mem.eql(u8, previous.file, item.file));
+            }
+        }
+        fn roundtrip(a: A, r: *Renderer, blocks: []const Block, visible: []const u8, notes: []const []const u8, files: []const []const u8, markers: []const usize) !void {
+            const references = try r.finishReferences();
+            try std.testing.expectEqual(r.media.items.len, r.media_caption_spans.items.len);
+            try values(a, blocks, references, r.media.items, visible, notes, files, markers);
+            const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+            const sections = [_]Section{.{ .blocks = blocks }};
+            const blob = @import("blob_encoder");
+            const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, r.media.items);
+            const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "recursive media", .language, .{ .code = "en", .heading = "English" });
+            try values(a, decoded.entry.sections[0].blocks, decoded.entry.references, decoded.entry.media, visible, notes, files, markers);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Canonically equal names recurse before the outer record can commit.
+    // The existing first registered (inner) metadata stays first; every visible
+    // occurrence and unnamed reference still appears exactly once in source order.
+    var same: Renderer = .{ .a = a, .context = .{} };
+    const same_blocks = try same.renderBody("[[File:Same_file.jpg|thumb|outer<ref>one</ref> [[File:Same file.jpg|thumb|inner<ref>two</ref>]] tail<ref>three</ref>]] [[File:Same_file.jpg|thumb|again<ref>four</ref>]]");
+    try Check.roundtrip(a, &same, same_blocks, "outer[1] inner[2] tail[3] again[4]", &.{ "one", "two", "three", "four" }, &.{"Same file.jpg"}, &.{ 1, 2, 3, 4 });
+    try std.testing.expectEqualStrings("inner[2]", same.media.items[0].caption);
+    try std.testing.expect(!same.fallbacks.any());
+    // The recursive child consumes the final slot. The outer caption has already
+    // parsed and must be reused despite refusing its new metadata registration.
+    var capped: Renderer = .{ .a = a, .context = .{} };
+    var files: [128][]const u8 = undefined;
+    for (0..127) |index| {
+        files[index] = try std.fmt.allocPrint(a, "Kept{d}.jpg", .{index});
+        try capped.mediaFile(files[index], "");
+    }
+    files[127] = "Inner.jpg";
+    const cap_blocks = try capped.renderBody("[[File:Outer.jpg|thumb|outer<ref>one</ref> [[File:Inner.jpg|thumb|inner<ref>two</ref>]] tail<ref>three</ref>]]");
+    try Check.roundtrip(a, &capped, cap_blocks, "outer[1] inner[2] tail[3]", &.{ "one", "two", "three" }, &files, &.{ 1, 2, 3 });
+    try std.testing.expect(capped.fallbacks.render_limit);
+    for (cap_blocks) |block_value| for (block_value.spans) |span| {
+        try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-media-file-4f757465722e6a7067") == null);
+    };
+    const prior_refs = capped.refs.items.len;
+    try capped.mediaFile("Too late.jpg", "not parsed<ref>bad</ref>");
+    try std.testing.expectEqual(prior_refs, capped.refs.items.len);
+    try std.testing.expectEqual(@as(usize, 128), capped.media.items.len);
+    // Metadata-only callers retain their void-registration behavior. A duplicate
+    // discovered during capture keeps the inner record and cannot parse twice.
+    var metadata: Renderer = .{ .a = a, .context = .{} };
+    try metadata.mediaFile("Meta.jpg", "outer<ref>one</ref> [[File:Meta.jpg|thumb|inner<ref>two</ref>]] tail<ref>three</ref>");
+    const metadata_refs = try metadata.finishReferences();
+    try Check.values(a, &[_]Block{}, metadata_refs, metadata.media.items, "", &.{ "one", "two", "three" }, &.{"Meta.jpg"}, &.{});
+    try std.testing.expectEqualStrings("inner[2]", metadata.media.items[0].caption);
+    try std.testing.expectEqual(metadata.media.items.len, metadata.media_caption_spans.items.len);
+    try metadata.mediaFile("Meta.jpg", "not parsed<ref>bad</ref>");
+    try std.testing.expectEqual(@as(usize, 3), metadata.refs.items.len);
+    var refused: Renderer = .{ .a = a, .context = .{} };
+    try refused.mediaFile("", "not parsed<ref>bad</ref>");
+    try refused.mediaFile("Unknown.bin", "not parsed<ref>bad</ref>");
+    try std.testing.expectEqual(@as(usize, 0), refused.refs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), refused.media.items.len);
+    try std.testing.expectEqual(@as(usize, 0), refused.media_caption_spans.items.len);
 }
