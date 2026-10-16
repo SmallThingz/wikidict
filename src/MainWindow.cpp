@@ -352,15 +352,14 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 candidates.removeDuplicates();
             }
             bool selectedCollection = false;
-            QString lastError;
             for (const QString &candidate : candidates) {
                 if (cancelled->load()) return loaded;
                 // The core admits a neutral redirect collection only when the
                 // language manifest and language directory are both empty.
                 try { loaded->api->select(selected, candidate); selectedCollection = true; break; }
-                catch (const std::exception &error) { lastError = QString::fromUtf8(error.what()); }
+                catch (const std::exception &) { /* Try the next available collection. */ }
             }
-            if (!selectedCollection) throw DictApiError((QStringLiteral("No readable dictionary was found for this collection. Import a dictionary in Library. ") + lastError).toStdString());
+            if (!selectedCollection) throw DictApiError("No readable dictionary was found for this collection. Import a dictionary in Library.");
             for (qsizetype offset = 0; !cancelled->load();) {
                 const QJsonObject page = QJsonDocument::fromJson(loaded->api->search(QString(), 1000, offset)).object();
                 const QJsonArray matches = page.value(QStringLiteral("matches")).toArray();

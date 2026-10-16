@@ -1,4 +1,5 @@
 #include "LibraryDialog.hpp"
+#include "LibraryStore.hpp"
 #include <QAbstractButton>
 #include <QApplication>
 #include <QDialog>
@@ -6,8 +7,12 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QLabel>
+#include <QLocale>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
@@ -26,6 +31,37 @@ template <typename T> T *control(QObject &parent, const char *name) {
     require(result != nullptr, name);
     return result;
 }
+// Deliberately completes on the event loop so the real finished callback runs.
+class MissingCatalogReply final : public QNetworkReply {
+public:
+    MissingCatalogReply(QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QObject *parent)
+        : QNetworkReply(parent) {
+        setOperation(operation);
+        setRequest(request);
+        setUrl(request.url());
+        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 404);
+        setError(QNetworkReply::ContentNotFoundError,
+                 QStringLiteral("Error transferring https://user:secret@catalogue.example/private?token=secret - server replied: Not Found"));
+        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
+        QTimer::singleShot(0, this, [this] { setFinished(true); emit finished(); });
+    }
+    void abort() override {}
+protected:
+    qint64 readData(char *, qint64) override { return -1; }
+};
+class MissingCatalogNetwork final : public QNetworkAccessManager {
+public:
+    explicit MissingCatalogNetwork(int &destructions) : destructions_(destructions) {}
+    ~MissingCatalogNetwork() override { ++destructions_; }
+    int requests = 0;
+protected:
+    QNetworkReply *createRequest(Operation operation, const QNetworkRequest &request, QIODevice *) override {
+        ++requests;
+        return new MissingCatalogReply(operation, request, this);
+    }
+private:
+    int &destructions_;
+};
 void answerFile(const QString &path) {
     QTimer::singleShot(300, [path] {
         for (auto *widget : QApplication::topLevelWidgets()) {
@@ -118,7 +154,12 @@ int main(int argc, char **argv) {
         QTest::mouseClick(import, Qt::LeftButton);
         require(QTest::qWaitFor([&] { return !progress->isVisible() && installed->topLevelItemCount() == 1; }, 15000), "import finishes in UI");
         require(dialog.libraryChanged(), "import marks root for reader reload");
-        require(status->text().startsWith(QStringLiteral("Installed English")), "successful import status");
+        const auto imported = LibraryStorage::installed(dialog.selectedRoot());
+        require(imported.size() == 1 && imported.first().words >= 0, "one installed dictionary with its actual word count");
+        const auto words = imported.first().words;
+        const QString expectedStatus = QStringLiteral("Installed English: %1 %2.")
+            .arg(QLocale().toString(words), words == 1 ? QStringLiteral("word") : QStringLiteral("words"));
+        require(status->text() == expectedStatus, "successful import status uses the actual count and singular/plural word");
         if (argc > 2) require(dialog.grab().save(QString::fromLocal8Bit(argv[2])), "save library screenshot");
         installed->setCurrentItem(installed->topLevelItem(0));
         require(remove->isEnabled(), "selected installed dictionary enables removal");
@@ -144,6 +185,35 @@ int main(int argc, char **argv) {
         auto *failure = control<QLabel>(unavailable, "libraryStatus");
         require(QTest::qWaitFor([&] { return failure->text().startsWith(QStringLiteral("Could not finish:")); }, 5000), "catalogue failure is visible");
         require(control<QPushButton>(unavailable, "importDictionary")->isEnabled(), "failed network operation does not disable local import");
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{
+            QStringLiteral("https://catalogue.example/private?token=secret")});
+        int managerDestructions = 0;
+        QPointer<MissingCatalogNetwork> observedManager;
+        {
+            auto manager = std::make_unique<MissingCatalogNetwork>(managerDestructions);
+            observedManager = manager.get();
+            LibraryDialog missing(nullptr, temp.filePath(QStringLiteral("missing-catalogue")), std::move(manager));
+            require(!manager && observedManager->parent() == &missing, "network manager ownership transfers to dialog");
+            missing.show();
+            auto *missingStatus = control<QLabel>(missing, "libraryStatus");
+            auto *missingProgress = control<QProgressBar>(missing, "libraryProgress");
+            require(QTest::qWaitFor([&] { return observedManager->requests == 1 && !missingProgress->isVisible(); }, 5000),
+                    "asynchronous HTTP 404 callback finishes");
+            require(missingStatus->text() == QStringLiteral("Could not finish: catalogue.example: Catalogue is not available yet. Import a dictionary or try again later."),
+                    "typed HTTP 404 has actionable guidance without raw transfer diagnostics or URL secrets");
+            require(control<QTreeWidget>(missing, "availableDictionaries")->topLevelItemCount() == 0,
+                    "HTTP 404 does not create catalogue entries");
+            auto *localImport = control<QPushButton>(missing, "importDictionary");
+            require(localImport->isEnabled(), "HTTP 404 preserves local import");
+            answerFile(source);
+            QTest::mouseClick(localImport, Qt::LeftButton);
+            require(QTest::qWaitFor([&] { return !missingProgress->isVisible() && missing.libraryChanged(); }, 15000),
+                    "actual local import succeeds after HTTP 404");
+            require(control<QTreeWidget>(missing, "installedDictionaries")->topLevelItemCount() == 1,
+                    "HTTP 404 recovery installs the local dictionary");
+            require(managerDestructions == 0, "adopted manager lives until dialog teardown");
+        }
+        require(observedManager.isNull() && managerDestructions == 1, "adopted manager is deleted exactly once with the dialog");
         std::cout << "Library UI: empty state, file import, confirmed removal and catalogue failure recovery passed\n";
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';

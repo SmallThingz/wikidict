@@ -181,6 +181,32 @@ private slots:
         learning.sync();
     }
 
+    void emptyLibraryGuidanceDoesNotExposeInternalErrors() {
+        QTemporaryDir empty(QDir::currentPath() + QStringLiteral("/.tmp/empty-library-XXXXXX"));
+        QVERIFY(empty.isValid());
+        MainWindow window(empty.path());
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QVERIFY(!window.api_);
+        QCOMPARE(window.title_->text(), QStringLiteral("Open your dictionaries"));
+        QCOMPARE(window.resultStatus_->text(), QStringLiteral("No dictionary open"));
+        const QString guidance = window.reading_->toPlainText();
+        QVERIFY(guidance.contains(QStringLiteral("No readable dictionary was found for this collection. Import a dictionary in Library.")));
+        QVERIFY(!guidance.contains(QStringLiteral("select:")));
+        QVERIFY(!guidance.contains(QStringLiteral("FileNotFound")));
+        QVERIFY(!window.search_->isEnabled());
+        QVERIFY(!window.results_->isEnabled());
+        QVERIFY(!window.kind_->isEnabled());
+        QVERIFY(!window.language_->isEnabled());
+        auto *library = window.findChild<QPushButton *>(QStringLiteral("openDictionaries"));
+        QVERIFY(library && library->isEnabled());
+        window.openRoot(fixture_, QStringLiteral("cat"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QVERIFY(window.search_->isEnabled());
+        QVERIFY(window.results_->isEnabled());
+    }
+
     void narrowReaderKeepsNavigationAndHeadingVisible() {
         MainWindow window{QString()};
         window.title_->setText(QStringLiteral("acupuncture"));

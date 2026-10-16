@@ -2,6 +2,7 @@
 
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDebug>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileDialog>
@@ -27,6 +28,7 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <stdexcept>
 
 namespace {
 QString exceptionText(const std::exception &error) { return QString::fromUtf8(error.what()); }
@@ -43,7 +45,8 @@ QTreeWidget *dictionaryList(QWidget *parent, const QStringList &columns) {
 }
 }
 
-LibraryDialog::LibraryDialog(QWidget *parent, const QString &root)
+LibraryDialog::LibraryDialog(QWidget *parent, const QString &root,
+                             std::unique_ptr<QNetworkAccessManager> network)
     : QDialog(parent), root_(root.isEmpty()
           ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)).filePath(QStringLiteral("dictionaries"))
           : QDir(root).absolutePath()) {
@@ -51,7 +54,14 @@ LibraryDialog::LibraryDialog(QWidget *parent, const QString &root)
     setObjectName(QStringLiteral("libraryDialog"));
     resize(780, 680);
     setMinimumSize(580, 480);
-    network_ = new QNetworkAccessManager(this);
+    if (network && (network->parent() || network->thread() != thread()))
+        throw std::invalid_argument("Injected network manager must be unparented and on the dialog thread");
+    if (network) {
+        network->setParent(this);
+        network_ = network.release();
+    } else {
+        network_ = new QNetworkAccessManager(this);
+    }
     auto *layout = new QVBoxLayout(this);
     layout->setSpacing(10);
     auto *heading = new QLabel(QStringLiteral("Dictionary library"), this);
@@ -327,8 +337,9 @@ void LibraryDialog::startImport(const QString &file, const QByteArray &hash, qin
                 if (!commitError.isEmpty()) { finishOperation(commitError, true); return; }
                 changed_ = true;
                 refreshInstalled();
-                finishOperation(QStringLiteral("Installed %1: %2 words.").arg((*prepared)->dictionary.heading,
-                    QLocale().toString((*prepared)->dictionary.words)));
+                const auto &dictionary = (*prepared)->dictionary;
+                finishOperation(QStringLiteral("Installed %1: %2 %3.").arg(dictionary.heading,
+                    QLocale().toString(dictionary.words), dictionary.words == 1 ? QStringLiteral("word") : QStringLiteral("words")));
             });
     });
 }
@@ -396,6 +407,13 @@ void LibraryDialog::fetchNextCatalog() {
     connect(reply, &QNetworkReply::finished, this, [this, reply, data, url] {
         data->append(reply->readAll());
         QString error = reply->property("libraryFailure").toString();
+        const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (error.isEmpty() && httpStatus == 404) {
+            // Keep useful diagnostics without exposing URL credentials, paths or query values.
+            qWarning().noquote() << "Catalogue request failed: host=" << url.host()
+                                 << "http_status=" << httpStatus << "network_error=" << int(reply->error());
+            error = QStringLiteral("Catalogue is not available yet. Import a dictionary or try again later.");
+        }
         if (error.isEmpty() && reply->error() != QNetworkReply::NoError) error = reply->errorString();
         if (error.isEmpty()) {
             try {

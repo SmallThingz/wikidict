@@ -2,6 +2,7 @@
 
 #include "LibraryStore.hpp"
 #include <QDialog>
+#include <QNetworkAccessManager>
 #include <QPointer>
 #include <atomic>
 #include <functional>
@@ -10,7 +11,6 @@
 class QComboBox;
 class QLabel;
 class QLineEdit;
-class QNetworkAccessManager;
 class QNetworkReply;
 class QProgressBar;
 class QPushButton;
@@ -20,7 +20,9 @@ class QTreeWidget;
 
 class LibraryDialog final : public QDialog {
 public:
-    LibraryDialog(QWidget *parent, const QString &root);
+    // Consumes an unparented manager on the dialog thread; QObject owns it after adoption.
+    LibraryDialog(QWidget *parent, const QString &root,
+                  std::unique_ptr<QNetworkAccessManager> network = {});
     ~LibraryDialog() override;
     QString selectedRoot() const { return root_; }
     bool libraryChanged() const { return changed_; }
