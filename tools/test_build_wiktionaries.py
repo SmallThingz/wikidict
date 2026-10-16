@@ -1688,6 +1688,65 @@ class BuildTest(unittest.TestCase):
             received={call.args[0][0]['wiki']:call.kwargs['auxiliary_snapshots'] for call in build.call_args_list}
             self.assertNotEqual(received['aawiktionary']['namespace-registry'],received['abwiktionary']['namespace-registry'])
             for wiki,snapshots in received.items():self.assertIn('# wiki\t'+wiki,snapshots['namespace-registry'].read_text())
+    def test_automatic_scheduler_reduces_four_to_two_to_one_without_restarting_jobs(self):
+        groups={(wiki,'20260901'):[dict(wiki=wiki)] for wiki in
+                ('aawiktionary','abwiktionary','acwiktionary')}
+        dispatched=[]
+        def budget(_owned=0):return (4,3,1)[min(len(dispatched),2)]
+        def fake_build(group,downloads,output,zig,threads,**options):
+            dispatched.append((group[0]['wiki'],threads))
+            self.assertNotIn('expansion_workers',options)
+            if len(dispatched)==1:raise ValueError('preserved first edition failure')
+        with patch.object(b,'safe_worker_budget',side_effect=budget), \
+             patch.object(b,'build',side_effect=fake_build),patch.object(b.time,'sleep') as sleep:
+            failures=b.build_groups(groups,Path('.'),Path('.'),'zig',4,1,adaptive_workers=True)
+        self.assertEqual(dispatched,[('aawiktionary',4),('abwiktionary',2),('acwiktionary',1)])
+        self.assertEqual(failures,[('aawiktionary','20260901')])
+        sleep.assert_not_called()
+
+    def test_automatic_scheduler_preserves_zero_capacity_deadline(self):
+        groups={(wiki,'20260901'):[dict(wiki=wiki)] for wiki in
+                ('aawiktionary','abwiktionary','acwiktionary')}
+        dispatched=[];clock=[0]
+        def budget(_owned=0):return 0 if dispatched and clock[0]<7 else 4
+        with patch.object(b,'safe_worker_budget',side_effect=budget), \
+             patch.object(b,'build',side_effect=lambda group,*args,**kwargs:dispatched.append(group[0]['wiki'])), \
+             patch.object(b.time,'monotonic',side_effect=lambda:clock[0]), \
+             patch.object(b.time,'sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)) as sleep:
+            failures=b.build_groups(groups,Path('.'),Path('.'),'zig',4,1,admission_wait_seconds=7,adaptive_workers=True)
+        self.assertEqual(dispatched,['aawiktionary'])
+        self.assertEqual(failures,[('abwiktionary','20260901'),('acwiktionary','20260901')])
+        self.assertEqual([call.args[0] for call in sleep.call_args_list],[5,2])
+
+    def test_main_automatic_count_handles_startup_drop_but_explicit_counts_remain_exact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',
+                url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
+            argv=['build_wiktionaries.py','--downloads',str(root),'--output',str(root/'output')]
+            with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',side_effect=[4,3]), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.args[4:],(2,1,None))
+            self.assertTrue(groups.call_args.kwargs['adaptive_workers'])
+            for flags,budgets in [(['--threads','4'],[3]),(['--expansion-workers','4'],[4,3])]:
+                with self.subTest(flags=flags),patch.object(sys,'argv',argv+flags), \
+                     patch.object(b,'safe_worker_budget',side_effect=budgets), \
+                     patch.object(b,'build_groups',return_value=[]) as groups,contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):b.main()
+                    groups.assert_not_called()
+            with patch.object(sys,'argv',argv+['--threads','2']),patch.object(b,'safe_worker_budget',return_value=3), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.args[4:],(2,1,None))
+            self.assertNotIn('adaptive_workers',groups.call_args.kwargs)
+
+    def test_automatic_reduction_cannot_override_expansion_or_affinity_contract(self):
+        for options in [dict(adaptive_workers=True,expansion_workers=4),
+                        dict(adaptive_workers=True,cpu_admission='affinity'),dict(adaptive_workers=1)]:
+            with self.subTest(options=options),self.assertRaisesRegex(ValueError,'Automatic worker reduction'):
+                b.build_groups({},Path('.'),Path('.'),'zig',4,1,**options)
+
     def test_scheduler_rechecks_worker_budget_before_starting_next_edition(self):
         groups={
             ('aawiktionary','20260901'):[dict(wiki='aawiktionary')],

@@ -153,6 +153,11 @@ def safe_worker_budget(owned_workers=0, *, cpu_admission='load'):
     memory_workers=max(0,memory_limit-SUPERVISOR_CHILD_RESERVE)//MEMORY_PER_BUILD_WORKER
     return min(MAX_TOTAL_BUILD_WORKERS,cpu_workers,memory_workers)
 
+def reduced_automatic_workers(current, budget):
+    """Lower an automatic count through the finite 4/2/1 policy; never raise it."""
+    return next((n for n in (4,2,1) if n < current and n <= budget),current)
+
+
 def default_build_threads():
     return max(1,min(MAX_PIPELINE_WORKERS,safe_worker_budget()))
 
@@ -2149,13 +2154,15 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     cleanup_shard_workspace(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False):
     from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     if type(admission_wait_seconds) is not int or not 1 <= admission_wait_seconds <= MAX_WATCHDOG_WALL_SECONDS:
         raise ValueError('Resource admission wait must be a positive finite number of seconds, up to seven days')
     if cpu_admission not in ('load','affinity'):raise ValueError('Unknown CPU admission policy')
+    if type(adaptive_workers) is not bool or (adaptive_workers and (cpu_admission!='load' or expansion_workers is not None)):
+        raise ValueError('Automatic worker reduction requires load admission and implicit expansion workers')
     if cpu_admission=='affinity':validate_affinity_workers(threads,jobs,expansion_workers)
     pending=list(sorted(groups.items()))
     failures=[]
@@ -2168,6 +2175,11 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
             while pending and len(active)<jobs:
                 active_workers=len(active)*admission_workers
                 live_budget=safe_worker_budget(active_workers) if cpu_admission=='load' else safe_worker_budget(cpu_admission='affinity')
+                if adaptive_workers and not active and live_budget < admission_workers:
+                    reduced=reduced_automatic_workers(threads,live_budget)
+                    if reduced < threads:
+                        print(f'Reducing automatic workers from {threads} to {reduced} within resource budget {live_budget}',flush=True)
+                        threads=admission_workers=reduced
                 if live_budget < active_workers+admission_workers:
                     break
                 if admission_deadline is not None and time.monotonic() >= admission_deadline:
@@ -2265,6 +2277,7 @@ def main():
             p.error('Explicit build deadline requires watchdog mode and must be 1 through '+str(MAX_WATCHDOG_WALL_SECONDS)+' seconds')
     if a.cpu_admission=='affinity' and a.resource_mode!='watchdog':
         p.error('Affinity admission requires explicit watchdog mode')
+    adaptive_workers=a.cpu_admission=='load' and a.threads is None and a.expansion_workers is None
     if a.threads is None and a.cpu_admission=='load':a.threads=default_build_threads()
     try:budget=safe_worker_budget() if a.cpu_admission=='load' else safe_worker_budget(cpu_admission='affinity')
     except ValueError as error:p.error(str(error))
@@ -2272,6 +2285,8 @@ def main():
         a.threads=max(1,min(MAX_PIPELINE_WORKERS,budget))
     if budget < 1:p.error('No worker budget within the selected CPU admission policy and build memory limit (at most 8 GiB)')
     worker_limit=min(budget,MAX_PIPELINE_WORKERS)
+    if adaptive_workers and a.threads > worker_limit:
+        a.threads=reduced_automatic_workers(a.threads,worker_limit)
     if not 1 <= a.threads <= worker_limit:p.error(f'Threads must be 1 through {worker_limit} on this host')
     expansion_workers=a.threads if a.expansion_workers is None else a.expansion_workers
     if not 1 <= expansion_workers <= MAX_PAGE_EXPANSION_WORKERS:
@@ -2311,6 +2326,7 @@ def main():
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     options={}
     if a.cpu_admission!='load':options['cpu_admission']=a.cpu_admission
+    if adaptive_workers:options['adaptive_workers']=True
     if a.resource_mode=='watchdog':
         from build_resource_limits import WATCHDOG_WALL_SECONDS
         # The outer watchdog still enforces its original global wall deadline,
