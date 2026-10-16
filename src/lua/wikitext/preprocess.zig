@@ -8,7 +8,7 @@ fn findCiPos(hay: []const u8, start: usize, needle: []const u8) ?usize {
     return null;
 }
 
-fn decodedTagEnd(text: []const u8, start: usize) ?usize {
+pub fn decodedTagEnd(text: []const u8, start: usize) ?usize {
     const p = std.mem.indexOfScalarPos(u8, text, start, '>') orelse return null;
     return p + 1;
 }

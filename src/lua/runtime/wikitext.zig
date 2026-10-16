@@ -24,6 +24,12 @@ const Value = rt.Value;
 const nowiki_marker_prefix = "\x7f'\"`UNIQ--nowiki-";
 const nowiki_marker_suffix = "-QINU`\"'\x7f";
 
+const hiero_marker_prefix = "\x7f'\"`UNIQ--hiero-";
+const StripValue = struct {
+    kind: enum { nowiki, hiero },
+    text: []const u8,
+};
+
 fn makeNowikiMarker(a: std.mem.Allocator, id: u32) ![]const u8 {
     return std.fmt.allocPrint(a, "{s}{X:0>8}{s}", .{ nowiki_marker_prefix, id, nowiki_marker_suffix });
 }
@@ -199,7 +205,7 @@ pub const Expander = struct {
     poem_argument_depth: usize = 0,
     poem_hook_depth: usize = 0,
     strip_counter: u32 = 0,
-    strip_values: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
+    strip_values: std.AutoHashMapUnmanaged(u32, StripValue) = .empty,
     page_line: std.ArrayList(u8) = .empty,
     max_depth: usize = 512,
     max_template_depth: usize = 128,
@@ -508,6 +514,16 @@ pub const Expander = struct {
             self.runtime.allocator.free(output);
             output = normalized;
             if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(start);
+        }
+        const restored_hiero = try self.restoreHieroMarkers(self.runtime.allocator, output);
+        if (restored_hiero.ptr != output.ptr) self.runtime.allocator.free(output);
+        output = restored_hiero;
+        const finalized_nowiki = try self.finalizeNowikiMarkers(self.runtime.allocator, output);
+        if (finalized_nowiki.ptr != output.ptr) self.runtime.allocator.free(output);
+        output = finalized_nowiki;
+        if (self.display_title) |display| {
+            const general = try self.restoreHieroMarkers(self.runtime.allocator, display);
+            self.display_title = try self.finalizeNowikiMarkers(self.runtime.allocator, general);
         }
         const normalized = try self.normalizeUnknownPoemAlloc(output);
         if (normalized.ptr != output.ptr) self.runtime.allocator.free(output);
@@ -2876,6 +2892,113 @@ pub const Expander = struct {
         return out.toOwnedSlice(a);
     }
 
+    // Parser::extensionSubstitution returns a general strip marker to Lua.
+    // Keep this registered hook result opaque across later display-text escaping;
+    // authored entity spellings remain part of its original raw payload.
+    fn stripPreprocessedHiero(self: *Expander, a: std.mem.Allocator, source: []const u8) ![]const u8 {
+        var scan: preprocess.OpaqueParserScan = .{};
+        var out: std.ArrayList(u8) = .empty;
+        var pos: usize = 0;
+        var copied: usize = 0;
+        var changed = false;
+        while (std.mem.indexOfScalarPos(u8, source, pos, '<')) |open| {
+            pos = open + 1;
+            const end = scan.end(source, open) orelse continue;
+            pos = end;
+            const tail = source[open..];
+            if (tail.len < 7 or !std.ascii.eqlIgnoreCase(tail[0..6], "<hiero") or
+                !(tail[6] == '>' or tail[6] == '/' or std.ascii.isWhitespace(tail[6]))) continue;
+            const opening_end = preprocess.decodedTagEnd(source, open) orelse continue;
+            if (end <= opening_end) continue; // Unmatched and self-closing roots retain their existing path.
+            const page_a = self.page_allocator orelse return error.MissingPageAllocator;
+            const id = self.strip_counter;
+            self.strip_counter +%= 1;
+            const stored = try page_a.dupe(u8, source[open..end]);
+            try self.strip_values.put(page_a, id, .{ .kind = .hiero, .text = stored });
+            try out.appendSlice(a, source[copied..open]);
+            try out.appendSlice(a, try std.fmt.allocPrint(a, "{s}{X:0>8}{s}", .{ hiero_marker_prefix, id, nowiki_marker_suffix }));
+            copied = end;
+            changed = true;
+        }
+        if (!changed) return source;
+        try out.appendSlice(a, source[copied..]);
+        return out.toOwnedSlice(a);
+    }
+
+    // Only an existing page-owned value of the exact marker kind can be
+    // restored. Authored spellings and another kind's shared id are not values.
+    fn ownedStripMarker(self: *const Expander, source: []const u8, at: usize, prefix: []const u8, kind: @FieldType(StripValue, "kind")) ?struct { end: usize, text: []const u8 } {
+        const length = prefix.len + 8 + nowiki_marker_suffix.len;
+        if (at > source.len or source.len - at < length or !std.mem.startsWith(u8, source[at..], prefix)) return null;
+        const id_start = at + prefix.len;
+        const suffix_at = id_start + 8;
+        if (!std.mem.startsWith(u8, source[suffix_at..], nowiki_marker_suffix)) return null;
+        const id = std.fmt.parseInt(u32, source[id_start..suffix_at], 16) catch return null;
+        const value = self.strip_values.get(id) orelse return null;
+        if (value.kind != kind) return null;
+        return .{ .end = at + length, .text = value.text };
+    }
+
+    // Final producer restoration is distinct from mw.text.unstrip: the latter
+    // removes general markers, while this route restores only this page's kind.
+    fn restoreHieroMarkers(self: *Expander, a: std.mem.Allocator, source: []const u8) ![]const u8 {
+        if (std.mem.indexOf(u8, source, hiero_marker_prefix) == null) return source;
+        var out: std.ArrayList(u8) = .empty;
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, source, pos, hiero_marker_prefix)) |at| {
+            try out.appendSlice(a, source[pos..at]);
+            if (self.ownedStripMarker(source, at, hiero_marker_prefix, .hiero)) |marker| {
+                try out.appendSlice(a, marker.text);
+                pos = marker.end;
+            } else {
+                try out.append(a, source[at]);
+                pos = at + 1;
+            }
+        }
+        try out.appendSlice(a, source[pos..]);
+        return out.toOwnedSlice(a);
+    }
+
+    // CoreTagHooks permits prior general strip results through nowiki. Keep
+    // every other byte in the existing authenticated protected-literal route,
+    // including wiki delimiters, closing tags, entities and source whitespace.
+    fn finalNowikiBody(self: *Expander, a: std.mem.Allocator, body: []const u8) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        var search: usize = 0;
+        var copied: usize = 0;
+        while (std.mem.indexOfPos(u8, body, search, hiero_marker_prefix)) |at| {
+            search = at + 1;
+            const marker = self.ownedStripMarker(body, at, hiero_marker_prefix, .hiero) orelse continue;
+            if (at > copied) try out.appendSlice(a, try self.poemLiteral("nowiki", body[copied..at]));
+            // This is the final general phase, not a recursive scan of payloads.
+            try out.appendSlice(a, marker.text);
+            search = marker.end;
+            copied = marker.end;
+        }
+        if (copied < body.len) try out.appendSlice(a, try self.poemLiteral("nowiki", body[copied..]));
+        return out.toOwnedSlice(a);
+    }
+
+    fn finalizeNowikiMarkers(self: *Expander, a: std.mem.Allocator, source: []const u8) ![]const u8 {
+        if (std.mem.indexOf(u8, source, nowiki_marker_prefix) == null) return source;
+        var out: std.ArrayList(u8) = .empty;
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, source, pos, nowiki_marker_prefix)) |at| {
+            try out.appendSlice(a, source[pos..at]);
+            if (self.ownedStripMarker(source, at, nowiki_marker_prefix, .nowiki)) |marker| {
+                // Owned markers finalize even inside returned pre/code markup;
+                // the renderer supplies its actual inherited whitespace/style.
+                try out.appendSlice(a, try self.finalNowikiBody(a, marker.text));
+                pos = marker.end;
+            } else {
+                try out.append(a, source[at]);
+                pos = at + 1;
+            }
+        }
+        try out.appendSlice(a, source[pos..]);
+        return out.toOwnedSlice(a);
+    }
+
     fn hostFramePreprocess(raw: ?*anyopaque, a: std.mem.Allocator, source: []const u8, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const stripped = try preprocess.stripDecodedCommentsPreservingPoem(a, source);
@@ -2887,7 +3010,8 @@ pub const Expander = struct {
             self.fake_heading_count += 1;
             return std.fmt.allocPrint(a, "\x7f'\"`UNIQ--h-{d}--QINU`\"'\x7f", .{number});
         }
-        return self.expandWikitext(stripped, args, title, 0);
+        const expanded = try self.expandWikitext(stripped, args, title, 0);
+        return self.stripPreprocessedHiero(a, expanded);
     }
 
     fn hostFrameExpandTemplate(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8, args: *rt.Table) anyerror![]const u8 {
@@ -2908,7 +3032,7 @@ pub const Expander = struct {
             self.strip_counter +%= 1;
             const page_a = self.page_allocator orelse return error.MissingPageAllocator;
             const stored = try page_a.dupe(u8, text);
-            try self.strip_values.put(page_a, id, stored);
+            try self.strip_values.put(page_a, id, .{ .kind = .nowiki, .text = stored });
             return makeNowikiMarker(a, id);
         }
         const canonical = canonicalExtensionTag(name) orelse return error.UnsupportedExtensionTag;
@@ -2933,10 +3057,9 @@ pub const Expander = struct {
                 pos = marker_end;
                 continue;
             };
-            if (self.strip_values.get(id)) |text|
-                try out.appendSlice(a, text)
-            else
-                try out.appendSlice(a, source[at..marker_end]);
+            if (self.strip_values.get(id)) |value| {
+                try out.appendSlice(a, if (value.kind == .nowiki) value.text else source[at..marker_end]);
+            } else try out.appendSlice(a, source[at..marker_end]);
             pos = marker_end;
         }
         try out.appendSlice(a, source[pos..]);
@@ -3641,6 +3764,7 @@ const TestModule = struct {
         try exports.rawSet(ctx.allocator, .{ .string = "object" }, try ctx.makeFunctionKnown(16, objectReturn, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "generated_comments" }, try ctx.makeFunctionKnown(17, generatedComments, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "generated_unclosed" }, try ctx.makeFunctionKnown(18, generatedUnclosed, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "generated_hiero" }, try ctx.makeFunctionKnown(19, generatedHiero, &.{}));
         try exports.rawSet(ctx.allocator, .{ .string = "value" }, .{ .number = 17 });
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = .{ .table = exports };
@@ -3653,6 +3777,26 @@ const TestModule = struct {
         const out = try std.heap.smp_allocator.alloc(Value, 1);
         out[0] = value;
         return out;
+    }
+    fn generatedHiero(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+        const frame_args = try ctx.getIndex(args[0], .{ .string = "args" });
+        const raw = try ctx.getIndex(frame_args, .{ .number = 1 });
+        const source = if (raw == .string) raw.string else "<hiero>D35:t*y-nDs-f</hiero>";
+        const call = try ctx.getIndex(args[0], .{ .string = "preprocess" });
+        const expanded = try ctx.callValue(call, &.{ args[0], .{ .string = source } });
+        defer rt.freeResults(expanded);
+        var out: std.ArrayList(u8) = .empty;
+        // Module:languages rev92737865 escape_risky_characters, after its
+        // temporary formatting substitutions. General marker bytes are intact.
+        for (expanded[0].string) |ch| {
+            if (std.mem.indexOfScalar(u8, "!#%&*+/:;<=>?@[\\]_{|}", ch) != null)
+                try out.appendSlice(ctx.allocator, try std.fmt.allocPrint(ctx.allocator, "&#{d};", .{ch}))
+            else
+                try out.append(ctx.allocator, ch);
+        }
+        const values = try std.heap.smp_allocator.alloc(Value, 1);
+        values[0] = .{ .string = try out.toOwnedSlice(ctx.allocator) };
+        return values;
     }
     fn generatedComments(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
         const out = try std.heap.smp_allocator.alloc(Value, 1);
@@ -6275,4 +6419,170 @@ test "native AOT unmatched extension openers expand later templates while matche
     var failed_roots: std.ArrayList(u8) = .empty;
     for (0..512) |_| try failed_roots.appendSlice(a, "{{broken <math>tail ");
     try std.testing.expectEqualStrings(failed_roots.items, try expander.expandFragment("Page", failed_roots.items, 1_670_803_200));
+}
+
+test "native preprocessed Hiero stays protected across archived display escaping and final title restoration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.initProgram(a, 24, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(TestModule.root)};
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TestModule.lookup, TestModule.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists }, .install_scribunto = installTestInvoke };
+    const raw = "<hiero>D35:t*y-nDs-f</hiero>";
+    try std.testing.expectEqualStrings("before " ++ raw ++ " [[cat|after]]", try expander.expandFragment("jwtj.f", "before {{#invoke:Test|generated_hiero}} [[cat|after]]", 1791731560));
+    try std.testing.expect(!expander.unsupported_parser_function);
+    // Authored references remain raw bytes; this producer boundary does not
+    // reinterpret them as MdC separators or perform an extra entity pass.
+    const encoded = "<hiero>D35&#58;t&#42;y-nDs-f</hiero>";
+    try std.testing.expectEqualStrings(encoded, try expander.expandFragment("Page", "{{#invoke:Test|generated_hiero|" ++ encoded ++ "}}", 1791731560));
+    const doubled = "<hiero>D35&amp;#58;t&amp;#42;y-nDs-f</hiero>";
+    try std.testing.expectEqualStrings(doubled, try expander.expandFragment("Page", "{{#invoke:Test|generated_hiero|" ++ doubled ++ "}}", 1791731560));
+    try std.testing.expectEqualStrings(encoded, try expander.expandFragment("Page", encoded, 1791731560));
+    try std.testing.expectEqualStrings("", try expander.expandFragment("Page", "{{DISPLAYTITLE:{{#invoke:Test|generated_hiero}}}}", 1791731560));
+    try std.testing.expectEqualStrings(raw, expander.display_title.?);
+    // Existing direct #tag and frame API serialization are not broadened.
+    try std.testing.expectEqualStrings(raw, try expander.expandFragment("Page", "{{#tag:hiero|D35:t*y-nDs-f}}", 1791731560));
+    const literal_api = try Expander.hostFrameExtensionTag(&expander, a, "hiero", .{ .string = "D35:t*y-nDs-f" }, null);
+    try std.testing.expectEqualStrings(raw, literal_api);
+}
+
+test "Hiero general markers retain kind ownership protected domains and single restoration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    expander.beginPage("Page", "", 1791731560);
+    const protected = "<nowiki><hiero>D35:t*y-nDs-f</hiero></nowiki><pre><hiero>D35:t*y-nDs-f</hiero></pre>";
+    try std.testing.expectEqualStrings(protected, try expander.stripPreprocessedHiero(a, protected));
+    for ([_][]const u8{ "<hiero>D35:t*y-nDs-f", "<hiero/>", "<hieroish>D35:t*y-nDs-f</hieroish>" }) |literal|
+        try std.testing.expectEqualStrings(literal, try expander.stripPreprocessedHiero(a, literal));
+    try std.testing.expect(expander.strip_values.count() == 0);
+    const raw = "<hiero>D35:t*y-nDs-f</hiero>";
+    const marker = try expander.stripPreprocessedHiero(a, raw);
+    try std.testing.expect(std.mem.startsWith(u8, marker, hiero_marker_prefix));
+    try std.testing.expectEqualStrings(raw, try expander.restoreHieroMarkers(a, marker));
+    const mw = runtime.getGlobal(23);
+    const text = try runtime.getIndex(mw, .{ .string = "text" });
+    const no_wiki = try runtime.getIndex(text, .{ .string = "unstripNoWiki" });
+    const untouched = try runtime.callValue(no_wiki, &.{.{ .string = marker }});
+    defer rt.freeResults(untouched);
+    try std.testing.expectEqualStrings(marker, untouched[0].string);
+    for ([_][]const u8{ "unstrip", "killMarkers" }) |name| {
+        const call = try runtime.getIndex(text, .{ .string = name });
+        const killed = try runtime.callValue(call, &.{.{ .string = marker }});
+        defer rt.freeResults(killed);
+        try std.testing.expectEqualStrings("", killed[0].string);
+    }
+    const nowiki = try Expander.hostFrameExtensionTag(&expander, a, "nowiki", .{ .string = "literal" }, null);
+    const wrong_general = try std.fmt.allocPrint(a, "{s}{X:0>8}{s}", .{ hiero_marker_prefix, @as(u32, 1), nowiki_marker_suffix });
+    try std.testing.expectEqualStrings(wrong_general, try expander.restoreHieroMarkers(a, wrong_general));
+    const wrong_nowiki = try makeNowikiMarker(a, 0);
+    try std.testing.expectEqualStrings(wrong_nowiki, try Expander.hostTextUnstripNoWiki(&expander, a, wrong_nowiki));
+    try std.testing.expectEqualStrings("literal", try Expander.hostTextUnstripNoWiki(&expander, a, nowiki));
+    const unknown = try std.fmt.allocPrint(a, "{s}FFFFFFFF{s}", .{ hiero_marker_prefix, nowiki_marker_suffix });
+    try std.testing.expectEqualStrings(unknown, try expander.restoreHieroMarkers(a, unknown));
+    const nested_source = try std.fmt.allocPrint(a, "<hiero>{s}</hiero>", .{marker});
+    const nested_marker = try expander.stripPreprocessedHiero(a, nested_source);
+    try std.testing.expectEqualStrings(nested_source, try expander.restoreHieroMarkers(a, nested_marker));
+    expander.beginPage("Next", "", 1791731560);
+    try std.testing.expect(expander.strip_values.count() == 0);
+    try std.testing.expectEqualStrings(marker, try expander.restoreHieroMarkers(a, marker));
+}
+
+const NowikiReturnProbe = struct {
+    fn lookup(_: ?*const anyopaque, module_name: []const u8) ?u32 {
+        return if (std.mem.eql(u8, module_name, "Module:NowikiReturnProbe")) 0 else null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id == 0) "Module:NowikiReturnProbe" else null;
+    }
+    fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const exports = try ctx.newTable();
+        try exports.rawSet(ctx.allocator, .{ .string = "show" }, try ctx.makeFunctionKnown(1, show, &.{}));
+        const values = try std.heap.smp_allocator.alloc(Value, 1);
+        values[0] = .{ .table = exports };
+        return values;
+    }
+    const literal = "[[cat|hidden]] {{#if:x|must-stay-literal|bad}} </nowiki> __NOTOC__ A&amp;B&#58;&amp;#58;\nC";
+    fn show(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+        const params = try ctx.getIndex(args[0], .{ .string = "args" });
+        const mode = try ctx.getIndex(params, .{ .number = 1 });
+        if (mode != .string) return error.StringExpected;
+        var body: []const u8 = literal;
+        if (!std.mem.eql(u8, mode.string, "plain")) {
+            const call = try ctx.getIndex(args[0], .{ .string = "preprocess" });
+            const general = try ctx.callValue(call, &.{ args[0], .{ .string = "<hiero>D35:t*y-nDs-f</hiero>" } });
+            defer rt.freeResults(general);
+            body = if (std.mem.eql(u8, mode.string, "unstrip"))
+                try std.fmt.allocPrint(ctx.allocator, "left {s} right", .{general[0].string})
+            else
+                try std.mem.concat(ctx.allocator, u8, &.{ "left&#58;&amp;#58;\n", general[0].string, " right [[hidden]] {{#if:x|literal|bad}} </nowiki>" });
+        }
+        const tag = try ctx.getIndex(args[0], .{ .string = "extensionTag" });
+        const wrapped = try ctx.callValue(tag, &.{ args[0], .{ .string = "nowiki" }, .{ .string = body } });
+        defer rt.freeResults(wrapped);
+        var returned = wrapped[0];
+        if (std.mem.eql(u8, mode.string, "unstrip")) {
+            const text = try ctx.getIndex(ctx.getGlobal(23), .{ .string = "text" });
+            const call = try ctx.getIndex(text, .{ .string = "unstripNoWiki" });
+            const result = try ctx.callValue(call, &.{returned});
+            defer rt.freeResults(result);
+            returned = .{ .string = try ctx.allocator.dupe(u8, result[0].string) };
+        }
+        const values = try std.heap.smp_allocator.alloc(Value, 1);
+        values[0] = .{ .string = try ctx.allocator.dupe(u8, returned.string) };
+        return values;
+    }
+};
+
+test "direct nowiki API returns finalize protected text and prior general hook results" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.initProgram(a, 24, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(NowikiReturnProbe.root)};
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, NowikiReturnProbe.lookup, NowikiReturnProbe.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists }, .install_scribunto = installTestInvoke };
+    // Existing explicit API control works without requiring final nowiki unstrip.
+    const explicit = try expander.expandFragment("Page", "{{#invoke:NowikiReturnProbe|show|unstrip}}", 1791731560);
+    try std.testing.expectEqualStrings("left <hiero>D35:t*y-nDs-f</hiero> right", explicit);
+    for ([_][]const u8{ "plain", "wrapped" }) |mode| {
+        const source = try std.mem.concat(a, u8, &.{ "{{#invoke:NowikiReturnProbe|show|", mode, "}}" });
+        const expanded = try expander.expandFragment("Page", source, 1791731560);
+        errdefer std.debug.print("nowiki finalization mode {s}: {s}\n", .{ mode, expanded });
+        try std.testing.expect(std.mem.indexOf(u8, expanded, nowiki_marker_prefix) == null);
+        try std.testing.expect(std.mem.indexOf(u8, expanded, hiero_marker_prefix) == null);
+        try std.testing.expect(expander.poem_metadata != null);
+        const metadata = try std.json.parseFromSlice(std.json.Value, a, expander.poem_metadata.?, .{});
+        defer metadata.deinit();
+        const items = metadata.value.object.get("items").?.array.items;
+        if (std.mem.eql(u8, mode, "plain")) {
+            try std.testing.expectEqual(@as(usize, 1), items.len);
+            try std.testing.expectEqualStrings("nowiki", items[0].object.get("tag").?.string);
+            try std.testing.expectEqualStrings(NowikiReturnProbe.literal, items[0].object.get("body").?.string);
+            try std.testing.expect(std.mem.indexOf(u8, expanded, "[[cat|hidden]]") == null);
+        } else {
+            try std.testing.expectEqual(@as(usize, 2), items.len);
+            try std.testing.expectEqualStrings("left&#58;&amp;#58;\n", items[0].object.get("body").?.string);
+            try std.testing.expectEqualStrings(" right [[hidden]] {{#if:x|literal|bad}} </nowiki>", items[1].object.get("body").?.string);
+            try std.testing.expect(std.mem.indexOf(u8, expanded, "<hiero>D35:t*y-nDs-f</hiero>") != null);
+        }
+        try std.testing.expect(!expander.unsupported_parser_function);
+    }
 }

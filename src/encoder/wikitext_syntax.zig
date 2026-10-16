@@ -226,7 +226,7 @@ pub fn trim(text: []const u8) []const u8 {
     return std.mem.trim(u8, text, " \t\r\n");
 }
 pub fn isMultilineContainerTag(name: []const u8) bool {
-    inline for (&.{ "ref", "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) |tag| {
+    inline for (&.{ "ref", "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) |tag| {
         if (std.ascii.eqlIgnoreCase(name, tag)) return true;
     }
     return false;

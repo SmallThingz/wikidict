@@ -1155,7 +1155,7 @@ const FnEmitter = struct {
             .local => |binding| switch (self.storage[binding]) {
                 .uninitialized => error.UninitializedBinding,
                 .direct => |value| if (known_shape) |shape|
-                    .{ .table = .{ .ptr = try self.box(value), .shape = shape } }
+                    .{ .shaped_boxed = .{ .ptr = try self.box(value), .shape = shape } }
                 else if (known_native) |namespace|
                     .{ .native_boxed = .{ .ptr = try self.box(value), .native_namespace = namespace } }
                 else if (known_array_element) |namespace|
@@ -1173,7 +1173,7 @@ const FnEmitter = struct {
                     const out = try self.valueSlot();
                     try self.copyValue(out, slot);
                     break :blk if (known_shape) |shape|
-                        .{ .table = .{ .ptr = out, .shape = shape } }
+                        .{ .shaped_boxed = .{ .ptr = out, .shape = shape } }
                     else if (known_native) |namespace|
                         .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } }
                     else if (known_array_element) |namespace|
@@ -1186,7 +1186,7 @@ const FnEmitter = struct {
                     const cell = try llvm.load(self.builder, self.ty().ptr, slot, 8);
                     _ = try llvm.call(self.builder, self.rt().cell_get, &.{ cell, out });
                     break :blk if (known_shape) |shape|
-                        .{ .table = .{ .ptr = out, .shape = shape } }
+                        .{ .shaped_boxed = .{ .ptr = out, .shape = shape } }
                     else if (known_native) |namespace|
                         .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } }
                     else if (known_array_element) |namespace|
@@ -1200,7 +1200,7 @@ const FnEmitter = struct {
                 const cell = try llvm.load(self.builder, self.ty().ptr, self.upvalue_slots[ordinal], 8);
                 _ = try llvm.call(self.builder, self.rt().cell_get, &.{ cell, out });
                 break :blk if (known_shape) |shape|
-                    .{ .table = .{ .ptr = out, .shape = shape } }
+                    .{ .shaped_boxed = .{ .ptr = out, .shape = shape } }
                 else if (known_native) |namespace|
                     .{ .native_boxed = .{ .ptr = out, .native_namespace = namespace } }
                 else if (known_array_element) |namespace|

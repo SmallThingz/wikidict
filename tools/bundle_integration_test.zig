@@ -17,6 +17,7 @@ const source =
     "# Synth fork: {{#invoke:IntegrationSynth|run|forked}}\n" ++
     "# Pure fork: {{#invoke:IntegrationPureDataProbe|run}}\n" ++
     "# Legacy varargs: {{#invoke:IntegrationLegacyVarargs|run}}\n" ++
+    "# Nullable shapes: {{#invoke:IntegrationNullableShape|run}}\n" ++
     "# Iterator mutation: {{#invoke:IntegrationForms|iterator_mutation_probe}}\n" ++
     "# Invoke values: {{#invoke:IntegrationForms|object_result}} / {{#invoke:IntegrationForms|multiple_results}} / {{#iferror:{{#invoke:IntegrationForms|object_result_error}}|conversion caught|BAD}} / {{#iferror:{{#invoke:IntegrationForms|nil_hole_result}}|hole caught|BAD}}\n" ++
     "# Captured fork: {{#invoke:IntegrationCapturedProbe|run}}\n" ++
@@ -30,6 +31,45 @@ const source =
     "# Subpage namespaces: {{BASEPAGENAME:Template:foo/bar}} / {{BASEPAGENAME:Category:foo/bar}}\n" ++
     "# Site magic: {{SERVER}} / {{SERVERNAME}}\n" ++
     "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}} / {{REVISIONUSER}} / {{PAGEID:rat}} / {{REVISIONUSER:rat}}\n";
+const nullable_shape_module_source =
+    \\local function verify(mode, middle)
+    \\local function maybe(mode)
+    \\ if mode == 1 then return { value = 'table' } end
+    \\ if mode == 2 then return nil end
+    \\ return false
+    \\end
+    \\ local second, third, used = 0, 0, 0
+    \\ local function step2() second = second + 1; return middle end
+    \\ local function step3() third = third + 1; return { value = 'last' } end
+    \\ local function consume(t) used = used + 1; assert(t.value == 'table') end
+    \\ local local_value = maybe(mode)
+    \\ if local_value and step2() and step3() then assert(local_value.value == 'table'); consume(local_value) end
+    \\ local expected_second = mode == 1 and 1 or 0
+    \\ local expected_third = mode == 1 and middle and 1 or 0
+    \\ assert(second == expected_second and third == expected_third and used == expected_third, 'direct nullable AND effects')
+    \\ assert((not local_value) == (mode ~= 1), 'nullable not')
+    \\ local fallback_calls = 0
+    \\ local function fallback() fallback_calls = fallback_calls + 1; return 'fallback' end
+    \\ local selected = local_value or fallback()
+    \\ assert(fallback_calls == (mode == 1 and 0 or 1), 'nullable OR effects')
+    \\ assert(mode == 1 and selected.value == 'table' or mode ~= 1 and selected == 'fallback', 'nullable OR operand')
+    \\ local captured = maybe(mode)
+    \\ local function from_upvalue()
+    \\  if captured and step2() and step3() then assert(captured.value == 'table'); consume(captured) end
+    \\  assert((not captured) == (mode ~= 1), 'upvalue nullable not')
+    \\ end
+    \\ if captured and step2() and step3() then assert(captured.value == 'table'); consume(captured) end
+    \\ from_upvalue()
+    \\ assert(second == expected_second * 3 and third == expected_third * 3 and used == expected_third * 3, 'cell and upvalue nullable AND effects')
+    \\ local mutable = maybe(mode)
+    \\ if middle then mutable = maybe(mode) end
+    \\ if mutable and step2() and step3() then assert(mutable.value == 'table'); consume(mutable) end
+    \\ assert(second == expected_second * 4 and third == expected_third * 4 and used == expected_third * 4, 'mutable nullable AND effects')
+    \\end
+    \\for mode = 1, 3 do verify(mode, true); verify(mode, false) end
+    \\return {run=function() return 'nullable shape guards verified' end}
+;
+
 const loop_capture_module_source =
     \\do
     \\ local outer=0
@@ -623,6 +663,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Template:Template:nested", .ns = 10, .id = 12, .body = "nested namespace retained" },
         .{ .title = "Template:nested", .ns = 10, .id = 13, .body = "ordinary namespace distinct" },
         .{ .title = "Template:نط:10", .ns = 10, .id = 31, .body = "English ordinary namespace template" },
+        .{ .title = "Module:IntegrationNullableShape", .ns = 828, .id = 33, .body = nullable_shape_module_source },
         .{ .title = "Module:IntegrationForms", .ns = 828, .id = 1, .body = module_source },
         .{ .title = "Module:IntegrationLegacyVarargs", .ns = 828, .id = 32, .body = legacy_vararg_source },
         .{ .title = "Module:IntegrationExports", .ns = 828, .id = 30, .body = "return {ok=function() return 'OK' end, value=17, callable=setmetatable({}, {__call=function() return 'BAD' end})}" },
@@ -2152,6 +2193,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(!exists(init.io, incomplete), "completed bundle marker removed");
 
     const text = try h.run(&.{ bin, "lookup", "mouse", "--root", root, "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, text, "Nullable shapes: nullable shape guards verified") != null, "native nullable table shape hints preserve AND OR not and captured guards");
     const broken_alias = try h.run(&.{ bin, "lookup", "BrokenAlias", "--root", root, "--details" }, 0);
     try h.require(std.mem.indexOf(u8, broken_alias, "alias tail from original source") != null and std.mem.indexOf(u8, broken_alias, "Lua error") == null and std.mem.indexOf(u8, broken_alias, "#invoke") == null, "redirect tails keep original getContent context without executing the ignored redirect label");
     try h.require(std.mem.indexOf(u8, text, "Talk:Category discussion") != null and std.mem.indexOf(u8, text, "Nested category") != null, "default CategoryTree pages mode compiles other namespaces and subcategory links");
@@ -2220,6 +2262,34 @@ const PoemPhaseCase = struct {
     no_poem: bool = false,
     empty_phase: bool = false,
 };
+
+const returned_nowiki_glyphs = "𓂜𓐰𓏏𓐱𓏭𓅪𓆑";
+const returned_nowiki_plain = "[[hidden]] {{PhaseLines}} </nowiki> __NOTOC__ A&B:&#58; C";
+const returned_nowiki_wrapped = "left:&#58; " ++ returned_nowiki_glyphs ++ " right [[hidden]] {{PhaseLines}} </nowiki>";
+const returned_nowiki_explicit = "left " ++ returned_nowiki_glyphs ++ " right";
+const returned_nowiki_pre = "  A\tB\n C [[hidden]] {{PhaseLines}} & : &#58;";
+const returned_nowiki_module =
+    \\return {
+    \\show=function(frame)
+    \\ local mode=frame.args[1]
+    \\ if mode=="plain" then
+    \\  local body="[[hidden]] {{PhaseLines}} </nowiki> __NOTOC__ A&amp;B&#58;&amp;#58;\nC"
+    \\  return "<b>"..frame:extensionTag("nowiki",body).."</b>[[cat|after]]"
+    \\ elseif mode=="pre" then
+    \\  local body="  A\tB\n C [[hidden]] {{PhaseLines}} &amp; &#58; &amp;#58;"
+    \\  return "<pre>"..frame:extensionTag("nowiki",body).."</pre>[[cat|after]]"
+    \\ end
+    \\ local general=frame:preprocess("<hiero>D35:t*y-nDs-f</hiero>")
+    \\ if mode=="unstrip" then
+    \\  local marker=frame:extensionTag("nowiki","left "..general.." right")
+    \\  return mw.text.unstripNoWiki(marker).."[[cat|after]]"
+    \\ end
+    \\ local body="left&#58;&amp;#58;\n"..general.." right [[hidden]] {{PhaseLines}} </nowiki>"
+    \\ return "<code>"..frame:extensionTag("nowiki",body).."</code>[[cat|after]]"
+    \\end
+    \\}
+;
+
 const poem_phase_cases = [_]PoemPhaseCase{
     .{ .title = "PoemRawLines", .body = "<poem>A\n[[cat]]</poem>", .breaks = 1, .text = "A\ncat", .indent2 = false },
     .{ .title = "PoemTemplateLines", .body = "<poem>{{PhaseLines}}</poem>", .breaks = 0, .text = "A cat", .indent2 = false },
@@ -2252,6 +2322,10 @@ const poem_phase_cases = [_]PoemPhaseCase{
     .{ .title = "PoemNestedInvoke", .body = "{{#invoke:PhasePoemWrapper|run}}", .text = "cat\nTail", .breaks = 1, .indent2 = true },
     .{ .title = "PoemAuthoredTokenCollision", .body = "<poem>A\nB</poem><poem>" ++ poem_collision_token ++ "</poem>", .text = "A\nB\n" ++ poem_collision_token, .breaks = 1 },
     .{ .title = "PoemPlainControl", .body = "Plain body", .text = "Plain body", .no_poem = true },
+    .{ .title = "NowikiReturnedPlain", .body = "{{#invoke:PhaseNowiki|show|plain}}", .text = returned_nowiki_plain ++ "after", .breaks = 0, .no_poem = true },
+    .{ .title = "NowikiReturnedWrapped", .body = "{{#invoke:PhaseNowiki|show|wrapped}}", .text = returned_nowiki_wrapped ++ "after", .breaks = 0, .no_poem = true },
+    .{ .title = "NowikiReturnedExplicit", .body = "{{#invoke:PhaseNowiki|show|unstrip}}", .text = returned_nowiki_explicit ++ "after", .breaks = 0, .no_poem = true },
+    .{ .title = "NowikiReturnedPre", .body = "{{#invoke:PhaseNowiki|show|pre}}", .text = returned_nowiki_pre ++ "after", .breaks = 0, .no_poem = true },
 };
 fn poemFixtureSource(a: std.mem.Allocator, body: []const u8) ![]const u8 {
     return std.fmt.allocPrint(a, "==English==\n{s}", .{body});
@@ -2309,6 +2383,53 @@ const PoemObserved = struct {
         return observed;
     }
 };
+
+fn checkReturnedNowikiRecord(h: *Harness, title: []const u8, entry_value: encoder.presentation_types.Entry) !void {
+    const plain = std.mem.eql(u8, title, "NowikiReturnedPlain");
+    const wrapped = std.mem.eql(u8, title, "NowikiReturnedWrapped");
+    const explicit = std.mem.eql(u8, title, "NowikiReturnedExplicit");
+    const pre = std.mem.eql(u8, title, "NowikiReturnedPre");
+    const prefix = if (plain) returned_nowiki_plain else if (wrapped) returned_nowiki_wrapped else if (explicit) returned_nowiki_explicit else if (pre) returned_nowiki_pre else return;
+    const expected = try std.fmt.allocPrint(h.a, "{s}after", .{prefix});
+    const Check = struct {
+        expected: []const u8,
+        prefix_len: usize,
+        glyph_start: ?usize,
+        bold: bool,
+        code: bool,
+        position: usize = 0,
+        fn spans(self: *@This(), harness: *Harness, values: []const encoder.presentation_types.Span) !void {
+            for (values) |span| {
+                if (span.target.len != 0) try harness.require(self.position >= self.prefix_len and span.kind == .link and std.mem.eql(u8, span.target, "cat"), "returned nowiki never activates literal or empty-span navigation");
+                for ([_][]const u8{ span.text, span.trail }) |part| for (part) |byte| {
+                    try harness.require(self.position < self.expected.len and self.expected[self.position] == byte, "returned nowiki retains exact text, entities, LF and tab policy");
+                    const literal = self.position < self.prefix_len;
+                    const glyph = if (self.glyph_start) |start| self.position >= start and self.position < start + returned_nowiki_glyphs.len else false;
+                    try harness.require(span.kind == (if (literal) encoder.presentation_types.InlineKind.text else encoder.presentation_types.InlineKind.link), "returned nowiki typed literal and external cat kinds remain exact");
+                    try harness.require(std.mem.eql(u8, span.target, if (literal) "" else "cat"), "returned nowiki literal targets stay empty and following cat stays navigable");
+                    try harness.require(span.bold == (literal and self.bold) and span.code == (literal and self.code and !glyph), "returned nowiki inherits bold/code while rendered glyphs remain noncode");
+                    try harness.require(!span.italic and !span.superscript and !span.subscript, "returned nowiki does not invent additional styles");
+                    try harness.require(std.mem.eql(u8, span.language, if (glyph) "egy" else "") and std.mem.eql(u8, span.direction, if (glyph) "ltr" else "") and std.mem.eql(u8, span.classes, if (glyph) "Egyp" else ""), "returned owned hiero keeps exact language font and direction without styling adjacent literals");
+                    self.position += 1;
+                };
+            }
+        }
+    };
+    var check: Check = .{
+        .expected = expected,
+        .prefix_len = prefix.len,
+        .glyph_start = if (wrapped or explicit) std.mem.indexOf(u8, prefix, returned_nowiki_glyphs) else null,
+        .bold = plain,
+        .code = wrapped or pre,
+    };
+    try check.spans(h, entry_value.preamble_spans);
+    for (entry_value.sections) |section| for (section.blocks) |block| {
+        try h.require(block.table == null and (block.kind == .paragraph or block.kind == .preformatted), "returned nowiki preserves body structure without activating literal markup");
+        try check.spans(h, block.spans);
+    };
+    try h.require(check.position == expected.len and entry_value.references.len == 0 and entry_value.media.len == 0, "returned nowiki complete literal and following action survive actual published DPR2");
+}
+
 fn readPoemRecord(h: *Harness, root: []const u8, heading: []const u8, title: []const u8) !struct { payload: []const u8, stored: encoder.presentation_types.Stored } {
     const path = try encoder.blob_builder.languageBlobPathAlloc(h.a, root, heading);
     const bytes = try std.Io.Dir.cwd().readFileAlloc(h.io, path, h.a, .limited(2 * 1024 * 1024));
@@ -2358,6 +2479,7 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
     var pages: std.ArrayList(Page) = .empty;
     for (poem_phase_cases, 0..) |case, i| try pages.append(h.a, .{ .title = case.title, .ns = 0, .id = @intCast(i + 1), .body = try poemFixtureSource(h.a, case.body) });
     try pages.appendSlice(h.a, &.{
+        .{ .title = "Module:PhaseNowiki", .ns = 828, .id = 109, .body = returned_nowiki_module },
         .{ .title = "Template:PhaseLines", .ns = 10, .id = 101, .body = "A\n[[cat]]" },
         .{ .title = "Template:PhaseIndent", .ns = 10, .id = 102, .body = "::B" },
         .{ .title = "Template:PhaseSpaces", .ns = 10, .id = 103, .body = "  B" },
@@ -2407,6 +2529,7 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
             if (reply != .output) return error.UnexpectedPoemReply;
             const output = reply.output;
             try h.require(std.mem.eql(u8, output.output, expanded.source) and std.mem.eql(u8, output.display_title, expanded.display_title orelse ""), "saved native output/title round-trip exactly");
+            if (std.mem.startsWith(u8, case.title, "NowikiReturned") and !std.mem.eql(u8, case.title, "NowikiReturnedExplicit")) try h.require(expanded.poem_metadata != null, "direct returned nowiki carries authenticated literal metadata");
             if (expanded.poem_metadata) |metadata| {
                 try h.require(saved[4] == 4 and output.poem_metadata != null and std.mem.eql(u8, metadata, output.poem_metadata.?), "optional phase bytes survive saved kind4 record");
                 const parsed = try std.json.parseFromSlice(std.json.Value, h.a, metadata, .{});
@@ -2427,7 +2550,7 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
                     first_metadata = output.poem_metadata;
                 }
             } else {
-                try h.require(std.mem.eql(u8, case.title, "PoemPlainControl") and saved[4] == 0 and output.poem_metadata == null, "ordinary no-Poem expansion retains old success0 bytes");
+                try h.require((std.mem.eql(u8, case.title, "PoemPlainControl") or std.mem.eql(u8, case.title, "NowikiReturnedExplicit")) and saved[4] == 0 and output.poem_metadata == null, "ordinary no-Poem expansion retains old success0 bytes");
             }
             try replay.addExpandedPageWithReasonsAndPoem(h.a, .{ .id = 0, .kind = .language }, case.title, output.output, raw, if (output.display_title.len == 0) null else output.display_title, &.{}, output.poem_metadata);
         }
@@ -2445,6 +2568,7 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
         const saved = try readPoemRecord(h, replay_root, "English", case.title);
         try h.require(std.mem.eql(u8, normal.payload, saved.payload), "saved success record and normal page-slot path publish identical DPR2");
         const seen = try PoemObserved.entry(h, normal.stored.entry);
+        try checkReturnedNowikiRecord(h, case.title, normal.stored.entry);
         if (case.breaks) |count| try h.require(seen.breaks == count, case.title);
         if (case.text) |expected| try h.require(std.mem.eql(u8, expected, seen.text.items), case.title);
         if (case.indent2) |wanted| try h.require((seen.indent2 != 0) == wanted, case.title);

@@ -1898,11 +1898,16 @@ pub const Renderer = struct {
                     } else if (std.mem.eql(u8, item.tag, "text")) {
                         try self.poemText(item.body, literal_style);
                     } else {
-                        literal_style.code = !std.mem.eql(u8, item.tag, "nowiki");
-                        literal_style.preserve_whitespace = !std.mem.eql(u8, item.tag, "nowiki");
+                        const nowiki = std.mem.eql(u8, item.tag, "nowiki");
+                        if (!nowiki) {
+                            literal_style.code = true;
+                            literal_style.preserve_whitespace = true;
+                        }
                         literal_style.provenance = .protected_literal;
                         if (oneOf(item.tag, &.{ "source", "syntaxhighlight" }))
                             try self.text(item.body, literal_style)
+                        else if (nowiki)
+                            try self.protectedNowikiLiteral(item.body, literal_style)
                         else
                             try self.protectedLiteral(item.body, literal_style);
                     }
@@ -4690,7 +4695,7 @@ pub const Renderer = struct {
             const prefix = list_prefix.path.len;
             const table_indent: ?[]const u8 = if (anchored_inline) null else wikiTableIndent(clean);
             const html_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
-                oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center" }) and
+                oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) and
                 syntax.matchingTag(clean, tag) != null) tag else null) else null;
             const protected_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
@@ -15899,5 +15904,160 @@ test "encoded LF and tab remain soft outside preformatted text through DPR2" {
         const decoded = try blob.presentation_codec.decodeAlloc(a, payload, "encoded whitespace", .language, .{ .code = "en", .heading = "English" });
         try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
         try Check.blocks(a, decoded.entry.sections[0].blocks, case.body, case.code, case.breaks);
+    }
+}
+
+test "matched noinclude bodies retain structural content and diagnostics through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn spans(alloc: std.mem.Allocator, values: anytype, expected: []const u8, target: []const u8, linked_text: []const u8) !void {
+            var visible: std.ArrayList(u8) = .empty;
+            var linked: std.ArrayList(u8) = .empty;
+            for (values) |span| {
+                if (span.target.len != 0) {
+                    try std.testing.expect(span.kind == .link);
+                    try std.testing.expectEqualStrings(target, span.target);
+                }
+                const parts = if (@hasField(@TypeOf(span), "trail"))
+                    [_][]const u8{ span.text, span.trail }
+                else
+                    [_][]const u8{ span.text, "" };
+                for (parts) |part| {
+                    try visible.appendSlice(alloc, part);
+                    if (span.target.len != 0) try linked.appendSlice(alloc, part);
+                }
+                const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                try std.testing.expect(!code);
+            }
+            try std.testing.expectEqualStrings(expected, visible.items);
+            try std.testing.expectEqualStrings(linked_text, linked.items);
+        }
+        fn blocks(alloc: std.mem.Allocator, values: anytype, case_index: usize) !void {
+            switch (case_index) {
+                0 => {
+                    try std.testing.expectEqual(@as(usize, 4), values.len);
+                    try std.testing.expect(values[0].kind == .table);
+                    const table = values[0].table.?;
+                    try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+                    try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+                    const cell = table.rows[0].cells[0];
+                    try std.testing.expectEqual(@as(u16, 1), cell.colspan);
+                    try std.testing.expectEqual(@as(u16, 1), cell.rowspan);
+                    try spans(alloc, cell.spans, "cell", "cat", "cell");
+                    try std.testing.expect(values[1].kind == .rule);
+                    try std.testing.expect(values[2].kind == .list_detail);
+                    try std.testing.expectEqual(@as(u8, 1), values[2].depth);
+                    try std.testing.expectEqualStrings(":", values[2].list_path);
+                    try spans(alloc, values[2].spans, "documentation", "dog", "documentation");
+                    try std.testing.expect(values[3].kind == .paragraph);
+                    try spans(alloc, values[3].spans, "after", "bird", "after");
+                },
+                1 => {
+                    try std.testing.expectEqual(@as(usize, 2), values.len);
+                    try std.testing.expect(values[0].kind == .heading);
+                    try std.testing.expectEqual(@as(u8, 2), values[0].level);
+                    try spans(alloc, values[0].spans, "French", "", "");
+                    try std.testing.expect(values[1].kind == .paragraph);
+                    try spans(alloc, values[1].spans, "word", "cat", "word");
+                },
+                2 => {
+                    try std.testing.expectEqual(@as(usize, 1), values.len);
+                    try std.testing.expect(values[0].kind == .paragraph);
+                    try spans(alloc, values[0].spans, "kept", "dog", "kept");
+                },
+                3 => {
+                    try std.testing.expectEqual(@as(usize, 1), values.len);
+                    try std.testing.expect(values[0].kind == .paragraph);
+                    try spans(alloc, values[0].spans, "<noinclude> [[fake]] </noinclude> real", "cat", "real");
+                },
+                else => unreachable,
+            }
+        }
+    };
+    const sources = [_][]const u8{
+        "{|\n| [[cat|cell]]\n|}<noinclude>\n<div class=\"documentation\">\n----\n<dl><dd>[[dog|documentation]]</dd></dl>\n</div>\n</noinclude> [[bird|after]]",
+        "<noinclude>\n==French==\n[[cat|word]]\n</noinclude>",
+        "<noinclude>[[dog|kept]]",
+        "<nowiki><noinclude>\n[[fake]]\n</noinclude></nowiki> [[cat|real]]",
+    };
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const blob = @import("blob_encoder");
+    for (sources, 0..) |source, case_index| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const result = try renderer.renderBody(source);
+        errdefer std.debug.print("noinclude case {d}: {s}\n", .{ case_index, source });
+        try Check.blocks(a, result, case_index);
+        try std.testing.expectEqual(case_index == 2, renderer.fallbacks.unclosed_formatting);
+        if (case_index != 2) try std.testing.expect(!renderer.fallbacks.any());
+        const sections = [_]Section{.{ .blocks = result }};
+        const payload = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, payload, "noinclude boundary", .language, .{ .code = "en", .heading = "English" });
+        try Check.blocks(a, decoded.entry.sections[0].blocks, case_index);
+    }
+}
+
+test "restored raw hiero preserves glyph styling without decoding authored separators through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn blocks(values: anytype, prefix: []const u8, prefix_code: bool, glyphs: bool) !void {
+            var position: usize = 0;
+            const suffix = "after";
+            for (values) |block_value| {
+                try std.testing.expect(block_value.kind == .paragraph or block_value.kind == .preformatted);
+                try std.testing.expect(block_value.table == null);
+                for (block_value.spans) |span| {
+                    if (span.target.len != 0) {
+                        try std.testing.expect(span.kind == .link);
+                        try std.testing.expectEqualStrings("cat", span.target);
+                    }
+                    const parts = if (@hasField(@TypeOf(span), "trail"))
+                        [_][]const u8{ span.text, span.trail }
+                    else
+                        [_][]const u8{ span.text, "" };
+                    for (parts) |part| for (part) |byte| {
+                        if (std.ascii.isWhitespace(byte)) continue;
+                        try std.testing.expect(position < prefix.len + suffix.len);
+                        const in_prefix = position < prefix.len;
+                        const expected = if (in_prefix) prefix[position] else suffix[position - prefix.len];
+                        try std.testing.expectEqual(expected, byte);
+                        const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                        try std.testing.expectEqual(in_prefix and prefix_code, code);
+                        try std.testing.expectEqualStrings(if (in_prefix) "" else "cat", span.target);
+                        try std.testing.expect(if (in_prefix) span.kind == .text else span.kind == .link);
+                        try std.testing.expectEqualStrings(if (in_prefix and glyphs) "egy" else "", span.language);
+                        try std.testing.expectEqualStrings(if (in_prefix and glyphs) "ltr" else "", span.direction);
+                        try std.testing.expectEqualStrings(if (in_prefix and glyphs) "Egyp" else "", span.classes);
+                        position += 1;
+                    };
+                }
+            }
+            try std.testing.expectEqual(prefix.len + suffix.len, position);
+        }
+    };
+    const cases = [_]struct { source: []const u8, prefix: []const u8, code: bool = false, glyphs: bool = false, unsupported: bool = false }{
+        .{ .source = "<hiero>D35:t*y-nDs-f</hiero> [[cat|after]]", .prefix = "𓂜𓐰𓏏𓐱𓏭𓅪𓆑", .glyphs = true },
+        .{ .source = "<hiero>D35&#58;t&#42;y-nDs-f</hiero> [[cat|after]]", .prefix = "D35:t*y-nDs-f", .code = true, .unsupported = true },
+        .{ .source = "<hiero>D35&amp;#58;t&amp;#42;y-nDs-f</hiero> [[cat|after]]", .prefix = "D35&#58;t&#42;y-nDs-f", .code = true, .unsupported = true },
+        .{ .source = "<nowiki><hiero>D35:t*y-nDs-f</hiero></nowiki> [[cat|after]]", .prefix = "<hiero>D35:t*y-nDs-f</hiero>" },
+        .{ .source = "<source><hiero>D35&#58;t&#42;y-nDs-f</hiero></source> [[cat|after]]", .prefix = "<hiero>D35&#58;t&#42;y-nDs-f</hiero>", .code = true },
+    };
+    const Section = struct { level: u8 = 2, title: []const u8 = "Egyptian", blocks: []const Block };
+    const blob = @import("blob_encoder");
+    for (cases, 0..) |case, case_index| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        errdefer std.debug.print("hiero separator case {d}: {s}\n", .{ case_index, case.source });
+        try Check.blocks(blocks, case.prefix, case.code, case.glyphs);
+        try std.testing.expectEqual(case.unsupported, renderer.fallbacks.unsupported_element);
+        try std.testing.expect(!renderer.fallbacks.unclosed_formatting);
+        if (!case.unsupported) try std.testing.expect(!renderer.fallbacks.any());
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const payload = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, payload, "hiero separators", .language, .{ .code = "egy", .heading = "Egyptian" });
+        try Check.blocks(decoded.entry.sections[0].blocks, case.prefix, case.code, case.glyphs);
     }
 }

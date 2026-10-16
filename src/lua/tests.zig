@@ -2304,3 +2304,64 @@ test "legacy vararg locals preserve lexical scope and emitted extra argument cou
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_table_append_many"));
     try std.testing.expect(std.mem.indexOf(u8, ir, "uitofp i64") != null);
 }
+
+test "nullable local table shape hints retain runtime truthiness through captures" {
+    const source =
+        \\local function verify(mode, middle)
+        \\local function maybe(mode)
+        \\ if mode == 1 then return { value = 'table' } end
+        \\ if mode == 2 then return nil end
+        \\ return false
+        \\end
+        \\ local second, third, used = 0, 0, 0
+        \\ local function step2() second = second + 1; return middle end
+        \\ local function step3() third = third + 1; return { value = 'last' } end
+        \\ local function consume(t) used = used + 1; assert(t.value == 'table') end
+        \\ local local_value = maybe(mode)
+        \\ if local_value and step2() and step3() then assert(local_value.value == 'table'); consume(local_value) end
+        \\ local expected_second = mode == 1 and 1 or 0
+        \\ local expected_third = mode == 1 and middle and 1 or 0
+        \\ assert(second == expected_second and third == expected_third and used == expected_third, 'direct nullable AND effects')
+        \\ assert((not local_value) == (mode ~= 1), 'nullable not')
+        \\ local fallback_calls = 0
+        \\ local function fallback() fallback_calls = fallback_calls + 1; return 'fallback' end
+        \\ local selected = local_value or fallback()
+        \\ assert(fallback_calls == (mode == 1 and 0 or 1), 'nullable OR effects')
+        \\ assert(mode == 1 and selected.value == 'table' or mode ~= 1 and selected == 'fallback', 'nullable OR operand')
+        \\ local captured = maybe(mode)
+        \\ local function from_upvalue()
+        \\  if captured and step2() and step3() then assert(captured.value == 'table'); consume(captured) end
+        \\  assert((not captured) == (mode ~= 1), 'upvalue nullable not')
+        \\ end
+        \\ if captured and step2() and step3() then assert(captured.value == 'table'); consume(captured) end
+        \\ from_upvalue()
+        \\ assert(second == expected_second * 3 and third == expected_third * 3 and used == expected_third * 3, 'cell and upvalue nullable AND effects')
+        \\ local mutable = maybe(mode)
+        \\ if middle then mutable = maybe(mode) end
+        \\ if mutable and step2() and step3() then assert(mutable.value == 'table'); consume(mutable) end
+        \\ assert(second == expected_second * 4 and third == expected_third * 4 and used == expected_third * 4, 'mutable nullable AND effects')
+        \\end
+        \\for mode = 1, 3 do verify(mode, true); verify(mode, false) end
+        \\return true
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var registry = llvm_shapes.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try registry.collect(0, chunk.body);
+    var shape_facts = try registry.moduleFacts(std.testing.allocator, 0);
+    defer shape_facts.deinit(std.testing.allocator);
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{
+        .table_shapes = &shape_facts,
+        .shape_registry = &registry,
+    });
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.count(u8, ir, "call i8 @dict_lua_value_truthy(") >= 4);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_known_shape_field") != null);
+}

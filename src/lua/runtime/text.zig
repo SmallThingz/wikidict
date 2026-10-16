@@ -314,8 +314,9 @@ fn textUnstripCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![
         return one(runtime.allocator, .{ .string = source });
     if (host_api.get(runtime)) |host| if (host.text_unstrip_no_wiki) |call| {
         const restored = try call(host.ctx, runtime.allocator, source);
-        if (std.mem.indexOfScalar(u8, restored, 0x7f) != null) return error.NotImplemented;
-        return one(runtime.allocator, .{ .string = restored });
+        const without_markers = try killMarkersAlloc(runtime.allocator, restored);
+        if (std.mem.indexOfScalar(u8, without_markers, 0x7f) != null) return error.NotImplemented;
+        return one(runtime.allocator, .{ .string = without_markers });
     };
     return error.NotImplemented;
 }
