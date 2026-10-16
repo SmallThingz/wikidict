@@ -90,7 +90,8 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
     if ((out.command == .stats or out.command == .saved or out.command == .history) and has_query) return error.Usage;
     if (out.command == .tui and out.format != .text) return error.Usage;
     if (out.offset != 0 and out.command != .search and out.command != .saved and out.command != .history) return error.Usage;
-    if (out.command == .search and (out.offset > search.max_retained_matches or out.limit > search.max_retained_matches - out.offset)) return error.Usage;
+    if (out.command == .search and !out.case_sensitive and std.mem.trim(u8, out.query, " \t\r\n").len != 0 and
+        (out.offset > search.max_retained_matches or out.limit > search.max_retained_matches - out.offset)) return error.Usage;
     return out;
 }
 test "CLI options are strict and lookup shorthand is unambiguous" {
@@ -164,4 +165,42 @@ test "reader commands and configured defaults remain explicit" {
     try std.testing.expectError(error.Usage, parse(&.{"save"}));
     try std.testing.expectError(error.Usage, parse(&.{"install"}));
     try std.testing.expectError(error.Usage, parse(&.{ "history", "cat" }));
+}
+
+test "direct prefix pagination bypasses only the folded retention limit" {
+    const a = std.testing.allocator;
+    const boundary = try std.fmt.allocPrint(a, "{d}", .{search.max_retained_matches});
+    defer a.free(boundary);
+    const last_retained = try std.fmt.allocPrint(a, "{d}", .{search.max_retained_matches - 1});
+    defer a.free(last_retained);
+    const maximum_offset = try std.fmt.allocPrint(a, "{d}", .{std.math.maxInt(usize)});
+    defer a.free(maximum_offset);
+
+    // Browsing uses a direct prefix range, without retaining preceding matches.
+    const browse = try parse(&.{ "search", "--offset", boundary, "--limit", "1000" });
+    try std.testing.expectEqualStrings("", browse.query);
+    try std.testing.expectEqual(search.max_retained_matches, browse.offset);
+    try std.testing.expectEqual(@as(usize, 1000), browse.limit);
+    inline for (.{ "", " \t\r\n" }) |query| {
+        const empty = try parse(&.{ "search", query, "--offset", maximum_offset, "--limit", "1000" });
+        try std.testing.expectEqualStrings(query, empty.query);
+        try std.testing.expect(!empty.case_sensitive);
+        try std.testing.expectEqual(std.math.maxInt(usize), empty.offset);
+    }
+    const exact = try parse(&.{ "search", "cat", "--case-sensitive", "--offset", maximum_offset, "--limit", "1000" });
+    try std.testing.expect(exact.case_sensitive);
+    try std.testing.expectEqualStrings("cat", exact.query);
+    try std.testing.expectEqual(std.math.maxInt(usize), exact.offset);
+
+    // Folded search still retains offset + limit, including its last valid slot.
+    inline for (.{ "cat", " cat " }) |query| {
+        const folded = try parse(&.{ "search", query, "--offset", last_retained, "--limit", "1" });
+        try std.testing.expect(!folded.case_sensitive);
+        try std.testing.expectEqual(search.max_retained_matches - 1, folded.offset);
+        try std.testing.expectEqual(@as(usize, 1), folded.limit);
+        try std.testing.expectError(error.Usage, parse(&.{ "search", query, "--offset", last_retained, "--limit", "2" }));
+        try std.testing.expectError(error.Usage, parse(&.{ "search", query, "--offset", boundary, "--limit", "1" }));
+        try std.testing.expectError(error.Usage, parse(&.{ "search", query, "--offset", maximum_offset, "--limit", "1" }));
+    }
+    try std.testing.expectError(error.Usage, parse(&.{ "search", "--offset", boundary, "--limit", "1001" }));
 }
