@@ -257,13 +257,20 @@ fn verifyNamespaceRecords(io: std.Io, allocator: std.mem.Allocator, root: []cons
     };
     defer coverage.deinit(allocator);
     var expected_aliases: u64 = 0;
+    var minimum_language_records: u64 = 0;
     var alias_rows = coverage.rows.valueIterator();
     while (alias_rows.next()) |row| {
         const actual = stats.alias_namespaces.get(row.id);
         if (row.alias_pages != (if (actual) |v| v.count else 0) or (if (actual) |v| row.kind != v.kind else false)) return error.NamespaceCoverageAliasMismatch;
         expected_aliases = try std.math.add(u64, expected_aliases, row.alias_pages);
+        // Every successful non-alias main page emits at least one owner record.
+        if (row.kind == .language) minimum_language_records = try std.math.add(u64, minimum_language_records, (try std.math.add(u64, row.expanded_pages, row.fallback_pages)) - row.alias_pages);
     }
     if (expected_aliases != stats.alias_records) return error.NamespaceCoverageAliasMismatch;
+    if (stats.language_records < minimum_language_records) {
+        std.debug.print("namespace record coverage mismatch: kind=language minimum={d} actual={d}\n", .{ minimum_language_records, stats.language_records });
+        return error.NamespaceCoverageRecordMismatch;
+    }
     // Fixed-kind pages emit one record each. Language pages can emit several.
     inline for (feature_kinds) |kind| {
         var expected: u64 = 0;
@@ -480,4 +487,113 @@ test "table witness owns raw title bytes and bounded JSON provenance" {
     const bounded = TableWitness.init(.{ .title = &long, .payload_offset = 8, .payload_len = 9 }, 0, 0);
     try std.testing.expectEqual(@as(usize, 4096), bounded.title_prefix_bytes);
     try std.testing.expectEqual(@as(usize, 4100), bounded.title_bytes);
+}
+
+test "namespace verification requires main records while allowing multiple owners" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const temporary = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(temporary, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const manifest = try std.fs.path.join(temporary, &.{ root, catalog.manifest_filename });
+    const language_root = try std.fs.path.join(temporary, &.{ root, catalog.language_directory });
+    try std.Io.Dir.cwd().createDirPath(io, language_root);
+    const Fixture = struct {
+        fn language(io2: std.Io, alloc: std.mem.Allocator, directory: []const u8, heading: []const u8, code: []const u8, titles: []const []const u8) !void {
+            const records = try alloc.alloc(format.RecordInput, titles.len);
+            for (titles, records) |title, *record| record.* = .{
+                .title = title,
+                .payload = try presentation_codec.encodeAlloc(alloc, .{ .entry = .{ .title = title, .kind = .language, .language = heading, .language_code = code } }),
+            };
+            const metadata = try format.buildLanguageMetadataAlloc(alloc, code, heading);
+            const blob = try format.buildAlloc(alloc, .language, metadata, records);
+            var filename: [catalog.language_blob_filename_len]u8 = undefined;
+            const path = try std.fs.path.join(alloc, &.{ directory, catalog.languageBlobFilename(heading, &filename) });
+            try std.Io.Dir.cwd().writeFile(io2, .{ .sub_path = path, .data = blob });
+        }
+    };
+    var coverage: encoder.namespace_coverage.Table = .{};
+    defer coverage.deinit(a);
+    try coverage.input(a, 0, "", .language, true);
+    try coverage.outcome(0, .expanded);
+    try coverage.write(io, a, root);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "heading\n" });
+    var empty: Stats = .{};
+    defer empty.deinit(a);
+    try verifyLanguages(io, a, root, &empty);
+    try std.testing.expectEqual(@as(usize, 0), empty.language_records);
+    try std.testing.expectError(error.NamespaceCoverageRecordMismatch, verifyNamespaceRecords(io, a, root, &empty));
+
+    try Fixture.language(io, temporary, language_root, "English", "en", &.{"first"});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "heading\nEnglish\n" });
+    var one: Stats = .{};
+    defer one.deinit(a);
+    try verifyLanguages(io, a, root, &one);
+    try std.testing.expectEqual(@as(usize, 1), one.language_records);
+    try verifyNamespaceRecords(io, a, root, &one);
+    // A failed expansion also retains one record; one existing record cannot
+    // satisfy two completed non-alias source pages.
+    try coverage.input(a, 0, "", .language, true);
+    try coverage.outcome(0, .fallback);
+    try coverage.write(io, a, root);
+    try std.testing.expectError(error.NamespaceCoverageRecordMismatch, verifyNamespaceRecords(io, a, root, &one));
+
+    // The first page has two owners and the second has one. The bound must not
+    // mistake a valid multilingual page for a duplicate source page.
+    try Fixture.language(io, temporary, language_root, "English", "en", &.{ "first", "second" });
+    try Fixture.language(io, temporary, language_root, "French", "fr", &.{"first"});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "heading\nEnglish\nFrench\n" });
+    var multiple: Stats = .{};
+    defer multiple.deinit(a);
+    try verifyLanguages(io, a, root, &multiple);
+    try std.testing.expectEqual(@as(usize, 2), multiple.language_blobs);
+    try std.testing.expectEqual(@as(usize, 3), multiple.language_records);
+    try verifyNamespaceRecords(io, a, root, &multiple);
+}
+
+test "namespace main record bound preserves empty excluded alias and supplemental pages" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    var coverage: encoder.namespace_coverage.Table = .{};
+    defer coverage.deinit(a);
+    var stats: Stats = .{};
+    defer stats.deinit(a);
+    try coverage.write(io, a, root);
+    try verifyNamespaceRecords(io, a, root, &stats);
+
+    // No successfully rendered main page: unavailable, compile-only and
+    // duplicate inputs do not create a language-record obligation.
+    try coverage.input(a, 0, "", .language, false);
+    try coverage.input(a, 10, "Template", null, true);
+    try coverage.input(a, 0, "", .language, true);
+    try coverage.outcome(0, .duplicate);
+    try coverage.write(io, a, root);
+    try verifyNamespaceRecords(io, a, root, &stats);
+
+    // Both expanded and fallback aliases retain their typed alias records,
+    // without fabricating a language owner for an alias-only edition.
+    try coverage.input(a, 0, "", .language, true);
+    try coverage.alias(0, .expanded);
+    try coverage.input(a, 0, "", .language, true);
+    try coverage.alias(0, .fallback);
+    try coverage.write(io, a, root);
+    stats.alias_records = 2;
+    try stats.alias_namespaces.put(a, 0, .{ .kind = .language, .count = 2 });
+    try verifyNamespaceRecords(io, a, root, &stats);
+
+    // Fixed/supplemental emission has its own exact count, not a language count.
+    try coverage.input(a, 100, "Appendix", .supplemental, true);
+    try coverage.outcome(100, .expanded);
+    try coverage.write(io, a, root);
+    try std.testing.expectError(error.NamespaceCoverageRecordMismatch, verifyNamespaceRecords(io, a, root, &stats));
+    stats.supplemental_records = 1;
+    try verifyNamespaceRecords(io, a, root, &stats);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
 }
