@@ -4869,7 +4869,7 @@ pub const Renderer = struct {
                             try body.append(self.a, content[cursor]);
                             cursor += 1;
                         }
-                        try blocks.appendSlice(self.a, try self.renderBody(body.items));
+                        try blocks.appendSlice(self.a, try self.renderBodyWithLanguageDirection(body.items, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{})));
                     } else {
                         var fostered: std.ArrayList(Block) = .empty;
                         if (try self.htmlTable(clean[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{}))) |table_value| {
@@ -4880,6 +4880,10 @@ pub const Renderer = struct {
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
                     try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, self.body_language_direction orelse .{});
                 } else {
+                    const parent_language_direction = self.body_language_direction;
+                    const scoped_style = try self.htmlLanguageDirection(tag, parent_language_direction orelse .{});
+                    self.body_language_direction = .{ .language = scoped_style.language, .direction = scoped_style.direction };
+                    defer self.body_language_direction = parent_language_direction;
                     const scoped_quote = try self.rawBodyQuoteSeed(input, clean[tag.end..pair.inner_end], &body_quotes);
                     try blocks.appendSlice(self.a, try self.renderBodySlice(clean[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(clean.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote));
                 }
@@ -4925,6 +4929,23 @@ pub const Renderer = struct {
                     previous_list_path = table_path;
                 }
                 const body_start = pos;
+                if (try self.singleCellLayoutTable(input, pos)) |layout| {
+                    // Match the cell-local navigation boundary without flattening
+                    // its real nested grid or registering its effects twice.
+                    const previous_target = self.body_link_target;
+                    self.body_link_target = "";
+                    defer self.body_link_target = previous_target;
+                    // Cells begin a local quote/observer domain, just as
+                    // cellSpans -> renderBody does on the non-layout path.
+                    try blocks.appendSlice(self.a, try self.indentTableBlocks(
+                        try self.renderBody(layout.body),
+                        table_path,
+                    ));
+                    pos = layout.end;
+                    if (pos != 0 and pos < input.len and input[pos - 1] != '\n')
+                        inline_line_end = syntax.logicalEnd(input, pos);
+                    continue;
+                }
                 const table = try self.parseTable(input, pos);
                 pos = table.end;
                 // A close-marker suffix remains on its authored physical line;
@@ -5453,6 +5474,124 @@ pub const Renderer = struct {
         try self.appendTableCaption(caption, try self.cellSpans(body));
         pending.* = false;
     }
+    const LayoutTableBody = struct { body: []const u8, end: usize };
+
+    // Cells cannot contain a DPR2 grid. A closed, single ordinary layout cell
+    // can instead expose its original body to the existing block renderer.
+    // Inspect shape before rendering: references/media must register only once.
+    fn singleCellLayoutTable(self: *Renderer, input: []const u8, start: usize) Error!?LayoutTableBody {
+        var opaque_scan: syntax.OpaqueScan = .{};
+        var no_more_nowiki_close = false;
+        var pos = start;
+        var body_start: ?usize = null;
+        var saw_row = false;
+        var nested_tables: usize = 0;
+        while (pos < input.len) {
+            const line_start = pos;
+            const end = syntax.logicalEndWithOpaqueScan(input, pos, &no_more_nowiki_close, &opaque_scan);
+            const line = trim(input[pos..end]);
+            pos = if (end < input.len) end + 1 else end;
+            if (wikiTableIndent(line) != null) {
+                if (body_start == null or nested_tables >= max_depth) return null;
+                nested_tables += 1;
+                continue;
+            }
+            if (nested_tables != 0) {
+                if (starts(line, "|}")) nested_tables -= 1;
+                continue;
+            }
+            if (starts(line, "|}")) {
+                const first = body_start orelse return null;
+                const body = input[first..line_start];
+                if (!hasCompleteLayoutGrid(body)) return null;
+                return .{
+                    .body = body,
+                    .end = if (line.len > 2) @intFromPtr(line.ptr) - @intFromPtr(input.ptr) + 2 else pos,
+                };
+            }
+            if (starts(line, "|-")) {
+                if (saw_row or body_start != null or trim(line[2..]).len != 0) return null;
+                saw_row = true;
+            } else if (starts(line, "|+") or starts(line, "!") or starts(line, "<tr")) {
+                return null;
+            } else if (starts(line, "|")) {
+                if (body_start != null) return null;
+                const raw = line[1..];
+                const physical_end = std.mem.indexOfAny(u8, raw, "\r\n") orelse raw.len;
+                if (syntax.delimiter(raw[0..physical_end], "||", 0) != null) return null;
+                if (cellAttributePipe(raw)) |pipe| {
+                    const tag: syntax.Tag = .{ .name = "td", .attrs = raw[0..pipe], .end = 0, .closing = false, .self_closing = false };
+                    inline for (.{ "colspan", "rowspan" }) |name| {
+                        if (try self.semanticAttribute(tag, name)) |value| {
+                            const span = std.fmt.parseInt(u16, value, 10) catch return null;
+                            if (span != 1) return null;
+                        }
+                    }
+                }
+                const content = (try self.cellContent(raw)).text;
+                if (content.len != 0 and (std.mem.indexOfScalar(u8, "#*:;", content[0]) != null or
+                    self.tableCellHeading(content[0 .. std.mem.indexOfScalar(u8, content, '\n') orelse content.len]) != null)) return null;
+                body_start = @intFromPtr(content.ptr) - @intFromPtr(input.ptr);
+            } else if (body_start == null and line.len != 0) {
+                // Fostered prefix/caption/header semantics remain on the normal path.
+                return null;
+            }
+        }
+        return null;
+    }
+
+    fn hasCompleteLayoutGrid(body: []const u8) bool {
+        var opaque_scan: syntax.OpaqueScan = .{};
+        var no_more_nowiki_close = false;
+        var depth: usize = 0;
+        var found = false;
+        var at: usize = 0;
+        while (at < body.len) {
+            if (body[at] == '<') {
+                const maybe_tag = opaque_scan.tagAt(body, at, &no_more_nowiki_close);
+                // An unmatched pre opener owns its remaining body in the
+                // renderer, although the shared lexical scan resumes at tag.end.
+                if (maybe_tag) |tag| {
+                    if (!tag.closing and tag.is("pre")) return false;
+                }
+                if (opaque_scan.protectedEnd(body, at, &no_more_nowiki_close)) |end| {
+                    at = end;
+                    continue;
+                }
+                if (maybe_tag) |tag| {
+                    // Do not infer transparency through another HTML grid.
+                    if (oneOf(tag.name, &.{ "table", "tr", "td", "th", "code", "tt", "kbd", "samp" })) return false;
+                    at = tag.end;
+                    continue;
+                }
+            }
+            if (starts(body[at..], "{{") or starts(body[at..], "[[")) {
+                if (syntax.balancedWithOpaqueScan(body, at, &opaque_scan)) |pair| {
+                    at = pair.end;
+                    continue;
+                }
+            }
+            if (at == 0 or body[at - 1] == '\n') {
+                const end = std.mem.indexOfScalarPos(u8, body, at, '\n') orelse body.len;
+                const line = body[at..end];
+                // Leading-space preformatted source is not an active wiki grid.
+                if (line.len != 0 and (line[0] == '{' or line[0] == ':') and wikiTableIndent(line) != null) {
+                    if (depth >= max_depth) return false;
+                    depth += 1;
+                    found = true;
+                } else if (starts(trim(line), "|}")) {
+                    if (depth == 0) return false;
+                    depth -= 1;
+                } else if (depth == 0 and line.len != 0 and (line[0] == '|' or line[0] == '!')) {
+                    return false;
+                }
+            }
+            if (depth == 0 and starts(body[at..], "||")) return false;
+            at += 1;
+        }
+        return found and depth == 0;
+    }
+
     fn parseTable(self: *Renderer, input: []const u8, start: usize) Error!TableResult {
         var rows: std.ArrayList(Row) = .empty;
         var fostered: std.ArrayList(Block) = .empty;
@@ -9234,13 +9373,26 @@ test "table closing oracle nested tails and protected markers preserve cell owne
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
     const blocks = try r.renderBody("{|\n| outer cell\n{|\n| inner cell\n|}inner tail\n|}outer tail");
-    try std.testing.expectEqual(@as(usize, 2), blocks.len);
-    try std.testing.expectEqual(Kind.table, blocks[0].kind);
-    const cell = try flattened(a, blocks[0].table.?.rows[0].cells[0].spans);
-    for ([_][]const u8{ "outer cell", "inner cell", "inner tail" }) |part| try std.testing.expect(std.mem.indexOf(u8, cell, part) != null);
-    try std.testing.expect(std.mem.indexOf(u8, cell, "outer tail") == null);
-    try std.testing.expectEqual(Kind.paragraph, blocks[1].kind);
-    try std.testing.expectEqualStrings("outer tail", try flattened(a, blocks[1].spans));
+    // The ordinary single-cell outer table is a transparent layout: preserve
+    // the actual inner grid and both distinct closing-marker suffix domains.
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqualStrings("outer cell", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.table, blocks[1].kind);
+    const table = blocks[1].table.?;
+    try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+    const cell = table.rows[0].cells[0];
+    try std.testing.expect(!cell.header);
+    try std.testing.expectEqual(@as(u16, 1), cell.colspan);
+    try std.testing.expectEqual(@as(u16, 1), cell.rowspan);
+    try std.testing.expectEqualStrings("inner cell", try flattened(a, cell.spans));
+    try std.testing.expectEqual(@as(usize, 0), table.caption.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[2].kind);
+    try std.testing.expectEqualStrings("inner tail", try flattened(a, blocks[2].spans));
+    try std.testing.expectEqual(Kind.paragraph, blocks[3].kind);
+    try std.testing.expectEqualStrings("outer tail", try flattened(a, blocks[3].spans));
+    try std.testing.expect(!r.fallbacks.malformed_table);
     var protected: Renderer = .{ .a = a, .context = .{} };
     const literal = try protected.renderBody("{|\n| <nowiki>|}literal</nowiki>\n|}tail");
     try std.testing.expectEqual(@as(usize, 2), literal.len);
@@ -9585,16 +9737,31 @@ test "wiki table boundary: colon-indented retain nested and unterminated content
     const a = arena.allocator();
     var nested: Renderer = .{ .a = a, .context = .{} };
     const blocks = try nested.renderBody(": {|\n| outer\n:: {|\n| inner\n|}\ntail\n|} after");
-    try std.testing.expectEqual(@as(usize, 2), blocks.len);
-    try std.testing.expectEqual(Kind.table, blocks[0].kind);
-    try std.testing.expectEqualStrings(":", blocks[0].list_path);
-    const content = try flattened(a, blocks[0].table.?.rows[0].cells[0].spans);
-    try std.testing.expect(std.mem.indexOf(u8, content, "outer") != null);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, content, "inner"));
-    try std.testing.expect(std.mem.indexOf(u8, content, "tail") != null);
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqualStrings("outer", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.table, blocks[1].kind);
+    const table = blocks[1].table.?;
+    try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+    const cell = table.rows[0].cells[0];
+    try std.testing.expect(!cell.header);
+    try std.testing.expectEqual(@as(u16, 1), cell.colspan);
+    try std.testing.expectEqual(@as(u16, 1), cell.rowspan);
+    const content = try flattened(a, cell.spans);
+    try std.testing.expectEqualStrings("inner", content);
+    try std.testing.expectEqual(@as(usize, 0), table.caption.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[2].kind);
+    try std.testing.expectEqualStrings("tail", try flattened(a, blocks[2].spans));
+    try std.testing.expectEqual(Kind.paragraph, blocks[3].kind);
+    try std.testing.expectEqualStrings("after", try flattened(a, blocks[3].spans));
+    // The nested table's local "::" is below the outer ":" layout indent.
+    for (blocks, [_][]const u8{ ":", ":::", ":", "" }, [_]u8{ 1, 3, 1, 0 }) |block, path, depth| {
+        try std.testing.expectEqualStrings(path, block.list_path);
+        try std.testing.expectEqual(depth, block.depth);
+    }
     try std.testing.expect(std.mem.indexOf(u8, content, "{|") == null);
     try std.testing.expect(std.mem.indexOf(u8, content, "|}") == null);
-    try std.testing.expectEqualStrings("after", try flattened(a, blocks[1].spans));
     try std.testing.expect(!nested.fallbacks.malformed_table);
     // Preserve the existing ordinary-table recovery diagnostic; this control
     // makes no fresh malformed-wikitext parity claim against MediaWiki.
@@ -9693,18 +9860,25 @@ test "wiki cell attributes stop before a nested Finnish NavFrame table" {
             "|-\n! genitive\n| [[YYA:n]]\n| &ndash;\n|-\n|}\n" ++
             "</div>\n</div>\n|}\n",
     );
-    try std.testing.expectEqual(@as(usize, 1), blocks.len);
-    try std.testing.expectEqual(Kind.table, blocks[0].kind);
-    const table = blocks[0].table.?;
-    try std.testing.expectEqual(@as(usize, 1), table.rows.len);
-    try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
-    const text_value = try flattened(a, table.rows[0].cells[0].spans);
-    try std.testing.expect(std.mem.startsWith(u8, text_value, "Inflection of YYA\n"));
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "singular · plural") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "nominative · YYA · –") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "genitive · YYA:n · –") != null);
-    inline for (.{ "{|", "|-", "|}", "class=", "cellspacing=" }) |raw_control|
-        try std.testing.expect(std.mem.indexOf(u8, text_value, raw_control) == null);
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqualStrings("Inflection of YYA", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(Kind.table, blocks[1].kind);
+    const table = blocks[1].table.?;
+    try std.testing.expectEqual(@as(usize, 3), table.rows.len);
+    for (table.rows) |row| try std.testing.expectEqual(@as(usize, 3), row.cells.len);
+    for (table.rows[0].cells) |cell| try std.testing.expect(cell.header);
+    try std.testing.expect(table.rows[1].cells[0].header);
+    try std.testing.expect(!table.rows[1].cells[1].header);
+    try std.testing.expectEqualStrings("singular", try flattened(a, table.rows[0].cells[1].spans));
+    try std.testing.expectEqualStrings("nominative", try flattened(a, table.rows[1].cells[0].spans));
+    try std.testing.expectEqualStrings("YYA", try flattened(a, table.rows[1].cells[1].spans));
+    try std.testing.expectEqualStrings("YYA:n", try flattened(a, table.rows[2].cells[1].spans));
+    try std.testing.expectEqualStrings("–", try flattened(a, table.rows[2].cells[2].spans));
+    var yya_target = false;
+    for (table.rows[1].cells[1].spans) |span| {
+        if (std.mem.eql(u8, span.target, "YYA")) yya_target = true;
+    }
+    try std.testing.expect(yya_target);
     try std.testing.expect(!r.fallbacks.malformed_table);
 }
 
@@ -16060,4 +16234,158 @@ test "restored raw hiero preserves glyph styling without decoding authored separ
         const decoded = try blob.presentation_codec.decodeAlloc(a, payload, "hiero separators", .language, .{ .code = "egy", .heading = "Egyptian" });
         try Check.blocks(decoded.entry.sections[0].blocks, case.prefix, case.code, case.glyphs);
     }
+}
+
+test "single-cell layout grid admission preserves outer table semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const grid = "{|\n! head !! other\n|-\n| one || two\n|}\n";
+    const admitted = "|-\n|<div>before\n" ++ grid ++ "after</div>\n|}suffix";
+    const layout = (try r.singleCellLayoutTable(admitted, 0)).?;
+    try std.testing.expectEqualStrings("<div>before\n" ++ grid ++ "after</div>\n", layout.body);
+    try std.testing.expectEqualStrings("suffix", admitted[layout.end..]);
+    inline for (.{
+        "|+\ncaption\n|-\n|",
+        "|-\n!",
+        "|-\n| colspan=2 |",
+        "|-\n| colspan=0 |",
+        "|-\n| rowspan=0 |",
+        "|-\n| rowspan=2 |",
+        "|-\n| colspan=invalid |",
+        "fostered\n|-\n|",
+    }) |prefix| {
+        try std.testing.expect(try r.singleCellLayoutTable(prefix ++ "<div>\n" ++ grid ++ "</div>\n|}", 0) == null);
+    }
+    try std.testing.expect(try r.singleCellLayoutTable("|-\n|<div>\n" ++ grid ++ "</div>\n| second\n|}", 0) == null);
+    try std.testing.expect(try r.singleCellLayoutTable("|-\n|<div>\n" ++ grid ++ "</div>\n|-\n| second\n|}", 0) == null);
+    try std.testing.expect(try r.singleCellLayoutTable("|-\n|<div>\n" ++ grid ++ "</div> || second\n|}", 0) == null);
+    try std.testing.expect(try r.singleCellLayoutTable("|-\n|<div>\n" ++ grid ++ "</div>", 0) == null);
+    try std.testing.expect(try r.singleCellLayoutTable("|-\n|<nowiki>\n" ++ grid ++ "</nowiki>\n|}", 0) == null);
+    try std.testing.expect(try r.singleCellLayoutTable("|-\n|<!--\n" ++ grid ++ "-->\n|}", 0) == null);
+    try std.testing.expect(try r.singleCellLayoutTable("|-\n|<source>\n" ++ grid ++ "</source>\n|}", 0) == null);
+    inline for (.{ "</pre>", "" }) |closer| {
+        try std.testing.expect(try r.singleCellLayoutTable("|-\n|<pre>\n" ++ grid ++ closer ++ "\n|}", 0) == null);
+    }
+    try std.testing.expect(try r.singleCellLayoutTable("|-\n|<ref>\n" ++ grid ++ "</ref>\n|}", 0) == null);
+    inline for (.{ "code", "tt", "kbd", "samp" }) |tag_name| {
+        try std.testing.expect(try r.singleCellLayoutTable("|-\n|<" ++ tag_name ++ ">prefix\n" ++ grid ++ "</" ++ tag_name ++ ">\n|}", 0) == null);
+    }
+}
+
+test "single-cell layout grid renders effects once and restores navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    r.body_link_target = "Outer";
+    const blocks = try r.renderBody("{|\n|-\n|<div>before<ref>first note</ref>\n" ++
+        "{|\n|+ [[Caption|caption]]\n! colspan=2 | header\n|-\n| rowspan=2 | [[Cell|one]] || [[File:Grid.png|thumb|media]]\n" ++
+        "|-\n| two\n|}\nafter<ref>second note</ref></div>\n|}[[Suffix|suffix]]");
+    try std.testing.expectEqualStrings("Outer", r.body_link_target);
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    const table = blocks[1].table.?;
+    try std.testing.expectEqual(@as(usize, 3), table.rows.len);
+    try std.testing.expectEqual(@as(u16, 2), table.rows[0].cells[0].colspan);
+    try std.testing.expect(table.rows[0].cells[0].header);
+    try std.testing.expectEqual(@as(u16, 2), table.rows[1].cells[0].rowspan);
+    try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
+    const references = try r.finishReferences();
+    try std.testing.expectEqual(@as(usize, 2), references.len);
+    var cell_target = false;
+    for (table.rows[1].cells[0].spans) |span| {
+        try std.testing.expect(!std.mem.eql(u8, span.target, "Outer"));
+        if (std.mem.eql(u8, span.target, "Cell")) cell_target = true;
+    }
+    try std.testing.expect(cell_target);
+    var suffix_target = false;
+    for (blocks[3].spans) |span| {
+        if (std.mem.eql(u8, span.target, "Suffix")) suffix_target = true;
+    }
+    try std.testing.expect(suffix_target);
+}
+
+test "single-cell layout grid keeps a fresh cell quote domain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const input = "{|\n|-\n|<div>prefix\n* item\n{|\n! header\n|-\n| cell\n|}\n</div>\n|}";
+    var ordinary: Renderer = .{ .a = a, .context = .{} };
+    const standalone = try ordinary.renderBody(input);
+    var linked: Renderer = .{ .a = a, .context = .{} };
+    linked.body_link_target = "Outer";
+    const seed: QuoteSeed = .{
+        .state = .none,
+        .correction = null,
+        .line_end = input.len,
+        .boundaries = QuoteBoundaries.init(input),
+        .label_scope = true,
+    };
+    const inherited = try linked.renderBodySlice(input, false, false, null, seed);
+    try std.testing.expectEqual(standalone.len, inherited.len);
+    var lists: usize = 0;
+    for (standalone, inherited) |plain, scoped| {
+        try std.testing.expectEqual(plain.kind, scoped.kind);
+        try std.testing.expectEqualStrings(plain.list_path, scoped.list_path);
+        try std.testing.expectEqualStrings(try flattened(a, plain.spans), try flattened(a, scoped.spans));
+        if (scoped.kind == .list_item) {
+            lists += 1;
+            try std.testing.expectEqualStrings("item", try flattened(a, scoped.spans));
+            for (scoped.spans) |span| try std.testing.expect(!std.mem.eql(u8, span.target, "Outer"));
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), lists);
+    try std.testing.expectEqualStrings("Outer", linked.body_link_target);
+
+    // The same matched block-wrapper path must retain DOM language/direction
+    // when a layout cell becomes root blocks, including partial overrides.
+    var language: Renderer = .{ .a = a, .context = .{} };
+    const scoped = try language.renderBody(
+        "<div lang=fr dir=rtl>[[Inherited|parent]]\n" ++
+            "<div lang=de>[[Language|language]]</div>\n" ++
+            "<div dir=ltr>[[Direction|direction]]</div>\n" ++
+            "<div lang=\"\" dir=auto>[[Reset|reset]]</div>\n" ++
+            "[[Sibling|sibling]]</div>[[Outside|outside]]",
+    );
+    const expected = [_]struct { target: []const u8, language: []const u8, direction: []const u8 }{
+        .{ .target = "Inherited", .language = "fr", .direction = "rtl" },
+        .{ .target = "Language", .language = "de", .direction = "rtl" },
+        .{ .target = "Direction", .language = "fr", .direction = "ltr" },
+        .{ .target = "Reset", .language = "", .direction = "auto" },
+        .{ .target = "Sibling", .language = "fr", .direction = "rtl" },
+        .{ .target = "Outside", .language = "", .direction = "" },
+    };
+    var seen: [expected.len]usize = @splat(0);
+    for (scoped) |block| for (block.spans) |span| {
+        for (expected, 0..) |wanted, i| {
+            if (!std.mem.eql(u8, span.target, wanted.target)) continue;
+            seen[i] += 1;
+            try std.testing.expectEqualStrings(wanted.language, span.language);
+            try std.testing.expectEqualStrings(wanted.direction, span.direction);
+        }
+    };
+    for (seen) |count| try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expect(language.body_language_direction == null);
+
+    var translations: Renderer = .{ .a = a, .context = .{} };
+    translations.body_language_direction = .{ .language = "de", .direction = "ltr" };
+    const translated = try translations.renderBody(
+        "<table class=translations lang=fr dir=rtl>\n<tr><td>[[Translation|translation]]</td></tr>\n</table>[[TableSibling|sibling]]",
+    );
+    var translated_seen: [2]usize = @splat(0);
+    for (translated) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.target, "Translation")) {
+            translated_seen[0] += 1;
+            try std.testing.expectEqualStrings("fr", span.language);
+            try std.testing.expectEqualStrings("rtl", span.direction);
+        } else if (std.mem.eql(u8, span.target, "TableSibling")) {
+            translated_seen[1] += 1;
+            try std.testing.expectEqualStrings("de", span.language);
+            try std.testing.expectEqualStrings("ltr", span.direction);
+        }
+    };
+    for (translated_seen) |count| try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqualStrings("de", translations.body_language_direction.?.language);
+    try std.testing.expectEqualStrings("ltr", translations.body_language_direction.?.direction);
 }

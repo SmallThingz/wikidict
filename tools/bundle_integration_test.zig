@@ -2326,6 +2326,15 @@ const poem_phase_cases = [_]PoemPhaseCase{
     .{ .title = "NowikiReturnedWrapped", .body = "{{#invoke:PhaseNowiki|show|wrapped}}", .text = returned_nowiki_wrapped ++ "after", .breaks = 0, .no_poem = true },
     .{ .title = "NowikiReturnedExplicit", .body = "{{#invoke:PhaseNowiki|show|unstrip}}", .text = returned_nowiki_explicit ++ "after", .breaks = 0, .no_poem = true },
     .{ .title = "NowikiReturnedPre", .body = "{{#invoke:PhaseNowiki|show|pre}}", .text = returned_nowiki_pre ++ "after", .breaks = 0, .no_poem = true },
+    .{ .title = "LayoutGrid", .body = "{{LayoutGrid}}", .no_poem = true },
+    .{ .title = "LayoutHeader", .body = "{{LayoutHeader}}", .no_poem = true },
+    .{ .title = "LayoutColspan", .body = "{{LayoutColspan}}", .no_poem = true },
+    .{ .title = "LayoutRowspan", .body = "{{LayoutRowspan}}", .no_poem = true },
+    .{ .title = "LayoutZeroColspan", .body = "{{LayoutZeroColspan}}", .no_poem = true },
+    .{ .title = "LayoutZeroRowspan", .body = "{{LayoutZeroRowspan}}", .no_poem = true },
+    .{ .title = "LayoutMultiCell", .body = "{{LayoutMultiCell}}", .no_poem = true },
+    .{ .title = "LayoutMultiRow", .body = "{{LayoutMultiRow}}", .no_poem = true },
+    .{ .title = "LayoutProtected", .body = "{{LayoutProtected}}", .no_poem = true },
 };
 fn poemFixtureSource(a: std.mem.Allocator, body: []const u8) ![]const u8 {
     return std.fmt.allocPrint(a, "==English==\n{s}", .{body});
@@ -2457,6 +2466,116 @@ fn rejectPoemRecordMetadata(h: *Harness, parent: []const u8, name: []const u8, s
     };
     return error.InvalidPoemMetadataWasAccepted;
 }
+// The returned template markup passes through the real native worker, normal
+// page-slot publication and saved-reply replay already exercised by this probe.
+const layout_grid_cases = [_]struct { title: []const u8, prefix: []const u8, tail: []const u8 = "", protected: bool = false }{
+    .{ .title = "LayoutGrid", .prefix = "|-\n|" },
+    .{ .title = "LayoutHeader", .prefix = "|-\n!" },
+    .{ .title = "LayoutColspan", .prefix = "|-\n| colspan=2 |" },
+    .{ .title = "LayoutRowspan", .prefix = "|-\n| rowspan=2 |" },
+    .{ .title = "LayoutZeroColspan", .prefix = "|-\n| colspan=0 |" },
+    .{ .title = "LayoutZeroRowspan", .prefix = "|-\n| rowspan=0 |" },
+    .{ .title = "LayoutMultiCell", .prefix = "|-\n|", .tail = "\n| other-cell" },
+    .{ .title = "LayoutMultiRow", .prefix = "|-\n|", .tail = "\n|-\n| other-row" },
+    .{ .title = "LayoutProtected", .prefix = "|-\n|", .protected = true },
+};
+const native_layout_grid = "{| class=\"inflection-table\"\n|+ [[grid-caption|grid-caption]]\n|-\n! colspan=2 | [[header|header]]\n|-\n| rowspan=2 | [[left|left]]\n| [[one|one]]\n|-\n| [[two|two]]\n|}\n";
+fn layoutGridSource(a: std.mem.Allocator, case: @TypeOf(layout_grid_cases[0])) ![]const u8 {
+    const grid = if (case.protected) "<nowiki>" ++ native_layout_grid ++ "[[ghost]]</nowiki>\n" else native_layout_grid;
+    return std.fmt.allocPrint(a, "{{| width=\"40%\"\n{s}<div class=\"NavFrame\" lang=\"fr\" dir=\"rtl\">\n<div class=\"NavHead\">[[nav|nav-caption]]</div>\n[[before|before]]<ref>first-note [[ref-one]]</ref>[[File:Cat.jpg|thumb|image-caption]]\n<div class=\"NavContent\">\n{s}</div>\n[[after|after]]<ref>second-note [[ref-two]]</ref></div>{s}\n|}}[[suffix|suffix]]\n<references/>", .{ case.prefix, grid, case.tail });
+}
+fn layoutSpanText(h: *Harness, spans: []const encoder.presentation_types.Span) ![]const u8 {
+    var value: std.ArrayList(u8) = .empty;
+    for (spans) |span| {
+        try value.appendSlice(h.a, span.text);
+        try value.appendSlice(h.a, span.trail);
+    }
+    return value.toOwnedSlice(h.a);
+}
+fn checkLayoutGridRecord(h: *Harness, title: []const u8, value: encoder.presentation_types.Entry) !void {
+    if (!std.mem.startsWith(u8, title, "Layout")) return;
+    const positive = std.mem.eql(u8, title, "LayoutGrid");
+    const protected = std.mem.eql(u8, title, "LayoutProtected");
+    try h.require(value.sections.len == 1 and std.mem.eql(u8, value.sections[0].title, "English") and value.sections[0].level == 2, "native layout keeps its sole English owner and section level");
+    var table_value: ?encoder.presentation_types.Table = null;
+    var tables: usize = 0;
+    var body: std.ArrayList(u8) = .empty;
+    var ordinary: std.ArrayList(u8) = .empty;
+    var marks = [_]usize{ 0, 0, 0, 0, 0, 0 };
+    const targets = [_][]const u8{ "nav", "before", "after", "suffix", "#reference-1", "#reference-2" };
+    const Observe = struct {
+        fn spans(harness: *Harness, items: []const encoder.presentation_types.Span, all: *std.ArrayList(u8), counts: *[6]usize, wanted: []const []const u8) !void {
+            for (items) |span| {
+                try harness.require(!std.mem.eql(u8, span.target, "ghost"), "protected fake grid never invents a ghost action");
+                for (wanted, 0..) |target, i| if (std.mem.eql(u8, span.target, target)) {
+                    counts[i] += 1;
+                };
+                if (std.mem.eql(u8, span.target, "before") or std.mem.eql(u8, span.target, "after") or std.mem.eql(u8, span.target, "nav"))
+                    try harness.require(std.mem.eql(u8, span.language, "fr") and std.mem.eql(u8, span.direction, "rtl"), "layout body actions retain authored inherited language/direction");
+                if (std.mem.eql(u8, span.target, "suffix"))
+                    try harness.require(span.language.len == 0 and span.direction.len == 0, "same-line close suffix restores outer language/direction");
+                try all.appendSlice(harness.a, span.text);
+                try all.appendSlice(harness.a, span.trail);
+            }
+        }
+    };
+    for (value.sections[0].blocks) |block| {
+        try Observe.spans(h, block.spans, &body, &marks, &targets);
+        try ordinary.appendSlice(h.a, try layoutSpanText(h, block.spans));
+        if (block.table) |table| {
+            tables += 1;
+            table_value = table;
+            try Observe.spans(h, table.caption, &body, &marks, &targets);
+            for (table.rows) |row| for (row.cells) |cell| try Observe.spans(h, cell.spans, &body, &marks, &targets);
+        }
+    }
+    try h.require(tables == 1, "native wrapper publishes one actual grid or one retained ordinary outer table");
+    for (marks) |count| try h.require(count == 1, "native layout caption/prefix/suffix and ordered reference actions occur exactly once");
+    for ([_][]const u8{ "nav-caption", "before", "after", "suffix", "image-caption" }) |word|
+        try h.require(std.mem.count(u8, body.items, word) == 1, "native layout visible text is not duplicated during shape admission");
+    try h.require(value.references.len == 2 and value.references[0].number == 1 and value.references[1].number == 2, "native layout preserves exactly two distinct unnamed reference identities");
+    for (value.references, 0..) |reference, i| {
+        const expected = if (i == 0) "first-note ref-one" else "second-note ref-two";
+        const action = if (i == 0) "ref-one" else "ref-two";
+        try h.require(reference.name.len == 0 and std.mem.eql(u8, try layoutSpanText(h, reference.spans), expected), "native layout reference text and order survive DPR2 exactly once");
+        var found: usize = 0;
+        for (reference.spans) |span| if (std.mem.eql(u8, span.target, action)) {
+            found += 1;
+        };
+        try h.require(found == 1, "native layout reference action remains bound to its own note");
+    }
+    try h.require(value.media.len == 1 and std.mem.eql(u8, value.media[0].file, "Cat.jpg") and std.mem.eql(u8, value.media[0].caption, "image-caption"), "native layout media catalog is registered once with its actual caption");
+    const table = table_value.?;
+    if (positive) {
+        try h.require(table.rows.len == 3 and table.rows[0].cells.len == 1 and table.rows[1].cells.len == 2 and table.rows[2].cells.len == 1, "native inner grid retains exact header/rowspan row shape");
+        const header = table.rows[0].cells[0];
+        const left = table.rows[1].cells[0];
+        try h.require(header.header and header.colspan == 2 and header.rowspan == 1 and !left.header and left.rowspan == 2 and left.colspan == 1, "native grid preserves numeric header/colspan/rowspan geometry");
+        try h.require(std.mem.eql(u8, try layoutSpanText(h, table.caption), "grid-caption") and std.mem.eql(u8, try layoutSpanText(h, header.spans), "header") and std.mem.eql(u8, try layoutSpanText(h, left.spans), "left") and std.mem.eql(u8, try layoutSpanText(h, table.rows[1].cells[1].spans), "one") and std.mem.eql(u8, try layoutSpanText(h, table.rows[2].cells[0].spans), "two"), "native inner caption and individual cell content remain separate");
+        for ([_][]const encoder.presentation_types.Span{ table.caption, header.spans, left.spans, table.rows[1].cells[1].spans, table.rows[2].cells[0].spans }, [_][]const u8{ "grid-caption", "header", "left", "one", "two" }) |spans, target| {
+            var found: usize = 0;
+            for (spans) |span| if (std.mem.eql(u8, span.target, target)) {
+                found += 1;
+            };
+            try h.require(found == 1, "native inner cells retain their authored independent targets");
+        }
+        try h.require(std.mem.indexOf(u8, ordinary.items, "nav-caption") != null and std.mem.indexOf(u8, ordinary.items, "before") != null and std.mem.indexOf(u8, ordinary.items, "after") != null, "layout heading and prefix/suffix are root blocks beside the grid");
+    } else {
+        try h.require(table.caption.len == 0, "ineligible wrapper retains its normal outer table caption boundary");
+        if (std.mem.eql(u8, title, "LayoutMultiRow")) {
+            try h.require(table.rows.len == 2, "multiple outer rows are not discarded by grid promotion");
+        } else {
+            try h.require(table.rows.len == 1, "ineligible one-row outer wrapper is not replaced by its nested grid");
+        }
+        try h.require(table.rows[0].cells.len == (if (std.mem.eql(u8, title, "LayoutMultiCell")) @as(usize, 2) else 1), "multiple outer cells remain distinct");
+        const cell = table.rows[0].cells[0];
+        try h.require(cell.header == std.mem.eql(u8, title, "LayoutHeader"), "outer header semantics remain unchanged");
+        if (std.mem.eql(u8, title, "LayoutColspan")) try h.require(cell.colspan == 2, "outer colspan is preserved on the normal path");
+        if (std.mem.eql(u8, title, "LayoutRowspan")) try h.require(cell.rowspan == 2, "outer rowspan is preserved on the normal path");
+        if (protected) try h.require(std.mem.indexOf(u8, body.items, "[[ghost]]") != null and std.mem.indexOf(u8, body.items, "{|") != null, "protected fake-grid syntax remains literal in its original outer cell");
+    }
+}
+
 fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
     const protocol = @import("bundle_protocol");
     const root = try std.fs.path.join(h.a, &.{ dir, "poem-phase-dictionary" });
@@ -2478,6 +2597,7 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
     });
     var pages: std.ArrayList(Page) = .empty;
     for (poem_phase_cases, 0..) |case, i| try pages.append(h.a, .{ .title = case.title, .ns = 0, .id = @intCast(i + 1), .body = try poemFixtureSource(h.a, case.body) });
+    for (layout_grid_cases, 0..) |case, i| try pages.append(h.a, .{ .title = try std.fmt.allocPrint(h.a, "Template:{s}", .{case.title}), .ns = 10, .id = @intCast(110 + i), .body = try layoutGridSource(h.a, case) });
     try pages.appendSlice(h.a, &.{
         .{ .title = "Module:PhaseNowiki", .ns = 828, .id = 109, .body = returned_nowiki_module },
         .{ .title = "Template:PhaseLines", .ns = 10, .id = 101, .body = "A\n[[cat]]" },
@@ -2550,7 +2670,7 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
                     first_metadata = output.poem_metadata;
                 }
             } else {
-                try h.require((std.mem.eql(u8, case.title, "PoemPlainControl") or std.mem.eql(u8, case.title, "NowikiReturnedExplicit")) and saved[4] == 0 and output.poem_metadata == null, "ordinary no-Poem expansion retains old success0 bytes");
+                try h.require((std.mem.eql(u8, case.title, "PoemPlainControl") or std.mem.eql(u8, case.title, "NowikiReturnedExplicit") or std.mem.startsWith(u8, case.title, "Layout")) and saved[4] == 0 and output.poem_metadata == null, "ordinary no-Poem expansion retains old success0 bytes");
             }
             try replay.addExpandedPageWithReasonsAndPoem(h.a, .{ .id = 0, .kind = .language }, case.title, output.output, raw, if (output.display_title.len == 0) null else output.display_title, &.{}, output.poem_metadata);
         }
@@ -2569,6 +2689,7 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
         try h.require(std.mem.eql(u8, normal.payload, saved.payload), "saved success record and normal page-slot path publish identical DPR2");
         const seen = try PoemObserved.entry(h, normal.stored.entry);
         try checkReturnedNowikiRecord(h, case.title, normal.stored.entry);
+        try checkLayoutGridRecord(h, case.title, normal.stored.entry);
         if (case.breaks) |count| try h.require(seen.breaks == count, case.title);
         if (case.text) |expected| try h.require(std.mem.eql(u8, expected, seen.text.items), case.title);
         if (case.indent2) |wanted| try h.require((seen.indent2 != 0) == wanted, case.title);
