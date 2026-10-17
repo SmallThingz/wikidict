@@ -2919,8 +2919,12 @@ private slots:
             auto *next = buttonWithText(games->currentWidget(), QStringLiteral("Next"));
             QVERIFY(input && next);
             QVERIFY(input->isEnabled());
+            auto *inputAccessible = QAccessible::queryAccessibleInterface(input);
+            QVERIFY(inputAccessible);
+            QCOMPARE(inputAccessible->text(QAccessible::Name), QStringLiteral("Unscramble answer"));
             QTest::keyClicks(input, "dog");
             QCOMPARE(input->text(), QStringLiteral("dog"));
+            QCOMPARE(inputAccessible->text(QAccessible::Name), QStringLiteral("Unscramble answer"));
             QTest::keyClick(input, Qt::Key_Return);
             QVERIFY(dialog->isVisible());
             QCOMPARE(window.learning_.answerCount(), 1);

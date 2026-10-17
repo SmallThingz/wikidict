@@ -421,8 +421,10 @@ private slots:
         Network network;
         MediaPanel panel(nullptr, &network);
         panel.setEntry(entry());
+        // Voice discovery and playback each start this full test ELF under loader tracing.
+        // The correct finished state took 8.25 s in the single-CPU qualification.
         panel.sayWord(QStringLiteral("-v de <literal>"), QStringLiteral("en"));
-        QTRY_COMPARE(panel.findChild<QLabel *>(QStringLiteral("mediaSpeechStatus"))->text(), QStringLiteral("Finished."));
+        QTRY_COMPARE_WITH_TIMEOUT(panel.findChild<QLabel *>(QStringLiteral("mediaSpeechStatus"))->text(), QStringLiteral("Finished."), 15000);
         QFile result(capture);
         QVERIFY(result.open(QIODevice::ReadOnly));
         QCOMPARE(result.readAll(), QByteArrayLiteral("en-gb\n-v de <literal>\n"));
@@ -442,7 +444,7 @@ private slots:
         const auto phonemes = panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation"));
         QCOMPARE(phonemes.size(), 1);
         QTest::mouseClick(phonemes.first(), Qt::LeftButton);
-        QTRY_COMPARE(panel.findChild<QLabel *>(QStringLiteral("mediaSpeechStatus"))->text(), QStringLiteral("Finished."));
+        QTRY_COMPARE_WITH_TIMEOUT(panel.findChild<QLabel *>(QStringLiteral("mediaSpeechStatus"))->text(), QStringLiteral("Finished."), 15000);
         QVERIFY(result.open(QIODevice::ReadOnly));
         QCOMPARE(result.readAll(), QByteArrayLiteral("en-gb\n<speak><phoneme alphabet=\"espeak\" ph=\"kat\"/></speak>\n"));
         result.close();
@@ -451,7 +453,7 @@ private slots:
         panel.setEntry(ipaEntry);
         QVERIFY(panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation")).isEmpty());
         panel.sayWord(QStringLiteral("hold"), QStringLiteral("en"));
-        QTRY_VERIFY(result.exists());
+        QTRY_VERIFY_WITH_TIMEOUT(result.exists(), 15000);
         panel.stopPlayback();
         QCOMPARE(panel.findChild<QPushButton *>(QStringLiteral("mediaListen"))->text(), QStringLiteral("Listen offline"));
         QCOMPARE(network.urls.size(), 0);

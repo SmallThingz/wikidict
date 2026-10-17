@@ -1715,6 +1715,7 @@ void MainWindow::showLearningDialog(int tab) {
     auto *scrambleClue = new QLabel(scramblePage); scrambleClue->setWordWrap(true);
     scrambleClue->setTextFormat(Qt::PlainText);
     auto *scrambleInput = new QLineEdit(scramblePage); scrambleInput->setPlaceholderText(QStringLiteral("Type the word"));
+    scrambleInput->setAccessibleName(QStringLiteral("Unscramble answer"));
     auto *scrambleResult = new QLabel(scramblePage);
     scrambleResult->setTextFormat(Qt::PlainText);
     auto *scrambleCheck = new QPushButton(QStringLiteral("Check"), scramblePage);
@@ -1814,7 +1815,7 @@ void MainWindow::showLearningDialog(int tab) {
     connect(quizLength, &QSpinBox::valueChanged, &dialog, [this](int value) { learning_.setQuizLength(value); });
     auto refreshPractice = [&] {
         pool = learningPool();
-        poolStatus->setText(QStringLiteral("%1 words ready · %2").arg(pool.size()).arg(randomPool->currentText()));
+        poolStatus->setText((pool.size() == 1 ? QStringLiteral("%1 word ready · %2") : QStringLiteral("%1 words ready · %2")).arg(pool.size()).arg(randomPool->currentText()));
         quizRight = 0;
         quizTotal = 0;
         populateQuiz();
