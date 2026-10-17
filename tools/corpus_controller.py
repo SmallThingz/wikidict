@@ -451,9 +451,138 @@ def _review_evidence(values):
                 descriptor(reference['path']) == reference, 'Content review evidence changed')
 
 
-def _review_fallbacks(path, expected_count, namespace_counts=None):
+def _review_source_limitations(review, accepted, complete):
+    """Authenticate explicit source limitations; diagnostic pages cannot authorize a final output."""
+    references = review.get('source_authored_unresolved_declarations', [])
+    require(isinstance(references, list) and len(references) <= 4096, 'Invalid source limitation inventory')
+    result = {}
+    for reference in references:
+        _review_evidence([reference]); item = read_ref(reference)
+        require(item.get('schema') == 'wikidict.source-authored-unresolved-declaration.v1' and
+                item.get('edition') == complete['edition'] and item.get('date') == complete['date'] and
+                item.get('complete') == accepted['complete'] and item.get('build_inputs') == complete['build_inputs'],
+                'Source limitation belongs to another accepted publication')
+        title = item.get('title'); label = item.get('label')
+        require(type(item.get('namespace')) is int and item['namespace'] == 0 and isinstance(title, str) and title and
+                isinstance(label, str) and label.strip() == label and label and
+                not any(char in label for char in '{}[]<>|=\r\n') and
+                type(item.get('page_id')) is int and item['page_id'] > 0 and
+                type(item.get('revision_id')) is int and item['revision_id'] > 0,
+                'Source limitation page/declaration identity missing')
+        key = (0, title)
+        require(key not in result, 'Duplicate source limitation page')
+        evidence = item.get('source_evidence'); _review_evidence(evidence)
+        for name in ('raw_source', 'producer_row', 'registry', 'declaration_convention'):
+            require(item.get(name) in evidence, 'Source limitation authority omitted from source evidence')
+        producer = read_ref(item['producer_row'])
+        require(all(producer.get(k) == item[k] for k in ('namespace', 'title', 'page_id', 'revision_id')) and
+                producer.get('build_inputs') == complete['build_inputs'] and
+                producer.get('raw_source') == item['raw_source'] and
+                producer.get('source_input') in complete['build_inputs']['files'], 'Source limitation producer identity differs')
+        raw = Path(item['raw_source']['path']).read_bytes(); declaration = item.get('declaration', {})
+        start, end = declaration.get('start'), declaration.get('end')
+        require(type(start) is int and type(end) is int and 0 <= start < end <= len(raw) and
+                raw[start:end].decode('utf-8') == declaration.get('text') and
+                declaration['text'] == '{{اللغة|' + label + '}}', 'Exact authored declaration differs')
+        line_start = raw.rfind(b'\n', 0, start) + 1
+        line_end = raw.find(b'\n', end)
+        if line_end < 0: line_end = len(raw)
+        before = raw[line_start:start].strip(); after = raw[end:line_end].strip()
+        require(2 <= len(before) <= 6 and before == b'=' * len(before) and after == before,
+                'Source limitation declaration is not an actual language heading')
+        registry_ref = item['registry']
+        require(registry_ref['sha256'] == complete['build_inputs']['auxiliary_snapshot_sha256']['language-registry'],
+                'Source limitation resolver registry differs from actual build')
+        registry = Path(registry_ref['path']).read_text(encoding='utf-8')
+        require(registry.startswith('# wikidict-language-registry-v2\n') and
+                '# content-language\tar\n' in registry, 'Unsupported source declaration convention')
+        # Extra conservative collision veto only; this is not an implementation of the normal resolver.
+        aliases = set()
+        for line in registry.splitlines():
+            if not line: continue
+            if line.startswith('# local-alias\t'): aliases.update(line.split('\t')[1:])
+            elif not line.startswith('#'): aliases.update(line.split('\t'))
+        normalized = lambda value: value.removeprefix('ال').casefold()
+        require(not any(normalized(label) == normalized(alias) for alias in aliases),
+                'Known language alias cannot be treated as a source limitation')
+        convention = read_ref(item['declaration_convention'])
+        require(convention.get('label') == label and convention.get('canonical_language') is None and
+                convention.get('source_authored_unsupported_declaration') is True and
+                convention.get('known_language_alias_omission') is False,
+                'Unsupported source declaration review missing')
+        _review_evidence(convention.get('evidence'))
+        require(convention.get('actual_producer_classification_observed') is True and
+                convention.get('normal_registry_source_reviewed') is True and convention.get('no_new_resolver_query') is True and
+                convention.get('source_snapshot') in convention['evidence'] and
+                convention.get('resolver_source') in convention['evidence'], 'Normal registry/source review authority missing')
+        source_snapshot = read_ref(convention['source_snapshot'])
+        require(dict(head=source_snapshot['head'], fingerprint=source_snapshot['fingerprint']) == accepted['source'] and
+                source_snapshot['fingerprint'] == complete['build_inputs']['source'] and
+                source_snapshot['files']['tools/language_registry.zig'] == convention['resolver_source'],
+                'Normal resolver source differs from the accepted producer')
+        output_evidence = item.get('output_evidence'); _review_evidence(output_evidence)
+        require(item.get('output_review') in output_evidence, 'Source limitation output review missing')
+        output_review = read_ref(item['output_review'])
+        require(output_review.get('schema') == 'wikidict.manual-page-review.v1' and
+                output_review.get('verdict') == 'pass-with-documented-source-defect' and
+                output_review.get('complete') == accepted['complete'] and
+                output_review.get('raw_source') == item['raw_source'] and
+                output_review.get('producer_row') == item['producer_row'] and
+                output_review.get('label') == label and
+                all(output_review.get(k) is True for k in ('all_positive_owners_accounted',
+                    'whole_page_payload_conserved', 'known_owners_preserved')),
+                'Source limitation whole-page/owner conservation review differs')
+        inventory_ref = output_review.get('language_inventory')
+        require(inventory_ref in output_evidence, 'Source limitation owner inventory evidence missing')
+        inventory_command_ref = output_review.get('inventory_command')
+        require(inventory_command_ref in output_evidence, 'Normal inventory command evidence missing')
+        inventory_command = read_ref(inventory_command_ref); inventory_argv = inventory_command.get('argv', [])
+        require(inventory_command.get('exit_code') == 0 and inventory_command.get('error') is None and
+                inventory_command.get('remaining_owned_processes') == [] and inventory_command.get('stdout') == inventory_ref and
+                inventory_argv[1:3] == ['languages', title] and '--root' in inventory_argv and
+                inventory_argv[inventory_argv.index('--root') + 1] == accepted['root'],
+                'Owner inventory is not from the selected accepted payload')
+        inventory = read_ref(inventory_ref)
+        require(inventory.get('schema') == 'dict.languages.v1' and inventory.get('query') == title,
+                'Source limitation language inventory differs')
+        owners = {row['heading']: row['records'] for row in inventory['accounting'] if row['records'] > 0}
+        require('Unclassified' in owners and len(owners) == sum(row['records'] > 0 for row in inventory['accounting']),
+                'Source limitation owner inventory is ambiguous')
+        exports = output_review.get('owner_exports')
+        require(isinstance(exports, list) and len(exports) == len(owners) and
+                {row.get('owner') for row in exports} == set(owners), 'Source limitation owner exports incomplete')
+        unclassified = None
+        for export in exports:
+            require(export['lookup'] in output_evidence and export['command'] in output_evidence,
+                    'Source limitation owner export evidence missing')
+            command = read_ref(export['command']); argv = command.get('argv', [])
+            require(command.get('exit_code') == 0 and command.get('error') is None and
+                    command.get('remaining_owned_processes') == [] and command.get('stdout') == export['lookup'] and
+                    '--root' in argv and argv[argv.index('--root') + 1] == accepted['root'] and
+                    '--language' in argv and argv[argv.index('--language') + 1] == export['owner'] and
+                    len(argv) >= 3 and argv[1:3] == ['lookup', title],
+                    'Source limitation output is not from the selected published payload')
+            body = read_ref(export['lookup'])
+            require(body.get('schema') == 'dict.results.v1' and body.get('query') == title and
+                    body.get('language') == export['owner'] and body.get('operation') == 'lookup' and
+                    body.get('offset') == 0 and body.get('record_count') == body.get('total_matches') == owners[export['owner']] and
+                    body.get('has_more') is False and
+                    len(body.get('entries', [])) == owners[export['owner']] and
+                    all(entry.get('title') == title and entry.get('language') == export['owner'] for entry in body['entries']),
+                    'Source limitation output owner/record completeness differs')
+            if export['owner'] == 'Unclassified': unclassified = body
+        require(any(section.get('title') == label for entry in unclassified['entries'] for section in entry.get('sections', [])),
+                'Original unsupported declaration label was not retained')
+        require(output_review.get('fallback') == dict(namespace=0, title=title, reasons=['unresolved_language_heading']),
+                'Source limitation fallback disposition differs')
+        result[key] = dict(namespace=0, title=title, reasons=['unresolved_language_heading'])
+    return result
+
+
+def _review_fallbacks(path, expected_count, namespace_counts=None, source_limitations=None):
     # Stream every row, including errors after any possible sample prefix.
-    before = path.stat(); count = 0; reason_counts = {}; namespaces = {}
+    before = path.stat(); count = 0; reason_counts = {}; namespaces = {}; used = set()
+    source_limitations = source_limitations or {}
     with path.open('rb') as stream:
         while True:
             raw = stream.readline(REVIEW_METADATA_LIMIT + 1)
@@ -465,8 +594,13 @@ def _review_fallbacks(path, expected_count, namespace_counts=None):
             reasons = row.get('reasons')
             require(isinstance(reasons, list) and reasons and
                     all(isinstance(reason, str) and reason for reason in reasons) and len(set(reasons)) == len(reasons), 'Invalid fallback review reasons')
+            key = (row['namespace'], row['title'])
+            source_limited = key in source_limitations
+            if source_limited:
+                require(key not in used and row == source_limitations[key], 'Source limitation fallback row differs or repeats')
+                used.add(key)
             for reason in reasons:
-                require(reason.split(':', 1)[0] not in
+                require((source_limited and reason == 'unresolved_language_heading') or reason.split(':', 1)[0] not in
                         ('expansion_error', 'missing_language_heading', 'unresolved_language_heading',
                          'rendered_lua_error', 'rendered_extension_error', 'render_limit',
                          'template_presentation', 'missing_template'),
@@ -478,6 +612,7 @@ def _review_fallbacks(path, expected_count, namespace_counts=None):
     require(all(getattr(before, field) == getattr(after, field) == getattr(path.stat(), field)
                 for field in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')),
             'Fallback review report changed while streaming')
+    require(set(source_limitations) == used, 'Unused source limitation disposition')
     require(count == expected_count, 'Fallback review count differs from actual completion')
     if namespace_counts is not None: namespace_counts.update(namespaces)
     return reason_counts
@@ -539,8 +674,9 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
         require(type(fallback_count) is int and fallback_count >= 0 and
                 type(review.get('fallback_pages')) is int and review['fallback_pages'] == fallback_count,
                 'Explicit fallback disposition count differs')
+        source_limitations = _review_source_limitations(review, accepted, complete)
         fallback_namespaces = {}
-        reasons = _review_fallbacks(root / 'fallback-pages.jsonl', fallback_count, fallback_namespaces)
+        reasons = _review_fallbacks(root / 'fallback-pages.jsonl', fallback_count, fallback_namespaces, source_limitations)
         # Reuse the producer's exact bounded coverage/conservation validators.
         import build_wiktionaries as builder
         coverage = builder.validate_page_coverage(root, require_total=True)
@@ -578,7 +714,12 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
                 content.get('native_output_checked') is True and
                 content.get('build_inputs') == accepted['build_inputs'] and
                 content.get('input_pages') == complete['input_pages'] and
-                content.get('no_unresolved_language_declarations') is True and
+                ((not source_limitations and content.get('no_unresolved_language_declarations') is True) or
+                 (bool(source_limitations) and content.get('no_unresolved_language_declarations') is False and
+                  content.get('source_unresolved_declarations_present') is True and
+                  content.get('product_unresolved_language_errors') is False and
+                  type(content.get('source_limitation_count')) is int and
+                  content['source_limitation_count'] == len(source_limitations))) and
                 content.get('no_build_render_errors') is True and
                 isinstance(content.get('explanation'), str) and content['explanation'].strip(),
                 'Actual source intent and native output content review required')

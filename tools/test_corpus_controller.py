@@ -1168,5 +1168,131 @@ class ContentReviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.check(data)
 
 
+class SourceLimitationFixture:
+    def __init__(self,top,*,label='رموز',inline=False):
+        self.top=top;self.serial=0;self.label=label
+        self.data=content_review_fixture(top,controller.PILOT,fallback_reasons=['unresolved_language_heading'],unclassified=True)
+        self.source,self.rows,self.review=self.data;self.row=self.rows[0];self.accepted=self.row['accepted'];self.edition=self.row['edition']
+        self.root=Path(self.accepted['root']);self.er=self.review['editions'][0]
+        declaration='{{اللغة|'+label+'}}';self.raw=(('prefix '+declaration+' suffix') if inline else ('== '+declaration+' =='))+'\n# retained symbol sense\n== {{اللغة|إنجليزية}} ==\n# retained known sense\n'
+        self.declaration=dict(start=self.raw.encode().index(declaration.encode()),text=declaration)
+        self.declaration['end']=self.declaration['start']+len(declaration.encode())
+        self.registry='# wikidict-language-registry-v2\n# content-language\tar\nen\tEnglish\ten\nzxx\tNo linguistic content\tzxx\n'
+        self.producer_changes={};self.item_changes={};self.output_changes={};self.convention_changes={}
+        self.lookup_changes={};self.command_changes={};self.inventory_changes={};self.inventory_command_changes={}
+    def rawref(self,name,data):
+        self.serial+=1;p=self.top/('evidence-%d-%s'%(self.serial,name));p.write_bytes(data);return controller.descriptor(p)
+    def save(self,name,value):return self.rawref(name,json.dumps(value,ensure_ascii=False,sort_keys=True).encode())
+    def seal(self):
+        raw=self.rawref('source.wikitext',self.raw.encode());registry=self.rawref('registry.tsv',self.registry.encode())
+        complete=controller.read_ref(self.accepted['complete']);inputs=copy.deepcopy(complete['build_inputs']);inputs['auxiliary_snapshot_sha256']={'language-registry':registry['sha256']}
+        complete['build_inputs']=inputs
+        # Preserve ordinary authenticated completion/snapshot joins after adding the selected registry.
+        for d in (self.accepted['complete'],self.accepted['complete_snapshot']):write_json(Path(d['path']),complete)
+        self.accepted['complete']=controller.descriptor(Path(self.accepted['complete']['path']));self.accepted['complete_snapshot']=controller.descriptor(Path(self.accepted['complete_snapshot']['path']));self.accepted['build_inputs']=inputs
+        self.er['complete']=self.accepted['complete'];self.er['content_review']['complete_sha256']=self.accepted['complete']['sha256'];self.er['content_review']['build_inputs']=inputs
+        self.review['accepted_completions'][self.edition]=self.accepted['complete']['sha256']
+        resolver=self.rawref('resolver.zig',b'// synthetic captured resolver source; never executed\n')
+        snapshot=self.save('snapshot.json',dict(self.source,files={'tools/language_registry.zig':resolver}))
+        docs=self.rawref('docs.txt','Synthetic review fixture: declaration convention is explicitly documented.'.encode())
+        convention=dict(label=self.label,canonical_language=None,source_authored_unsupported_declaration=True,known_language_alias_omission=False,
+            actual_producer_classification_observed=True,normal_registry_source_reviewed=True,no_new_resolver_query=True,
+            source_snapshot=snapshot,resolver_source=resolver,evidence=[snapshot,resolver,docs])
+        convention.update(self.convention_changes);convention=self.save('convention.json',convention)
+        producer=dict(namespace=0,title='entry',page_id=51,revision_id=73,build_inputs=inputs,raw_source=raw,source_input=inputs['files'][0]);producer.update(self.producer_changes)
+        producer=self.save('producer.json',producer)
+        accounting=[dict(heading='Unclassified',records=1,code='',classification='unverified'),dict(heading='English',records=1,code='en',classification='language')]
+        inventory=dict(schema='dict.languages.v1',scope='entry',query='entry',accounting=accounting,languages=['Unclassified','English'],heading_count=2,language_count=1,translingual_count=0,unverified_count=1)
+        inventory.update(self.inventory_changes);inventory=self.save('inventory.json',inventory)
+        invcmd=dict(argv=['/synthetic/reader','languages','entry','--root',self.accepted['root']],exit_code=0,error=None,remaining_owned_processes=[],stdout=inventory);invcmd.update(self.inventory_command_changes)
+        invcmd=self.save('inventory-command.json',invcmd);exports=[];out_evidence=[inventory,invcmd]
+        for owner in ('Unclassified','English'):
+            body=dict(schema='dict.results.v1',operation='lookup',kind='language',query='entry',language=owner,offset=0,record_count=1,total_matches=1,has_more=False,
+                entries=[dict(title='entry',language=owner,language_code='' if owner=='Unclassified' else 'en',sections=[dict(level=2,title=self.label if owner=='Unclassified' else 'English',blocks=[dict(kind='definition',spans=[dict(kind='text',text='retained symbol sense' if owner=='Unclassified' else 'retained known sense')])])])])
+            body.update(self.lookup_changes.get(owner,{}));lookup=self.save('lookup.json',body)
+            command=dict(argv=['/synthetic/reader','lookup','entry','--root',self.accepted['root'],'--language',owner,'--format','json','--limit','1000'],exit_code=0,error=None,remaining_owned_processes=[],stdout=lookup)
+            command.update(self.command_changes.get(owner,{}));command=self.save('command.json',command)
+            exports.append(dict(owner=owner,lookup=lookup,command=command));out_evidence.extend([lookup,command])
+        output=dict(schema='wikidict.manual-page-review.v1',verdict='pass-with-documented-source-defect',complete=self.accepted['complete'],raw_source=raw,producer_row=producer,label=self.label,
+            all_positive_owners_accounted=True,whole_page_payload_conserved=True,known_owners_preserved=True,language_inventory=inventory,inventory_command=invcmd,
+            owner_exports=exports,fallback=dict(namespace=0,title='entry',reasons=['unresolved_language_heading']))
+        output.update(self.output_changes);output=self.save('output-review.json',output);out_evidence.append(output)
+        item=dict(schema='wikidict.source-authored-unresolved-declaration.v1',edition=self.edition,date=complete['date'],complete=self.accepted['complete'],build_inputs=inputs,
+            namespace=0,title='entry',page_id=51,revision_id=73,label=self.label,raw_source=raw,producer_row=producer,registry=registry,declaration_convention=convention,declaration=self.declaration,
+            source_evidence=[raw,producer,registry,convention],output_review=output,output_evidence=out_evidence)
+        item.update(self.item_changes);self.item=self.save('limitation.json',item);self.er['source_authored_unresolved_declarations']=[self.item]
+        self.er['content_review'].update(no_unresolved_language_declarations=False,source_unresolved_declarations_present=True,product_unresolved_language_errors=False,source_limitation_count=1)
+        self.er['dispositions']['unclassified']['explanation']='Exact unsupported source label and both owner payloads retained; source declaration remains unresolved.'
+        return self
+    def check(self):return controller.validate_content_review(self.review,self.source,self.rows,controller.PILOT,scope='pilot')
+class SourceLimitationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.top=Path(self.tmp.name).resolve();self.count=0
+    def fixture(self,**kw):
+        self.count+=1;p=self.top/str(self.count);p.mkdir();return SourceLimitationFixture(p,**kw)
+    def test_clean_default_and_unproved_unresolved_remain_strict(self):
+        source,rows,value=content_review_fixture(self.top/'legacy',controller.PILOT)
+        controller.validate_content_review(value,source,rows,controller.PILOT,scope='pilot')
+        f=self.fixture().seal();del f.er['source_authored_unresolved_declarations']
+        with self.assertRaises(ValueError):f.check()
+    def test_exact_evidence_passes_without_clearing_source_declaration_or_fallback(self):
+        f=self.fixture().seal();before=(Path(f.accepted['reports']['fallback-pages.jsonl']['path']).read_bytes(),copy.deepcopy(f.review))
+        self.assertIs(f.check(),f.review);self.assertEqual(before,(Path(f.accepted['reports']['fallback-pages.jsonl']['path']).read_bytes(),f.review))
+        self.assertFalse(f.er['content_review']['no_unresolved_language_declarations'])
+    def test_other_page_revision_input_or_completion_cannot_borrow_proof(self):
+        for changes in (dict(revision_id=74),dict(page_id=52),dict(source_input=['other']),dict(title='elsewhere')):
+            f=self.fixture();f.producer_changes=changes;f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.item_changes={'complete':dict(path='/diagnostic/complete.json',bytes=1,sha256='0'*64)};f.seal()
+        with self.assertRaises(ValueError):f.check()
+    def test_exact_byte_span_and_actual_heading_required(self):
+        f=self.fixture(inline=True).seal()
+        with self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.declaration['start']+=1;f.seal()
+        with self.assertRaises(ValueError):f.check()
+    def test_known_alias_or_unreviewed_normal_resolver_cannot_be_source_exception(self):
+        f=self.fixture(label='English').seal()
+        with self.assertRaises(ValueError):f.check()
+        for key in ('normal_registry_source_reviewed','actual_producer_classification_observed','no_new_resolver_query'):
+            f=self.fixture();f.convention_changes={key:False};f.seal()
+            with self.subTest(key=key),self.assertRaises(ValueError):f.check()
+    def test_false_clear_or_product_error_claims_rejected(self):
+        for key,val in [('no_unresolved_language_declarations',True),('source_unresolved_declarations_present',False),('product_unresolved_language_errors',True),('source_limitation_count',0)]:
+            f=self.fixture().seal();f.er['content_review'][key]=val
+            with self.subTest(key=key),self.assertRaises(ValueError):f.check()
+    def test_known_owner_omission_cross_owner_or_lost_label_rejected(self):
+        for changes in (dict(known_owners_preserved=False),dict(whole_page_payload_conserved=False),dict(owner_exports=[])):
+            f=self.fixture();f.output_changes=changes;f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.lookup_changes={'Unclassified':dict(entries=[dict(title='entry',language='Unclassified',sections=[dict(title='other')])])};f.seal()
+        with self.assertRaises(ValueError):f.check()
+    def test_inventory_and_lookup_must_read_actual_accepted_root(self):
+        for inventory in (True,False):
+            f=self.fixture();bad=dict(argv=['/synthetic/reader','languages' if inventory else 'lookup','entry','--root','/diagnostic/root','--language','English'])
+            if inventory:f.inventory_command_changes=bad
+            else:f.command_changes={'English':bad}
+            f.seal()
+            with self.subTest(inventory=inventory),self.assertRaises(ValueError):f.check()
+    def test_full_export_pagination_counts_and_owner_identity_are_checked(self):
+        for changes in (dict(offset=1),dict(has_more=True),dict(total_matches=2),dict(record_count=0),dict(language='Unclassified')):
+            f=self.fixture();f.lookup_changes={'English':changes};f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+    def test_only_exact_single_fallback_rows_are_matched(self):
+        row=dict(namespace=0,title='entry',reasons=['unresolved_language_heading']);p=self.top/'fallback.jsonl';limits={(0,'entry'):row}
+        for rows in ([dict(row,title='other')],[dict(row,reasons=['unresolved_language_heading','expansion_error'])],[row,row],[]):
+            p.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+            with self.subTest(rows=rows),self.assertRaises(ValueError):controller._review_fallbacks(p,len(rows),source_limitations=limits)
+    def test_duplicate_exception_and_changed_evidence_rejected(self):
+        f=self.fixture().seal();f.er['source_authored_unresolved_declarations']*=2
+        with self.assertRaises(ValueError):f.check()
+        f=self.fixture().seal();Path(f.item['path']).write_text('{}')
+        with self.assertRaises(ValueError):f.check()
+    def test_diagnostic_cohort_cannot_be_final198_or_hide_other_failures(self):
+        f=self.fixture().seal()
+        with self.assertRaises(ValueError):controller.validate_content_review(f.review,f.source,f.rows,[r['edition'] for r in f.rows],scope='final')
+        f.review['unresolved_render_failures']=['actual error']
+        with self.assertRaises(ValueError):f.check()
+
+
 if __name__ == '__main__':
     unittest.main()
