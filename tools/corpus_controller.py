@@ -680,7 +680,20 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
         # Reuse the producer's exact bounded coverage/conservation validators.
         import build_wiktionaries as builder
         coverage = builder.validate_page_coverage(root, require_total=True)
-        namespace_totals = builder.validate_namespace_coverage(root, coverage['pages_seen'], fallback_counts=fallback_namespaces)
+        site_info_ref = review.get('site_info_snapshot')
+        site_info_path = None
+        if site_info_ref is not None:
+            require(isinstance(site_info_ref, dict) and type(site_info_ref.get('bytes')) is int and
+                    0 < site_info_ref['bytes'] <= 1024 * 1024,
+                    'Site-info review authority exceeds bound')
+            site_info = read_ref(site_info_ref)
+            require(site_info_ref['sha256'] == complete['build_inputs'].get('auxiliary_snapshot_sha256', {}).get('site-info') and
+                    site_info.get('schema') == 'wikidict.site-info.v2' and
+                    site_info.get('wiki') == row['edition'] and site_info.get('date') == complete['date'],
+                    'Site-info review authority differs from accepted build inputs')
+            site_info_path = Path(site_info_ref['path'])
+        namespace_totals = builder.validate_namespace_coverage(root, coverage['pages_seen'],
+            fallback_counts=fallback_namespaces, site_info_snapshot=site_info_path)
         require(coverage['pages_seen'] == complete['input_pages'] == accepted['input_pages'] and
                 namespace_totals == complete['namespace_coverage_totals'] and
                 namespace_totals['fallback_pages'] == fallback_count,

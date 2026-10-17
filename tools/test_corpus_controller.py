@@ -1168,6 +1168,60 @@ class ContentReviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.check(data)
 
 
+    def site_metadata_fixture(self, suffix='metadata'):
+        data=content_review_fixture(self.top/suffix,controller.PILOT,empty=True)
+        accepted=data[1][0]['accepted'];review=data[2]['editions'][0];root=Path(accepted['root'])
+        site=dict(schema='wikidict.site-info.v2',wiki=data[1][0]['edition'],date=root.name,
+                  namespace_registry_sha256='a'*64,query=dict(general=dict(wikiid=data[1][0]['edition'],mainpage='Main Page')))
+        path=self.top/(suffix+'-site.json');write_json(path,site)
+        review['site_info_snapshot']=controller.descriptor(path)
+        accepted['build_inputs']['auxiliary_snapshot_sha256']={'site-info':review['site_info_snapshot']['sha256']}
+        counts=dict(input_rows=81,compile_only_rows=79,source_unavailable_rows=0,site_metadata_rows=2,
+                    dispatched_rows=0,expanded_pages=0,fallback_pages=0,duplicate_rows=0)
+        row=dict(id=0,name='',kind='language',**dict(counts,input_rows=2,compile_only_rows=0))
+        compile_only=dict(id=10,name='Template',kind=None,**dict(counts,input_rows=79,site_metadata_rows=0))
+        report=dict(version=1,registry_sha256='a'*64,site_info_sha256=review['site_info_snapshot']['sha256'],namespaces=[row,compile_only])
+        complete=json.loads((root/'complete.json').read_bytes())
+        complete['build_inputs']=accepted['build_inputs'];complete['namespace_coverage_totals']=counts
+        write_json(root/'complete.json',complete);review['namespace_coverage_totals']=counts
+        self.rewrite_report(data,'namespace-coverage.json',report)
+        return data
+
+    def test_site_metadata_review_forwards_original_captured_authority(self):
+        self.check(self.site_metadata_fixture())
+
+    def test_site_metadata_review_missing_authority_stays_strict(self):
+        data=self.site_metadata_fixture();del data[2]['editions'][0]['site_info_snapshot']
+        with self.assertRaisesRegex(ValueError,'requires pinned site info'):self.check(data)
+
+    def test_site_metadata_review_changed_or_wrong_edition_authority_refused(self):
+        for suffix in ('changed','wrong-edition','wrong-date'):
+            with self.subTest(suffix=suffix):
+                data=self.site_metadata_fixture(suffix);review=data[2]['editions'][0]
+                path=Path(review['site_info_snapshot']['path']);site=json.loads(path.read_bytes())
+                site['wiki']='otherwiktionary'
+                if suffix=='wrong-date':site['wiki']=data[1][0]['edition'];site['date']='20260901'
+                write_json(path,site)
+                if suffix!='changed':
+                    review['site_info_snapshot']=controller.descriptor(path)
+                    accepted=data[1][0]['accepted'];root=Path(accepted['root'])
+                    accepted['build_inputs']['auxiliary_snapshot_sha256']['site-info']=review['site_info_snapshot']['sha256']
+                    complete=json.loads((root/'complete.json').read_bytes());complete['build_inputs']=accepted['build_inputs']
+                    write_json(root/'complete.json',complete)
+                    self.rewrite_report(data,'namespace-coverage.json',json.loads((root/'namespace-coverage.json').read_bytes()))
+                with self.assertRaises(ValueError):self.check(data)
+
+    def test_site_metadata_report_authority_cannot_replace_accepted_input(self):
+        data=self.site_metadata_fixture();accepted=data[1][0]['accepted'];review=data[2]['editions'][0]
+        path=Path(review['site_info_snapshot']['path']);site=json.loads(path.read_bytes())
+        site['query']['general']['mainpage']='Different Main Page';write_json(path,site)
+        review['site_info_snapshot']=controller.descriptor(path)
+        report=json.loads((Path(accepted['root'])/'namespace-coverage.json').read_bytes())
+        report['site_info_sha256']=review['site_info_snapshot']['sha256']
+        self.rewrite_report(data,'namespace-coverage.json',report)
+        with self.assertRaisesRegex(ValueError,'differs from accepted build inputs'):self.check(data)
+
+
 class SourceLimitationFixture:
     def __init__(self,top,*,label='رموز',inline=False):
         self.top=top;self.serial=0;self.label=label
