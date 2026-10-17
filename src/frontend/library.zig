@@ -52,12 +52,116 @@ pub fn catalog(io: std.Io, a: A, url: []const u8, w: *std.Io.Writer) !void {
         if (count > 10000) return error.InvalidCatalog;
     }
 }
+// Failed staging and ordinary cancellation must not strand owned partial files.
+fn removeOwned(io: std.Io, path: []const u8) void {
+    const protection = io.swapCancelProtection(.blocked);
+    defer _ = io.swapCancelProtection(protection);
+    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => std.debug.print("dict: could not remove installation staging file {s}: {s}\n", .{ path, @errorName(err) }),
+    };
+}
+const InstallTransaction = struct {
+    io: std.Io,
+    destination: []const u8,
+    obsolete: []const u8,
+    previous: []const u8,
+    manifest: ?[]const u8 = null,
+    manifest_part: ?[]const u8 = null,
+    previous_manifest: ?[]const u8 = null,
+    had_destination: bool = false,
+    had_manifest: bool = false,
+    installed: bool = false,
+    manifest_published: bool = false,
+
+    fn requireAbsent(self: InstallTransaction, path: []const u8) !void {
+        std.Io.Dir.cwd().access(self.io, path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
+        return error.InstallRecoveryRequired;
+    }
+    fn moveAside(self: InstallTransaction, from: []const u8, to: []const u8) !bool {
+        std.Io.Dir.cwd().rename(from, .cwd(), to, self.io) catch |err| switch (err) {
+            error.FileNotFound => return false,
+            else => return err,
+        };
+        return true;
+    }
+    fn publish(self: *InstallTransaction, temporary: []const u8) !void {
+        self.had_destination = try self.moveAside(self.destination, self.previous);
+        try std.Io.Dir.cwd().rename(temporary, .cwd(), self.destination, self.io);
+        self.installed = true;
+        if (self.manifest_part) |part| {
+            self.had_manifest = try self.moveAside(self.manifest.?, self.previous_manifest.?);
+            try std.Io.Dir.cwd().rename(part, .cwd(), self.manifest.?, self.io);
+            self.manifest_published = true;
+        }
+        // Keep the opposite raw/xz file until the new manifest is published.
+        std.Io.Dir.cwd().deleteFile(self.io, self.obsolete) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+    }
+    fn rollback(self: *InstallTransaction) !void {
+        var failed = false;
+        if (self.had_manifest) {
+            std.Io.Dir.cwd().rename(self.previous_manifest.?, .cwd(), self.manifest.?, self.io) catch {
+                failed = true;
+            };
+        } else if (self.manifest_published) {
+            std.Io.Dir.cwd().deleteFile(self.io, self.manifest.?) catch {
+                failed = true;
+            };
+        }
+        if (self.had_destination) {
+            std.Io.Dir.cwd().rename(self.previous, .cwd(), self.destination, self.io) catch {
+                failed = true;
+            };
+        } else if (self.installed) {
+            std.Io.Dir.cwd().deleteFile(self.io, self.destination) catch {
+                failed = true;
+            };
+        }
+        if (failed) return error.InstallRollbackFailed;
+    }
+    fn commit(self: *InstallTransaction, temporary: []const u8) !void {
+        // Only the short rename/rollback phase is protected. Download, copy,
+        // decoding, manifest preparation and lock acquisition remain cancelable.
+        try self.io.checkCancel();
+        const protection = self.io.swapCancelProtection(.blocked);
+        defer _ = self.io.swapCancelProtection(protection);
+        try self.requireAbsent(self.previous);
+        if (self.previous_manifest) |path| try self.requireAbsent(path);
+        self.publish(temporary) catch |err| {
+            self.rollback() catch {
+                // Never delete a backup which may now be the only original copy.
+                std.debug.print("dict: installation recovery needed; retain {s} and {s}\n", .{
+                    self.previous, self.previous_manifest orelse "(no manifest backup)",
+                });
+                return error.InstallRollbackFailed;
+            };
+            return err;
+        };
+        // Filesystem commit succeeded. Failed backup cleanup is a warning,
+        // not a failed install which misleadingly implies the old data survived.
+        if (self.had_destination) removeOwned(self.io, self.previous);
+        if (self.had_manifest) removeOwned(self.io, self.previous_manifest.?);
+    }
+};
+fn reportInstalled(w: *std.Io.Writer, count: usize, destination: []const u8) !void {
+    w.print("Installed {d} words: ", .{count}) catch return error.InstallReportFailed;
+    output.terminalText(w, destination) catch return error.InstallReportFailed;
+    w.writeByte('\n') catch return error.InstallReportFailed;
+    w.flush() catch return error.InstallReportFailed;
+}
+
 pub fn install(io: std.Io, a: A, root: []const u8, input: []const u8, expected: []const u8, w: *std.Io.Writer) !void {
     if (input.len == 0) return error.Usage;
     try std.Io.Dir.cwd().createDirPath(io, root);
     const temporary = try std.fmt.allocPrint(a, "{s}/.install-{d}.part", .{ root, std.os.linux.getpid() });
     defer a.free(temporary);
-    defer std.Io.Dir.cwd().deleteFile(io, temporary) catch {};
+    defer removeOwned(io, temporary);
     if (std.mem.startsWith(u8, input, "https://")) {
         const response = try run(io, a, &.{ "curl", "--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--proto-redir", "=https", "--max-time", "3600", "--max-filesize", "34359738368", "--output", temporary, input });
         a.free(response);
@@ -80,50 +184,69 @@ pub fn install(io: std.Io, a: A, root: []const u8, input: []const u8, expected: 
     }
     const kind = file.view.kind;
     if (file.recordCount() == 0 and kind == .language) return error.EmptyDictionary;
+    const view = try @import("blob_decoder").openTrustedBlob(file.directory.header);
     for (0..file.recordCount()) |i| {
         var record = try file.readAlloc(a, i);
         defer record.deinit();
-        if (kind == .alias) {
-            var decoded = @import("model.zig").fromRecord(a, .{ .alias = .{ .title = record.title, .payload = record.payload } }) catch |err| switch (err) {
-                error.OutOfMemory => return err,
-                else => return error.UncompiledDictionary,
-            };
-            decoded.deinit();
-        } else if (!std.mem.startsWith(u8, record.payload, "DPR2")) return error.UncompiledDictionary;
+        var decoded = @import("model.zig").fromRecord(a, view.wrapRecord(.{
+            .title = record.title, .payload = record.payload,
+        })) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.UncompiledDictionary,
+        };
+        decoded.deinit();
     }
     const heading = if (kind == .language) (try file.view.languageMetadata()).heading else "";
     const raw_path = try store.pathAlloc(a, root, kind, heading);
     defer a.free(raw_path);
     const destination = if (file.compressed != null) try std.mem.concat(a, u8, &.{ raw_path, ".xz" }) else try a.dupe(u8, raw_path);
     defer a.free(destination);
-    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(destination).?);
-    try std.Io.Dir.cwd().rename(temporary, .cwd(), destination, io);
     const obsolete = if (file.compressed != null) try a.dupe(u8, raw_path) else try std.mem.concat(a, u8, &.{ raw_path, ".xz" });
     defer a.free(obsolete);
-    std.Io.Dir.cwd().deleteFile(io, obsolete) catch {};
+    const previous = try std.mem.concat(a, u8, &.{ temporary, ".previous" });
+    defer a.free(previous);
+    const manifest = try std.fs.path.join(a, &.{ root, "languages.tsv" });
+    defer a.free(manifest);
+    const manifest_part = try std.mem.concat(a, u8, &.{ temporary, ".manifest.part" });
+    defer a.free(manifest_part);
+    defer removeOwned(io, manifest_part);
+    const previous_manifest = try std.mem.concat(a, u8, &.{ temporary, ".manifest.previous" });
+    defer a.free(previous_manifest);
+    const lock_path = try std.fs.path.join(a, &.{ root, ".dict-install.lock" });
+    defer a.free(lock_path);
+    const lock = try std.Io.Dir.cwd().createFile(io, lock_path, .{ .truncate = false, .lock = .exclusive });
+    defer lock.close(io);
+    var publish_manifest = false;
     if (kind == .language) {
-        const manifest = try std.fs.path.join(a, &.{ root, "languages.tsv" });
-        defer a.free(manifest);
         const prior = std.Io.Dir.cwd().readFileAlloc(io, manifest, a, .limited(16 * 1024 * 1024)) catch |err| switch (err) {
             error.FileNotFound => try a.dupe(u8, "heading\n"),
             else => return err,
         };
         defer a.free(prior);
+        // Validate the whole existing catalogue before replacing any dictionary.
         if (try store.catalog.find(prior, heading) == null) {
             var text: std.Io.Writer.Allocating = .init(a);
             defer text.deinit();
             try text.writer.writeAll(prior);
             if (!std.mem.endsWith(u8, prior, "\n")) try text.writer.writeByte('\n');
             try store.catalog.writeEntry(&text.writer, heading);
-            const temp_manifest = try std.mem.concat(a, u8, &.{ manifest, ".part" });
-            defer a.free(temp_manifest);
-            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = temp_manifest, .data = text.written() });
-            try std.Io.Dir.cwd().rename(temp_manifest, .cwd(), manifest, io);
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_part, .data = text.written() });
+            publish_manifest = true;
         }
     }
-    try w.print("Installed {d} words: ", .{file.recordCount()});
-    try output.terminalText(w, destination);
-    try w.writeByte('\n');
+    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(destination).?);
+    var transaction: InstallTransaction = .{
+        .io = io,
+        .destination = destination,
+        .obsolete = obsolete,
+        .previous = previous,
+        .manifest = if (publish_manifest) manifest else null,
+        .manifest_part = if (publish_manifest) manifest_part else null,
+        .previous_manifest = if (publish_manifest) previous_manifest else null,
+    };
+    try transaction.commit(temporary);
+    // Output failure after this point does not undo a committed installation.
+    try reportInstalled(w, file.recordCount(), destination);
 }
 
 test "installer accepts internal compiled aliases and empty feature framing" {
@@ -186,4 +309,248 @@ test "installer accepts internal compiled aliases and empty feature framing" {
     const empty_language = try enc.blob_format.buildAlloc(fixture, .language, language_metadata, &.{});
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = empty_language });
     try std.testing.expectError(error.EmptyDictionary, install(io, a, root, source, "", &log.writer));
+}
+
+fn expectInstallBytes(io: std.Io, a: A, path: []const u8, expected: []const u8) !void {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(4 * 1024 * 1024));
+    defer a.free(bytes);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+}
+fn expectNoInstallParts(io: std.Io, root: []const u8) !void {
+    var directory = try std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true });
+    defer directory.close(io);
+    var entries = directory.iterate();
+    while (try entries.next(io)) |entry| try std.testing.expect(!std.mem.startsWith(u8, entry.name, ".install-"));
+}
+fn installFixtureBlob(a: A, kind: store.Kind, payload: []const u8) ![]u8 {
+    const enc = @import("blob_encoder");
+    const metadata = if (kind == .language) try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English") else "";
+    defer if (kind == .language) a.free(metadata);
+    return enc.blob_format.buildAlloc(a, kind, metadata, &.{.{ .title = "cat", .payload = payload }});
+}
+test "installer fully rejects malformed nonalias presentation before replacing raw xz and catalogue" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var log: std.Io.Writer.Allocating = .init(a);
+    defer log.deinit();
+    const enc = @import("blob_encoder");
+    for ([_]store.Kind{ .language, .thesaurus, .citations, .reconstruction, .rhymes, .sign_gloss, .supplemental }) |kind| {
+        const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, @tagName(kind) });
+        const source = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/{s}.input", .{ tmp.sub_path, @tagName(kind) });
+        const raw = try store.pathAlloc(fixture, root, kind, if (kind == .language) "English" else "");
+        const packed = try std.mem.concat(fixture, u8, &.{ raw, ".xz" });
+        const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
+        try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(raw).?);
+        const good_payload = try enc.presentation_codec.encodeAlloc(fixture, .{ .entry = .{
+            .title = "cat", .kind = kind, .language = if (kind == .language) "English" else null,
+            .language_code = if (kind == .language) "en" else "",
+        } });
+        const before = try installFixtureBlob(fixture, kind, good_payload);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw, .data = before });
+        // These prior transport bytes are opaque to the transaction: neither
+        // existing variant may change when the incoming record is corrupt.
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = packed, .data = "prior xz transport bytes" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "heading\nEnglish\n" });
+        const broken = try installFixtureBlob(fixture, kind, "DPR2broken");
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = broken });
+        try std.testing.expectError(error.UncompiledDictionary, install(io, a, root, source, "", &log.writer));
+        try expectInstallBytes(io, a, raw, before);
+        try expectInstallBytes(io, a, packed, "prior xz transport bytes");
+        try expectInstallBytes(io, a, manifest, "heading\nEnglish\n");
+        try expectNoInstallParts(io, root);
+    }
+}
+test "installer rejects invalid catalogue before touching raw xz or a new destination" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const enc = @import("blob_encoder");
+    const payload = try enc.presentation_codec.encodeAlloc(fixture, .{ .entry = .{
+        .title = "cat", .kind = .language, .language = "English", .language_code = "en",
+    } });
+    const incoming = try installFixtureBlob(fixture, .language, payload);
+    const source = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/incoming", .{tmp.sub_path});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = incoming });
+    var log: std.Io.Writer.Allocating = .init(a);
+    defer log.deinit();
+    for (0..4) |variant| {
+        const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/case-{d}", .{ tmp.sub_path, variant });
+        const raw = try store.pathAlloc(fixture, root, .language, "English");
+        const packed = try std.mem.concat(fixture, u8, &.{ raw, ".xz" });
+        const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
+        try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(raw).?);
+        const had_raw = variant == 0 or variant == 2;
+        const had_xz = variant == 1 or variant == 2;
+        if (had_raw) try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw, .data = "original raw" });
+        if (had_xz) try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = packed, .data = "original xz" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "bad\n" });
+        try std.testing.expectError(error.InvalidManifest, install(io, a, root, source, "", &log.writer));
+        if (had_raw) try expectInstallBytes(io, a, raw, "original raw") else
+            try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, raw, .{}));
+        if (had_xz) try expectInstallBytes(io, a, packed, "original xz") else
+            try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, packed, .{}));
+        try expectInstallBytes(io, a, manifest, "bad\n");
+        try expectNoInstallParts(io, root);
+    }
+}
+test "installer manifest publication failure restores replacement and removes new installation" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    for ([_]bool{ false, true }) |existing| {
+        const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, if (existing) "replace" else "new" });
+        try std.Io.Dir.cwd().createDirPath(io, root);
+        const destination = try std.fs.path.join(fixture, &.{ root, "dictionary" });
+        const obsolete = try std.mem.concat(fixture, u8, &.{ destination, ".xz" });
+        const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
+        const temporary = try std.fs.path.join(fixture, &.{ root, ".install-input.part" });
+        const previous = try std.mem.concat(fixture, u8, &.{ temporary, ".previous" });
+        const previous_manifest = try std.mem.concat(fixture, u8, &.{ temporary, ".manifest.previous" });
+        const missing_part = try std.mem.concat(fixture, u8, &.{ temporary, ".missing-manifest" });
+        if (existing) {
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = destination, .data = "original raw" });
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = obsolete, .data = "original xz" });
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "heading\nEnglish\n" });
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = temporary, .data = "replacement" });
+        var transaction: InstallTransaction = .{
+            .io = io, .destination = destination, .obsolete = obsolete, .previous = previous,
+            .manifest = manifest, .manifest_part = missing_part, .previous_manifest = previous_manifest,
+        };
+        // A missing staged manifest makes the actual final rename fail after
+        // dictionary publication, without a production injection hook.
+        try std.testing.expectError(error.FileNotFound, transaction.commit(temporary));
+        if (existing) {
+            try expectInstallBytes(io, a, destination, "original raw");
+            try expectInstallBytes(io, a, obsolete, "original xz");
+            try expectInstallBytes(io, a, manifest, "heading\nEnglish\n");
+        } else {
+            try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, destination, .{}));
+            try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, manifest, .{}));
+        }
+        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, previous, .{}));
+        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, previous_manifest, .{}));
+    }
+}
+test "installer successful transaction retires opposite transport only after manifest publication" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const raw = try std.fs.path.join(fixture, &.{ root, "dictionary" });
+    const packed = try std.mem.concat(fixture, u8, &.{ raw, ".xz" });
+    const temporary = try std.fs.path.join(fixture, &.{ root, ".install-input.part" });
+    const previous = try std.mem.concat(fixture, u8, &.{ temporary, ".previous" });
+    const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
+    const part = try std.mem.concat(fixture, u8, &.{ temporary, ".manifest.part" });
+    const prior_manifest = try std.mem.concat(fixture, u8, &.{ temporary, ".manifest.previous" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw, .data = "old raw" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = packed, .data = "old xz" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = temporary, .data = "new xz" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "heading\n" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = part, .data = "heading\nEnglish\n" });
+    var transaction: InstallTransaction = .{
+        .io = io, .destination = packed, .obsolete = raw, .previous = previous,
+        .manifest = manifest, .manifest_part = part, .previous_manifest = prior_manifest,
+    };
+    try transaction.commit(temporary);
+    try expectInstallBytes(io, a, packed, "new xz");
+    try expectInstallBytes(io, a, manifest, "heading\nEnglish\n");
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, raw, .{}));
+    try expectNoInstallParts(io, root);
+}
+test "installer failed rollback retains the only recovery copy" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const destination = try std.fs.path.join(fixture, &.{ root, "destination" });
+    const previous = try std.fs.path.join(fixture, &.{ root, ".install-input.part.previous" });
+    const child = try std.fs.path.join(fixture, &.{ destination, "keep" });
+    try std.Io.Dir.cwd().createDirPath(io, destination);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = child, .data = "unrelated existing path" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = previous, .data = "only original dictionary" });
+    var transaction: InstallTransaction = .{
+        .io = io, .destination = destination, .obsolete = "", .previous = previous, .had_destination = true,
+    };
+    try std.testing.expectError(error.InstallRollbackFailed, transaction.rollback());
+    try expectInstallBytes(io, a, previous, "only original dictionary");
+    try expectInstallBytes(io, a, child, "unrelated existing path");
+}
+test "installer canceled staging cleanup leaves installed data intact" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const partial = try std.fs.path.join(fixture, &.{ root, ".install-canceled.part" });
+    const installed = try std.fs.path.join(fixture, &.{ root, "dictionary" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = partial, .data = "partial staging" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = installed, .data = "original dictionary" });
+    const Task = struct {
+        fn run(task_io: std.Io, path: []const u8, ready: *std.Io.Event) std.Io.Cancelable!void {
+            defer removeOwned(task_io, path);
+            ready.set(task_io);
+            try task_io.sleep(.fromSeconds(60), .awake);
+        }
+    };
+    var ready: std.Io.Event = .unset;
+    var group: std.Io.Group = .init;
+    defer group.cancel(io);
+    try group.concurrent(io, Task.run, .{ io, partial, &ready });
+    try ready.wait(io);
+    group.cancel(io);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, partial, .{}));
+    try expectInstallBytes(io, a, installed, "original dictionary");
+}
+test "installer buffered confirmation failure reports committed filesystem state" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/library", .{tmp.sub_path});
+    const source = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/incoming", .{tmp.sub_path});
+    const payload = try @import("blob_encoder").presentation_codec.encodeAlloc(fixture, .{ .entry = .{
+        .title = "cat", .kind = .language, .language = "English", .language_code = "en",
+    } });
+    const incoming = try installFixtureBlob(fixture, .language, payload);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = incoming });
+    var buffer: [16384]u8 = undefined;
+    var writer = std.Io.Writer.failing;
+    writer.buffer = &buffer;
+    try std.testing.expectError(error.InstallReportFailed, install(io, a, root, source, "", &writer));
+    // The confirmation fit the same-sized CLI buffer; its actual drain failed.
+    try std.testing.expect(std.mem.startsWith(u8, writer.buffer[0..writer.end], "Installed "));
+    const raw = try store.pathAlloc(fixture, root, .language, "English");
+    const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
+    try expectInstallBytes(io, a, raw, incoming);
+    try expectInstallBytes(io, a, manifest, "heading\nEnglish\n");
+    try expectNoInstallParts(io, root);
 }

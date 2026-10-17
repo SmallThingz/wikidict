@@ -80,6 +80,10 @@ fn run(init: std.process.Init) !u8 {
             std.debug.print("dict: catalogue unavailable ({s}). Try 'dict catalog HTTPS_URL', or install a local file with 'dict install FILE --root DIRECTORY'.\n", .{@errorName(err)});
             return 2;
         } else library.install(init.io, init.gpa, opts.root, opts.query, opts.sha256, w) catch |err| {
+            if (err == error.InstallReportFailed) {
+                std.debug.print("dict: dictionary installed, but confirmation output failed.\n", .{});
+                return 2;
+            }
             std.debug.print("dict: installation failed ({s}). Check the file or HTTPS URL, destination permissions, and optional SHA-256; then retry.\n", .{@errorName(err)});
             return 2;
         };
@@ -265,5 +269,6 @@ test {
     _ = tui;
     _ = @import("media_job.zig");
     _ = @import("pipeline_tests.zig");
+    _ = @import("library.zig");
     _ = @import("blob_storage");
 }
