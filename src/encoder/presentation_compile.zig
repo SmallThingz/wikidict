@@ -1458,6 +1458,7 @@ pub const Renderer = struct {
     pre_block: bool = false,
     // An HTML li/dd suppresses implicit paragraphs and leading-space pre.
     html_list_item_flow: bool = false,
+    html_blockquote_flow: bool = false,
     pre_scope_observer: ?PreScopeObserver = null,
     body_link_target: []const u8 = "",
     // Only an active structural parent supplies this lexical lang/dir base.
@@ -5230,7 +5231,7 @@ pub const Renderer = struct {
             // A close-marker's same-line whitespace is not an authored blank
             // line. Keep its pending soft-space join for the next physical line.
             if (anchored_inline and clean.len == 0 and link_inline_join != null and !self.pre_block) continue;
-            const special = html_tag != null or protected_tag != null or multiline_data != null or (!self.pre_block and !self.html_list_item_flow and clean.len == 0) or heading != null or prefix != 0 or horizontal_rule or (!anchored_inline and ((!self.pre_block and !self.html_list_item_flow and !link_label_scope and starts(line, " ")) or table_indent != null));
+            const special = html_tag != null or protected_tag != null or multiline_data != null or (!self.pre_block and !self.html_list_item_flow and clean.len == 0) or heading != null or prefix != 0 or horizontal_rule or (!anchored_inline and ((!self.pre_block and !self.html_list_item_flow and !self.html_blockquote_flow and !link_label_scope and starts(line, " ")) or table_indent != null));
             if (!special) {
                 if (para == null) {
                     para = start;
@@ -5297,6 +5298,11 @@ pub const Renderer = struct {
                     const scoped_style = try self.htmlLanguageDirection(tag, parent_language_direction orelse .{});
                     self.body_language_direction = .{ .language = scoped_style.language, .direction = scoped_style.direction };
                     defer self.body_language_direction = parent_language_direction;
+                    // Ordinary quoted lines do not open implicit preformatted blocks.
+                    // Explicit pre/nowiki and actual list/heading rules stay independent.
+                    const parent_blockquote_flow = self.html_blockquote_flow;
+                    self.html_blockquote_flow = parent_blockquote_flow or tag.is("blockquote");
+                    defer self.html_blockquote_flow = parent_blockquote_flow;
                     const scoped_quote = try self.rawBodyQuoteSeed(input, clean[tag.end..pair.inner_end], &body_quotes);
                     try blocks.appendSlice(self.a, try self.renderBodySlice(clean[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(clean.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote));
                 }
@@ -5422,7 +5428,7 @@ pub const Renderer = struct {
                 }
                 continue;
             }
-            if (!self.html_list_item_flow and !link_label_scope and starts(line, " ")) {
+            if (!self.html_list_item_flow and !self.html_blockquote_flow and !link_label_scope and starts(line, " ")) {
                 // Leading-space preformatting preserves whitespace, but unlike
                 // <pre>/<syntaxhighlight> it still interprets inline markup.
                 const previous_seed = self.next_quote_seed;
@@ -18474,4 +18480,59 @@ test "etymology tree branch HTML preserves parent-first relationships through DP
     try std.testing.expect(!hinted_blocks[2].relation_note);
     try std.testing.expect(hinted.fallbacks.rendered_lua_error);
     try std.testing.expect(hinted.semantic_capture == null);
+}
+
+test "blockquote indentation remains ordinary flow with protected and outside boundaries through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { source: []const u8, kinds: []const []const u8, paths: []const []const u8, texts: []const []const u8, rich: bool = false };
+    const Check = struct {
+        fn shape(alloc: A, blocks: anytype, case: Case) !void {
+            try std.testing.expectEqual(case.kinds.len, blocks.len);
+            for (blocks, case.kinds, case.paths, case.texts) |value, kind, path, visible| {
+                try std.testing.expectEqualStrings(kind, @tagName(value.kind));
+                try std.testing.expectEqualStrings(path, value.list_path);
+                try std.testing.expectEqualStrings(visible, trim(try FormattingScopeTest.text(alloc, value.spans)));
+                try std.testing.expect(value.table == null);
+                if (value.kind == .heading) try std.testing.expectEqual(@as(u8, 2), value.level);
+                if (value.kind != .preformatted) for (value.spans) |span| {
+                    const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                    try std.testing.expect(!code);
+                };
+            }
+            try FormattingScopeTest.word(alloc, blocks, "quoted", if (case.rich) .{ .small = true, .language = "fr", .direction = "rtl" } else .{});
+            try FormattingScopeTest.word(alloc, blocks, "outside", .{ .code = true });
+        }
+        fn one(alloc: A, case: Case) !void {
+            var renderer: Renderer = .{ .a = alloc, .context = .{} };
+            const blocks = try renderer.renderBody(case.source);
+            try @This().shape(alloc, blocks, case);
+            const stored = try FormattingScopeTest.encode(alloc, &renderer, blocks);
+            try @This().shape(alloc, stored.entry.sections[0].blocks, case);
+            if (@hasField(Renderer, "html_blockquote_flow")) try std.testing.expect(!renderer.html_blockquote_flow);
+            try std.testing.expect(!renderer.html_list_item_flow);
+            try std.testing.expect(!renderer.fallbacks.any());
+        }
+    };
+    // Nested ordinary containers inherit the quote context. Nested explicit
+    // quotes are checked before their closer, without claiming legacy lexical
+    // boolean parity for an indented continuation after an inner quote closes.
+    const cases = [_]Case{
+        .{ .source = "<blockquote>\n quoted\n</blockquote>\n outside", .kinds = &.{ "paragraph", "preformatted" }, .paths = &.{ "", "" }, .texts = &.{ "quoted", "outside" } },
+        .{ .source = "<blockquote lang=fr dir=rtl>\n<div><small>\n quoted\n</small></div>\n</blockquote>\n outside", .kinds = &.{ "paragraph", "preformatted" }, .paths = &.{ "", "" }, .texts = &.{ "quoted", "outside" }, .rich = true },
+        .{ .source = "<blockquote>\n; term : detail\n: continuation\n quoted\n</blockquote>\n outside", .kinds = &.{ "term", "list_detail", "indent", "paragraph", "preformatted" }, .paths = &.{ ";", ":", ":", "", "" }, .texts = &.{ "term", "detail", "continuation", "quoted", "outside" } },
+        .{ .source = "<blockquote>\n <nowiki># quoted <!-- literal --></nowiki>\n\n next\n</blockquote>\n outside", .kinds = &.{ "paragraph", "paragraph", "preformatted" }, .paths = &.{ "", "", "" }, .texts = &.{ "# quoted <!-- literal -->", "next", "outside" } },
+        .{ .source = "<blockquote>\n quoted\n\n<pre>* protected</pre>\n</blockquote>\n outside", .kinds = &.{ "paragraph", "preformatted", "preformatted" }, .paths = &.{ "", "", "" }, .texts = &.{ "quoted", "* protected", "outside" } },
+        .{ .source = "<blockquote>outer\n\n<blockquote>\n quoted\n</blockquote>\n</blockquote>\n outside", .kinds = &.{ "paragraph", "paragraph", "preformatted" }, .paths = &.{ "", "", "" }, .texts = &.{ "outer", "quoted", "outside" } },
+        .{ .source = "<blockquote>\n <nowiki>== literal ==</nowiki>\n\n== Actual ==\n quoted\n</blockquote>\n outside", .kinds = &.{ "paragraph", "heading", "paragraph", "preformatted" }, .paths = &.{ "", "", "", "" }, .texts = &.{ "== literal ==", "Actual", "quoted", "outside" } },
+    };
+    var failed_cases: usize = 0;
+    for (cases, 0..) |case, index| {
+        Check.one(a, case) catch |err| {
+            std.debug.print("blockquote indent case {d}: {s}\n{s}\n", .{ index, @errorName(err), case.source });
+            failed_cases += 1;
+        };
+    }
+    try std.testing.expectEqual(@as(usize, 0), failed_cases);
 }
