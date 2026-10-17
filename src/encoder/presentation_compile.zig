@@ -267,6 +267,12 @@ pub const PoemPhase = struct {
     // Borrowed only during this page's synchronous Writer compilation. JSON
     // values and Renderer-owned strings have their separate allocator lifetimes.
     full_output: []const u8,
+    // Encoder-only semantic preparation; never part of PoemPhaseWire.
+    numbered_bodies: []const ?[]const u8 = &.{},
+    // Build-only whole-page root, borrowed from PreparedExternalLinks.source.
+    // Rewritten bytes and this overlay share its caller page-allocator lifetime;
+    // unchanged roots retain the existing borrowed full_output lifetime.
+    numbered_source: ?[]const u8 = null,
 };
 const native_poem_prefix = "\x7fWDPOEM:";
 const max_poem_metadata_bytes = 16 * 1024 * 1024;
@@ -375,6 +381,7 @@ pub fn parsePoemPhaseAlloc(a: A, full_output: []const u8, display_title: ?[]cons
 
 pub const Context = struct {
     poem_phase: ?*const PoemPhase = null,
+    external_links_prepared: bool = false,
     image_options: ?*const @import("namespace_registry").image_options.Registry = null,
     behavior_switches: ?*const @import("namespace_registry").behavior_switches.Registry = null,
     namespace_catalog: ?*const @import("namespace_registry").Registry = null,
@@ -831,7 +838,7 @@ fn normalizeWikiQuotesSeededWithContext(a: A, input: []const u8, depth: usize, l
 }
 
 pub const Reference = struct { number: usize, group_number: usize, name: []const u8 = "", group: []const u8 = "", body: []const u8 = "", spans: []const Span = &.{}, poem: bool = false, poem_direction: []const u8 = "" };
-pub const ReferenceDefinition = struct { name: []const u8, group: []const u8 = "", body: []const u8 = "" };
+pub const ReferenceDefinition = struct { name: []const u8, group: []const u8 = "", body: []const u8 = "", list_defined: bool = false };
 pub const ReferenceDefinitions = struct { items: []const ReferenceDefinition = &.{}, fallbacks: @import("presentation_fallback.zig").Report = .{} };
 
 /// Collect names once without rendering reference bodies or creating citations.
@@ -1449,6 +1456,326 @@ pub fn preparePageTocSourceAlloc(a: A, input: []const u8, registry: ?*const @imp
     return try out.toOwnedSlice(a);
 }
 
+// Build-only preparation. Numeric labels are resolved before language-owner
+// regrouping, while the original Poem transport and its authenticated items stay
+// immutable. All returned strings/overlays belong to the supplied page allocator.
+pub const PreparedExternalLinks = struct {
+    source: []const u8,
+    poem_phase: ?*const PoemPhase,
+};
+const PageExternalNumbering = struct {
+    const Phase = enum { extensions, media, ordinary };
+    const Edit = struct { start: usize, end: usize, value: []const u8 };
+    a: A,
+    renderer: Renderer,
+    phase: ?*const PoemPhase,
+    number: usize = 0,
+    edits: std.ArrayList(Edit) = .empty,
+    seen_references: std.ArrayList(usize) = .empty,
+    seen_reference_sites: std.ArrayList(usize) = .empty,
+    seen_extensions: std.ArrayList(usize) = .empty,
+    seen_poem: []bool,
+
+    fn body(self: *@This(), index: usize) []const u8 {
+        const phase = self.phase.?;
+        if (index < phase.numbered_bodies.len) if (phase.numbered_bodies[index]) |value| return value;
+        return phase.items[index].body orelse "";
+    }
+    // Reference definitions borrowed by the existing Renderer can point into
+    // its owned Poem copies. Translate only those exact byte ranges back to the
+    // immutable phase body that will receive the corresponding preparation.
+    fn address(self: *@This(), input: []const u8, offset: usize) usize {
+        const pointer = @intFromPtr(input.ptr);
+        if (self.phase != null and input.len != 0) for (self.renderer.poem_items.items, 0..) |item, index| {
+            const begin = @intFromPtr(item.body.ptr);
+            if (pointer >= begin and pointer < begin + item.body.len and input.len <= begin + item.body.len - pointer)
+                return @intFromPtr(self.body(index).ptr) + pointer - begin + offset;
+        };
+        return pointer + offset;
+    }
+    fn enclosed(first: usize, last: usize, edit: Edit) bool {
+        return if (edit.start == edit.end) edit.start >= first and edit.start < last else edit.start >= first and edit.end <= last;
+    }
+    fn replace(self: *@This(), input: []const u8, start: usize, end: usize, value: []const u8) Error!void {
+        if (start > end or end > input.len or self.edits.items.len >= max_nodes) return error.RenderLimit;
+        const first = self.address(input, start);
+        const last = self.address(input, end);
+        var index: usize = 0;
+        while (index < self.edits.items.len) {
+            const edit = self.edits.items[index];
+            if (edit.start == first and edit.end == last) return;
+            if (first != last and enclosed(first, last, edit)) {
+                _ = self.edits.swapRemove(index);
+                continue;
+            }
+            if (edit.start != edit.end and (if (first == last) first >= edit.start and first < edit.end else first < edit.end and last > edit.start))
+                return error.InvalidPreContext;
+            index += 1;
+        }
+        try self.edits.append(self.a, .{ .start = first, .end = last, .value = value });
+    }
+    fn apply(self: *@This(), input: []const u8) Error![]const u8 {
+        const begin = self.address(input, 0);
+        const end = begin + input.len;
+        var selected: std.ArrayList(Edit) = .empty;
+        defer selected.deinit(self.a);
+        for (self.edits.items) |edit| if (enclosed(begin, end, edit))
+            try selected.append(self.a, edit);
+        if (selected.items.len == 0) return input;
+        std.mem.sort(Edit, selected.items, {}, struct {
+            fn less(_: void, lhs: Edit, rhs: Edit) bool {
+                return lhs.start < rhs.start;
+            }
+        }.less);
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.a);
+        var position: usize = 0;
+        for (selected.items) |edit| {
+            const start = edit.start - begin;
+            if (start < position) return error.InvalidPreContext;
+            try out.appendSlice(self.a, input[position..start]);
+            try out.appendSlice(self.a, edit.value);
+            position = edit.end - begin;
+        }
+        try out.appendSlice(self.a, input[position..]);
+        return out.toOwnedSlice(self.a);
+    }
+    fn reference(self: *@This(), site: usize, name: []const u8, group: []const u8, source: []const u8, depth: usize) Error!void {
+        // Anonymous references have no reusable referenceIndex. Their source site
+        // still belongs to one extension pass even when a caption is revisited.
+        for (self.seen_reference_sites.items) |prior| if (prior == site) return;
+        try self.seen_reference_sites.append(self.a, site);
+        const index = (try self.renderer.referenceIndex(name, group, source)) orelse return error.RenderLimit;
+        // A forward use with no resolved body consumes nothing. Its later
+        // definition must still be prepared when that body becomes available.
+        if (self.renderer.refs.items[index].body.len == 0) return;
+        for (self.seen_references.items) |seen| if (seen == index) return;
+        try self.seen_references.append(self.a, index);
+        try self.domain(self.renderer.refs.items[index].body, true, depth + 1);
+    }
+    fn domain(self: *@This(), source: []const u8, in_reference: bool, depth: usize) Error!void {
+        if (depth > max_depth) return error.RenderLimit;
+        const prepared = try self.renderer.externalSourceControls(source);
+        for ([_]Phase{ .extensions, .media, .ordinary }) |phase|
+            try self.walk(prepared, phase, in_reference, true, depth + 1);
+        if (prepared.ptr != source.ptr)
+            try self.replace(source, 0, source.len, try self.apply(prepared));
+    }
+    fn attribute(self: *@This(), tag: syntax.Tag, name: []const u8, depth: usize) Error!void {
+        const raw = tag.attr(name) orelse return;
+        const value = (try self.renderer.semanticAttribute(tag, name)) orelse return;
+        const before = self.edits.items.len;
+        try self.domain(value, false, depth + 1);
+        if (self.edits.items.len == before) return;
+        const prepared = try self.apply(value);
+        var escaped: std.ArrayList(u8) = .empty;
+        errdefer escaped.deinit(self.a);
+        for (prepared) |ch| switch (ch) {
+            '&' => try escaped.appendSlice(self.a, "&amp;"),
+            '<' => try escaped.appendSlice(self.a, "&lt;"),
+            '>' => try escaped.appendSlice(self.a, "&gt;"),
+            ' ', 0x09...0x0d => try escaped.appendSlice(self.a, try std.fmt.allocPrint(self.a, "&#{d};", .{ch})),
+            '"' => try escaped.appendSlice(self.a, "&quot;"),
+            '\'' => try escaped.appendSlice(self.a, "&#39;"),
+            else => try escaped.append(self.a, ch),
+        };
+        try self.replace(raw, 0, raw.len, try escaped.toOwnedSlice(self.a));
+    }
+    fn gallery(self: *@This(), input: []const u8, tag: syntax.Tag, depth: usize) Error!void {
+        try self.attribute(tag, "caption", depth + 1);
+        var lines = std.mem.splitScalar(u8, input, '\n');
+        while (lines.next()) |raw_line| {
+            const line = trim(raw_line);
+            const pipe = syntax.delimiter(line, "|", 0) orelse continue;
+            const raw_file = trim(line[0..pipe]);
+            const colon = std.mem.indexOfScalar(u8, raw_file, ':');
+            const file = if (colon != null and self.renderer.namespaceOfTarget(raw_file) == 6) raw_file[colon.? + 1 ..] else raw_file;
+            if (media_types.referencedKind(file) == null) continue;
+            const choice = self.renderer.mediaCaptionChoice(trim(line[pipe + 1 ..]), file, Renderer.mediaOptionMode(file, true));
+            if (choice.authored_caption) try self.domain(choice.text, false, depth + 1);
+        }
+    }
+    fn internal(self: *@This(), token: ir.InlineSpan, phase: Phase, in_reference: bool, allowed: bool, depth: usize) Error!void {
+        const target = try self.renderer.entityText(try self.renderer.withoutBehaviorControls(token.target));
+        const explicit = starts(target, ":");
+        if (!explicit and self.renderer.namespaceOfTarget(target) == 6) {
+            if (!token.link_has_pipe or (phase != .extensions and phase != .media)) return;
+            const colon = std.mem.indexOfScalar(u8, target, ':') orelse return;
+            const file = target[colon + 1 ..];
+            const choice = self.renderer.mediaCaptionChoice(token.text, file, Renderer.mediaOptionMode(file, false));
+            if (choice.authored_caption) {
+                if (phase == .extensions) try self.walk(choice.text, phase, in_reference, false, depth + 1) else try self.domain(choice.text, false, depth + 1);
+            }
+        } else if (phase == .extensions and token.link_has_pipe) {
+            // Strip-phase extensions precede ordinary internal-link holders.
+            // Their bodies are processed here without admitting nested ordinary actions.
+            try self.walk(token.text, phase, in_reference, false, depth + 1);
+        } else if (token.link_has_pipe and self.renderer.nestedLabelRefusal(target, token.text, explicit) != null) {
+            try self.walk(token.text, phase, in_reference, allowed, depth + 1);
+        }
+    }
+    fn walk(self: *@This(), input: []const u8, phase: Phase, in_reference: bool, allowed: bool, depth: usize) Error!void {
+        if (depth > max_depth) return error.RenderLimit;
+        var it: ir.InlineIterator = .{ .input = input, .renderer_boundaries = true, .link_trail = self.renderer.context.link_trail };
+        var opaque_scan: syntax.OpaqueScan = .{};
+        while (it.cursor < input.len) {
+            const at = it.cursor;
+            if (self.phase != null) if (self.renderer.poemItemAt(input[at..])) |item| {
+                it.cursor += item.token.len;
+                const index = nativePoemIndex(input[at..]) orelse return error.InvalidPreContext;
+                if (phase == .extensions and item.kind == .literal and std.mem.eql(u8, item.tag, "poem") and !self.seen_poem[index]) {
+                    self.seen_poem[index] = true;
+                    try self.domain(self.body(index), in_reference, depth + 1);
+                }
+                continue;
+            };
+            if (input[at] == '<') {
+                if (starts(input[at..], "<!--")) {
+                    it.cursor = opaque_scan.protectedEnd(input, at, null) orelse input.len;
+                    continue;
+                }
+                if (try self.renderer.semanticTagAt(input, at)) |tag| {
+                    it.cursor = tag.end;
+                    if (tag.closing or tag.self_closing) {
+                        if (phase == .extensions and tag.is("ref") and !tag.closing and !in_reference)
+                            try self.reference(self.address(input, at), (try self.renderer.semanticAttribute(tag, "name")) orelse "", (try self.renderer.semanticAttribute(tag, "group")) orelse "", "", depth + 1);
+                        continue;
+                    }
+                    if (tag.is("includeonly")) {
+                        it.cursor = if (opaque_scan.pair(input, tag)) |pair| pair.end else input.len;
+                        continue;
+                    }
+                    if (tag.is("nowiki")) {
+                        it.cursor = opaque_scan.protectedEnd(input, at, null) orelse input.len;
+                        continue;
+                    }
+                    const pair = opaque_scan.pair(input, tag) orelse continue;
+                    const content = input[tag.end..pair.inner_end];
+                    it.cursor = pair.end;
+                    if (tag.is("references")) continue;
+                    if (tag.is("ref")) {
+                        if (phase == .extensions and !in_reference)
+                            try self.reference(self.address(input, at), (try self.renderer.semanticAttribute(tag, "name")) orelse "", (try self.renderer.semanticAttribute(tag, "group")) orelse "", content, depth + 1);
+                    } else if (tag.is("gallery") or tag.is("poem")) {
+                        if (phase == .extensions) {
+                            const address_at = self.address(input, at);
+                            var seen = false;
+                            for (self.seen_extensions.items) |prior| if (prior == address_at) {
+                                seen = true;
+                                break;
+                            };
+                            if (!seen) {
+                                try self.seen_extensions.append(self.a, address_at);
+                                if (tag.is("gallery")) try self.gallery(content, tag, depth + 1) else try self.domain(content, in_reference, depth + 1);
+                            }
+                        }
+                    } else if (!tag.isOpaque() or tag.html_pre) {
+                        try self.walk(content, phase, in_reference, allowed and !tag.is("a"), depth + 1);
+                    }
+                    continue;
+                }
+            }
+            const before = it.cursor;
+            // InlineIterator owns token admission; yield before authenticated
+            // native items even when they follow an ordinary text run.
+            const stop = if (self.phase != null) std.mem.indexOfPos(u8, input, before + 1, native_poem_prefix) orelse input.len else input.len;
+            it.input = input[0..stop];
+            const token = it.next() orelse {
+                it.input = input;
+                continue;
+            };
+            it.input = input;
+            if (it.cursor == before) return error.InvalidPreContext;
+            if (token.kind == .link) {
+                try self.internal(token, phase, in_reference, allowed, depth + 1);
+            } else if (phase == .extensions and token.kind == .external_link and
+                (token.text.ptr != token.target.ptr or token.text.len != token.target.len))
+            {
+                // Valid external labels also contain strip-phase extension bodies.
+                // Ordinary links in these labels remain owned by the outer action.
+                try self.walk(token.text, phase, in_reference, false, depth + 1);
+            } else if (phase == .ordinary and allowed and token.kind == .external_link and
+                token.external_label_prefix.len == 0 and token.text.ptr == token.target.ptr and token.text.len == token.target.len)
+            {
+                const target_at = @intFromPtr(token.target.ptr) - @intFromPtr(input.ptr);
+                if (target_at == 0 or target_at > input.len or input[target_at - 1] != '[' or it.cursor == 0 or input[it.cursor - 1] != ']') continue;
+                const target = try self.renderer.externalUrlTarget(token.target);
+                // Never manufacture a clean label for an uncompiled destination.
+                if (unresolvedActionTarget(target)) return error.UncompiledTemplate;
+                if (!safeUrl(target)) continue;
+                const closing = self.address(input, it.cursor - 1);
+                var prepared_here = false;
+                for (self.edits.items) |edit| if (edit.start == closing and edit.end == closing) {
+                    prepared_here = true;
+                    break;
+                };
+                if (prepared_here) continue;
+                if (self.number >= max_nodes) return error.RenderLimit;
+                self.number += 1;
+                const label = try std.fmt.allocPrint(self.a, " <nowiki>[{d}]</nowiki>", .{self.number});
+                try self.replace(input, it.cursor - 1, it.cursor - 1, label);
+            }
+        }
+    }
+};
+pub fn preparePageExternalLinksAlloc(a: A, source: []const u8, context: Context) Error!PreparedExternalLinks {
+    // Repeated whole-page rendering reuses its already numbered root. Owner
+    // subdomains keep that root as definition authority without replacing it.
+    if (context.poem_phase) |known| if (known.numbered_source) |root| {
+        if (std.mem.eql(u8, source, root) or std.mem.eql(u8, source, known.full_output))
+            return .{ .source = root, .poem_phase = known };
+    };
+    var prep: PageExternalNumbering = .{
+        .a = a,
+        .renderer = .{ .a = a, .context = context },
+        .phase = context.poem_phase,
+        .seen_poem = try a.alloc(bool, if (context.poem_phase) |phase| phase.items.len else 0),
+    };
+    defer prep.edits.deinit(a);
+    defer prep.seen_references.deinit(a);
+    defer prep.seen_reference_sites.deinit(a);
+    defer prep.seen_extensions.deinit(a);
+    defer a.free(prep.seen_poem);
+    @memset(prep.seen_poem, false);
+    try prep.renderer.loadPoemPhase();
+    // Recollect against the exact prepared domain; native metadata originals
+    // remain authentication evidence, not mutable source-rewrite storage.
+    prep.renderer.ref_defs.clearRetainingCapacity();
+    const input = try prep.renderer.externalSourceControls(source);
+    try prep.renderer.referenceDefinitions(input, "");
+    prep.renderer.poem_definitions_complete = true;
+    for (prep.renderer.ref_defs.items) |definition| if (definition.list_defined)
+        try prep.reference(@intFromPtr(definition.body.ptr), definition.name, definition.group, definition.body, 0);
+    try prep.domain(input, false, 0);
+    const prepared = try prep.apply(input);
+    var phase = context.poem_phase;
+    if (phase) |original| {
+        const bodies = try a.alloc(?[]const u8, original.items.len);
+        @memset(bodies, null);
+        const previous_root = original.numbered_source orelse original.full_output;
+        const whole_page = std.mem.eql(u8, source, previous_root);
+        const prepared_root = if (whole_page) prepared else previous_root;
+        // Owner slices may normalize independently, but cannot replace the
+        // prepared full-page definition authority with their smaller domain.
+        var changed = whole_page and !std.mem.eql(u8, prepared_root, previous_root);
+        for (original.items, 0..) |item, index| {
+            const body = prep.body(index);
+            if (item.body == null) continue;
+            const updated = try prep.apply(body);
+            bodies[index] = if (updated.ptr != body.ptr) updated else if (index < original.numbered_bodies.len) original.numbered_bodies[index] else null;
+            changed = changed or updated.ptr != body.ptr;
+        }
+        if (changed) {
+            const overlay = try a.create(PoemPhase);
+            overlay.* = original.*;
+            overlay.numbered_bodies = bodies;
+            overlay.numbered_source = if (whole_page) prepared_root else original.numbered_source;
+            phase = overlay;
+        } else a.free(bodies);
+    }
+    return .{ .source = prepared, .poem_phase = phase };
+}
+
 pub const Renderer = struct {
     fallbacks: @import("presentation_fallback.zig").Report = .{},
     a: A,
@@ -1518,7 +1845,7 @@ pub const Renderer = struct {
         const phase = self.context.poem_phase orelse return;
         if (phase.items.len == 0) return;
         try self.poem_items.ensureTotalCapacity(self.a, phase.items.len);
-        for (phase.items) |item| {
+        for (phase.items, 0..) |item, item_index| {
             self.poem_items.appendAssumeCapacity(.{
                 .token = try self.a.dupe(u8, item.token),
                 .kind = switch (item.kind) {
@@ -1530,7 +1857,9 @@ pub const Renderer = struct {
                 },
                 .indent = item.depth orelse 0,
                 .tag = if (item.tag) |value| try self.a.dupe(u8, value) else "",
-                .body = if (item.body) |value| try self.a.dupe(u8, value) else "",
+                .body = if (item_index < phase.numbered_bodies.len and phase.numbered_bodies[item_index] != null)
+                    try self.a.dupe(u8, phase.numbered_bodies[item_index].?)
+                else if (item.body) |value| try self.a.dupe(u8, value) else "",
             });
         }
         // Follow only emitted page roots, in source order. Authenticated but
@@ -1541,7 +1870,7 @@ pub const Renderer = struct {
             break;
         };
         if (has_poem) {
-            try self.referenceDefinitionsInner(phase.full_output, "", 0);
+            try self.referenceDefinitionsInner(phase.numbered_source orelse phase.full_output, "", 0, false);
             self.poem_definitions_complete = true;
         }
     }
@@ -2813,9 +3142,9 @@ pub const Renderer = struct {
         try self.text(marker, s);
     }
     fn referenceDefinitions(self: *Renderer, content: []const u8, default_group: []const u8) Error!void {
-        try self.referenceDefinitionsInner(content, default_group, 0);
+        try self.referenceDefinitionsInner(content, default_group, 0, false);
     }
-    fn referenceDefinitionsInner(self: *Renderer, content: []const u8, default_group: []const u8, depth: usize) Error!void {
+    fn referenceDefinitionsInner(self: *Renderer, content: []const u8, default_group: []const u8, depth: usize, list_defined: bool) Error!void {
         if (depth >= max_depth) {
             self.fallbacks.render_limit = true;
             return;
@@ -2850,7 +3179,7 @@ pub const Renderer = struct {
                 const inner_tag = syntax.tagAt(item.body, inner_open) orelse continue;
                 if (!inner_tag.is("poem") or inner_tag.closing or inner_tag.self_closing) continue;
                 const inner_pair = syntax.matchingTag(item.body, inner_tag) orelse continue;
-                try self.referenceDefinitionsInner(item.body[inner_tag.end..inner_pair.inner_end], default_group, depth + 1);
+                try self.referenceDefinitionsInner(item.body[inner_tag.end..inner_pair.inner_end], default_group, depth + 1, list_defined);
                 continue;
             }
             if (starts(content[open..], "<!--")) {
@@ -2865,7 +3194,7 @@ pub const Renderer = struct {
             if (!tag.closing and tag.is("references")) {
                 const pair = opaque_scan.pair(content, tag) orelse continue;
                 const own_group = ((try self.semanticAttribute(tag, "group")) orelse "");
-                try self.referenceDefinitionsInner(content[tag.end..pair.inner_end], if (own_group.len != 0) own_group else default_group, depth + 1);
+                try self.referenceDefinitionsInner(content[tag.end..pair.inner_end], if (own_group.len != 0) own_group else default_group, depth + 1, true);
                 pos = pair.end;
                 continue;
             }
@@ -2886,7 +3215,10 @@ pub const Renderer = struct {
             var found = false;
             for (self.ref_defs.items) |*definition| {
                 if (!std.mem.eql(u8, definition.name, name) or !std.mem.eql(u8, definition.group, group)) continue;
-                if (definition.body.len == 0 and body.len != 0) definition.body = body;
+                if (definition.body.len == 0 and body.len != 0) {
+                    definition.body = body;
+                    definition.list_defined = list_defined;
+                }
                 found = true;
                 break;
             }
@@ -2895,7 +3227,7 @@ pub const Renderer = struct {
                     self.fallbacks.render_limit = true;
                     return;
                 }
-                try self.ref_defs.append(self.a, .{ .name = name, .group = group, .body = body });
+                try self.ref_defs.append(self.a, .{ .name = name, .group = group, .body = body, .list_defined = list_defined });
             }
             for (self.refs.items) |*ref| {
                 if (std.mem.eql(u8, ref.name, name) and std.mem.eql(u8, ref.group, group) and ref.body.len == 0 and body.len != 0) ref.body = body;
@@ -3971,7 +4303,11 @@ pub const Renderer = struct {
             try self.text("[render nesting limit]", inherited);
             return;
         }
-        const input = if (self.navigation_target_probe != null) source else try self.externalSourceControls(try self.prepareUnmatchedOpaque(source));
+        const numbered_source = if (depth == 0) try self.prepareNumberedInput(source, inherited) else source;
+        const numbering_before = self.context.external_links_prepared;
+        self.context.external_links_prepared = true;
+        defer self.context.external_links_prepared = numbering_before;
+        const input = if (self.navigation_target_probe != null) numbered_source else try self.externalSourceControls(try self.prepareUnmatchedOpaque(numbered_source));
         var it: ir.InlineIterator = .{
             .input = input,
             .bold = inherited.bold,
@@ -4299,7 +4635,31 @@ pub const Renderer = struct {
             try self.text(body, missing);
         }
     }
-    pub fn parseSpans(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
+    fn prepareNumberedInput(self: *Renderer, source: []const u8, style: Style) Error![]const u8 {
+        if (self.context.external_links_prepared or self.pre_scope_observer != null or self.in_reference or self.poem_depth != 0 or
+            self.navigation_target_probe != null or self.body_link_target.len != 0 or
+            style.kind == .external_link or (style.kind == .link and !style.poem_independent_parse)) return source;
+        const prepared = try preparePageExternalLinksAlloc(self.a, source, self.context);
+        if (prepared.poem_phase != self.context.poem_phase) {
+            self.context.poem_phase = prepared.poem_phase;
+            if (self.poem_phase_loaded) if (prepared.poem_phase) |phase| {
+                for (self.poem_items.items, 0..) |*item, index| if (index < phase.numbered_bodies.len) {
+                    if (phase.numbered_bodies[index]) |body| item.body = try self.a.dupe(u8, body);
+                };
+                if (self.poem_definitions_complete) {
+                    self.ref_defs.clearRetainingCapacity();
+                    self.poem_definition_dispatches = 0;
+                    try self.referenceDefinitionsInner(phase.numbered_source orelse phase.full_output, "", 0, false);
+                }
+            };
+        }
+        return prepared.source;
+    }
+    pub fn parseSpans(self: *Renderer, source: []const u8, style: Style) Error![]const Span {
+        const input = try self.prepareNumberedInput(source, style);
+        const numbering_before = self.context.external_links_prepared;
+        self.context.external_links_prepared = true;
+        defer self.context.external_links_prepared = numbering_before;
         const quote_seed = self.next_quote_seed;
         self.next_quote_seed = null;
         try self.loadPoemPhase();
@@ -4451,7 +4811,11 @@ pub const Renderer = struct {
         }
         return false;
     }
-    pub fn renderBody(self: *Renderer, input: []const u8) Error![]const Block {
+    pub fn renderBody(self: *Renderer, source: []const u8) Error![]const Block {
+        const input = try self.prepareNumberedInput(source, .{});
+        const numbering_before = self.context.external_links_prepared;
+        self.context.external_links_prepared = true;
+        defer self.context.external_links_prepared = numbering_before;
         try self.loadPoemPhase();
         if (self.context.poem_phase == null and self.poem_depth == 0 and !self.in_reference and std.mem.indexOf(u8, input, poem_prefix) != null)
             self.poem_authored_token = true;
@@ -9957,7 +10321,7 @@ test "quote scope oracle external labels and URL delimiters preserve targets" {
         if (span.kind == .external_link) try std.testing.expectEqualStrings("https://example.test", span.target);
     }
     const no_label = try r.parseSpans("[https://example.test]", .{});
-    try std.testing.expectEqualStrings("https://example.test", try flattened(a, no_label));
+    try std.testing.expectEqualStrings("[1]", try flattened(a, no_label));
     for (no_label) |span| try std.testing.expectEqualStrings("https://example.test", span.target);
     const protected = try r.parseSpans("<nowiki>[https://example.test ''literal]</nowiki>", .{});
     try std.testing.expectEqualStrings("[https://example.test ''literal]", try flattened(a, protected));
@@ -10053,7 +10417,7 @@ test "quote scope oracle empty reopened external fragment has no URL label" {
         try std.testing.expect(span.flags.italic);
     }
     const authored = try r.parseSpans("[https://example.test ]", .{});
-    try std.testing.expectEqualStrings("https://example.test", try flattened(a, authored));
+    try std.testing.expectEqualStrings("[1]", try flattened(a, authored));
     for (authored) |span| try std.testing.expectEqualStrings("https://example.test", span.target);
 }
 
@@ -10931,7 +11295,7 @@ test "external delimiter fixture protected literals and existing URLs" {
     try externalDelimiterCheck("<pre>[https://example.test&lt;word label]</pre>", "[https://example.test<word label]", null);
     try externalDelimiterCheck("<code><nowiki>[https://example.test&gt;word label]</nowiki></code>", "[https://example.test>word label]", null);
     try externalDelimiterCheck("[https://example.test/?a=1&amp;b=2 label]", "label", "https://example.test/?a=1&b=2");
-    try externalDelimiterCheck("[https://example.test/?a=1&amp;b=2]", "https://example.test/?a=1&b=2", "https://example.test/?a=1&b=2");
+    try externalDelimiterCheck("[https://example.test/?a=1&amp;b=2]", "[1]", "https://example.test/?a=1&b=2");
     try externalDelimiterCheck("https://example.test/?a=1&amp;b=2", "https://example.test/?a=1&b=2", "https://example.test/?a=1&b=2");
     try externalDelimiterCheck("[https://example.test <nowiki>&lt;word</nowiki> label]", "<word label", "https://example.test");
     try freeExternalBoundaryCheck("https://example.test&lt;word", "https://example.test<word", "https://example.test");
@@ -11978,7 +12342,7 @@ test "external angle entities preserve encoded navigation and decoded labels" {
         const source = try std.fmt.bufPrint(&buf, "[https://example.test/a{s}b label]", .{entity});
         try externalDelimiterCheck(source, "label", "https://example.test/a%3Eb");
     }
-    try externalDelimiterCheck("[https://example.test/a&#60;b]", "https://example.test/a<b", "https://example.test/a%3Cb");
+    try externalDelimiterCheck("[https://example.test/a&#60;b]", "[1]", "https://example.test/a%3Cb");
     try externalDelimiterCheck("[https://example.test/a&#60;b A &amp; B]", "A & B", "https://example.test/a%3Cb");
     try externalDelimiterCheck("<nowiki>[https://example.test/a&#60;b label]</nowiki>", "[https://example.test/a<b label]", null);
 }
@@ -13531,7 +13895,7 @@ test "external URL controls normalize targets protocols and effective boundaries
     const cases = [_]struct { source: []const u8, visible: []const u8, target: []const u8 }{
         .{ .source = "[https://example.test/A__NOTOC__B label]", .visible = "label", .target = "https://example.test/AB" },
         .{ .source = "https://example.test/A__NOGALLERY__B", .visible = "https://example.test/AB", .target = "https://example.test/AB" },
-        .{ .source = "[https://example.test/A__NOCC__B]", .visible = "https://example.test/AB", .target = "https://example.test/AB" },
+        .{ .source = "[https://example.test/A__NOCC__B]", .visible = "[1]", .target = "https://example.test/AB" },
         .{ .source = "[htt__NOTOC__ps://example.test label]", .visible = "label", .target = "https://example.test" },
         .{ .source = "https:__NOEDITSECTION__//example.test", .visible = "https://example.test", .target = "https://example.test" },
         .{ .source = "[__NOTOC__https://example.test label]", .visible = "label", .target = "https://example.test" },
@@ -17929,8 +18293,8 @@ test "native Poem independent parse restores external labels and resets new hold
         .{ .body = "[https://example.test <b>label] tail</b>", .visible = "label tail", .bold = true },
         .{ .body = "[[B|[https://inner.test kept] tail]]", .visible = "[https://inner.test kept] tail", .target = "B" },
         .{ .body = "https://example.test", .visible = "https://example.test" },
-        .{ .body = "[https://example.test]", .visible = "https://example.test" },
-        .{ .body = "[https://example.test ]", .visible = "https://example.test" },
+        .{ .body = "[https://example.test]", .visible = "[1]" },
+        .{ .body = "[https://example.test ]", .visible = "[1]" },
     };
     for (cases) |case| {
         const scope = try poemPhaseTestToken(a, 0);
@@ -19078,4 +19442,364 @@ test "unresolved external action destinations retain clean labels and reject bar
         for (spans) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
         try std.testing.expect(r.fallbacks.literal_markup);
     }
+}
+
+const ExternalNumberingFixture = struct {
+    const Expected = struct { target: []const u8, label: []const u8, bold: ?bool = null, code: ?bool = null };
+    fn spans(values: anytype, wanted: Expected, count: *usize) !void {
+        for (values) |span| if (span.kind == .external_link and std.mem.eql(u8, span.target, wanted.target)) {
+            count.* += 1;
+            try std.testing.expectEqualStrings(wanted.label, span.text);
+            if (wanted.bold) |flag| try std.testing.expectEqual(flag, if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold);
+            if (wanted.code) |flag| try std.testing.expectEqual(flag, if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code);
+        };
+    }
+    fn actions(blocks: anytype, refs: anytype, wanted: Expected) !void {
+        var count: usize = 0;
+        for (blocks) |block_value| {
+            try spans(block_value.spans, wanted, &count);
+            if (block_value.table) |table| {
+                try spans(table.caption, wanted, &count);
+                for (table.rows) |row| for (row.cells) |cell| try spans(cell.spans, wanted, &count);
+            }
+        }
+        for (refs) |ref| try spans(ref.spans, wanted, &count);
+        if (count == 0) std.debug.print("missing numbered target {s}\n", .{wanted.target});
+        try std.testing.expect(count != 0);
+    }
+    fn roundtrip(a: A, r: *Renderer, blocks: []const Block, expected: []const Expected) !void {
+        const refs = try r.finishReferences();
+        for (expected) |wanted| try actions(blocks, refs, wanted);
+        const stored = try FormattingScopeTest.encode(a, r, blocks);
+        for (expected) |wanted| try actions(stored.entry.sections[0].blocks, stored.entry.references, wanted);
+    }
+};
+
+test "external autonumber semantic bracket labels differ from bare URLs and reset per page" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("[https://example.org/first] https://example.org/bare [https://example.org/label authored] [https://example.org/last]");
+    try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
+        .{ .target = "https://example.org/first", .label = "[1]" },
+        .{ .target = "https://example.org/bare", .label = "https://example.org/bare" },
+        .{ .target = "https://example.org/label", .label = "authored" },
+        .{ .target = "https://example.org/last", .label = "[2]" },
+    });
+    var next: Renderer = .{ .a = a, .context = .{} };
+    const next_blocks = try next.renderBody("[https://example.org/fresh]");
+    try ExternalNumberingFixture.roundtrip(a, &next, next_blocks, &.{.{ .target = "https://example.org/fresh", .label = "[1]" }});
+}
+
+test "external autonumber official reference body precedes ordinary headings tables and code through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("==English==\n[https://example.org/a] [https://example.org/l label] https://example.org/free [https://example.org/same https://example.org/same]\n==French==\n[https://example.org/b] <b>[https://example.org/bold]</b>\n<ref name=x>[https://example.org/ref]</ref> [https://example.org/after-ref]\n<references/>\n{|\n|+ [https://example.org/cap]\n| [https://example.org/cell]\n|}\n<nowiki>[https://example.org/literal]</nowiki><pre>[https://example.org/pre]</pre><code>[https://example.org/code]</code>[https://example.org/after]\n");
+    try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
+        .{ .target = "https://example.org/ref", .label = "[1]" },
+        .{ .target = "https://example.org/a", .label = "[2]" },
+        .{ .target = "https://example.org/l", .label = "label" },
+        .{ .target = "https://example.org/free", .label = "https://example.org/free" },
+        .{ .target = "https://example.org/same", .label = "https://example.org/same" },
+        .{ .target = "https://example.org/b", .label = "[3]" },
+        .{ .target = "https://example.org/bold", .label = "[4]", .bold = true },
+        .{ .target = "https://example.org/after-ref", .label = "[5]" },
+        .{ .target = "https://example.org/cap", .label = "[6]" },
+        .{ .target = "https://example.org/cell", .label = "[7]" },
+        .{ .target = "https://example.org/code", .label = "[8]", .code = true },
+        .{ .target = "https://example.org/after", .label = "[9]" },
+    });
+}
+test "external autonumber official list definitions duplicate refs gallery poem file and ordinary phases through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const prepared = try preparePageExternalLinksAlloc(a, "==English==\n[https://example.org/body-first]\n<ref name=x/> [https://example.org/body-middle]\n<ref name=x>[https://example.org/ref-x]</ref>\n<ref name=x>[https://example.org/ref-x]</ref>\n<references><ref name=unused>[https://example.org/unused]</ref></references>\n[[File:Example.jpg|thumb|[https://example.org/file-caption]]]\n<gallery>\nExample.jpg|[https://example.org/gallery-caption]\n</gallery>\n<poem>[https://example.org/poem]</poem>\n[https://example.org/body-last]\n<references/>\n", .{});
+    // The official fixture emits an unused-list-defined Cite error. This test
+    // preserves number consumption, not a claim of native Cite-error parity.
+    try std.testing.expect(std.mem.indexOf(u8, prepared.source, "https://example.org/unused <nowiki>[1]</nowiki>") != null);
+    var r: Renderer = .{ .a = a, .context = .{ .poem_phase = prepared.poem_phase, .external_links_prepared = true } };
+    const blocks = try r.renderBody(prepared.source);
+    try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
+        .{ .target = "https://example.org/ref-x", .label = "[2]" },
+        .{ .target = "https://example.org/gallery-caption", .label = "[3]" },
+        .{ .target = "https://example.org/poem", .label = "[4]" },
+        .{ .target = "https://example.org/file-caption", .label = "[5]" },
+        .{ .target = "https://example.org/body-first", .label = "[6]" },
+        .{ .target = "https://example.org/body-middle", .label = "[7]" },
+        .{ .target = "https://example.org/body-last", .label = "[8]" },
+    });
+}
+test "external autonumber official strip refs inside owning labels precede file and body through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("[[cat|internal <ref name=\"internal\">[https://example.org/internal-ref]</ref> label]]\n[https://example.org/external external <ref name=\"external\">[https://example.org/external-ref]</ref> label]\n[[File:Example.jpg|thumb|caption <ref name=\"file\">[https://example.org/file-ref]</ref> [https://example.org/file-caption]]]\n[https://example.org/body] <ref name=\"body\">[https://example.org/body-ref]</ref> [https://example.org/after]\n<references/>\n");
+    try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
+        .{ .target = "https://example.org/internal-ref", .label = "[1]" },
+        .{ .target = "https://example.org/external-ref", .label = "[2]" },
+        .{ .target = "https://example.org/file-ref", .label = "[3]" },
+        .{ .target = "https://example.org/body-ref", .label = "[4]" },
+        .{ .target = "https://example.org/file-caption", .label = "[5]" },
+        .{ .target = "https://example.org/body", .label = "[6]" },
+        .{ .target = "https://example.org/after", .label = "[7]" },
+    });
+    var internal_owner = false;
+    var external_owner = false;
+    for (blocks) |block_value| for (block_value.spans) |span| {
+        internal_owner = internal_owner or (span.kind == .link and std.mem.eql(u8, span.target, "cat") and std.mem.indexOf(u8, span.text, "internal") != null);
+        external_owner = external_owner or (span.kind == .external_link and std.mem.eql(u8, span.target, "https://example.org/external") and std.mem.indexOf(u8, span.text, "external") != null);
+    };
+    try std.testing.expect(internal_owner and external_owner);
+}
+test "external autonumber anonymous caption refs are visited once and unquoted gallery attributes preserve labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("[[File:Example.jpg|thumb|caption <ref>[https://example.org/anonymous]</ref> [https://example.org/file]]] [https://example.org/body]");
+    try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
+        .{ .target = "https://example.org/anonymous", .label = "[1]" },
+        .{ .target = "https://example.org/file", .label = "[2]" },
+        .{ .target = "https://example.org/body", .label = "[3]" },
+    });
+    try std.testing.expectEqual(@as(usize, 1), r.refs.items.len);
+    var gallery: Renderer = .{ .a = a, .context = .{} };
+    const gallery_blocks = try gallery.renderBody("<gallery caption=[https://example.org/gallery-title]>\nExample.jpg|[https://example.org/gallery-item]\n</gallery>\n[https://example.org/after-gallery]");
+    try ExternalNumberingFixture.roundtrip(a, &gallery, gallery_blocks, &.{
+        .{ .target = "https://example.org/gallery-title", .label = "[1]" },
+        .{ .target = "https://example.org/gallery-item", .label = "[2]" },
+        .{ .target = "https://example.org/after-gallery", .label = "[3]" },
+    });
+
+    var forward: Renderer = .{ .a = a, .context = .{} };
+    const forward_blocks = try forward.renderBody("<gallery caption=\"<ref name=f/> <ref name=f>[https://example.org/forward-ref]</ref> [https://example.org/forward-title]\">\nExample.jpg|[https://example.org/forward-item]\n</gallery>\n[https://example.org/forward-body]");
+    try ExternalNumberingFixture.roundtrip(a, &forward, forward_blocks, &.{
+        .{ .target = "https://example.org/forward-ref", .label = "[1]" },
+        .{ .target = "https://example.org/forward-title", .label = "[2]" },
+        .{ .target = "https://example.org/forward-item", .label = "[3]" },
+        .{ .target = "https://example.org/forward-body", .label = "[4]" },
+    });
+    try std.testing.expectEqual(@as(usize, 1), forward.refs.items.len);
+}
+test "external autonumber native Poem after ordinary text preserves authenticated originals and phase order" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const scope = try poemPhaseTestToken(a, 0);
+    const original_body = try std.fmt.allocPrint(a, "{s}<poem>[https://example.org/poem]</poem>", .{scope});
+    const token = try poemPhaseTestLiteralToken(a, 1, original_body);
+    const source = try std.fmt.allocPrint(a, "lead [https://example.org/before] {s} [https://example.org/after]", .{token});
+    const items = [_]PoemPhaseItem{
+        .{ .token = scope, .kind = .scope },
+        .{ .token = token, .kind = .literal, .tag = "poem", .body = original_body },
+    };
+    const wire = try poemPhaseTestRecord(a, source, "", &items);
+    const phase = (try parsePoemPhaseAlloc(a, source, null, wire)).?;
+    const prepared = try preparePageExternalLinksAlloc(a, source, .{ .poem_phase = phase });
+    const overlay = prepared.poem_phase orelse return error.TestUnexpectedResult;
+    try std.testing.expect(overlay != phase);
+    try std.testing.expectEqualStrings(original_body, phase.items[1].body.?);
+    try std.testing.expectEqualStrings(original_body, overlay.items[1].body.?);
+    try std.testing.expectEqualStrings(source, overlay.full_output);
+    try std.testing.expectEqualStrings(wire, try poemPhaseTestRecord(a, source, "", overlay.items));
+    try std.testing.expect(std.mem.indexOf(u8, prepared.source, token) != null);
+    var r: Renderer = .{ .a = a, .context = .{ .poem_phase = overlay, .external_links_prepared = true } };
+    const blocks = try r.renderBody(prepared.source);
+    try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
+        .{ .target = "https://example.org/poem", .label = "[1]" },
+        .{ .target = "https://example.org/before", .label = "[2]" },
+        .{ .target = "https://example.org/after", .label = "[3]" },
+    });
+    const twice = try preparePageExternalLinksAlloc(a, prepared.source, .{ .poem_phase = overlay });
+    try std.testing.expectEqualStrings(prepared.source, twice.source);
+    try std.testing.expectEqualStrings(overlay.numbered_bodies[1].?, twice.poem_phase.?.numbered_bodies[1].?);
+
+    // Outside definitions need the prepared full root; a new page with an
+    // unchanged Poem body still needs a root-only overlay and fresh numbering.
+    const root_cases = [_][]const u8{
+        "[https://example.org/root-poem] <ref name=in>[https://example.org/inside-ref]</ref>",
+        "unchanged poem",
+    };
+    var previous_root: ?[]const u8 = null;
+    for (root_cases, 0..) |content, case_index| {
+        const body_value = try std.fmt.allocPrint(a, "{s}<poem>{s}</poem>", .{ scope, content });
+        const item_token = try poemPhaseTestLiteralToken(a, 1, body_value);
+        const page = try std.fmt.allocPrint(a, "lead [https://example.org/root-before] <ref name=out>[https://example.org/outside-ref]</ref> {s} [https://example.org/root-after]", .{item_token});
+        const page_items = [_]PoemPhaseItem{
+            .{ .token = scope, .kind = .scope },
+            .{ .token = item_token, .kind = .literal, .tag = "poem", .body = body_value },
+        };
+        const page_wire = try poemPhaseTestRecord(a, page, "", &page_items);
+        const original = (try parsePoemPhaseAlloc(a, page, null, page_wire)).?;
+        try std.testing.expect(original.numbered_source == null);
+        const numbered = try preparePageExternalLinksAlloc(a, page, .{ .poem_phase = original });
+        const page_overlay = numbered.poem_phase.?;
+        try std.testing.expect(page_overlay != original);
+        try std.testing.expect(original.numbered_source == null);
+        try std.testing.expectEqualStrings(page, page_overlay.full_output);
+        try std.testing.expectEqualStrings(numbered.source, page_overlay.numbered_source.?);
+        try std.testing.expectEqualStrings(body_value, page_overlay.items[1].body.?);
+        try std.testing.expectEqualStrings(page_wire, try poemPhaseTestRecord(a, page, "", page_overlay.items));
+        if (previous_root) |prior| try std.testing.expect(!std.mem.eql(u8, prior, page_overlay.numbered_source.?));
+        if (case_index == 1) try std.testing.expect(page_overlay.numbered_bodies[1] == null);
+        var page_renderer: Renderer = .{ .a = a, .context = .{
+            .poem_phase = if (case_index == 1) original else page_overlay,
+            .external_links_prepared = case_index != 1,
+        } };
+        // Refresh an already loaded original definition table in the root-only case.
+        if (case_index == 1) try page_renderer.loadPoemPhase();
+        const page_blocks = try page_renderer.renderBody(if (case_index == 1) page else numbered.source);
+        try std.testing.expectEqualStrings(numbered.source, page_renderer.context.poem_phase.?.numbered_source.?);
+        const before_label = if (case_index == 0) "[4]" else "[2]";
+        const after_label = if (case_index == 0) "[5]" else "[3]";
+        try ExternalNumberingFixture.roundtrip(a, &page_renderer, page_blocks, &.{
+            .{ .target = "https://example.org/outside-ref", .label = "[1]" },
+            .{ .target = "https://example.org/root-before", .label = before_label },
+            .{ .target = "https://example.org/root-after", .label = after_label },
+        });
+        if (case_index == 0) {
+            const refs = try page_renderer.finishReferences();
+            try ExternalNumberingFixture.actions(page_blocks, refs, .{ .target = "https://example.org/inside-ref", .label = "[2]" });
+            try ExternalNumberingFixture.actions(page_blocks, refs, .{ .target = "https://example.org/root-poem", .label = "[3]" });
+            const stored = try FormattingScopeTest.encode(a, &page_renderer, page_blocks);
+            try ExternalNumberingFixture.actions(stored.entry.sections[0].blocks, stored.entry.references, .{ .target = "https://example.org/inside-ref", .label = "[2]" });
+            try ExternalNumberingFixture.actions(stored.entry.sections[0].blocks, stored.entry.references, .{ .target = "https://example.org/root-poem", .label = "[3]" });
+        }
+        const replayed = try preparePageExternalLinksAlloc(a, page, .{ .poem_phase = page_overlay });
+        try std.testing.expectEqualStrings(numbered.source, replayed.source);
+        try std.testing.expect(replayed.poem_phase.? == page_overlay);
+        const owner_end = std.mem.indexOf(u8, numbered.source, item_token) orelse return error.TestUnexpectedResult;
+        const owner_prepared = try preparePageExternalLinksAlloc(a, numbered.source[0..owner_end], .{ .poem_phase = page_overlay });
+        try std.testing.expectEqualStrings(numbered.source, owner_prepared.poem_phase.?.numbered_source.?);
+        var owner: Renderer = .{ .a = a, .context = .{ .poem_phase = owner_prepared.poem_phase, .external_links_prepared = true } };
+        const owner_blocks = try owner.renderBody(owner_prepared.source);
+        try ExternalNumberingFixture.roundtrip(a, &owner, owner_blocks, &.{
+            .{ .target = "https://example.org/outside-ref", .label = "[1]" },
+            .{ .target = "https://example.org/root-before", .label = before_label },
+        });
+        previous_root = page_overlay.numbered_source;
+    }
+}
+test "external autonumber prepared heading repeated for TOC retains the same label and direct inline API" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const prepared = try preparePageExternalLinksAlloc(a, "__TOC__\n==[https://example.org/heading]==\n[https://example.org/body]\n==Second==\ntext", .{});
+    var r: Renderer = .{ .a = a, .context = .{ .poem_phase = prepared.poem_phase, .external_links_prepared = true } };
+    const blocks = try r.renderBody(prepared.source);
+    try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
+        .{ .target = "https://example.org/heading", .label = "[1]" },
+        .{ .target = "https://example.org/body", .label = "[2]" },
+    });
+    const start = std.mem.indexOf(u8, prepared.source, "[https://example.org/heading") orelse return error.TestUnexpectedResult;
+    const end = std.mem.indexOfPos(u8, prepared.source, start, "</nowiki>]") orelse return error.TestUnexpectedResult;
+    const heading = prepared.source[start .. end + "</nowiki>]".len];
+    const repeated = try r.parseSpans(heading, .{});
+    try ExternalNumberingControls.action(repeated, "https://example.org/heading", "[1]");
+    var direct: Renderer = .{ .a = a, .context = .{} };
+    try direct.inlineText("[https://example.org/direct]", .{}, 0);
+    try ExternalNumberingControls.action(direct.spans.items, "https://example.org/direct", "[1]");
+}
+
+const ExternalNumberingControls = struct {
+    fn action(spans: []const Span, target: []const u8, label: []const u8) !void {
+        var found: usize = 0;
+        for (spans) |span| {
+            if (span.kind == .external_link and std.mem.eql(u8, span.target, target)) {
+                found += 1;
+                try std.testing.expectEqualStrings(label, span.text);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), found);
+    }
+};
+
+test "external autonumber controls bare and explicit identical labels do not consume numbers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("https://example.test/bare [https://example.test/label named] [https://example.test/same https://example.test/same] [https://example.test/auto] [https://example.test/second]", .{});
+    try ExternalNumberingControls.action(spans, "https://example.test/bare", "https://example.test/bare");
+    try ExternalNumberingControls.action(spans, "https://example.test/label", "named");
+    try ExternalNumberingControls.action(spans, "https://example.test/same", "https://example.test/same");
+    try ExternalNumberingControls.action(spans, "https://example.test/auto", "[1]");
+    try ExternalNumberingControls.action(spans, "https://example.test/second", "[2]");
+}
+
+test "external autonumber controls protected and entity bracket spellings do not consume" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("<pre>[https://example.test/pre]</pre> <nowiki>[https://example.test/protected]</nowiki> &#91;https://example.test/entity&#93; [https://example.test/auto]", .{});
+    try ExternalNumberingControls.action(spans, "https://example.test/auto", "[1]");
+    var protected_found = false;
+    for (spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "example.test/protected") != null) {
+            protected_found = true;
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        }
+    }
+    try std.testing.expect(protected_found);
+}
+
+test "external autonumber controls malformed actions fail before numbering or retain clean rejection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "[https://example.test/?q={{missing}}] [https://example.test/auto]",
+    }) |source| {
+        try std.testing.expectError(error.UncompiledTemplate, preparePageExternalLinksAlloc(a, source, .{}));
+    }
+    const bare_prepared = try preparePageExternalLinksAlloc(a, "https://example.test/?q={{missing}} [https://example.test/auto]", .{});
+    var bare: Renderer = .{ .a = a, .context = .{ .poem_phase = bare_prepared.poem_phase, .external_links_prepared = true } };
+    try std.testing.expectError(error.UncompiledTemplate, bare.parseSpans(bare_prepared.source, .{}));
+    const prepared = try preparePageExternalLinksAlloc(a, "[https://example.test/?q={{missing}} clean label] [https://example.test/auto]", .{});
+    var r: Renderer = .{ .a = a, .context = .{ .poem_phase = prepared.poem_phase, .external_links_prepared = true } };
+    const spans = try r.parseSpans(prepared.source, .{});
+    try ExternalNumberingControls.action(spans, "https://example.test/auto", "[1]");
+    try std.testing.expect(r.fallbacks.rejected_external_target);
+    var clean = false;
+    for (spans) |span| if (std.mem.indexOf(u8, span.text, "clean label") != null) {
+        clean = true;
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+    };
+    try std.testing.expect(clean);
+}
+
+test "external autonumber controls wholepage owner slices keep global labels and independent pages reset" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const separator = "\nOWNER_SPLIT\n";
+    const prepared = try preparePageExternalLinksAlloc(a, "[https://example.test/one]" ++ separator ++ "[https://example.test/two]", .{});
+    const cut = std.mem.indexOf(u8, prepared.source, separator) orelse return error.TestUnexpectedResult;
+    var first: Renderer = .{ .a = a, .context = .{ .poem_phase = prepared.poem_phase, .external_links_prepared = true } };
+    var second: Renderer = .{ .a = a, .context = .{ .poem_phase = prepared.poem_phase, .external_links_prepared = true } };
+    try ExternalNumberingControls.action(try first.parseSpans(prepared.source[0..cut], .{}), "https://example.test/one", "[1]");
+    try ExternalNumberingControls.action(try second.parseSpans(prepared.source[cut + separator.len ..], .{}), "https://example.test/two", "[2]");
+    const next_page = try preparePageExternalLinksAlloc(a, "[https://example.test/fresh]", .{});
+    var fresh: Renderer = .{ .a = a, .context = .{ .poem_phase = next_page.poem_phase, .external_links_prepared = true } };
+    try ExternalNumberingControls.action(try fresh.parseSpans(next_page.source, .{}), "https://example.test/fresh", "[1]");
+}
+
+test "external autonumber controls prepared source is idempotent without global mutable state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const once = try preparePageExternalLinksAlloc(a, "[https://example.test/one] [https://example.test/two]", .{});
+    const twice = try preparePageExternalLinksAlloc(a, once.source, .{ .poem_phase = once.poem_phase });
+    try std.testing.expectEqualStrings(once.source, twice.source);
+    var r: Renderer = .{ .a = a, .context = .{ .poem_phase = twice.poem_phase, .external_links_prepared = true } };
+    const spans = try r.parseSpans(twice.source, .{});
+    try ExternalNumberingControls.action(spans, "https://example.test/one", "[1]");
+    try ExternalNumberingControls.action(spans, "https://example.test/two", "[2]");
 }

@@ -186,6 +186,7 @@ pub const referenceDefinitionsAlloc = compiler.referenceDefinitionsAlloc;
 pub const mayHaveMultilineLinks = compiler.mayHaveMultilineLinks;
 pub const mayHaveFormattingScopes = compiler.mayHaveFormattingScopes;
 pub const preparePageTocSourceAlloc = compiler.preparePageTocSourceAlloc;
+pub const preparePageExternalLinksAlloc = compiler.preparePageExternalLinksAlloc;
 
 fn requireCompiledText(text: []const u8) !void {
     for ([_][]const u8{ "[[", "]]", "{{", "}}", "{|", "|}" }) |token| {

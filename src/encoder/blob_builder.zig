@@ -1471,16 +1471,25 @@ fn processMain(
     display_title: ?[]const u8,
     stats: *BuildStats,
     fallbacks: *presentation_document.Fallbacks,
-    poem_phase: ?*const presentation_document.PoemPhase,
+    raw_poem_phase: ?*const presentation_document.PoemPhase,
 ) !void {
+    const numbered = try presentation_document.preparePageExternalLinksAlloc(page_allocator, source_raw, .{
+        .title = title,
+        .link_trail = codes.link_trail,
+        .namespace_catalog = codes.namespace_catalog,
+        .behavior_switches = codes.behavior_switches,
+        .image_options = codes.image_options,
+        .poem_phase = raw_poem_phase,
+    });
+    const poem_phase = numbered.poem_phase;
     // MediaWiki's first body TOC is page-scoped, before language-owner regrouping.
-    const may_cross_pre = preCandidate(source_raw) or presentation_document.mayHaveFormattingScopes(source_raw);
-    const may_cross_link = presentation_document.mayHaveMultilineLinks(source_raw);
+    const may_cross_pre = preCandidate(numbered.source) or presentation_document.mayHaveFormattingScopes(numbered.source);
+    const may_cross_link = presentation_document.mayHaveMultilineLinks(numbered.source);
     const body_source: presentation_document.PreparedBodySource = if (may_cross_pre or may_cross_link)
-        try presentation_document.prepareBodySourceAlloc(page_allocator, title, source_raw)
+        try presentation_document.prepareBodySourceAlloc(page_allocator, title, numbered.source)
     else
-        .{ .source = source_raw, .fallbacks = .{} };
-    defer if (body_source.source.ptr != source_raw.ptr) page_allocator.free(body_source.source);
+        .{ .source = numbered.source, .fallbacks = .{} };
+    defer if (body_source.source.ptr != numbered.source.ptr) page_allocator.free(body_source.source);
     fallbacks.merge(body_source.fallbacks);
     const source = try presentation_document.preparePageTocSourceAlloc(page_allocator, body_source.source, codes.behavior_switches);
     defer if (source.ptr != body_source.source.ptr) page_allocator.free(source);
@@ -5452,4 +5461,58 @@ test "Writer attributed formatting crosses language owners and restores scope th
     }
     for (seen) |count| try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expect(joined_suffix);
+}
+
+test "Writer external link numbering precedes owner regrouping and resets per page through DPR2" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TestLanguages.codes();
+    const out_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, out_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const first = "==English==\n===Noun===\n# first [https://example.test/first]\n==French==\n===Noun===\n# second [https://example.test/second]\n==English==\n===Verb===\n# third [https://example.test/third]\n";
+    const next = "==French==\n===Noun===\n# next [https://example.test/next]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "numbered first", first, first, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "numbered next", next, next, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    const expected = [_]struct {
+        owner: []const u8,
+        code: []const u8,
+        title: []const u8,
+        targets: []const []const u8,
+        labels: []const []const u8,
+    }{
+        .{ .owner = "English", .code = "en", .title = "numbered first", .targets = &.{ "https://example.test/first", "https://example.test/third" }, .labels = &.{ "[1]", "[3]" } },
+        .{ .owner = "French", .code = "fr", .title = "numbered first", .targets = &.{"https://example.test/second"}, .labels = &.{"[2]"} },
+        .{ .owner = "French", .code = "fr", .title = "numbered next", .targets = &.{"https://example.test/next"}, .labels = &.{"[1]"} },
+    };
+    for (expected) |case| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, out_root, case.owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(case.code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(case.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(case.title, decoded.entry.title);
+        try std.testing.expectEqualStrings(case.code, decoded.entry.language_code);
+        var actions: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind != .external_link) continue;
+            try std.testing.expect(actions < case.targets.len);
+            try std.testing.expectEqualStrings(case.targets[actions], span.target);
+            try std.testing.expectEqualStrings(case.labels[actions], span.text);
+            actions += 1;
+        };
+        try std.testing.expectEqual(case.targets.len, actions);
+    }
 }
