@@ -1967,7 +1967,9 @@ test "captured main page identity and SQL-bound aliases are metadata not lexical
     const pa = arena.allocator();
     const root = try std.fmt.allocPrint(pa, ".zig-cache/tmp/{s}", .{tmp.sub_path});
     var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\taawiktionary\n# dump-date\t20261001\n# content-language\taa\n" ++
-        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n");
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n");
     defer namespaces.deinit();
     const registry_hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
     const site_bytes = try std.json.Stringify.valueAlloc(pa, .{
@@ -2033,7 +2035,9 @@ test "captured main page identity and SQL-bound aliases are metadata not lexical
 test "site mainpage authority rejects wrong registry wiki and missing captured identity" {
     const a = std.testing.allocator;
     var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\taawiktionary\n# dump-date\t20261001\n# content-language\taa\n" ++
-        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n");
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n");
     defer namespaces.deinit();
     const hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
     const cases = [_]struct { wiki: []const u8, digest: []const u8, title: []const u8 }{
@@ -2060,7 +2064,9 @@ test "valid project namespace mainpage capture does not invalidate ordinary rout
     const a = std.testing.allocator;
     var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
         "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
-        "4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\n");
+        "4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n");
     defer namespaces.deinit();
     const hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
     const bytes = try std.json.Stringify.valueAlloc(a, .{
