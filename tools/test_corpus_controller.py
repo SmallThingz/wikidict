@@ -818,5 +818,217 @@ class ControllerMemoryPolicyTests(unittest.TestCase):
             accept.assert_not_called()
 
 
+
+
+def content_review_fixture(top, editions, *, fallback_reasons=(), unclassified=False, empty=False):
+    """Synthetic authenticated metadata; no native publication is represented as tested."""
+    source = dict(head='test-head', fingerprint='test-source')
+    rows = []; reviews = []
+    for index, edition in enumerate(editions):
+        root = top / 'dictionaries' / edition / '20261001'; root.mkdir(parents=True)
+        special = index == 0
+        reasons = list(fallback_reasons) if special else []
+        is_empty = empty and special; is_unclassified = unclassified and special
+        headings = [] if is_empty else ['Unclassified' if is_unclassified else 'Test language']
+        (root/'languages.tsv').write_text('heading\n' + ''.join(x+'\n' for x in headings))
+        write_json(root/'page-coverage.json', dict(version=1,start_page=0,requested_limit=None,pages_seen=81,index_byte_offset=0,expected_input_pages=81,page_index_rows=81,page_index_identity=dict(device_major=1,device_minor=0,inode=1,size=81,mtime_ns=1)))
+        counters=dict(input_rows=81,compile_only_rows=81 if is_empty else 0,source_unavailable_rows=0,dispatched_rows=0 if is_empty else 81,expanded_pages=0 if is_empty else 81-int(bool(reasons)),fallback_pages=int(bool(reasons)),duplicate_rows=0)
+        write_json(root/'namespace-coverage.json',dict(version=1,namespaces=[dict(id=10,name='Template',kind=None,**counters)] if is_empty else [dict(id=0,name='',kind='language',**counters)]))
+        (root/'fallback-pages.jsonl').write_text(''.join(json.dumps(dict(namespace=0,title='entry',reasons=reasons))+'\n' for _ in range(bool(reasons))))
+        if not is_empty: (root/'test.wikblb.xz').write_bytes(b'synthetic payload; structurally qualified elsewhere')
+        files = {p.name:dict(size=p.stat().st_size,sha256=controller.digest(p)) for p in root.iterdir()}
+        inputs = dict(source=source['fingerprint'], files=[[edition,'20261001','dump.xml',81,'test-sha1']])
+        complete = dict(edition=edition,date='20261001',build_inputs=inputs,input_pages=81,
+                        status='empty' if is_empty else 'built',blobs=0 if is_empty else 1,
+                        fallback_pages=int(bool(reasons)),namespace_coverage_totals=counters,publication_files=files)
+        write_json(root/'complete.json',complete)
+        snapshot=top/'receipts'/edition/'complete.json'; snapshot.parent.mkdir(parents=True)
+        snapshot.write_bytes((root/'complete.json').read_bytes())
+        reports={name:controller.descriptor(root/name) for name in controller.REVIEW_REPORT_NAMES}
+        accepted=dict(root=str(root),source=source,build_inputs=inputs,input_pages=81,
+                      complete=controller.descriptor(root/'complete.json'),complete_snapshot=controller.descriptor(snapshot),reports=reports)
+        rows.append(dict(edition=edition,accepted=accepted))
+        evidence=top/'evidence'/edition; evidence.mkdir(parents=True)
+        (evidence/'source.txt').write_text('Selected source explicitly contains no qualifying dictionary content.' if is_empty else 'Selected authored source context.')
+        write_json(evidence/'output.json',dict(edition=edition,complete=accepted['complete'],reports=reports))
+        explanation='Selected source and native output checked; no qualifying dictionary content.' if is_empty else 'Selected source intent and native output checked.'
+        reviews.append(dict(edition=edition,complete=accepted['complete'],reports=reports,
+            fallback_pages=int(bool(reasons)),fallback_reasons={reason:1 for reason in reasons},
+            language_inventory=controller.descriptor(root/'languages.tsv'),unclassified_present=is_unclassified,
+            publication_status=complete['status'],input_pages=81,namespace_coverage_totals=complete['namespace_coverage_totals'],content_review=dict(edition=edition,
+                complete_sha256=accepted['complete']['sha256'],build_inputs=inputs,input_pages=81,
+                source_intent_verified=True,native_output_checked=True,no_unresolved_language_declarations=True,
+                no_build_render_errors=True,explanation=explanation,
+                source_evidence=[controller.descriptor(evidence/'source.txt')],output_evidence=[controller.descriptor(evidence/'output.json')]),
+            dispositions=dict(fallbacks=dict(status='source-verified' if reasons else 'none',
+                explanation='Verified authored warning context and native output.',source_verified_reasons={reason:'Exact authored limitation checked.' for reason in reasons}),
+                unclassified=dict(status='source-verified' if is_unclassified else 'none',explanation='Verified authored non-language content, no unresolved language declaration.'),
+                empty=dict(status='source-verified' if is_empty else 'not-empty',explanation=explanation))))
+    scope='pilot' if set(editions)==set(controller.PILOT) else 'final'
+    review=dict(schema='wikidict.corpus-pilot-content-review.v1' if scope=='pilot' else 'wikidict.corpus-final-semantic-review.v1',
+        outcome='passed',source_head=source['head'],source_fingerprint=source['fingerprint'],
+        accepted_completions={row['edition']:row['accepted']['complete']['sha256'] for row in rows},editions=reviews,
+        pending_build_failures=[],unresolved_build_failures=[],pending_render_failures=[],unresolved_render_failures=[])
+    return source,rows,review
+
+
+class ContentReviewTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.top=Path(self.temp.name).resolve()
+
+    def fixture(self, **kwargs):
+        return content_review_fixture(self.top, controller.PILOT, **kwargs)
+
+    def check(self, data, scope='pilot'):
+        source,rows,review=data
+        return controller.validate_content_review(review,source,rows,[row['edition'] for row in rows],scope=scope)
+
+    def test_exact_clean_pilot_passes(self):
+        data=self.fixture(); self.assertIs(data[2],self.check(data))
+
+    def test_same_validator_accepts_exact_final198(self):
+        data=content_review_fixture(self.top,all_editions()); self.check(data,'final')
+        data[2]['editions'].pop()
+        with self.assertRaises(ValueError):self.check(data,'final')
+
+    def test_old_generic_hash_map_is_insufficient(self):
+        data=self.fixture(); del data[2]['editions']
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_duplicate_edition_review_refused(self):
+        data=self.fixture(); data[2]['editions'][1]=copy.deepcopy(data[2]['editions'][0])
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_source_verified_warning_requires_every_reason(self):
+        data=self.fixture(fallback_reasons=['unclosed_formatting']); self.check(data)
+        data[2]['editions'][0]['dispositions']['fallbacks']['source_verified_reasons']={}
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_zero_claim_cannot_hide_actual_fallback(self):
+        data=self.fixture(fallback_reasons=['unclosed_formatting']); data[2]['editions'][0]['fallback_pages']=0
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_expansion_and_unresolved_language_errors_never_waived(self):
+        for index,reason in enumerate(('expansion_error','expansion_error:expand:NotImplemented','missing_language_heading','unresolved_language_heading','rendered_lua_error','rendered_extension_error','render_limit','template_presentation','missing_template')):
+            with self.subTest(reason=reason):
+                data=content_review_fixture(self.top/str(index),controller.PILOT,fallback_reasons=[reason])
+                with self.assertRaisesRegex(ValueError,'remains unresolved'):self.check(data)
+
+    def test_streams_late_error_without_materializing_report(self):
+        path=self.top/'fallback.jsonl'
+        rows=[dict(namespace=0,title=str(n),reasons=['unclosed_formatting']) for n in range(1000)]
+        rows.append(dict(namespace=0,title='late',reasons=['expansion_error:expand:NotImplemented']))
+        path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+        with mock.patch.object(Path,'read_bytes',side_effect=AssertionError('Do not materialize fallback report')):
+            with self.assertRaisesRegex(ValueError,'late'):
+                controller._review_fallbacks(path,len(rows))
+
+    def test_stream_count_and_oversized_row_refused(self):
+        path=self.top/'fallback.jsonl'; path.write_text(json.dumps(dict(namespace=0,title='x',reasons=['warning']))+'\n')
+        with self.assertRaises(ValueError):controller._review_fallbacks(path,0)
+        path.write_bytes(b'x'*(controller.REVIEW_METADATA_LIMIT+1))
+        with self.assertRaisesRegex(ValueError,'exceeds'):controller._review_fallbacks(path,1)
+
+    def test_unclassified_presence_not_a_guessed_record_count(self):
+        data=self.fixture(unclassified=True); self.check(data)
+        data[2]['editions'][0]['unclassified_present']=False
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_empty_edition_with81_input_rows_needs_source_and_output(self):
+        data=self.fixture(empty=True); self.check(data)
+        data[2]['editions'][0]['content_review']['source_evidence']=[]
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_empty_edition_cannot_be_inferred_from_missing_inventory(self):
+        data=self.fixture(empty=True); Path(data[2]['editions'][0]['language_inventory']['path']).unlink()
+        with self.assertRaises((ValueError,OSError)):self.check(data)
+
+    def test_each_pending_or_unresolved_array_blocks_review(self):
+        data=self.fixture()
+        for key in ('pending_build_failures','unresolved_build_failures','pending_render_failures','unresolved_render_failures'):
+            with self.subTest(key=key):
+                value=copy.deepcopy(data); value[2][key]=['unresolved']
+                with self.assertRaises(ValueError):self.check(value)
+
+    def test_missing_zero_disposition_is_not_implicitly_clear(self):
+        data=self.fixture(); del data[2]['editions'][0]['dispositions']['unclassified']
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_arbitrary_waiver_status_refused(self):
+        data=self.fixture(fallback_reasons=['unclosed_formatting']); data[2]['editions'][0]['dispositions']['fallbacks']['status']='waived'
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_report_mutation_and_cross_edition_substitution_refused(self):
+        data=self.fixture(); report=data[2]['editions'][0]['reports']['page-coverage.json']; Path(report['path']).write_text('{}')
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_completion_map_and_current_source_bound(self):
+        data=self.fixture()
+        for field in ('accepted_completions','source_fingerprint'):
+            value=copy.deepcopy(data); value[2][field]={} if field=='accepted_completions' else 'stale'
+            with self.assertRaises(ValueError):self.check(value)
+
+    def test_review_intent_and_output_evidence_are_mandatory(self):
+        data=self.fixture()
+        for field in ('source_intent_verified','native_output_checked','no_unresolved_language_declarations','no_build_render_errors'):
+            value=copy.deepcopy(data); value[2]['editions'][0]['content_review'][field]=False
+            with self.assertRaises(ValueError):self.check(value)
+
+    def test_evidence_and_build_input_binding_refused_if_changed(self):
+        data=self.fixture(); value=copy.deepcopy(data); value[2]['editions'][0]['content_review']['build_inputs']={}
+        with self.assertRaises(ValueError):self.check(value)
+        Path(data[2]['editions'][0]['content_review']['output_evidence'][0]['path']).write_text('changed')
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_explicit_failure_and_wrong_schema_refused(self):
+        data=self.fixture(); data[2]['passed']=False
+        with self.assertRaises(ValueError):self.check(data)
+        del data[2]['passed']; data[2]['schema']='generic-pass'
+        with self.assertRaises(ValueError):self.check(data)
+
+
+    def test_empty_review_must_state_observed_namespace_counts(self):
+        data=self.fixture(empty=True); data[2]['editions'][0]['namespace_coverage_totals']={}
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_empty_output_cannot_omit_native_evidence(self):
+        data=self.fixture(empty=True); data[2]['editions'][0]['content_review']['output_evidence']=[]
+        with self.assertRaises(ValueError):self.check(data)
+
+
+
+    def test_completion_cannot_conceal_page_coverage_mismatch(self):
+        data=self.fixture(empty=True); self.rewrite_report(data,'page-coverage.json',dict(version=1,start_page=0,requested_limit=None,pages_seen=80,index_byte_offset=0,expected_input_pages=81,page_index_identity=dict(device_major=1,device_minor=0,inode=1,size=81,mtime_ns=1)))
+        with self.assertRaises(ValueError):self.check(data)
+
+    def test_completion_cannot_conceal_namespace_conservation_mismatch(self):
+        data=self.fixture(empty=True); path=Path(data[1][0]['accepted']['root'])/'namespace-coverage.json'
+        value=json.loads(path.read_bytes()); value['namespaces'][0]['compile_only_rows']=80
+        self.rewrite_report(data,'namespace-coverage.json',value)
+        with self.assertRaises(ValueError):self.check(data)
+
+    def rewrite_report(self,data,name,value):
+        accepted=data[1][0]['accepted']; review=data[2]['editions'][0];root=Path(accepted['root'])
+        write_json(root/name,value); reference=controller.descriptor(root/name)
+        accepted['reports'][name]=reference;review['reports']=copy.deepcopy(accepted['reports'])
+        complete=json.loads((root/'complete.json').read_bytes());complete['publication_files'][name]=dict(size=reference['bytes'],sha256=reference['sha256'])
+        write_json(root/'complete.json',complete);Path(accepted['complete_snapshot']['path']).write_bytes((root/'complete.json').read_bytes())
+        accepted['complete']=controller.descriptor(root/'complete.json');accepted['complete_snapshot']=controller.descriptor(accepted['complete_snapshot']['path'])
+        review['complete']=accepted['complete'];review['content_review']['complete_sha256']=accepted['complete']['sha256'];data[2]['accepted_completions'][data[1][0]['edition']]=accepted['complete']['sha256']
+
+
+
+    def test_valid_coverage_total_must_match_completion(self):
+        data=self.fixture(empty=True); root=Path(data[1][0]['accepted']['root'])
+        coverage=json.loads((root/'page-coverage.json').read_bytes());coverage.update(pages_seen=80,expected_input_pages=80,page_index_rows=80)
+        self.rewrite_report(data,'page-coverage.json',coverage)
+        with self.assertRaisesRegex(ValueError,'namespace|coverage|Namespace'):self.check(data)
+
+    def test_accepted_input_numerator_must_match_actual_coverage(self):
+        data=self.fixture();data[1][0]['accepted']['input_pages']=80
+        with self.assertRaises(ValueError):self.check(data)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -4799,6 +4799,10 @@ pub const Renderer = struct {
         }
         return false;
     }
+    fn htmlHeadingLevel(tag: syntax.Tag) ?u8 {
+        if (tag.name.len != 2 or std.ascii.toLower(tag.name[0]) != 'h' or tag.name[1] < '1' or tag.name[1] > '6') return null;
+        return tag.name[1] - '0';
+    }
     // Promote only existing ordinary block containers after lexical text.
     // Nested accepted tags, protected bodies and link labels keep their owners.
     fn inlineBodyContainerAt(self: *Renderer, input: []const u8, start: usize, line_end: usize) Error!?usize {
@@ -4814,7 +4818,7 @@ pub const Renderer = struct {
                 if (try self.semanticTagAt(input[at..], 0)) |tag| {
                     if (!tag.closing and syntax.pairedHtmlTag(tag.name)) {
                         const pair = syntax.matchingTag(input[at..], tag) orelse return null;
-                        if (at > start and oneOf(tag.name, &.{ "blockquote", "div", "p", "center" }))
+                        if (at > start and (oneOf(tag.name, &.{ "blockquote", "div", "p", "center" }) or htmlHeadingLevel(tag) != null))
                             return at;
                         at += pair.end;
                     } else at += tag.end;
@@ -5141,7 +5145,7 @@ pub const Renderer = struct {
             const prefix = list_prefix.path.len;
             const table_indent: ?[]const u8 = if (anchored_inline) null else wikiTableIndent(clean);
             const html_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
-                oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) and
+                (oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) or htmlHeadingLevel(tag) != null) and
                 syntax.matchingTag(clean, tag) != null) tag else null) else null;
             const protected_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
@@ -5341,6 +5345,18 @@ pub const Renderer = struct {
                             try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value });
                         } else try self.block(&blocks, .preformatted, clean[0..pair.end], "", "", 0);
                     }
+                } else if (htmlHeadingLevel(tag)) |level| {
+                    // HTML headings are typed blocks, including after lexical
+                    // text; their close does not invent a new wiki line start.
+                    const parent_attributes = self.body_formatting_attributes;
+                    const parent_language_direction = self.body_language_direction;
+                    const scoped_style = try self.htmlInlineStyle(tag, self.bodyFormattingStyle(.{}));
+                    self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = parent_attributes.relation_note, .language = scoped_style.language, .direction = scoped_style.direction });
+                    defer {
+                        self.body_formatting_attributes = parent_attributes;
+                        self.body_language_direction = parent_language_direction;
+                    }
+                    try self.bodyRawBlock(&blocks, input, clean[tag.end..pair.inner_end], &body_quotes, .heading, "", "", level);
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
                     try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
                 } else if (try self.appendEtymologyTree(&blocks, clean[tag.end..pair.inner_end], tag)) {
@@ -5730,6 +5746,11 @@ pub const Renderer = struct {
                     continue;
                 }
                 if (try self.semanticTagAt(input[at..], 0)) |tag| {
+                    // The existing body owner must apply its scope before an
+                    // inner formatting wrapper is considered. Hoisting the
+                    // inner opener would flatten the owner's lexical prefix.
+                    if (!tag.closing and (oneOf(tag.name, &.{ "blockquote", "div", "p", "center" }) or htmlHeadingLevel(tag) != null) and
+                        syntax.matchingTag(input[at..], tag) != null) return null;
                     if (!tag.closing and (blockFormattingFlags(tag) != null or tag.is("span"))) {
                         const rest = input[at..];
                         if (syntax.matchingTag(rest, tag)) |pair| {
@@ -5761,19 +5782,55 @@ pub const Renderer = struct {
         return null;
     }
     fn htmlListItemHasWikiList(self: *Renderer, input: []const u8) Error!bool {
-        // The opener's own line is inline. Later authored lines use the same
-        // protected/link-aware boundaries and behavior controls as renderBody.
+        // Ordinary block containers do not hide authored physical wiki-list
+        // lines. Protected bodies, links and independently owned lists/tables
+        // still consume their whole source range before any marker is tested.
         var opaque_scan: syntax.OpaqueScan = .{};
         var at: usize = 0;
+        var line_start: usize = 0;
         const matcher = self.behaviorControlMatcher();
         while (at < input.len) {
-            const end = syntax.logicalEndWithOpaqueScan(input, at, null, &opaque_scan);
-            if (at != 0) {
-                const line = input[at..end];
+            // The HTML item's own opening line remains inline.
+            if (at == line_start and at != 0) {
+                const line = input[at..];
                 const list_line = line[syntax.leadingBehaviorControlOffset(line, matcher)..];
                 if ((try syntax.controlListPrefixAlloc(self.a, list_line, matcher)).path.len != 0) return true;
             }
-            at = if (end < input.len) end + 1 else end;
+            at += std.mem.indexOfAny(u8, input[at..], "\n<[{") orelse return false;
+            if (input[at] == '\n') {
+                at += 1;
+                line_start = at;
+                continue;
+            }
+            if (input[at] == '<') {
+                if (opaque_scan.protectedEnd(input, at, null)) |protected_end| {
+                    at = protected_end;
+                    continue;
+                }
+                if (opaque_scan.tagAt(input, at, null)) |tag| {
+                    const ordinary = tag.is("blockquote") or tag.is("div") or tag.is("p") or tag.is("center");
+                    if (!tag.closing and !ordinary and (tag.html_pre or syntax.isMultilineContainerTag(tag.name))) {
+                        if (syntax.matchingTagWithOpaqueScan(input, tag, &opaque_scan)) |pair| {
+                            at = pair.end;
+                            continue;
+                        }
+                    }
+                    at = tag.end;
+                    continue;
+                }
+            } else if (starts(input[at..], "[[") or starts(input[at..], "{{")) {
+                if (syntax.balancedWithOpaqueScan(input, at, &opaque_scan)) |pair| {
+                    at = pair.end;
+                    continue;
+                }
+            } else if (input[at] == '[' and ir.hasExternalProtocol(input[at + 1 ..])) {
+                var iterator: ir.InlineIterator = .{ .input = input[at..], .renderer_boundaries = true };
+                if (iterator.next()) |token| if (token.kind == .external_link) {
+                    at += iterator.cursor;
+                    continue;
+                };
+            }
+            at += 1;
         }
         return false;
     }
@@ -11412,17 +11469,37 @@ test "inline block opening fixture separates linked lexical text for div paragra
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+    // Official legacy parse separates div/p from both lexical neighbors.
+    // This changes body ownership, not the direct parseSpans boundary rules.
     for ([_][]const u8{
         "alpha<div>[[A|beta]]</div>gamma",
         "alpha<p>[[A|beta]]</p>gamma",
-        "alpha<h3>[[A|beta]]</h3>gamma",
     }) |input| {
         var r: Renderer = .{ .a = a, .context = .{} };
         const blocks = try r.renderBody(input);
-        try std.testing.expectEqual(@as(usize, 1), blocks.len);
-        try std.testing.expectEqualStrings("alpha\nbeta\ngamma", try flattened(a, blocks[0].spans));
-        try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[0].spans, .link, "A"));
+        try FormattingScopeTest.shapes(a, blocks, &.{ "paragraph", "paragraph", "paragraph" }, &.{ "alpha", "beta", "gamma" });
+        try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[1].spans, .link, "A"));
+        const stored = try FormattingScopeTest.encode(a, &r, blocks);
+        try FormattingScopeTest.shapes(a, stored.entry.sections[0].blocks, &.{ "paragraph", "paragraph", "paragraph" }, &.{ "alpha", "beta", "gamma" });
+        try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "beta", .{ .kind = .link, .target = "A" });
+        try std.testing.expect(!r.fallbacks.any());
     }
+    // The exact linked-h3 official response has its own typed heading.
+    var heading: Renderer = .{ .a = a, .context = .{} };
+    const heading_blocks = try heading.renderBody("alpha<h3>[[A|beta]]</h3>gamma");
+    const heading_stored = try FormattingScopeTest.encode(a, &heading, heading_blocks);
+    inline for (.{ heading_blocks, heading_stored.entry.sections[0].blocks }) |actual| {
+        try std.testing.expectEqual(@as(usize, 3), actual.len);
+        try std.testing.expectEqualStrings("paragraph", @tagName(actual[0].kind));
+        try std.testing.expectEqualStrings("heading", @tagName(actual[1].kind));
+        try std.testing.expectEqual(@as(u8, 3), actual[1].level);
+        try std.testing.expectEqualStrings("paragraph", @tagName(actual[2].kind));
+        try std.testing.expectEqualStrings("alpha", try FormattingScopeTest.text(a, actual[0].spans));
+        try std.testing.expectEqualStrings("beta", try FormattingScopeTest.text(a, actual[1].spans));
+        try std.testing.expectEqualStrings("gamma", try FormattingScopeTest.text(a, actual[2].spans));
+        try FormattingScopeTest.word(a, actual, "beta", .{ .kind = .link, .target = "A" });
+    }
+    try std.testing.expect(!heading.fallbacks.any());
 }
 
 test "inline block opening fixture preserves inline and protected literal controls" {
@@ -18658,5 +18735,219 @@ test "inline block containers retain physical list ownership and protected bound
             failed_cases += 1;
         };
     }
+    try std.testing.expectEqual(@as(usize, 0), failed_cases);
+}
+
+test "matched HTML headings preserve typed levels links styles and same-line suffix through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for (1..7) |level| {
+        const source = try std.fmt.allocPrint(a, "alpha<h{d} class=note lang=fr dir=rtl>[[A|beta]]</h{d}>gamma", .{ level, level });
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(source);
+        const saved = try FormattingScopeTest.encode(a, &r, blocks);
+        inline for (.{ blocks, saved.entry.sections[0].blocks }) |actual| {
+            try std.testing.expectEqual(@as(usize, 3), actual.len);
+            try std.testing.expectEqualStrings("paragraph", @tagName(actual[0].kind));
+            try std.testing.expectEqualStrings("heading", @tagName(actual[1].kind));
+            try std.testing.expectEqualStrings("paragraph", @tagName(actual[2].kind));
+            try std.testing.expectEqual(@as(u8, @intCast(level)), actual[1].level);
+            try std.testing.expectEqualStrings("alpha", try FormattingScopeTest.text(a, actual[0].spans));
+            try std.testing.expectEqualStrings("beta", try FormattingScopeTest.text(a, actual[1].spans));
+            try std.testing.expectEqualStrings("gamma", try FormattingScopeTest.text(a, actual[2].spans));
+            try FormattingScopeTest.word(a, actual, "beta", .{ .kind = .link, .target = "A", .classes = "note", .language = "fr", .direction = "rtl" });
+            try FormattingScopeTest.word(a, actual, "alpha", .{});
+            try FormattingScopeTest.word(a, actual, "gamma", .{});
+        }
+        try std.testing.expect(!r.fallbacks.any());
+    }
+    const suffixes = [_][]const u8{ "* tail", "==tail==", "{| tail" };
+    for (suffixes) |suffix| {
+        const source = try std.fmt.allocPrint(a, "<H3>[[A|beta]]</H3>{s}", .{suffix});
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(source);
+        const saved = try FormattingScopeTest.encode(a, &r, blocks);
+        inline for (.{ blocks, saved.entry.sections[0].blocks }) |actual| {
+            try std.testing.expectEqual(@as(usize, 2), actual.len);
+            try std.testing.expectEqualStrings("heading", @tagName(actual[0].kind));
+            try std.testing.expectEqual(@as(u8, 3), actual[0].level);
+            try std.testing.expectEqualStrings("paragraph", @tagName(actual[1].kind));
+            try std.testing.expectEqualStrings(suffix, try FormattingScopeTest.text(a, actual[1].spans));
+            try FormattingScopeTest.word(a, actual, "beta", .{ .kind = .link, .target = "A" });
+        }
+        try std.testing.expect(!r.fallbacks.any());
+    }
+}
+
+test "HTML headings stay within protected and link-label owners through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sources = [_][]const u8{
+        "<nowiki><h3>literal</h3></nowiki>",
+        "<pre><h3>literal</h3></pre>",
+        "[[A|<h3>label</h3>]]",
+        "[https://example.org <h3>label</h3>]",
+        "<div><h2>[[A|beta]]</h2>gamma</div>",
+    };
+    for (sources, 0..) |source, index| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(source);
+        const saved = try FormattingScopeTest.encode(a, &r, blocks);
+        inline for (.{ blocks, saved.entry.sections[0].blocks }) |actual| {
+            var headings: usize = 0;
+            for (actual) |block_value| {
+                if (std.mem.eql(u8, @tagName(block_value.kind), "heading")) {
+                    headings += 1;
+                    try std.testing.expectEqual(@as(u8, 2), block_value.level);
+                    try std.testing.expectEqualStrings("beta", try FormattingScopeTest.text(a, block_value.spans));
+                }
+            }
+            try std.testing.expectEqual(@as(usize, if (index == 4) 1 else 0), headings);
+            if (index < 2) try std.testing.expectEqualStrings("<h3>literal</h3>", try FormattingScopeTest.text(a, actual[0].spans));
+            if (index == 2) try FormattingScopeTest.word(a, actual, "label", .{ .kind = .link, .target = "A" });
+            if (index == 3) try FormattingScopeTest.word(a, actual, "label", .{ .kind = .external_link, .target = "https://example.org" });
+        }
+        try std.testing.expect(!r.fallbacks.any());
+    }
+}
+
+test "HTML item ordinary containers retain nested wiki lists and protected ownership through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { source: []const u8, kinds: []const []const u8, paths: []const []const u8, texts: []const []const u8, numbers: []const []const u8 = &.{}, rich: bool = false, external: bool = false };
+    const Check = struct {
+        fn shape(alloc: A, values: anytype, case: Case) !void {
+            try std.testing.expectEqual(case.kinds.len, values.len);
+            var links: usize = 0;
+            for (values, case.kinds, case.paths, case.texts, 0..) |value, kind, path, visible, index| {
+                try std.testing.expectEqualStrings(kind, @tagName(value.kind));
+                try std.testing.expectEqualStrings(path, value.list_path);
+                try std.testing.expectEqual(@as(u8, @intCast(path.len)), value.depth);
+                try std.testing.expectEqualStrings(if (case.numbers.len == 0) "" else case.numbers[index], value.number);
+                try std.testing.expectEqualStrings(visible, trim(try FormattingScopeTest.text(alloc, value.spans)));
+                try std.testing.expect(value.table == null);
+                for (value.spans) |span| {
+                    const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                    try std.testing.expect(!code);
+                    if (span.kind == .link or span.kind == .external_link) {
+                        links += 1;
+                        try std.testing.expectEqualStrings(if (case.external) "external_link" else "link", @tagName(span.kind));
+                        try std.testing.expectEqualStrings(if (case.external) "https://example.org" else "cat", span.target);
+                        try std.testing.expectEqualStrings(if (case.external) "https://example.org" else "child", span.text);
+                    }
+                }
+            }
+            try std.testing.expectEqual(@as(usize, @intFromBool(case.rich or case.external)), links);
+            if (case.rich) {
+                try FormattingScopeTest.word(alloc, values, "parent", .{ .language = "fr", .direction = "rtl", .classes = "note" });
+                try FormattingScopeTest.word(alloc, values, "child", .{ .kind = .link, .target = "cat", .small = true, .language = "de", .direction = "ltr", .classes = "note" });
+                try FormattingScopeTest.word(alloc, values, "tail", .{ .language = "fr", .direction = "rtl", .classes = "note" });
+                try FormattingScopeTest.word(alloc, values, "after", .{});
+            }
+        }
+        fn one(alloc: A, case: Case) !void {
+            var renderer: Renderer = .{ .a = alloc, .context = .{} };
+            const values = try renderer.renderBody(case.source);
+            try @This().shape(alloc, values, case);
+            const stored = try FormattingScopeTest.encode(alloc, &renderer, values);
+            try @This().shape(alloc, stored.entry.sections[0].blocks, case);
+            try std.testing.expect(!renderer.fallbacks.any());
+            try std.testing.expect(!renderer.html_list_item_flow and !renderer.html_blockquote_flow);
+            try std.testing.expectEqualStrings("", renderer.body_formatting_attributes.classes);
+            try std.testing.expect(renderer.body_language_direction == null);
+            try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(renderer.block_formatting)));
+        }
+        fn protectedShape(alloc: A, values: anytype, visible: []const u8) !void {
+            try std.testing.expectEqual(@as(usize, 2), values.len);
+            try std.testing.expectEqualStrings("list_item", @tagName(values[0].kind));
+            try std.testing.expectEqualStrings("*", values[0].list_path);
+            // Soft line breaks inside a literal are not a list boundary.
+            var words = std.mem.tokenizeAny(u8, try FormattingScopeTest.text(alloc, values[0].spans), " \t\r\n");
+            var normalized: std.ArrayList(u8) = .empty;
+            while (words.next()) |word| {
+                if (normalized.items.len != 0) try normalized.append(alloc, ' ');
+                try normalized.appendSlice(alloc, word);
+            }
+            try std.testing.expectEqualStrings(visible, normalized.items);
+            try std.testing.expectEqualStrings("paragraph", @tagName(values[1].kind));
+            try std.testing.expectEqualStrings("after", trim(try FormattingScopeTest.text(alloc, values[1].spans)));
+            for (values) |value| for (value.spans) |span| try std.testing.expect(span.kind != .link);
+        }
+        fn protectedOne(alloc: A, source: []const u8, visible: []const u8) !void {
+            var renderer: Renderer = .{ .a = alloc, .context = .{} };
+            const values = try renderer.renderBody(source);
+            try @This().protectedShape(alloc, values, visible);
+            const stored = try FormattingScopeTest.encode(alloc, &renderer, values);
+            try @This().protectedShape(alloc, stored.entry.sections[0].blocks, visible);
+            try std.testing.expect(!renderer.fallbacks.any());
+        }
+    };
+    var failed_cases: usize = 0;
+    var case_index: usize = 0;
+    // The same physical-line admission must work in every supported ordinary
+    // container and under unordered, ordered and definition-detail ownership.
+    for ([_][]const u8{ "div", "blockquote", "p", "center" }) |tag| {
+        const cases = [_]Case{
+            .{ .source = try std.fmt.allocPrint(a, "<ul><li>parent<{s}>\n* child\n</{s}>tail</li></ul>\nafter", .{ tag, tag }), .kinds = &.{ "list_item", "list_item", "list_detail", "paragraph" }, .paths = &.{ "*", "**", "*:", "" }, .texts = &.{ "parent", "child", "tail", "after" } },
+            .{ .source = try std.fmt.allocPrint(a, "<ol><li>parent<{s}>\n# first\n# second\n</{s}>tail</li></ol>\nafter", .{ tag, tag }), .kinds = &.{ "list_item", "definition", "definition", "list_detail", "paragraph" }, .paths = &.{ "#", "##", "##", "#:", "" }, .texts = &.{ "parent", "first", "second", "tail", "after" }, .numbers = &.{ "1", "1", "2", "", "" } },
+            .{ .source = try std.fmt.allocPrint(a, "<dl><dt>term</dt><dd>parent<{s}>\n* child\n</{s}>tail</dd><dd>nextdetail</dd></dl>\nafter", .{ tag, tag }), .kinds = &.{ "term", "list_detail", "list_item", "list_detail", "list_detail", "paragraph" }, .paths = &.{ ";", ":", ":*", ":", ":", "" }, .texts = &.{ "term", "parent", "child", "tail", "nextdetail", "after" } },
+        };
+        for (cases) |case| {
+            Check.one(a, case) catch |err| {
+                std.debug.print("nested item container case {d}: {s}\n{s}\n", .{ case_index, @errorName(err), case.source });
+                failed_cases += 1;
+            };
+            case_index += 1;
+        }
+    }
+    const edges = [_]Case{
+        .{ .source = "<ul><li>parent<div>[https://example.org label\n* fake]</div>tail</li></ul>\nafter", .kinds = &.{ "list_item", "list_detail", "list_item", "list_detail", "paragraph" }, .paths = &.{ "*", "*:", "**", "*:", "" }, .texts = &.{ "parent", "[https://example.org label", "fake]", "tail", "after" }, .external = true },
+        .{ .source = "<ul><li>parent<div>* literal opener\n* child\n</div>tail</li></ul>\nafter", .kinds = &.{ "list_item", "list_detail", "list_item", "list_detail", "paragraph" }, .paths = &.{ "*", "*:", "**", "*:", "" }, .texts = &.{ "parent", "* literal opener", "child", "tail", "after" } },
+        .{ .source = "<ul><li>parent<div>brief</div><center>\n* child\n</center>tail</li></ul>\nafter", .kinds = &.{ "list_item", "list_detail", "list_item", "list_detail", "paragraph" }, .paths = &.{ "*", "*:", "**", "*:", "" }, .texts = &.{ "parent", "brief", "child", "tail", "after" } },
+        .{ .source = "<ul><li>parent<div><!--\n* hidden\n-->\n* child\n</div>tail</li></ul>\nafter", .kinds = &.{ "list_item", "list_item", "list_detail", "paragraph" }, .paths = &.{ "*", "**", "*:", "" }, .texts = &.{ "parent", "child", "tail", "after" } },
+        .{ .source = "<ul lang=fr dir=rtl><li class=note>parent<div lang=de dir=ltr><small>\n* [[cat|child]]\n</small></div>tail</li></ul>\nafter", .kinds = &.{ "list_item", "list_item", "list_detail", "paragraph" }, .paths = &.{ "*", "**", "*:", "" }, .texts = &.{ "parent", "child", "tail", "after" }, .rich = true },
+    };
+    for (edges) |case| {
+        Check.one(a, case) catch |err| {
+            std.debug.print("nested item container case {d}: {s}\n{s}\n", .{ case_index, @errorName(err), case.source });
+            failed_cases += 1;
+        };
+        case_index += 1;
+    }
+    const protected_cases = .{
+        .{ "<ul><li>parent<div><nowiki>\n* [[cat|literal]]\n</nowiki></div>tail</li></ul>\nafter", "parent * [[cat|literal]] tail" },
+        .{ "<ul><li>parent<div><!--\n* hidden\n--></div>tail</li></ul>\nafter", "parent tail" },
+    };
+    inline for (protected_cases) |case| {
+        Check.protectedOne(a, case[0], case[1]) catch |err| {
+            std.debug.print("nested item protected case {d}: {s}\n{s}\n", .{ case_index, @errorName(err), case[0] });
+            failed_cases += 1;
+        };
+        case_index += 1;
+    }
+    // Protected/link owners retain their internal markers. An external LF
+    // ends bracketed-label ownership, as the pinned official fixture shows.
+    for ([_][]const u8{
+        "parent<div><nowiki>\n* fake\n</nowiki></div>tail",
+        "parent<div><pre>\n* fake\n</pre></div>tail",
+        "parent<div><!--\n* fake\n--></div>tail",
+        "parent<div>[[cat|label\n* fake]]</div>tail",
+        "parent<div>[https://example.org label\n* fake]</div>tail",
+        "parent<div>{{template|\n* fake}}</div>tail",
+        "parent<div><ul><li>\n* independently owned\n</li></ul></div>tail",
+        "parent<div>* literal same line</div>tail",
+    }, 0..) |input, index| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const admitted = try renderer.htmlListItemHasWikiList(input);
+        if (admitted != (index == 4)) {
+            std.debug.print("unexpected nested item admission {d}: {s}\n", .{ case_index, input });
+            failed_cases += 1;
+        }
+        case_index += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 27), case_index);
     try std.testing.expectEqual(@as(usize, 0), failed_cases);
 }

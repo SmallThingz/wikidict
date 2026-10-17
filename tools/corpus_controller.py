@@ -362,6 +362,182 @@ def gate(ref, cfg, outcomes):
     return value
 
 
+
+REVIEW_METADATA_LIMIT = 8 * 1024**2
+REVIEW_REPORT_NAMES = ('page-coverage.json', 'namespace-coverage.json', 'fallback-pages.jsonl')
+
+
+def _review_file(reference, root, name):
+    path = root / name
+    require(isinstance(reference, dict) and set(reference) == {'path', 'bytes', 'sha256'} and
+            reference['path'] == str(path) and type(reference['bytes']) is int and
+            reference['bytes'] >= 0 and path.stat().st_size == reference['bytes'], 'Content review report path differs')
+    require(descriptor(path) == reference, 'Content review report bytes differ')
+    return path
+
+
+def _review_evidence(values):
+    require(isinstance(values, list) and 0 < len(values) <= 64, 'Source/output review evidence required')
+    for reference in values:
+        require(isinstance(reference, dict) and type(reference.get('bytes')) is int and
+                0 < reference['bytes'] <= REVIEW_METADATA_LIMIT,
+                'Use bounded source/output review evidence, not corpus payloads')
+        require(Path(reference['path']).stat().st_size == reference['bytes'] and
+                descriptor(reference['path']) == reference, 'Content review evidence changed')
+
+
+def _review_fallbacks(path, expected_count, namespace_counts=None):
+    # Stream every row, including errors after any possible sample prefix.
+    before = path.stat(); count = 0; reason_counts = {}; namespaces = {}
+    with path.open('rb') as stream:
+        while True:
+            raw = stream.readline(REVIEW_METADATA_LIMIT + 1)
+            if not raw: break
+            require(len(raw) <= REVIEW_METADATA_LIMIT, 'Fallback review row exceeds metadata limit')
+            row = json.loads(raw)
+            require(isinstance(row, dict) and type(row.get('namespace')) is int and row['namespace'] >= 0 and
+                    isinstance(row.get('title'), str), 'Invalid fallback review identity')
+            reasons = row.get('reasons')
+            require(isinstance(reasons, list) and reasons and
+                    all(isinstance(reason, str) and reason for reason in reasons) and len(set(reasons)) == len(reasons), 'Invalid fallback review reasons')
+            for reason in reasons:
+                require(reason.split(':', 1)[0] not in
+                        ('expansion_error', 'missing_language_heading', 'unresolved_language_heading',
+                         'rendered_lua_error', 'rendered_extension_error', 'render_limit',
+                         'template_presentation', 'missing_template'),
+                        'Positive expansion/language error remains unresolved: ' + row['title'] + ': ' + reason)
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            namespaces[row['namespace']] = namespaces.get(row['namespace'], 0) + 1
+            count += 1
+        after = os.fstat(stream.fileno())
+    require(all(getattr(before, field) == getattr(after, field) == getattr(path.stat(), field)
+                for field in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')),
+            'Fallback review report changed while streaming')
+    require(count == expected_count, 'Fallback review count differs from actual completion')
+    if namespace_counts is not None: namespace_counts.update(namespaces)
+    return reason_counts
+
+
+def validate_content_review(value, source, rows, expected_editions, *, scope):
+    """One content gate for exact current pilot/final output; never a diagnostic waiver."""
+    expected_editions = set(expected_editions)
+    require(scope in ('pilot', 'final') and
+            ((scope == 'pilot' and expected_editions == set(PILOT)) or
+             (scope == 'final' and len(expected_editions) == 198)), 'Invalid content review cohort')
+    schema = 'wikidict.corpus-pilot-content-review.v1' if scope == 'pilot' else 'wikidict.corpus-final-semantic-review.v1'
+    require(value.get('passed', True) is True and value.get('schema') == schema and value.get('outcome') in ('passed', 'passed-closed'),
+            'Explicit current content review schema required')
+    require(value.get('source_head') == source['head'] and value.get('source_fingerprint') == source['fingerprint'],
+            'Content review belongs to another source')
+    for key in ('pending_build_failures', 'unresolved_build_failures', 'pending_render_failures', 'unresolved_render_failures'):
+        require(value.get(key) == [], 'Content review retains pending/unresolved build/render failures')
+    require(len(rows) == len(expected_editions) and len({row['edition'] for row in rows}) == len(rows) and
+            {row['edition'] for row in rows} == expected_editions and all(row.get('accepted') for row in rows),
+            'Content review requires exact accepted edition cohort')
+    expected = {row['edition']: row['accepted']['complete']['sha256'] for row in rows}
+    require(value.get('accepted_completions') == expected, 'Content review completion map differs')
+    reviews = value.get('editions')
+    require(isinstance(reviews, list) and len(reviews) == len(expected_editions) and
+            all(isinstance(row, dict) for row in reviews) and
+            len({row.get('edition') for row in reviews}) == len(reviews) and
+            {row.get('edition') for row in reviews} == expected_editions,
+            'Explicit unique per-edition content dispositions required')
+    by_edition = {row['edition']: row for row in reviews}
+    for row in rows:
+        accepted = row['accepted']; review = by_edition[row['edition']]; root = Path(accepted['root'])
+        require(root.is_absolute() and root.is_dir() and not any(path.is_symlink() for path in (root, *root.parents)),
+                'Unsafe accepted content review root')
+        require(accepted['source'] == source and review.get('complete') == accepted['complete'],
+                'Content review completion/source differs')
+        require(all(type(accepted[key].get('bytes')) is int and 0 < accepted[key]['bytes'] <= REVIEW_METADATA_LIMIT
+                    for key in ('complete', 'complete_snapshot')), 'Completion review metadata exceeds limit')
+        complete = read_ref(accepted['complete']); snapshot = read_ref(accepted['complete_snapshot'])
+        require(complete == snapshot and all(accepted['complete'][key] == accepted['complete_snapshot'][key]
+                for key in ('bytes', 'sha256')) and complete['edition'] == row['edition'] and
+                complete['date'] == root.name and complete['build_inputs'] == accepted['build_inputs'] and
+                complete['build_inputs']['source'] == source['fingerprint'], 'Accepted completion identity differs')
+        reports = accepted['reports']
+        require(set(reports) == set(REVIEW_REPORT_NAMES) and review.get('reports') == reports,
+                'Content review report inventory differs')
+        files = complete['publication_files']
+        for name in REVIEW_REPORT_NAMES:
+            expected_ref = dict(path=str(root / name), bytes=files[name]['size'], sha256=files[name]['sha256'])
+            require(reports[name] == expected_ref, 'Content report differs from completion inventory')
+            path = _review_file(reports[name], root, name)
+        require(type(complete.get('input_pages')) is int and complete['input_pages'] >= 0 and
+                review.get('input_pages') == complete['input_pages'] and
+                review.get('namespace_coverage_totals') == complete['namespace_coverage_totals'] and
+                isinstance(review['namespace_coverage_totals'], dict) and
+                all(type(n) is int and n >= 0 for n in review['namespace_coverage_totals'].values()),
+                'Explicit observed input/namespace counts required')
+        fallback_count = complete['fallback_pages']
+        require(type(fallback_count) is int and fallback_count >= 0 and
+                type(review.get('fallback_pages')) is int and review['fallback_pages'] == fallback_count,
+                'Explicit fallback disposition count differs')
+        fallback_namespaces = {}
+        reasons = _review_fallbacks(root / 'fallback-pages.jsonl', fallback_count, fallback_namespaces)
+        # Reuse the producer's exact bounded coverage/conservation validators.
+        import build_wiktionaries as builder
+        coverage = builder.validate_page_coverage(root, require_total=True)
+        namespace_totals = builder.validate_namespace_coverage(root, coverage['pages_seen'], fallback_counts=fallback_namespaces)
+        require(coverage['pages_seen'] == complete['input_pages'] == accepted['input_pages'] and
+                namespace_totals == complete['namespace_coverage_totals'] and
+                namespace_totals['fallback_pages'] == fallback_count,
+                'Reviewed coverage/namespace totals differ from actual completion')
+        require(review.get('fallback_reasons') == reasons and
+                all(type(n) is int for n in review['fallback_reasons'].values()), 'Explicit fallback reason inventory differs')
+        inventory = dict(path=str(root / 'languages.tsv'), bytes=files['languages.tsv']['size'],
+                         sha256=files['languages.tsv']['sha256'])
+        require(review.get('language_inventory') == inventory, 'Language inventory review differs')
+        path = _review_file(inventory, root, 'languages.tsv')
+        require(inventory['bytes'] <= REVIEW_METADATA_LIMIT, 'Language inventory exceeds metadata limit')
+        with path.open('rb') as stream: inventory_bytes = stream.read(REVIEW_METADATA_LIMIT + 1)
+        require(len(inventory_bytes) == inventory['bytes'] and
+                hashlib.sha256(inventory_bytes).hexdigest() == inventory['sha256'], 'Language inventory changed while reading')
+        headings = inventory_bytes.decode('utf-8').splitlines()
+        require(headings and headings[0] == 'heading' and all(headings[1:]) and
+                len(set(headings[1:])) == len(headings[1:]), 'Invalid authenticated language inventory')
+        unclassified = 'Unclassified' in headings[1:]
+        require(type(review.get('unclassified_present')) is bool and review['unclassified_present'] == unclassified,
+                'Explicit Unclassified disposition differs')
+        status = complete['status']
+        blob_count = sum(name.endswith(('.wikblb', '.wikblb.xz')) for name in files)
+        require(status in ('built', 'empty') and review.get('publication_status') == status and
+                type(complete.get('blobs')) is int and complete['blobs'] == blob_count and
+                ((status == 'empty' and blob_count == 0 and not headings[1:]) or
+                 (status == 'built' and blob_count > 0)), 'Explicit empty-edition disposition differs')
+        content = review.get('content_review')
+        require(isinstance(content, dict) and content.get('edition') == row['edition'] and
+                content.get('complete_sha256') == accepted['complete']['sha256'] and
+                content.get('source_intent_verified') is True and
+                content.get('native_output_checked') is True and
+                content.get('build_inputs') == accepted['build_inputs'] and
+                content.get('input_pages') == complete['input_pages'] and
+                content.get('no_unresolved_language_declarations') is True and
+                content.get('no_build_render_errors') is True and
+                isinstance(content.get('explanation'), str) and content['explanation'].strip(),
+                'Actual source intent and native output content review required')
+        _review_evidence(content.get('source_evidence')); _review_evidence(content.get('output_evidence'))
+        dispositions = review.get('dispositions')
+        require(isinstance(dispositions, dict) and set(dispositions) == {'fallbacks', 'unclassified', 'empty'} and
+                all(isinstance(item, dict) for item in dispositions.values()),
+                'All three explicit residual dispositions required')
+        expected_status = dict(fallbacks='source-verified' if fallback_count else 'none',
+                               unclassified='source-verified' if unclassified else 'none',
+                               empty='source-verified' if status == 'empty' else 'not-empty')
+        source_reasons = dispositions['fallbacks'].get('source_verified_reasons')
+        require(isinstance(source_reasons, dict) and set(source_reasons) == set(reasons) and
+                all(isinstance(note, str) and note.strip() for note in source_reasons.values()),
+                'Every actual fallback reason needs a source/output disposition')
+        for kind, wanted in expected_status.items():
+            disposition = dispositions[kind]
+            require(isinstance(disposition, dict) and disposition.get('status') == wanted,
+                    'Residual category is not explicitly source-verified/clear: ' + kind)
+            if wanted == 'source-verified':
+                require(isinstance(disposition.get('explanation'), str) and disposition['explanation'].strip(),
+                        'Source-verified limitation needs actual source/output explanation: ' + kind)
+    return value
+
 def command(cfg, edition, workers, memory_limit_bytes=MEMORY_INITIAL):
     require(type(memory_limit_bytes) is int and memory_limit_bytes in (MEMORY_INITIAL, MEMORY),
             'Production memory budget must be 4 or 8 GiB')
@@ -625,8 +801,8 @@ def main(argv=None):
         current = summarize(rows, editions, preparations)
         if args.phase == 'remaining':
             review = gate(cfg['pilot_review'], cfg, ('passed', 'passed-closed'))
-            expected = {x['edition']: x['accepted']['complete']['sha256'] for x in current['editions'] if x['edition'] in PILOT and x['accepted']}
-            require(set(expected) == set(PILOT) and review['accepted_completions'] == expected, 'Actual current eight-edition content review required')
+            pilot_rows = [row for row in current['editions'] if row['edition'] in PILOT]
+            validate_content_review(review, cfg['source'], pilot_rows, PILOT, scope='pilot')
         selected = selected_phase_editions(editions, args.phase, args.defer_english)
         sequence = max((x['sequence'] for x in rows), default=0)
         for edition in selected:

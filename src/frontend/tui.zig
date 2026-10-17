@@ -696,8 +696,9 @@ const State = struct {
                     self.section = @min(self.section, self.section_count -| 1);
                     if (self.nav == .learn and self.answered) try formatted.writer.writeAll("Space: next word\n\n");
                     if (self.focus == .entry) if (self.reading) |r| {
-                        if (r.data.history.len == 0 or !std.mem.eql(u8, r.data.history[0], doc.entry.title)) {
-                            try r.remember(doc.entry.title);
+                        const selected_title = try self.db.titleAt(i);
+                        if (r.data.history.len == 0 or !std.mem.eql(u8, r.data.history[0], selected_title)) {
+                            try r.remember(selected_title);
                             try r.save(self.io);
                         }
                     };
@@ -1151,4 +1152,185 @@ test "terminal query editing is bounded and UTF8-aware" {
     try std.testing.expectEqual(@as(usize, 1), state.count());
     try std.testing.expectEqualStrings("cat", try state.db.titleAt(state.recordIndex(state.selected)));
     try std.testing.expectEqual(@as(usize, 1), state.choice_count);
+}
+
+test "terminal redirected reading preserves selected identity in history saved and resume" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const Fixture = struct {
+        fn write(alloc: std.mem.Allocator, directory: []const u8, kind: store.Kind, records: []const enc.blob_format.RecordInput) !void {
+            const metadata = if (kind == .language) try enc.blob_format.buildLanguageMetadataAlloc(alloc, "en", "English") else "";
+            const bytes = try enc.blob_format.buildAlloc(alloc, kind, metadata, records);
+            const path = try store.pathAlloc(alloc, directory, kind, if (kind == .language) "English" else "");
+            try std.Io.Dir.cwd().createDirPath(std.testing.io, std.fs.path.dirname(path).?);
+            try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+        }
+        fn payload(alloc: std.mem.Allocator, kind: store.Kind, title: []const u8, body: []const u8) ![]const u8 {
+            return enc.presentation_codec.encodeAlloc(alloc, .{ .entry = .{
+                .title = title,
+                .kind = kind,
+                .language = if (kind == .language) "English" else null,
+                .language_code = if (kind == .language) "en" else "",
+                .sections = &.{.{ .level = 2, .title = "Entry", .blocks = &.{.{
+                    .kind = .definition,
+                    .spans = &.{.{ .text = body }},
+                }} }},
+            } });
+        }
+    };
+    try Fixture.write(fixture, root, .language, &.{.{
+        .title = "cat",
+        .payload = try Fixture.payload(fixture, .language, "cat", "ordinary redirect body"),
+    }});
+    try Fixture.write(fixture, root, .thesaurus, &.{.{
+        .title = "animal",
+        .payload = try Fixture.payload(fixture, .thesaurus, "animal", "feature redirect body"),
+    }});
+    const sources = [_][]const u8{ "Alpha", "Feature" };
+    const targets = [_][]const u8{ "cat", "Thesaurus:animal" };
+    const displayed = [_][]const u8{ "cat", "animal" };
+    const bodies = [_][]const u8{ "ordinary redirect body", "feature redirect body" };
+    var aliases: [3]enc.blob_format.RecordInput = undefined;
+    for (sources, targets, 0..) |source, target, i| {
+        const feature = i == 1;
+        aliases[i] = .{
+            .title = try enc.alias_codec.keyAlloc(fixture, .language, source),
+            .payload = try enc.alias_codec.encodeAlloc(fixture, .{
+                .source_namespace = 0,
+                .source_kind = .language,
+                .source_title = source,
+                .source_key = source,
+                .xml_target = target,
+                .target_title = target,
+                .target_namespace = if (feature) 110 else 0,
+                .target_kind = if (feature) .thesaurus else .language,
+                .target_key = displayed[i],
+                .fragment = "",
+                .presentation = try Fixture.payload(fixture, .alias, source, "compiled redirect"),
+            }),
+        };
+    }
+    aliases[2] = .{
+        .title = try enc.alias_codec.keyAlloc(fixture, .thesaurus, "Old"),
+        .payload = try enc.alias_codec.encodeAlloc(fixture, .{
+            .source_namespace = 110,
+            .source_kind = .thesaurus,
+            .source_title = "Thesaurus:Old",
+            .source_key = "Old",
+            .xml_target = "Thesaurus:animal",
+            .target_title = "Thesaurus:animal",
+            .target_namespace = 110,
+            .target_kind = .thesaurus,
+            .target_key = "animal",
+            .fragment = "",
+            .presentation = try Fixture.payload(fixture, .alias, "Thesaurus:Old", "compiled feature redirect"),
+        }),
+    };
+    std.mem.sort(enc.blob_format.RecordInput, &aliases, {}, struct {
+        fn less(_: void, left: enc.blob_format.RecordInput, right: enc.blob_format.RecordInput) bool {
+            return std.mem.order(u8, left.title, right.title) == .lt;
+        }
+    }.less);
+    try Fixture.write(fixture, root, .alias, &aliases);
+    var db = try store.Store.open(std.testing.io, a, root, .language, "English");
+    defer db.deinit();
+    const label = try db.labelAlloc(fixture);
+    var reading = ReadingState.init(a);
+    defer reading.deinit();
+    try reading.load(std.testing.io, root, label);
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading, .label = label, .theme = .terminal, .color = false, .details = true };
+    defer state.deinit();
+    for (sources, displayed, bodies, 0..) |source, target, body, n| {
+        _ = try state.key(.{ .key = .clear });
+        try state.insert(source);
+        _ = try state.key(.{ .key = .enter });
+        try state.prepare(80);
+        try std.testing.expectEqualStrings(source, reading.data.last_title);
+        try std.testing.expectEqual(n + 1, reading.data.history.len);
+        try std.testing.expectEqualStrings(source, reading.data.history[0]);
+        try std.testing.expect(!ReadingState.contains(reading.data.history, target));
+        try std.testing.expect(std.mem.indexOf(u8, state.text, body) != null);
+        var raw = try db.recordAlloc(a, state.recordIndex(state.selected));
+        defer raw.deinit();
+        var doc = try model.fromRecord(a, raw.record);
+        defer doc.deinit();
+        try std.testing.expectEqualStrings(target, doc.entry.title);
+        try std.testing.expectEqualStrings(source, doc.entry.redirect.?.source_title);
+        try std.testing.expect(doc.entry.redirect.?.followed);
+        // Saving and reopening retain the same source selection as History.
+        _ = try state.key(.{ .key = .text, .bytes = .{ 's', 0, 0, 0 }, .len = 1 });
+        try std.testing.expect(ReadingState.contains(reading.data.saved, source));
+        try std.testing.expect(!ReadingState.contains(reading.data.saved, target));
+        try state.navigate(.saved);
+        _ = try state.key(.{ .key = .enter });
+        try state.prepare(80);
+        try std.testing.expectEqualStrings(source, try db.titleAt(state.recordIndex(state.selected)));
+        try std.testing.expectEqualStrings(source, reading.data.last_title);
+        try state.navigate(.history);
+        _ = try state.key(.{ .key = .enter });
+        try state.prepare(80);
+        try std.testing.expectEqualStrings(source, try db.titleAt(state.recordIndex(state.selected)));
+        try std.testing.expectEqual(n + 1, reading.data.history.len);
+    }
+    // The startup path resolves the persisted source title, not the body title.
+    {
+        var restored = ReadingState.init(a);
+        defer restored.deinit();
+        try restored.load(std.testing.io, root, label);
+        try std.testing.expectEqualStrings("Feature", restored.data.last_title);
+        try std.testing.expectEqual(@as(usize, 2), restored.data.history.len);
+        try std.testing.expectEqualStrings("Feature", restored.data.history[0]);
+        try std.testing.expectEqualStrings("Alpha", restored.data.history[1]);
+        var resumed: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &restored, .label = label, .theme = .terminal, .color = false, .details = true };
+        defer resumed.deinit();
+        try resumed.changed();
+        resumed.selected = (try db.find(restored.data.last_title)).?;
+        resumed.focus = .entry;
+        try resumed.prepare(40);
+        try std.testing.expectEqualStrings("Feature", restored.data.last_title);
+        try std.testing.expectEqual(@as(usize, 2), restored.data.history.len);
+        try std.testing.expect(std.mem.indexOf(u8, resumed.text, "feature redirect body") != null);
+    }
+    // Disabling new history still keeps the selected source as the resume title.
+    reading.data.history_limit = 0;
+    _ = try state.key(.{ .key = .clear });
+    try state.insert("Alpha");
+    _ = try state.key(.{ .key = .enter });
+    try state.prepare(40);
+    try std.testing.expectEqualStrings("Alpha", reading.data.last_title);
+    try std.testing.expectEqual(@as(usize, 2), reading.data.history.len);
+    try std.testing.expectEqualStrings("Feature", reading.data.history[0]);
+    // A feature dictionary stores its local navigation key, not the XML namespace spelling.
+    {
+        var feature_db = try store.Store.open(std.testing.io, a, root, .thesaurus, "");
+        defer feature_db.deinit();
+        const feature_label = try feature_db.labelAlloc(fixture);
+        var feature_reading = ReadingState.init(a);
+        defer feature_reading.deinit();
+        try feature_reading.load(std.testing.io, root, feature_label);
+        var feature_state: State = .{ .io = std.testing.io, .a = a, .db = &feature_db, .reading = &feature_reading, .label = feature_label, .theme = .terminal, .color = false, .details = true };
+        defer feature_state.deinit();
+        try feature_state.insert("Old");
+        _ = try feature_state.key(.{ .key = .enter });
+        try feature_state.prepare(80);
+        try std.testing.expectEqualStrings("Old", feature_reading.data.last_title);
+        try std.testing.expectEqual(@as(usize, 1), feature_reading.data.history.len);
+        try std.testing.expectEqualStrings("Old", feature_reading.data.history[0]);
+        try std.testing.expect(!ReadingState.contains(feature_reading.data.history, "animal"));
+        try std.testing.expect(!ReadingState.contains(feature_reading.data.history, "Thesaurus:Old"));
+        try std.testing.expect(std.mem.indexOf(u8, feature_state.text, "feature redirect body") != null);
+        _ = try feature_state.key(.{ .key = .text, .bytes = .{ 's', 0, 0, 0 }, .len = 1 });
+        try std.testing.expect(ReadingState.contains(feature_reading.data.saved, "Old"));
+        var feature_restored = ReadingState.init(a);
+        defer feature_restored.deinit();
+        try feature_restored.load(std.testing.io, root, feature_label);
+        try std.testing.expectEqualStrings("Old", feature_restored.data.last_title);
+        try std.testing.expect((try feature_db.find(feature_restored.data.last_title)) != null);
+        try std.testing.expectEqual(@as(usize, 1), feature_restored.data.history.len);
+    }
 }
