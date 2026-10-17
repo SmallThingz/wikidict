@@ -393,6 +393,60 @@ class ControllerPreparationTests(unittest.TestCase):
                                      result=result_ref, closure=controller.descriptor(closure_path)))
         return controller.descriptor(receipt_path)
 
+    def location_context(self, root, *, result_changes=None, closure_changes=None):
+        old = self.config(root / 'context')
+        relocated = root / 'selected-identical-manifest.json'
+        relocated.write_bytes(Path(old['manifest']['path']).read_bytes())
+        current = dict(old, manifest=controller.descriptor(relocated))
+        receipt = self.preparation(root / 'prep', old, 'location-only', outcome='failed',
+            seconds=7, edition='arwiktionary', result_changes=result_changes, closure_changes=closure_changes)
+        value = controller.read_ref(receipt)
+        value['manifest_transition'] = dict(from_manifest=old['manifest'], to_manifest=current['manifest'],
+            from_manifest_snapshot=old['manifest'], scope='retained-production-time-only',
+            runtime_reuse_credit=False, reason='Same authenticated manifest bytes at the selected ordinary path.',
+            identical_manifest_content=True)
+        path = root / 'location-accounting.json'; write_json(path, value)
+        current['production_preparations'] = [controller.descriptor(path)]
+        return old, current, value, path
+
+    def test_identical_manifest_location_preserves_failed_arabic_interval_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); old,cfg,value,path=self.location_context(root)
+            original=Path(value['result']['path']).read_bytes()
+            cfg['production_preparations'] *= 2
+            rows=controller.load_preparations(cfg)
+            self.assertEqual(len(rows),1); self.assertEqual(rows[0]['edition'],'arwiktionary')
+            self.assertEqual(rows[0]['outcome'],'failed'); self.assertEqual(rows[0]['elapsed_seconds'],7)
+            self.assertEqual(rows[0]['original_manifest'],old['manifest'])
+            self.assertEqual(rows[0]['manifest_transition'],value['manifest_transition'])
+            self.assertFalse(rows[0]['manifest_transition']['runtime_reuse_credit'])
+            self.assertEqual(rows,controller.load_preparations(cfg))
+            self.assertEqual(Path(value['result']['path']).read_bytes(),original)
+
+    def test_identical_manifest_location_requires_explicit_authenticated_time_only_proof(self):
+        for change in ('missing-flag','runtime-credit','wrong-from','stale-snapshot','different-bytes','registry-credit'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory); old,cfg,value,path=self.location_context(root)
+                transition=value['manifest_transition']
+                if change=='missing-flag':transition.pop('identical_manifest_content')
+                if change=='runtime-credit':transition['runtime_reuse_credit']=True
+                if change=='wrong-from':transition['from_manifest']={}
+                if change=='stale-snapshot':transition['from_manifest_snapshot']['sha256']='f'*64
+                if change=='different-bytes':
+                    write_json(Path(cfg['manifest']['path']),{'changed_payload':True})
+                    cfg['manifest']=controller.descriptor(cfg['manifest']['path']);transition['to_manifest']=cfg['manifest']
+                if change=='registry-credit':transition['unrelated_arabic_registry']={}
+                write_json(path,value);cfg['production_preparations']=[controller.descriptor(path)]
+                with self.assertRaises(ValueError):controller.load_preparations(cfg)
+
+    def test_identical_manifest_location_does_not_relax_context_or_independent_closure(self):
+        for changed in ('clock','unclosed','source'):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
+                changes={'now_unix':1} if changed=='clock' else ({'source':{}} if changed=='source' else None)
+                old,cfg,value,path=self.location_context(Path(directory),result_changes=changes,
+                    closure_changes={'cleanup_proven':False} if changed=='unclosed' else None)
+                with self.assertRaises(ValueError):controller.load_preparations(cfg)
+
     def test_all_production_outcomes_count_once_across_duplicate_load_and_resume(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -681,6 +735,90 @@ class ControllerPreparationTests(unittest.TestCase):
             current['production_preparations'] = [self.manifest_receipt(root / 'prep', receipt, current, current, snapshot)]
             with self.assertRaisesRegex(ValueError, 'does not change manifest'):
                 controller.load_preparations(current)
+
+
+    def arabic_registry_contexts(self, root):
+        old = self.config(root / 'context')
+        original_registry = root / 'language-registry.original.tsv'
+        original_registry.write_bytes(b'# wikidict-language-registry-v2\n# content-language\tar\nmul\tMultiple languages\tmul\n')
+        derived_registry = root / 'language-registry.derived.tsv'
+        derived_registry.write_bytes(original_registry.read_bytes() + '# local-alias\tmul\tمتفق عليه دوليا\n'.encode())
+        refs = dict(original_registry=controller.descriptor(original_registry),
+                    derived_registry=controller.descriptor(derived_registry))
+        value = dict(requested_editions=['enwiktionary', 'arwiktionary'],
+                     files=[dict(wiki='arwiktionary', date='20261001', sha1='a' * 40)],
+                     auxiliary_capture_roots={'enwiktionary': '/captures/en', 'arwiktionary': '/captures/ar'},
+                     language_registries=[dict(wiki='enwiktionary', date='20261001', name='language-registry.tsv', content_language='en', size=5, sha256='f' * 64),
+                         dict(wiki='arwiktionary', date='20261001', name='language-registry.tsv', content_language='ar',
+                              size=refs['original_registry']['bytes'], sha256=refs['original_registry']['sha256'])])
+        path = Path(old['manifest']['path']); write_json(path, value)
+        old['manifest'] = controller.descriptor(path)
+        snapshot = root / 'manifest.original.json'; snapshot.write_bytes(path.read_bytes())
+        value['language_registries'][1].update(size=refs['derived_registry']['bytes'], sha256=refs['derived_registry']['sha256'])
+        write_json(path, value)
+        return old, dict(old, manifest=controller.descriptor(path)), controller.descriptor(snapshot), refs
+
+    def test_unrelated_arabic_registry_retains_sixteen_intervals_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); old, current, snapshot, refs = self.arabic_registry_contexts(root)
+            current['source'] = self.config(root / 'new-source')['source']
+            value = controller.read_ref(current['manifest'])
+            value['auxiliary_capture_roots']['enwiktionary'] = '/captures/new'
+            write_json(Path(current['manifest']['path']), value)
+            current['manifest'] = controller.descriptor(current['manifest']['path'])
+            selected, immutable = [], []
+            for i in range(16):
+                receipt = self.preparation(root / str(i), old, 'p' + str(i),
+                    outcome=('passed', 'failed', 'superseded')[i % 3], seconds=i + 1)
+                authority = controller.read_ref(receipt)
+                immutable.extend((Path(authority[key]['path']), Path(authority[key]['path']).read_bytes()) for key in ('result', 'closure'))
+                receipt = self.transition_receipt(root / str(i), receipt, old['source'], current['source'])
+                selected.append(self.manifest_receipt(root / str(i), receipt, old, current, snapshot,
+                    dict(unrelated_arabic_registry=refs)))
+            current['production_preparations'] = selected + selected
+            rows = controller.load_preparations(current)
+            self.assertEqual(16, len(rows))
+            summary = controller.summarize([attempt('a', 1, pages=17, seconds=20)], ['enwiktionary'], rows + rows)
+            self.assertEqual(136, summary['observed_cohort_preparation_seconds'])
+            self.assertEqual(156, summary['observed_cohort_seconds'])
+            self.assertTrue(all(row['manifest_transition']['runtime_reuse_credit'] is False for row in rows))
+            for path, content in immutable:self.assertEqual(content, path.read_bytes())
+
+    def test_unrelated_arabic_registry_rejects_nonalias_and_other_input_changes(self):
+        for change in ('extra-directive', 'wrong-code', 'symbol-alias', 'rewrite-old', 'other-registry', 'dump', 'capture-root', 'editions', 'extra-field'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);old,current,snapshot,refs=self.arabic_registry_contexts(root)
+                value=controller.read_ref(current['manifest'])
+                if change in ('extra-directive','wrong-code','symbol-alias','rewrite-old'):
+                    path=Path(refs['derived_registry']['path']); data=path.read_bytes()
+                    if change=='extra-directive':data+=b'# local-alias\tmul\textra\n'
+                    if change=='wrong-code':data=data.replace(b'# local-alias\tmul\t',b'# local-alias\tzxx\t')
+                    if change=='symbol-alias':data=data.replace('متفق عليه دوليا'.encode(),'رموز'.encode())
+                    if change=='rewrite-old':data=data.replace(b'Multiple languages',b'Something else')
+                    path.write_bytes(data);refs['derived_registry']=controller.descriptor(path)
+                    value['language_registries'][1].update(size=refs['derived_registry']['bytes'],sha256=refs['derived_registry']['sha256'])
+                if change=='other-registry':value['language_registries'][0]['sha256']='b'*64
+                if change=='dump':value['files'][0]['sha1']='b'*40
+                if change=='capture-root':value['auxiliary_capture_roots']['arwiktionary']='/other'
+                if change=='editions':value['requested_editions'].append('dewiktionary')
+                if change=='extra-field':value['unrelated']=True
+                write_json(Path(current['manifest']['path']),value);current['manifest']=controller.descriptor(current['manifest']['path'])
+                receipt=self.preparation(root/'prep',old,'p')
+                current['production_preparations']=[self.manifest_receipt(root/'prep',receipt,old,current,snapshot,dict(unrelated_arabic_registry=refs))]
+                with self.assertRaises(ValueError):controller.load_preparations(current)
+
+    def test_unrelated_arabic_registry_rejects_same_edition_runtime_credit_and_stale_bytes(self):
+        for change in ('same-edition','runtime-credit','stale-registry','unclosed','missing-proof'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);old,current,snapshot,refs=self.arabic_registry_contexts(root)
+                receipt=self.preparation(root/'prep',old,'p',edition='arwiktionary' if change=='same-edition' else 'enwiktionary',
+                    closure_changes={'cleanup_proven':False} if change=='unclosed' else None)
+                extra=dict(unrelated_arabic_registry=refs)
+                if change=='runtime-credit':extra['runtime_reuse_credit']=True
+                if change=='missing-proof':extra['unrelated_arabic_registry']={}
+                current['production_preparations']=[self.manifest_receipt(root/'prep',receipt,old,current,snapshot,extra)]
+                if change=='stale-registry':Path(refs['derived_registry']['path']).write_bytes(b'changed')
+                with self.assertRaises(ValueError):controller.load_preparations(current)
 
 
 class ControllerMemoryPolicyTests(unittest.TestCase):

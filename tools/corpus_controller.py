@@ -135,6 +135,95 @@ def phase_end(log_path, edition, date):
     return found[0] if found else None
 
 
+def validate_preparation_manifest_transition(cfg, manifest, edition, date, manifest_transition):
+    """Authenticate only existing time-only input carries; no runtime eligibility."""
+    if manifest != cfg['manifest']:
+        require(isinstance(manifest_transition, dict)
+                and manifest_transition.get('from_manifest') == manifest
+                and manifest_transition.get('to_manifest') == cfg['manifest']
+                and manifest_transition.get('scope') == 'retained-production-time-only'
+                and manifest_transition.get('runtime_reuse_credit') is False
+                and isinstance(manifest_transition.get('reason'), str)
+                and manifest_transition['reason'].strip(),
+                'Older-input preparation needs an explicit time-only manifest transition')
+        snapshot = manifest_transition.get('from_manifest_snapshot')
+        require(isinstance(snapshot, dict)
+                and all(snapshot.get(key) == manifest[key] for key in ('bytes', 'sha256')),
+                'Original manifest snapshot differs from preparation')
+        before, after = read_ref(snapshot), read_ref(cfg['manifest'])
+        require(isinstance(before, dict) and isinstance(after, dict), 'Invalid transition manifests')
+        registry_change = manifest_transition.get('unrelated_arabic_registry')
+        if all(manifest[key] == cfg['manifest'][key] for key in ('bytes', 'sha256')):
+            require(manifest_transition.get('identical_manifest_content') is True
+                    and registry_change is None and before == after,
+                    'Manifest location carry needs explicit identical-content proof')
+            return manifest_transition
+        require(manifest_transition.get('identical_manifest_content') is None,
+                'Identical-content manifest carry cannot change bytes')
+        if registry_change is not None:
+            # Accounting only: a source-grounded Arabic TSV addition cannot
+            # invalidate or grant runtime credit to another edition's work.
+            require(edition != 'arwiktionary' and date == '20261001'
+                    and isinstance(registry_change, dict)
+                    and set(registry_change) == {'original_registry', 'derived_registry'},
+                    'Arabic registry timing transition applies only to another edition')
+            registry_refs = [registry_change[key] for key in ('original_registry', 'derived_registry')]
+            for registry_ref in registry_refs:
+                require(isinstance(registry_ref, dict) and set(registry_ref) == {'path', 'bytes', 'sha256'}
+                        and type(registry_ref['bytes']) is int and 0 < registry_ref['bytes'] <= 1024**2
+                        and descriptor(registry_ref['path']) == registry_ref,
+                        'Arabic registry timing bytes differ')
+            original_registry, derived_registry = [Path(ref['path']).read_bytes() for ref in registry_refs]
+            directive = '# local-alias\tmul\tمتفق عليه دوليا\n'.encode('utf-8')
+            require(original_registry.startswith(b'# wikidict-language-registry-v2\n')
+                    and b'# content-language\tar\n' in original_registry
+                    and original_registry.endswith(b'\n') and directive not in original_registry
+                    and derived_registry == original_registry + directive,
+                    'Arabic registry timing transition must append only the exact local alias')
+            old_rows, new_rows = before.get('language_registries'), after.get('language_registries')
+            require(isinstance(old_rows, list) and isinstance(new_rows, list)
+                    and len(old_rows) == len(new_rows)
+                    and all(isinstance(row, dict) for row in old_rows + new_rows),
+                    'Arabic registry inventory differs')
+            selected = [i for i, row in enumerate(old_rows)
+                        if row.get('wiki') == 'arwiktionary' and row.get('date') == '20261001']
+            require(len(selected) == 1, 'Exactly one Arabic registry inventory required')
+            index = selected[0]
+            original_row, derived_row = old_rows[index], new_rows[index]
+            require(original_row.get('name') == 'language-registry.tsv'
+                    and original_row.get('content_language') == 'ar'
+                    and all(original_row.get(key) == registry_refs[0][field]
+                            and derived_row.get(key) == registry_refs[1][field]
+                            for key, field in (('size', 'bytes'), ('sha256', 'sha256'))),
+                    'Arabic registry inventory does not authenticate selected TSVs')
+            expected = dict(before, language_registries=list(old_rows))
+            expected['language_registries'][index] = dict(original_row,
+                size=registry_refs[1]['bytes'], sha256=registry_refs[1]['sha256'])
+            # Preserve the already-supported own-edition capture-root carry
+            # when older intervals predate that independent input update.
+            old_roots, new_roots = before.get('auxiliary_capture_roots'), after.get('auxiliary_capture_roots')
+            require(isinstance(old_roots, dict) and isinstance(new_roots, dict)
+                    and isinstance(old_roots.get(edition), str) and old_roots[edition]
+                    and isinstance(new_roots.get(edition), str) and new_roots[edition],
+                    'Missing original or current preparation capture root')
+            expected['auxiliary_capture_roots'] = dict(old_roots)
+            expected['auxiliary_capture_roots'][edition] = new_roots[edition]
+            require(expected == after,
+                    'Arabic registry timing transition changes unrelated manifest inputs')
+        else:
+            before, after = dict(before), dict(after)
+            old_roots, new_roots = before.pop('auxiliary_capture_roots', None), after.pop('auxiliary_capture_roots', None)
+            require(isinstance(old_roots, dict) and isinstance(new_roots, dict), 'Missing auxiliary capture roots')
+            old_roots, new_roots = dict(old_roots), dict(new_roots)
+            old_root, new_root = old_roots.pop(edition, None), new_roots.pop(edition, None)
+            require(isinstance(old_root, str) and old_root and isinstance(new_root, str) and new_root
+                    and old_root != new_root and before == after and old_roots == new_roots,
+                    'Manifest transition must change only this edition auxiliary capture root')
+    elif manifest_transition is not None:
+        require(False, 'Manifest transition does not change manifest')
+    return manifest_transition
+
+
 def load_preparations(cfg):
     """Authenticate explicitly selected production work, never diagnostics.
 
@@ -161,32 +250,8 @@ def load_preparations(cfg):
                     'Older-source preparation needs an explicit source transition')
         elif transition is not None:
             require(False, 'Source transition does not change source')
-        manifest_transition = receipt.get('manifest_transition')
-        if result['manifest'] != cfg['manifest']:
-            require(isinstance(manifest_transition, dict)
-                    and manifest_transition.get('from_manifest') == result['manifest']
-                    and manifest_transition.get('to_manifest') == cfg['manifest']
-                    and manifest_transition.get('scope') == 'retained-production-time-only'
-                    and manifest_transition.get('runtime_reuse_credit') is False
-                    and isinstance(manifest_transition.get('reason'), str)
-                    and manifest_transition['reason'].strip(),
-                    'Older-input preparation needs an explicit time-only manifest transition')
-            snapshot = manifest_transition.get('from_manifest_snapshot')
-            require(isinstance(snapshot, dict)
-                    and all(snapshot.get(key) == result['manifest'][key] for key in ('bytes', 'sha256')),
-                    'Original manifest snapshot differs from preparation')
-            before, after = read_ref(snapshot), read_ref(cfg['manifest'])
-            require(isinstance(before, dict) and isinstance(after, dict), 'Invalid transition manifests')
-            before, after = dict(before), dict(after)
-            old_roots, new_roots = before.pop('auxiliary_capture_roots', None), after.pop('auxiliary_capture_roots', None)
-            require(isinstance(old_roots, dict) and isinstance(new_roots, dict), 'Missing auxiliary capture roots')
-            old_roots, new_roots = dict(old_roots), dict(new_roots)
-            old_root, new_root = old_roots.pop(result['edition'], None), new_roots.pop(result['edition'], None)
-            require(isinstance(old_root, str) and old_root and isinstance(new_root, str) and new_root
-                    and old_root != new_root and before == after and old_roots == new_roots,
-                    'Manifest transition must change only this edition auxiliary capture root')
-        elif manifest_transition is not None:
-            require(False, 'Manifest transition does not change manifest')
+        manifest_transition = validate_preparation_manifest_transition(
+            cfg, result['manifest'], result['edition'], result['date'], receipt.get('manifest_transition'))
         for key in ('compiler', 'date', 'now_unix', 'expansion_timeout_ms'):
             require(result[key] == cfg[key], f'Preparation {key} differs from this run')
         seconds = result['elapsed_seconds']
