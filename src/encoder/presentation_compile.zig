@@ -4799,6 +4799,45 @@ pub const Renderer = struct {
         }
         return false;
     }
+    // Promote only existing ordinary block containers after lexical text.
+    // Nested accepted tags, protected bodies and link labels keep their owners.
+    fn inlineBodyContainerAt(self: *Renderer, input: []const u8, start: usize, line_end: usize) Error!?usize {
+        var at = start;
+        var opaque_scan: syntax.OpaqueScan = .{};
+        while (at < line_end) {
+            at += std.mem.indexOfAny(u8, input[at..line_end], "<[{") orelse return null;
+            if (input[at] == '<') {
+                if (opaque_scan.protectedEnd(input, at, null)) |end| {
+                    at = end;
+                    continue;
+                }
+                if (try self.semanticTagAt(input[at..], 0)) |tag| {
+                    if (!tag.closing and syntax.pairedHtmlTag(tag.name)) {
+                        const pair = syntax.matchingTag(input[at..], tag) orelse return null;
+                        if (at > start and oneOf(tag.name, &.{ "blockquote", "div", "p", "center" }))
+                            return at;
+                        at += pair.end;
+                    } else at += tag.end;
+                    continue;
+                }
+            } else if (starts(input[at..], "[[") or starts(input[at..], "{{")) {
+                if (syntax.balancedWithOpaqueScan(input, at, &opaque_scan)) |pair| {
+                    at = pair.end;
+                    continue;
+                }
+                return null;
+            } else if (input[at] == '[' and ir.hasExternalProtocol(input[at + 1 ..])) {
+                var iterator: ir.InlineIterator = .{ .input = input[at..], .renderer_boundaries = true };
+                if (iterator.next()) |token| if (token.kind == .external_link) {
+                    at += iterator.cursor;
+                    continue;
+                };
+            }
+            at += 1;
+        }
+        return null;
+    }
+
     fn bodyPreAt(input: []const u8, start: usize, opaque_scan: *syntax.OpaqueScan) ?BodyPre {
         const line_end = std.mem.indexOfScalarPos(u8, input, start, '\n') orelse input.len;
         var nesting: [max_depth][]const u8 = undefined;
@@ -5228,6 +5267,19 @@ pub const Renderer = struct {
                     continue;
                 }
             }
+            // An ordinary block after lexical text owns its body and later wiki lines.
+            // Split only its prefix, then reuse the existing matched body arm.
+            if (prefix == 0 and html_tag == null and protected_tag == null and heading == null and
+                table_indent == null and !self.pre_block and !link_label_scope)
+            {
+                if (try self.inlineBodyContainerAt(input, start, physical_end)) |container_at| {
+                    try self.bodyRawParagraph(&blocks, input, input[para orelse start .. container_at], if ((para orelse start) == 0) initial_quote else null, &body_quotes, &link_inline_join);
+                    para = null;
+                    formatting_join_pending = false;
+                    pos = container_at;
+                    continue;
+                }
+            }
             // A close-marker's same-line whitespace is not an authored blank
             // line. Keep its pending soft-space join for the next physical line.
             if (anchored_inline and clean.len == 0 and link_inline_join != null and !self.pre_block) continue;
@@ -5301,10 +5353,13 @@ pub const Renderer = struct {
                     // Ordinary quoted lines do not open implicit preformatted blocks.
                     // Explicit pre/nowiki and actual list/heading rules stay independent.
                     const parent_blockquote_flow = self.html_blockquote_flow;
-                    self.html_blockquote_flow = parent_blockquote_flow or tag.is("blockquote");
-                    defer self.html_blockquote_flow = parent_blockquote_flow;
+                    if (tag.is("blockquote")) self.html_blockquote_flow = true;
+                    errdefer self.html_blockquote_flow = parent_blockquote_flow;
                     const scoped_quote = try self.rawBodyQuoteSeed(input, clean[tag.end..pair.inner_end], &body_quotes);
                     try blocks.appendSlice(self.a, try self.renderBodySlice(clean[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(clean.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote));
+                    // Legacy blockquote state is lexical: an inner closer exits
+                    // quote mode even while an outer DOM quote remains open.
+                    if (tag.is("blockquote")) self.html_blockquote_flow = false;
                 }
                 pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
                 if (pos < input.len and input[pos] == '\n') {
@@ -18531,6 +18586,75 @@ test "blockquote indentation remains ordinary flow with protected and outside bo
     for (cases, 0..) |case, index| {
         Check.one(a, case) catch |err| {
             std.debug.print("blockquote indent case {d}: {s}\n{s}\n", .{ index, @errorName(err), case.source });
+            failed_cases += 1;
+        };
+    }
+    try std.testing.expectEqual(@as(usize, 0), failed_cases);
+}
+
+test "inline block containers retain physical list ownership and protected boundaries through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { source: []const u8, kinds: []const []const u8, paths: []const []const u8, texts: []const []const u8, rich: bool = false, has_word: bool = false };
+    const Check = struct {
+        fn shape(alloc: A, values: anytype, case: Case) !void {
+            try std.testing.expectEqual(case.kinds.len, values.len);
+            var links: usize = 0;
+            for (values, case.kinds, case.paths, case.texts) |value, kind, path, visible| {
+                try std.testing.expectEqualStrings(kind, @tagName(value.kind));
+                try std.testing.expectEqualStrings(path, value.list_path);
+                try std.testing.expectEqualStrings(visible, trim(try FormattingScopeTest.text(alloc, value.spans)));
+                if (value.kind == .definition) try std.testing.expectEqualStrings("1", value.number);
+                for (value.spans) |span| {
+                    const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+                    try std.testing.expectEqual(value.kind == .preformatted, code);
+                }
+                for (value.spans) |span| if (span.kind == .link) {
+                    links += 1;
+                    try std.testing.expectEqualStrings("cat", span.target);
+                    try std.testing.expectEqualStrings("word", span.text);
+                };
+            }
+            try std.testing.expectEqual(@as(usize, @intFromBool(case.has_word)), links);
+            if (case.has_word) try FormattingScopeTest.word(alloc, values, "word", if (case.rich) .{ .kind = .link, .target = "cat", .language = "fr", .direction = "rtl" } else .{ .kind = .link, .target = "cat" });
+            if (case.rich) {
+                try FormattingScopeTest.word(alloc, values, "brief", .{ .small = true });
+                try FormattingScopeTest.word(alloc, values, "after", .{});
+            }
+        }
+        fn one(alloc: A, case: Case) !void {
+            var renderer: Renderer = .{ .a = alloc, .context = .{} };
+            const values = try renderer.renderBody(case.source);
+            try @This().shape(alloc, values, case);
+            const stored = try FormattingScopeTest.encode(alloc, &renderer, values);
+            try @This().shape(alloc, stored.entry.sections[0].blocks, case);
+            try std.testing.expect(!renderer.html_blockquote_flow and !renderer.html_list_item_flow);
+            try std.testing.expect(!renderer.fallbacks.any());
+        }
+    };
+    const cases = [_]Case{
+        .{ .source = "before<blockquote>\n# [[cat|word]]\n</blockquote>suffix\n# outside", .kinds = &.{ "paragraph", "definition", "paragraph", "definition" }, .paths = &.{ "", "#", "", "#" }, .texts = &.{ "before", "word", "suffix", "outside" }, .has_word = true },
+        .{ .source = "before<blockquote># literal opener\n# real\n</blockquote># literal suffix\n# outside", .kinds = &.{ "paragraph", "paragraph", "definition", "paragraph", "definition" }, .paths = &.{ "", "", "#", "", "#" }, .texts = &.{ "before", "# literal opener", "real", "# literal suffix", "outside" } },
+        .{ .source = "before<blockquote>\n<nowiki># literal</nowiki>\n# real\n</blockquote>after", .kinds = &.{ "paragraph", "paragraph", "definition", "paragraph" }, .paths = &.{ "", "", "#", "" }, .texts = &.{ "before", "# literal", "real", "after" } },
+        .{ .source = "<nowiki><blockquote># literal</blockquote></nowiki>\n# outside", .kinds = &.{ "paragraph", "definition" }, .paths = &.{ "", "#" }, .texts = &.{ "<blockquote># literal</blockquote>", "outside" } },
+        .{ .source = "before<blockquote>\n quoted\n</blockquote>\n outside", .kinds = &.{ "paragraph", "paragraph", "preformatted" }, .paths = &.{ "", "", "" }, .texts = &.{ "before", "quoted", "outside" } },
+        .{ .source = "before <small>brief</small><blockquote lang=fr dir=rtl>\n# [[cat|word]]\n</blockquote>after", .kinds = &.{ "paragraph", "definition", "paragraph" }, .paths = &.{ "", "#", "" }, .texts = &.{ "before brief", "word", "after" }, .rich = true, .has_word = true },
+        .{ .source = "<blockquote>outer\n<blockquote>inner</blockquote>\n continuation\n</blockquote>\n outside", .kinds = &.{ "paragraph", "paragraph", "preformatted", "preformatted" }, .paths = &.{ "", "", "", "" }, .texts = &.{ "outer", "inner", "continuation", "outside" } },
+        .{ .source = "<blockquote>outer\n<div><blockquote>inner</blockquote></div>\n continuation\n</blockquote>\n outside", .kinds = &.{ "paragraph", "paragraph", "preformatted", "preformatted" }, .paths = &.{ "", "", "", "" }, .texts = &.{ "outer", "inner", "continuation", "outside" } },
+        .{ .source = "<blockquote>outer<blockquote>inner</blockquote>\n continuation\n</blockquote>\n outside", .kinds = &.{ "paragraph", "paragraph", "preformatted", "preformatted" }, .paths = &.{ "", "", "", "" }, .texts = &.{ "outer", "inner", "continuation", "outside" } },
+        .{ .source = "before<blockquote>quote</blockquote>after", .kinds = &.{ "paragraph", "paragraph", "paragraph" }, .paths = &.{ "", "", "" }, .texts = &.{ "before", "quote", "after" } },
+        .{ .source = "before<div>\n# [[cat|word]]\n</div>suffix\n# outside", .kinds = &.{ "paragraph", "definition", "paragraph", "definition" }, .paths = &.{ "", "#", "", "#" }, .texts = &.{ "before", "word", "suffix", "outside" }, .has_word = true },
+        .{ .source = "before<div>division</div>after", .kinds = &.{ "paragraph", "paragraph", "paragraph" }, .paths = &.{ "", "", "" }, .texts = &.{ "before", "division", "after" } },
+        .{ .source = "before<p>paragraph</p>after", .kinds = &.{ "paragraph", "paragraph", "paragraph" }, .paths = &.{ "", "", "" }, .texts = &.{ "before", "paragraph", "after" } },
+        .{ .source = "before<center>centered</center>after", .kinds = &.{ "paragraph", "paragraph", "paragraph" }, .paths = &.{ "", "", "" }, .texts = &.{ "before", "centered", "after" } },
+        .{ .source = "<nowiki><div># literal</div></nowiki>\n# outside", .kinds = &.{ "paragraph", "definition" }, .paths = &.{ "", "#" }, .texts = &.{ "<div># literal</div>", "outside" } },
+        .{ .source = "before <small>brief</small><div lang=fr dir=rtl>\n# [[cat|word]]\n</div>after", .kinds = &.{ "paragraph", "definition", "paragraph" }, .paths = &.{ "", "#", "" }, .texts = &.{ "before brief", "word", "after" }, .rich = true, .has_word = true },
+    };
+    var failed_cases: usize = 0;
+    for (cases, 0..) |case, index| {
+        Check.one(a, case) catch |err| {
+            std.debug.print("inline block container case {d}: {s}\n{s}\n", .{ index, @errorName(err), case.source });
             failed_cases += 1;
         };
     }
