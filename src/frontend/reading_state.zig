@@ -1,5 +1,6 @@
 const std = @import("std");
 const A = std.mem.Allocator;
+const max_state_bytes: usize = 32 * 1024 * 1024;
 pub const Data = struct {
     history: []const []const u8 = &.{},
     saved: []const []const u8 = &.{},
@@ -38,7 +39,7 @@ pub const State = struct {
         defer scratch_arena.deinit();
         const scratch = scratch_arena.allocator();
         const path = try std.fmt.allocPrint(scratch, "{s}/.dict-state/{x}.json", .{ root, std.hash.Wyhash.hash(0, label) });
-        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, scratch, .limited(32 * 1024 * 1024)) catch |err| switch (err) {
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, scratch, .limited(max_state_bytes)) catch |err| switch (err) {
             error.FileNotFound => null,
             else => return err,
         };
@@ -66,7 +67,7 @@ pub const State = struct {
         const lock_path = try std.fmt.allocPrint(scratch, "{s}.lock", .{self.path});
         const lock = try std.Io.Dir.cwd().createFile(io, lock_path, .{ .truncate = false, .lock = .exclusive });
         defer lock.close(io);
-        const existing = std.Io.Dir.cwd().readFileAlloc(io, self.path, scratch, .limited(32 * 1024 * 1024)) catch |err| switch (err) {
+        const existing = std.Io.Dir.cwd().readFileAlloc(io, self.path, scratch, .limited(max_state_bytes)) catch |err| switch (err) {
             error.FileNotFound => null,
             else => return err,
         };
@@ -84,7 +85,7 @@ pub const State = struct {
         next.media_cache_mb = @min(4096, next.media_cache_mb);
         next.right = latest.right +| (self.data.right -| self.baseline.right);
         next.wrong = latest.wrong +| (self.data.wrong -| self.baseline.wrong);
-        next.saved = try mergeWords(scratch, self.baseline.saved, self.data.saved, latest.saved, 100_000, false);
+        next.saved = try mergeWords(scratch, self.baseline.saved, self.data.saved, latest.saved, std.math.maxInt(usize), false);
         next.history = try mergeWords(scratch, self.baseline.history, self.data.history, latest.history, if (next.history_limit == 0) 100_000 else next.history_limit, true);
         var committed: std.heap.ArenaAllocator = .init(self.a);
         errdefer committed.deinit();
@@ -95,6 +96,7 @@ pub const State = struct {
         const baseline = try snapshot(strings, owned);
         const owned_path = try strings.dupe(u8, self.path);
         const bytes = try std.json.Stringify.valueAlloc(scratch, owned, .{});
+        if (bytes.len > max_state_bytes) return error.ReadingStateTooLarge;
         const temp = try std.fmt.allocPrint(scratch, "{s}.part", .{self.path});
         defer std.Io.Dir.cwd().deleteFile(io, temp) catch {};
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = temp, .data = bytes });
@@ -184,7 +186,7 @@ pub const State = struct {
         self.data.history = try self.prepend(self.data.history, title, self.data.history_limit, false);
     }
     pub fn bookmark(self: *State, title: []const u8) !void {
-        self.data.saved = try self.prepend(self.data.saved, title, 100_000, contains(self.data.saved, title));
+        self.data.saved = try self.prepend(self.data.saved, title, std.math.maxInt(usize), contains(self.data.saved, title));
     }
     pub fn forget(self: *State, title: []const u8) !void {
         self.data.history = try self.prepend(self.data.history, title, if (self.data.history_limit == 0) 100_000 else self.data.history_limit, true);
@@ -389,4 +391,133 @@ test "failed saves preserve both generations and reclaim staged allocations" {
     try state.save(io);
     try std.testing.expectEqualStrings("after", state.baseline.last_title);
     try std.testing.expectEqual(@as(usize, 3), state.data.right);
+}
+
+test "large saved libraries survive unrelated saves additions and concurrent removals" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    var fixture_arena: std.heap.ArenaAllocator = .init(a);
+    defer fixture_arena.deinit();
+    const fixture = fixture_arena.allocator();
+    const titles = try fixture.alloc([]const u8, 100_001);
+    for (titles, 0..) |*title, i| title.* = try std.fmt.allocPrint(fixture, "saved-{d:0>6}-café", .{i});
+
+    var first = State.init(a);
+    defer first.deinit();
+    try first.load(io, root, "English");
+    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(first.path).?);
+    const seed = try std.json.Stringify.valueAlloc(fixture, Data{ .saved = titles }, .{});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = first.path, .data = seed });
+    try first.load(io, root, "English");
+    try std.testing.expectEqual(titles.len, first.data.saved.len);
+
+    // A settings/history save must preserve every explicitly saved word.
+    first.data.theme = .light;
+    first.data.history_limit = 2;
+    try first.remember("first");
+    try first.remember("second");
+    try first.remember("third");
+    try first.save(io);
+    try std.testing.expectEqual(titles.len, first.data.saved.len);
+    for (titles, first.data.saved) |expected, actual| try std.testing.expectEqualStrings(expected, actual);
+    try std.testing.expectEqual(@as(usize, 2), first.data.history.len);
+
+    var second = State.init(a);
+    defer second.deinit();
+    try second.load(io, root, "English");
+    try first.bookmark("追加した言葉");
+    try std.testing.expectEqual(titles.len + 1, first.data.saved.len);
+    try std.testing.expectEqualStrings("追加した言葉", first.data.saved[0]);
+    for (titles, first.data.saved[1..]) |expected, actual| try std.testing.expectEqualStrings(expected, actual);
+    try first.save(io);
+
+    // A stale reader removes exactly its selected word and retains the other reader's addition.
+    try second.bookmark(titles[2]);
+    try second.bookmark("another saved word");
+    try second.save(io);
+    try std.testing.expectEqual(titles.len + 1, second.data.saved.len);
+    try std.testing.expectEqualStrings("another saved word", second.data.saved[0]);
+    try std.testing.expectEqualStrings("追加した言葉", second.data.saved[1]);
+    var index: usize = 2;
+    for (titles, 0..) |expected, i| {
+        if (i == 2) continue;
+        try std.testing.expectEqualStrings(expected, second.data.saved[index]);
+        index += 1;
+    }
+    try std.testing.expectEqual(second.data.saved.len, index);
+
+    // An idle save must not resurrect the removed word or discard either addition.
+    try first.save(io);
+    var restored = State.init(a);
+    defer restored.deinit();
+    try restored.load(io, root, "English");
+    try std.testing.expectEqual(second.data.saved.len, restored.data.saved.len);
+    for (second.data.saved, restored.data.saved) |expected, actual| try std.testing.expectEqualStrings(expected, actual);
+    try std.testing.expectEqual(@TypeOf(restored.data.theme).light, restored.data.theme);
+    try std.testing.expectEqual(@as(usize, 2), restored.data.history.len);
+    try std.testing.expectEqualStrings("third", restored.data.history[0]);
+    try std.testing.expectEqualStrings("second", restored.data.history[1]);
+}
+
+test "oversized escaped reading state preserves disk and generations then recovers" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const read_limit: usize = 32 * 1024 * 1024;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    var counted: std.testing.FailingAllocator = .init(a, .{});
+    var state = State.init(counted.allocator());
+    defer state.deinit();
+    try state.load(io, root, "English");
+    try state.remember("before");
+    try state.bookmark("kept");
+    try state.save(io);
+    const disk_before = try std.Io.Dir.cwd().readFileAlloc(io, state.path, a, .limited(read_limit));
+    defer a.free(disk_before);
+
+    // Each quote needs two JSON bytes: the raw title fits the read envelope,
+    // but publishing its escaped representation would make the state unreadable.
+    const escaped_title = try a.alloc(u8, read_limit / 2 + 1);
+    defer a.free(escaped_title);
+    @memset(escaped_title, '"');
+    try std.testing.expect(escaped_title.len < read_limit and escaped_title.len * 2 > read_limit);
+    try state.bookmark(escaped_title);
+    try state.remember("after");
+    state.data.right = 3;
+    const data_before = state.data;
+    const baseline_before = state.baseline;
+    const path_before = state.path;
+    const live_before = counted.allocated_bytes - counted.freed_bytes;
+
+    try std.testing.expectError(error.ReadingStateTooLarge, state.save(io));
+    try std.testing.expect(std.meta.eql(data_before, state.data));
+    try std.testing.expect(std.meta.eql(baseline_before, state.baseline));
+    try std.testing.expect(std.meta.eql(path_before, state.path));
+    try std.testing.expectEqual(live_before, counted.allocated_bytes - counted.freed_bytes);
+    const disk_after = try std.Io.Dir.cwd().readFileAlloc(io, state.path, a, .limited(read_limit));
+    defer a.free(disk_after);
+    try std.testing.expectEqualStrings(disk_before, disk_after);
+
+    var restored = State.init(a);
+    defer restored.deinit();
+    try restored.load(io, root, "English");
+    try std.testing.expectEqual(@as(usize, 1), restored.data.saved.len);
+    try std.testing.expectEqualStrings("kept", restored.data.saved[0]);
+    try std.testing.expectEqualStrings("before", restored.data.last_title);
+    try std.testing.expectEqual(@as(usize, 0), restored.data.right);
+
+    // Removing the unpublishable pending word permits a normal atomic save.
+    try state.bookmark(escaped_title);
+    try state.save(io);
+    try restored.load(io, root, "English");
+    try std.testing.expectEqual(@as(usize, 1), restored.data.saved.len);
+    try std.testing.expectEqualStrings("kept", restored.data.saved[0]);
+    try std.testing.expectEqualStrings("after", restored.data.last_title);
+    try std.testing.expectEqual(@as(usize, 3), restored.data.right);
 }
