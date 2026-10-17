@@ -11,6 +11,7 @@ const Options = struct {
     root: []const u8,
     namespace_registry_snapshot: ?[]const u8 = null,
     site_info_snapshot: ?[]const u8 = null,
+    site_statistics_format_snapshot: ?[]const u8 = null,
     commons_data_snapshot: ?[]const u8 = null,
     category_stats_snapshot: ?[]const u8 = null,
     interface_messages_snapshot: ?[]const u8 = null,
@@ -55,6 +56,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.site_info_snapshot != null) return error.Usage;
             options.site_info_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--site-statistics-format-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.site_statistics_format_snapshot != null) return error.Usage;
+            options.site_statistics_format_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--commons-data-snapshot")) {
             index += 1;
             if (index >= args.len or options.commons_data_snapshot != null) return error.Usage;
@@ -891,6 +896,7 @@ test "structured Wikibase and language fallback snapshot options are strict" {
         .{ "--language-names-snapshot", "language_names_snapshot" },
         .{ "--date-numbering-snapshot", "date_numbering_snapshot" },
         .{ "--site-info-snapshot", "site_info_snapshot" },
+        .{ "--site-statistics-format-snapshot", "site_statistics_format_snapshot" },
     };
     inline for (cases) |case| {
         const options = try parseOptions(&.{ "dump.xml", "out", case[0], "snapshot.tsv" });
@@ -912,7 +918,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--page-redirects-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--date-numbering-snapshot FILE] [--magic-words-snapshot FILE] [--behavior-switches-snapshot FILE] [--image-options-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--site-statistics-format-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--page-redirects-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--date-numbering-snapshot FILE] [--magic-words-snapshot FILE] [--behavior-switches-snapshot FILE] [--image-options-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -942,6 +948,8 @@ pub fn main(init: std.process.Init) !void {
     try installSnapshot(init.io, a, options.namespace_registry_snapshot orelse return error.NamespaceRegistryRequired, expander_root, "namespace-registry.tsv");
     if (options.site_info_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "namespace-siteinfo.raw.json");
+    if (options.site_statistics_format_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "site-statistics-format.json");
     if (options.commons_data_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "commons-data.tsv");
     if (options.category_stats_snapshot) |snapshot|

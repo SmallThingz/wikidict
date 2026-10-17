@@ -482,8 +482,12 @@ pub const Registry = struct {
         // whose captured Nīwenglisc entry and sprǣcnaman register identify en.
         // This is a reviewed local alias, not a literal upstream alias record.
         // Keep the exact edition/spelling and all existing conflict checks.
-        if (std.mem.eql(u8, self.content_code orelse "", "ang"))
+        if (std.mem.eql(u8, self.content_code orelse "", "ang")) {
             try self.addLocalAlias("Níwe Englisc", "en");
+            // Exact macron spelling is independently attested by the same
+            // archive's language category and its acute-category redirect.
+            try self.addLocalAlias("Nīwe Englisc", "en");
+        }
         if (self.content_code) |code_value| {
             if (self.resolve(code_value) == null) return error.InvalidLanguageRegistry;
         }
@@ -1575,12 +1579,14 @@ test "curated ANG historical heading resolves through the captured canonical reg
     // Exact archived Module:sprǣcnaman literals (page 8074); the older heading
     // is deliberately absent from that module's own aliases table.
     try r.addLocalNamesLua("local names = { ang = \"Englisc\", en = \"Nīwenglisc\" }\nlocal aliases = { [\"Ænglisc\"] = \"ang\" }\n");
-    const resolved = r.resolveTrusted("Níwe Englisc").?;
-    try std.testing.expectEqualStrings("en", resolved.code);
-    try std.testing.expectEqualStrings("Nīwenglisc", resolved.heading);
+    for ([_][]const u8{ "Níwe Englisc", "Nīwe Englisc" }) |heading| {
+        const resolved = r.resolveTrusted(heading).?;
+        try std.testing.expectEqualStrings("en", resolved.code);
+        try std.testing.expectEqualStrings("Nīwenglisc", resolved.heading);
+    }
     try std.testing.expectEqualStrings("Englisc", r.resolve("ang").?.heading);
     try std.testing.expectEqual(@as(usize, 2), r.codes.count());
-    for ([_][]const u8{ "Niwe Englisc", "níwe englisc", "Níwe  Englisc" }) |other|
+    for ([_][]const u8{ "Niwe Englisc", "níwe englisc", "Níwe  Englisc", "nīwe englisc", "Nīwe  Englisc" }) |other|
         try std.testing.expect(r.resolve(other) == null);
 }
 
@@ -1588,26 +1594,30 @@ test "curated ANG heading requires the exact edition and a registered English co
     var other = Registry.empty(std.testing.allocator);
     defer other.deinit();
     try other.addTsv("# content-language\ten\nen\tEnglish\nenm\tMiddle English\n");
-    try std.testing.expect(other.resolve("Níwe Englisc") == null);
+    for ([_][]const u8{ "Níwe Englisc", "Nīwe Englisc" }) |heading|
+        try std.testing.expect(other.resolve(heading) == null);
     var missing = Registry.empty(std.testing.allocator);
     defer missing.deinit();
     try missing.addTsv("# content-language\tang\nang\tÆnglisc\n");
-    try std.testing.expect(missing.resolve("Níwe Englisc") == null);
+    for ([_][]const u8{ "Níwe Englisc", "Nīwe Englisc" }) |heading|
+        try std.testing.expect(missing.resolve(heading) == null);
     try std.testing.expectEqual(@as(usize, 1), missing.codes.count());
 }
 
 test "curated ANG heading cannot replace or promote captured aliases" {
-    var ordinary = Registry.empty(std.testing.allocator);
-    defer ordinary.deinit();
-    try ordinary.addTsv("# content-language\tang\nang\tÆnglisc\nen\tEnglish\nfr\tFrench\tNíwe Englisc\n");
-    try std.testing.expectEqualStrings("fr", ordinary.resolve("Níwe Englisc").?.code);
-    try std.testing.expect(ordinary.resolveTrusted("Níwe Englisc") == null);
-    var conflict = Registry.empty(std.testing.allocator);
-    defer conflict.deinit();
-    try conflict.addTsv("# content-language\tang\nang\tÆnglisc\nen\tEnglish\nfr\tFrench\n# local-alias\tfr\tNíwe Englisc\n");
-    try std.testing.expect(conflict.resolve("Níwe Englisc") == null);
-    var identical = Registry.empty(std.testing.allocator);
-    defer identical.deinit();
-    try identical.addTsv("# content-language\tang\nang\tÆnglisc\nen\tEnglish\n# local-alias\ten\tNíwe Englisc\n");
-    try std.testing.expectEqualStrings("en", identical.resolveTrusted("Níwe Englisc").?.code);
+    inline for (.{ "Níwe Englisc", "Nīwe Englisc" }) |heading| {
+        var ordinary = Registry.empty(std.testing.allocator);
+        defer ordinary.deinit();
+        try ordinary.addTsv("# content-language\tang\nang\tÆnglisc\nen\tEnglish\nfr\tFrench\t" ++ heading ++ "\n");
+        try std.testing.expectEqualStrings("fr", ordinary.resolve(heading).?.code);
+        try std.testing.expect(ordinary.resolveTrusted(heading) == null);
+        var conflict = Registry.empty(std.testing.allocator);
+        defer conflict.deinit();
+        try conflict.addTsv("# content-language\tang\nang\tÆnglisc\nen\tEnglish\nfr\tFrench\n# local-alias\tfr\t" ++ heading ++ "\n");
+        try std.testing.expect(conflict.resolve(heading) == null);
+        var identical = Registry.empty(std.testing.allocator);
+        defer identical.deinit();
+        try identical.addTsv("# content-language\tang\nang\tÆnglisc\nen\tEnglish\n# local-alias\ten\t" ++ heading ++ "\n");
+        try std.testing.expectEqualStrings("en", identical.resolveTrusted(heading).?.code);
+    }
 }

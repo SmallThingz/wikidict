@@ -219,3 +219,123 @@ test "versioned site info binds date and complete seven-counter current profile"
     try std.testing.expect(legacy.statistics == null);
     try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, "{\"schema\":\"unknown\",\"query\":{\"general\":{}}}", "arwiktionary", "20261001", "ar"));
 }
+
+/// Exact content-language formatting observations for the seven pinned site-info
+/// values. This is not a general locale formatter and never reads live counts.
+pub const FormattedStatistics = struct {
+    arena: std.heap.ArenaAllocator,
+    values: [7][]const u8,
+
+    pub fn init(a: A, bytes: []const u8, site_bytes: []const u8, namespace_sha256: [32]u8, wiki: []const u8, date: []const u8, language: []const u8) !FormattedStatistics {
+        if (bytes.len > 16 * 1024 or !std.unicode.utf8ValidateSlice(bytes)) return error.InvalidSiteStatisticsFormatSnapshot;
+        var site = try Snapshot.init(a, site_bytes, wiki, date, language);
+        defer site.deinit();
+        const counts = site.statistics orelse return error.InvalidSiteStatisticsFormatSnapshot;
+        const parsed_site = try std.json.parseFromSlice(std.json.Value, a, site_bytes, .{ .duplicate_field_behavior = .@"error" });
+        defer parsed_site.deinit();
+        if (!std.mem.eql(u8, try string(parsed_site.value, "namespace_registry_sha256"), &std.fmt.bytesToHex(namespace_sha256, .lower)))
+            return error.SiteStatisticsFormatIdentityMismatch;
+        var arena = std.heap.ArenaAllocator.init(a);
+        errdefer arena.deinit();
+        const owned = arena.allocator();
+        const parsed = std.json.parseFromSlice(std.json.Value, owned, bytes, .{ .duplicate_field_behavior = .@"error" }) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.InvalidSiteStatisticsFormatSnapshot,
+        };
+        defer parsed.deinit();
+        const value = parsed.value;
+        if (value != .object or value.object.count() != 7 or
+            !std.mem.eql(u8, try string(value, "schema"), "wikidict.site-statistics-format.v1"))
+            return error.InvalidSiteStatisticsFormatSnapshot;
+        if (!std.mem.eql(u8, try string(value, "wiki"), wiki) or
+            !std.mem.eql(u8, try string(value, "date"), date) or
+            !std.mem.eql(u8, try string(value, "content_language"), language))
+            return error.SiteStatisticsFormatIdentityMismatch;
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(site_bytes, &digest, .{});
+        if (!std.mem.eql(u8, try string(value, "site_info_sha256"), &std.fmt.bytesToHex(digest, .lower)) or
+            !std.mem.eql(u8, try string(value, "namespace_registry_sha256"), &std.fmt.bytesToHex(namespace_sha256, .lower)))
+            return error.SiteStatisticsFormatIdentityMismatch;
+        const rows = try field(value, "values");
+        if (rows != .array or rows.array.items.len != 7) return error.InvalidSiteStatisticsFormatSnapshot;
+        var values: [7][]const u8 = undefined;
+        const keys = [_][]const u8{ "pages", "articles", "images", "edits", "users", "activeusers", "admins" };
+        for (rows.array.items, keys, counts, 0..) |row, key, count, i| {
+            if (row != .object or row.object.count() != 3 or !std.mem.eql(u8, try string(row, "key"), key))
+                return error.InvalidSiteStatisticsFormatSnapshot;
+            const raw = try std.fmt.allocPrint(owned, "{d}", .{count});
+            if (!std.mem.eql(u8, try string(row, "raw"), raw)) return error.SiteStatisticsFormatIdentityMismatch;
+            const formatted = try string(row, "formatted");
+            if (formatted.len == 0 or formatted.len > 256 or !std.unicode.utf8ValidateSlice(formatted) or
+                std.mem.indexOfAny(u8, formatted, "<>{}|[]") != null) return error.InvalidSiteStatisticsFormatSnapshot;
+            var codepoints = (try std.unicode.Utf8View.init(formatted)).iterator();
+            while (codepoints.nextCodepoint()) |cp|
+                if (cp < 32 or (cp >= 127 and cp <= 159)) return error.InvalidSiteStatisticsFormatSnapshot;
+            values[i] = try owned.dupe(u8, formatted);
+        }
+        return .{ .arena = arena, .values = values };
+    }
+
+    pub fn deinit(self: *FormattedStatistics) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+};
+
+test "formatted statistics bind captured raw values identity and exact locale strings" {
+    const a = std.testing.allocator;
+    const namespace: [32]u8 = @splat(0);
+    const namespace_hex = std.fmt.bytesToHex(namespace, .lower);
+    const site = try std.fmt.allocPrint(a, "{{\"namespace_registry_sha256\":\"{s}\",{s}", .{ namespace_hex, (test_stats_prefix ++ "2}}}")[1..] });
+    defer a.free(site);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(site, &digest, .{});
+    const digest_hex = std.fmt.bytesToHex(digest, .lower);
+    const Row = struct { key: []const u8, raw: []const u8, formatted: []const u8 };
+    var proof = .{
+        .schema = @as([]const u8, "wikidict.site-statistics-format.v1"),
+        .wiki = @as([]const u8, "bclwiktionary"),
+        .date = @as([]const u8, "20261001"),
+        .content_language = @as([]const u8, "bcl"),
+        .namespace_registry_sha256 = @as([]const u8, &namespace_hex),
+        .site_info_sha256 = @as([]const u8, &digest_hex),
+        .values = [_]Row{
+            .{ .key = "pages", .raw = "13332", .formatted = "13.332" },
+            .{ .key = "articles", .raw = "8530", .formatted = "۸٬۵۳۰" },
+            .{ .key = "images", .raw = "0", .formatted = "۰" },
+            .{ .key = "edits", .raw = "60889", .formatted = "60 889" },
+            .{ .key = "users", .raw = "1596", .formatted = "1,596" },
+            .{ .key = "activeusers", .raw = "14", .formatted = "14" },
+            .{ .key = "admins", .raw = "2", .formatted = "2" },
+        },
+    };
+    const encoded = try std.json.Stringify.valueAlloc(a, proof, .{});
+    defer a.free(encoded);
+    var snapshot = try FormattedStatistics.init(a, encoded, site, namespace, "bclwiktionary", "20261001", "bcl");
+    defer snapshot.deinit();
+    for (proof.values, snapshot.values) |expected, actual| try std.testing.expectEqualStrings(expected.formatted, actual);
+    proof.values[1].raw = "0";
+    const wrong_count = try std.json.Stringify.valueAlloc(a, proof, .{});
+    defer a.free(wrong_count);
+    try std.testing.expectError(error.SiteStatisticsFormatIdentityMismatch, FormattedStatistics.init(a, wrong_count, site, namespace, "bclwiktionary", "20261001", "bcl"));
+    proof.values[1].raw = "8530";
+    proof.site_info_sha256 = &namespace_hex;
+    const wrong_hash = try std.json.Stringify.valueAlloc(a, proof, .{});
+    defer a.free(wrong_hash);
+    try std.testing.expectError(error.SiteStatisticsFormatIdentityMismatch, FormattedStatistics.init(a, wrong_hash, site, namespace, "bclwiktionary", "20261001", "bcl"));
+    proof.site_info_sha256 = &digest_hex;
+    proof.wiki = "enwiktionary";
+    const wrong_wiki = try std.json.Stringify.valueAlloc(a, proof, .{});
+    defer a.free(wrong_wiki);
+    try std.testing.expectError(error.SiteStatisticsFormatIdentityMismatch, FormattedStatistics.init(a, wrong_wiki, site, namespace, "bclwiktionary", "20261001", "bcl"));
+    proof.wiki = "bclwiktionary";
+    proof.values[0].key = "articles";
+    const wrong_order = try std.json.Stringify.valueAlloc(a, proof, .{});
+    defer a.free(wrong_order);
+    try std.testing.expectError(error.InvalidSiteStatisticsFormatSnapshot, FormattedStatistics.init(a, wrong_order, site, namespace, "bclwiktionary", "20261001", "bcl"));
+    proof.values[0].key = "pages";
+    proof.values[0].formatted = "<b>13,332</b>";
+    const markup = try std.json.Stringify.valueAlloc(a, proof, .{});
+    defer a.free(markup);
+    try std.testing.expectError(error.InvalidSiteStatisticsFormatSnapshot, FormattedStatistics.init(a, markup, site, namespace, "bclwiktionary", "20261001", "bcl"));
+}

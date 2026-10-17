@@ -1234,6 +1234,7 @@ class SourceLimitationFixture:
         self.registry='# wikidict-language-registry-v2\n# content-language\tar\nen\tEnglish\ten\nzxx\tNo linguistic content\tzxx\n'
         self.producer_changes={};self.item_changes={};self.output_changes={};self.convention_changes={}
         self.lookup_changes={};self.command_changes={};self.inventory_changes={};self.inventory_command_changes={}
+        self.owner_records={'Unclassified':293,'English':701};self.alias_records=89
     def rawref(self,name,data):
         self.serial+=1;p=self.top/('evidence-%d-%s'%(self.serial,name));p.write_bytes(data);return controller.descriptor(p)
     def save(self,name,value):return self.rawref(name,json.dumps(value,ensure_ascii=False,sort_keys=True).encode())
@@ -1255,13 +1256,13 @@ class SourceLimitationFixture:
         convention.update(self.convention_changes);convention=self.save('convention.json',convention)
         producer=dict(namespace=0,title='entry',page_id=51,revision_id=73,build_inputs=inputs,raw_source=raw,source_input=inputs['files'][0]);producer.update(self.producer_changes)
         producer=self.save('producer.json',producer)
-        accounting=[dict(heading='Unclassified',records=1,code='',classification='unverified'),dict(heading='English',records=1,code='en',classification='language')]
+        accounting=[dict(heading='Unclassified',records=self.owner_records['Unclassified'],code='',classification='unverified'),dict(heading='English',records=self.owner_records['English'],code='en',classification='language')]
         inventory=dict(schema='dict.languages.v1',scope='entry',query='entry',accounting=accounting,languages=['Unclassified','English'],heading_count=2,language_count=1,translingual_count=0,unverified_count=1)
         inventory.update(self.inventory_changes);inventory=self.save('inventory.json',inventory)
         invcmd=dict(argv=['/synthetic/reader','languages','entry','--root',self.accepted['root']],exit_code=0,error=None,remaining_owned_processes=[],stdout=inventory);invcmd.update(self.inventory_command_changes)
         invcmd=self.save('inventory-command.json',invcmd);exports=[];out_evidence=[inventory,invcmd]
         for owner in ('Unclassified','English'):
-            body=dict(schema='dict.results.v1',operation='lookup',kind='language',query='entry',language=owner,offset=0,record_count=1,total_matches=1,has_more=False,
+            body=dict(schema='dict.results.v1',operation='lookup',kind='language',query='entry',language=owner,offset=0,record_count=self.owner_records[owner]+self.alias_records,total_matches=1,has_more=False,
                 entries=[dict(title='entry',language=owner,language_code='' if owner=='Unclassified' else 'en',sections=[dict(level=2,title=self.label if owner=='Unclassified' else 'English',blocks=[dict(kind='definition',spans=[dict(kind='text',text='retained symbol sense' if owner=='Unclassified' else 'retained known sense')])])])])
             body.update(self.lookup_changes.get(owner,{}));lookup=self.save('lookup.json',body)
             command=dict(argv=['/synthetic/reader','lookup','entry','--root',self.accepted['root'],'--language',owner,'--format','json','--limit','1000'],exit_code=0,error=None,remaining_owned_processes=[],stdout=lookup)
@@ -1293,6 +1294,20 @@ class SourceLimitationTests(unittest.TestCase):
         f=self.fixture().seal();before=(Path(f.accepted['reports']['fallback-pages.jsonl']['path']).read_bytes(),copy.deepcopy(f.review))
         self.assertIs(f.check(),f.review);self.assertEqual(before,(Path(f.accepted['reports']['fallback-pages.jsonl']['path']).read_bytes(),f.review))
         self.assertFalse(f.er['content_review']['no_unresolved_language_declarations'])
+    def test_multi_record_stores_with_or_without_alias_overlay_keep_one_exact_title(self):
+        for alias_records in (0,89):
+            f=self.fixture();f.alias_records=alias_records;f.seal()
+            self.assertIs(f.check(),f.review)
+            output=controller.read_ref(controller.read_ref(f.item)['output_review'])
+            for exported in output['owner_exports']:
+                body=controller.read_ref(exported['lookup'])
+                self.assertEqual(body['record_count'],f.owner_records[exported['owner']]+alias_records)
+                self.assertEqual((body['total_matches'],len(body['entries']),body['offset'],body['has_more']),(1,1,0,False))
+    def test_whole_store_counts_cannot_substitute_for_exact_match_or_undercount_owner(self):
+        for changes in (dict(record_count=292),dict(record_count=True),dict(record_count='382'),
+                        dict(total_matches=382),dict(total_matches=True),dict(total_matches=0),dict(entries=[])):
+            f=self.fixture();f.lookup_changes={'Unclassified':changes};f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
     def test_other_page_revision_input_or_completion_cannot_borrow_proof(self):
         for changes in (dict(revision_id=74),dict(page_id=52),dict(source_input=['other']),dict(title='elsewhere')):
             f=self.fixture();f.producer_changes=changes;f.seal()

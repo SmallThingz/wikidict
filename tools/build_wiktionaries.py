@@ -31,7 +31,7 @@ SHARD_PAGES = 100_000
 SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 2
 AUXILIARY_SNAPSHOT_NAMES = (
-    'site-info', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
+    'site-info', 'site-statistics-format', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
     'wikibase-entity-terms', 'wikibase-page-links', 'language-fallbacks', 'language-names', 'date-numbering', 'file-metadata',
     'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words', 'behavior-switches', 'image-options',
@@ -228,6 +228,7 @@ def validate_interwiki_provenance(snapshot, edition, expected_sha):
 
 
 def auxiliary_snapshot_filename(name):
+    if name=='site-statistics-format':return 'site-statistics-format.json'
     return 'namespace-siteinfo.raw.json' if name=='site-info' else name+'.tsv'
 
 
@@ -263,6 +264,9 @@ def auxiliary_capture_helper(name, path):
     if name=='wikibase-page-links':
         import prepare_wikibase_page_links
         return prepare_wikibase_page_links
+    if name=='site-statistics-format':
+        import prepare_site_statistics_format
+        return prepare_site_statistics_format
     if name=='site-info':
         if auxiliary_manifest_filename(name,path)=='site-info.manifest.json':
             import prepare_site_info
@@ -316,6 +320,9 @@ def auxiliary_capture_helper(name, path):
         return prepare_behavior_switches
     if name=='magic-words':
         record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
+        if isinstance(record,dict) and type(record.get('version')) is int and record['version']==6:
+            import prepare_magic_words_statistics
+            return prepare_magic_words_statistics
         if isinstance(record,dict) and type(record.get('version')) is int and record['version']==5:
             import prepare_magic_words_lst
             return prepare_magic_words_lst
@@ -510,7 +517,7 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
             raise ValueError(f'Unknown auxiliary snapshot: {name}')
         path=Path(source)
         capture=validated_auxiliary_capture(name,path,edition,date)
-        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','wikibase-page-links','file-metadata','behavior-switches','image-options'):
+        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','wikibase-page-links','file-metadata','behavior-switches','image-options'):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         if capture is not None: captures[name]=capture
         path=path.resolve(strict=True)
@@ -530,6 +537,11 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
             if header[0]!='# wikidict-namespace-registry-v1' or (edition is not None and header[1]!='# wiki\t'+edition) or (date is not None and header[2]!='# dump-date\t'+date):
                 raise ValueError('Namespace registry identifies a different edition or date')
         hashes[name]=sha
+    if 'site-statistics-format' in captures:
+        formatting=captures['site-statistics-format'][0]
+        if ('site-info' not in hashes or
+                formatting['configuration']['site_info_sha256']!=hashes['site-info']):
+            raise ValueError('Statistics formatting uses a different selected site-info snapshot')
     if 'image-options' in captures:
         behavior=captures.get('behavior-switches')
         if behavior is None or captures['image-options'][0]['behavior_manifest_sha256']!=behavior[1]['behavior-switches.manifest.json']:
@@ -690,6 +702,8 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 ('wikibase-page-links',),edition,date))
             preferred.update(discover_auxiliary_generation(root,'site-info',
                 ('site-info',),edition,date))
+            preferred.update(discover_auxiliary_generation(root,'site-statistics-format-v1',
+                ('site-statistics-format',),edition,date))
             for name in AUXILIARY_SNAPSHOT_NAMES:
                 if name in preferred:continue
                 path=root/(auxiliary_snapshot_filename(name))
@@ -698,12 +712,12 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
                 if all(present):snapshots[name]=path
             snapshots.update(preferred)
-            from prepare_magic_words_lst import selected_snapshot_root
+            from prepare_magic_words_statistics import selected_snapshot_root
             magic_root=selected_snapshot_root(root)
             if magic_root.exists() or magic_root.is_symlink():
                 if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
                 path=magic_root/'magic-words.tsv'
-                from prepare_magic_words_lst import validate_snapshot
+                from prepare_magic_words_statistics import validate_snapshot
                 validate_snapshot(path,edition,date)
                 snapshots['magic-words']=path
         elif (downloads/edition/date/'namespace-registry.tsv').is_file():
@@ -762,7 +776,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                          capture[0].get('schema')=='wikidict.language-names-autonym-capture.v1')
         # Keep complete directory-provenance captures separate from other
         # snapshots so strict replay sees only their own recorded payloads.
-        folder=destination/name if name in ('commons-data','date-numbering') or autonym_capture else (
+        folder=destination/name if name in ('commons-data','date-numbering','site-statistics-format') or autonym_capture else (
             destination/'site-info' if name=='site-info' and
             auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
         if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))

@@ -563,11 +563,14 @@ def _review_source_limitations(review, accepted, complete):
                     len(argv) >= 3 and argv[1:3] == ['lookup', title],
                     'Source limitation output is not from the selected published payload')
             body = read_ref(export['lookup'])
+            # Reader store count includes aliases; inventory records count only language definitions.
+            # Exact lookup returns one title, independently of either whole-store count.
             require(body.get('schema') == 'dict.results.v1' and body.get('query') == title and
                     body.get('language') == export['owner'] and body.get('operation') == 'lookup' and
-                    body.get('offset') == 0 and body.get('record_count') == body.get('total_matches') == owners[export['owner']] and
-                    body.get('has_more') is False and
-                    len(body.get('entries', [])) == owners[export['owner']] and
+                    body.get('offset') == 0 and type(body.get('record_count')) is int and
+                    body['record_count'] >= owners[export['owner']] and
+                    type(body.get('total_matches')) is int and body['total_matches'] == 1 and
+                    body.get('has_more') is False and len(body.get('entries', [])) == 1 and
                     all(entry.get('title') == title and entry.get('language') == export['owner'] for entry in body['entries']),
                     'Source limitation output owner/record completeness differs')
             if export['owner'] == 'Unclassified': unclassified = body

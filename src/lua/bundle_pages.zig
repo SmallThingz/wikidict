@@ -222,6 +222,7 @@ pub const Provider = struct {
     external_data_storage: ?Mapped = null,
     external_data_available: bool = false,
     site_info: ?site_info_lib.Snapshot = null,
+    site_statistics_format: ?site_info_lib.FormattedStatistics = null,
     category_stats: std.StringHashMapUnmanaged(CategoryStats) = .empty,
     category_stats_storage: ?Mapped = null,
     category_stats_available: bool = false,
@@ -315,6 +316,7 @@ pub const Provider = struct {
         self.external_data.deinit(self.a);
         if (self.external_data_storage) |*mapped| mapped.deinit();
         if (self.site_info) |*snapshot| snapshot.deinit();
+        if (self.site_statistics_format) |*snapshot| snapshot.deinit();
         self.category_stats.deinit(self.a);
         if (self.category_stats_storage) |*mapped| mapped.deinit();
         var message_keys = self.interface_messages.keyIterator();
@@ -382,6 +384,7 @@ pub const Provider = struct {
             .external_data = if (self.external_data_available) externalData else null,
             .site_server = if (self.site_info) |snapshot| snapshot.server else null,
             .site_statistics = if (self.site_info) |snapshot| snapshot.statistics else null,
+            .site_statistics_formatted = if (self.site_statistics_format) |snapshot| snapshot.values else null,
             .site_script = if (self.site_info) |snapshot| snapshot.script else null,
             .site_article_path = if (self.site_info) |snapshot| snapshot.article_path else null,
             .category_stats = if (self.category_stats_available) categoryStats else null,
@@ -410,6 +413,9 @@ pub const Provider = struct {
         var mapped = (try self.mapOptional("namespace-siteinfo.raw.json")) orelse return;
         defer mapped.deinit();
         self.site_info = try site_info_lib.Snapshot.init(self.a, mapped.bytes, self.namespace_catalog.wiki, self.namespace_catalog.dump_date, self.namespace_catalog.content_language);
+        var formatted = (try self.mapOptional("site-statistics-format.json")) orelse return;
+        defer formatted.deinit();
+        self.site_statistics_format = try site_info_lib.FormattedStatistics.init(self.a, formatted.bytes, mapped.bytes, self.namespace_catalog.source_sha256, self.namespace_catalog.wiki, self.namespace_catalog.dump_date, self.namespace_catalog.content_language);
     }
 
     fn mapOptional(self: *Provider, name: []const u8) !?Mapped {

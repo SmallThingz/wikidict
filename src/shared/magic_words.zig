@@ -21,20 +21,27 @@ pub const title_ids = [_][]const u8{
     "subpagenamee",     "talkspace",     "talkspacee",      "talkpagename",
     "talkpagenamee",
 };
-const function_ids = [_][]const u8{
-    "ns",              "urlencode",        "lcfirst",       "ucfirst",      "lc",              "uc",            "localurl",
-    "fullurl",         "fullurle",         "canonicalurl",  "formatnum",    "plural",          "language",      "padleft",       "padright",
-    "anchorencode",    "defaultsort",      "pagename",      "pagenamee",    "fullpagename",    "fullpagenamee", "subpagename",
-    "subpagenamee",    "rootpagename",     "rootpagenamee", "basepagename", "basepagenamee",   "talkpagename",  "talkpagenamee",
-    "subjectpagename", "subjectpagenamee", "namespace",     "namespacee",   "namespacenumber", "talkspace",     "talkspacee",
-    "subjectspace",    "subjectspacee",    "int",           "special",      "tag",             "formatdate",    "displaytitle",
-    "expr",            "if",               "ifeq",          "ifexpr",       "iferror",         "switch",        "ifexist",
-    "time",            "titleparts",       "len",           "sub",          "categorytree",    "invoke",       "lst",
+pub const statistics_ids = [_][]const u8{
+    "numberofpages", "numberofarticles",    "numberoffiles",  "numberofedits",
+    "numberofusers", "numberofactiveusers", "numberofadmins",
+};
+const variable_ids = statistics_ids ++ title_ids;
+const function_ids = statistics_ids ++ [_][]const u8{
+    "ns",            "urlencode",       "lcfirst",          "ucfirst",       "lc",           "uc",              "localurl",
+    "fullurl",       "fullurle",        "canonicalurl",     "formatnum",     "plural",       "language",        "padleft",
+    "padright",      "anchorencode",    "defaultsort",      "pagename",      "pagenamee",    "fullpagename",    "fullpagenamee",
+    "subpagename",   "subpagenamee",    "rootpagename",     "rootpagenamee", "basepagename", "basepagenamee",   "talkpagename",
+    "talkpagenamee", "subjectpagename", "subjectpagenamee", "namespace",     "namespacee",   "namespacenumber", "talkspace",
+    "talkspacee",    "subjectspace",    "subjectspacee",    "int",           "special",      "tag",             "formatdate",
+    "displaytitle",  "expr",            "if",               "ifeq",          "ifexpr",       "iferror",         "switch",
+    "ifexist",       "time",            "titleparts",       "len",           "sub",          "categorytree",    "invoke",
+    "lst",
 };
 
 pub const hash_function_ids = [_][]const u8{
     "special", "tag",     "formatdate", "expr",       "if",  "ifeq", "ifexpr",       "iferror",
-    "switch",  "ifexist", "time",       "titleparts", "len", "sub",  "categorytree", "invoke", "lst",
+    "switch",  "ifexist", "time",       "titleparts", "len", "sub",  "categorytree", "invoke",
+    "lst",
 };
 
 fn hashFunction(id: []const u8) bool {
@@ -55,7 +62,7 @@ fn functionHead(id: []const u8) []const u8 {
 }
 
 fn priority(id: []const u8, form: Form) usize {
-    const ids: []const []const u8 = if (form == .variable) &title_ids else &function_ids;
+    const ids: []const []const u8 = if (form == .variable) &variable_ids else &function_ids;
     for (ids, 0..) |candidate, rank| if (std.mem.eql(u8, id, candidate)) return rank;
     unreachable;
 }
@@ -76,6 +83,11 @@ const Winners = struct {
 
 fn titleId(raw: []const u8) ?[]const u8 {
     for (title_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
+    return null;
+}
+
+pub fn statisticsId(raw: []const u8) ?usize {
+    for (statistics_ids, 0..) |id, index| if (std.ascii.eqlIgnoreCase(raw, id)) return index;
     return null;
 }
 
@@ -130,7 +142,7 @@ pub const Registry = struct {
             const map = if (case_sensitive) &sensitive else &insensitive;
             const a_owned = arena.allocator();
             const key = if (case_sensitive) alias else try lower.lowerAlloc(a_owned, alias);
-            if (titleId(id) != null) try addAlias(a_owned, map, key, id, .variable);
+            if (titleId(id) != null or statisticsId(id) != null) try addAlias(a_owned, map, key, id, .variable);
             // Parser::setFunctionHook adds a hash before removing one trailing
             // colon. The source spelling is not title-normalized or deduplicated.
             var function_alias = key;
@@ -269,4 +281,16 @@ test "language parser aliases retain their captured hash and registration order"
     try std.testing.expect(registry.resolve("language", .parser_function) == null);
     try std.testing.expect(knownHashFunctionHead("#LANGUAGE"));
     try std.testing.expect(!knownHashFunctionHead("##language"));
+}
+
+test "captured statistics require expanded snapshot and preserve alias sensitivity" {
+    const a = std.testing.allocator;
+    const identity = "\n# wiki\tabwiktionary\n# dump-date\t20261001\n# content-language\tab\n";
+    const row = "numberofarticles\t1\tКОЛИЧЕСТВО_СТАТЕЙ\n";
+    var words = try Registry.init(a, parser_header ++ identity ++ row, "abwiktionary", "20261001", "ab");
+    defer words.deinit();
+    try std.testing.expectEqualStrings("numberofarticles", (try words.resolve("КОЛИЧЕСТВО_СТАТЕЙ", .variable)).?);
+    try std.testing.expectEqualStrings("numberofarticles", (try words.resolve("КОЛИЧЕСТВО_СТАТЕЙ", .parser_function)).?);
+    try std.testing.expect((try words.resolve("количество_статей", .variable)) == null);
+    try std.testing.expectError(error.InvalidMagicWordsSnapshot, Registry.init(a, header ++ identity ++ row, "abwiktionary", "20261001", "ab"));
 }

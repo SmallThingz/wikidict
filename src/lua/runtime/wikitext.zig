@@ -123,6 +123,8 @@ pub const Provider = struct {
     site_server: ?[]const u8 = null,
     // pages, articles, files, edits, users, activeUsers, admins; exact Lua integers.
     site_statistics: ?[7]u53 = null,
+    // Exact ordinary-format observations for these same pinned raw counts.
+    site_statistics_formatted: ?[7][]const u8 = null,
     site_script: ?[]const u8 = null,
     site_article_path: ?[]const u8 = null,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
@@ -1244,6 +1246,18 @@ pub const Expander = struct {
     fn namespacedPageAlloc(self: *Expander, spec: namespace_lib.Spec, text: []const u8) ![]const u8 {
         if (spec.id == 0) return text;
         return std.fmt.allocPrint(self.runtime.allocator, "{s}:{s}", .{ spec.name, text });
+    }
+
+    fn statisticsMagic(self: *Expander, name: []const u8, option: []const u8) !?[]const u8 {
+        const index = rt.namespace_registry.magic_words.statisticsId(name) orelse return null;
+        const captured = self.host.site_statistics orelse {
+            self.runtime.last_error = .{ .string = try std.fmt.allocPrint(self.runtime.allocator, "Site statistics snapshot missing field={s}", .{name}) };
+            return error.SiteInfoSnapshotMissing;
+        };
+        const raw = try std.fmt.allocPrint(self.runtime.allocator, "{d}", .{captured[index]});
+        if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, option, " \t\r\n"), "R")) return raw;
+        const formatted = self.provider.site_statistics_formatted orelse return error.SiteStatisticsFormatSnapshotMissing;
+        return formatted[index];
     }
 
     fn titleMagic(self: *Expander, raw_name: []const u8, raw_page: ?[]const u8) !?[]const u8 {
@@ -2570,14 +2584,22 @@ pub const Expander = struct {
     ) anyerror!?[]const u8 {
         // Variables without a colon only take precedence over templates when
         // no pipe arguments were supplied (Parser::braceSubstitution).
-        if (raw_args.len == 0) if (try self.resolveTitleMagic(head, .variable)) |name|
-            return (try self.titleMagic(name, null)) orelse unreachable;
+        if (raw_args.len == 0) {
+            if (try self.resolveTitleMagic(head, .variable)) |name| {
+                if (try self.statisticsMagic(name, "")) |value| return value;
+                return (try self.titleMagic(name, null)) orelse unreachable;
+            }
+        }
         if (try self.magicWord(head)) |value| return value;
 
         if (preprocess.findTopParserColon(head)) |colon| {
             const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
             const name = (try self.resolveParserFunction(raw_name)) orelse return null;
             const first = head[colon.index + colon.len ..];
+            if (self.provider.resolve_parser_function != null and rt.namespace_registry.magic_words.statisticsId(name) != null) {
+                const option = try self.expandWikitext(first, params, host_title, depth + 1);
+                return (try self.statisticsMagic(name, option)) orelse unreachable;
+            }
             if (isRevisionMagicName(name)) {
                 const page = try self.expandWikitext(first, params, host_title, depth + 1);
                 return (try self.revisionMagic(name, page)) orelse unreachable;
@@ -3561,6 +3583,14 @@ pub const Expander = struct {
         const name = (try self.resolveParserFunction(raw_name)) orelse return error.UnsupportedParserFunction;
         const first = args.rawGet(.{ .number = 1 });
         const second = args.rawGet(.{ .number = 2 });
+        if (self.provider.resolve_parser_function != null and rt.namespace_registry.magic_words.statisticsId(name) != null) {
+            const option: []const u8 = if (first) |value| switch (value) {
+                .nil => "",
+                .string => |text| text,
+                else => return error.StringExpected,
+            } else "";
+            return (try self.statisticsMagic(name, option)) orelse unreachable;
+        }
         if (try self.parserTitleMagic(name)) |canonical| {
             const page: ?[]const u8 = if (first) |value| switch (value) {
                 .nil => null,
@@ -6585,4 +6615,54 @@ test "direct nowiki API returns finalize protected text and prior general hook r
         }
         try std.testing.expect(!expander.unsupported_parser_function);
     }
+}
+
+test "captured statistics aliases format all seven counters and preserve raw zero" {
+    const aliases = rt.namespace_registry.magic_words;
+    const Source = struct {
+        words: *const aliases.Registry,
+        fn resolve(raw: ?*anyopaque, name: []const u8, form: aliases.Form) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            return self.words.resolve(name, form);
+        }
+        fn parser(raw: ?*anyopaque, name: []const u8) !?[]const u8 {
+            return resolve(raw, name, .parser_function);
+        }
+        fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "Template:NUMBEROFARTICLES")) return "ordinary-template";
+            return null;
+        }
+        fn exists(_: ?*anyopaque, _: []const u8) !bool {
+            return true;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var words = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tabwiktionary\n# dump-date\t20261001\n# content-language\tab\n" ++
+        "numberofpages\t1\tNUMBEROFPAGES\nnumberofarticles\t1\tNUMBEROFARTICLES\nnumberofarticles\t1\tКОЛИЧЕСТВО_СТАТЕЙ\n" ++
+        "numberoffiles\t1\tNUMBEROFFILES\nnumberofedits\t1\tNUMBEROFEDITS\nnumberofusers\t1\tNUMBEROFUSERS\n" ++
+        "numberofactiveusers\t1\tNUMBEROFACTIVEUSERS\nnumberofadmins\t1\tNUMBEROFADMINS\n", "abwiktionary", "20261001", "ab");
+    defer words.deinit();
+    var source: Source = .{ .words = &words };
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = Source.get, .exists = Source.exists, .resolve_title_magic = Source.resolve, .resolve_parser_function = Source.parser, .site_statistics = .{ 248, 0, 1234, 8985, 651, 0, 1 }, .site_statistics_formatted = .{ "248", "0", "1,234", "8,985", "651", "0", "1" } } };
+    try std.testing.expectEqualStrings("248|0|0|1,234|8,985|651|0|1", try expander.expandFragment("Notice", "{{NUMBEROFPAGES}}|{{NUMBEROFARTICLES}}|{{КОЛИЧЕСТВО_СТАТЕЙ}}|{{NUMBEROFFILES}}|{{NUMBEROFEDITS}}|{{NUMBEROFUSERS}}|{{NUMBEROFACTIVEUSERS}}|{{NUMBEROFADMINS}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("1234|0|ordinary-template", try expander.expandFragment("Notice", "{{NUMBEROFFILES:R}}|{{КОЛИЧЕСТВО_СТАТЕЙ: R }}|{{NUMBEROFARTICLES|x}}", 1_670_803_200));
+    const args = try runtime.newTable();
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = "R" });
+    try std.testing.expectEqualStrings("1234", try Expander.hostFrameParserFunction(&expander, a, "NUMBEROFFILES", args));
+    try std.testing.expect((try words.resolve("numberofarticles", .variable)) == null);
+    expander.provider.site_statistics_formatted = .{ "248", "0", "۱٬۲۳۴", "8.985", "651", "0", "1" };
+    try std.testing.expectEqualStrings("۱٬۲۳۴|8.985|1234", try expander.expandFragment("Notice", "{{NUMBEROFFILES}}|{{NUMBEROFEDITS}}|{{NUMBEROFFILES:R}}", 1_670_803_200));
+    expander.provider.site_statistics_formatted = null;
+    try std.testing.expectError(error.SiteStatisticsFormatSnapshotMissing, expander.expandFragment("Notice", "{{NUMBEROFFILES}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("1234", try expander.expandFragment("Notice", "{{NUMBEROFFILES:R}}", 1_670_803_200));
+    expander.provider.site_statistics = null;
+    try std.testing.expectError(error.SiteInfoSnapshotMissing, expander.expandFragment("Notice", "{{NUMBEROFARTICLES}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("Site statistics snapshot missing field=numberofarticles", runtime.last_error.string);
 }
