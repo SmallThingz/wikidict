@@ -1456,6 +1456,8 @@ pub const Renderer = struct {
     body_depth: usize = 0,
     parsed_pre: bool = false,
     pre_block: bool = false,
+    // An HTML li/dd suppresses implicit paragraphs and leading-space pre.
+    html_list_item_flow: bool = false,
     pre_scope_observer: ?PreScopeObserver = null,
     body_link_target: []const u8 = "",
     // Only an active structural parent supplies this lexical lang/dir base.
@@ -3488,6 +3490,233 @@ pub const Renderer = struct {
         }
         return self.htmlLanguageDirection(tag, s);
     }
+    // Module:etymon/tree emits child-first fragments, not nested HTML lists.
+    // Validate that small structural grammar before compiling any visible body.
+    // The hidden etymon JSON is deliberately not another presentation source.
+    const EtymologyTreeNode = struct {
+        raw: []const u8,
+        prefix: []const u8 = "",
+        style: Style = .{},
+        scopes: []const syntax.Tag,
+        children: []const usize,
+        height: usize,
+        spans: []const Span = &.{},
+        relation_note: bool = false,
+        group: bool = false,
+    };
+    const EtymologyTreePlan = struct {
+        renderer: *Renderer,
+        nodes: std.ArrayList(EtymologyTreeNode) = .empty,
+        limited: bool = false,
+
+        fn hasClass(self: *EtymologyTreePlan, tag: syntax.Tag, wanted: []const u8) Error!bool {
+            const classes = (try self.renderer.semanticAttribute(tag, "class")) orelse return false;
+            var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
+            while (tokens.next()) |value| if (std.mem.eql(u8, value, wanted)) return true;
+            return false;
+        }
+        fn skipSpaceAndComments(input: []const u8, cursor: *usize) bool {
+            while (cursor.* < input.len) {
+                if (std.ascii.isWhitespace(input[cursor.*])) {
+                    cursor.* += 1;
+                } else if (starts(input[cursor.*..], "<!--")) {
+                    cursor.* = syntax.protectedEnd(input, cursor.*) orelse return false;
+                } else break;
+            }
+            return true;
+        }
+        fn addNode(self: *EtymologyTreePlan, raw: []const u8, prefix: []const u8, scopes: []const syntax.Tag, children: []const usize, group: bool) Error!?usize {
+            var height: usize = 1;
+            for (children) |child| height = @max(height, self.nodes.items[child].height + 1);
+            if (self.nodes.items.len >= 1024 or height >= max_depth) {
+                self.limited = true;
+                return null;
+            }
+            const index = self.nodes.items.len;
+            try self.nodes.append(self.renderer.a, .{ .raw = raw, .prefix = prefix, .scopes = scopes, .children = children, .height = height, .group = group });
+            return index;
+        }
+        fn extendScopes(self: *EtymologyTreePlan, scopes: []const syntax.Tag, tag: syntax.Tag) Error![]const syntax.Tag {
+            const extended = try self.renderer.a.alloc(syntax.Tag, scopes.len + 1);
+            @memcpy(extended[0..scopes.len], scopes);
+            extended[scopes.len] = tag;
+            return extended;
+        }
+        fn groupLabel(self: *EtymologyTreePlan, input: []const u8) Error!bool {
+            var cursor: usize = 0;
+            if (!skipSpaceAndComments(input, &cursor)) return false;
+            const tag = try self.renderer.semanticTagAt(input, cursor) orelse return false;
+            if (tag.closing or !tag.is("span") or !(try self.hasClass(tag, "etytree-group-label"))) return false;
+            const pair = syntax.matchingTag(input, tag) orelse return false;
+            cursor = pair.end;
+            return skipSpaceAndComments(input, &cursor) and cursor == input.len;
+        }
+        fn branches(self: *EtymologyTreePlan, input: []const u8, scopes: []const syntax.Tag, depth: usize) Error!?[]const usize {
+            if (depth >= max_depth) {
+                self.limited = true;
+                return null;
+            }
+            var roots: std.ArrayList(usize) = .empty;
+            var cursor: usize = 0;
+            var columns: usize = 0;
+            while (cursor < input.len) {
+                if (!skipSpaceAndComments(input, &cursor)) return null;
+                if (cursor == input.len) break;
+                const tag = try self.renderer.semanticTagAt(input, cursor) orelse return null;
+                if (tag.closing or !tag.is("div") or !(try self.hasClass(tag, "etytree-branch"))) return null;
+                const pair = syntax.matchingTag(input, tag) orelse return null;
+                const child_scopes = try self.extendScopes(scopes, tag);
+                const children = (try self.sequence(input[tag.end..pair.inner_end], child_scopes, depth + 1, true)) orelse return null;
+                try roots.appendSlice(self.renderer.a, children);
+                columns += 1;
+                cursor = pair.end;
+            }
+            if (columns < 2) return null;
+            return try roots.toOwnedSlice(self.renderer.a);
+        }
+        fn sequence(self: *EtymologyTreePlan, input: []const u8, scopes: []const syntax.Tag, depth: usize, branch_tail: bool) Error!?[]const usize {
+            if (depth >= max_depth) {
+                self.limited = true;
+                return null;
+            }
+            var roots: std.ArrayList(usize) = .empty;
+            var needs_parent = false;
+            var tail_stage: enum { none, short, done } = .none;
+            var prefix: []const u8 = "";
+            var cursor: usize = 0;
+            while (cursor < input.len) {
+                if (!skipSpaceAndComments(input, &cursor)) return null;
+                if (cursor == input.len) break;
+                if (tail_stage == .done) return null;
+                const at = cursor;
+                const tag = try self.renderer.semanticTagAt(input, at) orelse return null;
+                if (tag.closing or (!tag.is("div") and !tag.is("span"))) return null;
+                const pair = syntax.matchingTag(input, tag) orelse return null;
+                const content = input[tag.end..pair.inner_end];
+                if (tail_stage == .short and !(tag.is("span") and try self.hasClass(tag, "etytree-branch-mid"))) return null;
+                const scoped_tags = try self.extendScopes(scopes, tag);
+                if (tag.is("div") and try self.hasClass(tag, "etytree-block")) {
+                    if (roots.items.len != 0 and !needs_parent) return null;
+                    const children = try roots.toOwnedSlice(self.renderer.a);
+                    const child = (try self.addNode(content, prefix, scoped_tags, children, false)) orelse return null;
+                    try roots.append(self.renderer.a, child);
+                    prefix = "";
+                    needs_parent = false;
+                } else if (tag.is("div") and try self.hasClass(tag, "etytree-branch-group")) {
+                    if (roots.items.len != 0 or prefix.len != 0) return null;
+                    const children = (try self.branches(content, scoped_tags, depth + 1)) orelse return null;
+                    try roots.appendSlice(self.renderer.a, children);
+                    needs_parent = true;
+                } else if (tag.is("span") and ((try self.hasClass(tag, "etytree-connector-vertical")) or
+                    (try self.hasClass(tag, "etytree-connector-dotted"))))
+                {
+                    if (roots.items.len == 0 or prefix.len != 0) return null;
+                    if (trim(content).len != 0) {
+                        if (!(try self.groupLabel(content))) return null;
+                        const children = try roots.toOwnedSlice(self.renderer.a);
+                        const child = (try self.addNode(content, "", scoped_tags, children, true)) orelse return null;
+                        try roots.append(self.renderer.a, child);
+                    }
+                    needs_parent = true;
+                } else if (tag.is("span") and ((try self.hasClass(tag, "etytree-branch-left")) or
+                    (try self.hasClass(tag, "etytree-branch-right")) or
+                    (try self.hasClass(tag, "etytree-branch-mid")) or
+                    (try self.hasClass(tag, "etytree-connector-vertical-short"))))
+                {
+                    if (!branch_tail or roots.items.len == 0 or trim(content).len != 0) return null;
+                    // A container may supply a forest or a labelled group to
+                    // the shared parent outside this branch column.
+                    if (try self.hasClass(tag, "etytree-connector-vertical-short")) {
+                        if (tail_stage != .none) return null;
+                        tail_stage = .short;
+                    } else {
+                        if ((try self.hasClass(tag, "etytree-branch-mid")) != (tail_stage == .short)) return null;
+                        tail_stage = .done;
+                    }
+                } else if (tag.is("div") and try self.hasClass(tag, "etytree-duplicate-connector")) {
+                    // This marker means ancestry was hidden. Keep its visible
+                    // arrow, never invent the hidden nodes or another edge.
+                    if (roots.items.len != 0 or prefix.len != 0) return null;
+                    prefix = input[at..pair.end];
+                } else return null;
+                cursor = pair.end;
+            }
+            if (prefix.len != 0 or roots.items.len == 0) return null;
+            if (branch_tail) {
+                if (tail_stage != .done) return null;
+            } else if (roots.items.len != 1 or needs_parent) return null;
+            return try roots.toOwnedSlice(self.renderer.a);
+        }
+    };
+
+    fn etymologyTreeSpans(self: *Renderer, node_value: EtymologyTreeNode) Error![]const Span {
+        var spans: std.ArrayList(Span) = .empty;
+        if (node_value.prefix.len != 0) {
+            const parsed_prefix = try self.parseSpans(node_value.prefix, node_value.style);
+            var end = parsed_prefix.len;
+            while (end != 0 and parsed_prefix[end - 1].kind == .line_break) end -= 1;
+            try spans.appendSlice(self.a, parsed_prefix[0..end]);
+        }
+        const parsed = try self.parseSpans(node_value.raw, node_value.style);
+        var prefix_boundary = spans.items.len != 0;
+        var separated_label = false;
+        for (parsed) |span| {
+            var label = false;
+            var tokens = std.mem.tokenizeAny(u8, span.classes, " \t\r\n");
+            while (tokens.next()) |value| label = label or std.mem.eql(u8, value, "etytree-label-container");
+            var separate = label and !separated_label;
+            if (prefix_boundary) {
+                if (span.kind == .line_break) prefix_boundary = false else if (span.text.len != 0) {
+                    separate = separate or !std.ascii.isWhitespace(span.text[0]);
+                    prefix_boundary = false;
+                }
+            }
+            if (separate and spans.items.len != 0 and !formattingVisibleEndsSpace(spans.items)) {
+                var separator = span;
+                separator.kind = .text;
+                separator.text = " ";
+                separator.target = "";
+                try spans.append(self.a, separator);
+            }
+            if (label) separated_label = true;
+            try spans.append(self.a, span);
+        }
+        return try spans.toOwnedSlice(self.a);
+    }
+    fn emitEtymologyTree(self: *Renderer, blocks: *std.ArrayList(Block), nodes: []const EtymologyTreeNode, index: usize, parent_path: []const u8) Error!void {
+        const node_value = nodes[index];
+        const path = try std.fmt.allocPrint(self.a, "{s}*", .{parent_path});
+        try self.appendBlockBudgeted(blocks, .{ .kind = .list_item, .depth = @intCast(path.len), .list_path = path, .spans = node_value.spans, .relation_note = node_value.relation_note });
+        for (node_value.children) |child| {
+            if (self.truncated) break;
+            try self.emitEtymologyTree(blocks, nodes, child, path);
+        }
+    }
+    fn appendEtymologyTree(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, tag: syntax.Tag) Error!bool {
+        if (!tag.is("div") or self.pre_block or self.parsed_pre) return false;
+        var plan: EtymologyTreePlan = .{ .renderer = self };
+        if (!(try plan.hasClass(tag, "etytree-body"))) return false;
+        const roots = (try plan.sequence(input, &.{tag}, 0, false)) orelse {
+            if (plan.limited) self.fallbacks.render_limit = true;
+            return false;
+        };
+        // Indices are in source DOM order, including group labels after their
+        // terms. Register content effects once before projecting parent-first.
+        for (plan.nodes.items) |*node_value| {
+            var hints: SemanticHints = .{ .relation_note = self.body_formatting_attributes.relation_note };
+            const previous_capture = self.semantic_capture;
+            self.semantic_capture = &hints;
+            defer self.semantic_capture = previous_capture;
+            var node_style = self.bodyFormattingStyle(self.body_language_direction orelse .{});
+            for (node_value.scopes) |scope_tag| node_style = try self.htmlInlineStyle(scope_tag, node_style);
+            node_value.style = node_style;
+            node_value.spans = try self.etymologyTreeSpans(node_value.*);
+            node_value.relation_note = hints.relation_note;
+        }
+        try self.emitEtymologyTree(blocks, plan.nodes.items, roots[0], "");
+        return true;
+    }
+
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
         const raw_tag = opaque_scan.tagAt(input, at, no_more_nowiki_close) orelse return null;
@@ -4615,10 +4844,31 @@ pub const Renderer = struct {
         return null;
     }
 
+    fn behaviorControlMatcher(self: *Renderer) ?syntax.ControlMatcher {
+        return if (self.context.behavior_switches) |registry| .{
+            .ctx = registry,
+            .match = struct {
+                fn match(raw: ?*const anyopaque, value: []const u8, at: usize) ?usize {
+                    const profile: *const @import("namespace_registry").behavior_switches.Registry = @ptrCast(@alignCast(raw.?));
+                    return profile.matchAt(std.heap.page_allocator, value, at) catch null;
+                }
+            }.match,
+            .toc_match = struct {
+                fn match(raw: ?*const anyopaque, value: []const u8, at: usize) ?usize {
+                    const profile: *const @import("namespace_registry").behavior_switches.Registry = @ptrCast(@alignCast(raw.?));
+                    return profile.tocMatchAt(std.heap.page_allocator, value, at) catch null;
+                }
+            }.match,
+        } else null;
+    }
     fn renderBodyWithInlineStart(self: *Renderer, source: []const u8, initial_inline: bool) Error![]const Block {
         return self.renderBodySlice(source, initial_inline, false, null, null);
     }
+    const BodyListSeed = struct { path: []const u8, previous_path: []const u8, counts: [32]usize, result: ?*BodyListSeed = null };
     fn renderBodySlice(self: *Renderer, source: []const u8, initial_inline: bool, terminal_inline: bool, source_origin: ?usize, initial_quote: ?QuoteSeed) Error![]const Block {
+        return self.renderBodySliceSeeded(source, initial_inline, terminal_inline, source_origin, initial_quote, null);
+    }
+    fn renderBodySliceSeeded(self: *Renderer, source: []const u8, initial_inline: bool, terminal_inline: bool, source_origin: ?usize, initial_quote: ?QuoteSeed, initial_list: ?BodyListSeed) Error![]const Block {
         const input = try self.prepareUnmatchedOpaque(source);
         // An allocated preparation is a different source domain. Do not infer
         // its original offsets; the caller prepares the whole page first.
@@ -4644,8 +4894,8 @@ pub const Renderer = struct {
         var para: ?usize = null;
         var link_inline_join: ?bool = null;
         var formatting_join_pending = false;
-        var counts: [32]usize = @splat(0);
-        var previous_list_path: []const u8 = "";
+        var counts: [32]usize = if (initial_list) |seed| seed.counts else @splat(0);
+        var previous_list_path: []const u8 = if (initial_list) |seed| seed.previous_path else "";
         var line_opaque: syntax.OpaqueScan = .{};
         var body_pre_opaque: syntax.OpaqueScan = .{};
         var body_quotes: ?QuoteBoundaryScan = if (initial_quote != null) QuoteBoundaryScan.initWithContext(input, initial_quote, self.context) else null;
@@ -4656,21 +4906,7 @@ pub const Renderer = struct {
         // after a complete construct. Keep its original logical boundary while
         // consuming roots on that line; recursive bodies have their own cache.
         var logical_line_end: ?usize = null;
-        const control_matcher: ?syntax.ControlMatcher = if (self.context.behavior_switches) |registry| .{
-            .ctx = registry,
-            .match = struct {
-                fn match(raw: ?*const anyopaque, value: []const u8, at: usize) ?usize {
-                    const profile: *const @import("namespace_registry").behavior_switches.Registry = @ptrCast(@alignCast(raw.?));
-                    return profile.matchAt(std.heap.page_allocator, value, at) catch null;
-                }
-            }.match,
-            .toc_match = struct {
-                fn match(raw: ?*const anyopaque, value: []const u8, at: usize) ?usize {
-                    const profile: *const @import("namespace_registry").behavior_switches.Registry = @ptrCast(@alignCast(raw.?));
-                    return profile.tocMatchAt(std.heap.page_allocator, value, at) catch null;
-                }
-            }.match,
-        } else null;
+        const control_matcher = self.behaviorControlMatcher();
         while (pos < input.len) {
             if (self.truncated) break;
             const start = pos;
@@ -4706,22 +4942,48 @@ pub const Renderer = struct {
             // Match across the whole body before line splitting discards that
             // wrapper. Keep list/table structure and inherit its flags while
             // rendering the enclosed blocks; never repair unmatched markup.
-            if (clean.ptr == line.ptr) if (try self.semanticTagAt(clean, 0)) |tag| {
-                if (blockFormattingFlags(tag)) |flags| {
-                    const offset = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr);
+            const item_formatting = if (self.html_list_item_flow) try self.htmlListItemFormattingAt(input, start, physical_end) else null;
+            if (item_formatting != null or clean.ptr == line.ptr) if (if (item_formatting) |opening| @as(?syntax.Tag, opening.tag) else try self.semanticTagAt(clean, 0)) |tag| {
+                if (if (self.html_list_item_flow and tag.is("span")) @as(?SpanFlags, .{}) else blockFormattingFlags(tag)) |flags| {
+                    const offset = if (item_formatting) |opening| opening.offset else @intFromPtr(clean.ptr) - @intFromPtr(input.ptr);
                     const rest = input[offset..];
                     if (syntax.matchingTag(rest, tag)) |pair| {
                         const closing_line_end = std.mem.indexOfScalarPos(u8, rest, pair.end, '\n') orelse rest.len;
-                        const first_line_inline = trim(clean[tag.end..]).len != 0;
+                        const opening_line_end = std.mem.indexOfScalarPos(u8, rest, tag.end, '\n') orelse rest.len;
+                        const first_line_inline = if (item_formatting != null) trim(rest[tag.end..opening_line_end]).len != 0 else trim(clean[tag.end..]).len != 0;
                         if (!first_line_inline or std.mem.indexOfScalar(u8, rest[tag.end..pair.inner_end], '\n') != null or bodyPreCandidate(rest[tag.end..pair.inner_end]) or mayHaveMultilineLinks(rest[tag.end..pair.inner_end])) {
                             const body = rest[tag.end..pair.inner_end];
                             const joining_format = formatting_join_pending;
-                            const join_separator = if (joining_format) link_inline_join orelse false else true;
-                            const join_inline_paragraph = (para != null or joining_format) and !formattingBlankBoundary(body, true);
+                            const join_separator = if (self.html_list_item_flow and offset > start)
+                                std.ascii.isWhitespace(input[offset - 1]) or (body.len != 0 and std.ascii.isWhitespace(body[0]))
+                            else if (joining_format)
+                                link_inline_join orelse false
+                            else
+                                true;
+                            var list_state: BodyListSeed = .{ .path = list_prefix.path, .previous_path = "", .counts = @splat(0) };
+                            const list_seed: ?BodyListSeed = if (self.html_list_item_flow and list_prefix.path.len != 0)
+                                .{ .path = list_prefix.path, .previous_path = previous_list_path, .counts = counts, .result = &list_state }
+                            else
+                                null;
+                            if (list_seed == null and offset > start and para == null) para = start;
+                            const join_inline_paragraph = list_seed == null and (para != null or joining_format) and !formattingBlankBoundary(body, true);
                             if (para) |p| {
-                                try self.bodyRawParagraph(&blocks, input, input[p..start], null, &body_quotes, &link_inline_join);
+                                try self.bodyRawParagraph(&blocks, input, input[p..(if (list_seed != null) start else offset)], null, &body_quotes, &link_inline_join);
                                 formatting_join_pending = false;
                                 para = null;
+                            }
+                            var list_prefix_index: ?usize = null;
+                            if (list_seed) |seed| {
+                                // The marker belongs to the wiki child, not to the
+                                // HTML item's paragraph before this formatting scope.
+                                const prefix_body = input[start..offset];
+                                if (trim(prefix_body).len != 0) {
+                                    const prefix_quote = try self.rawBodyQuoteSeed(input, prefix_body, &body_quotes);
+                                    const prefix_blocks = try self.renderBodySliceSeeded(prefix_body, false, true, if (origin) |base| base + start else null, prefix_quote, seed);
+                                    try blocks.appendSlice(self.a, prefix_blocks);
+                                    if (prefix_blocks.len != 0 and std.mem.eql(u8, prefix_blocks[prefix_blocks.len - 1].list_path, seed.path))
+                                        list_prefix_index = blocks.items.len - 1;
+                                }
                             }
                             formatting_join_pending = false;
                             if (joining_format) link_inline_join = null;
@@ -4749,8 +5011,24 @@ pub const Renderer = struct {
                             // text to a wiki line start. Later physical lines retain
                             // normal list/heading/preformatted interpretation.
                             const scoped_quote = try self.rawBodyQuoteSeed(input, rest[tag.end..pair.inner_end], &body_quotes);
-                            const scoped_blocks = try self.renderBodySlice(body, first_line_inline, body.len != 0 and body[body.len - 1] != '\n', if (origin) |base| base + offset + tag.end else null, scoped_quote);
+                            // Reconstruct only the already-admitted marker. This
+                            // keeps the ordinary list/heading/table precedence on
+                            // the scoped first line; no authored body is reparsed.
+                            const scoped_body = if (list_seed) |seed| try std.fmt.allocPrint(self.a, "{s} {s}", .{ seed.path, body }) else body;
+                            const scoped_blocks = try self.renderBodySliceSeeded(scoped_body, if (list_seed != null) false else first_line_inline, body.len != 0 and body[body.len - 1] != '\n', if (list_seed != null) null else if (origin) |base| base + offset + tag.end else null, scoped_quote, list_seed);
                             var scoped_start: usize = 0;
+                            if (list_seed) |seed| if (list_prefix_index) |index| {
+                                if (first_line_inline and scoped_blocks.len != 0 and std.mem.eql(u8, scoped_blocks[0].list_path, seed.path)) {
+                                    var leading: std.ArrayList(Span) = .empty;
+                                    const previous = &blocks.items[index];
+                                    if (join_separator and !formattingVisibleEndsSpace(previous.spans))
+                                        try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction });
+                                    try leading.appendSlice(self.a, scoped_blocks[0].spans);
+                                    try self.appendParagraphSpans(&blocks, index, leading.items, false);
+                                    blocks.items[index].relation_note = previous.relation_note or scoped_blocks[0].relation_note;
+                                    scoped_start = 1;
+                                }
+                            };
                             // An inline opener following a soft newline continues the
                             // active paragraph. Merge its first paragraph without
                             // extending the wrapper's flags over the preceding text.
@@ -4779,8 +5057,13 @@ pub const Renderer = struct {
                                 inline_line_end = offset + closing_line_end;
                                 if (formatting_join_pending) link_inline_join = ((body.len != 0 and std.ascii.isWhitespace(body[body.len - 1])) or std.ascii.isWhitespace(input[pos])) and !formattingVisibleEndsSpace(blocks.items[blocks.items.len - 1].spans);
                             }
-                            @memset(&counts, 0);
-                            previous_list_path = "";
+                            if (list_seed != null) {
+                                counts = list_state.counts;
+                                previous_list_path = list_state.previous_path;
+                            } else {
+                                @memset(&counts, 0);
+                                previous_list_path = "";
+                            }
                             continue;
                         }
                     }
@@ -4947,7 +5230,7 @@ pub const Renderer = struct {
             // A close-marker's same-line whitespace is not an authored blank
             // line. Keep its pending soft-space join for the next physical line.
             if (anchored_inline and clean.len == 0 and link_inline_join != null and !self.pre_block) continue;
-            const special = html_tag != null or protected_tag != null or multiline_data != null or (!self.pre_block and clean.len == 0) or heading != null or prefix != 0 or horizontal_rule or (!anchored_inline and ((!self.pre_block and !link_label_scope and starts(line, " ")) or table_indent != null));
+            const special = html_tag != null or protected_tag != null or multiline_data != null or (!self.pre_block and !self.html_list_item_flow and clean.len == 0) or heading != null or prefix != 0 or horizontal_rule or (!anchored_inline and ((!self.pre_block and !self.html_list_item_flow and !link_label_scope and starts(line, " ")) or table_indent != null));
             if (!special) {
                 if (para == null) {
                     para = start;
@@ -5007,6 +5290,8 @@ pub const Renderer = struct {
                     }
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
                     try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
+                } else if (try self.appendEtymologyTree(&blocks, clean[tag.end..pair.inner_end], tag)) {
+                    // The accepted tree already emitted its data-only nested list.
                 } else {
                     const parent_language_direction = self.body_language_direction;
                     const scoped_style = try self.htmlLanguageDirection(tag, parent_language_direction orelse .{});
@@ -5137,7 +5422,7 @@ pub const Renderer = struct {
                 }
                 continue;
             }
-            if (!link_label_scope and starts(line, " ")) {
+            if (!self.html_list_item_flow and !link_label_scope and starts(line, " ")) {
                 // Leading-space preformatting preserves whitespace, but unlike
                 // <pre>/<syntaxhighlight> it still interprets inline markup.
                 const previous_seed = self.next_quote_seed;
@@ -5194,7 +5479,7 @@ pub const Renderer = struct {
             }
         }
         if (para) |p| {
-            if (terminal_inline and !self.parsed_pre) {
+            if (terminal_inline and !self.parsed_pre and !(self.html_list_item_flow and formatting_join_pending)) {
                 const previous_seed = self.next_quote_seed;
                 self.next_quote_seed = if (p == 0) initial_quote else null;
                 defer self.next_quote_seed = previous_seed;
@@ -5203,6 +5488,9 @@ pub const Renderer = struct {
             formatting_join_pending = false;
         }
         try paragraph_join.finish(self.a);
+        if (initial_list) |seed| if (seed.result) |state| {
+            state.* = .{ .path = seed.path, .previous_path = previous_list_path, .counts = counts };
+        };
         return try blocks.toOwnedSlice(self.a);
     }
     fn parseBodySpans(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
@@ -5370,7 +5658,114 @@ pub const Renderer = struct {
         }
         try self.htmlListItemPart(blocks, input[preceding..], if (emitted) .list_detail else kind, path, if (emitted) "" else number, item, !emitted, style);
     }
+    fn htmlListItemFormattingAt(self: *Renderer, input: []const u8, start: usize, line_end: usize) Error!?struct { offset: usize, tag: syntax.Tag } {
+        var at = start;
+        var opaque_scan: syntax.OpaqueScan = .{};
+        while (at < line_end) {
+            at += std.mem.indexOfAny(u8, input[at..line_end], "<[{") orelse return null;
+            if (input[at] == '<') {
+                if (opaque_scan.protectedEnd(input, at, null)) |end| {
+                    at = end;
+                    continue;
+                }
+                if (try self.semanticTagAt(input[at..], 0)) |tag| {
+                    if (!tag.closing and (blockFormattingFlags(tag) != null or tag.is("span"))) {
+                        const rest = input[at..];
+                        if (syntax.matchingTag(rest, tag)) |pair| {
+                            const body = rest[tag.end..pair.inner_end];
+                            const first_end = std.mem.indexOfScalarPos(u8, rest, tag.end, '\n') orelse rest.len;
+                            if (trim(rest[tag.end..first_end]).len == 0 or std.mem.indexOfScalar(u8, body, '\n') != null or bodyPreCandidate(body) or mayHaveMultilineLinks(body))
+                                return .{ .offset = at, .tag = tag };
+                            at += pair.end;
+                            continue;
+                        }
+                    }
+                    at += tag.end;
+                    continue;
+                }
+            } else if (starts(input[at..], "[[") or starts(input[at..], "{{")) {
+                if (syntax.balancedWithOpaqueScan(input, at, &opaque_scan)) |pair| {
+                    at = pair.end;
+                    continue;
+                }
+            } else if (input[at] == '[' and ir.hasExternalProtocol(input[at + 1 ..])) {
+                var iterator: ir.InlineIterator = .{ .input = input[at..], .renderer_boundaries = true };
+                if (iterator.next()) |token| if (token.kind == .external_link) {
+                    at += iterator.cursor;
+                    continue;
+                };
+            }
+            at += 1;
+        }
+        return null;
+    }
+    fn htmlListItemHasWikiList(self: *Renderer, input: []const u8) Error!bool {
+        // The opener's own line is inline. Later authored lines use the same
+        // protected/link-aware boundaries and behavior controls as renderBody.
+        var opaque_scan: syntax.OpaqueScan = .{};
+        var at: usize = 0;
+        const matcher = self.behaviorControlMatcher();
+        while (at < input.len) {
+            const end = syntax.logicalEndWithOpaqueScan(input, at, null, &opaque_scan);
+            if (at != 0) {
+                const line = input[at..end];
+                const list_line = line[syntax.leadingBehaviorControlOffset(line, matcher)..];
+                if ((try syntax.controlListPrefixAlloc(self.a, list_line, matcher)).path.len != 0) return true;
+            }
+            at = if (end < input.len) end + 1 else end;
+        }
+        return false;
+    }
+    fn htmlListItemWikiBody(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, keep_empty: bool, style: Style) Error!void {
+        var hints: SemanticHints = .{ .relation_note = self.body_formatting_attributes.relation_note };
+        const item_style = blk: {
+            const previous_capture = self.semantic_capture;
+            self.semantic_capture = &hints;
+            defer self.semantic_capture = previous_capture;
+            break :blk try self.htmlInlineStyle(item, style);
+        };
+        const previous_attributes = self.body_formatting_attributes;
+        const previous_language_direction = self.body_language_direction;
+        const previous_formatting = self.block_formatting;
+        const previous_flow = self.html_list_item_flow;
+        self.restoreFormattingAttributes(.{ .classes = item_style.classes, .role = item_style.role, .relation_note = hints.relation_note, .language = item_style.language, .direction = item_style.direction });
+        const flags: SpanFlags = .{ .bold = item_style.bold, .italic = item_style.italic, .code = item_style.code, .small = item_style.small, .superscript = item_style.superscript, .subscript = item_style.subscript, .strike = item_style.strike, .underline = item_style.underline };
+        self.block_formatting = @bitCast(@as(u8, @bitCast(previous_formatting)) | @as(u8, @bitCast(flags)));
+        self.html_list_item_flow = true;
+        defer {
+            self.body_formatting_attributes = previous_attributes;
+            self.body_language_direction = previous_language_direction;
+            self.block_formatting = previous_formatting;
+            self.html_list_item_flow = previous_flow;
+        }
+        const children = try self.renderBodySlice(input, true, true, null, null);
+        const detail_path = if (path[path.len - 1] == '*' or path[path.len - 1] == '#')
+            try std.fmt.allocPrint(self.a, "{s}:", .{path})
+        else
+            path;
+        var emitted = false;
+        for (children) |value| {
+            if (!emitted and value.kind != .paragraph and keep_empty) {
+                try self.appendBlockBudgeted(blocks, .{ .kind = kind, .spans = &.{}, .list_path = path, .depth = @intCast(@min(path.len, 255)), .number = number, .relation_note = hints.relation_note });
+            }
+            var child = value;
+            if (child.list_path.len != 0) {
+                child.list_path = try std.fmt.allocPrint(self.a, "{s}{s}", .{ path, child.list_path });
+            } else if (child.kind == .paragraph) {
+                child.kind = if (emitted) .list_detail else kind;
+                child.list_path = if (emitted or kind == .list_detail) detail_path else path;
+                child.number = if (emitted) "" else number;
+            } else {
+                child.list_path = detail_path;
+            }
+            child.depth = @intCast(@min(child.list_path.len, 255));
+            try self.appendBlockBudgeted(blocks, child);
+            emitted = true;
+        }
+    }
     fn htmlListItemPart(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, keep_empty: bool, style: Style) Error!void {
+        if (try self.htmlListItemHasWikiList(input))
+            return self.htmlListItemWikiBody(blocks, input, kind, path, number, item, keep_empty, style);
         // Reuse semantic attribute/style handling while removing only the list
         // marker tag. Its li identity must not reach the inline bullet path.
         const styled = try std.fmt.allocPrint(self.a, "<span{s}>{s}</span>", .{ item.attrs, input });
@@ -17755,4 +18150,328 @@ test "formatting attributes survive fragment boundaries and restore parent scope
     const spaced_saved = try FormattingScopeTest.encode(a, &spaced_renderer, spaced_blocks);
     try FormattingScopeTest.shapes(a, spaced_blocks, &.{"paragraph"}, &.{"trailer tail"});
     try FormattingScopeTest.shapes(a, spaced_saved.entry.sections[0].blocks, &.{"paragraph"}, &.{"trailer tail"});
+}
+
+test "HTML list items preserve authored wiki sublists through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn shape(alloc: A, blocks: anytype, paths: []const []const u8, texts: []const []const u8, rich: bool) !void {
+            try std.testing.expectEqual(paths.len, blocks.len);
+            for (blocks, paths, texts) |block_value, path, expected_text| {
+                const expected_kind = if (path.len == 0) "paragraph" else if (std.mem.eql(u8, path, ":")) "list_detail" else "list_item";
+                try std.testing.expectEqualStrings(expected_kind, @tagName(block_value.kind));
+                try std.testing.expectEqualStrings(path, block_value.list_path);
+                try std.testing.expectEqual(@as(u8, @intCast(path.len)), block_value.depth);
+                try std.testing.expectEqualStrings("", block_value.number);
+                try std.testing.expect(block_value.table == null);
+                try std.testing.expectEqualStrings(expected_text, trim(try FormattingScopeTest.text(alloc, block_value.spans)));
+            }
+            if (rich) {
+                try FormattingScopeTest.word(alloc, blocks, "parent", .{ .small = true, .language = "fr", .direction = "rtl" });
+                try FormattingScopeTest.word(alloc, blocks, "child", .{ .kind = .link, .target = "cat", .language = "fr", .direction = "rtl" });
+                try FormattingScopeTest.word(alloc, blocks, "after", .{});
+            }
+        }
+        fn protected(alloc: A, blocks: anytype) !void {
+            var whole: std.ArrayList(u8) = .empty;
+            for (blocks) |block_value| {
+                try std.testing.expect(!std.mem.startsWith(u8, block_value.list_path, "**"));
+                try whole.appendSlice(alloc, try FormattingScopeTest.text(alloc, block_value.spans));
+                for (block_value.spans) |span| try std.testing.expect(span.kind != .link);
+            }
+            const parent = std.mem.indexOf(u8, whole.items, "parent") orelse return error.TestUnexpectedResult;
+            try std.testing.expect(std.mem.indexOfPos(u8, whole.items, parent + "parent".len, "parent") == null);
+            const child = std.mem.indexOf(u8, whole.items, "* child") orelse return error.TestUnexpectedResult;
+            try std.testing.expect(std.mem.indexOfPos(u8, whole.items, child + "* child".len, "* child") == null);
+        }
+        fn dump(alloc: A, label: []const u8, phase: []const u8, blocks: anytype) !void {
+            std.debug.print("html-wiki-item {s} {s} blocks={d}\n", .{ label, phase, blocks.len });
+            for (blocks) |block_value| {
+                std.debug.print("  kind={s} path={s} text=[{s}]\n", .{
+                    @tagName(block_value.kind),                             block_value.list_path,
+                    try FormattingScopeTest.text(alloc, block_value.spans),
+                });
+            }
+        }
+    };
+    const Case = struct {
+        label: []const u8,
+        source: []const u8,
+        paths: []const []const u8,
+        texts: []const []const u8,
+        rich: bool = false,
+        protected: bool = false,
+    };
+    const cases = [_]Case{
+        .{ .label = "wiki nested", .source = "<ul><li>parent\n* child\n</li></ul>", .paths = &.{ "*", "**" }, .texts = &.{ "parent", "child" } },
+        .{ .label = "wiki linked attributes", .source = "<ul lang=fr dir=rtl><li><small>parent</small>\n* [[cat|child]]\n</li></ul>\nafter", .paths = &.{ "*", "**", "" }, .texts = &.{ "parent", "child", "after" }, .rich = true },
+        .{ .label = "wiki in definition detail", .source = "<dl><dd>parent\n* child\n</dd></dl>", .paths = &.{ ":", ":*" }, .texts = &.{ "parent", "child" } },
+        .{ .label = "explicit HTML nested", .source = "<ul><li>parent<ul><li>child</li></ul></li></ul>", .paths = &.{ "*", "**" }, .texts = &.{ "parent", "child" } },
+        .{ .label = "same-line literal", .source = "<ul><li>parent * child</li></ul>", .paths = &.{"*"}, .texts = &.{"parent * child"} },
+        .{ .label = "nowiki literal", .source = "<ul><li>parent\n<nowiki>* child</nowiki>\n</li></ul>", .paths = &.{}, .texts = &.{}, .protected = true },
+        .{ .label = "pre literal", .source = "<ul><li>parent\n<pre>* child</pre>\n</li></ul>", .paths = &.{}, .texts = &.{}, .protected = true },
+    };
+    var failed = false;
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+        try Check.dump(a, case.label, "native", blocks);
+        try Check.dump(a, case.label, "DPR2", stored.entry.sections[0].blocks);
+        // Observe both actual representations and all neighboring controls before
+        // returning the expected baseline failure for the missing wiki sublist.
+        if (case.protected) {
+            Check.protected(a, blocks) catch {
+                failed = true;
+            };
+            Check.protected(a, stored.entry.sections[0].blocks) catch {
+                failed = true;
+            };
+        } else {
+            Check.shape(a, blocks, case.paths, case.texts, case.rich) catch {
+                failed = true;
+            };
+            Check.shape(a, stored.entry.sections[0].blocks, case.paths, case.texts, case.rich) catch {
+                failed = true;
+            };
+        }
+        if (renderer.fallbacks.any()) failed = true;
+    }
+    try std.testing.expect(!failed);
+}
+test "HTML wiki sublist repair preserves indentation and formatting boundaries through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn shape(alloc: A, blocks: anytype, paths: []const []const u8, texts: []const []const u8, numbers: []const []const u8) !void {
+            try std.testing.expectEqual(paths.len, blocks.len);
+            for (blocks, paths, texts, 0..) |value, path, text_value, index| {
+                const kind = if (path.len == 0) "paragraph" else if (path[path.len - 1] == '*') "list_item" else if (path[path.len - 1] == '#') "definition" else "list_detail";
+                try std.testing.expectEqualStrings(kind, @tagName(value.kind));
+                try std.testing.expectEqualStrings(path, value.list_path);
+                try std.testing.expectEqualStrings(if (numbers.len == 0) "" else numbers[index], value.number);
+                try std.testing.expectEqual(@as(u8, @intCast(path.len)), value.depth);
+                try std.testing.expectEqualStrings(text_value, trim(try FormattingScopeTest.text(alloc, value.spans)));
+            }
+        }
+        fn words(alloc: A, blocks: anytype, small: bool, child_small: bool, literal_star: bool, inline_scope: bool, list_scope: bool) !void {
+            try FormattingScopeTest.word(alloc, blocks, "parent", .{ .small = small, .language = "fr", .direction = "rtl", .classes = "note" });
+            try FormattingScopeTest.word(alloc, blocks, "child", .{ .small = child_small, .kind = .link, .target = "cat", .language = if (inline_scope) "de" else "fr", .direction = if (inline_scope) "ltr" else "rtl", .classes = if (inline_scope) "note inner" else "note" });
+            if (inline_scope) {
+                try FormattingScopeTest.word(alloc, blocks, "before", .{ .small = true, .language = "de", .direction = "ltr", .classes = "note inner" });
+                try FormattingScopeTest.word(alloc, blocks, "brief", .{ .small = true, .language = "fr", .direction = "rtl", .classes = "note" });
+            }
+            if (list_scope) {
+                try FormattingScopeTest.word(alloc, blocks, "before", .{ .language = "fr", .direction = "rtl", .classes = "note" });
+                try FormattingScopeTest.word(alloc, blocks, "continuation", .{ .small = true, .language = "fr", .direction = "rtl", .classes = "note" });
+            }
+            try FormattingScopeTest.word(alloc, blocks, "tail", .{ .language = "fr", .direction = "rtl", .classes = "note" });
+            try FormattingScopeTest.word(alloc, blocks, "after", .{});
+            if (literal_star) try std.testing.expect(std.mem.indexOf(u8, try FormattingScopeTest.text(alloc, blocks[0].spans), "* parent") != null);
+        }
+        fn one(alloc: A, case: anytype) !void {
+            var renderer: Renderer = .{ .a = alloc, .context = .{} };
+            const blocks = try renderer.renderBody(case.source);
+            const stored = try FormattingScopeTest.encode(alloc, &renderer, blocks);
+            try @This().shape(alloc, blocks, case.paths, case.texts, case.numbers);
+            try @This().shape(alloc, stored.entry.sections[0].blocks, case.paths, case.texts, case.numbers);
+            if (case.rich) {
+                try @This().words(alloc, blocks, !case.inline_scope and !case.list_scope, case.child_small, case.literal_star, case.inline_scope, case.list_scope);
+                try @This().words(alloc, stored.entry.sections[0].blocks, !case.inline_scope and !case.list_scope, case.child_small, case.literal_star, case.inline_scope, case.list_scope);
+            } else {
+                for (blocks) |value| {
+                    try std.testing.expect(value.kind != .preformatted);
+                    for (value.spans) |span| try std.testing.expect(!span.flags.code);
+                }
+            }
+            if (case.numbered_scope) {
+                try FormattingScopeTest.word(alloc, blocks, "child", .{ .small = true, .kind = .link, .target = "cat" });
+                try FormattingScopeTest.word(alloc, stored.entry.sections[0].blocks, "child", .{ .small = true, .kind = .link, .target = "cat" });
+                try FormattingScopeTest.word(alloc, blocks, "fourth", .{ .small = true });
+                try FormattingScopeTest.word(alloc, stored.entry.sections[0].blocks, "fourth", .{ .small = true });
+                try FormattingScopeTest.word(alloc, blocks, "fifth", .{});
+                try FormattingScopeTest.word(alloc, stored.entry.sections[0].blocks, "fifth", .{});
+                try FormattingScopeTest.word(alloc, blocks, "tail", .{});
+                try FormattingScopeTest.word(alloc, stored.entry.sections[0].blocks, "tail", .{});
+            }
+            try std.testing.expect(!renderer.fallbacks.any());
+            try std.testing.expect(!renderer.html_list_item_flow);
+            try std.testing.expectEqualStrings("", renderer.body_formatting_attributes.classes);
+            try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(renderer.block_formatting)));
+        }
+    };
+    const Case = struct {
+        source: []const u8,
+        paths: []const []const u8,
+        texts: []const []const u8,
+        numbers: []const []const u8 = &.{},
+        rich: bool = false,
+        child_small: bool = false,
+        literal_star: bool = false,
+        inline_scope: bool = false,
+        list_scope: bool = false,
+        numbered_scope: bool = false,
+    };
+    const cases = [_]Case{
+        .{ .source = "<ul><li>parent\n ordinary\n* child\n more\n</li></ul>\nafter", .paths = &.{ "*", "**", "*:", "" }, .texts = &.{ "parent  ordinary", "child", "more", "after" } },
+        .{ .source = "<dl><dd>parent\n ordinary\n* child\n more\n</dd></dl>\nafter", .paths = &.{ ":", ":*", ":", "" }, .texts = &.{ "parent  ordinary", "child", "more", "after" } },
+        .{ .source = "<ul lang=fr dir=rtl><li class=note><small>parent\n* [[cat|child]]\n</small>tail\n</li></ul>\nafter", .paths = &.{ "*", "**", "*:", "" }, .texts = &.{ "parent", "child", "tail", "after" }, .rich = true, .child_small = true },
+        .{ .source = "<ul lang=fr dir=rtl><li class=note><small>parent</small>\n* [[cat|child]]\ntail\n</li></ul>\nafter", .paths = &.{ "*", "**", "*:", "" }, .texts = &.{ "parent", "child", "tail", "after" }, .rich = true },
+        .{ .source = "<ul lang=fr dir=rtl><li class=note><small>* parent\n* [[cat|child]]\n</small>tail\n</li></ul>\nafter", .paths = &.{ "*", "**", "*:", "" }, .texts = &.{ "* parent", "child", "tail", "after" }, .rich = true, .child_small = true, .literal_star = true },
+        .{ .source = "<ul lang=fr dir=rtl><li class=note>parent <small>brief</small> <span class=inner lang=de dir=ltr><small>before\n* [[cat|child]]\n</small></span>tail\n</li></ul>\nafter", .paths = &.{ "*", "**", "*:", "" }, .texts = &.{ "parent brief before", "child", "tail", "after" }, .rich = true, .child_small = true, .inline_scope = true },
+        .{ .source = "<ul lang=fr dir=rtl><li class=note>parent\n* before<small>[[cat|child]]\n continuation</small> tail\n</li></ul>\nafter", .paths = &.{ "*", "**", "*:", "" }, .texts = &.{ "parent", "beforechild", "continuation tail", "after" }, .rich = true, .child_small = true, .list_scope = true },
+        .{ .source = "<ul><li>parent\n# first\n# second\n# before <small>[[cat|child]]\n# fourth</small>\n# fifth\n tail\n</li></ul>\nafter", .paths = &.{ "*", "*#", "*#", "*#", "*#", "*#", "*:", "" }, .texts = &.{ "parent", "first", "second", "before child", "fourth", "fifth", "tail", "after" }, .numbers = &.{ "", "1", "2", "3", "4", "5", "", "" }, .numbered_scope = true },
+        .{ .source = "<ul><li>parent\n<nowiki>\n* literal\n</nowiki>\n* child\n</li></ul>", .paths = &.{ "*", "**" }, .texts = &.{ "parent  * literal", "child" } },
+        .{ .source = "<ul><li>parent\n ordinary\n</li></ul>\nafter", .paths = &.{ "*", "" }, .texts = &.{ "parent  ordinary", "after" } },
+    };
+    var failed_cases: usize = 0;
+    for (cases, 0..) |case, case_index| {
+        Check.one(a, case) catch |err| {
+            std.debug.print("HTML wiki repair case {d}: {s}\n{s}\n", .{ case_index, @errorName(err), case.source });
+            failed_cases += 1;
+        };
+    }
+    try std.testing.expectEqual(@as(usize, 0), failed_cases);
+}
+
+test "etymology tree branch HTML preserves parent-first relationships through DPR2" {
+    const Check = struct {
+        fn shape(a: A, blocks: anytype, values: []const []const u8, paths: []const []const u8) !void {
+            try std.testing.expectEqual(values.len, blocks.len);
+            for (blocks, values, paths) |item, value, path| {
+                try std.testing.expect(item.kind == .list_item);
+                try std.testing.expectEqualStrings(path, item.list_path);
+                try std.testing.expectEqual(@as(u8, @intCast(path.len)), item.depth);
+                try std.testing.expectEqualStrings("", item.number);
+                try std.testing.expect(item.table == null);
+                try std.testing.expectEqualStrings(value, try FormattingScopeTest.text(a, item.spans));
+            }
+        }
+        fn actions(a: A, blocks: anytype) !void {
+            try FormattingScopeTest.word(a, blocks, "RootNode", .{ .kind = .link, .target = "R", .classes = "etytree-term" });
+            try FormattingScopeTest.word(a, blocks, "AncestorA", .{ .kind = .link, .target = "A", .classes = "etytree-term" });
+            try FormattingScopeTest.word(a, blocks, "OldestC", .{ .kind = .link, .target = "C", .language = "la", .direction = "ltr", .italic = true, .classes = "etytree-term" });
+            try FormattingScopeTest.word(a, blocks, "AncestorB", .{ .kind = .link, .target = "B", .classes = "etytree-term" });
+            try FormattingScopeTest.word(a, blocks, "der.", .{ .kind = .link, .target = "Appendix:Glossary#derived terms", .classes = "etytree-label" });
+            try FormattingScopeTest.word(a, blocks, "lbor.", .{ .kind = .link, .target = "Appendix:Glossary#learned borrowing", .classes = "etytree-label" });
+        }
+        fn effects(a: A, blocks: anytype, notes: anytype, media: anytype) !void {
+            try std.testing.expectEqual(@as(usize, 2), blocks.len);
+            try std.testing.expectEqualStrings("*", blocks[0].list_path);
+            try std.testing.expectEqualStrings("**", blocks[1].list_path);
+            try std.testing.expectEqual(@as(usize, 3), notes.len);
+            const bodies = [_][]const u8{ "child-note", "caption-note", "root-note" };
+            for (notes, bodies) |note, body| try std.testing.expectEqualStrings(body, try FormattingScopeTest.text(a, note.spans));
+            const markers = [_][]const u8{ "#reference-3", "#reference-1", "#reference-2" };
+            var next: usize = 0;
+            for (blocks) |item| for (item.spans) |span| {
+                if (span.role != .reference) continue;
+                try std.testing.expect(next < markers.len);
+                try std.testing.expectEqualStrings(markers[next], span.target);
+                next += 1;
+            };
+            try std.testing.expectEqual(markers.len, next);
+            try std.testing.expectEqual(@as(usize, 1), media.len);
+            try std.testing.expectEqualStrings("Tree.svg", media[0].file);
+            try std.testing.expectEqualStrings("image-caption[2]", media[0].caption);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Source-shaped oracle from Module:etymon/tree rev91079116:
+    // R has ancestors A and B; A has ancestor C. The DOM is child-first.
+    const source = "<div class=\"etytree-body\"><div class=\"etytree-branch-group\"><div class=\"etytree-branch\"><div class=\"etytree-block\"><i lang=\"la\" dir=\"ltr\"><span class=\"etytree-term\">[[C|OldestC]]</span></i></div><span class=\"etytree-connector-vertical\"></span><div class=\"etytree-block\"><span class=\"etytree-term\">[[A|AncestorA]]</span><span class=\"etytree-label-container\"><span class=\"etytree-label\">[[Appendix:Glossary#derived terms|<abbr title=\"edge\">der.</abbr>]]</span></span></div><span class=\"etytree-branch-left\"></span></div><div class=\"etytree-branch\"><div class=\"etytree-block\"><span class=\"etytree-term\">[[B|AncestorB]]</span><span class=\"etytree-label-container\"><span class=\"etytree-label\">[[Appendix:Glossary#learned borrowing|<abbr title=\"edge\">lbor.</abbr>]]</span><abbr class=\"etytree-unc\" title=\"uncertain\">?</abbr></span></div><span class=\"etytree-branch-right\"></span></div></div><span class=\"etytree-connector-vertical\"></span><div class=\"etytree-block\"><span class=\"etytree-term\">[[R|RootNode]]</span></div></div>";
+    const values = [_][]const u8{ "RootNode", "AncestorA der.", "OldestC", "AncestorB lbor.?" };
+    const paths = [_][]const u8{ "*", "**", "***", "**" };
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    try Check.shape(a, blocks, &values, &paths);
+    try Check.actions(a, blocks);
+    try std.testing.expect(!renderer.fallbacks.any());
+    const decoded = try FormattingScopeTest.encode(a, &renderer, blocks);
+    try Check.shape(a, decoded.entry.sections[0].blocks, &values, &paths);
+    try Check.actions(a, decoded.entry.sections[0].blocks);
+
+    // A visible group operation belongs between the parent and its terms.
+    // The hidden JSON anchor is not a second source of rendered tree content.
+    var grouped: Renderer = .{ .a = a, .context = .{} };
+    const grouped_blocks = try grouped.renderBody("<div class=\"etytree-body\"><div class=\"etytree-branch-group\"><div class=\"etytree-branch\"><div class=\"etytree-block\"><span class=\"etytree-term\">[[A|GroupA]]</span></div><span class=\"etytree-branch-left\"></span></div><div class=\"etytree-branch\"><div class=\"etytree-block\"><span class=\"etytree-term\">[[B|GroupB]]</span></div><span class=\"etytree-branch-right\"></span></div></div><span class=\"etytree-connector-vertical\"><span class=\"etytree-group-label\"><span class=\"etytree-label\"><abbr title=\"blend\">blend</abbr></span><abbr class=\"etytree-unc\" title=\"uncertain\">?</abbr></span></span><div class=\"etytree-block\"><span class=\"etytree-term\">[[R|RootNode]]</span></div></div><ul class=\"etymonid\" data-ety-tree-json=\"{&quot;term&quot;:&quot;HIDDEN&quot;,&quot;children&quot;:[]}\"></ul>");
+    const group_values = [_][]const u8{ "RootNode", "blend?", "GroupA", "GroupB" };
+    const group_paths = [_][]const u8{ "*", "**", "***", "***" };
+    try Check.shape(a, grouped_blocks, &group_values, &group_paths);
+    const grouped_decoded = try FormattingScopeTest.encode(a, &grouped, grouped_blocks);
+    try Check.shape(a, grouped_decoded.entry.sections[0].blocks, &group_values, &group_paths);
+    try std.testing.expect(!grouped.fallbacks.any());
+
+    // Parse content once in original DOM order, although list nodes are reordered.
+    var effects_renderer: Renderer = .{ .a = a, .context = .{} };
+    const effect_blocks = try effects_renderer.renderBody("<div class=\"etytree-body\"><div class=\"etytree-block\">child<ref>child-note</ref> [[File:Tree.svg|thumb|image-caption<ref>caption-note</ref>]]</div><span class=\"etytree-connector-vertical\"></span><div class=\"etytree-block\">root<ref>root-note</ref></div></div>");
+    const references = try effects_renderer.finishReferences();
+    try Check.effects(a, effect_blocks, references, effects_renderer.media.items);
+    try std.testing.expectEqual(effects_renderer.media.items.len, effects_renderer.media_caption_spans.items.len);
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = effect_blocks }};
+    const blob = @import("blob_encoder");
+    const encoded = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, effects_renderer.media.items);
+    const effect_decoded = try blob.presentation_codec.decodeAlloc(a, encoded, "etymology tree", .language, .{ .code = "en", .heading = "English" });
+    try Check.effects(a, effect_decoded.entry.sections[0].blocks, effect_decoded.entry.references, effect_decoded.entry.media);
+    try std.testing.expect(!effects_renderer.fallbacks.any());
+
+    // Missing connectors are not evidence of an edge. Validation has no effects,
+    // and the ordinary fallback must register each authored reference just once.
+    var malformed: Renderer = .{ .a = a, .context = .{} };
+    const malformed_blocks = try malformed.renderBody("<div class=\"etytree-body\"><div class=\"etytree-block\">first<ref>first-note</ref></div><div class=\"etytree-block\">second<ref>second-note</ref></div></div>");
+    const malformed_refs = try malformed.finishReferences();
+    try std.testing.expectEqual(@as(usize, 2), malformed_refs.len);
+    try std.testing.expectEqualStrings("first-note", try FormattingScopeTest.text(a, malformed_refs[0].spans));
+    try std.testing.expectEqualStrings("second-note", try FormattingScopeTest.text(a, malformed_refs[1].spans));
+    for (malformed_blocks) |item| try std.testing.expect(item.kind != .list_item);
+    try std.testing.expect(!malformed.fallbacks.any());
+
+    // A duplicate/hidden-ancestry arrow is visible, not invented ancestry.
+    var duplicate_renderer: Renderer = .{ .a = a, .context = .{} };
+    const duplicate_blocks = try duplicate_renderer.renderBody("<div class=\"etytree-body\"><div class=\"etytree-duplicate-connector\"><div><span class=\"etytree-dup-right\"></span><span class=\"etytree-dup-horiz\"></span><span class=\"etytree-dup-left\"></span><span class=\"etytree-dup-arrow\">▲</span></div></div><div class=\"etytree-block\"><span class=\"etytree-term\">[[R|RootNode]]</span></div></div>");
+    try Check.shape(a, duplicate_blocks, &.{"▲ RootNode"}, &.{"*"});
+    const duplicate_decoded = try FormattingScopeTest.encode(a, &duplicate_renderer, duplicate_blocks);
+    try Check.shape(a, duplicate_decoded.entry.sections[0].blocks, &.{"▲ RootNode"}, &.{"*"});
+    try std.testing.expect(!duplicate_renderer.fallbacks.any());
+
+    // Multiple containers can contain a labelled group or an unlabelled forest.
+    // No term is invented for the container; the shared outer parent owns it.
+    var nested_renderer: Renderer = .{ .a = a, .context = .{} };
+    const nested_blocks = try nested_renderer.renderBody("<div class=\"etytree-body\"><div class=\"etytree-branch-group\"><div class=\"etytree-branch\"><div class=\"etytree-branch-group\"><div class=\"etytree-branch\"><div class=\"etytree-block\"><span class=\"etytree-term\">[[A|A]]</span></div><span class=\"etytree-branch-left\"></span></div><div class=\"etytree-branch\"><div class=\"etytree-block\"><span class=\"etytree-term\">[[B|B]]</span></div><span class=\"etytree-branch-right\"></span></div></div><span class=\"etytree-connector-vertical\"><span class=\"etytree-group-label\">blend?</span></span><span class=\"etytree-branch-left\"></span></div><div class=\"etytree-branch\"><div class=\"etytree-branch-group\"><div class=\"etytree-branch\"><div class=\"etytree-block\"><span class=\"etytree-term\">[[C|C]]</span></div><span class=\"etytree-branch-left\"></span></div><div class=\"etytree-branch\"><div class=\"etytree-block\"><span class=\"etytree-term\">[[D|D]]</span></div><span class=\"etytree-branch-right\"></span></div></div><span class=\"etytree-connector-vertical\"></span><span class=\"etytree-connector-vertical-short\"></span><span class=\"etytree-branch-mid\"></span></div><div class=\"etytree-branch\"><div class=\"etytree-block\"><span class=\"etytree-term\">[[E|E]]</span></div><span class=\"etytree-branch-right\"></span></div></div><span class=\"etytree-connector-vertical\"></span><div class=\"etytree-block\"><span class=\"etytree-term\">[[R|R]]</span></div></div>");
+    const nested_values = [_][]const u8{ "R", "blend?", "A", "B", "C", "D", "E" };
+    const nested_paths = [_][]const u8{ "*", "**", "***", "***", "**", "**", "**" };
+    try Check.shape(a, nested_blocks, &nested_values, &nested_paths);
+    const nested_decoded = try FormattingScopeTest.encode(a, &nested_renderer, nested_blocks);
+    try Check.shape(a, nested_decoded.entry.sections[0].blocks, &nested_values, &nested_paths);
+    for ([_][]const u8{ "R", "A", "B", "C", "D", "E" }) |value| {
+        try FormattingScopeTest.word(a, nested_blocks, value, .{ .kind = .link, .target = value, .classes = "etytree-term" });
+        try FormattingScopeTest.word(a, nested_decoded.entry.sections[0].blocks, value, .{ .kind = .link, .target = value, .classes = "etytree-term" });
+    }
+    try std.testing.expect(!nested_renderer.fallbacks.any());
+
+    // A rejected geometry check must not resolve effectful class semantics.
+    var pure_renderer: Renderer = .{ .a = a, .context = .{} };
+    var pure_hints: SemanticHints = .{};
+    pure_renderer.semantic_capture = &pure_hints;
+    var pure_plan: Renderer.EtymologyTreePlan = .{ .renderer = &pure_renderer };
+    try std.testing.expect((try pure_plan.sequence("<div class=\"etytree-block nyms scribunto-error\">first</div><div class=\"etytree-block\">second</div>", &.{}, 0, false)) == null);
+    try std.testing.expect(!pure_hints.relation_note);
+    try std.testing.expect(!pure_renderer.fallbacks.any());
+
+    // Class hints are captured on the accepted node, without leaking to its
+    // parent or a later ordinary paragraph in the same renderer.
+    var hinted: Renderer = .{ .a = a, .context = .{} };
+    const hinted_blocks = try hinted.renderBody("<div class=\"etytree-body\"><div class=\"etytree-block nyms scribunto-error\">child</div><span class=\"etytree-connector-vertical\"></span><div class=\"etytree-block\">parent</div></div>\n\nplain");
+    try std.testing.expectEqual(@as(usize, 3), hinted_blocks.len);
+    try std.testing.expect(!hinted_blocks[0].relation_note);
+    try std.testing.expect(hinted_blocks[1].relation_note);
+    try std.testing.expect(!hinted_blocks[2].relation_note);
+    try std.testing.expect(hinted.fallbacks.rendered_lua_error);
+    try std.testing.expect(hinted.semantic_capture == null);
 }
