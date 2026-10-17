@@ -464,7 +464,8 @@ void MainWindow::setupUi() {
     side->addWidget(results_, 1);
     resultStatus_ = new QLabel(sidebar);
     resultStatus_->setWordWrap(true);
-    resultStatus_->setAccessibleName(QStringLiteral("Search status"));
+    resultStatus_->setTextFormat(Qt::PlainText);
+    resultStatus_->setAccessibleDescription(QStringLiteral("Search status"));
     side->addWidget(resultStatus_);
     openingProgress_ = new QProgressBar(sidebar);
     openingProgress_->setRange(0, 0);
@@ -612,6 +613,16 @@ void MainWindow::setupUi() {
             QSignalBlocker languageBlocker(language_);
             kind_->setCurrentIndex(kind_->findData(api_->kind()));
             language_->setCurrentText(api_->language());
+        } else {
+            // Library changes invalidated the old reader; cancellation cannot restore its view.
+            json_->clear();
+            results_->clear();
+            sections_->clear();
+            sections_->setEnabled(false);
+            bookmark_->setEnabled(false);
+            title_->setText(QStringLiteral("Open your dictionaries"));
+            meta_->setText(QStringLiteral("Your words stay on this computer."));
+            reading_->setHtml(QStringLiteral("<p>Opening cancelled.</p><p>Open <b>Library</b> to import a dictionary or choose another folder.</p>"));
         }
         resultStatus_->setText(QStringLiteral("Opening cancelled. Choose a folder to try again."));
     });
@@ -1522,6 +1533,26 @@ void MainWindow::showLearningDialog(int tab) {
     bookmarkLayout->addWidget(removeBookmark);
     tabs->addTab(bookmarkPage, QStringLiteral("Bookmarks"));
 
+    const auto selectedWordItem = [](QListWidget *list) -> QListWidgetItem * {
+        const auto selected = list->selectedItems();
+        if (selected.size() != 1) return nullptr;
+        auto *item = selected.first();
+        return (item->flags() & Qt::ItemIsEnabled) &&
+            !item->data(Qt::UserRole).toString().isEmpty() ? item : nullptr;
+    };
+    const auto restoreEmptyWordList = [](QListWidget *list, const QString &text) {
+        if (list->count() != 0) return;
+        auto *item = new QListWidgetItem(text, list);
+        item->setFlags(Qt::NoItemFlags);
+    };
+    auto updateWordRemoval = [&] {
+        removeHistory->setEnabled(selectedWordItem(historyList) != nullptr);
+        removeBookmark->setEnabled(selectedWordItem(bookmarkList) != nullptr);
+    };
+    connect(historyList, &QListWidget::itemSelectionChanged, &dialog, updateWordRemoval);
+    connect(bookmarkList, &QListWidget::itemSelectionChanged, &dialog, updateWordRemoval);
+    updateWordRemoval();
+
     auto openFrom = [&](QListWidgetItem *item, const QVector<SavedWord> &words) {
         if (!item || !(item->flags() & Qt::ItemIsEnabled)) return;
         const QString key = item->data(Qt::UserRole).toString();
@@ -1537,15 +1568,19 @@ void MainWindow::showLearningDialog(int tab) {
         auto *item = new QListWidgetItem(QStringLiteral("No history yet."), historyList); item->setFlags(Qt::NoItemFlags);
     });
     connect(removeHistory, &QPushButton::clicked, &dialog, [&] {
-        auto *item = historyList->currentItem();
-        if (!item || !(item->flags() & Qt::ItemIsEnabled)) return;
+        auto *item = selectedWordItem(historyList);
+        if (!item) return;
         learning_.removeHistory(item->data(Qt::UserRole).toString());
         delete item;
+        restoreEmptyWordList(historyList, QStringLiteral("No history yet."));
+        updateWordRemoval();
         clearHistory->setEnabled(!learning_.history().isEmpty());
     });
     connect(removeBookmark, &QPushButton::clicked, &dialog, [&] {
-        auto *item = bookmarkList->currentItem(); if (!item) return;
+        auto *item = selectedWordItem(bookmarkList); if (!item) return;
         learning_.removeBookmark(item->data(Qt::UserRole).toString()); delete item;
+        restoreEmptyWordList(bookmarkList, QStringLiteral("No bookmarks yet."));
+        updateWordRemoval();
         if (currentEntry_.isEmpty()) return;
         bookmark_->setText(learning_.isBookmarked(savedWord(currentEntry_).key) ? QStringLiteral("★ Saved") : QStringLiteral("☆ Bookmark"));
     });
@@ -1590,8 +1625,11 @@ void MainWindow::showLearningDialog(int tab) {
     auto populateQuiz = [&] {
         if (quizTotal >= learning_.settings().quizLength) { quizRight = 0; quizTotal = 0; }
         quizScore->setText(QStringLiteral("%1 / %2 · %3 questions").arg(quizRight).arg(quizTotal).arg(learning_.settings().quizLength));
-        if (pool.size() < 2) {
-            quizClue->setText(QStringLiteral("Open or bookmark at least two words first."));
+        QSet<QString> distinctTitles;
+        for (const SavedWord &word : pool) distinctTitles.insert(word.title);
+        if (distinctTitles.size() < 2) {
+            quizAnswer = {};
+            quizClue->setText(QStringLiteral("Open or bookmark at least two different words first."));
             for (auto *button : quizButtons) button->hide();
             quizNext->setEnabled(false);
             return;
@@ -1600,8 +1638,10 @@ void MainWindow::showLearningDialog(int tab) {
         quizClue->setText(quizAnswer.clue);
         QVector<SavedWord> candidates;
         candidates.push_back(quizAnswer);
+        QSet<QString> candidateTitles{quizAnswer.title};
         for (const SavedWord &word : shuffled(pool)) {
-            if (word.key == quizAnswer.key) continue;
+            if (candidateTitles.contains(word.title)) continue;
+            candidateTitles.insert(word.title);
             candidates.push_back(word);
             if (candidates.size() == 4) break;
         }
@@ -1609,7 +1649,7 @@ void MainWindow::showLearningDialog(int tab) {
         for (int i = 0; i < quizButtons.size(); ++i) {
             auto *button = quizButtons[i];
             if (i >= candidates.size()) { button->hide(); continue; }
-            button->show(); button->setEnabled(true); button->setText(candidates[i].title); button->setProperty("wordKey", candidates[i].key);
+            button->show(); button->setEnabled(true); button->setText(QString(candidates[i].title).replace(QChar('&'), QStringLiteral("&&"))); button->setProperty("wordKey", candidates[i].key);
         }
         quizNext->setEnabled(false);
     };

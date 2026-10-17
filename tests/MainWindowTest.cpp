@@ -2,6 +2,7 @@
 #include "LibraryStore.hpp"
 
 #include <QAbstractTextDocumentLayout>
+#include <QAccessible>
 #include <QApplication>
 #include <QComboBox>
 #include <QDialog>
@@ -15,8 +16,11 @@
 #include <QGridLayout>
 #include <QGlyphRun>
 #include <QPainterPath>
+#include <QImage>
+#include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -650,7 +654,14 @@ private slots:
         QVERIFY(window.currentEntry_.isEmpty() || !window.currentEntry_.value(QStringLiteral("redirect")).toObject().value(QStringLiteral("followed")).toBool());
     }
 
+    void removingLastDictionaryClearsVisibleEntryAndSearchState_data() {
+        QTest::addColumn<bool>("cancelReload");
+        QTest::newRow("reload-fails-empty") << false;
+        QTest::newRow("reload-cancelled-empty") << true;
+    }
+
     void removingLastDictionaryClearsVisibleEntryAndSearchState() {
+        QFETCH(bool, cancelReload);
         QTemporaryDir directory(QStringLiteral(".tmp/ui-last-dictionary-remove-XXXXXX"));
         QVERIFY(directory.isValid());
         const QString root = QDir(directory.path()).absolutePath();
@@ -709,7 +720,16 @@ private slots:
         });
         window.chooseRoot();
         QVERIFY(removed);
+        if (cancelReload) {
+            // chooseRoot starts the real replacement load before returning; no event-loop delay.
+            QVERIFY(window.loading_);
+            QVERIFY(!window.api_);
+            QVERIFY(window.cancelOpening_->isVisible());
+            window.cancelOpening_->click();
+        }
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && !window.api_, 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChildren<QFutureWatcherBase *>().isEmpty(), 30000);
+        QCoreApplication::processEvents();
         QVERIFY(window.currentEntry_.isEmpty());
         QVERIFY(window.currentJson_.isEmpty());
         QVERIFY(window.json_->toPlainText().isEmpty());
@@ -726,7 +746,9 @@ private slots:
         QVERIFY(!window.back_->isEnabled());
         QVERIFY(!window.forward_->isEnabled());
         QCOMPARE(window.title_->text(), QStringLiteral("Open your dictionaries"));
-        QCOMPARE(window.resultStatus_->text(), QStringLiteral("No dictionary open"));
+        QCOMPARE(window.resultStatus_->text(), cancelReload
+            ? QStringLiteral("Opening cancelled. Choose a folder to try again.")
+            : QStringLiteral("No dictionary open"));
         QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Open Library")));
         QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
         QStringList remainingHistory;
@@ -1270,11 +1292,49 @@ private slots:
         QCOMPARE(window.search_->text(), QStringLiteral("dog"));
 
         QTest::keyClick(window.search_, Qt::Key_A, Qt::ControlModifier);
-        QTest::keyClicks(window.search_, "missing-word-for-ux-test");
+        QTest::keyClicks(window.search_, "<b>missing</b>");
         QTest::keyClick(window.search_, Qt::Key_Return);
         QTRY_VERIFY(window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
         QCOMPARE(title(window), QStringLiteral("dog"));
         QCOMPARE(window.results_->count(), 0);
+        const QString literal = QStringLiteral("No exact entry for “<b>missing</b>”. Try a suggestion or another collection.");
+        QCOMPARE(window.resultStatus_->text(), literal);
+        window.resultStatus_->setFixedSize(440, 120);
+        QLabel plain(window.resultStatus_->parentWidget());
+        QLabel rich(window.resultStatus_->parentWidget());
+        for (QLabel *reference : {&plain, &rich}) {
+            reference->setFont(window.resultStatus_->font());
+            reference->setPalette(window.resultStatus_->palette());
+            reference->setFixedSize(window.resultStatus_->size());
+            reference->setWordWrap(window.resultStatus_->wordWrap());
+            reference->setAlignment(window.resultStatus_->alignment());
+            reference->setMargin(window.resultStatus_->margin());
+            reference->setIndent(window.resultStatus_->indent());
+            reference->setText(literal);
+        }
+        plain.setTextFormat(Qt::PlainText);
+        rich.setTextFormat(Qt::RichText);
+        const auto rendered = [](QLabel &label) {
+            QImage image(label.size(), QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            label.render(&image);
+            return image;
+        };
+        const QImage plainImage = rendered(plain);
+        const QImage richImage = rendered(rich);
+        QVERIFY(plainImage != richImage);
+        QCOMPARE(rendered(*window.resultStatus_), plainImage);
+
+        auto *accessible = QAccessible::queryAccessibleInterface(window.resultStatus_);
+        QVERIFY(accessible);
+        QCOMPARE(accessible->text(QAccessible::Name), literal);
+        QCOMPARE(accessible->text(QAccessible::Description), QStringLiteral("Search status"));
+        QTest::keyClick(window.search_, Qt::Key_A, Qt::ControlModifier);
+        QTest::keyClicks(window.search_, "cat");
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QVERIFY(window.resultStatus_->text() != literal);
+        QCOMPARE(accessible->text(QAccessible::Name), window.resultStatus_->text());
     }
 
     void keyboardTraversalUsesActualFocusAndKeepsBackReachable() {
@@ -2522,6 +2582,246 @@ private slots:
                 span(QStringLiteral("Useful linked prose"), QStringLiteral("not-audiotable"), QStringLiteral("ordinary")),
                 span(QStringLiteral(" example.wav"), {}, QStringLiteral("example.wav"))})})});
         QCOMPARE(window.clueFor(entry), QStringLiteral("Useful linked prose example.wav"));
+    }
+
+    void savedListsRemoveSelectedWordInsteadOfCurrent_data() {
+        QTest::addColumn<bool>("bookmarks");
+        QTest::addColumn<bool>("staleCurrent");
+        QTest::newRow("history-null-current") << false << false;
+        QTest::newRow("history-stale-current") << false << true;
+        QTest::newRow("saved-null-current") << true << false;
+        QTest::newRow("saved-stale-current") << true << true;
+    }
+
+    void savedListsRemoveSelectedWordInsteadOfCurrent() {
+        QFETCH(bool, bookmarks);
+        QFETCH(bool, staleCurrent);
+        MainWindow window{QString()};
+        for (const QString &key : {QStringLiteral("first"), QStringLiteral("second")}) {
+            SavedWord word;
+            word.key = key;
+            word.title = key;
+            word.language = QStringLiteral("English");
+            word.kind = QStringLiteral("language");
+            word.clue = QStringLiteral("Saved meaning for %1").arg(key);
+            word.originRoot = QStringLiteral("/saved-fixture/%1").arg(key);
+            word.originEdition = QStringLiteral("enwiktionary-20261001");
+            if (bookmarks) window.learning_.toggleBookmark(word);
+            else window.learning_.record(word);
+        }
+        const int tab = bookmarks ? 1 : 0;
+        const QString emptyText = bookmarks ? QStringLiteral("No bookmarks yet.") : QStringLiteral("No history yet.");
+        const QString removeText = bookmarks ? QStringLiteral("Remove selected bookmark") : QStringLiteral("Remove selected word");
+        auto words = [&]() { return bookmarks ? window.learning_.bookmarks() : window.learning_.history(); };
+        bool exercised = false;
+        bool removalCompleted = false;
+        QTimer::singleShot(0, &window, [&] {
+            exercised = true;
+            const auto close = qScopeGuard([&] { for (auto *child : window.findChildren<QDialog *>()) child->reject(); });
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            auto *tabs = dialog->findChild<QTabWidget *>();
+            QVERIFY(tabs);
+            auto *page = tabs->widget(tab);
+            auto *list = page->findChild<QListWidget *>();
+            auto *remove = buttonWithText(page, removeText);
+            QVERIFY(list && remove);
+            QCOMPARE(list->count(), 2);
+            const QString keepKey = list->item(0)->data(Qt::UserRole).toString();
+            const QString selectedKey = list->item(1)->data(Qt::UserRole).toString();
+            QVERIFY(keepKey != selectedKey);
+            list->setCurrentRow(0);
+            list->selectionModel()->setCurrentIndex(staleCurrent ? list->model()->index(0, 0) : QModelIndex(), QItemSelectionModel::NoUpdate);
+            list->selectionModel()->select(list->model()->index(1, 0), QItemSelectionModel::ClearAndSelect);
+            QCOMPARE(list->selectedItems().size(), 1);
+            QCOMPARE(list->selectedItems().first()->data(Qt::UserRole).toString(), selectedKey);
+            if (staleCurrent) QCOMPARE(list->currentItem()->data(Qt::UserRole).toString(), keepKey);
+            else QVERIFY(!list->currentItem());
+            QVERIFY(remove->isEnabled());
+            QTest::mouseClick(remove, Qt::LeftButton);
+            QCOMPARE(words().size(), 1);
+            QCOMPARE(words().first().key, keepKey);
+            QCOMPARE(words().first().originRoot, QStringLiteral("/saved-fixture/%1").arg(keepKey));
+
+            // A current row without selection must never remove another saved word.
+            list->setCurrentRow(0);
+            list->clearSelection();
+            QVERIFY(list->currentItem());
+            QVERIFY(!remove->isEnabled());
+            remove->click();
+            QCOMPARE(words().size(), 1);
+            list->selectionModel()->select(list->model()->index(0, 0), QItemSelectionModel::ClearAndSelect);
+            QVERIFY(remove->isEnabled());
+            QTest::mouseClick(remove, Qt::LeftButton);
+            QVERIFY(words().isEmpty());
+            QCOMPARE(list->count(), 1);
+            QCOMPARE(list->item(0)->text(), emptyText);
+            QVERIFY(!(list->item(0)->flags() & Qt::ItemIsEnabled));
+            list->setCurrentRow(0);
+            QVERIFY(!remove->isEnabled());
+            remove->click();
+            QVERIFY(words().isEmpty());
+            QCOMPARE(list->count(), 1);
+            removalCompleted = true;
+        });
+        window.showLearningDialog(tab);
+        QVERIFY(exercised);
+        // The baseline already recorded its single row failure in the modal callback.
+        if (!removalCompleted) return;
+
+        bool reopenedEmpty = false;
+        QTimer::singleShot(0, &window, [&] {
+            reopenedEmpty = true;
+            const auto close = qScopeGuard([&] { for (auto *child : window.findChildren<QDialog *>()) child->reject(); });
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            auto *tabs = dialog->findChild<QTabWidget *>();
+            QVERIFY(tabs);
+            auto *list = tabs->widget(tab)->findChild<QListWidget *>();
+            auto *remove = buttonWithText(tabs->widget(tab), removeText);
+            QVERIFY(list && remove);
+            QCOMPARE(list->count(), 1);
+            QCOMPARE(list->item(0)->text(), emptyText);
+            QVERIFY(!(list->item(0)->flags() & Qt::ItemIsEnabled));
+            QVERIFY(!remove->isEnabled());
+        });
+        window.showLearningDialog(tab);
+        QVERIFY(reopenedEmpty);
+    }
+
+    void definitionQuizUsesDistinctVisibleTitles_data() {
+        QTest::addColumn<bool>("hasOtherTitle");
+        QTest::newRow("duplicate-owners-only") << false;
+        QTest::newRow("duplicate-owners-and-other-title") << true;
+    }
+
+    void definitionQuizUsesDistinctVisibleTitles() {
+        QFETCH(bool, hasOtherTitle);
+        MainWindow window{QString()};
+        QVector<SavedWord> expected;
+        for (int index = 0; index < (hasOtherTitle ? 3 : 2); ++index) {
+            SavedWord word;
+            word.key = QStringLiteral("owner-key-%1").arg(index);
+            word.title = index == 2 ? QStringLiteral("dog") : QStringLiteral("cat");
+            word.language = index == 1 ? QStringLiteral("French") : QStringLiteral("English");
+            word.kind = QStringLiteral("language");
+            word.clue = QStringLiteral("Meaning from owner %1").arg(index);
+            word.originRoot = QStringLiteral("/quiz-owner/%1").arg(index);
+            word.originEdition = QStringLiteral("edition-%1").arg(index);
+            expected.append(word);
+            window.learning_.toggleBookmark(word);
+        }
+        window.learning_.setRandomPool(QStringLiteral("bookmarks"));
+        QCOMPARE(window.learningPool().size(), expected.size());
+        bool exercised = false;
+        QTimer::singleShot(0, &window, [&] {
+            exercised = true;
+            const auto close = qScopeGuard([&] { for (auto *child : window.findChildren<QDialog *>()) child->reject(); });
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            auto *tabs = dialog->findChild<QTabWidget *>();
+            QVERIFY(tabs);
+            auto *games = tabs->widget(2)->findChild<QStackedWidget *>();
+            QVERIFY(games);
+            QWidget *quiz = games->widget(0);
+            auto *next = buttonWithText(quiz, QStringLiteral("Next"));
+            QVERIFY(next);
+            QVector<QPushButton *> choices;
+            for (auto *button : quiz->findChildren<QPushButton *>()) if (button != next && button->isVisible()) choices.append(button);
+            if (!hasOtherTitle) {
+                QVERIFY(hasLabel(quiz, QStringLiteral("Open or bookmark at least two different words first.")));
+                QVERIFY(choices.isEmpty());
+                QVERIFY(!next->isEnabled());
+                QCOMPARE(window.learning_.answerCount(), 0);
+                return;
+            }
+            QCOMPARE(choices.size(), 2);
+            QSet<QString> labels;
+            for (auto *button : choices) { QVERIFY(button->isEnabled()); labels.insert(button->text()); }
+            QCOMPARE(labels, (QSet<QString>{QStringLiteral("cat"), QStringLiteral("dog")}));
+            // Randomness selects the real question; its displayed clue identifies the exact owner.
+            const SavedWord *question = nullptr;
+            for (const SavedWord &word : expected) if (hasLabel(quiz, word.clue)) question = &word;
+            QVERIFY(question);
+            auto *correct = buttonWithText(quiz, question->title);
+            QVERIFY(correct);
+            QTest::mouseClick(correct, Qt::LeftButton);
+            QCOMPARE(window.learning_.answerCount(), 1);
+            QCOMPARE(window.learning_.study().value(question->key).right, 1);
+            for (const SavedWord &word : expected) {
+                QCOMPARE(window.learning_.study().value(word.key).wrong, 0);
+                if (word.key != question->key) QCOMPARE(window.learning_.study().value(word.key).right, 0);
+            }
+        });
+        window.showLearningDialog(2);
+        QVERIFY(exercised);
+        QCOMPARE(window.learning_.bookmarks().size(), expected.size());
+        for (const SavedWord &word : expected) {
+            const auto saved = window.learning_.bookmarks();
+            const auto it = std::find_if(saved.cbegin(), saved.cend(), [&](const SavedWord &value) { return value.key == word.key; });
+            QVERIFY(it != saved.cend());
+            QCOMPARE(it->originRoot, word.originRoot);
+            QCOMPARE(it->originEdition, word.originEdition);
+            QCOMPARE(it->language, word.language);
+            QCOMPARE(it->title, word.title);
+        }
+    }
+
+    void definitionQuizKeepsLiteralAmpersands() {
+        MainWindow window{QString()};
+        QVector<SavedWord> expected;
+        for (const QString &title : {QStringLiteral("R&B"), QStringLiteral("RB")}) {
+            SavedWord word;
+            word.key = QStringLiteral("quiz-key-") + title;
+            word.title = title;
+            word.language = QStringLiteral("English");
+            word.kind = QStringLiteral("language");
+            word.clue = QStringLiteral("Meaning for ") + title;
+            word.originRoot = QStringLiteral("/ampersand-fixture");
+            word.originEdition = QStringLiteral("enwiktionary-20261001");
+            expected.append(word);
+            window.learning_.toggleBookmark(word);
+        }
+        window.learning_.setRandomPool(QStringLiteral("bookmarks"));
+        bool exercised = false;
+        QTimer::singleShot(0, &window, [&] {
+            exercised = true;
+            const auto close = qScopeGuard([&] { for (auto *child : window.findChildren<QDialog *>()) child->reject(); });
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            auto *tabs = dialog->findChild<QTabWidget *>();
+            QVERIFY(tabs);
+            auto *games = tabs->widget(2)->findChild<QStackedWidget *>();
+            QVERIFY(games);
+            QWidget *quiz = games->widget(0);
+            auto *literal = buttonWithText(quiz, QStringLiteral("R&&B"));
+            auto *plain = buttonWithText(quiz, QStringLiteral("RB"));
+            QVERIFY(literal && plain);
+            QVERIFY(literal->isVisible() && plain->isVisible());
+            QVERIFY(QKeySequence::mnemonic(literal->text()).isEmpty());
+            QVERIFY(QKeySequence::mnemonic(plain->text()).isEmpty());
+            // Qt's real display-mnemonic parser must retain the literal ampersand glyph.
+            const QFontMetrics metrics(literal->font());
+            QCOMPARE(metrics.size(Qt::TextSingleLine | Qt::TextShowMnemonic, literal->text()).width(),
+                     metrics.size(Qt::TextSingleLine, QStringLiteral("R&B")).width());
+            QVERIFY(metrics.size(Qt::TextSingleLine, QStringLiteral("R&B")).width() >
+                    metrics.size(Qt::TextSingleLine, QStringLiteral("RB")).width());
+            const SavedWord *question = nullptr;
+            for (const SavedWord &word : expected) if (hasLabel(quiz, word.clue)) question = &word;
+            QVERIFY(question);
+            auto *correct = question->title == QStringLiteral("R&B") ? literal : plain;
+            QCOMPARE(correct->property("wordKey").toString(), question->key);
+            QTest::mouseClick(correct, Qt::LeftButton);
+            QCOMPARE(window.learning_.answerCount(), 1);
+            QCOMPARE(window.learning_.study().value(question->key).right, 1);
+            for (const SavedWord &word : expected) if (word.key != question->key)
+                QCOMPARE(window.learning_.study().value(word.key).right, 0);
+        });
+        window.showLearningDialog(2);
+        QVERIFY(exercised);
+        QCOMPARE(window.learning_.bookmarks().size(), 2);
+        QVERIFY(window.learning_.isBookmarked(QStringLiteral("quiz-key-R&B")));
+        QVERIFY(window.learning_.isBookmarked(QStringLiteral("quiz-key-RB")));
     }
 
     void learningSourceChangesWithoutReopeningDialog() {
