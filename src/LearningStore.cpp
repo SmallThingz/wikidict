@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QSet>
 #include <algorithm>
+#include <limits>
 
 namespace {
 QJsonObject wordJson(const SavedWord &word) {
@@ -42,7 +43,7 @@ bool validWord(const SavedWord &word) {
     return !word.key.isEmpty() && !word.title.isEmpty() && !word.kind.isEmpty() && !word.clue.isEmpty();
 }
 
-QVector<SavedWord> parseWords(const QJsonValue &value, int cap) {
+QVector<SavedWord> parseWords(const QJsonValue &value, qsizetype cap = std::numeric_limits<qsizetype>::max()) {
     QVector<SavedWord> out;
     if (!value.isArray()) return out;
     for (const QJsonValue &item : value.toArray()) {
@@ -81,7 +82,7 @@ void LearningStore::load() {
     if (settingsValue_.theme != QStringLiteral("light") && settingsValue_.theme != QStringLiteral("dark"))
         settingsValue_.theme = QStringLiteral("system");
     history_ = parseWords(root.value(QStringLiteral("history")), settingsValue_.historyLimit);
-    bookmarks_ = parseWords(root.value(QStringLiteral("bookmarks")), 1000);
+    bookmarks_ = parseWords(root.value(QStringLiteral("bookmarks")));
     const QJsonObject study = root.value(QStringLiteral("study")).toObject();
     for (auto it = study.begin(); it != study.end(); ++it) {
         if (!it.value().isObject()) continue;
@@ -148,7 +149,6 @@ bool LearningStore::toggleBookmark(const SavedWord &word) {
     SavedWord next = word;
     next.savedAt = QDateTime::currentMSecsSinceEpoch();
     bookmarks_.prepend(next);
-    if (bookmarks_.size() > 1000) bookmarks_.resize(1000);
     save();
     return true;
 }

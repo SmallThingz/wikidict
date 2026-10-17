@@ -31,6 +31,10 @@
 #include <stdexcept>
 
 namespace {
+const QTreeWidgetItem *selectedDictionary(const QTreeWidget *tree) {
+    const auto selected = tree->selectedItems();
+    return selected.size() == 1 ? selected.first() : nullptr;
+}
 QString exceptionText(const std::exception &error) { return QString::fromUtf8(error.what()); }
 QTreeWidget *dictionaryList(QWidget *parent, const QStringList &columns) {
     auto *tree = new QTreeWidget(parent);
@@ -163,10 +167,10 @@ LibraryDialog::LibraryDialog(QWidget *parent, const QString &root,
     connect(cancelButton_, &QPushButton::clicked, this, &LibraryDialog::cancelOperation);
     connect(filter_, &QLineEdit::textChanged, this, &LibraryDialog::refreshCatalogView);
     connect(installed_, &QTreeWidget::itemSelectionChanged, this, [this] {
-        removeButton_->setEnabled(!busy_ && installed_->currentItem());
+        removeButton_->setEnabled(!busy_ && selectedDictionary(installed_));
     });
     connect(available_, &QTreeWidget::itemSelectionChanged, this, [this] {
-        const auto *item = available_->currentItem();
+        const auto *item = selectedDictionary(available_);
         downloadButton_->setEnabled(!busy_ && item && !item->data(0, Qt::UserRole + 1).toBool());
     });
     setBusy(false);
@@ -197,8 +201,8 @@ void LibraryDialog::setBusy(bool busy, const QString &label) {
     addSourceButton_->setEnabled(!busy);
     removeSourceButton_->setEnabled(!busy && sources_->count() > 0);
     refreshButton_->setEnabled(!busy && sources_->count() > 0);
-    removeButton_->setEnabled(!busy && installed_->currentItem());
-    const auto *item = available_->currentItem();
+    removeButton_->setEnabled(!busy && selectedDictionary(installed_));
+    const auto *item = selectedDictionary(available_);
     downloadButton_->setEnabled(!busy && item && !item->data(0, Qt::UserRole + 1).toBool());
     progress_->setVisible(busy);
     cancelButton_->setVisible(busy);
@@ -270,7 +274,7 @@ void LibraryDialog::refreshInstalled() {
     refreshCatalogView();
 }
 void LibraryDialog::refreshCatalogView() {
-    const auto *selected = available_->currentItem();
+    const auto *selected = selectedDictionary(available_);
     const QString selectedUrl = selected ? selected->data(0, Qt::UserRole + 2).toString() : QString();
     available_->clear();
     QSet<QByteArray> hashes;
@@ -344,7 +348,7 @@ void LibraryDialog::startImport(const QString &file, const QByteArray &hash, qin
     });
 }
 void LibraryDialog::removeSelected() {
-    const auto *item = installed_->currentItem();
+    const auto *item = selectedDictionary(installed_);
     if (!item) return;
     const auto dictionary = dictionaries_.at(item->data(0, Qt::UserRole).toInt());
     if (QMessageBox::question(this, QStringLiteral("Remove dictionary?"),
@@ -430,7 +434,7 @@ void LibraryDialog::fetchNextCatalog() {
     });
 }
 void LibraryDialog::downloadSelected() {
-    const auto *selected = available_->currentItem();
+    const auto *selected = selectedDictionary(available_);
     if (!selected) return;
     const auto item = catalog_.at(selected->data(0, Qt::UserRole).toInt());
     if (!QDir().mkpath(root_)) { finishOperation(QStringLiteral("Cannot create the dictionary folder."), true); return; }

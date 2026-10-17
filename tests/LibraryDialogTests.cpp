@@ -2,6 +2,7 @@
 #include "LibraryStore.hpp"
 #include <QAbstractButton>
 #include <QApplication>
+#include <QItemSelectionModel>
 #include <QDialog>
 #include <QDir>
 #include <QFile>
@@ -161,6 +162,62 @@ int main(int argc, char **argv) {
             .arg(QLocale().toString(words), words == 1 ? QStringLiteral("word") : QStringLiteral("words"));
         require(status->text() == expectedStatus, "successful import status uses the actual count and singular/plural word");
         if (argc > 2) require(dialog.grab().save(QString::fromLocal8Bit(argv[2])), "save library screenshot");
+        // Accessibility row selection need not move the keyboard current index.
+        const QString secondSource = temp.filePath(QStringLiteral("French.wikblb"));
+        QByteArray secondBytes("WIKBLB08", 8);
+        secondBytes.append(char(1));
+        secondBytes.append("fr", 2); secondBytes.append(char(0));
+        secondBytes.append("French", 6); secondBytes.append(char(0));
+        secondBytes.append("chat", 4); secondBytes.append(char(0));
+        secondBytes.append(char(4)); secondBytes.append("DPR2", 4);
+        QFile secondFile(secondSource);
+        require(secondFile.open(QIODevice::WriteOnly) && secondFile.write(secondBytes) == secondBytes.size(), "write second distinct dictionary fixture");
+        secondFile.close();
+        answerFile(secondSource);
+        QTest::mouseClick(import, Qt::LeftButton);
+        require(QTest::qWaitFor([&] { return !progress->isVisible() && installed->topLevelItemCount() == 2; }, 15000), "second dictionary import finishes");
+        QTreeWidgetItem *english = nullptr, *french = nullptr;
+        for (int row = 0; row < installed->topLevelItemCount(); ++row) {
+            auto *item = installed->topLevelItem(row);
+            if (item->text(0) == QStringLiteral("English")) english = item;
+            if (item->text(0) == QStringLiteral("French")) french = item;
+        }
+        require(english && french, "distinct real dictionaries are available for selection regression");
+        const auto declineSelectedEnglish = [&] {
+            bool observedEnglish = false;
+            QTimer::singleShot(50, [&] {
+                for (auto *widget : QApplication::topLevelWidgets()) {
+                    if (auto *box = qobject_cast<QMessageBox *>(widget); box && box->isVisible()) {
+                        observedEnglish = box->text().startsWith(QStringLiteral("Remove English from"));
+                        box->button(QMessageBox::No)->click();
+                        return;
+                    }
+                }
+            });
+            QTest::mouseClick(remove, Qt::LeftButton);
+            require(observedEnglish, "confirmation targets selected English, independently of keyboard current item");
+            require(installed->topLevelItemCount() == 2, "declined selected-row deletion preserves both dictionaries");
+        };
+        installed->setCurrentItem(nullptr);
+        installed->clearSelection();
+        english->setSelected(true);
+        require(!installed->currentItem() && installed->selectedItems() == QList<QTreeWidgetItem *>{english}, "null current with one selected row");
+        require(remove->isEnabled(), "selection alone enables removal");
+        declineSelectedEnglish();
+        installed->setCurrentItem(french, 0, QItemSelectionModel::NoUpdate);
+        require(installed->currentItem() == french && installed->selectedItems() == QList<QTreeWidgetItem *>{english}, "stale other current item does not change selected row");
+        require(remove->isEnabled(), "selected row remains actionable with a different current item");
+        declineSelectedEnglish();
+        installed->clearSelection();
+        require(!remove->isEnabled(), "current item without selection does not enable destructive action");
+        french->setSelected(true);
+        QTimer::singleShot(50, [] {
+            for (auto *widget : QApplication::topLevelWidgets())
+                if (auto *box = qobject_cast<QMessageBox *>(widget); box && box->isVisible()) { box->button(QMessageBox::Yes)->click(); return; }
+        });
+        QTest::mouseClick(remove, Qt::LeftButton);
+        require(QTest::qWaitFor([&] { return !progress->isVisible() && installed->topLevelItemCount() == 1; }, 5000), "remove only selected French fixture");
+        require(installed->topLevelItem(0)->text(0) == QStringLiteral("English"), "unselected English survives selected French removal");
         installed->setCurrentItem(installed->topLevelItem(0));
         require(remove->isEnabled(), "selected installed dictionary enables removal");
         QTimer::singleShot(50, [] {

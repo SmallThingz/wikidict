@@ -233,6 +233,45 @@ private slots:
         QTRY_VERIFY(window.sections_->geometry().top() <= window.back_->geometry().bottom());
     }
 
+    void narrowTablesKeepWordsAndScrollHorizontally() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(780, 480);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const QString coptic = QString::fromUtf8("ϥⲱϭⲉ");
+        QJsonArray rows;
+        for (const QString &word : {QStringLiteral("present"), coptic}) {
+            QJsonArray cells;
+            for (int column = 0; column < 12; ++column)
+                cells.append(QJsonObject{{QStringLiteral("spans"), QJsonArray{
+                    QJsonObject{{QStringLiteral("text"), word}}}}});
+            rows.append(QJsonObject{{QStringLiteral("cells"), cells}});
+        }
+        window.reading_->setHtml(window.tableHtml(QJsonObject{{QStringLiteral("rows"), rows}}, 0));
+        QTextDocument *document = window.reading_->document();
+        document->documentLayout()->documentSize();
+        QTextTable *table = nullptr;
+        for (QTextFrame *frame : document->rootFrame()->childFrames())
+            if (auto *candidate = qobject_cast<QTextTable *>(frame)) { table = candidate; break; }
+        QVERIFY(table);
+        QCOMPARE(table->columns(), 12);
+        QCOMPARE(table->rows(), 2);
+        for (int row = 0; row < 2; ++row) {
+            for (int column = 0; column < 12; ++column) {
+                const QTextBlock block = table->cellAt(row, column).firstCursorPosition().block();
+                QCOMPARE(block.text(), row == 0 ? QStringLiteral("present") : coptic);
+                QCOMPARE(block.layout()->lineCount(), 1);
+            }
+        }
+        QTRY_VERIFY(window.reading_->horizontalScrollBar()->maximum() >
+                    window.reading_->viewport()->width() / 4);
+        // Ordinary prose still wraps at spaces instead of becoming one unbounded line.
+        window.reading_->setHtml(QStringLiteral("<p>") + QStringLiteral("ordinary prose ").repeated(80) + QStringLiteral("</p>"));
+        document->documentLayout()->documentSize();
+        QVERIFY(document->begin().layout()->lineCount() > 1);
+        QTRY_COMPARE(window.reading_->horizontalScrollBar()->maximum(), 0);
+    }
+
     void recoveryAndFolderPersistence() {
         {
             MainWindow window{QString()};
@@ -448,45 +487,64 @@ private slots:
                         {QStringLiteral("target"), QStringLiteral("jwtj-n.f")}},
             QJsonObject{{QStringLiteral("text"), QStringLiteral(" after")}}
         };
-        window.reading_->setHtml(window.spansHtml(spans));
-        QTextDocument *document = window.reading_->document();
-        document->setTextWidth(1000);
-        document->documentLayout()->documentSize();
-        const QTextCursor signs = document->find(joined);
-        QVERIFY(!signs.isNull());
-        QCOMPARE(signs.selectedText(), joined);
-        const QFont font = signs.charFormat().font();
-        QVERIFY(font.families().contains(QStringLiteral("NewGardinerOmni")));
-        QVERIFY(!document->find(QStringLiteral("before")).charFormat().font().families()
-                     .contains(QStringLiteral("NewGardinerOmni")));
-        QCOMPARE(document->find(QStringLiteral("next")).charFormat().anchorHref(),
-                 QStringLiteral("dict:jwtj-n.f"));
-
-        // The authored jwtj.f sequence stacks D35 over the horizontal t/y pair.
-        // Verify Qt's actual font shaping, not just retained Unicode controls.
-        const QFontMetricsF metrics(font);
-        QVERIFY(metrics.horizontalAdvance(joined) + 1 < metrics.horizontalAdvance(unjoined));
-        const QTextBlock block = document->begin();
-        QList<QRectF> ink;
-        for (const QGlyphRun &run : block.layout()->glyphRuns(
-                 signs.selectionStart() - block.position(), joined.size())) {
-            QCOMPARE(run.rawFont().familyName(), QStringLiteral("NewGardinerOmni"));
-            const auto indexes = run.glyphIndexes();
-            const auto positions = run.positions();
-            QCOMPARE(indexes.size(), positions.size());
-            for (qsizetype i = 0; i < indexes.size(); ++i) {
-                const QRectF bounds = run.rawFont().pathForGlyph(indexes[i]).boundingRect().translated(positions[i]);
-                if (bounds.isEmpty()) continue;
-                QVERIFY(indexes[i] != 0);
-                ink.append(bounds);
+        window.collapsedSections_.clear(); // Render the diagnostic Noun independent of fixture fold defaults.
+        for (const bool actualHeadword : {false, true}) {
+            QJsonArray renderedSpans = spans;
+            if (actualHeadword) {
+                QJsonObject headword = renderedSpans.at(1).toObject();
+                headword.insert(QStringLiteral("classes"), QStringLiteral("headword-line None headword Egyp"));
+                headword.insert(QStringLiteral("bold"), true);
+                headword.insert(QStringLiteral("role"), QStringLiteral("headword"));
+                renderedSpans.replace(1, headword);
             }
+            const QJsonObject section{{QStringLiteral("title"), QStringLiteral("Noun")},
+                {QStringLiteral("level"), 3},
+                {QStringLiteral("blocks"), QJsonArray{QJsonObject{
+                    {QStringLiteral("kind"), QStringLiteral("paragraph")},
+                    {QStringLiteral("spans"), renderedSpans}}}}};
+            const QString html = actualHeadword
+                ? window.entryHtml(QJsonObject{{QStringLiteral("sections"), QJsonArray{section}}})
+                : window.spansHtml(renderedSpans);
+            window.reading_->setHtml(html);
+            QTextDocument *document = window.reading_->document();
+            document->setTextWidth(1000);
+            document->documentLayout()->documentSize();
+            const QTextCursor signs = document->find(joined);
+            QVERIFY(!signs.isNull());
+            QCOMPARE(signs.selectedText(), joined);
+            const QFont font = signs.charFormat().font();
+            QVERIFY(font.families().contains(QStringLiteral("NewGardinerOmni")));
+            QVERIFY(!document->find(QStringLiteral("before")).charFormat().font().families()
+                         .contains(QStringLiteral("NewGardinerOmni")));
+            QCOMPARE(document->find(QStringLiteral("next")).charFormat().anchorHref(),
+                     QStringLiteral("dict:jwtj-n.f"));
+
+            // The authored jwtj.f sequence stacks D35 over the horizontal t/y pair.
+            // Verify Qt's actual font shaping, not just retained Unicode controls.
+            const QFontMetricsF metrics(font);
+            QVERIFY(metrics.horizontalAdvance(joined) + 1 < metrics.horizontalAdvance(unjoined));
+            const QTextBlock block = signs.block();
+            QList<QRectF> ink;
+            for (const QGlyphRun &run : block.layout()->glyphRuns(
+                     signs.selectionStart() - block.position(), joined.size())) {
+                QCOMPARE(run.rawFont().familyName(), QStringLiteral("NewGardinerOmni"));
+                const auto indexes = run.glyphIndexes();
+                const auto positions = run.positions();
+                QCOMPARE(indexes.size(), positions.size());
+                for (qsizetype i = 0; i < indexes.size(); ++i) {
+                    const QRectF bounds = run.rawFont().pathForGlyph(indexes[i]).boundingRect().translated(positions[i]);
+                    if (bounds.isEmpty()) continue;
+                    QVERIFY(indexes[i] != 0);
+                    ink.append(bounds);
+                }
+            }
+            QCOMPARE(ink.size(), qsizetype(5));
+            QVERIFY(ink[0].bottom() < ink[1].top());
+            QVERIFY(ink[0].bottom() < ink[2].top());
+            QVERIFY(ink[1].right() < ink[2].left());
+            QVERIFY(ink[3].left() > ink[2].right());
+            QVERIFY(ink[4].left() > ink[3].right());
         }
-        QCOMPARE(ink.size(), qsizetype(5));
-        QVERIFY(ink[0].bottom() < ink[1].top());
-        QVERIFY(ink[0].bottom() < ink[2].top());
-        QVERIFY(ink[1].right() < ink[2].left());
-        QVERIFY(ink[3].left() > ink[2].right());
-        QVERIFY(ink[4].left() > ink[3].right());
     }
 
     void cancellationKeepsLastWorkingDictionary() {
@@ -1374,6 +1432,74 @@ private slots:
         QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("reference-1")));
         QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:%23reference-1")));
         QVERIFY(textIsVisible(window.reading_, QStringLiteral("Reference content.")));
+    }
+
+    void bookmarksSurviveLargeLibrariesAndSubsequentSaves() {
+        QJsonArray rows;
+        QVector<SavedWord> expected;
+        for (int index = 0; index < 1025; ++index) {
+            SavedWord word;
+            word.key = QStringLiteral("saved-%1").arg(index);
+            word.title = QString::fromUtf8("слово");
+            word.language = QStringLiteral("English");
+            word.kind = QStringLiteral("language");
+            word.clue = QString::fromUtf8("معنى %1").arg(index);
+            word.originRoot = QStringLiteral("/saved-fixture/%1").arg(index % 2);
+            word.originEdition = index % 2 ? QStringLiteral("frwiktionary-20261001") : QStringLiteral("enwiktionary-20261001");
+            word.savedAt = index + 10;
+            word.lastViewed = index + 20;
+            word.views = index + 1;
+            expected.append(word);
+            rows.append(QJsonObject{
+                {QStringLiteral("key"), word.key}, {QStringLiteral("title"), word.title},
+                {QStringLiteral("language"), word.language}, {QStringLiteral("kind"), word.kind},
+                {QStringLiteral("clue"), word.clue}, {QStringLiteral("origin_root"), word.originRoot},
+                {QStringLiteral("origin_edition"), word.originEdition},
+                {QStringLiteral("saved_at"), double(word.savedAt)},
+                {QStringLiteral("last_viewed"), double(word.lastViewed)}, {QStringLiteral("views"), word.views}});
+        }
+        QSettings storage(QStringLiteral("SmallThingz"), QStringLiteral("Dict"));
+        storage.setValue(QStringLiteral("learning/state"), QJsonDocument(QJsonObject{
+            {QStringLiteral("bookmarks"), rows},
+            {QStringLiteral("history"), QJsonArray{rows.at(0), rows.at(1), rows.at(2), rows.at(3)}},
+            {QStringLiteral("settings"), QJsonObject{{QStringLiteral("history_limit"), 3}}}
+        }).toJson(QJsonDocument::Compact));
+        storage.sync();
+        QCOMPARE(storage.status(), QSettings::NoError);
+        const auto compareWords = [](const QVector<SavedWord> &actual, const QVector<SavedWord> &wanted) {
+            QCOMPARE(actual.size(), wanted.size());
+            for (qsizetype index = 0; index < wanted.size(); ++index) {
+                const SavedWord &a = actual.at(index), &b = wanted.at(index);
+                QCOMPARE(a.key, b.key); QCOMPARE(a.title, b.title); QCOMPARE(a.language, b.language);
+                QCOMPARE(a.kind, b.kind); QCOMPARE(a.clue, b.clue);
+                QCOMPARE(a.originRoot, b.originRoot); QCOMPARE(a.originEdition, b.originEdition);
+                QCOMPARE(a.savedAt, b.savedAt); QCOMPARE(a.lastViewed, b.lastViewed); QCOMPARE(a.views, b.views);
+            }
+        };
+        LearningStore store;
+        QCOMPARE(store.bookmarks().size(), 1025);
+        compareWords(store.bookmarks(), expected);
+        QCOMPARE(store.history().size(), 3);
+        SavedWord added = expected.first();
+        added.key = QStringLiteral("saved-new");
+        added.title = QStringLiteral("new word");
+        QVERIFY(store.toggleBookmark(added));
+        QCOMPARE(store.bookmarks().size(), 1026);
+        expected.prepend(store.bookmarks().first()); // Keep the actual assigned savedAt timestamp.
+        compareWords(store.bookmarks(), expected);
+        store.record(added);
+        store.setTheme(QStringLiteral("dark"));
+        storage.sync();
+        QCOMPARE(storage.status(), QSettings::NoError);
+        LearningStore reopened;
+        compareWords(reopened.bookmarks(), expected);
+        QCOMPARE(reopened.history().size(), 3);
+        QCOMPARE(reopened.history().first().key, added.key);
+        QCOMPARE(reopened.settings().theme, QStringLiteral("dark"));
+        QVERIFY(reopened.toggleBookmark(added) == false);
+        expected.removeFirst();
+        LearningStore afterRemoval;
+        compareWords(afterRemoval.bookmarks(), expected);
     }
 
     void savedOriginsSeparateIdenticalEntriesAndRejectReplacedEditions() {

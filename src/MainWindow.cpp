@@ -44,6 +44,7 @@
 #include <QTextBrowser>
 #include <QTextBoundaryFinder>
 #include <QTextEdit>
+#include <QTextOption>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -555,6 +556,8 @@ void MainWindow::setupUi() {
     right->addLayout(header);
     entryTabs_ = new QTabWidget(content);
     reading_ = new QTextBrowser(entryTabs_);
+    // Preserve whole cell words; wide tables should scroll rather than split glyphs.
+    reading_->setWordWrapMode(QTextOption::WordWrap);
     reading_->setOpenLinks(false);
     reading_->setOpenExternalLinks(false);
     reading_->setFrameShape(QFrame::NoFrame);
@@ -1035,7 +1038,14 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             const QJsonObject span = value.toObject();
             const QString kind = span.value(QStringLiteral("kind")).toString();
             if (kind == QStringLiteral("line_break")) { out += QStringLiteral("<br>"); continue; }
+            const QString classes = span.value(QStringLiteral("classes")).toString();
             QString text = (span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString()).toHtmlEscaped();
+            // Keep the script font on the characters themselves: Qt's full-page
+            // body style can otherwise replace an outer span's font inside <b>.
+            if (!span.value(QStringLiteral("code")).toBool() &&
+                classes.simplified().split(QChar(' '), Qt::SkipEmptyParts).contains(QStringLiteral("Egyp")))
+                text = QStringLiteral("<span style=\"font-family:'%1'\">%2</span>")
+                    .arg(egyptianFamily().toHtmlEscaped(), text);
             if (kind == QStringLiteral("template"))
                 throw DictApiError("compiled dictionary contains an uncompiled template span");
             if (kind == QStringLiteral("link")) {
@@ -1059,7 +1069,6 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (span.value(QStringLiteral("strike")).toBool()) text = QStringLiteral("<s>%1</s>").arg(text);
             if (span.value(QStringLiteral("superscript")).toBool()) text = QStringLiteral("<sup>%1</sup>").arg(text);
             if (span.value(QStringLiteral("subscript")).toBool()) text = QStringLiteral("<sub>%1</sub>").arg(text);
-            const QString classes = span.value(QStringLiteral("classes")).toString();
             const QString language = span.value(QStringLiteral("language")).toString();
             const QString direction = span.value(QStringLiteral("direction")).toString();
             // QTextDocument does not isolate inline HTML direction attributes.
@@ -1072,9 +1081,6 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (!classes.isEmpty() || !language.isEmpty() || !direction.isEmpty()) {
                 QString attrs;
                 if (!classes.isEmpty()) attrs += QStringLiteral(" class=\"%1\"").arg(classes.toHtmlEscaped());
-                if (!span.value(QStringLiteral("code")).toBool() &&
-                    classes.simplified().split(QChar(' '), Qt::SkipEmptyParts).contains(QStringLiteral("Egyp")))
-                    attrs += QStringLiteral(" style=\"font-family:'%1'\"").arg(egyptianFamily().toHtmlEscaped());
                 if (!language.isEmpty()) attrs += QStringLiteral(" lang=\"%1\"").arg(language.toHtmlEscaped());
                 if (!direction.isEmpty()) attrs += QStringLiteral(" dir=\"%1\"").arg(direction.toHtmlEscaped());
                 text = QStringLiteral("<span%1>%2</span>").arg(attrs, text);
