@@ -49,6 +49,24 @@ def text_fields(value, path='entry'):
             yield from text_fields(child, f'{path}[{index}]')
 
 
+
+def unresolved_action_target(target):
+    # Inspect semantic destinations once; never percent-decode or scan title/redirect metadata.
+    return '{{' in target or '}}' in target
+
+
+def action_fields(value, path='entry'):
+    if isinstance(value, dict):
+        if value.get('kind') in ('link', 'external_link') and isinstance(value.get('target'), str):
+            yield path + '.target', value['target']
+        for key, child in value.items():
+            if isinstance(child, (dict, list)):
+                yield from action_fields(child, path + '.' + key)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from action_fields(child, f'{path}[{index}]')
+
+
 def require(condition, message):
     if not condition:
         raise ScanError(message)
@@ -242,6 +260,13 @@ def scan(root, query):
                             view_kind=view['kind'], view_language=view['language'], query_title=title,
                             source_title=redirect['source_title'] if redirect else title,
                             redirect=redirect, path=path, text=text[:500], categories=categories))
+                for path, target in action_fields(content):
+                    if unresolved_action_target(target):
+                        result['issues'].append(dict(kind=actual_kind, language=owner, title=actual_title,
+                            view_kind=view['kind'], view_language=view['language'], query_title=title,
+                            source_title=redirect['source_title'] if redirect else title,
+                            redirect=redirect, path=path, text=target[:500],
+                            categories=['unresolved-action-target'], nonwaivable=True))
             offset += len(matches)
             if not page['has_more']:
                 break

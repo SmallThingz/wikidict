@@ -236,6 +236,12 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
             fallback.missing_template = true;
         };
     }
+    // Check after template presentation conversion as well as ordinary actions.
+    // Action targets have no protected-literal exemption; code=true is not provenance.
+    for (spans) |span| {
+        if ((span.kind == .external_link or span.kind == .link) and compiler.unresolvedActionTarget(span.target))
+            return error.UncompiledTemplate;
+    }
     var parsed: std.ArrayList(u8) = .empty;
     defer parsed.deinit(a);
     for (spans) |span| {
@@ -1388,4 +1394,57 @@ test "linked owner and edge-spaced heading companions preserve exact limited-tri
         try std.testing.expectEqual(@as(usize, 2), section.blocks.len);
         try std.testing.expectEqualStrings("body", section.blocks[1].spans[0].text);
     }
+}
+
+test "unresolved action targets cannot cross reported compilation and DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sources = [_]struct { input: []const u8, label: []const u8 }{
+        .{ .input = "[https://dsal.uchicago.edu/cgi-bin/app/caturvedi_query.py?page=&#123;&#123;&#123;page=&#125;&#125;&#125; <b>page 741</b>]", .label = "page 741" },
+        .{ .input = "[https://hindwidictionary.com/search?keyword=&#123;&#123;#urlencode:शारदा&#125;&#125; शारदा]", .label = "शारदा" },
+        .{ .input = "[https://example.test/?q=&#123;&#123;missing&#125;&#125; <nowiki>{{literal}}</nowiki>]", .label = "{{literal}}" },
+        .{ .input = "[https://example.test/?q=&#123;&#123;missing&#125;&#125; <code>&#123;&#123;literal&#125;&#125;</code>]", .label = "{{literal}}" },
+    };
+    for (sources) |item| {
+        var report: Fallbacks = .{};
+        const encoded = try compileReportedAlloc(a, "rejected target", .language, "Hindi", "hi", item.input, null, &report);
+        const decoded = try codec.decodeAlloc(a, encoded, "rejected target", .language, .{ .code = "hi", .heading = "Hindi" });
+        var visible: std.ArrayList(u8) = .empty;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            try std.testing.expect(span.kind != .link and span.kind != .external_link);
+            try std.testing.expectEqualStrings("", span.target);
+        };
+        try std.testing.expectEqualStrings(item.label, visible.items);
+        try std.testing.expect(report.rejected_external_target and !report.missing_template);
+    }
+    for ([_][]const u8{
+        "https://example.test/?q=&#123;&#123;missing&#125;&#125;",
+        "[https://example.test/?q=&#123;&#123;missing&#125;&#125;]",
+    }) |source| {
+        var report: Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledTemplate, compileReportedAlloc(a, "bare target", .language, "English", "en", source, null, &report));
+        try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "bare target", .language, "English", "en", source, null));
+    }
+    // A stale/raw action is never waived by reported mode or code styling.
+    for ([_]ir.InlineKind{ .link, .external_link }) |kind| {
+        var report: Fallbacks = .{};
+        const spans = [_]compiler.Span{.{ .kind = kind, .text = "label", .target = "https://example.test/?q={{missing}}", .flags = .{ .code = true }, .provenance = .protected_literal }};
+        try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &spans, &report));
+        try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &spans, null));
+    }
+    var missing_report: Fallbacks = .{};
+    const synthesized = try a.dupe(compiler.Span, &[_]compiler.Span{.{ .kind = .template, .text = "missing", .target = "{{nested}}" }});
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, synthesized, &missing_report));
+    // Existing ordinary literal diagnostics outside the rejected label do not
+    // become page-wide hard errors merely because another action was refused.
+    var outside_report: Fallbacks = .{ .rejected_external_target = true };
+    const outside = [_]compiler.Span{.{ .kind = .text, .text = "[[literal outside", .provenance = .parsed }};
+    try validateSpans(a, &outside, &outside_report);
+    try std.testing.expect(outside_report.literal_markup);
+    var unprotected_report: Fallbacks = .{};
+    _ = try compileReportedAlloc(a, "unresolved label", .language, "English", "en", "[https://example.test/?q=&#123;&#123;missing&#125;&#125; {{missing-label}}]", null, &unprotected_report);
+    try std.testing.expect(unprotected_report.missing_template);
 }

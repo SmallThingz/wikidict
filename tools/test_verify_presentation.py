@@ -52,6 +52,44 @@ class PresentationDiagnosticTests(unittest.TestCase):
         self.assertEqual('entry.blocks[0].spans', path)
         self.assertEqual(['behavior-switch'], audit.diagnostic_categories(text))
 
+
+    def test_residual_action_targets_are_separate_nonwaivable_candidates(self):
+        with Fixture() as f:
+            entry = f.entry('citation', 'clean prose', language='Hindi')
+            entry['sections'] = [dict(blocks=[dict(spans=[
+                dict(kind='external_link', text='page ', target='https://dsal.test/?page={{{page=}}}'),
+                dict(kind='external_link', text='741', target='https://dsal.test/?page={{{page=}}}'),
+                dict(kind='external_link', text='शारदा', target='https://hindwi.test/?q={{#urlencode:शारदा}}')])])]
+            f.language('Hindi', [entry])
+            result = audit.scan(f.root, f.query)
+            self.assertEqual('failed', result['status'])
+            self.assertEqual(3, len(result['issues']))
+            self.assertEqual(1, result['records'])
+            self.assertTrue(all(x['categories'] == ['unresolved-action-target'] and x['nonwaivable'] for x in result['issues']))
+            self.assertTrue(all(x['path'].endswith('.target') for x in result['issues']))
+            self.assertFalse(result['semantic_acceptance'])
+
+    def test_action_fields_cover_direct_span_tables_references_and_code_actions(self):
+        target = 'https://example.test/?q={{missing}}'
+        span = dict(kind='external_link', text='label', target=target, code=True)
+        self.assertEqual([('entry.target', target)], list(audit.action_fields(span)))
+        entry = dict(sections=[dict(blocks=[dict(table=dict(rows=[dict(cells=[dict(spans=[span])])]))])],
+                     references=[dict(spans=[dict(kind='link', text='label', target='{{{arg}}}')])])
+        paths = [p for p, _ in audit.action_fields(entry)]
+        self.assertEqual(2, len(paths))
+        self.assertIn('entry.sections[0].blocks[0].table.rows[0].cells[0].spans[0].target', paths)
+        self.assertIn('entry.references[0].spans[0].target', paths)
+
+    def test_valid_action_urls_and_nonaction_metadata_are_unchanged(self):
+        for target in ('https://example.test/{literal}', 'https://example.test/%7B%7Bx%7D%7D',
+                       'https://example.test/शारदा?a=1&b=2', 'cat#English'):
+            self.assertFalse(audit.unresolved_action_target(target))
+        self.assertEqual([], list(audit.action_fields(dict(title='{{literal}}', redirect=dict(target_title='{{old}}')))))
+        # Existing visible-text diagnostics still apply, including code=true.
+        spans = [dict(kind='text', text='{{literal}}', trail='', code=True)]
+        self.assertEqual([], list(audit.action_fields(spans)))
+        self.assertEqual(['source-markup'], audit.diagnostic_categories(list(audit.text_fields(spans))[0][1]))
+
     def test_all_seven_views_and_owner_inventory(self):
         with Fixture() as f:
             f.language('Unverified exact heading', [f.entry('main', '__NOEDITSECTION__', language='Unverified exact heading')])

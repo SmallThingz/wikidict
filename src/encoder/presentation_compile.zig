@@ -172,7 +172,7 @@ fn htmlListItemCount(input: []const u8) i32 {
     return count;
 }
 pub const media_types = @import("presentation_media.zig");
-pub const Error = A.Error || error{ RenderLimit, InvalidPreContext };
+pub const Error = A.Error || error{ RenderLimit, InvalidPreContext, UncompiledTemplate };
 
 // Build-only coordinates in an already page-TOC-prepared owner fragment.
 // The source owner map, rather than a new tag search here, proves these scopes.
@@ -1171,6 +1171,12 @@ fn pipeTrickLabel(target: []const u8) []const u8 {
         label = label[0..comma];
     }
     return label;
+}
+
+// Action destinations are semantic data, never a deferred template input.
+// Inspect decoded targets only; percent-encoded braces and single braces stay literal.
+pub fn unresolvedActionTarget(target: []const u8) bool {
+    return std.mem.indexOf(u8, target, "{{") != null or std.mem.indexOf(u8, target, "}}") != null;
 }
 
 pub fn safeUrl(url: []const u8) bool {
@@ -2700,6 +2706,36 @@ pub const Renderer = struct {
     pub fn link(self: *Renderer, label: []const u8, target: []const u8, style: Style, depth: usize, external: bool) Error!void {
         var s = style;
         const resolved_target = if (external) try self.externalUrlTarget(target) else target;
+        if (external and unresolvedActionTarget(resolved_target)) {
+            self.fallbacks.rejected_external_target = true;
+            // Retain an authored label and all its formatting, but never inherit
+            // an outer action or fabricate a replacement destination.
+            s.kind = .text;
+            s.target = "";
+            if (std.mem.eql(u8, label, target)) {
+                self.unresolved_templates += 1;
+                return error.UncompiledTemplate;
+            }
+            const label_start = self.spans.items.len;
+            try self.inlineText(label, s, depth + 1);
+            // Only this rejected action's emitted label is checked. Real
+            // protected/entity literals are not deferred source instructions.
+            var previous: u8 = 0;
+            for (self.spans.items[label_start..]) |span| {
+                if (span.kind == .line_break or span.provenance != .parsed) {
+                    previous = 0;
+                    continue;
+                }
+                for (span.text) |ch| {
+                    if ((ch == '{' or ch == '}') and ch == previous) {
+                        self.unresolved_templates += 1;
+                        return error.UncompiledTemplate;
+                    }
+                    previous = ch;
+                }
+            }
+            return;
+        }
         if (resolved_target.len != 0 and (!external or safeUrl(resolved_target))) {
             s.kind = if (external) .external_link else .link;
             s.target = resolved_target;
@@ -10741,7 +10777,7 @@ test "wiki cell attributes use first unprotected pipe regardless of quoting" {
     try std.testing.expect(found);
 }
 
-test "unknown parser entity braces keep complete external target and intended label" {
+test "unknown parser entity braces reject malformed external targets and keep intended labels" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -10750,12 +10786,22 @@ test "unknown parser entity braces keep complete external target and intended la
     try std.testing.expectEqualStrings("शारदा", try flattened(a, spans));
     try std.testing.expect(spans.len != 0);
     for (spans) |span| {
-        try std.testing.expectEqual(ir.InlineKind.external_link, span.kind);
-        try std.testing.expectEqualStrings("https://hindwidictionary.com/search?keyword={{#urlencode:शारदा}}", span.target);
+        try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+        try std.testing.expectEqualStrings("", span.target);
     }
-    const spaces = try renderer.parseSpans("[https://example.test/?q=&#123;&#123;#urlencode:alpha beta&#125;&#125; label]", .{});
-    try std.testing.expectEqualStrings("beta}} label", try flattened(a, spaces));
-    for (spaces) |span| try std.testing.expectEqualStrings("https://example.test/?q={{#urlencode:alpha", span.target);
+    // Entity-authored closing braces in the label remain literal after target rejection.
+    const entity_label = try renderer.parseSpans("[https://example.test/?q=&#123;&#123;#urlencode:alpha beta&#125;&#125; label]", .{});
+    try std.testing.expectEqualStrings("beta}} label", try flattened(a, entity_label));
+    for (entity_label) |span| {
+        try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+        try std.testing.expectEqualStrings("", span.target);
+        if (std.mem.indexOfAny(u8, span.text, "{}") != null)
+            try std.testing.expectEqual(Provenance.entity_literal, span.provenance);
+    }
+    try std.testing.expect(renderer.fallbacks.rejected_external_target);
+    // The paired raw closing-brace label remains an unresolved build error.
+    try std.testing.expectError(error.UncompiledTemplate, renderer.parseSpans("[https://example.test/?q=&#123;&#123;#urlencode:alpha beta}} label]", .{}));
+    try std.testing.expect(renderer.fallbacks.rejected_external_target);
     const authored_nowiki = try renderer.parseSpans("[https://example.test/?q=<nowiki>{{alpha beta}}</nowiki> label]", .{});
     try std.testing.expectEqualStrings("{{alpha beta}} label", try flattened(a, authored_nowiki));
     for (authored_nowiki) |span| try std.testing.expectEqualStrings("https://example.test/?q=", span.target);
@@ -18950,4 +18996,86 @@ test "HTML item ordinary containers retain nested wiki lists and protected owner
     }
     try std.testing.expectEqual(@as(usize, 27), case_index);
     try std.testing.expectEqual(@as(usize, 0), failed_cases);
+}
+
+test "unresolved external action destinations retain clean labels and reject bare source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "https://dsal.uchicago.edu/cgi-bin/app/caturvedi_query.py?page={{{page=}}}",
+        "https://hindwidictionary.com/search?keyword={{#urlencode:शारदा}}",
+        "https://example.test/?q={{missing}}",
+    }) |target| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        try r.link("<b>page <i>741</i></b>", target, .{ .kind = .link, .target = "old-parent", .language = "hi", .direction = "rtl", .small = true, .role = .example }, 0, true);
+        try std.testing.expectEqualStrings("page 741", try plainText(a, r.spans.items));
+        for (r.spans.items) |span| {
+            try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+            try std.testing.expectEqualStrings("", span.target);
+            try std.testing.expect(span.flags.bold and span.flags.small);
+            try std.testing.expectEqualStrings("hi", span.language);
+            try std.testing.expectEqualStrings("rtl", span.direction);
+            try std.testing.expect(span.role == .example);
+            if (std.mem.eql(u8, span.text, "741")) try std.testing.expect(span.flags.italic);
+        }
+        try std.testing.expect(r.fallbacks.rejected_external_target);
+        try std.testing.expectEqual(@as(usize, 0), r.unresolved_templates);
+        var bare: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledTemplate, bare.link(target, target, .{}, 0, true));
+    }
+    for ([_][]const u8{ "<nowiki>{{literal}}</nowiki>", "<code>&#123;&#123;literal&#125;&#125;</code>" }) |label| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        try r.link(label, "https://example.test/?q={{missing}}", .{}, 0, true);
+        try std.testing.expectEqualStrings("{{literal}}", try plainText(a, r.spans.items));
+        for (r.spans.items) |span| {
+            try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+            try std.testing.expectEqualStrings("", span.target);
+            if (std.mem.indexOfAny(u8, span.text, "{}") != null)
+                try std.testing.expect(span.provenance != .parsed);
+            if (starts(label, "<code>")) try std.testing.expect(span.flags.code);
+        }
+    }
+    var prior: Renderer = .{ .a = a, .context = .{} };
+    try prior.text("see ", .{});
+    try std.testing.expectError(error.UncompiledTemplate, prior.link("{{unclosed", "https://example.test/?q={{missing}}", .{}, 0, true));
+    try std.testing.expectEqualStrings("see ", prior.spans.items[0].text);
+    var newline: Renderer = .{ .a = a, .context = .{} };
+    try newline.link("{<br>{example}", "https://example.test/?q={{missing}}", .{}, 0, true);
+    try std.testing.expectEqualStrings("{\n{example}", try plainText(a, newline.spans.items));
+    var boundary: Renderer = .{ .a = a, .context = .{} };
+    try boundary.link("{<nowiki>{example}</nowiki>", "https://example.test/?q={{missing}}", .{}, 0, true);
+    try std.testing.expectEqualStrings("{{example}", try plainText(a, boundary.spans.items));
+    var supported: Renderer = .{ .a = a, .context = .{} };
+    try supported.link("{{small|word}}", "https://example.test/?q={{missing}}", .{}, 0, true);
+    try std.testing.expectEqualStrings("word", try plainText(a, supported.spans.items));
+    for (supported.spans.items) |span| {
+        try std.testing.expect(span.flags.small);
+        try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+        try std.testing.expectEqualStrings("", span.target);
+    }
+    var unresolved_label: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledTemplate, unresolved_label.link("{{unclosed", "https://example.test/?q={{missing}}", .{}, 0, true));
+    const controls = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "https://example.test/?q={literal}", .expected = "https://example.test/?q={literal}" },
+        .{ .input = "https://example.test/?q=%7B%7Bmissing%7D%7D", .expected = "https://example.test/?q=%7B%7Bmissing%7D%7D" },
+        .{ .input = "https://example.test/शारदा?a=1&amp;b=2", .expected = "https://example.test/शारदा?a=1&b=2" },
+        .{ .input = "https://example.test/?q=&amp;#123;literal&amp;#125;", .expected = "https://example.test/?q=&#123;literal&#125;" },
+    };
+    for (controls) |item| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        try r.link("valid label", item.input, .{}, 0, true);
+        try std.testing.expectEqualStrings("valid label", try plainText(a, r.spans.items));
+        for (r.spans.items) |span| {
+            try std.testing.expectEqual(ir.InlineKind.external_link, span.kind);
+            try std.testing.expectEqualStrings(item.expected, span.target);
+        }
+        try std.testing.expect(!r.fallbacks.rejected_external_target);
+    }
+    for ([_][]const u8{ "[[{{missing}}|clean label]]", "[[{{{arg}}}|clean label]]", "[[&#123;&#123;missing&#125;&#125;|clean label]]" }) |source| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(source, .{});
+        for (spans) |span| try std.testing.expect(span.kind != .link and span.kind != .external_link);
+        try std.testing.expect(r.fallbacks.literal_markup);
+    }
 }

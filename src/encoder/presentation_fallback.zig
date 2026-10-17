@@ -7,6 +7,7 @@ pub const Report = struct {
     render_limit: bool = false,
     template_presentation: bool = false,
     missing_template: bool = false,
+    rejected_external_target: bool = false,
     display_title_rejected: bool = false,
     missing_language_heading: bool = false,
     unresolved_language_heading: bool = false,
