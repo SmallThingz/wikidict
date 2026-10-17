@@ -1880,7 +1880,7 @@ def validate_verified_publication_inventory(staging, verified_compressed=None):
     return expected,checked
 
 
-def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fallback_counts=None):
+def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fallback_counts=None, site_info_snapshot=None):
     if type(expected_rows) is not int or expected_rows<0:raise ValueError('Missing expected namespace row count')
     path=root/'namespace-coverage.json'
     try:report=read_small_json(path,8*1024*1024)
@@ -1903,6 +1903,21 @@ def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fa
     alias_fields=['alias_pages' in row for row in report['namespaces'] if isinstance(row,dict)]
     if alias_fields and any(alias_fields)!=all(alias_fields):raise ValueError('Mixed alias coverage schema')
     if alias_fields and all(alias_fields):counters+=('alias_pages',)
+    metadata_fields=['site_metadata_rows' in row for row in report['namespaces'] if isinstance(row,dict)]
+    if metadata_fields and any(metadata_fields)!=all(metadata_fields):raise ValueError('Mixed site metadata coverage schema')
+    if metadata_fields and all(metadata_fields):counters+=('site_metadata_rows',)
+    metadata_rows=sum(row.get('site_metadata_rows',0) for row in report['namespaces'] if isinstance(row,dict) and type(row.get('site_metadata_rows',0)) is int)
+    if metadata_rows:
+        if site_info_snapshot is None:raise ValueError('Site metadata coverage requires pinned site info')
+        site=read_small_json(Path(site_info_snapshot),1024*1024)
+        general=site.get('query',{}).get('general',{})
+        if (site.get('schema')!='wikidict.site-info.v2' or
+                not isinstance(general.get('mainpage'),str) or not general['mainpage'] or
+                general.get('wikiid')!=site.get('wiki') or
+                site.get('namespace_registry_sha256')!=report.get('registry_sha256') or
+                sha256_file(Path(site_info_snapshot))!=report.get('site_info_sha256')):
+            raise ValueError('Site metadata coverage authority differs')
+    elif report.get('site_info_sha256') is not None:raise ValueError('Unused site metadata authority')
     totals={key:0 for key in counters};seen=set()
     for row in report['namespaces']:
         if not isinstance(row,dict):raise ValueError('Invalid namespace coverage row')
@@ -1915,7 +1930,8 @@ def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fa
             value=row.get(key)
             if type(value) is not int or not 0<=value<2**64:raise ValueError('Invalid namespace coverage counter')
             totals[key]+=value
-        if row['input_rows']!=row['compile_only_rows']+row['source_unavailable_rows']+row['dispatched_rows'] or row['dispatched_rows']!=row['expanded_pages']+row['fallback_pages']+row['duplicate_rows']:raise ValueError('Incomplete namespace coverage')
+        if row['input_rows']!=row['compile_only_rows']+row['source_unavailable_rows']+row.get('site_metadata_rows',0)+row['dispatched_rows'] or row['dispatched_rows']!=row['expanded_pages']+row['fallback_pages']+row['duplicate_rows']:raise ValueError('Incomplete namespace coverage')
+        if row.get('site_metadata_rows',0) and (ns!=0 or kind!='language'):raise ValueError('Invalid site metadata coverage disposition')
         if row.get('alias_pages',0)>row['expanded_pages']+row['fallback_pages'] or (kind is None and row.get('alias_pages',0)):raise ValueError('Invalid alias coverage subset')
         if (kind is None and row['input_rows']!=row['compile_only_rows']) or (kind is not None and row['compile_only_rows']!=0):raise ValueError('Invalid namespace coverage disposition')
         if (kind=='language')!=(ns==0) or (ns==0)!=(name==''):raise ValueError('Invalid main namespace coverage')
@@ -1927,7 +1943,7 @@ def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fa
     return totals
 
 
-def _publish_verified_staging(staging, target, edition, date, compression_workers=None, interwiki_sha=None, auxiliary_hashes=None, build_identity=None, namespace_snapshot=None):
+def _publish_verified_staging(staging, target, edition, date, compression_workers=None, interwiki_sha=None, auxiliary_hashes=None, build_identity=None, namespace_snapshot=None, site_info_snapshot=None):
     marker = staging / VERIFIED_MARKER
     if not marker.is_file():
         raise ValueError(f'Unverified staging directory: {staging}')
@@ -1947,7 +1963,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     coverage=validate_page_coverage(staging,require_total=True)
     fallback_counts = {}
     fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl', fallback_counts)
-    namespace_totals=validate_namespace_coverage(staging,coverage['pages_seen'],namespace_snapshot,fallback_counts)
+    namespace_totals=validate_namespace_coverage(staging,coverage['pages_seen'],namespace_snapshot,fallback_counts,site_info_snapshot)
     if namespace_snapshot is not None and namespace_totals['fallback_pages']!=fallback_pages:raise ValueError('Namespace fallback totals differ from fallback report')
     for part in staging.rglob('*.xz.part'):
         unlink_artifact(part)
@@ -1991,9 +2007,9 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     return len(compressed),fallback_pages
 
 
-def publish_verified_staging(staging, target, edition, date, compression_workers=None, interwiki_sha=None, auxiliary_hashes=None, build_identity=None, namespace_snapshot=None):
+def publish_verified_staging(staging, target, edition, date, compression_workers=None, interwiki_sha=None, auxiliary_hashes=None, build_identity=None, namespace_snapshot=None, site_info_snapshot=None):
     with build_phase(edition,date,'publish') as result:
-        blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot)
+        blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot,site_info_snapshot)
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
 def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None):
@@ -2052,7 +2068,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             raise ValueError('Existing output page total differs from coverage')
         fallback_counts = {}
         fallback_pages=validate_fallback_report(target/'fallback-pages.jsonl', fallback_counts)
-        namespace_totals=validate_namespace_coverage(target,metadata['input_pages'],namespace,fallback_counts)
+        namespace_totals=validate_namespace_coverage(target,metadata['input_pages'],namespace,fallback_counts,auxiliary_snapshots.get('site-info'))
         if (type(metadata.get('fallback_pages')) is not int or metadata['fallback_pages']!=fallback_pages or
                 namespace_totals['fallback_pages']!=fallback_pages or
                 metadata.get('namespace_coverage_totals')!=namespace_totals):
@@ -2087,7 +2103,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             if now_unix is not None and recorded_now!=now_unix:
                 raise ValueError('Verified staging uses a different or unrecorded build time')
             print(f'Resuming verified publication: {staging}', flush=True)
-            publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace)
+            publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace, site_info_snapshot=auxiliary_snapshots.get('site-info'))
             cleanup_shard_workspace(target.with_name(date+'.shards'))
             return 'resumed_publication'
         print(f'Retrying incomplete build: {staging}', flush=True)
@@ -2150,7 +2166,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         # Verified staging can now resume publication without the input cache.
         cleanup_shard_workspace(workspace)
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
-    publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace)
+    publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace, site_info_snapshot=auxiliary_snapshots.get('site-info'))
     cleanup_shard_workspace(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 

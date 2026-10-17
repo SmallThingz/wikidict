@@ -10,17 +10,19 @@ pub const Counts = struct {
     input_rows: u64 = 0,
     compile_only_rows: u64 = 0,
     source_unavailable_rows: u64 = 0,
+    site_metadata_rows: u64 = 0,
     dispatched_rows: u64 = 0,
     expanded_pages: u64 = 0,
     fallback_pages: u64 = 0,
     duplicate_rows: u64 = 0,
     alias_pages: u64 = 0,
 };
-const counter_fields = .{ "input_rows", "compile_only_rows", "source_unavailable_rows", "dispatched_rows", "expanded_pages", "fallback_pages", "duplicate_rows", "alias_pages" };
+const counter_fields = .{ "input_rows", "compile_only_rows", "source_unavailable_rows", "site_metadata_rows", "dispatched_rows", "expanded_pages", "fallback_pages", "duplicate_rows", "alias_pages" };
 pub const Outcome = enum { expanded, fallback, duplicate };
-pub const Report = struct { version: u32 = 1, registry_sha256: ?[]const u8 = null, namespaces: []const Counts };
+pub const Report = struct { version: u32 = 1, registry_sha256: ?[]const u8 = null, site_info_sha256: ?[]const u8 = null, namespaces: []const Counts };
 pub const Table = struct {
     registry_sha256: ?[32]u8 = null,
+    site_info_sha256: ?[32]u8 = null,
     rows: std.AutoHashMapUnmanaged(u32, Counts) = .empty,
     pub fn deinit(self: *Table, a: A) void {
         var it = self.rows.valueIterator();
@@ -41,6 +43,15 @@ pub const Table = struct {
         if (row.kind != kind or !std.mem.eql(u8, row.name, name)) return error.NamespaceCoverageIdentityMismatch;
         row.input_rows = try std.math.add(u64, row.input_rows, 1);
         if (kind == null) row.compile_only_rows += 1 else if (!has_source) row.source_unavailable_rows += 1 else row.dispatched_rows += 1;
+    }
+    /// Reclassify one already-counted main-namespace input, before dispatch.
+    pub fn siteMetadata(self: *Table, id: u32, digest: [32]u8) !void {
+        const row = self.rows.getPtr(id) orelse return error.NamespaceCoverageMissingInput;
+        if (id != 0 or row.kind != .language or row.dispatched_rows == 0) return error.NamespaceCoverageMismatch;
+        if (self.site_info_sha256) |previous| if (!std.meta.eql(previous, digest)) return error.NamespaceCoverageIdentityMismatch;
+        self.site_info_sha256 = digest;
+        row.dispatched_rows -= 1;
+        row.site_metadata_rows = try std.math.add(u64, row.site_metadata_rows, 1);
     }
     pub fn outcome(self: *Table, id: u32, result: Outcome) !void {
         const row = self.rows.getPtr(id) orelse return error.NamespaceCoverageMissingInput;
@@ -63,7 +74,8 @@ pub const Table = struct {
         var it = self.rows.valueIterator();
         while (it.next()) |row| {
             if (row.kind == .alias) return error.NamespaceCoverageMismatch;
-            const selected = try std.math.add(u64, try std.math.add(u64, row.compile_only_rows, row.source_unavailable_rows), row.dispatched_rows);
+            const selected = try std.math.add(u64, try std.math.add(u64, try std.math.add(u64, row.compile_only_rows, row.source_unavailable_rows), row.site_metadata_rows), row.dispatched_rows);
+            if (row.site_metadata_rows != 0 and (row.id != 0 or row.kind != .language or self.site_info_sha256 == null)) return error.NamespaceCoverageMismatch;
             const completed = try std.math.add(u64, try std.math.add(u64, row.expanded_pages, row.fallback_pages), row.duplicate_rows);
             if (row.alias_pages > try std.math.add(u64, row.expanded_pages, row.fallback_pages) or (row.kind == null and row.alias_pages != 0)) return error.NamespaceCoverageMismatch;
             if (selected != row.input_rows or completed != row.dispatched_rows) return error.NamespaceCoverageMismatch;
@@ -76,6 +88,10 @@ pub const Table = struct {
     pub fn merge(self: *Table, a: A, other: *const Table) !void {
         try other.validate(null);
         if (self.registry_sha256 == null and self.rows.count() == 0) self.registry_sha256 = other.registry_sha256 else if (!std.meta.eql(self.registry_sha256, other.registry_sha256)) return error.NamespaceCoverageRegistryMismatch;
+        if (other.site_info_sha256) |digest| {
+            if (self.site_info_sha256) |previous| if (!std.meta.eql(previous, digest)) return error.NamespaceCoverageIdentityMismatch;
+            self.site_info_sha256 = digest;
+        }
         var it = other.rows.valueIterator();
         while (it.next()) |row| {
             const slot = try self.rows.getOrPut(a, row.id);
@@ -105,7 +121,8 @@ pub const Table = struct {
             }
         }.less);
         const hash = if (self.registry_sha256) |digest| std.fmt.bytesToHex(digest, .lower) else @as([64]u8, undefined);
-        const json = try std.json.Stringify.valueAlloc(a, Report{ .namespaces = rows, .registry_sha256 = if (self.registry_sha256 != null) &hash else null }, .{});
+        const site_hash = if (self.site_info_sha256) |digest| std.fmt.bytesToHex(digest, .lower) else @as([64]u8, undefined);
+        const json = try std.json.Stringify.valueAlloc(a, Report{ .site_info_sha256 = if (self.site_info_sha256 != null) &site_hash else null, .namespaces = rows, .registry_sha256 = if (self.registry_sha256 != null) &hash else null }, .{});
         defer a.free(json);
         const path = try std.fs.path.join(a, &.{ root, filename });
         defer a.free(path);
@@ -130,6 +147,12 @@ pub const Table = struct {
             var digest: [32]u8 = undefined;
             _ = std.fmt.hexToBytes(&digest, raw) catch return error.InvalidNamespaceCoverage;
             result.registry_sha256 = digest;
+        }
+        if (parsed.value.site_info_sha256) |raw| {
+            if (raw.len != 64) return error.InvalidNamespaceCoverage;
+            var digest: [32]u8 = undefined;
+            _ = std.fmt.hexToBytes(&digest, raw) catch return error.InvalidNamespaceCoverage;
+            result.site_info_sha256 = digest;
         }
         for (parsed.value.namespaces) |row| {
             const slot = try result.rows.getOrPut(a, row.id);
@@ -188,4 +211,22 @@ test "compiled aliases remain a strict expanded subset and never compile-only" {
     try std.testing.expectEqual(@as(u64, 1), coverage.rows.get(0).?.alias_pages);
     coverage.rows.getPtr(0).?.alias_pages = 2;
     try std.testing.expectError(error.NamespaceCoverageMismatch, coverage.validate(2));
+}
+
+test "site metadata remains counted without language dispatch or fallback" {
+    const a = std.testing.allocator;
+    var table: Table = .{};
+    defer table.deinit(a);
+    try table.input(a, 0, "", .language, true);
+    try table.siteMetadata(0, @splat(1));
+    try table.input(a, 0, "", .language, true);
+    try table.siteMetadata(0, @splat(1));
+    try table.validate(2);
+    const row = table.rows.get(0).?;
+    try std.testing.expectEqual(@as(u64, 2), row.input_rows);
+    try std.testing.expectEqual(@as(u64, 2), row.site_metadata_rows);
+    try std.testing.expectEqual(@as(u64, 0), row.dispatched_rows);
+    try std.testing.expectEqual(@as(u64, 0), row.fallback_pages);
+    try std.testing.expectEqual(@as(u64, 0), row.alias_pages);
+    try std.testing.expectError(error.NamespaceCoverageMismatch, table.siteMetadata(0, @splat(1)));
 }

@@ -418,6 +418,55 @@ const ExpansionSlot = struct {
     }
 };
 
+// The installed versioned site-info snapshot is already pinned by build inputs.
+// No English title heuristic and no empty-page heuristic is used here.
+const SiteMainPage = struct { title: []const u8, digest: [32]u8 };
+fn siteString(value: std.json.Value, name: []const u8) ![]const u8 {
+    if (value != .object) return error.InvalidSiteMainPage;
+    const item = value.object.get(name) orelse return error.InvalidSiteMainPage;
+    if (item != .string) return error.InvalidSiteMainPage;
+    return item.string;
+}
+fn parseSiteMainPage(a: std.mem.Allocator, bytes: []const u8, namespaces: *const namespace_registry.Registry) !SiteMainPage {
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, bytes, .{});
+    defer parsed.deinit();
+    const value = parsed.value;
+    if (!std.mem.eql(u8, try siteString(value, "schema"), "wikidict.site-info.v2") or
+        !std.mem.eql(u8, try siteString(value, "wiki"), namespaces.wiki) or
+        !std.mem.eql(u8, try siteString(value, "date"), namespaces.dump_date) or
+        !std.mem.eql(u8, try siteString(value, "content_language"), namespaces.content_language)) return error.InvalidSiteMainPage;
+    const expected = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
+    if (!std.mem.eql(u8, try siteString(value, "namespace_registry_sha256"), &expected)) return error.InvalidSiteMainPage;
+    const query = value.object.get("query") orelse return error.InvalidSiteMainPage;
+    if (query != .object) return error.InvalidSiteMainPage;
+    const general = query.object.get("general") orelse return error.InvalidSiteMainPage;
+    if (!std.mem.eql(u8, try siteString(general, "wikiid"), namespaces.wiki)) return error.InvalidSiteMainPage;
+    const raw = try siteString(general, "mainpage");
+    if (raw.len == 0 or std.mem.indexOfAny(u8, raw, "\t\r\n#") != null) return error.InvalidSiteMainPage;
+    const title = try namespaces.normalizeTitle(a, raw, 0, .any);
+    errdefer a.free(title);
+    // Valid project-namespace homepages retain ordinary compile-only routing.
+    // siteTerminalPage refuses non-main namespace rows, without invalidating capture.
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return .{ .title = title, .digest = digest };
+}
+fn loadSiteMainPage(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry) !?SiteMainPage {
+    const path = try std.fs.path.join(a, &.{ root, "namespace-siteinfo.raw.json" });
+    defer a.free(path);
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return null, // Legacy/no capture remains strict.
+        else => return err,
+    };
+    defer a.free(bytes);
+    const format = try std.json.parseFromSlice(std.json.Value, a, bytes, .{});
+    defer format.deinit();
+    if (format.value != .object) return error.InvalidSiteMainPage;
+    const schema = format.value.object.get("schema") orelse return null;
+    if (schema != .string or !std.mem.eql(u8, schema.string, "wikidict.site-info.v2")) return null;
+    return try parseSiteMainPage(a, bytes, namespaces);
+}
+
 const ExpansionPool = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -426,6 +475,7 @@ const ExpansionPool = struct {
     page_index_bytes: []const u8 = "",
     page_title_index: ?dump_source.PageTitleIndex = null,
     page_redirects: ?*const encoder.page_redirects.Snapshot = null,
+    site_mainpage: ?SiteMainPage = null,
 
     fn init(
         io: std.Io,
@@ -663,6 +713,32 @@ fn aliasTargetPage(pool: *const ExpansionPool, title: []const u8) !?dump_source.
     return try dump_source.parsePageIndexLine(index.kind, pool.page_index_bytes[start..end]);
 }
 
+fn siteTerminalPage(pool: *const ExpansionPool, a: std.mem.Allocator, initial: dump_source.IndexedPage) !?dump_source.IndexedPage {
+    var page = initial;
+    var seen: [32]u64 = undefined;
+    var count: usize = 0;
+    while (count < seen.len) : (count += 1) {
+        if (page.ns != 0 or !page.has_source) return null;
+        for (seen[0..count]) |id| if (id == page.page_id) return null;
+        seen[count] = page.page_id;
+        const xml_target = page.redirect orelse return page;
+        const redirects = pool.page_redirects orelse return error.PageRedirectSnapshotMissing;
+        const target = try redirects.lookup(a, page.page_id, xml_target);
+        if (target.namespace != 0 or target.interwiki.len != 0) return null;
+        page = (try aliasTargetPage(pool, target.title)) orelse return null;
+    }
+    return null; // Cyclic/overlong chains keep ordinary strict treatment.
+}
+fn isSiteMetadata(pool: *const ExpansionPool, a: std.mem.Allocator, initial: dump_source.IndexedPage) !bool {
+    const site = pool.site_mainpage orelse return false;
+    const declared = (try aliasTargetPage(pool, site.title)) orelse return false;
+    // The captured official main page may itself redirect to a localized notice.
+    const canonical = (try siteTerminalPage(pool, a, declared)) orelse return false;
+    const resolved = (try siteTerminalPage(pool, a, initial)) orelse return false;
+    return resolved.page_id == canonical.page_id and resolved.revision_id == canonical.revision_id and
+        std.mem.eql(u8, resolved.title, canonical.title);
+}
+
 fn dispatchIndexedPage(
     pool: *ExpansionPool,
     writer: *encoder.blob_builder.Writer,
@@ -677,6 +753,15 @@ fn dispatchIndexedPage(
     const role = compiledKind(spec);
     try writer.namespace_coverage.input(writer.allocator, page.ns, spec.name, role, page.has_source);
     if (!page.has_source or role == null) return;
+    if (pool.site_mainpage != null and page.ns == 0) {
+        var metadata_arena = std.heap.ArenaAllocator.init(writer.allocator);
+        defer metadata_arena.deinit();
+        if (try isSiteMetadata(pool, metadata_arena.allocator(), page)) {
+            try writer.namespace_coverage.siteMetadata(page.ns, pool.site_mainpage.?.digest);
+            writer.stats.main_pages += 1;
+            return;
+        }
+    }
     if (page.redirect) |xml_target| {
         const index = pool.page_title_index orelse return error.MissingPageTitleIndex;
         const own_ref = (try index.lookup(pool.page_index_bytes, page.title)) orelse return error.InvalidPageTitleIndex;
@@ -960,6 +1045,9 @@ pub fn main(init: std.process.Init) !void {
     pool.page_index_bytes = page_index.bytes;
     pool.page_title_index = title_index;
     pool.page_redirects = if (redirects) |*snapshot| snapshot else null;
+    const site_mainpage = try loadSiteMainPage(init.io, a, options.expander_root, &namespaces);
+    defer if (site_mainpage) |site| a.free(site.title);
+    pool.site_mainpage = site_mainpage;
     if (options.shard_pages != null) {
         try runContinuous(init.io, a, args[2], options, codes, &namespaces, &pool, &dump, &page_index, page_index_kind, page_index_path);
         return;
@@ -1867,4 +1955,129 @@ test "Aal exact Arabic noun subtrees preserve exclusive English German bodies an
         if (!std.mem.eql(u8, heading, "الألمانية")) try std.testing.expect((try index.find("aalen-prefix-conflict")) == null);
         if (std.mem.eql(u8, heading, "الإنجليزية") or std.mem.eql(u8, heading, "العربية")) try std.testing.expect((try index.find("prefix-reset")) == null);
     }
+}
+
+test "captured main page identity and SQL-bound aliases are metadata not lexical pages" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const pa = arena.allocator();
+    const root = try std.fmt.allocPrint(pa, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\taawiktionary\n# dump-date\t20261001\n# content-language\taa\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n");
+    defer namespaces.deinit();
+    const registry_hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
+    const site_bytes = try std.json.Stringify.valueAlloc(pa, .{
+        .schema = "wikidict.site-info.v2",
+        .wiki = "aawiktionary",
+        .date = "20261001",
+        .content_language = "aa",
+        .namespace_registry_sha256 = @as([]const u8, &registry_hash),
+        .query = .{ .general = .{ .wikiid = "aawiktionary", .mainpage = "Main_Page" } },
+    }, .{});
+    const site = try parseSiteMainPage(pa, site_bytes, &namespaces);
+    try std.testing.expectEqualStrings("Main Page", site.title);
+    const source_rows = [_][]const u8{
+        "0\t0\tMain Page\t\t1511\t6705\t2009-02-21T23:10:42Z\tUser\twikitext\t0\t1\t0",
+        "0\t22\tmain Page\tMain Page\t941\t6285\t2009-02-21T23:10:42Z\tUser\twikitext\t0\t1\t0",
+        "0\t0\tOther empty\t\t2000\t2001\t2009-02-21T23:10:42Z\tUser\twikitext\t0\t1\t0",
+        "0\t0\tChain\tmain Page\t3000\t3001\t2009-02-21T23:10:42Z\tUser\twikitext\t0\t1\t0",
+        "0\t0\tCycle\tCycle\t4000\t4001\t2009-02-21T23:10:42Z\tUser\twikitext\t0\t1\t0",
+    };
+    const index_text = try std.mem.join(pa, "\n", &source_rows);
+    const index_path = try std.fs.path.join(pa, &.{ root, "page-index.tsv" });
+    const titles_path = try std.fs.path.join(pa, &.{ root, dump_source.page_title_index_filename });
+    const dump_path = try std.fs.path.join(pa, &.{ root, "pages.xml" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = index_text });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = "#REDIRECT[[Main Page]]" });
+    try dump_source.buildPageTitleIndex(io, a, index_path, titles_path);
+    const title_bytes = try std.Io.Dir.cwd().readFileAlloc(io, titles_path, pa, .limited(4096));
+    var redirects = try encoder.page_redirects.Snapshot.init(a, "# wikidict-page-redirects-v1\n# wiki\taawiktionary\n# dump-date\t20261001\n# sql-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n" ++
+        "941\t0\t4d61696e5f50616765\t\t\n3000\t0\t6d61696e5f50616765\t\t\n4000\t0\t4379636c65\t\t\n# end\t3\n", &namespaces);
+    defer redirects.deinit();
+    var pool: ExpansionPool = .{ .io = io, .allocator = a, .completion = undefined, .slots = &.{}, .page_index_bytes = index_text, .page_title_index = try dump_source.PageTitleIndex.init(title_bytes), .page_redirects = &redirects, .site_mainpage = site };
+    for (source_rows, 0..) |row, i| {
+        const page = try dump_source.parsePageIndexLine(.raw_xml, row);
+        try std.testing.expectEqual(i == 0 or i == 1 or i == 3, try isSiteMetadata(&pool, pa, page));
+    }
+    // Captured official title can redirect to the actual landing page (Abkhaz).
+    pool.site_mainpage = .{ .title = "Chain", .digest = site.digest };
+    try std.testing.expect(try isSiteMetadata(&pool, pa, try dump_source.parsePageIndexLine(.raw_xml, source_rows[0])));
+    try std.testing.expect(try isSiteMetadata(&pool, pa, try dump_source.parsePageIndexLine(.raw_xml, source_rows[1])));
+    const canonical = try dump_source.parsePageIndexLine(.raw_xml, source_rows[0]);
+    pool.site_mainpage = null;
+    try std.testing.expect(!try isSiteMetadata(&pool, pa, canonical));
+    pool.site_mainpage = site;
+    const out = try std.fs.path.join(pa, &.{ root, "dictionary" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, out);
+    defer writer.deinit();
+    var dump = try dump_source.SourceReader.open(io, a, a, dump_path, .raw_xml, null);
+    defer dump.deinit();
+    // No worker exists: either erroneous lexical dispatch would fail this fixture.
+    for (source_rows[0..2], 0..) |row, i| {
+        writer.stats.pages_seen += 1;
+        try dispatchIndexedPage(&pool, &writer, &dump, .raw_xml, &namespaces, row, i);
+    }
+    const stats = try writer.finish(.{});
+    try std.testing.expectEqual(@as(usize, 2), stats.main_pages);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.alias_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    try std.testing.expectEqual(@as(u64, 2), writer.namespace_coverage.rows.get(0).?.site_metadata_rows);
+}
+
+test "site mainpage authority rejects wrong registry wiki and missing captured identity" {
+    const a = std.testing.allocator;
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\taawiktionary\n# dump-date\t20261001\n# content-language\taa\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n");
+    defer namespaces.deinit();
+    const hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
+    const cases = [_]struct { wiki: []const u8, digest: []const u8, title: []const u8 }{
+        .{ .wiki = "otherwiktionary", .digest = &hash, .title = "Main Page" },
+        .{ .wiki = "aawiktionary", .digest = "0000000000000000000000000000000000000000000000000000000000000000", .title = "Main Page" },
+        .{ .wiki = "aawiktionary", .digest = &hash, .title = "" },
+        .{ .wiki = "aawiktionary", .digest = &hash, .title = "Main Page#Section" },
+    };
+    for (cases) |case| {
+        const bytes = try std.json.Stringify.valueAlloc(a, .{
+            .schema = "wikidict.site-info.v2",
+            .wiki = case.wiki,
+            .date = "20261001",
+            .content_language = "aa",
+            .namespace_registry_sha256 = case.digest,
+            .query = .{ .general = .{ .wikiid = case.wiki, .mainpage = case.title } },
+        }, .{});
+        defer a.free(bytes);
+        try std.testing.expectError(error.InvalidSiteMainPage, parseSiteMainPage(a, bytes, &namespaces));
+    }
+}
+
+test "valid project namespace mainpage capture does not invalidate ordinary routing" {
+    const a = std.testing.allocator;
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\n");
+    defer namespaces.deinit();
+    const hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
+    const bytes = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.site-info.v2",
+        .wiki = "enwiktionary",
+        .date = "20261001",
+        .content_language = "en",
+        .namespace_registry_sha256 = @as([]const u8, &hash),
+        .query = .{ .general = .{ .wikiid = "enwiktionary", .mainpage = "Wiktionary:Main Page" } },
+    }, .{});
+    defer a.free(bytes);
+    const site = try parseSiteMainPage(a, bytes, &namespaces);
+    defer a.free(site.title);
+    try std.testing.expectEqualStrings("Wiktionary:Main Page", site.title);
+    try std.testing.expectEqual(@as(i32, 4), namespaces.ofTitle(site.title).id);
+    try std.testing.expect(compiledKind(namespaces.byId(4).?) == null);
+    const page = try dump_source.parsePageIndexLine(.raw_xml, "0\t0\tWiktionary:Main Page\t\t1\t2\t2026-10-01T00:00:00Z\tUser\twikitext\t4\t1\t0");
+    const pool: ExpansionPool = .{ .io = std.testing.io, .allocator = a, .completion = undefined, .slots = &.{}, .site_mainpage = site };
+    try std.testing.expect((try siteTerminalPage(&pool, a, page)) == null);
 }

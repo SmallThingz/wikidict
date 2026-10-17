@@ -7,7 +7,7 @@ import stat
 
 BUILD_DISK_RESERVE_BYTES = 2 * 1024**3  # Policy margin, not an output-size bound.
 MAX_DISK_BYTES = (1 << 63) - 1
-_COUNTERS = ('input_rows', 'compile_only_rows', 'source_unavailable_rows',
+_COUNTERS = ('input_rows', 'compile_only_rows', 'source_unavailable_rows', 'site_metadata_rows',
              'dispatched_rows', 'expanded_pages', 'fallback_pages', 'duplicate_rows', 'alias_pages')
 _FEATURES = {name + '.wikblb': kind for kind, name in enumerate(
     ('thesaurus', 'citations', 'reconstruction', 'rhymes', 'sign-gloss', 'supplemental', 'aliases'), 2)}
@@ -42,7 +42,7 @@ def _coverage_bound(data):
     rows = report.get('namespaces')
     if not isinstance(rows, list):
         raise ValueError('Invalid namespace coverage rows')
-    total = len(json.dumps(dict(version=1, registry_sha256='0' * 64, namespaces=[]),
+    total = len(json.dumps(dict(version=1, registry_sha256='0' * 64, site_info_sha256='0' * 64, namespaces=[]),
                            separators=(',', ':')))
     for row in rows:
         if not isinstance(row, dict) or type(row.get('id')) is not int or not 0 <= row['id'] < 2**32:

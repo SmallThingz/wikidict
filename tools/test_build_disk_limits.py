@@ -237,5 +237,23 @@ class MergeDiskAdmissionTests(unittest.TestCase):
                 self.admit([shard])
 
 
+class SiteMetadataDiskBoundTests(unittest.TestCase):
+    def test_new_counter_and_authority_hash_fit_native_report_bound(self):
+        row=dict(id=0,name='',kind='language',site_metadata_rows=2)
+        source=dict(version=1,namespaces=[row])
+        bound=d._coverage_bound(json.dumps(source).encode())
+        full=dict(version=1,registry_sha256='a'*64,site_info_sha256='b'*64,
+                  namespaces=[dict(row,**{key:2**64-1 for key in d._COUNTERS})])
+        self.assertGreaterEqual(bound,len(json.dumps(full,separators=(',',':')).encode()))
+        del row['site_metadata_rows']
+        self.assertEqual(bound,d._coverage_bound(json.dumps(source).encode()))
+    def test_site_metadata_counter_rejects_invalid_values(self):
+        for value in (-1,2**64,True,'2',None):
+            with self.subTest(value=value):
+                source=dict(version=1,namespaces=[dict(id=0,name='',kind='language',site_metadata_rows=value)])
+                with self.assertRaisesRegex(ValueError,'Invalid namespace counter'):
+                    d._coverage_bound(json.dumps(source).encode())
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

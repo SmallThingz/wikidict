@@ -2842,6 +2842,47 @@ class WatchdogAddressSpaceCliTests(unittest.TestCase):
                 self.assertEqual(result.exception.code,2)
                 watchdog.assert_not_called();budget.assert_not_called()
 
+
+class SiteMainPageCoverageTests(unittest.TestCase):
+    def fixture(self, root):
+        site={'schema':'wikidict.site-info.v2','wiki':'aawiktionary','date':'20261001',
+              'namespace_registry_sha256':'a'*64,
+              'query':{'general':{'wikiid':'aawiktionary','mainpage':'Main Page'}}}
+        path=root/'site.json';path.write_text(json.dumps(site))
+        row=dict(id=0,name='',kind='language',input_rows=2,compile_only_rows=0,
+                 source_unavailable_rows=0,site_metadata_rows=2,dispatched_rows=0,
+                 expanded_pages=0,fallback_pages=0,duplicate_rows=0,alias_pages=0)
+        report=dict(version=1,registry_sha256='a'*64,site_info_sha256=b.sha256_file(path),namespaces=[row])
+        return path,report
+    def save(self,root,report):
+        (root/'namespace-coverage.json').write_text(json.dumps(report))
+    def test_mainpage_and_redirect_rows_conserved_without_payloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);site,report=self.fixture(root);self.save(root,report)
+            totals=b.validate_namespace_coverage(root,2,fallback_counts={},site_info_snapshot=site)
+            self.assertEqual((2,2,0,0),(totals['input_rows'],totals['site_metadata_rows'],totals['dispatched_rows'],totals['fallback_pages']))
+    def test_site_metadata_requires_pinned_unchanged_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);site,report=self.fixture(root);self.save(root,report)
+            with self.assertRaisesRegex(ValueError,'pinned site info'):b.validate_namespace_coverage(root,2)
+            site.write_text(site.read_text().replace('Main Page','Other'))
+            with self.assertRaisesRegex(ValueError,'authority differs'):b.validate_namespace_coverage(root,2,site_info_snapshot=site)
+    def test_site_metadata_cannot_hide_missing_input_or_other_namespace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);site,report=self.fixture(root)
+            report['namespaces'][0]['input_rows']=3;self.save(root,report)
+            with self.assertRaisesRegex(ValueError,'Incomplete'):b.validate_namespace_coverage(root,3,site_info_snapshot=site)
+            report['namespaces'][0].update(id=114,name='Citations',kind='citations',input_rows=2);self.save(root,report)
+            with self.assertRaisesRegex(ValueError,'site metadata coverage disposition'):b.validate_namespace_coverage(root,2,site_info_snapshot=site)
+    def test_ordinary_heading_failure_stays_in_fallback_partition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);site,report=self.fixture(root)
+            row=report['namespaces'][0];row.update(input_rows=3,dispatched_rows=1,fallback_pages=1)
+            self.save(root,report)
+            totals=b.validate_namespace_coverage(root,3,fallback_counts={0:1},site_info_snapshot=site)
+            self.assertEqual(1,totals['fallback_pages'])
+            with self.assertRaisesRegex(ValueError,'fallback counts differ'):b.validate_namespace_coverage(root,3,fallback_counts={},site_info_snapshot=site)
+
 if __name__=='__main__':unittest.main()
 
 class ReproducibleBuildTimeTest(unittest.TestCase):
