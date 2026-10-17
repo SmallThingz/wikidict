@@ -238,6 +238,38 @@ class PresentationDiagnosticTests(unittest.TestCase):
             with self.assertRaisesRegex(audit.ScanError, 'conflicting duplicate'):
                 audit.scan(f.root, f.query)
 
+    def test_repeated_caption_break_preserves_semantics_and_diagnostic_payload(self):
+        # Authored witness: {|\n|+ {\n|+ {example}\n| cell\n|}
+        # appendTableCaption emits an empty-text semantic break between caption parts.
+        def caption_entry(f, spans):
+            entry = f.entry('caption', '', language='English')
+            entry['sections'] = [dict(blocks=[dict(table=dict(caption=spans,
+                rows=[dict(cells=[dict(spans=[dict(kind='text', text='cell', trail='')])])]))])]
+            return entry
+
+        for stored_break in ('', '\n'):
+            with self.subTest(stored_break=stored_break), Fixture() as f:
+                entry = caption_entry(f, [dict(kind='text', text='{', trail=''),
+                    dict(kind='line_break', text=stored_break, trail=''),
+                    dict(kind='text', text='{example}', trail='')])
+                f.language('English', [entry])
+                result = audit.scan(f.root, f.query)
+                self.assertEqual(1, result['records'])
+                self.assertTrue(result['scan_complete'])
+                self.assertEqual([], result['issues'])
+                self.assertEqual('passed', result['status'])
+
+        # A semantic break must not hide real artifacts in nonempty text or trail.
+        with Fixture() as f:
+            entry = caption_entry(f, [dict(kind='line_break', text='{{stored}}',
+                trail=' __NOEDITSECTION__', code=True)])
+            f.language('English', [entry])
+            result = audit.scan(f.root, f.query)
+            self.assertEqual('failed', result['status'])
+            self.assertEqual(1, len(result['issues']))
+            self.assertEqual(['source-markup', 'behavior-switch'], result['issues'][0]['categories'])
+            self.assertIn('{{stored}} __NOEDITSECTION__', result['issues'][0]['text'])
+
     def test_split_marker_in_supplemental_table(self):
         with Fixture() as f:
             entry = f.entry('Appendix:T', '', kind='supplemental')

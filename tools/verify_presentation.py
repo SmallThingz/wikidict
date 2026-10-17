@@ -43,7 +43,11 @@ def text_fields(value, path='entry'):
                 yield from text_fields(child, path + '.' + key)
     elif isinstance(value, list):
         if value and all(isinstance(span, dict) and 'text' in span and 'kind' in span for span in value):
-            yield path, ''.join(span['text'] + span.get('trail', '') for span in value)
+            # Separate semantic breaks without hiding their stored diagnostic text/trail.
+            yield path, ''.join(
+                ('\n' + span['text'] + span.get('trail', '') + '\n'
+                 if span['kind'] == 'line_break' else span['text'] + span.get('trail', ''))
+                for span in value)
             return
         for index, child in enumerate(value):
             yield from text_fields(child, f'{path}[{index}]')
