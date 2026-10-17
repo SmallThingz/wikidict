@@ -99,5 +99,62 @@ class LargeXzWaveTests(unittest.TestCase):
         self.assert_clean_parts()
 
 
+class SmallXzBatchCleanupTests(unittest.TestCase):
+    """Ordinary cleanup errors must retain every already-verified recovery copy."""
+
+    setUp = LargeXzWaveTests.setUp
+    assert_clean_parts = LargeXzWaveTests.assert_clean_parts
+
+    def fake_batch_xz(self, *, corrupt=None):
+        def invoke(argv, *, check):
+            self.assertTrue(check)
+            self.assertEqual(argv[:3], ['xz', '-0', '--threads=1'])
+            self.assertIn('--keep', argv)
+            self.assertEqual([Path(value) for value in argv[5:]], self.paths)
+            for path in self.paths:
+                target = Path(str(path) + '.xz')
+                with target.open('xb') as out:
+                    out.write(b'corrupt xz' if path == corrupt else
+                              lzma.compress(path.read_bytes(), preset=0))
+        return invoke
+
+    def test_later_raw_unlink_failure_retains_all_verified_recovery_copies(self):
+        real_unlink = Path.unlink
+        failed = False
+
+        def unlink(path, *args, **kwargs):
+            nonlocal failed
+            if path == self.paths[1] and not failed:
+                failed = True
+                raise PermissionError('injected later raw cleanup failure')
+            return real_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(compress_blobs.subprocess, 'run',
+                               side_effect=self.fake_batch_xz()), \
+             mock.patch.object(compress_blobs, 'verify_round_trip',
+                               wraps=compress_blobs.verify_round_trip) as verified, \
+             mock.patch.object(Path, 'unlink', autospec=True, side_effect=unlink):
+            with self.assertRaisesRegex(PermissionError, 'later raw cleanup failure'):
+                compress_blobs.compress_many(self.paths, 64 * 1024, workers=1)
+        self.assertTrue(failed)
+        self.assertEqual(verified.call_count, len(self.paths))
+        self.assertFalse(self.paths[0].exists())
+        for path in self.paths[1:]:
+            self.assertEqual(path.read_bytes(), self.sources[path])
+        for path, original in self.sources.items():
+            self.assertEqual(lzma.decompress(Path(str(path) + '.xz').read_bytes()), original)
+        self.assert_clean_parts()
+
+    def test_verification_failure_still_removes_new_outputs_and_keeps_all_raw(self):
+        with mock.patch.object(compress_blobs.subprocess, 'run',
+                               side_effect=self.fake_batch_xz(corrupt=self.paths[1])):
+            with self.assertRaises((lzma.LZMAError, EOFError)):
+                compress_blobs.compress_many(self.paths, 64 * 1024, workers=1)
+        for path, original in self.sources.items():
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(Path(str(path) + '.xz').exists())
+        self.assert_clean_parts()
+
+
 if __name__ == '__main__':
     unittest.main()

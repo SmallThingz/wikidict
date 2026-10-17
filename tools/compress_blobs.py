@@ -45,11 +45,12 @@ def _compress_batch(paths, block_size):
             target=Path(str(path)+'.xz')
             verify_round_trip(path,target)
             raw_bytes+=path.stat().st_size;compressed_bytes+=target.stat().st_size
-        for path in paths:path.unlink()
     except Exception:
         for path in paths:
             Path(str(path)+'.xz').unlink(missing_ok=True)
         raise
+    # Verified outputs are now the recovery copies; raw cleanup must not roll them back.
+    for path in paths:path.unlink()
     print(f'batch: {len(paths)} blobs; {raw_bytes} -> {compressed_bytes} bytes; {time.perf_counter()-started:.3f}s; verified',flush=True)
 
 def _compress_large_wave(paths, block_size):
