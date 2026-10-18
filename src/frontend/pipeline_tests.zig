@@ -176,3 +176,39 @@ test "compiler linked heading publication reaches reader and CLI without label o
         try std.testing.expectEqualStrings(target, span_json.get("target").?.string);
     }
 }
+
+test "language inventory rejects an incomplete build before output and preserves completed empty editions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const marker = try std.fs.path.join(a, &.{ root, ".incomplete" });
+    const manifest = try std.fs.path.join(a, &.{ root, enc.blob_catalog.manifest_filename });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = manifest, .data = enc.blob_catalog.manifest_header ++ "\n" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = marker, .data = "building" });
+    var json: std.Io.Writer.Allocating = .init(a);
+    defer json.deinit();
+    // Both catalogue and exact-title inventory must obey the same boundary as
+    // lookup. A valid partial/empty manifest is not a completed publication.
+    for ([_][]const u8{ "", "cat" }) |query| {
+        try std.testing.expectError(error.DictionaryBuildIncomplete, @import("languages.zig").write(std.testing.io, a, a, .{ .root = root, .query = query, .format = .json }, &json.writer));
+        try std.testing.expectEqual(@as(usize, 0), json.written().len);
+    }
+    try std.Io.Dir.cwd().deleteFile(std.testing.io, marker);
+    for ([_][]const u8{ "", "cat" }) |query| {
+        json.clearRetainingCapacity();
+        try @import("languages.zig").write(std.testing.io, a, a, .{ .root = root, .query = query, .format = .json }, &json.writer);
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, json.written(), .{});
+        defer parsed.deinit();
+        const value = parsed.value.object;
+        try std.testing.expectEqualStrings("dict.languages.v1", value.get("schema").?.string);
+        try std.testing.expectEqualStrings(if (query.len == 0) "catalog" else "entry", value.get("scope").?.string);
+        try std.testing.expectEqualStrings(query, value.get("query").?.string);
+        for ([_][]const u8{ "heading_count", "language_count", "translingual_count", "unverified_count" }) |name|
+            try std.testing.expectEqual(@as(i64, 0), value.get(name).?.integer);
+        try std.testing.expectEqual(@as(usize, 0), value.get("languages").?.array.items.len);
+        try std.testing.expectEqual(@as(usize, 0), value.get("accounting").?.array.items.len);
+    }
+}

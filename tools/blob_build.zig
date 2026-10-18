@@ -2257,7 +2257,8 @@ test "AN captured aliases and raw ms banner preserve all nine owners through rea
         var registry = try F.registry(a, reviewed);
         defer registry.deinit();
         // These exact globally conflicting/broader labels must never be reassigned.
-        try std.testing.expect(registry.resolve("Malayo") == null);
+        try std.testing.expectEqualStrings("mbp", registry.resolve("Malayo").?.code);
+        try std.testing.expect(registry.resolveTrusted("Malayo") == null);
         try std.testing.expectEqualStrings("nah", registry.resolve("Nāhuatl").?.code);
         try std.testing.expect(registry.resolveTrusted("Adioukrou") == null);
         const codes = languageCodes(&registry, &namespaces);
@@ -2284,12 +2285,13 @@ test "AN captured aliases and raw ms banner preserve all nine owners through rea
             try F.assertRecord(a, root, heading, title, if (reviewed) fixture.code else "", body);
         }
         try F.assertRecord(a, root, if (reviewed) registry.resolve("it").?.heading else "Unclassified", "ordinary-suffixless-it", if (reviewed) "it" else "", "ordinary-it");
-        try std.testing.expect(registry.resolve("Malayo") == null);
+        try std.testing.expectEqualStrings("mbp", registry.resolve("Malayo").?.code);
+        try std.testing.expect(registry.resolveTrusted("Malayo") == null);
         try std.testing.expectEqualStrings("nah", registry.resolve("Nāhuatl").?.code);
     }
 }
 
-test "AN scoped banner corroboration refuses wrong codes POS markers conflicting suffixes and mismatched suffixless declarations" {
+test "AN scoped banner preserves canonical mbp evidence and refuses unsupported conflicting declarations" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -2305,8 +2307,8 @@ test "AN scoped banner corroboration refuses wrong codes POS markers conflicting
     var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
     defer writer.deinit();
     writer.language_codes = codes;
-    const negatives = [_]struct { title: []const u8, raw: []const u8, expanded: []const u8 }{
-        .{ .title = "wrong-raw-code", .raw = "{{-mbp-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en malayo]]\n# [[negative-body|Retained negative body]]\n" },
+    const negatives = [_]struct { title: []const u8, raw: []const u8, expanded: []const u8, expected_code: []const u8 = "" }{
+        .{ .title = "canonical-mbp-raw-code", .expected_code = "mbp", .raw = "{{-mbp-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en malayo]]\n# [[negative-body|Retained negative body]]\n" },
         .{ .title = "pos-code", .raw = "{{-adj-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en malayo]]\n# [[negative-body|Retained negative body]]\n" },
         .{ .title = "wrong-ms-suffix", .raw = "{{-ms-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''English''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en malayo]]\n# [[negative-body|Retained negative body]]\n" },
         .{ .title = "wrong-ms-label", .raw = "{{-ms-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Polonés|Polonés]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en malayo]]\n# [[negative-body|Retained negative body]]\n" },
@@ -2316,10 +2318,27 @@ test "AN scoped banner corroboration refuses wrong codes POS markers conflicting
     for (negatives) |fixture| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, fixture.title, fixture.expanded, fixture.raw, null);
     const stats = try writer.finish(codes);
     try std.testing.expectEqual(@as(usize, negatives.len), stats.language_records);
-    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
-    try std.testing.expectEqual(@as(usize, negatives.len), stats.fallback_pages);
-    for (negatives) |fixture| try F.assertRecord(a, root, "Unclassified", fixture.title, "", "negative-body");
-    try std.testing.expect(registry.resolve("Malayo") == null);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, negatives.len - 1), stats.fallback_pages);
+    // Canonical Malayo is mbp, not an ambiguous ms alias. Its explicit raw
+    // -mbp- and linked rendered Malayo agree under the existing generic path;
+    // the contradictory suffix does not grant the AN-specific ms exception.
+    for (negatives) |fixture| {
+        const canonical_mbp = std.mem.eql(u8, fixture.expected_code, "mbp");
+        const heading = if (canonical_mbp) registry.resolve("mbp").?.heading else "Unclassified";
+        try F.assertRecord(a, root, heading, fixture.title, fixture.expected_code, "negative-body");
+        const other_heading = if (canonical_mbp) "Unclassified" else registry.resolve("mbp").?.heading;
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const other_path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(other_heading, &filename) });
+        var mapped = try mmapPath(std.testing.io, other_path);
+        defer mapped.deinit();
+        const other_blob = try encoder.blob_format.inspect(mapped.bytes);
+        var other_index = try other_blob.buildTrustedIndexAlloc(a);
+        defer other_index.deinit(a);
+        try std.testing.expect((try other_index.find(fixture.title)) == null);
+    }
+    try std.testing.expectEqualStrings("mbp", registry.resolve("Malayo").?.code);
+    try std.testing.expect(registry.resolveTrusted("Malayo") == null);
     try std.testing.expectEqualStrings("nah", registry.resolve("Nāhuatl").?.code);
 }
 
@@ -2369,7 +2388,8 @@ test "AN authored direct Catalan banner and French Franzes alias keep separate W
     try std.testing.expect(registry.resolve("Franzés") == null);
     try registry.addTsv("# local-alias\tfr\tFranzés\n");
     try std.testing.expectEqualStrings("fr", registry.resolve("Franzés").?.code);
-    try std.testing.expect(registry.resolve("Malayo") == null);
+    try std.testing.expectEqualStrings("mbp", registry.resolve("Malayo").?.code);
+    try std.testing.expect(registry.resolveTrusted("Malayo") == null);
     try std.testing.expectEqualStrings("nah", registry.resolve("Nāhuatl").?.code);
     const codes = languageCodes(&registry, &namespaces);
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/direct", .{tmp.sub_path});

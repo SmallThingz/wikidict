@@ -988,6 +988,12 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
                 const language = markers.codes.resolve(value) orelse return false;
                 if (markers.represented) |codes| {
                     for (codes) |code| if (std.mem.eql(u8, code, language.code)) return true;
+                    // The captured AN -ms- declaration has a canonical mbp
+                    // display-label collision. Only its exact reviewed banner
+                    // and independently registered ms suffix admit the raw code.
+                    if (std.mem.eql(u8, value, "ms")) for (markers.expanded_sections) |section| {
+                        if (corroboratedAnMalayMarker(markers.codes.*, .{ .heading = value, .source = "", .hyphen_marker = true }, section)) return true;
+                    };
                     return false;
                 }
                 return true;
@@ -1711,7 +1717,8 @@ fn processMain(
         if (resolved == null and raw_aligned) resolved = resolveSection(codes, raw_sections.items[index]);
         if (ang_continuation == null) if (resolved) |raw_language| if (boundaryLanguage(codes, section)) |rendered_language| {
             if (!std.mem.eql(u8, raw_language.code, rendered_language.code) and
-                !corroboratedEqualsDeclaration(codes, raw_sections.items[index], section, raw_language.code, rendered_language.code))
+                !corroboratedEqualsDeclaration(codes, raw_sections.items[index], section, raw_language.code, rendered_language.code) and
+                !(std.mem.eql(u8, raw_language.code, "ms") and corroboratedAnMalayMarker(codes, raw_sections.items[index], section)))
             {
                 resolved = null;
                 fallbacks.unresolved_language_heading = true;

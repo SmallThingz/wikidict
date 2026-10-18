@@ -6,6 +6,7 @@ const output = @import("output.zig");
 const args = @import("args.zig");
 const Item = struct { heading: []const u8, code: []const u8, classification: enum { language, translingual, unverified }, records: usize };
 pub fn write(io: std.Io, a: std.mem.Allocator, scratch: std.mem.Allocator, opts: args.Options, w: *std.Io.Writer) !void {
+    try @import("blob_files").requireComplete(io, scratch, opts.root);
     const path = try std.fs.path.join(a, &.{ opts.root, store.catalog.manifest_filename });
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(16 * 1024 * 1024));
     var it = try store.catalog.Iterator.init(bytes);
