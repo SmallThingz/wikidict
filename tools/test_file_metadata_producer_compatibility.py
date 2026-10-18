@@ -19,11 +19,15 @@ class NamespaceProducerCompatibilityTest(unittest.TestCase):
     def test_exact_historical_capture_and_union_preserve_original_provenance(self):
         for kind in ('capture', 'union'):
             manifest, current = self.authorities(kind)
-            original = copy.deepcopy(manifest)
-            with mock.patch.object(policy, '_source_hashes', return_value=dict(policy.CURRENT_SOURCE_HASHES)):
-                self.assertTrue(policy.matches(manifest, current, kind, '/unused'))
-            self.assertEqual(manifest, original)
-            self.assertNotEqual(manifest['generator_sha256'], current['generator_sha256'])
+            expected = {'azwiktionary', 'bclwiktionary', 'bewwiktionary', 'bgwiktionary', 'bjnwiktionary', 'bnwiktionary', 'cawiktionary', 'enwiktionary'}
+            self.assertEqual(set(policy.HISTORICAL_CAPTURE_EDITIONS), expected)
+            for wiki in sorted(expected if kind == 'capture' else {'enwiktionary'}):
+                manifest['wiki'] = wiki
+                original = copy.deepcopy(manifest)
+                with mock.patch.object(policy, '_source_hashes', return_value=dict(policy.CURRENT_SOURCE_HASHES)):
+                    self.assertTrue(policy.matches(manifest, current, kind, '/unused'), (kind, wiki))
+                self.assertEqual(manifest, original)
+                self.assertNotEqual(manifest['generator_sha256'], current['generator_sha256'])
 
     def test_historical_authority_and_current_patch_drift_refuse(self):
         for kind in ('capture', 'union'):
@@ -32,6 +36,10 @@ class NamespaceProducerCompatibilityTest(unittest.TestCase):
                 for key, bad in [('wiki', 'arwiktionary'), ('date', '20261002'), ('generator_sha256', '0' * 64)]:
                     changed = copy.deepcopy(manifest); changed[key] = bad
                     self.assertFalse(policy.matches(changed, current, kind, '/unused'))
+                for wiki in ('arwiktionary', 'zzwiktionary') + (('azwiktionary', 'bclwiktionary', 'bewwiktionary', 'bgwiktionary', 'bjnwiktionary', 'bnwiktionary', 'cawiktionary') if kind == 'union' else ()):
+                    changed = copy.deepcopy(manifest); changed['wiki'] = wiki
+                    self.assertFalse(policy.matches(changed, current, kind, '/unused'), (kind, wiki))
+                self.assertFalse(policy.matches(manifest, current, 'unknown', '/unused'))
                 changed = copy.deepcopy(current); changed['generator_sha256'] = '0' * 64
                 self.assertFalse(policy.matches(manifest, changed, kind, '/unused'))
             for name in policy.CURRENT_SOURCE_HASHES:
