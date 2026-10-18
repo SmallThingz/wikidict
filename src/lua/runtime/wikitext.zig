@@ -6656,7 +6656,7 @@ test "captured statistics aliases format all seven counters and preserve raw zer
     const args = try runtime.newTable();
     try args.rawSet(a, .{ .number = 1 }, .{ .string = "R" });
     try std.testing.expectEqualStrings("1234", try Expander.hostFrameParserFunction(&expander, a, "NUMBEROFFILES", args));
-    try std.testing.expect((try words.resolve("numberofarticles", .variable)) == null);
+    try std.testing.expect((words.resolve("numberofarticles", .variable)) == null);
     expander.provider.site_statistics_formatted = .{ "248", "0", "۱٬۲۳۴", "8.985", "651", "0", "1" };
     try std.testing.expectEqualStrings("۱٬۲۳۴|8.985|1234", try expander.expandFragment("Notice", "{{NUMBEROFFILES}}|{{NUMBEROFEDITS}}|{{NUMBEROFFILES:R}}", 1_670_803_200));
     expander.provider.site_statistics_formatted = null;

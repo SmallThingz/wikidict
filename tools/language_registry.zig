@@ -425,6 +425,16 @@ pub const Registry = struct {
             }
             if (line.len == 0) continue;
             if (line[0] == '#') {
+                const heading_marker = "# local-heading\t";
+                if (std.mem.eql(u8, line, "# local-heading")) return error.InvalidLanguageRegistry;
+                if (std.mem.startsWith(u8, line, heading_marker)) {
+                    var fields = std.mem.splitScalar(u8, line[heading_marker.len..], '\t');
+                    const code_value = fields.next() orelse return error.InvalidLanguageRegistry;
+                    const label = fields.next() orelse return error.InvalidLanguageRegistry;
+                    if (fields.next() != null or !validCode(code_value) or !self.codes.contains(code_value) or
+                        !validLocalHeading(label)) return error.InvalidLanguageRegistry;
+                    continue;
+                }
                 const local_marker = "# local-alias\t";
                 if (std.mem.eql(u8, line, "# local-alias")) return error.InvalidLanguageRegistry;
                 if (std.mem.startsWith(u8, line, local_marker)) {
@@ -476,6 +486,17 @@ pub const Registry = struct {
             const code_value = fields.next().?;
             const label = fields.next().?;
             try self.addLocalAlias(label, code_value);
+        }
+        // A reviewed heading can trust only an exact pre-existing unique label.
+        // Resolve after all ordinary rows, independently of directive placement.
+        var heading_lines = std.mem.splitScalar(u8, source, '\n');
+        while (heading_lines.next()) |line| {
+            const marker = "# local-heading\t";
+            if (!std.mem.startsWith(u8, line, marker)) continue;
+            var fields = std.mem.splitScalar(u8, line[marker.len..], '\t');
+            const code_value = fields.next().?;
+            const label = fields.next().?;
+            try self.trustLocalHeading(code_value, label);
         }
         // Curated ANG historical heading from the 20261001 archive: thirteen
         // uses "Níwe Englisc"; its language category describes Modern English,
@@ -543,6 +564,20 @@ pub const Registry = struct {
         }
         const owned = self.arena.allocator();
         try self.local_aliases.put(owned, try owned.dupe(u8, name), try owned.dupe(u8, code_value));
+    }
+
+    /// Curated edition-local evidence may promote an existing exact label,
+    /// never create an alias, change its owner or make unrelated ISO names trusted.
+    fn trustLocalHeading(self: *Registry, code_value: []const u8, label: []const u8) !void {
+        if (!validLocalHeading(label) or !self.codes.contains(code_value) or self.ambiguous.contains(label))
+            return error.InvalidLanguageRegistry;
+        const owner = self.names.get(label) orelse return error.InvalidLanguageRegistry;
+        if (!std.mem.eql(u8, owner, code_value)) return error.InvalidLanguageRegistry;
+        if (self.local_aliases.get(label)) |candidate| {
+            const local_code = candidate orelse return error.InvalidLanguageRegistry;
+            if (!std.mem.eql(u8, local_code, code_value)) return error.InvalidLanguageRegistry;
+        }
+        try self.trustAlias(label);
     }
 
     /// Read only the literal records in the two pinned language-data shapes.
@@ -731,6 +766,14 @@ pub const Registry = struct {
 
 const LocalName = struct { key: []const u8, value: []const u8 };
 const LuaLiteralField = struct { key: []const u8, value: *const lua_parser.Expr };
+
+fn validLocalHeading(value: []const u8) bool {
+    if (!validLocalLabel(value) or !std.unicode.utf8ValidateSlice(value) or
+        !std.mem.eql(u8, value, std.mem.trim(u8, value, " \t\r\n")) or
+        std.mem.indexOfAny(u8, value, "{}[]<>|=") != null) return false;
+    for (value) |ch| if (ch < 0x20 or ch == 0x7f) return false;
+    return true;
+}
 
 fn validLocalLabel(value: []const u8) bool {
     return value.len != 0 and std.mem.indexOfAny(u8, value, "\x00\n\r\t") == null;
@@ -1619,5 +1662,71 @@ test "curated ANG heading cannot replace or promote captured aliases" {
         defer identical.deinit();
         try identical.addTsv("# content-language\tang\nang\tÆnglisc\nen\tEnglish\n# local-alias\ten\t" ++ heading ++ "\n");
         try std.testing.expectEqualStrings("en", identical.resolveTrusted(heading).?.code);
+    }
+}
+
+test "reviewed local heading trusts only its existing exact registered owner" {
+    var r = Registry.empty(std.testing.allocator);
+    defer r.deinit();
+    try r.addTsv("# content-language\tam\n# mediawiki\nam\tአማርኛ\n# iso-639-3\nngh\tNǁng\tNǀuu\nen\tEnglish\tOrdinary alias\n");
+    try std.testing.expectEqualStrings("ngh", r.resolve("Nǁng").?.code);
+    try std.testing.expect(r.resolveTrusted("Nǁng") == null);
+    const name_count = r.names.count();
+    try r.addTsv("# local-heading\tngh\tNǁng\n# local-heading\tngh\tNǁng\n");
+    try std.testing.expectEqualStrings("ngh", r.resolveTrusted("Nǁng").?.code);
+    try std.testing.expectEqualStrings("Nǁng", r.resolveTrusted("Nǁng").?.heading);
+    try std.testing.expect(r.resolveStrong("Nǁng") == null);
+    try std.testing.expectEqual(name_count, r.names.count());
+    try std.testing.expect(r.resolveTrusted("Nǀuu") == null);
+    try std.testing.expect(r.resolveTrusted("English") == null);
+    try std.testing.expect(r.resolveTrusted("Ordinary alias") == null);
+    try r.addLocalAlias("Ordinary alias", "en");
+    try std.testing.expect(r.resolveTrusted("Ordinary alias") == null);
+    try r.addLocalAlias("New local alias", "en");
+    try std.testing.expectEqualStrings("en", r.resolveTrusted("New local alias").?.code);
+}
+
+test "reviewed local headings reject absent conflicted and malformed labels or codes" {
+    const rows = "# iso-639-3\nngh\tNǁng\tShared\tBad|label\tBad\x01label\t\xff\nen\tEnglish\tShared\teng\n";
+    for ([_][]const u8{
+        "# local-heading",                 "# local-heading\tngh",               "# local-heading\tngh\t",
+        "# local-heading\tunknown\tNǁng",
+        "# local-heading\ten\tNǁng",
+        "# local-heading\tngh\tAbsent",    "# local-heading\tngh\tShared",       "# local-heading\teng\tEnglish",
+        "# local-heading\tngh\tNǁng\textra",
+        "# local-heading\tngh\t Nǁng",
+        "# local-heading\tngh\tBad|label", "# local-heading\tngh\tBad\x01label", "# local-heading\tngh\t\xff",
+        "# local-heading\tngh\tNǁng\n# local-heading\ten\tNǁng",
+        "# local-alias\ten\tNǁng\n# local-heading\tngh\tNǁng",
+    }) |directive| {
+        var r = Registry.empty(std.testing.allocator);
+        defer r.deinit();
+        try r.addTsv(rows);
+        try std.testing.expectError(error.InvalidLanguageRegistry, r.addTsv(directive));
+    }
+    var local_only = Registry.empty(std.testing.allocator);
+    defer local_only.deinit();
+    try local_only.addTsv("ngh\tNǁng\n# local-alias\tngh\tNot captured\n");
+    try std.testing.expectError(error.InvalidLanguageRegistry, local_only.addTsv("# local-heading\tngh\tNot captured\n"));
+}
+
+test "reviewed local heading directives are independent of ordinary row order" {
+    const rows = "# iso-639-3\nngh\tNǁng\tNǀuu\nen\tEnglish\n";
+    const directive = "# local-heading\tngh\tNǁng\n";
+    for ([_]bool{ false, true }) |before| {
+        var r = Registry.empty(std.testing.allocator);
+        defer r.deinit();
+        try r.addTsv(if (before) directive ++ rows else rows ++ directive);
+        try std.testing.expectEqualStrings("ngh", r.resolveTrusted("Nǁng").?.code);
+        try std.testing.expect(r.resolveTrusted("Nǀuu") == null);
+        try std.testing.expect(r.resolveTrusted("English") == null);
+    }
+    // A same-text ordinary alias for another owner remains ambiguous, regardless of placement.
+    const ambiguous_rows = "# iso-639-3\nngh\tNǁng\tShared\nen\tEnglish\tShared\n";
+    const ambiguous_directive = "# local-heading\tngh\tShared\n";
+    for ([_]bool{ false, true }) |before| {
+        var r = Registry.empty(std.testing.allocator);
+        defer r.deinit();
+        try std.testing.expectError(error.InvalidLanguageRegistry, r.addTsv(if (before) ambiguous_directive ++ ambiguous_rows else ambiguous_rows ++ ambiguous_directive));
     }
 }

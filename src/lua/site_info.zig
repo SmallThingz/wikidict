@@ -292,8 +292,17 @@ test "formatted statistics bind captured raw values identity and exact locale st
     std.crypto.hash.sha2.Sha256.hash(site, &digest, .{});
     const digest_hex = std.fmt.bytesToHex(digest, .lower);
     const Row = struct { key: []const u8, raw: []const u8, formatted: []const u8 };
-    var proof = .{
-        .schema = @as([]const u8, "wikidict.site-statistics-format.v1"),
+    const Proof = struct {
+        schema: []const u8,
+        wiki: []const u8,
+        date: []const u8,
+        content_language: []const u8,
+        namespace_registry_sha256: []const u8,
+        site_info_sha256: []const u8,
+        values: [7]Row,
+    };
+    var proof: Proof = .{
+        .schema = "wikidict.site-statistics-format.v1",
         .wiki = @as([]const u8, "bclwiktionary"),
         .date = @as([]const u8, "20261001"),
         .content_language = @as([]const u8, "bcl"),

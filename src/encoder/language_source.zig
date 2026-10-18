@@ -379,12 +379,27 @@ const Balance = struct {
     }
 };
 
+/// An exact equals-style standalone declaration remains a boundary even
+/// when its language code has not been captured in the registry.
+pub fn equalsLanguageDeclaration(source: []const u8) ?[]const u8 {
+    const first = std.mem.trim(u8, source[0..(std.mem.indexOfScalar(u8, source, '\n') orelse source.len)], " \t\r");
+    if (!std.mem.startsWith(u8, first, "{{")) return null;
+    const body = std.mem.trimStart(u8, first[2..], " \t");
+    if (body.len == 0 or body[0] != '=') return null;
+    return parseStandaloneLanguageMarker(first);
+}
+
 fn parseStandaloneLanguageMarker(line: []const u8) ?[]const u8 {
     const trimmed = std.mem.trim(u8, line, " \t\r");
     if (trimmed.len < 7 or !std.mem.startsWith(u8, trimmed, "{{") or !std.mem.endsWith(u8, trimmed, "}}")) return null;
     const body = std.mem.trim(u8, trimmed[2 .. trimmed.len - 2], " \t");
-    if (body.len >= 3 and body[0] == '=' and body[body.len - 1] == '=') {
-        const code = std.mem.trim(u8, body[1 .. body.len - 1], " \t");
+    // Equals-language templates may take sort/display arguments. Only the
+    // first field declares the language; arguments never supply an owner.
+    const name = std.mem.trim(u8, body[0..(std.mem.indexOfScalar(u8, body, '|') orelse body.len)], " \t");
+    if (name.len >= 3 and name[0] == '=' and name[name.len - 1] == '=') {
+        const pair = syntax.balanced(trimmed, 0) orelse return null;
+        if (pair.end != trimmed.len) return null;
+        const code = std.mem.trim(u8, name[1 .. name.len - 1], " \t");
         if (validMarkerCode(code)) return code;
     }
     if (body.len >= 3 and body[0] == '-' and body[body.len - 1] == '-') {
@@ -947,4 +962,19 @@ test "balanced link heading admission is source-bound and conservative" {
         try std.testing.expectEqualStrings("English", it.next().?.heading);
         try std.testing.expect(it.next() == null);
     }
+}
+
+test "equals declarations preserve unknown boundaries without accepting hyphen or partial forms" {
+    try std.testing.expectEqualStrings("qmg", equalsLanguageDeclaration("{{=qmg=}}\n# body").?);
+    try std.testing.expectEqualStrings("nb", equalsLanguageDeclaration("  {{ = nb = }}\n# body").?);
+    for ([_][]const u8{ "{{-qmg-}}\n# body", "{{=qmg=}} trailing", "<nowiki>{{=qmg=}}</nowiki>", "{{=qmg|x=}}", "{{=x=}}", "==qmg==" }) |source|
+        try std.testing.expect(equalsLanguageDeclaration(source) == null);
+}
+
+test "equals language arguments never supply or change the declared code" {
+    try std.testing.expectEqualStrings("ett", equalsLanguageDeclaration("{{=ett=|𐌅𐌄𐌋𐌈𐌉𐌕𐌄}}\nbody").?);
+    try std.testing.expectEqualStrings("ett", equalsLanguageDeclaration("{{=ett=|{{sort|en}}|display=[[English]]}}\nbody").?);
+    try std.testing.expectEqualStrings("unknown", equalsLanguageDeclaration("{{=unknown=|ett}}\nbody").?);
+    for ([_][]const u8{ "{{=ett=|x}} trailing", "{{=ett=|{{broken}}", "{{=ett=|x}}{{=en=}}", "<nowiki>{{=ett=|en}}</nowiki>", "{{-ett-|en}}" }) |source|
+        try std.testing.expect(equalsLanguageDeclaration(source) == null);
 }

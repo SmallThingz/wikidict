@@ -3421,6 +3421,74 @@ pub const Renderer = struct {
         try self.protectedLiteral(exponent, power_style);
         return true;
     }
+    // Statistics/lexical examples need a product of ASCII variables, not a
+    // general TeX interpreter. A bare exponent consumes exactly one digit.
+    // Braces admit only a signed integer or a signed numerator/positive denominator.
+    fn monomialExponent(content: []const u8, cursor: *usize) ?[]const u8 {
+        var at = cursor.*;
+        if (at >= content.len) return null;
+        if (std.ascii.isDigit(content[at])) {
+            cursor.* = at + 1;
+            return content[at .. at + 1];
+        }
+        if (content[at] != '{') return null;
+        at += 1;
+        const start = at;
+        if (at < content.len and (content[at] == '+' or content[at] == '-')) at += 1;
+        const digits = at;
+        while (at < content.len and std.ascii.isDigit(content[at])) : (at += 1) {}
+        if (at == digits) return null;
+        if (at < content.len and content[at] == '/') {
+            at += 1;
+            const denominator = at;
+            var nonzero = false;
+            while (at < content.len and std.ascii.isDigit(content[at])) : (at += 1) {
+                nonzero = nonzero or content[at] != '0';
+            }
+            if (at == denominator or !nonzero) return null;
+        }
+        if (at >= content.len or content[at] != '}') return null;
+        cursor.* = at + 1;
+        return content[start..at];
+    }
+
+    fn monomial(self: *Renderer, content: []const u8, style: Style) Error!bool {
+        var coefficient_end: usize = 0;
+        if (content.len != 0 and (content[0] == '+' or content[0] == '-')) coefficient_end = 1;
+        const digits = coefficient_end;
+        while (coefficient_end < content.len and std.ascii.isDigit(content[coefficient_end])) : (coefficient_end += 1) {}
+        if (digits != 0 and coefficient_end == digits) return false;
+        var at = coefficient_end;
+        var terms: usize = 0;
+        while (at < content.len) {
+            if (!std.ascii.isAlphabetic(content[at])) return false;
+            at += 1;
+            terms += 1;
+            if (at < content.len and content[at] == '^') {
+                at += 1;
+                _ = monomialExponent(content, &at) orelse return false;
+            }
+        }
+        if (terms == 0) return false;
+
+        // Only after the entire monomial validates may any presentation be emitted.
+        if (coefficient_end != 0) try self.protectedLiteral(content[0..coefficient_end], style);
+        var variable_style = style;
+        variable_style.italic = true;
+        var power_style = style;
+        power_style.superscript = true;
+        at = coefficient_end;
+        while (at < content.len) {
+            try self.protectedLiteral(content[at .. at + 1], variable_style);
+            at += 1;
+            if (at < content.len and content[at] == '^') {
+                at += 1;
+                const exponent = monomialExponent(content, &at) orelse unreachable;
+                try self.protectedLiteral(exponent, power_style);
+            }
+        }
+        return true;
+    }
     // Sanitizer escapes unmatched registered extension openers before inline and
     // structural parsing. Matched scopes and nowiki remain opaque; allowed HTML
     // pre keeps its separate parsed whitespace/layout behavior.
@@ -3492,7 +3560,8 @@ pub const Renderer = struct {
             return tag.end;
         };
         const content = input[tag.end..pair.inner_end];
-        if (tag.is("math") and matched_pair != null and trim(tag.attrs).len == 0 and try self.numericPower(content, style)) return pair.end;
+        if (tag.is("math") and matched_pair != null and trim(tag.attrs).len == 0 and
+            (try self.numericPower(content, style) or try self.monomial(content, style))) return pair.end;
         if (tag.is("hiero") and matched_pair != null and trim(tag.attrs).len == 0) {
             if (try hieroglyphs.decodeAlloc(self.a, content)) |glyphs| {
                 var glyph_style = style;
@@ -19802,4 +19871,124 @@ test "external autonumber controls prepared source is idempotent without global 
     const spans = try r.parseSpans(twice.source, .{});
     try ExternalNumberingControls.action(spans, "https://example.test/one", "[1]");
     try ExternalNumberingControls.action(spans, "https://example.test/two", "[2]");
+}
+
+test "actual Afrikaans term monomials preserve variable and exponent semantics through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, first: []const u8, second: []const u8, visible: []const u8 }{
+        .{ .source = "-5x^2y^3", .first = "2", .second = "3", .visible = "-5x2y3 linked" },
+        .{ .source = "-5x^{-2}y^{3/2}", .first = "-2", .second = "3/2", .visible = "-5x-2y3/2 linked" },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(try std.fmt.allocPrint(a, "# <math>{s}</math> [[term|linked]]", .{case.source}));
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expect(!r.fallbacks.any());
+        const spans = blocks[0].spans;
+        try std.testing.expectEqualStrings(case.visible, try plainText(a, spans));
+        try std.testing.expectEqualStrings("-5", spans[0].text);
+        try std.testing.expect(!spans[0].flags.italic and !spans[0].flags.superscript and !spans[0].flags.code);
+        for ([_]usize{ 1, 3 }, [_][]const u8{ "x", "y" }) |index, variable| {
+            try std.testing.expectEqualStrings(variable, spans[index].text);
+            try std.testing.expect(spans[index].flags.italic and !spans[index].flags.superscript and !spans[index].flags.code);
+        }
+        for ([_]usize{ 2, 4 }, [_][]const u8{ case.first, case.second }) |index, exponent| {
+            try std.testing.expectEqualStrings(exponent, spans[index].text);
+            try std.testing.expect(!spans[index].flags.italic and spans[index].flags.superscript and !spans[index].flags.code);
+        }
+        const blob = @import("blob_encoder");
+        const Section = struct { level: u8 = 2, title: []const u8 = "Afrikaans", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "term", .language, .{ .code = "af", .heading = "Afrikaans" });
+        const restored = decoded.entry.sections[0].blocks[0].spans;
+        var visible: std.ArrayList(u8) = .empty;
+        var following_link = false;
+        for (restored) |span| {
+            try visible.appendSlice(a, span.text);
+            try std.testing.expect(!span.code);
+            if (std.mem.eql(u8, span.text, "x") or std.mem.eql(u8, span.text, "y")) {
+                try std.testing.expect(span.italic and !span.superscript);
+            } else if (std.mem.eql(u8, span.text, case.first) or std.mem.eql(u8, span.text, case.second)) {
+                try std.testing.expect(span.superscript and !span.italic);
+            }
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings("term", span.target);
+                try std.testing.expectEqualStrings("linked", span.text);
+                try std.testing.expect(!span.italic and !span.superscript);
+                following_link = true;
+            }
+        }
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        try std.testing.expect(following_link);
+    }
+}
+
+test "complete monomial grammar preserves one-token exponents without general TeX" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "x", .visible = "x" },
+        .{ .source = "2xy", .visible = "2xy" },
+        .{ .source = "+12ab^{+3}", .visible = "+12ab+3" },
+        .{ .source = "x^2y^0", .visible = "x2y0" },
+        .{ .source = "x^{-3/2}", .visible = "x-3/2" },
+        .{ .source = "x^{0/03}", .visible = "x0/03" },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(try std.fmt.allocPrint(a, "<math>{s}</math>", .{case.source}), .{});
+        try std.testing.expectEqualStrings(case.visible, try plainText(a, spans));
+        try std.testing.expect(!r.fallbacks.any());
+        for (spans) |span| try std.testing.expect(!span.flags.code);
+    }
+}
+
+test "malformed monomial tails remain wholly opaque and preserve following actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_][]const u8{
+        "-5x^2y^{3/2}+z", "-5x^{-2}y^{3/2}tail!", "x^12",             "x^10y^2",
+        "x^^2",           "x^",                   "x^-",              "x^{-}",
+        "x^{}",           "x^{3/0}",              "x^{3/00}",         "x^{3/-2}",
+        "x^{{2}}",        "x^{3/2",               "x^{3/2}}",         "x^{1+2}",
+        "x_{2}",          "x^2\\alpha",           "x^{\\frac{3}{2}}", "2.5x",
+        "-x",             " x^2 ",
+        "α^2",
+    };
+    for (cases) |source| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(try std.fmt.allocPrint(a, "<math>{s}</math> [[term|after]]", .{source}), .{});
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s} after", .{source}), try plainText(a, spans));
+        try std.testing.expect(r.fallbacks.unsupported_element and !r.fallbacks.unclosed_formatting);
+        var coded: std.ArrayList(u8) = .empty;
+        var linked = false;
+        for (spans) |span| {
+            if (span.flags.code) {
+                try coded.appendSlice(a, span.text);
+                try std.testing.expect(!span.flags.italic and !span.flags.superscript);
+                try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+            }
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings("term", span.target);
+                try std.testing.expectEqualStrings("after", span.text);
+                try std.testing.expect(!span.flags.code and !span.flags.italic and !span.flags.superscript);
+                linked = true;
+            }
+        }
+        try std.testing.expectEqualStrings(source, coded.items);
+        try std.testing.expect(linked);
+    }
+    var attrs: Renderer = .{ .a = a, .context = .{} };
+    _ = try attrs.parseSpans("<math display='block'>-5x^2y^3</math>", .{});
+    try std.testing.expect(attrs.fallbacks.unsupported_element);
+    var literal: Renderer = .{ .a = a, .context = .{} };
+    const literal_spans = try literal.parseSpans("<nowiki><math>-5x^2y^3</math></nowiki>", .{});
+    try std.testing.expectEqualStrings("<math>-5x^2y^3</math>", try plainText(a, literal_spans));
+    try std.testing.expect(!literal.fallbacks.any());
+    for (literal_spans) |span| try std.testing.expect(!span.flags.italic and !span.flags.superscript);
 }

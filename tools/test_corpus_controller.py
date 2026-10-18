@@ -821,6 +821,184 @@ class ControllerPreparationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):controller.load_preparations(current)
 
 
+    def registry_appends_context(self, root):
+        old = self.config(root / 'context')
+        original = dict(requested_editions=['enwiktionary', 'arwiktionary', 'afwiktionary', 'amwiktionary'],
+            files=[dict(wiki='arwiktionary', date='20261001', sha1='a' * 40)],
+            auxiliary_capture_roots={wiki: '/captures/' + wiki for wiki in
+                ('enwiktionary', 'arwiktionary', 'afwiktionary', 'amwiktionary')},
+            language_registries=[])
+        changes = []
+        for wiki, language, code, label in (
+                ('arwiktionary', 'ar', 'mul', 'متفق عليه دوليا'),
+                ('afwiktionary', 'af', 'zh', 'Sjinees'),
+                ('amwiktionary', 'am', 'am', 'አማርኛ የዕለት ቋንቋ')):
+            before = root / (wiki + '.original.tsv')
+            before.write_text('# wikidict-language-registry-v2\n# content-language\t' + language +
+                '\n' + code + '\tExisting name\n' + ('ngh\tN/u\n' if language == 'am' else ''))
+            after = root / (wiki + '.derived.tsv')
+            after.write_bytes(before.read_bytes() + ('# local-alias\t' + code + '\t' + label + '\n').encode())
+            change = dict(edition=wiki, original_registry=controller.descriptor(before),
+                derived_registry=controller.descriptor(after), aliases=[[code, label]])
+            if language == 'am':
+                change['local_headings'] = [['ngh', 'Nǁng']]
+                after.write_bytes(after.read_bytes() + '# local-heading\tngh\tNǁng\n'.encode())
+                change['derived_registry'] = controller.descriptor(after)
+            changes.append(change)
+            original['language_registries'].append(dict(wiki=wiki, date='20261001',
+                name='language-registry.tsv', content_language=language,
+                size=change['original_registry']['bytes'], sha256=change['original_registry']['sha256']))
+        path = Path(old['manifest']['path']); write_json(path, original)
+        old['manifest'] = controller.descriptor(path)
+        snapshot = root / 'manifest.snapshot.json'; snapshot.write_bytes(path.read_bytes())
+        updated = copy.deepcopy(original)
+        for row, change in zip(updated['language_registries'], changes):
+            row.update(size=change['derived_registry']['bytes'], sha256=change['derived_registry']['sha256'])
+        selected = root / 'manifest.selected.json'; write_json(selected, updated)
+        return old, dict(old, manifest=controller.descriptor(selected)), controller.descriptor(snapshot), changes
+
+    def test_registry_appends_preserve_eighteen_intervals_and_deduplicate_without_reuse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); old, current, snapshot, changes = self.registry_appends_context(root)
+            refs = []; immutable = []
+            for i in range(18):
+                receipt = self.preparation(root / str(i), old, 'append-' + str(i),
+                    outcome=['passed', 'failed', 'superseded'][i % 3], seconds=i + 1.25)
+                value = controller.read_ref(receipt)
+                immutable.extend((Path(value[key]['path']), Path(value[key]['path']).read_bytes())
+                                 for key in ('result', 'closure'))
+                refs.append(self.manifest_receipt(root / str(i), receipt, old, current, snapshot,
+                    dict(unrelated_registry_appends=changes)))
+            current['production_preparations'] = refs + refs
+            rows = controller.load_preparations(current)
+            self.assertEqual(18, len(rows))
+            self.assertAlmostEqual(175.5, sum(row['elapsed_seconds'] for row in rows))
+            self.assertTrue(all(row['manifest_transition']['runtime_reuse_credit'] is False for row in rows))
+            for path, raw in immutable: self.assertEqual(raw, path.read_bytes())
+
+    def test_registry_appends_keep_explicit_source_and_own_capture_root_carries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); old, current, snapshot, changes = self.registry_appends_context(root)
+            value = controller.read_ref(current['manifest'])
+            value['auxiliary_capture_roots']['enwiktionary'] = '/captures/new-en'
+            write_json(Path(current['manifest']['path']), value)
+            current['manifest'] = controller.descriptor(current['manifest']['path'])
+            source = root / 'new-source.json'; write_json(source, dict(new_source=True))
+            current['source'] = controller.descriptor(source)
+            receipt = self.preparation(root / 'prep', old, 'source', seconds=7)
+            receipt = self.transition_receipt(root / 'prep', receipt, old['source'], current['source'])
+            current['production_preparations'] = [self.manifest_receipt(root / 'prep', receipt, old,
+                current, snapshot, dict(unrelated_registry_appends=changes))]
+            self.assertEqual(7, controller.load_preparations(current)[0]['elapsed_seconds'])
+
+    def test_registry_appends_refuse_other_manifest_fields(self):
+        for kind in ('dump', 'other-root', 'row-name', 'reordered-rows', 'editions', 'extra'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); old, current, snapshot, changes = self.registry_appends_context(root)
+                value = controller.read_ref(current['manifest'])
+                if kind == 'dump': value['files'][0]['sha1'] = 'b' * 40
+                if kind == 'other-root': value['auxiliary_capture_roots']['arwiktionary'] = '/other'
+                if kind == 'row-name': value['language_registries'][0]['name'] = 'other.tsv'
+                if kind == 'reordered-rows': value['language_registries'].reverse()
+                if kind == 'editions': value['requested_editions'].append('dewiktionary')
+                if kind == 'extra': value['extra'] = True
+                write_json(Path(current['manifest']['path']), value)
+                current['manifest'] = controller.descriptor(current['manifest']['path'])
+                with self.assertRaises(ValueError):
+                    controller.validate_preparation_manifest_transition(current, old['manifest'],
+                        'enwiktionary', old['date'], dict(from_manifest=old['manifest'],
+                        to_manifest=current['manifest'], from_manifest_snapshot=snapshot,
+                        scope='retained-production-time-only', runtime_reuse_credit=False,
+                        reason='explicit', unrelated_registry_appends=changes))
+
+    def test_registry_appends_refuse_bad_proof_and_registry_bytes(self):
+        for kind in ('empty', 'duplicate-edition', 'duplicate-label', 'unknown-code', 'stale',
+                     'rewrite', 'extra-alias', 'mixed-proof', 'runtime-credit'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); old, current, snapshot, changes = self.registry_appends_context(root)
+                proof = dict(from_manifest=old['manifest'], to_manifest=current['manifest'],
+                    from_manifest_snapshot=snapshot, scope='retained-production-time-only',
+                    runtime_reuse_credit=False, reason='explicit', unrelated_registry_appends=changes)
+                if kind == 'empty': proof['unrelated_registry_appends'] = []
+                if kind == 'duplicate-edition': changes[1] = copy.deepcopy(changes[0])
+                if kind == 'duplicate-label': changes[0]['aliases'] *= 2
+                if kind == 'unknown-code': changes[0]['aliases'][0][0] = 'unknown'
+                if kind == 'mixed-proof': proof['unrelated_arabic_registry'] = {}
+                if kind == 'runtime-credit': proof['runtime_reuse_credit'] = True
+                if kind in ('stale', 'rewrite', 'extra-alias'):
+                    path = Path(changes[0]['derived_registry']['path'])
+                    data = path.read_bytes()
+                    if kind == 'stale': path.write_bytes(b'changed')
+                    else:
+                        data = (data.replace(b'Existing name', b'Rewritten') if kind == 'rewrite'
+                                else data + b'# local-alias\tmul\tUndeclared\n')
+                        path.write_bytes(data); changes[0]['derived_registry'] = controller.descriptor(path)
+                        value = controller.read_ref(current['manifest'])
+                        value['language_registries'][0].update(size=changes[0]['derived_registry']['bytes'],
+                            sha256=changes[0]['derived_registry']['sha256'])
+                        write_json(Path(current['manifest']['path']), value)
+                        current['manifest'] = controller.descriptor(current['manifest']['path'])
+                        proof['to_manifest'] = current['manifest']
+                with self.assertRaises(ValueError):
+                    controller.validate_preparation_manifest_transition(current, old['manifest'],
+                        'enwiktionary', old['date'], proof)
+
+    def test_registry_appends_never_relax_preparation_edition_context_or_closure(self):
+        for kind in ('same-edition', 'clock', 'source', 'unclosed'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); old, current, snapshot, changes = self.registry_appends_context(root)
+                receipt = self.preparation(root / 'prep', old, 'bad',
+                    edition='arwiktionary' if kind == 'same-edition' else 'enwiktionary',
+                    closure_changes={'cleanup_proven': False} if kind == 'unclosed' else None)
+                current['production_preparations'] = [self.manifest_receipt(root / 'prep', receipt,
+                    old, current, snapshot, dict(unrelated_registry_appends=changes))]
+                if kind == 'clock': current['now_unix'] += 1
+                if kind == 'source':
+                    source = root / 'other-source.json'; write_json(source, dict(other=True))
+                    current['source'] = controller.descriptor(source)
+                with self.assertRaises(ValueError): controller.load_preparations(current)
+
+    def test_registry_appends_refuse_identical_content_and_same_manifest_proofs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); old, current, snapshot, changes = self.registry_appends_context(root)
+            identical = root / 'same-content.json'
+            identical.write_bytes(Path(old['manifest']['path']).read_bytes())
+            current['manifest'] = controller.descriptor(identical)
+            proof = dict(from_manifest=old['manifest'], to_manifest=current['manifest'],
+                from_manifest_snapshot=snapshot, scope='retained-production-time-only',
+                runtime_reuse_credit=False, reason='explicit',
+                identical_manifest_content=True, unrelated_registry_appends=changes)
+            with self.assertRaises(ValueError):
+                controller.validate_preparation_manifest_transition(current, old['manifest'],
+                    'enwiktionary', old['date'], proof)
+            with self.assertRaises(ValueError):
+                controller.validate_preparation_manifest_transition(old, old['manifest'],
+                    'enwiktionary', old['date'], proof)
+
+
+
+    def test_registry_appends_local_heading_proof_does_not_grant_runtime_or_accept_unknown_codes(self):
+        for kind in ('valid', 'unknown-code', 'duplicate-label', 'missing-declaration', 'malformed-pair'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); old, current, snapshot, changes = self.registry_appends_context(root)
+                if kind == 'unknown-code': changes[2]['local_headings'][0][0] = 'unknown'
+                if kind == 'duplicate-label': changes[2]['local_headings'][0][1] = changes[2]['aliases'][0][1]
+                if kind == 'missing-declaration': changes[2].pop('local_headings')
+                if kind == 'malformed-pair': changes[2]['local_headings'] = [['ngh']]
+                proof = dict(from_manifest=old['manifest'], to_manifest=current['manifest'],
+                    from_manifest_snapshot=snapshot, scope='retained-production-time-only',
+                    runtime_reuse_credit=False, reason='explicit', unrelated_registry_appends=changes)
+                if kind == 'valid':
+                    self.assertIs(proof, controller.validate_preparation_manifest_transition(
+                        current, old['manifest'], 'enwiktionary', old['date'], proof))
+                    self.assertIs(proof['runtime_reuse_credit'], False)
+                else:
+                    with self.assertRaises(ValueError):
+                        controller.validate_preparation_manifest_transition(current, old['manifest'],
+                            'enwiktionary', old['date'], proof)
+
+
+
 class ControllerMemoryPolicyTests(unittest.TestCase):
     def cfg(self, root):
         return dict(armed=True, source={'head': 'a'*40, 'fingerprint': 'b'*64},

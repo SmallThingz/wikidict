@@ -189,7 +189,8 @@ pub fn install(io: std.Io, a: A, root: []const u8, input: []const u8, expected: 
         var record = try file.readAlloc(a, i);
         defer record.deinit();
         var decoded = @import("model.zig").fromRecord(a, view.wrapRecord(.{
-            .title = record.title, .payload = record.payload,
+            .title = record.title,
+            .payload = record.payload,
         })) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => return error.UncompiledDictionary,
@@ -343,24 +344,26 @@ test "installer fully rejects malformed nonalias presentation before replacing r
         const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, @tagName(kind) });
         const source = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/{s}.input", .{ tmp.sub_path, @tagName(kind) });
         const raw = try store.pathAlloc(fixture, root, kind, if (kind == .language) "English" else "");
-        const packed = try std.mem.concat(fixture, u8, &.{ raw, ".xz" });
+        const packed_path = try std.mem.concat(fixture, u8, &.{ raw, ".xz" });
         const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
         try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(raw).?);
         const good_payload = try enc.presentation_codec.encodeAlloc(fixture, .{ .entry = .{
-            .title = "cat", .kind = kind, .language = if (kind == .language) "English" else null,
+            .title = "cat",
+            .kind = kind,
+            .language = if (kind == .language) "English" else null,
             .language_code = if (kind == .language) "en" else "",
         } });
         const before = try installFixtureBlob(fixture, kind, good_payload);
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw, .data = before });
         // These prior transport bytes are opaque to the transaction: neither
         // existing variant may change when the incoming record is corrupt.
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = packed, .data = "prior xz transport bytes" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = packed_path, .data = "prior xz transport bytes" });
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "heading\nEnglish\n" });
         const broken = try installFixtureBlob(fixture, kind, "DPR2broken");
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = broken });
         try std.testing.expectError(error.UncompiledDictionary, install(io, a, root, source, "", &log.writer));
         try expectInstallBytes(io, a, raw, before);
-        try expectInstallBytes(io, a, packed, "prior xz transport bytes");
+        try expectInstallBytes(io, a, packed_path, "prior xz transport bytes");
         try expectInstallBytes(io, a, manifest, "heading\nEnglish\n");
         try expectNoInstallParts(io, root);
     }
@@ -375,7 +378,10 @@ test "installer rejects invalid catalogue before touching raw xz or a new destin
     defer tmp.cleanup();
     const enc = @import("blob_encoder");
     const payload = try enc.presentation_codec.encodeAlloc(fixture, .{ .entry = .{
-        .title = "cat", .kind = .language, .language = "English", .language_code = "en",
+        .title = "cat",
+        .kind = .language,
+        .language = "English",
+        .language_code = "en",
     } });
     const incoming = try installFixtureBlob(fixture, .language, payload);
     const source = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/incoming", .{tmp.sub_path});
@@ -385,19 +391,17 @@ test "installer rejects invalid catalogue before touching raw xz or a new destin
     for (0..4) |variant| {
         const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/case-{d}", .{ tmp.sub_path, variant });
         const raw = try store.pathAlloc(fixture, root, .language, "English");
-        const packed = try std.mem.concat(fixture, u8, &.{ raw, ".xz" });
+        const packed_path = try std.mem.concat(fixture, u8, &.{ raw, ".xz" });
         const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
         try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(raw).?);
         const had_raw = variant == 0 or variant == 2;
         const had_xz = variant == 1 or variant == 2;
         if (had_raw) try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw, .data = "original raw" });
-        if (had_xz) try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = packed, .data = "original xz" });
+        if (had_xz) try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = packed_path, .data = "original xz" });
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "bad\n" });
         try std.testing.expectError(error.InvalidManifest, install(io, a, root, source, "", &log.writer));
-        if (had_raw) try expectInstallBytes(io, a, raw, "original raw") else
-            try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, raw, .{}));
-        if (had_xz) try expectInstallBytes(io, a, packed, "original xz") else
-            try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, packed, .{}));
+        if (had_raw) try expectInstallBytes(io, a, raw, "original raw") else try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, raw, .{}));
+        if (had_xz) try expectInstallBytes(io, a, packed_path, "original xz") else try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, packed_path, .{}));
         try expectInstallBytes(io, a, manifest, "bad\n");
         try expectNoInstallParts(io, root);
     }
@@ -427,8 +431,13 @@ test "installer manifest publication failure restores replacement and removes ne
         }
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = temporary, .data = "replacement" });
         var transaction: InstallTransaction = .{
-            .io = io, .destination = destination, .obsolete = obsolete, .previous = previous,
-            .manifest = manifest, .manifest_part = missing_part, .previous_manifest = previous_manifest,
+            .io = io,
+            .destination = destination,
+            .obsolete = obsolete,
+            .previous = previous,
+            .manifest = manifest,
+            .manifest_part = missing_part,
+            .previous_manifest = previous_manifest,
         };
         // A missing staged manifest makes the actual final rename fail after
         // dictionary publication, without a production injection hook.
@@ -455,23 +464,28 @@ test "installer successful transaction retires opposite transport only after man
     defer tmp.cleanup();
     const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}", .{tmp.sub_path});
     const raw = try std.fs.path.join(fixture, &.{ root, "dictionary" });
-    const packed = try std.mem.concat(fixture, u8, &.{ raw, ".xz" });
+    const packed_path = try std.mem.concat(fixture, u8, &.{ raw, ".xz" });
     const temporary = try std.fs.path.join(fixture, &.{ root, ".install-input.part" });
     const previous = try std.mem.concat(fixture, u8, &.{ temporary, ".previous" });
     const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
     const part = try std.mem.concat(fixture, u8, &.{ temporary, ".manifest.part" });
     const prior_manifest = try std.mem.concat(fixture, u8, &.{ temporary, ".manifest.previous" });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw, .data = "old raw" });
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = packed, .data = "old xz" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = packed_path, .data = "old xz" });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = temporary, .data = "new xz" });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "heading\n" });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = part, .data = "heading\nEnglish\n" });
     var transaction: InstallTransaction = .{
-        .io = io, .destination = packed, .obsolete = raw, .previous = previous,
-        .manifest = manifest, .manifest_part = part, .previous_manifest = prior_manifest,
+        .io = io,
+        .destination = packed_path,
+        .obsolete = raw,
+        .previous = previous,
+        .manifest = manifest,
+        .manifest_part = part,
+        .previous_manifest = prior_manifest,
     };
     try transaction.commit(temporary);
-    try expectInstallBytes(io, a, packed, "new xz");
+    try expectInstallBytes(io, a, packed_path, "new xz");
     try expectInstallBytes(io, a, manifest, "heading\nEnglish\n");
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, raw, .{}));
     try expectNoInstallParts(io, root);
@@ -492,7 +506,11 @@ test "installer failed rollback retains the only recovery copy" {
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = child, .data = "unrelated existing path" });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = previous, .data = "only original dictionary" });
     var transaction: InstallTransaction = .{
-        .io = io, .destination = destination, .obsolete = "", .previous = previous, .had_destination = true,
+        .io = io,
+        .destination = destination,
+        .obsolete = "",
+        .previous = previous,
+        .had_destination = true,
     };
     try std.testing.expectError(error.InstallRollbackFailed, transaction.rollback());
     try expectInstallBytes(io, a, previous, "only original dictionary");
@@ -538,7 +556,10 @@ test "installer buffered confirmation failure reports committed filesystem state
     const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/library", .{tmp.sub_path});
     const source = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/incoming", .{tmp.sub_path});
     const payload = try @import("blob_encoder").presentation_codec.encodeAlloc(fixture, .{ .entry = .{
-        .title = "cat", .kind = .language, .language = "English", .language_code = "en",
+        .title = "cat",
+        .kind = .language,
+        .language = "English",
+        .language_code = "en",
     } });
     const incoming = try installFixtureBlob(fixture, .language, payload);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = incoming });

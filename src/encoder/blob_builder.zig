@@ -797,6 +797,8 @@ fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?Resol
 }
 
 fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source.Section) bool {
+    if (language_source.equalsLanguageDeclaration(section.source)) |code|
+        if (std.mem.eql(u8, code, section.heading)) return true;
     return declarationLabel(codes, section.heading) != null;
 }
 
@@ -926,7 +928,27 @@ fn appendClassifiedSection(a: std.mem.Allocator, codes: LanguageCodes, sections:
 const LanguageMarkers = struct {
     codes: *const LanguageCodes,
     represented: ?[]const []const u8 = null,
+    expanded_sections: []const language_source.Section = &.{},
 };
+
+// An unknown raw equals marker is a boundary only when actual expanded L2
+// independently repeats its code in a whole linked declaration. This does
+// not resolve the code or assign the linked target's language to that region.
+fn expandedEqualsDeclaration(section: language_source.Section, code: []const u8) bool {
+    const source = std.mem.trimStart(u8, section.source, " \t\r");
+    if (!std.mem.startsWith(u8, source, "==") or source.len < 3 or source[2] == '=') return false;
+    const heading = std.mem.trim(u8, section.heading, " \t\r\n");
+    if (!std.mem.startsWith(u8, heading, "[[") or !std.mem.endsWith(u8, heading, "]]")) return false;
+    const body = heading[2 .. heading.len - 2];
+    if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null) return false;
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return false;
+    if (std.mem.trim(u8, body[0..pipe], " \t").len == 0 or std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null) return false;
+    const label = std.mem.trim(u8, body[pipe + 1 ..], " \t");
+    if (label.len < code.len + 3 or label[label.len - 1] != ')') return false;
+    const open = label.len - code.len - 2;
+    return label[open] == '(' and open > 0 and std.ascii.isWhitespace(label[open - 1]) and
+        std.mem.eql(u8, label[open + 1 .. label.len - 1], code);
+}
 
 fn languageSections(source: []const u8, context: *const LanguageMarkers) language_source.Iterator {
     var iterator = language_source.Iterator.initWithMarkerFilter(source, .{
@@ -945,9 +967,10 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
         .accepts_equals = struct {
             fn accepts(raw: ?*const anyopaque, value: []const u8) bool {
                 const markers: *const LanguageMarkers = @ptrCast(@alignCast(raw.?));
-                // Equals-style declarations cannot be erased by their generic
-                // display target. Hyphen/POS markers keep represented filtering.
-                return markers.codes.resolve(value) != null;
+                if (markers.codes.resolve(value) != null) return true;
+                for (markers.expanded_sections) |section|
+                    if (expandedEqualsDeclaration(section, value)) return true;
+                return false;
             }
         }.accepts,
     });
@@ -1407,11 +1430,8 @@ fn groupIndex(groups: []PageLanguageGroup, language: ResolvedLanguage) ?usize {
 fn corroboratedEqualsDeclaration(codes: LanguageCodes, raw: language_source.Section, rendered: language_source.Section, raw_code: []const u8, rendered_code: []const u8) bool {
     const canonical = codes.resolve(raw_code) orelse return false;
     if (!std.mem.eql(u8, canonical.code, raw_code) or raw.hyphen_marker) return false;
-    const first_line = std.mem.trim(u8, raw.source[0..(std.mem.indexOfScalar(u8, raw.source, '\n') orelse raw.source.len)], " \t\r");
-    if (!std.mem.startsWith(u8, first_line, "{{") or !std.mem.endsWith(u8, first_line, "}}")) return false;
-    const marker_body = std.mem.trim(u8, first_line[2 .. first_line.len - 2], " \t");
-    if (marker_body.len < 3 or marker_body[0] != '=' or marker_body[marker_body.len - 1] != '=') return false;
-    if (!std.mem.eql(u8, std.mem.trim(u8, marker_body[1 .. marker_body.len - 1], " \t"), raw_code)) return false;
+    const declaration = language_source.equalsLanguageDeclaration(raw.source) orelse return false;
+    if (!std.mem.eql(u8, declaration, raw_code)) return false;
     const heading = std.mem.trim(u8, rendered.heading, " \t\r\n");
     if (!std.mem.startsWith(u8, heading, "[[") or !std.mem.endsWith(u8, heading, "]]")) return false;
     const body = heading[2 .. heading.len - 2];
@@ -1558,7 +1578,7 @@ fn processMain(
         // When every rendered boundary identifies a language, only its codes
         // may supply raw language boundaries. This follows the actual page,
         // without banning a code that another edition uses as a language.
-        const raw_markers: LanguageMarkers = .{ .codes = &codes, .represented = if (named_boundaries) represented.items else null };
+        const raw_markers: LanguageMarkers = .{ .codes = &codes, .represented = if (named_boundaries) represented.items else null, .expanded_sections = page_sections.items };
         var raw_it = languageSections(raw, &raw_markers);
         var raw_observation: presentation_document.PreObservation = .{ .scopes = &.{}, .unclosed_formatting = false };
         defer freePreObservation(page_allocator, raw_observation);
@@ -1674,6 +1694,15 @@ fn processMain(
             fallbacks.unresolved_language_heading = true;
             resolved = .{ .code = "", .heading = "Unclassified" };
         }
+
+        // Admitting an unknown equals marker established a boundary, not an
+        // owner. Its linked rendered target cannot lend a different language.
+        if (raw_aligned) if (language_source.equalsLanguageDeclaration(raw_sections.items[index].source)) |code| {
+            if (codes.resolve(code) == null) {
+                fallbacks.unresolved_language_heading = true;
+                resolved = .{ .code = "", .heading = "Unclassified" };
+            }
+        };
 
         if (resolved) |language| {
             const group_index = groupIndex(groups.items, language) orelse blk: {
@@ -5514,5 +5543,153 @@ test "Writer external link numbering precedes owner regrouping and resets per pa
             actions += 1;
         };
         try std.testing.expectEqual(case.targets.len, actions);
+    }
+}
+
+test "unknown equals declaration preserves adjacent Norwegian variant ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "nb", "Bokmal" }, .{ "nn", "Nynorsk" }, .{ "no", "Noors" } }) |row|
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]))
+                    return .{ .code = row[0], .heading = row[1] };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .resolve_fn = Local.resolve };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Captured AF ja uses these declarations and linked variant headings;
+    // qmg is intentionally absent from its captured language register.
+    const raw = "{{=nb=}}\n# BOKMAL_ONLY\n{{=qmg=}}\n# UNKNOWN_ONLY\n{{=nn=}}\n# NYNORSK_ONLY\n";
+    const expanded = "==[[Noors|Noors boekmaal (nb)]]==\n# BOKMAL_ONLY\n" ++
+        "==[[Middelsaksies|Middelsaksies (qmg)]]==\n# UNKNOWN_ONLY\n" ++
+        "==[[Noors|Nieu-Noors (nn)]]==\n# NYNORSK_ONLY\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ja", expanded, raw, null);
+    try std.testing.expectEqual(@as(usize, 3), (try writer.finish(codes)).language_records);
+    inline for (.{ .{ "Bokmal", "nb", "BOKMAL_ONLY" }, .{ "Nynorsk", "nn", "NYNORSK_ONLY" }, .{ "Unclassified", "", "UNKNOWN_ONLY" } }) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row[0]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("ja")).?;
+        const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualStrings(row[1], page.entry.language_code);
+        var text: std.ArrayList(u8) = .empty;
+        for (page.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
+            try text.appendSlice(a, span.text);
+        inline for (.{ "BOKMAL_ONLY", "NYNORSK_ONLY", "UNKNOWN_ONLY" }) |sentinel|
+            try std.testing.expectEqual(std.mem.eql(u8, sentinel, row[2]), std.mem.indexOf(u8, text.items, sentinel) != null);
+    }
+}
+
+test "undefined equals support does not erase registered neighboring owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "nl", "Nederlands" }, .{ "nn", "Nynorsk" }, .{ "no", "Noors" } }) |row|
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]))
+                    return .{ .code = row[0], .heading = row[1] };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .resolve_fn = Local.resolve };
+    // voetbalploeg rev193320 puts undefined {{=fm2=}} after its Dutch
+    // inflection and before pronunciation. No language declaration backs it.
+    const raw = "{{=nl=}}\n# DUTCH_ONLY\n{{=fm2=}}\n# SUPPORT_ONLY\n{{=nn=}}\n# NYNORSK_ONLY\n";
+    inline for (.{ "literal", "support" }) |mode| {
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, mode });
+        var writer = try Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        const middle = if (std.mem.eql(u8, mode, "literal")) "{{=fm2=}}\n" else "===Support===\n";
+        const expanded = "==[[Nederlands|Nederlands (nl)]]==\n# DUTCH_ONLY\n" ++ middle ++
+            "# SUPPORT_ONLY\n==[[Noors|Nieu-Noors (nn)]]==\n# NYNORSK_ONLY\n";
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "voetbalploeg", expanded, raw, null);
+        try std.testing.expectEqual(@as(usize, 2), (try writer.finish(codes)).language_records);
+        inline for (.{ .{ "Nederlands", "nl" }, .{ "Nynorsk", "nn" } }) |row| {
+            var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row[0]));
+            defer mapped.deinit();
+            const blob = try blob_format.inspect(mapped.bytes);
+            var index = try blob.buildTrustedIndexAlloc(a);
+            defer index.deinit(a);
+            const record = (try index.find("voetbalploeg")).?;
+            const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+            try std.testing.expectEqualStrings(row[1], page.entry.language_code);
+            var text: std.ArrayList(u8) = .empty;
+            for (page.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
+                try text.appendSlice(a, span.text);
+            const dutch = std.mem.eql(u8, row[1], "nl");
+            try std.testing.expectEqual(dutch, std.mem.indexOf(u8, text.items, "DUTCH_ONLY") != null);
+            try std.testing.expectEqual(dutch, std.mem.indexOf(u8, text.items, "SUPPORT_ONLY") != null);
+            try std.testing.expectEqual(!dutch, std.mem.indexOf(u8, text.items, "NYNORSK_ONLY") != null);
+        }
+    }
+}
+
+test "unknown equals boundaries require exact expanded linked L2 corroboration" {
+    const positive: language_source.Section = .{ .heading = "[[Middelsaksies|Middelsaksies (qmg)]]", .source = "==[[Middelsaksies|Middelsaksies (qmg)]]==\n# body" };
+    try std.testing.expect(expandedEqualsDeclaration(positive, "qmg"));
+    for ([_]language_source.Section{
+        .{ .heading = "[[Middelsaksies|Middelsaksies (qmg)]]", .source = "===[[Middelsaksies|Middelsaksies (qmg)]]===\n# body" },
+        .{ .heading = "[[Middelsaksies|Middelsaksies (gmh)]]", .source = "==heading==\n" },
+        .{ .heading = "[[Middelsaksies|Middelsaksies (qmg)]] trailing", .source = "==heading==\n" },
+        .{ .heading = "[[Middelsaksies|Middelsaksies (qmg)|extra]]", .source = "==heading==\n" },
+        .{ .heading = "Support", .source = "==Support==\n" },
+    }) |section| try std.testing.expect(!expandedEqualsDeclaration(section, "qmg"));
+}
+
+test "unknown equals declaration cannot borrow a registered rendered target owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "nb", "Bokmal" }, .{ "nn", "Nynorsk" }, .{ "no", "Noors" } }) |row|
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]))
+                    return .{ .code = row[0], .heading = row[1] };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .resolve_fn = Local.resolve };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Instantiated conflicting target: qmg is absent, but Noors is registered.
+    // Corroborated boundary syntax must never promote that target to owner.
+    const raw = "{{=nb=}}\n# BOKMAL_ONLY\n{{=qmg=}}\n# UNKNOWN_ONLY\n{{=nn=}}\n# NYNORSK_ONLY\n";
+    const expanded = "==[[Noors|Noors boekmaal (nb)]]==\n# BOKMAL_ONLY\n" ++
+        "==[[Noors|Different (qmg)]]==\n# UNKNOWN_ONLY\n" ++
+        "==[[Noors|Nieu-Noors (nn)]]==\n# NYNORSK_ONLY\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ja", expanded, raw, null);
+    try std.testing.expectEqual(@as(usize, 3), (try writer.finish(codes)).language_records);
+    inline for (.{ .{ "Bokmal", "nb", "BOKMAL_ONLY" }, .{ "Nynorsk", "nn", "NYNORSK_ONLY" }, .{ "Unclassified", "", "UNKNOWN_ONLY" } }) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row[0]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("ja")).?;
+        const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualStrings(row[1], page.entry.language_code);
+        var text: std.ArrayList(u8) = .empty;
+        for (page.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
+            try text.appendSlice(a, span.text);
+        inline for (.{ "BOKMAL_ONLY", "NYNORSK_ONLY", "UNKNOWN_ONLY" }) |sentinel|
+            try std.testing.expectEqual(std.mem.eql(u8, sentinel, row[2]), std.mem.indexOf(u8, text.items, sentinel) != null);
     }
 }

@@ -289,8 +289,8 @@ test "captured statistics require expanded snapshot and preserve alias sensitivi
     const row = "numberofarticles\t1\tКОЛИЧЕСТВО_СТАТЕЙ\n";
     var words = try Registry.init(a, parser_header ++ identity ++ row, "abwiktionary", "20261001", "ab");
     defer words.deinit();
-    try std.testing.expectEqualStrings("numberofarticles", (try words.resolve("КОЛИЧЕСТВО_СТАТЕЙ", .variable)).?);
-    try std.testing.expectEqualStrings("numberofarticles", (try words.resolve("КОЛИЧЕСТВО_СТАТЕЙ", .parser_function)).?);
-    try std.testing.expect((try words.resolve("количество_статей", .variable)) == null);
+    try std.testing.expectEqualStrings("numberofarticles", (words.resolve("КОЛИЧЕСТВО_СТАТЕЙ", .variable)).?);
+    try std.testing.expectEqualStrings("numberofarticles", (words.resolve("КОЛИЧЕСТВО_СТАТЕЙ", .parser_function)).?);
+    try std.testing.expect((words.resolve("количество_статей", .variable)) == null);
     try std.testing.expectError(error.InvalidMagicWordsSnapshot, Registry.init(a, header ++ identity ++ row, "abwiktionary", "20261001", "ab"));
 }

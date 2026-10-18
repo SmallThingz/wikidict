@@ -2087,3 +2087,111 @@ test "valid project namespace mainpage capture does not invalidate ordinary rout
     const pool: ExpansionPool = .{ .io = std.testing.io, .allocator = a, .completion = undefined, .slots = &.{}, .site_mainpage = site };
     try std.testing.expect((try siteTerminalPage(&pool, a, page)) == null);
 }
+
+test "reviewed exact local heading owns the captured Amharic language entry without global ISO trust" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tamwiktionary\n# dump-date\t20261001\n# content-language\tam\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tአብነት\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tመደብ\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    // Exact saved source page4837. The reviewed directive is explicit local
+    // policy backed by its language definition and category; no category inference runs here.
+    const source = "==Nǁng==\n===መንበብ===\n*[[IPA]]: [ᵑǁŋ]\n===ስም===\n#[[መሰል]] የ[[ደቡብ አፍሪካ]] [[ቋንቋ]]\n===ተመሳሳይ===\n*<small>(''[[casual]]'')</small> [[Nǀuu]]\n*[[Nǁŋ-ǂe]] (Nǁng people)\n[[መደብ:Nǁng]][[መደብ:Nǁng ስም]]";
+    for ([_]bool{ false, true }) |reviewed| {
+        var registry = language_registry.Registry.empty(a);
+        defer registry.deinit();
+        try registry.addTsv("# content-language\tam\n# mediawiki\nam\tአማርኛ\n# iso-639-3\nngh\tNǁng\tNǀuu\nen\tEnglish\n");
+        if (reviewed) try registry.addTsv("# local-heading\tngh\tNǁng\n");
+        try std.testing.expect(registry.resolveTrusted("English") == null);
+        try std.testing.expect(registry.resolveTrusted("Nǀuu") == null);
+        const codes = languageCodes(&registry, &namespaces);
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, if (reviewed) "reviewed" else "ordinary" });
+        var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Nǁng", source, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, if (reviewed) 0 else 1), stats.fallback_pages);
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(if (reviewed) "Nǁng" else "Unclassified", &filename) });
+        var mapped = try mmapPath(std.testing.io, path);
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(if (reviewed) "ngh" else "", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("Nǁng")).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(if (reviewed) "ngh" else "", decoded.entry.language_code);
+        var definitions: usize = 0;
+        var language_links: usize = 0;
+        var country_links: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| {
+            if (block.kind == .definition) definitions += 1;
+            for (block.spans) |span| {
+                if (span.kind != .link) continue;
+                if (std.mem.eql(u8, span.target, "ቋንቋ")) language_links += 1;
+                if (std.mem.eql(u8, span.target, "ደቡብ አፍሪካ")) country_links += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(@as(usize, 1), language_links);
+        try std.testing.expectEqual(@as(usize, 1), country_links);
+    }
+}
+
+test "AF parameterized Etruscan declaration keeps actual record with uncaptured local heading" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    // Captured rows: Etruskies deliberately absent, adj present as Adioukrou.
+    try registry.addTsv("# wikidict-language-registry-v2\n# content-language\taf\naf\tAfrikaans\taf\nett\tEtruscan\tett\nadj\tAdioukrou\tadj\nen\tEnglish\ten\n");
+    const codes = languageCodes(&registry, null);
+    const title = "𐌄𐌕𐌉𐌈𐌋𐌄𐌅";
+    // Original170B sourceSHA2e5b5faa7125fb036ff2d39d2cb9d5d8a11f676baefad96751c8f729dab071c7.
+    const body = "'''velθite''', wisselvorm van '''𐌉𐌕𐌄𐌈𐌋𐌄𐌅''' (velθeti), lokatief enkelvoud van  ☞ [[𐌀𐌈𐌋𐌄𐌅]].";
+    const original = "{{=ett=|𐌅𐌄𐌋𐌈𐌉𐌕𐌄}}\n" ++ body;
+    const nested = "{{=ett=|{{sort|en}}|display=[[English]]}}\n" ++ body;
+    const expanded = "==[[Etruskies|Etruskies (ett)]]==\n" ++ body;
+    inline for (.{ original, nested }) |raw| {
+        const suffix = if (std.mem.eql(u8, raw, original)) "original" else "nested";
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, suffix });
+        var writer = try encoder.blob_builder.Writer.init(io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, expanded, raw, null);
+        try std.testing.expectEqual(@as(usize, 1), (try writer.finish(codes)).language_records);
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename("Etruscan", &filename) }));
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings("ett", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(title)).?;
+        const page = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings("ett", page.entry.language_code);
+        var text: std.ArrayList(u8) = .empty;
+        var link_found = false;
+        for (page.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try text.appendSlice(a, span.text);
+            if (std.mem.eql(u8, span.target, "𐌀𐌈𐌋𐌄𐌅")) link_found = true;
+        };
+        try std.testing.expect(std.mem.indexOf(u8, text.items, "velθite") != null);
+        try std.testing.expect(std.mem.indexOf(u8, text.items, "lokatief enkelvoud") != null);
+        try std.testing.expect(link_found);
+    }
+}

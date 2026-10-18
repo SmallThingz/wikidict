@@ -135,6 +135,82 @@ def phase_end(log_path, edition, date):
     return found[0] if found else None
 
 
+
+def _validate_unrelated_registry_appends(before, after, edition, date, changes):
+    """Append proofs authenticate historical time only; no native reuse credit."""
+    require(date == '20261001' and isinstance(changes, list) and 0 < len(changes) <= 3,
+            'Registry append timing proof has invalid scope')
+    old_rows, new_rows = before.get('language_registries'), after.get('language_registries')
+    require(isinstance(old_rows, list) and isinstance(new_rows, list)
+            and len(old_rows) == len(new_rows)
+            and all(isinstance(row, dict) for row in old_rows + new_rows),
+            'Registry append inventory differs')
+    expected = dict(before, language_registries=list(old_rows))
+    seen = set()
+    for change in changes:
+        require(isinstance(change, dict)
+                and set(change) in ({'edition', 'original_registry', 'derived_registry', 'aliases'},
+                    {'edition', 'original_registry', 'derived_registry', 'aliases', 'local_headings'}),
+                'Registry append proof fields differ')
+        wiki = change['edition']
+        require(isinstance(wiki, str) and wiki not in seen and wiki != edition,
+                'Registry append timing cannot change the preparation edition or duplicate it')
+        seen.add(wiki)
+        selected = [i for i, row in enumerate(old_rows)
+                    if row.get('wiki') == wiki and row.get('date') == date]
+        require(len(selected) == 1, 'Exactly one selected registry row required')
+        index = selected[0]; row = old_rows[index]
+        refs = [change[key] for key in ('original_registry', 'derived_registry')]
+        data = []
+        for item in refs:
+            require(isinstance(item, dict) and set(item) == {'path', 'bytes', 'sha256'}
+                    and type(item['bytes']) is int and 0 < item['bytes'] <= 1024**2
+                    and descriptor(item['path']) == item, 'Registry append bytes differ')
+            raw = Path(item['path']).read_bytes()
+            require(len(raw) == item['bytes'] and hashlib.sha256(raw).hexdigest() == item['sha256'],
+                    'Registry append changed while reading')
+            data.append(raw)
+        original, derived = data
+        language = row.get('content_language')
+        require(row.get('name') == 'language-registry.tsv' and isinstance(language, str)
+                and original.startswith(b'# wikidict-language-registry-v2\n')
+                and ('# content-language\t' + language + '\n').encode() in original
+                and original.endswith(b'\n'), 'Registry append original identity differs')
+        codes = {line.split('\t', 1)[0] for line in original.decode('utf-8').splitlines()
+                 if line and not line.startswith('#')}
+        aliases = change['aliases']; headings = change.get('local_headings', [])
+        keys = set(); directives = []
+        require(isinstance(aliases, list) and isinstance(headings, list)
+                and 0 < len(aliases) + len(headings) <= 32,
+                'Registry append needs explicit finite directives')
+        for kind, pairs in (('local-alias', aliases), ('local-heading', headings)):
+            for pair in pairs:
+                require(isinstance(pair, list) and len(pair) == 2
+                        and all(isinstance(value, str) for value in pair),
+                        'Registry append directive fields differ')
+                code, label = pair; key = label.casefold()
+                require(code in codes and label and label == label.strip() and len(label) <= 1024
+                        and all(ord(ch) >= 32 and not 127 <= ord(ch) < 160 for ch in label)
+                        and key not in keys, 'Registry append directive code or label invalid')
+                keys.add(key)
+                directive = ('# ' + kind + '\t' + code + '\t' + label + '\n').encode('utf-8')
+                require(directive not in original, 'Registry append repeats an existing directive')
+                directives.append(directive)
+        require(derived == original + b''.join(directives),
+                'Registry append must preserve every original byte and only declared aliases')
+        require(all(row.get(key) == refs[0][field]
+                    for key, field in (('size', 'bytes'), ('sha256', 'sha256'))),
+                'Registry append original inventory does not match bytes')
+        expected['language_registries'][index] = dict(row, size=refs[1]['bytes'], sha256=refs[1]['sha256'])
+    old_roots, new_roots = before.get('auxiliary_capture_roots'), after.get('auxiliary_capture_roots')
+    require(isinstance(old_roots, dict) and isinstance(new_roots, dict)
+            and isinstance(old_roots.get(edition), str) and old_roots[edition]
+            and isinstance(new_roots.get(edition), str) and new_roots[edition],
+            'Registry append preparation capture roots missing')
+    expected['auxiliary_capture_roots'] = dict(old_roots)
+    expected['auxiliary_capture_roots'][edition] = new_roots[edition]
+    require(expected == after, 'Registry append changes other manifest fields')
+
 def validate_preparation_manifest_transition(cfg, manifest, edition, date, manifest_transition):
     """Authenticate only existing time-only input carries; no runtime eligibility."""
     if manifest != cfg['manifest']:
@@ -153,14 +229,19 @@ def validate_preparation_manifest_transition(cfg, manifest, edition, date, manif
         before, after = read_ref(snapshot), read_ref(cfg['manifest'])
         require(isinstance(before, dict) and isinstance(after, dict), 'Invalid transition manifests')
         registry_change = manifest_transition.get('unrelated_arabic_registry')
+        registry_appends = manifest_transition.get('unrelated_registry_appends')
+        require(registry_change is None or registry_appends is None,
+                'Registry timing proof variants cannot be mixed')
         if all(manifest[key] == cfg['manifest'][key] for key in ('bytes', 'sha256')):
             require(manifest_transition.get('identical_manifest_content') is True
-                    and registry_change is None and before == after,
+                    and registry_change is None and registry_appends is None and before == after,
                     'Manifest location carry needs explicit identical-content proof')
             return manifest_transition
         require(manifest_transition.get('identical_manifest_content') is None,
                 'Identical-content manifest carry cannot change bytes')
-        if registry_change is not None:
+        if registry_appends is not None:
+            _validate_unrelated_registry_appends(before, after, edition, date, registry_appends)
+        elif registry_change is not None:
             # Accounting only: a source-grounded Arabic TSV addition cannot
             # invalidate or grant runtime credit to another edition's work.
             require(edition != 'arwiktionary' and date == '20261001'
