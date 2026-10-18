@@ -3502,9 +3502,9 @@ pub const Renderer = struct {
         fn space(p: *@This()) void {
             while (p.at < p.input.len and std.ascii.isWhitespace(p.input[p.at])) : (p.at += 1) {}
         }
-        fn put(p: *@This(), text: []const u8, italic: bool, script: InlineMathScript) Error!bool {
+        fn put(p: *@This(), token_text: []const u8, italic: bool, script: InlineMathScript) Error!bool {
             if (p.tokens.items.len >= 1024) return false;
-            try p.tokens.append(p.a, .{ .text = text, .italic = italic, .script = script });
+            try p.tokens.append(p.a, .{ .text = token_text, .italic = italic, .script = script });
             return true;
         }
         fn name(p: *@This()) []const u8 {
