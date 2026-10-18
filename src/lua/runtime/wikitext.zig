@@ -6992,8 +6992,8 @@ test "captured Arabic pagename self loop preserves magic distinction lazy fi def
 }
 
 const UsageRecoveryTest = struct {
-    fn lookup(_: ?*const anyopaque, name: []const u8) ?u32 {
-        return if (std.mem.eql(u8, name, "Module:usex")) 0 else null;
+    fn lookup(_: ?*const anyopaque, module_name: []const u8) ?u32 {
+        return if (std.mem.eql(u8, module_name, "Module:usex")) 0 else null;
     }
     fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
         return if (id == 0) "Module:usex" else null;

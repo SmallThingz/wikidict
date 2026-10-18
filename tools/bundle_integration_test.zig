@@ -2790,13 +2790,13 @@ fn abbreviationInteropProbe(h: *Harness, verifier: []const u8, bin: []const u8, 
     const root = try std.fs.path.join(h.a, &.{ dir, "abbreviation-interop" });
     const title = "Acupuncture abbreviation sample";
     const control = "Legacy format abbreviation control";
-    const source = "==English==\n===Abbreviations===\n[[Appendix:Glossary#derived terms|<abbr title=\"derived terms\">der.</abbr>]] <abbr class=\"etytree-unc\" title=\"uncertain\">?</abbr> [[Appendix:Glossary#learned borrowing|<abbr title=\"learned borrowing\">lbor.</abbr>]] <span class=\"gender\"><abbr title=\"feminine gender\">f</abbr></span> <span class=\"gender\"><abbr title=\"common gender\">c</abbr></span> <span class=\"gender\"><abbr title=\"masculine gender\">m</abbr></span> <span class=\"gender\"><abbr title=\"neuter gender\">n</abbr></span>\n";
+    const fixture_source = "==English==\n===Abbreviations===\n[[Appendix:Glossary#derived terms|<abbr title=\"derived terms\">der.</abbr>]] <abbr class=\"etytree-unc\" title=\"uncertain\">?</abbr> [[Appendix:Glossary#learned borrowing|<abbr title=\"learned borrowing\">lbor.</abbr>]] <span class=\"gender\"><abbr title=\"feminine gender\">f</abbr></span> <span class=\"gender\"><abbr title=\"common gender\">c</abbr></span> <span class=\"gender\"><abbr title=\"masculine gender\">m</abbr></span> <span class=\"gender\"><abbr title=\"neuter gender\">n</abbr></span>\n";
     const plain = "==English==\n===Noun===\n# Plain [[cat|control]].\n";
     var writer = try encoder.blob_builder.Writer.init(h.io, h.a, root);
     defer writer.deinit();
     const codes: encoder.blob_builder.LanguageCodes = .{ .get_fn = poemFixtureLanguage };
     writer.language_codes = codes;
-    try writer.addExpandedPage(h.a, .{ .id = 0, .kind = .language }, title, source, source, null);
+    try writer.addExpandedPage(h.a, .{ .id = 0, .kind = .language }, title, fixture_source, fixture_source, null);
     try writer.addExpandedPage(h.a, .{ .id = 0, .kind = .language }, control, plain, plain, null);
     _ = try writer.finish(codes);
     try std.Io.Dir.cwd().deleteFile(h.io, try std.fs.path.join(h.a, &.{ root, ".incomplete" }));

@@ -7203,11 +7203,14 @@ pub const Renderer = struct {
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
                 try self.flushWikiTableFostered(&fostered, &outside_source);
                 const header = line[0] == '!';
-                const separator = if (header) "!!" else "||";
                 var offset: usize = 1;
                 while (offset <= line.len) {
                     try self.finishCell(&cells, &cell_source, &current);
-                    const split_at = syntax.delimiter(line, separator, offset) orelse line.len;
+                    // MediaWiki accepts both separators on a header line; both keep header cells.
+                    const split_at = if (header)
+                        @min(syntax.delimiter(line, "!!", offset) orelse line.len, syntax.delimiter(line, "||", offset) orelse line.len)
+                    else
+                        syntax.delimiter(line, "||", offset) orelse line.len;
                     const content = try self.cellContent(line[offset..split_at]);
                     current = .{ .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan };
                     try cell_source.appendSlice(self.a, content.text);
@@ -20980,4 +20983,37 @@ test "unsupported hieroglyph attributes and codes retain protected source" {
     const literal = try protected.parseSpans("<nowiki><hiero link='true'>K3-N36</hiero></nowiki>", .{});
     try std.testing.expectEqualStrings("<hiero link='true'>K3-N36</hiero>", try plainText(a, literal));
     try std.testing.expect(!protected.fallbacks.unsupported_element);
+}
+
+test "wiki header rows accept both separators while preserving protected delimiters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    // Verbatim Sjabloon:nl-vervoeging page 27799 revision 171813 header row.
+    const blocks = try r.renderBody("{|\n! colspan=\"2\" bgcolor=\"#FFF0E0\"| Gebiedende wys || bgcolor=\"FFF0E0\"| Aanvoegende wys  !!colspan=\"3\" bgcolor=\"#FFFFE0\"| Onvoltooide deelwoord || colspan=\"3\" bgcolor=\"#FFFFE0\"| Voltooide deelwoord \n|-\n| [[sterven|sterf]] || [[sterven|sterve]] || stervend || gestorven\n|}\n");
+    const table = blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 4), table.rows[0].cells.len);
+    const labels = [_][]const u8{ "Gebiedende wys", "Aanvoegende wys", "Onvoltooide deelwoord", "Voltooide deelwoord" };
+    const widths = [_]u16{ 2, 1, 3, 3 };
+    for (table.rows[0].cells, labels, widths) |cell, label, width| {
+        try std.testing.expect(cell.header and cell.colspan == width and cell.rowspan == 1);
+        try std.testing.expectEqualStrings(label, std.mem.trim(u8, try flattened(a, cell.spans), " \t\r\n"));
+    }
+    try std.testing.expectEqual(@as(usize, 4), table.rows[1].cells.len);
+    var found_action = false;
+    for (table.rows[1].cells[0].spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "sterven") and std.mem.eql(u8, span.text, "sterf")) found_action = true;
+    }
+    try std.testing.expect(found_action);
+    const protected = try r.renderBody("{|\n! [[Target|A||B!!C]] || {{unknown|a||b!!c}} !! <nowiki>D||E!!F</nowiki>\n|-\n| alpha !! beta || omega\n|}\n");
+    const shielded = protected[0].table.?;
+    try std.testing.expectEqual(@as(usize, 3), shielded.rows[0].cells.len);
+    for (shielded.rows[0].cells) |cell| try std.testing.expect(cell.header);
+    try std.testing.expectEqualStrings("A||B!!C", std.mem.trim(u8, try flattened(a, shielded.rows[0].cells[0].spans), " \t\r\n"));
+    try std.testing.expectEqualStrings("D||E!!F", std.mem.trim(u8, try flattened(a, shielded.rows[0].cells[2].spans), " \t\r\n"));
+    try std.testing.expectEqual(@as(usize, 2), shielded.rows[1].cells.len);
+    try std.testing.expect(!shielded.rows[1].cells[0].header);
+    try std.testing.expectEqualStrings("alpha !! beta", std.mem.trim(u8, try flattened(a, shielded.rows[1].cells[0].spans), " \t\r\n"));
 }

@@ -636,7 +636,7 @@ fn resolveAnBannerHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLang
     return language;
 }
 
-// These four complete AN banners are independently captured declarations.
+// These thirteen complete AN banners are independently captured declarations.
 // Their local names are not necessarily registry aliases; the aligned raw
 // hyphen code and exact banner together supply the canonical identity. POS
 // abbreviations, arbitrary banners and another edition cannot borrow it.
@@ -645,15 +645,24 @@ fn corroboratedAnHyphenMarker(codes: LanguageCodes, raw: language_source.Section
     const declaration = anBannerDeclaration(codes, rendered.heading) orelse return false;
     const declared = codes.resolve(raw.heading) orelse return false;
     if (!std.mem.eql(u8, declared.code, raw.heading)) return false;
-    const rows = [_]struct { code: []const u8, label: []const u8, suffix: []const u8 }{
-        .{ .code = "pms", .label = "Piemontés", .suffix = "Piemontèis" },
-        .{ .code = "lad", .label = "Chodigoespañol", .suffix = "Djudeoespanyol" },
-        .{ .code = "fur", .label = "Friulán", .suffix = "Furlan" },
-        .{ .code = "ms", .label = "Malayo", .suffix = "Bahasa Melayu بهاس ملايو" },
+    const rows = [_]struct { code: []const u8, target: []const u8, label: []const u8, suffix: []const u8 }{
+        .{ .code = "pms", .target = "Piemontés", .label = "Piemontés", .suffix = "Piemontèis" },
+        .{ .code = "lad", .target = "Chodigoespañol", .label = "Chodigoespañol", .suffix = "Djudeoespanyol" },
+        .{ .code = "fur", .target = "Friulán", .label = "Friulán", .suffix = "Furlan" },
+        .{ .code = "ms", .target = "Malayo", .label = "Malayo", .suffix = "Bahasa Melayu بهاس ملايو" },
+        .{ .code = "zh", .target = "Chinés", .label = "Chinés", .suffix = "中文" },
+        .{ .code = "th", .target = "Tailandés", .label = "Tailandés", .suffix = "Tailandés" },
+        .{ .code = "bg", .target = "Bulgaro", .label = "Bulgaro", .suffix = "Български" },
+        .{ .code = "lt", .target = "Lituán", .label = "Lituán", .suffix = "Lietuvių kalba" },
+        .{ .code = "tk", .target = "Turquemán", .label = "Turquemán", .suffix = "Türkmençe" },
+        .{ .code = "mul", .target = "internacional", .label = "Internacional", .suffix = "" },
+        .{ .code = "haw", .target = "Hawayán", .label = "Hawayán", .suffix = "‘Ōlelo Hawai‘i" },
+        .{ .code = "rap", .target = "Rapanui", .label = "Rapa nui", .suffix = "Vananga Rapa Nui" },
+        .{ .code = "sw", .target = "Swahili", .label = "Swahili", .suffix = "Kiswahili" },
     };
     for (rows) |row| {
         if (std.mem.eql(u8, raw.heading, row.code) and
-            std.mem.eql(u8, declaration.target, row.label) and
+            std.mem.eql(u8, declaration.target, row.target) and
             std.mem.eql(u8, declaration.label, row.label) and
             std.mem.eql(u8, declaration.suffix, row.suffix)) return true;
     }
@@ -6266,7 +6275,7 @@ test "Arabic Norwegian declarations require exact variant and canonical authorit
         "<nowiki>[[في]] ال[[نرويجية]] ([[بوكمول]]):</nowiki>",
         "[[في]] ال[[نرويجية]] ([[بوكمول]]):\n",
     }) |bad| try std.testing.expect(resolveArabicNorwegianDeclaration(codes, bad) == null);
-    inline for (.{ ArabicNorwegianTest.Mode.missing_named, .wrong_named, .wrong_umbrella, .wrong_canonical }) |state| {
+    inline for ([_]ArabicNorwegianTest.Mode{ .missing_named, .wrong_named, .wrong_umbrella, .wrong_canonical }) |state| {
         const guarded = ArabicNorwegianTest.codes(&namespaces, &state);
         const heading = "[[في]] ال[[نرويجية]] ([[بوكمول]]):";
         try std.testing.expect(arabicNorwegianDeclaration(guarded, heading) != null);
@@ -6353,7 +6362,7 @@ test "Arabic Norwegian declarations isolate neighbors and missing variant author
     const a = arena.allocator();
     var namespaces = try @import("namespace_registry").Registry.init(a, ArabicNorwegianTest.namespace_tsv);
     defer namespaces.deinit();
-    inline for (.{ ArabicNorwegianTest.Mode.normal, .missing_named }) |state| {
+    inline for ([_]ArabicNorwegianTest.Mode{ .normal, .missing_named }) |state| {
         const codes = ArabicNorwegianTest.codes(&namespaces, &state);
         const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, @tagName(state) });
         var writer = try Writer.init(std.testing.io, a, root);
@@ -6411,23 +6420,30 @@ test "captured AN hyphen banners keep canonical owners despite local alias gaps"
             // Canonical current registry rows; intentionally omit the missing
             // local Piemontés/Chodigoespañol/Friulán aliases and retain the
             // Malayo display-name collision independently from canonical ms.
-            inline for (.{ .{ "pms", "Piedmontese" }, .{ "lad", "ladino" }, .{ "fur", "friulano" }, .{ "ms", "malayo" }, .{ "scn", "siciliano" }, .{ "an", "aragonés" }, .{ "fr", "francés" }, .{ "oc", "occitano" } }) |row|
+            inline for (.{ .{ "pms", "Piedmontese" }, .{ "lad", "ladino" }, .{ "fur", "friulano" }, .{ "ms", "malayo" }, .{ "scn", "siciliano" }, .{ "an", "aragonés" }, .{ "fr", "francés" }, .{ "oc", "occitano" }, .{ "zh", "chino" }, .{ "th", "tai" }, .{ "bg", "búlgaro" }, .{ "lt", "lituano" }, .{ "tk", "turcomano" }, .{ "mul", "Multiple languages" }, .{ "haw", "hawaiano" }, .{ "rap", "Rapanui" }, .{ "sw", "suajili" }, .{ "ca", "catalán" } }) |row|
                 if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1])) return .{ .code = row[0], .heading = row[1] };
             if (std.mem.eql(u8, value, "Malayo")) return .{ .code = "mbp", .heading = "Malayo" };
-            inline for (.{ .{ "Aragonés", "an", "aragonés" }, .{ "Francés", "fr", "francés" }, .{ "Franzés", "fr", "francés" }, .{ "Français", "fr", "francés" }, .{ "Occitán", "oc", "occitano" }, .{ "Occitan", "oc", "occitano" }, .{ "Secilián", "scn", "siciliano" }, .{ "secilián", "scn", "siciliano" }, .{ "Sicilianu", "scn", "siciliano" } }) |row|
+            inline for (.{ .{ "Aragonés", "an", "aragonés" }, .{ "Francés", "fr", "francés" }, .{ "Franzés", "fr", "francés" }, .{ "Français", "fr", "francés" }, .{ "Occitán", "oc", "occitano" }, .{ "Occitan", "oc", "occitano" }, .{ "Secilián", "scn", "siciliano" }, .{ "secilián", "scn", "siciliano" }, .{ "Sicilianu", "scn", "siciliano" }, .{ "Catalán", "ca", "catalán" } }) |row|
                 if (std.mem.eql(u8, value, row[0])) return .{ .code = row[1], .heading = row[2] };
             return null;
         }
     };
     const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve, .namespace_catalog = &namespaces };
     const banner_pms = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Piedmont.svg|40px]] '''''[[Wiktionary:Piemontés|Piemontés]]''''' <small>- ''Piemontèis''</small></div>";
-    const banner_scn = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag of Sicily.svg|40px]] '''''[[secilián|Secilián]]''''' <small>- ''Sicilianu''</small></div>";
     const banner_lad = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag of Thessaloniki.svg|40px]] '''''[[Wiktionary:Chodigoespañol|Chodigoespañol]]''''' <small>- ''Djudeoespanyol''</small></div>";
     const banner_fur = "<div id=\"toc\" class=\"toccolours\" >[[Image:Bandiere_dal_Friûl.svg|40px]] '''''[[Wiktionary:Friulán|Friulán]]''''' <small>- ''Furlan''</small></div>";
     const banner_ms = "<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>";
     const banner_an = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Aragon.svg|40px]] '''''[[Wiktionary:Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div>";
-    const banner_fr = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_France.svg|40px]] '''''[[Wiktionary:Franzés|Francés]]''''' <small>- ''Français''</small></div>";
-    for ([_]struct { code: []const u8, banner: []const u8 }{ .{ .code = "pms", .banner = banner_pms }, .{ .code = "lad", .banner = banner_lad }, .{ .code = "fur", .banner = banner_fur }, .{ .code = "ms", .banner = banner_ms } }) |row| {
+    const banner_zh = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_the People's Republic of China.svg|40px]] '''''[[Wiktionary:Chinés|Chinés]]''''' <small>- ''中文''</small></div>";
+    const banner_th = "<div id=\"toc\" class=\"toccolours\" > '''''[[Wiktionary:Tailandés|Tailandés]]''''' <small>- ''Tailandés''</small></div>";
+    const banner_bg = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Bulgaria.svg|40px]] '''''[[Wiktionary:Bulgaro|Bulgaro]]''''' <small>- ''Български''</small></div>";
+    const banner_lt = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Lithuania.svg|40px]] '''''[[Wiktionary:Lituán|Lituán]]''''' <small>- ''Lietuvių kalba''</small></div>";
+    const banner_tk = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Turkmenistan.svg|40px]] '''''[[Wiktionary:Turquemán|Turquemán]]''''' <small>- ''Türkmençe''</small></div>";
+    const banner_mul = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_the United Nations.svg|40px]] '''''[[internacional|Internacional]]''''' </div>";
+    const banner_haw = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Hawaii.svg|40px]] '''''[[Wiktionary:Hawayán|Hawayán]]''''' <small>- ''‘Ōlelo Hawai‘i''</small></div>";
+    const banner_rap = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Rapa_Nui,_Chile.svg|40px]] '''''[[Wiktionary:Rapanui|Rapa nui]]''''' <small>- ''Vananga Rapa Nui''</small></div>";
+    const banner_sw = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Kenya.svg|40px]] '''''[[Wiktionary:Swahili|Swahili]]''''' <small>- ''Kiswahili''</small></div>";
+    for ([_]struct { code: []const u8, banner: []const u8 }{ .{ .code = "pms", .banner = banner_pms }, .{ .code = "lad", .banner = banner_lad }, .{ .code = "fur", .banner = banner_fur }, .{ .code = "ms", .banner = banner_ms }, .{ .code = "zh", .banner = banner_zh }, .{ .code = "th", .banner = banner_th }, .{ .code = "bg", .banner = banner_bg }, .{ .code = "lt", .banner = banner_lt }, .{ .code = "tk", .banner = banner_tk }, .{ .code = "mul", .banner = banner_mul }, .{ .code = "haw", .banner = banner_haw }, .{ .code = "rap", .banner = banner_rap }, .{ .code = "sw", .banner = banner_sw } }) |row| {
         const raw: language_source.Section = .{ .heading = row.code, .source = "", .hyphen_marker = true };
         try std.testing.expect(corroboratedAnHyphenMarker(codes, raw, .{ .heading = row.banner, .source = "" }));
         try std.testing.expect(!corroboratedAnHyphenMarker(codes, .{ .heading = "adj", .source = "", .hyphen_marker = true }, .{ .heading = row.banner, .source = "" }));
@@ -6447,9 +6463,16 @@ test "captured AN hyphen banners keep canonical owners despite local alias gaps"
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "an", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_France.svg|40px]] '''''[[Wiktionary:Franzés|Francés]]''''' <small>- ''Français''</small></div>=\n==Sustantivo==\n# [[año]], [[añada]]\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Bandiere_dal_Friûl.svg|40px]] '''''[[Wiktionary:Friulán|Friulán]]''''' <small>- ''Furlan''</small></div>=\n==Sustantivo==\n# [[año]], [[añada]]\n==Occitán==\n==Sustantivo==\n# [[año]], [[añada]]\n", "{{-fr-}}\n{{-noun-}}\n'''an'''\n# [[año]], [[añada]]\n\n{{-fur-}}\n{{-noun-}}\n'''an'''\n# [[año]], [[añada]]\n\n{{-oc-}}\n{{-noun-}}\n'''an'''\n# [[año]], [[añada]]", null);
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "جون", "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=\n==Sustantivo==\n# [[chunio]].\n", "{{-ms-}}\n{{Prenunziazión|/dʒun/}}\n{{Etimolochía|anglés|June}}\n{{grafíaalt|[[Jun]]}}\n{{-noun-}}[[Categoría:MS:Sustantibos]]\n'''جون'''\n# [[chunio]].\n\n==Se beigan también==\n* (''mes''): Dezaga: [[مي]]. Debant: [[جولاي]]", null);
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Jun", "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=\n==Sustantivo==\n# [[chunio]].\n", "{{-ms-}}\n{{Prenunziazión|/dʒun/}}\n{{Etimolochía|anglés|June}}\n{{grafíaalt|[[جون]]}}\n{{-noun-}}[[Categoría:MS:Sustantibos]]\n'''Jun'''\n# [[chunio]].\n\n==Se beigan también==\n* (''mes''): Dezaga: [[Mei]]. Debant: [[Julai]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "波蘭語", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_the People's Republic of China.svg|40px]] '''''[[Wiktionary:Chinés|Chinés]]''''' <small>- ''中文''</small></div>=\n==Sustantivo==\n# [[polonés]]\n", "{{-zh-}}\n\n{{-adj-}}[[Categoría:ZH:Adchectivos]]\n# [[polonés]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "รู้จักมักคุ้น", "=<div id=\"toc\" class=\"toccolours\" > '''''[[Wiktionary:Tailandés|Tailandés]]''''' <small>- ''Tailandés''</small></div>=\n==Sustantivo==\n# [[conocer]].\n", "{{-th-}}\n{{Prenunziazión|/rúː.tɕàk.mák.kʰún/}}\n{{-verb-}}\n#[[conocer]].\n\n[[categoría:TH:Berbos]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "играя", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Bulgaria.svg|40px]] '''''[[Wiktionary:Bulgaro|Bulgaro]]''''' <small>- ''Български''</small></div>=\n==Sustantivo==\n# [[chugar]]\n", "{{-bg-}}\n{{-verb-}}\n'''играя'''\n# [[chugar]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "šonkaulis", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Lithuania.svg|40px]] '''''[[Wiktionary:Lituán|Lituán]]''''' <small>- ''Lietuvių kalba''</small></div>=\n==Sustantivo==\n# [[costiella]]\n", "{{-lt-}}\n{{-noun-}}\n'''šonkaulis'''\n# [[costiella]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "bürgüt", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Turkmenistan.svg|40px]] '''''[[Wiktionary:Turquemán|Turquemán]]''''' <small>- ''Türkmençe''</small></div>=\n==Sustantivo==\n# [[alica]]\n", "{{-tk-}}\n{{Prenunziazión}}\n{{Etimolochía}}\n{{-noun-}}\n[[Categoría:TK:Sustantibos]]\n'''bürgüt'''\n# [[alica]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "☉", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_the United Nations.svg|40px]] '''''[[internacional|Internacional]]''''' </div>=\n==Sustantivo==\n# (astronomía, astrolochía) o [[sol|Sol]]\n# (alquimia) lo metal planetario [[oro]]\n", "{{-mul-}}\n[[Imachen:Sun symbol (fixed width).svg|80px|right|frameless|{{PAGENAME}}]]\n{{-symbol-}}\n# (astronomía, astrolochía) o [[sol|Sol]]\n# (alquimia) lo metal planetario [[oro]]\n\n===Eixemplos d'emplego===\n:[1]: [[L☉|''L''<sub>☉</sub>]], [[M☉|''M''<sub>☉</sub>]], [[R☉|''R''<sub>☉</sub>]]\n\n==Se veigan tamién==\n{{simbolos planetarios}}", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "au", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Aragon.svg|40px]] '''''[[Wiktionary:Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div>=\n==Sustantivo==\n# [[Animal]] bertebrato amniota.\n=Catalán=\n==Sustantivo==\n# [[au]].\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_France.svg|40px]] '''''[[Wiktionary:Franzés|Francés]]''''' <small>- ''Français''</small></div>=\n==Sustantivo==\n# Contrazión de ''à le'', [[ta|Ta]] [[lo|lo]].\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Hawaii.svg|40px]] '''''[[Wiktionary:Hawayán|Hawayán]]''''' <small>- ''‘Ōlelo Hawai‘i''</small></div>=\n==Sustantivo==\n# Pronombre presonal: [[yo]]\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Rapa_Nui,_Chile.svg|40px]] '''''[[Wiktionary:Rapanui|Rapa nui]]''''' <small>- ''Vananga Rapa Nui''</small></div>=\n==Sustantivo==\n# Pronombre presonal. [[yo]]\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Kenya.svg|40px]] '''''[[Wiktionary:Swahili|Swahili]]''''' <small>- ''Kiswahili''</small></div>=\n==Sustantivo==\n# [[ó]], [[u]]\n", "[[Image:Flying mallard duck - female.jpg|150px|right|thumb|Fembra d'[[anedo]] (un '''au''') aturando-se en l'[[augua]].]]\n{{-an-}}\n{{Prenunziazión|[ˈaw]}}\n{{Etimolochía|latín|avis}}\n\n{{-noun.fem-}}\n'''au'''\n\n1.[[Animal]] bertebrato amniota de [[sangre]] calient, con o cuerpo cobierto de [[pluma]]s, [[pipón]] sin de garra [[dient]] e las estremidaz anteriors con forma d'[[ala]]s.\n{{inflect.sust.fem|ab|ab|a}}\n*'''<u>Forma castellanizata</u>''': '''abe''' (''pl.'' '''abes''')\n*'''<u>Sinonimo parzial</u>''': '''[[paxaro]]''' ([[Project:Notazión de sinonimias dialeutals|OCC.]]), '''[[muixón]]''' ([[Project:Notazión de sinonimias dialeutals|SOB + RIB.]]).\n\n{{-interj-}}\n'''au'''\n\n2. Enfatiza ta que s'emprenzipie un mobimient.\n*''p.ex. <u>Au!</u> Marcha!''\n\n{{-trans-}}  \n:*{{ast}}: ''sust.'' {{trans|ast|ave|1}} ''f''\n:*{{ca}}: ''sust.'' {{trans|ca|au|1}} ''f''; ''interj.'' {{trans|ca|au|2}}\n:*{{de}}: ''sust.'' {{trans|de|Vogel|1}} ''n''; ''interj.'' {{trans|de|komm|2}}\n:*{{es}}: ''sust.'' {{trans|es|ave|1}} ''f''; ''interj.'' {{trans|es|venga|2}}\n:*{{en}}: ''sust.'' {{trans|en|bird|1}}; ''interj.'' {{trans|en|come on|2}}\n:*{{fr}}: ''sust.'' {{trans|fr|oiseau|1}}; ''interj.'' {{trans|fr|allez|2}}\n:*{{la}}: ''sust.'' {{trans|la|avis|1}}\n:*{{it}}: ''sust.'' {{trans|it|uccello|1}}; ''interj.'' {{trans|it|vieni|2}}\n:*{{oc}}: ''sust.'' {{trans|oc|aucèl|1}}; ''interj.'' {{trans|oc|au|2}}\n:*{{pl}}: ''sust.'' {{trans|pl|ptak|1}} ''m''\n:*{{pt}}: ''sust.'' {{trans|pt|ave|1}} ''f''; ''interj.'' {{trans|pt|vem|2}}\n:*{{scn}}: ''sust.'' {{trans|scn|auceddu|1}}; ''interj.'' {{trans|scn|veni|2}}\n|}\n\n==Se beiga tamién==\n\n*[[muixón]] ó [[muxón]]\n\n==Enrastres esternos==\n{{Wikipedia|Au|aus}}\n{{Wikispecies_line|Aves|Aves}}\n{{Commonscat|Aves|aus}}\n|\n\n{{-ca-}}\n{{Prenunziazión|[ˈaw]}}\n{{Etimolochía|latín|avis}}\n\n{{-noun.fem-}}[[categoría:CA:Sustantibos femenins]]\n'''au'''\n\n*'''<u>Chenero</u>:''' femenino\n*'''<u>Plural</u>:''' ''aus''\n\n#[[au]].\n\n*'''<u>Sinonimo parzial</u>''': '''[[ocell]]''', '''[[moixó]]''' (catalán d'Aragón).\n\n{{-trans-}} \n:*{{an}}: ''sust.'' [[au]]\n:*{{de}}: ''sust.'' {{trans|de|Vogel}} ''n''\n:*{{es}}: ''sust.'' {{trans|es|ave}} ''f''\n:*{{en}}: ''sust.'' {{trans|en|bird}}\n:*{{fr}}: ''sust.'' {{trans|fr|oiseau}}\n:*{{it}}: ''sust.'' {{trans|it|uccello}}\n:*{{la}}: ''sust.'' {{trans|la|avis}}\n:*{{oc}}: ''sust.'' {{trans|oc|aucèl}}\n:*{{pt}}: ''sust.'' {{trans|pt|ave}} ''f''\n:*{{scn}}: ''sust.'' {{trans|scn|auceddu}}\n|}\n\n{{-fr-}}\n{{Prenunziazión|[o]}}\n{{PrenAudio|Fr-au.ogg}} (Francia)\n\n{{-prep-}}[[categoría:FR:Preposizions]]\n'''au'''\n#Contrazión de ''à le'', [[ta|Ta]] [[lo|lo]] (ta'l, ta'o, t'o).\n*'''Exemplo:''' ''Je [[vais]] au [[marché]]''. \"Yo boi ta'l [[mercato]]\".\n\n#[[en|En]].\n*'''Exemplo:''' ''Ce train s’arrête au Mans''. \"Este tren s'atura en Mans\".\n\n{{-adverb-}}[[categoría:FR:Alberbios]]\n'''au'''\n#[[tan|Tan]].\n*'''Exemplo:''' ''Elle est au belle que sa mère''. \"Ela ye tan berroya como la suya maire\".\n\n{{-haw-}}\n{{-pron-}}[[categoría:HAW:Pronombres]]\n'''au'''\n#Pronombre presonal: [[yo]]\n\n{{-rap-}}\n{{-pron-}}[[categoría:RAP:Pronombres]]\n'''au'''\n#Pronombre presonal. [[yo]]\n\n{{-sw-}}\n{{-conj-}}[[categoría:SW:Conchunzions]]\n'''au'''\n#[[ó]], [[u]]", null);
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 9), stats.language_records);
-    try std.testing.expectEqual(@as(usize, 8), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 21), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 18), stats.language_blobs);
     const expected = [_]struct { title: []const u8, owner: []const u8, code: []const u8, own_heading: []const u8, forbidden: []const u8 }{
         .{ .title = "mùsica", .owner = "Piedmontese", .code = "pms", .own_heading = "Piemontés", .forbidden = "Secilián" },
         .{ .title = "mùsica", .owner = "siciliano", .code = "scn", .own_heading = "Secilián", .forbidden = "Piemontés" },
@@ -6460,6 +6483,18 @@ test "captured AN hyphen banners keep canonical owners despite local alias gaps"
         .{ .title = "an", .owner = "occitano", .code = "oc", .own_heading = "Occitán", .forbidden = "Friulán" },
         .{ .title = "جون", .owner = "malayo", .code = "ms", .own_heading = "Malayo", .forbidden = "Piemontés" },
         .{ .title = "Jun", .owner = "malayo", .code = "ms", .own_heading = "Malayo", .forbidden = "Friulán" },
+        .{ .title = "波蘭語", .owner = "chino", .code = "zh", .own_heading = "Chinés", .forbidden = "Aragonés" },
+        .{ .title = "รู้จักมักคุ้น", .owner = "tai", .code = "th", .own_heading = "Tailandés", .forbidden = "Aragonés" },
+        .{ .title = "играя", .owner = "búlgaro", .code = "bg", .own_heading = "Bulgaro", .forbidden = "Aragonés" },
+        .{ .title = "šonkaulis", .owner = "lituano", .code = "lt", .own_heading = "Lituán", .forbidden = "Aragonés" },
+        .{ .title = "bürgüt", .owner = "turcomano", .code = "tk", .own_heading = "Turquemán", .forbidden = "Aragonés" },
+        .{ .title = "☉", .owner = "Multiple languages", .code = "mul", .own_heading = "Internacional", .forbidden = "Aragonés" },
+        .{ .title = "au", .owner = "aragonés", .code = "an", .own_heading = "Aragonés", .forbidden = "Hawayán" },
+        .{ .title = "au", .owner = "catalán", .code = "ca", .own_heading = "Catalán", .forbidden = "Hawayán" },
+        .{ .title = "au", .owner = "francés", .code = "fr", .own_heading = "Francés", .forbidden = "Hawayán" },
+        .{ .title = "au", .owner = "hawaiano", .code = "haw", .own_heading = "Hawayán", .forbidden = "Swahili" },
+        .{ .title = "au", .owner = "Rapanui", .code = "rap", .own_heading = "Rapa nui", .forbidden = "Hawayán" },
+        .{ .title = "au", .owner = "suajili", .code = "sw", .own_heading = "Swahili", .forbidden = "Hawayán" },
     };
     for (expected) |row| {
         var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row.owner));
@@ -6478,13 +6513,28 @@ test "captured AN hyphen banners keep canonical owners despite local alias gaps"
             if (std.mem.indexOf(u8, section.title, row.own_heading) != null) own += 1;
             for (section.blocks) |block| {
                 if (block.kind == .definition or (block.kind == .paragraph and block.spans.len != 0 and std.mem.indexOf(u8, block.spans[0].text, "24 oras") != null)) definitions += 1;
-                for (block.spans) |span| if (span.kind == .link and (std.mem.eql(u8, span.target, "mosica") or std.mem.eql(u8, span.target, "año") or std.mem.eql(u8, span.target, "añada") or std.mem.eql(u8, span.target, "chunio"))) {
+                for (block.spans) |span| if (span.kind == .link and (std.mem.eql(u8, span.target, "mosica") or std.mem.eql(u8, span.target, "año") or std.mem.eql(u8, span.target, "añada") or std.mem.eql(u8, span.target, "chunio") or std.mem.eql(u8, span.target, "polonés") or std.mem.eql(u8, span.target, "conocer") or std.mem.eql(u8, span.target, "chugar") or std.mem.eql(u8, span.target, "costiella") or std.mem.eql(u8, span.target, "alica") or std.mem.eql(u8, span.target, "sol") or std.mem.eql(u8, span.target, "oro") or std.mem.eql(u8, span.target, "Animal") or std.mem.eql(u8, span.target, "au") or std.mem.eql(u8, span.target, "ta") or std.mem.eql(u8, span.target, "lo") or std.mem.eql(u8, span.target, "yo") or std.mem.eql(u8, span.target, "ó") or std.mem.eql(u8, span.target, "u"))) {
                     actions += 1;
                 };
             }
         }
         try std.testing.expectEqual(@as(usize, 1), own);
-        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, row.title, "☉")) 2 else 1), definitions);
+        if (std.mem.eql(u8, row.title, "au")) {
+            var own_targets: usize = 0;
+            for (decoded.entry.sections) |section| {
+                if (!std.mem.eql(u8, row.code, "haw")) try std.testing.expect(std.mem.indexOf(u8, section.title, "Hawayán") == null);
+                if (!std.mem.eql(u8, row.code, "rap")) try std.testing.expect(std.mem.indexOf(u8, section.title, "Rapa nui") == null);
+                if (!std.mem.eql(u8, row.code, "sw")) try std.testing.expect(std.mem.indexOf(u8, section.title, "Swahili") == null);
+                for (section.blocks) |block| for (block.spans) |span| {
+                    if (span.kind != .link) continue;
+                    if ((std.mem.eql(u8, row.code, "haw") or std.mem.eql(u8, row.code, "rap")) and std.mem.eql(u8, span.target, "yo")) own_targets += 1;
+                    if (std.mem.eql(u8, row.code, "sw") and (std.mem.eql(u8, span.target, "ó") or std.mem.eql(u8, span.target, "u"))) own_targets += 1;
+                };
+            }
+            if (std.mem.eql(u8, row.code, "haw") or std.mem.eql(u8, row.code, "rap")) try std.testing.expectEqual(@as(usize, 1), own_targets);
+            if (std.mem.eql(u8, row.code, "sw")) try std.testing.expectEqual(@as(usize, 2), own_targets);
+        }
         if (!std.mem.eql(u8, row.title, "diya")) try std.testing.expect(actions > 0);
     }
 }
