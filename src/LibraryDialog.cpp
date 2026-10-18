@@ -304,7 +304,8 @@ void LibraryDialog::refreshCatalogView() {
 }
 void LibraryDialog::chooseRoot() {
     const QString folder = QFileDialog::getExistingDirectory(this, QStringLiteral("Choose dictionary folder"), root_);
-    if (folder.isEmpty() || folder == root_) return;
+    // Accepting the current folder is an explicit reload after an external update.
+    if (folder.isEmpty()) return;
     root_ = folder;
     changed_ = true;
     rootLabel_->setText(root_);

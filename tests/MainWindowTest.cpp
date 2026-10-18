@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QFontMetricsF>
@@ -754,6 +755,69 @@ private slots:
         QStringList remainingHistory;
         for (const auto &entry : window.learning_.history()) remainingHistory.append(entry.key);
         QCOMPARE(remainingHistory, history);
+    }
+
+    void choosingSameFolderReloadsExternallyReplacedDictionary() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-same-folder-reload-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString base = QDir(directory.path()).absolutePath();
+        QVERIFY(prepareCaseTitleFixture(fixture_, base, {QStringLiteral("cat")}));
+        const QString root = base + QStringLiteral("/library");
+        const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        const bool nativeDisabled = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        auto restore = qScopeGuard([&] {
+            QSettings().setValue(QStringLiteral("library/catalogSources"), sources);
+            QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, nativeDisabled);
+        });
+        MainWindow window(root, QStringLiteral("cat")); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QVERIFY(!window.searchTitles_.contains(QStringLiteral("newterm")));
+        const unsigned serial = window.loadSerial_;
+        // The same ordinary installer transaction replaces bytes outside this window.
+        QVERIFY(prepareCaseTitleFixture(fixture_, base, {QStringLiteral("cat"), QStringLiteral("newterm")}));
+        bool selected = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *library = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(library && library->objectName() == QStringLiteral("libraryDialog"));
+            auto close = qScopeGuard([&] { library->done(QDialog::Rejected); });
+            auto *choose = library->findChild<QPushButton *>(QStringLiteral("chooseDictionaryFolder"));
+            QVERIFY(choose);
+            // A failed assertion in the callback must not strand the nested chooser.
+            QTimer chooserDeadline;
+            chooserDeadline.setSingleShot(true);
+            QObject::connect(&chooserDeadline, &QTimer::timeout, library, [library] {
+                for (auto *picker : library->findChildren<QFileDialog *>())
+                    if (picker->isVisible()) picker->reject();
+            });
+            chooserDeadline.start(2000);
+            auto stopDeadline = qScopeGuard([&] { chooserDeadline.stop(); });
+            QTimer::singleShot(0, library, [&] {
+                auto *picker = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
+                QVERIFY(picker);
+                picker->setDirectory(root);
+                picker->selectFile(root);
+                selected = QMetaObject::invokeMethod(picker, "accept", Qt::DirectConnection);
+            });
+            QTest::mouseClick(choose, Qt::LeftButton);
+            QVERIFY(selected);
+        });
+        window.chooseRoot();
+        QVERIFY(selected);
+        QVERIFY(window.loadSerial_ > serial);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QVERIFY(window.searchTitles_.contains(QStringLiteral("newterm")));
+        window.search_->setText(QStringLiteral("newterm"));
+        window.refreshSearch();
+        QCOMPARE(window.results_->count(), 1);
+        window.search_->setFocus();
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QTRY_COMPARE(title(window), QStringLiteral("newterm"));
+        QVERIFY(!window.currentEntry_.isEmpty());
+        QVERIFY(!window.reading_->toPlainText().isEmpty());
     }
 
     void unchangedLibraryClosePreservesDisplayedEntry() {
