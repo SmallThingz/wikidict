@@ -2138,6 +2138,10 @@ class PublicationResumeTests(unittest.TestCase):
                 complete = target/'complete.json'
                 metadata = json.loads(complete.read_text())
                 self.assertEqual(1, metadata['fallback_pages'])
+                # Successful publication retires the old workspace first.
+                self.assertFalse(workspace.exists())
+                workspace.mkdir()
+                sentinel=workspace/'sentinel';sentinel.write_bytes(b'owned recovery state after publication')
                 report = target/'fallback-pages.jsonl'
                 record = json.loads(report.read_text()); record['namespace'] = 0
                 report.write_text(json.dumps(record)+'\n')
@@ -2150,7 +2154,7 @@ class PublicationResumeTests(unittest.TestCase):
                         b.build([item], root, root/'output', 'zig', 1)
                     native.assert_not_called()
                 self.assertEqual(before, complete.read_bytes())
-                self.assertTrue((workspace/'sentinel').exists())
+                self.assertEqual(sentinel.read_bytes(),b'owned recovery state after publication')
 
     def prepare(self, root, publish=True):
         folder=root/'testwiktionary/20260901'
@@ -2394,11 +2398,15 @@ class VerifiedPublicationInventoryTests(unittest.TestCase):
     def assert_refused_preserved(self,item,target,workspace,staging,pattern=''):
         inventory=(staging/b.VERIFIED_INVENTORY_NAME).read_bytes() if (staging/b.VERIFIED_INVENTORY_NAME).exists() else None
         complete=(staging/'complete.json').read_bytes() if (staging/'complete.json').exists() else None
+        workspace_before={p.relative_to(workspace).as_posix():p.read_bytes() for p in workspace.rglob('*') if p.is_file()} if workspace.exists() else None
         with patch.object(b,'run_checked') as native:
             with self.assertRaisesRegex(ValueError,pattern):b.build_locked([item],staging.parents[2],staging.parents[1],'zig',1)
             native.assert_not_called()
         self.assertFalse(target.exists());self.assertTrue((staging/b.VERIFIED_MARKER).is_file())
-        self.assertTrue((workspace/'sentinel').is_file())
+        if workspace_before is None:self.assertFalse(workspace.exists())
+        else:
+            self.assertTrue(workspace.is_dir())
+            self.assertEqual({p.relative_to(workspace).as_posix():p.read_bytes() for p in workspace.rglob('*') if p.is_file()},workspace_before)
         self.assertEqual(inventory,(staging/b.VERIFIED_INVENTORY_NAME).read_bytes() if inventory is not None else None)
         self.assertEqual(complete,(staging/'complete.json').read_bytes() if complete is not None else None)
 
@@ -2563,6 +2571,99 @@ class ExpansionDeadlineTests(unittest.TestCase):
         for value in (0,-1,3600001,True,'600000'):
             with self.assertRaises(ValueError): b.expansion_deadline_args(value)
 
+
+
+class VerifiedResumeCleanupOrderTests(unittest.TestCase):
+    """Owned synthetic staging only; no native compilation or actual corpus input."""
+    prepare = PublicationResumeTests.prepare
+
+    def owned_inputs(self, root):
+        item,target,workspace=self.prepare(root,publish=False)
+        staging=target.with_name(item['date']+'.building')
+        raw=root/'raw-shards'/item['wiki']/(item['date']+'.raw-shards')
+        b.external_raw_shards(workspace,raw,create=True)
+        (workspace/'state.json').write_text(json.dumps({'raw_shards_path':str(raw)}))
+        shard=raw/'00000000';shard.mkdir()
+        (shard/'.verified').write_text('verified\n')
+        (shard/'supplemental.wikblb').write_bytes(b'WIKBLB08fixture')
+        return item,target,workspace,staging,raw
+
+    def files(self, root):
+        return {p.relative_to(root).as_posix():p.read_bytes() for p in root.rglob('*') if p.is_file()}
+
+    def test_verified_resume_cleanup_failure_retries_before_first_xz_without_page_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging,raw=self.owned_inputs(root)
+                before=self.files(root)
+                with patch.object(b,'cleanup_shard_workspace',side_effect=PermissionError('owned cleanup interrupted')), \
+                     patch.object(b,'compress_many',wraps=b.compress_many) as compression, \
+                     patch.object(b,'run_checked') as native:
+                    with self.assertRaisesRegex(PermissionError,'owned cleanup interrupted'):
+                        b.build_locked([item],root,root/'output','zig',1)
+                    compression.assert_not_called();native.assert_not_called()
+                self.assertEqual(self.files(root),before)
+                self.assertFalse(target.exists())
+                original=b.compress_many
+                def compress_after_cleanup(paths,*args,**kwargs):
+                    self.assertFalse(workspace.exists());self.assertFalse(raw.exists())
+                    self.assertTrue((staging/b.VERIFIED_MARKER).is_file())
+                    return original(paths,*args,**kwargs)
+                with patch.object(b,'compress_many',side_effect=compress_after_cleanup) as compression, \
+                     patch.object(b,'run_checked') as native:
+                    self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'resumed_publication')
+                    compression.assert_called_once();native.assert_not_called()
+                self.assertEqual(lzma.open(target/'supplemental.wikblb.xz').read(),b'WIKBLB08fixture')
+                self.assertFalse(staging.exists());self.assertFalse(workspace.exists());self.assertFalse(raw.exists())
+                self.assertEqual(b.publication_inventory(target),json.loads((target/'complete.json').read_text())['publication_files'])
+
+    def test_verified_resume_authenticates_identity_inventory_and_payloads_before_cleanup(self):
+        for changed in ('identity','missing_inventory','raw','compressed_twin'):
+            with self.subTest(changed=changed),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                with patch.object(b,'PROJECT',root):
+                    item,target,workspace,staging,raw=self.owned_inputs(root)
+                    if changed=='identity':
+                        path=staging/b.BUILD_IDENTITY_NAME;value=json.loads(path.read_text());value['source']='different-source';path.write_text(json.dumps(value))
+                    elif changed=='missing_inventory':(staging/b.VERIFIED_INVENTORY_NAME).unlink()
+                    elif changed=='raw':(staging/'supplemental.wikblb').write_bytes(b'WIKBLB08changed')
+                    else:(staging/'supplemental.wikblb.xz').write_bytes(lzma.compress(b'WIKBLB08changed'))
+                    before=self.files(root)
+                    with patch.object(b,'cleanup_shard_workspace',wraps=b.cleanup_shard_workspace) as cleanup, \
+                         patch.object(b,'compress_many') as compression,patch.object(b,'run_checked') as native:
+                        with self.assertRaises(ValueError):b.build_locked([item],root,root/'output','zig',1)
+                        cleanup.assert_not_called();compression.assert_not_called();native.assert_not_called()
+                    self.assertEqual(self.files(root),before)
+                    self.assertTrue(workspace.exists());self.assertTrue(raw.exists());self.assertFalse(target.exists())
+
+    def test_verified_resume_raw_xz_twins_keep_owner_guard_and_retire_shards_before_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging,raw=self.owned_inputs(root)
+                payload=(staging/'supplemental.wikblb').read_bytes()
+                (staging/'supplemental.wikblb.xz').write_bytes(lzma.compress(payload))
+                owner=raw/b.RAW_SHARD_OWNER;saved_owner=owner.read_bytes();value=json.loads(saved_owner)
+                value['workspace']=str(root/'different.shards');owner.write_text(json.dumps(value))
+                before=self.files(root)
+                with patch.object(b,'compress_many') as compression,patch.object(b,'run_checked') as native:
+                    with self.assertRaisesRegex(ValueError,'raw shard owner differs'):
+                        b.build_locked([item],root,root/'output','zig',1)
+                    compression.assert_not_called();native.assert_not_called()
+                self.assertEqual(self.files(root),before);self.assertFalse(target.exists())
+                owner.write_bytes(saved_owner)
+                original=b.verify_round_trip
+                def roundtrip_after_cleanup(path,compressed):
+                    self.assertFalse(workspace.exists());self.assertFalse(raw.exists())
+                    return original(path,compressed)
+                with patch.object(b,'verify_round_trip',side_effect=roundtrip_after_cleanup) as verified, \
+                     patch.object(b,'compress_many') as compression,patch.object(b,'run_checked') as native:
+                    self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'resumed_publication')
+                    verified.assert_called_once();compression.assert_not_called();native.assert_not_called()
+                self.assertFalse((target/'supplemental.wikblb').exists())
+                self.assertEqual(lzma.open(target/'supplemental.wikblb.xz').read(),payload)
+                self.assertFalse(workspace.exists());self.assertFalse(raw.exists())
 
 
 class ExternalRawShardTests(unittest.TestCase):

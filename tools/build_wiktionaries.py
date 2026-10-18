@@ -1997,6 +1997,10 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     for part in staging.rglob('*.xz.part'):
         unlink_artifact(part)
     sealed,checked_compressed=validate_verified_publication_inventory(staging)
+    if build_identity is not None:
+        # Only authenticated merged bytes may replace the owned shard recovery copies.
+        # Retire them before XZ, including a resume after earlier cleanup failed.
+        cleanup_shard_workspace(target.with_name(date+'.shards'))
     raw = sorted(staging.rglob('*.wikblb'))
     compressed = sorted(staging.rglob('*.wikblb.xz'))
     logical = {name for name in sealed if name.endswith('.wikblb')}
@@ -2133,7 +2137,6 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
                 raise ValueError('Verified staging uses a different or unrecorded build time')
             print(f'Resuming verified publication: {staging}', flush=True)
             publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace, site_info_snapshot=auxiliary_snapshots.get('site-info'))
-            cleanup_shard_workspace(target.with_name(date+'.shards'))
             return 'resumed_publication'
         print(f'Retrying incomplete build: {staging}', flush=True)
         remove_artifact_tree(staging)
