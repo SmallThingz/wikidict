@@ -16,6 +16,7 @@ import tarfile
 import tempfile
 
 import prepare_file_metadata_v2 as v2
+import file_metadata_producer_compatibility as producer_compatibility
 
 SCHEMA = 'wikidict.file-metadata-union.v1'
 MANIFEST, COMPLETE, EVIDENCE = v2.MANIFEST, v2.COMPLETE, v2.EVIDENCE
@@ -210,7 +211,7 @@ def read_manifest(root, require_complete=True):
     manifest = v2.decode(raw)
     require(isinstance(manifest, dict) and manifest.get('schema') == SCHEMA
             and manifest.get('header_version') == 2, 'Union schema mismatch')
-    require(all(manifest.get(k) == value for k, value in producer().items()), 'Union producer changed')
+    require(producer_compatibility.matches(manifest, producer(), 'union', v2.REPO), 'Union producer changed')
     require(manifest.get('dump_date') is None
             and manifest.get('temporal_scope') == 'current-api-observation'
             and manifest.get('source_url') == v2.wiktionary_api(manifest['wiki'])

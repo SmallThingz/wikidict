@@ -15,6 +15,7 @@ import urllib.parse
 
 sys.dont_write_bytecode = True
 import prepare_file_metadata as evidence
+import file_metadata_producer_compatibility as producer_compatibility
 
 SCHEMA = 'wikidict.file-metadata-capture.v2'
 HEADER = '# wikidict-file-metadata-v2'
@@ -284,7 +285,7 @@ def verify(root, require_complete=True):
     if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA
             or manifest.get('header_version') != 2 or marker != expected_marker):
         raise ValueError('File metadata completion/schema mismatch')
-    if any(manifest.get(key) != value for key, value in producer().items()):
+    if not producer_compatibility.matches(manifest, producer(), 'capture', evidence.REPO):
         raise ValueError('File metadata collector or dependency identity changed')
     if (manifest.get('dump_date') is not None or manifest.get('temporal_scope') != 'current-api-observation'
             or manifest.get('source_url') != wiktionary_api(manifest['wiki'])):
