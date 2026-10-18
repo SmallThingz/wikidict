@@ -123,7 +123,9 @@ private:
         return nullptr;
     }
 
-    static bool prepareCaseTitleFixture(const QString &fixtureRoot, const QString &directory, QStringList titles) {
+    static bool prepareCaseTitleFixture(const QString &fixtureRoot, const QString &directory, QStringList titles,
+                                        const QByteArray &code = QByteArrayLiteral("en"),
+                                        const QByteArray &heading = QByteArrayLiteral("English"), bool distinctBody = false) {
         QFile fixture(fixtureRoot + QStringLiteral("/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"));
         if (!fixture.open(QIODevice::ReadOnly)) return false;
         const QByteArray original = fixture.readAll();
@@ -141,12 +143,16 @@ private:
             if (!(byte & 128)) break;
         }
         if (length > quint64(original.size() - at)) return false;
-        const QByteArray record = original.mid(lengthStart, at - lengthStart + qsizetype(length));
+        QByteArray record = original.mid(lengthStart, at - lengthStart + qsizetype(length));
+        if (distinctBody) {
+            // Equal-length fixture text keeps the existing compiled record framing intact.
+            if (record.count("A small animal.") != 1) return false;
+            record.replace("A small animal.", "A river animal.");
+        }
         std::sort(titles.begin(), titles.end(), [](const QString &left, const QString &right) {
             return left.toUtf8() < right.toUtf8();
         });
-        QByteArray bytes = QByteArrayLiteral("WIKBLB08") + char(1) +
-            QByteArrayLiteral("en\0") + QByteArrayLiteral("English\0");
+        QByteArray bytes = QByteArrayLiteral("WIKBLB08") + char(1) + code + '\0' + heading + '\0';
         for (const QString &word : titles) bytes += word.toUtf8() + '\0' + record;
         const QString source = directory + QStringLiteral("/source.wikblb");
         QFile file(source);
@@ -1235,6 +1241,84 @@ private slots:
         QTest::keyClicks(window.search_, "PAGE");
         QTRY_COMPARE(window.results_->count(), 80);
         QCOMPARE(window.results_->item(0)->data(Qt::UserRole).toString(), QStringLiteral("page001"));
+    }
+
+    void explicitLanguageFragmentSelectsInstalledOwnerAndPreservesNavigation() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-language-fragments-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString word = QString::fromUtf8("κρώζω");
+        const QString modernOnly = QStringLiteral("modern-only");
+        QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(), {word, modernOnly},
+            QByteArrayLiteral("el"), QByteArrayLiteral("Greek")));
+        QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(), {word},
+            QByteArrayLiteral("grc"), QByteArrayLiteral("Ancient Greek"), true));
+        const QString root = directory.path() + QStringLiteral("/library");
+        QFile edition(root + QStringLiteral("/.desktop-edition"));
+        QVERIFY(edition.open(QIODevice::WriteOnly));
+        const QByteArray editionBytes = QByteArrayLiteral("enwiktionary-20261001\n");
+        QCOMPARE(edition.write(editionBytes), qint64(editionBytes.size()));
+        edition.close();
+        QSettings().setValue(QStringLiteral("reader/language"), QStringLiteral("Greek"));
+        MainWindow window(root, word); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), word);
+        QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        const QString originalRoot = window.originRoot_;
+        const QString originalEdition = window.originEdition_;
+        const QString greekKey = window.savedWord(window.currentEntry_).key;
+        const auto follow = [&](const QString &target) {
+            QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(word)).object();
+            QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+            QJsonArray preamble = entry.value(QStringLiteral("preamble_spans")).toArray();
+            preamble.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")},
+                {QStringLiteral("text"), QStringLiteral("Follow owner or section")}, {QStringLiteral("target"), target}});
+            entry.insert(QStringLiteral("preamble_spans"), preamble);
+            response.insert(QStringLiteral("entries"), QJsonArray{entry});
+            window.renderResponse(QJsonDocument(response).toJson(), false);
+            return clickAnchor(window.reading_, QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target)));
+        };
+        QVERIFY(follow(word + QStringLiteral("#Ancient_Greek")));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Ancient Greek"), 30000);
+        QTRY_COMPARE(title(window), word);
+        QCOMPARE(window.currentEntry_.value(QStringLiteral("language")).toString(), QStringLiteral("Ancient Greek"));
+        QCOMPARE(window.language_->currentText(), QStringLiteral("Ancient Greek"));
+        QCOMPARE(window.originRoot_, originalRoot);
+        QCOMPARE(window.originEdition_, originalEdition);
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A river animal.")));
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        QVERIFY(window.savedWord(window.currentEntry_).key != greekKey);
+        QVERIFY(window.back_->isEnabled());
+        QTest::mouseClick(window.back_, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Greek"), 30000);
+        QTRY_COMPARE(title(window), word);
+        QCOMPARE(window.savedWord(window.currentEntry_).key, greekKey);
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        QTest::mouseClick(window.forward_, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Ancient Greek"), 30000);
+        QTRY_COMPARE(title(window), word);
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A river animal.")));
+
+        const unsigned serial = window.loadSerial_;
+        QVERIFY(follow(word + QStringLiteral("#Etymology")));
+        QCOMPARE(window.loadSerial_, serial);
+        QCOMPARE(window.api_->language(), QStringLiteral("Ancient Greek"));
+        const int row = window.sections_->findText(QStringLiteral("Etymology"));
+        QVERIFY(row >= 0);
+        QVERIFY(!window.collapsedSections_.contains(window.sections_->itemData(row).toInt()));
+        QVERIFY(follow(word + QStringLiteral("#Missing_owner")));
+        QCOMPARE(window.loadSerial_, serial);
+        QCOMPARE(window.api_->language(), QStringLiteral("Ancient Greek"));
+        QTest::mouseClick(window.back_, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Greek"), 30000);
+        QTRY_COMPARE(title(window), word);
+        const int historyCount = window.learning_.history().size();
+        QVERIFY(follow(modernOnly + QStringLiteral("#Ancient_Greek")));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Ancient Greek"), 30000);
+        QVERIFY(window.currentEntry_.isEmpty());
+        QVERIFY(window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
+        QCOMPARE(window.search_->text(), modernOnly);
+        QCOMPARE(window.learning_.history().size(), historyCount);
     }
 
     void exactSearchPreservesExplicitSelection_data() {

@@ -57,7 +57,12 @@ if(BUILD_TESTING)
     set_tests_properties(native-reader-ux PROPERTIES
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DICT_TEST_ROOT=${CMAKE_SOURCE_DIR}/tests/fixtures")
+    add_executable(dict-fake-voice ../tests/FakeVoice.cpp)
+    target_compile_features(dict-fake-voice PRIVATE cxx_std_20)
+    set_target_properties(dict-fake-voice PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
     add_executable(dict-media-tests ../tests/MediaPanelTest.cpp MediaPanel.cpp)
+    add_dependencies(dict-media-tests dict-fake-voice)
+    target_compile_definitions(dict-media-tests PRIVATE DICT_FAKE_VOICE_PATH="$<TARGET_FILE:dict-fake-voice>")
     target_compile_features(dict-media-tests PRIVATE cxx_std_20)
     target_include_directories(dict-media-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(dict-media-tests PRIVATE Qt6::Widgets Qt6::Network Qt6::Multimedia Qt6::Test)

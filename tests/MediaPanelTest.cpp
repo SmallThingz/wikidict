@@ -409,7 +409,7 @@ private slots:
         QTemporaryDir directory(QStringLiteral(".tmp/media-voice-XXXXXX"));
         QVERIFY(directory.isValid());
         const QString executable = QFileInfo(directory.path()).absoluteFilePath() + QStringLiteral("/espeak-ng");
-        QVERIFY(QFile::link(QCoreApplication::applicationFilePath(), executable));
+        QVERIFY(QFile::link(QString::fromUtf8(DICT_FAKE_VOICE_PATH), executable));
         const QByteArray previousPath = qgetenv("PATH");
         const QString capture = QFileInfo(directory.path()).absoluteFilePath() + QStringLiteral("/spoken.txt");
         qputenv("PATH", QFileInfo(directory.path()).absoluteFilePath().toUtf8());
@@ -421,8 +421,7 @@ private slots:
         Network network;
         MediaPanel panel(nullptr, &network);
         panel.setEntry(entry());
-        // Voice discovery and playback each start this full test ELF under loader tracing.
-        // The correct finished state took 8.25 s in the single-CPU qualification.
+        // Keep voice discovery/playback independent of Qt and multimedia loader startup.
         panel.sayWord(QStringLiteral("-v de <literal>"), QStringLiteral("en"));
         QTRY_COMPARE_WITH_TIMEOUT(panel.findChild<QLabel *>(QStringLiteral("mediaSpeechStatus"))->text(), QStringLiteral("Finished."), 15000);
         QFile result(capture);
@@ -491,31 +490,6 @@ private slots:
 };
 
 int main(int argc, char **argv) {
-    const bool voiceFixture = (argc == 2 && QByteArray(argv[1]) == "--voices") ||
-        ((argc == 4 || (argc == 5 && QByteArray(argv[4]) == "-m")) && QByteArray(argv[1]) == "-v" && QByteArray(argv[3]) == "--stdin");
-    if (voiceFixture) {
-        // QProcess inherits these roots; verify them before the fixture touches any file.
-        const QString inheritedRoot = QString::fromUtf8(qgetenv("WIKIDICT_MEDIA_TEST_ROOT"));
-        if (inheritedRoot.isEmpty() || qgetenv("XDG_CACHE_HOME") != (inheritedRoot + QStringLiteral("/cache")).toUtf8() ||
-            qgetenv("XDG_CONFIG_HOME") != (inheritedRoot + QStringLiteral("/config")).toUtf8() ||
-            qgetenv("XDG_DATA_HOME") != (inheritedRoot + QStringLiteral("/data")).toUtf8()) return 2;
-        isolateSettings(inheritedRoot);
-    }
-    if (argc == 2 && QByteArray(argv[1]) == "--voices") {
-        std::fputs("Pty Language Age/Gender VoiceName File Other Languages\n 2 en-gb M English gmw/en\n 5 fr-fr M French roa/fr\n", stdout);
-        return 0;
-    }
-    if ((argc == 4 || (argc == 5 && QByteArray(argv[4]) == "-m")) && QByteArray(argv[1]) == "-v" && QByteArray(argv[3]) == "--stdin") {
-        QFile input;
-        if (!input.open(stdin, QIODevice::ReadOnly)) return 2;
-        const QByteArray words = input.readAll();
-        QFile output(QString::fromUtf8(qgetenv("WIKIDICT_TEST_SPEECH_CAPTURE")));
-        if (!output.open(QIODevice::WriteOnly)) return 2;
-        output.write(QByteArray(argv[2]) + '\n' + words);
-        output.close();
-        if (words.startsWith("hold")) QThread::msleep(1000);
-        return 0;
-    }
     QDir().mkpath(QStringLiteral(".tmp"));
     QTemporaryDir directory(QStringLiteral(".tmp/media-tests-XXXXXX"));
     if (!directory.isValid()) return 2;

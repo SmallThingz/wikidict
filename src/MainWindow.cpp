@@ -237,7 +237,7 @@ void MainWindow::openRoot(const QString &root, const QString &word) {
     loadDataset(root, QSettings().value(QStringLiteral("reader/language"), QStringLiteral("English")).toString(), QStringLiteral("language"), true, word);
 }
 
-void MainWindow::loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word, int restoreVisit, const QString &expectedRoot, const QString &expectedEdition) {
+void MainWindow::loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word, int restoreVisit, const QString &expectedRoot, const QString &expectedEdition, const std::optional<QString> &fragment) {
     if (cancelLoad_) cancelLoad_->store(true);
     const auto cancelled = std::make_shared<std::atomic_bool>(false);
     cancelLoad_ = cancelled;
@@ -247,11 +247,11 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
     setLoading(true);
     resultStatus_->setText(QStringLiteral("Opening dictionaries and preparing search..."));
     auto *watcher = new QFutureWatcher<std::shared_ptr<LoadedDataset>>(this);
-    connect(watcher, &QFutureWatcher<std::shared_ptr<LoadedDataset>>::finished, this, [this, watcher, cancelled, serial, root, resetVisits, word, restoreVisit] {
+    connect(watcher, &QFutureWatcher<std::shared_ptr<LoadedDataset>>::finished, this, [this, watcher, cancelled, serial, root, resetVisits, word, restoreVisit, fragment] {
         const auto loaded = watcher->result();
         watcher->deleteLater();
         if (serial != loadSerial_ || cancelled->load()) return;
-        auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit] {
+        auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit, fragment] {
             if (serial != loadSerial_ || cancelled->load()) return;
             if (!loaded->error.isEmpty()) {
                 setLoading(false);
@@ -321,7 +321,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                         updateNavigation();
                     }
                 } catch (const std::exception &error) { resultStatus_->setText(QString::fromUtf8(error.what())); }
-            } else if (!word.isEmpty()) openWord(word);
+            } else if (!word.isEmpty()) openWord(word, fragment);
             search_->setFocus();
             statusBar()->showMessage(QStringLiteral("Opened %1").arg(QDir::toNativeSeparators(root)), 4000);
         };
@@ -659,6 +659,16 @@ void MainWindow::setupUi() {
             const std::optional<QString> section = target.contains(QChar('#')) ?
                 std::optional<QString>(target.section(QChar('#'), 1)) : std::nullopt;
             if (!word.isEmpty()) {
+                if (api_ && !loading_ && api_->kind() == QStringLiteral("language") && section) {
+                    QString owner = *section;
+                    owner.replace(QChar('_'), QChar(' '));
+                    // Only exact installed owner headings in this edition select another dictionary.
+                    if (owner != api_->language() && language_->findText(owner, Qt::MatchExactly | Qt::MatchCaseSensitive) >= 0) {
+                        loadDataset(api_->root(), owner, api_->kind(), false, word, -1,
+                            originRoot_, originEdition_, section);
+                        return;
+                    }
+                }
                 if (!openWord(word, section)) return;
             } else if (section) jumpToFragment(*section);
         }

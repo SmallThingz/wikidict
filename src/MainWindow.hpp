@@ -47,7 +47,7 @@ private:
     void setupUi();
     void updateReaderLayout();
     void openRoot(const QString &root, const QString &word = {});
-    void loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word = {}, int restoreVisit = -1, const QString &expectedRoot = {}, const QString &expectedEdition = {});
+    void loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word = {}, int restoreVisit = -1, const QString &expectedRoot = {}, const QString &expectedEdition = {}, const std::optional<QString> &fragment = std::nullopt);
     void setLoading(bool loading);
     void chooseRoot();
     void refreshSearch();

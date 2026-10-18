@@ -5,6 +5,7 @@
 #include <QItemSelectionModel>
 #include <QDialog>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileDialog>
 #include <QLabel>
@@ -35,15 +36,19 @@ template <typename T> T *control(QObject &parent, const char *name) {
 // Deliberately completes on the event loop so the real finished callback runs.
 class MissingCatalogReply final : public QNetworkReply {
 public:
-    MissingCatalogReply(QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QObject *parent)
+    MissingCatalogReply(QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QObject *parent, bool connectionFailure = false)
         : QNetworkReply(parent) {
         setOperation(operation);
         setRequest(request);
         setUrl(request.url());
-        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 404);
-        setError(QNetworkReply::ContentNotFoundError,
-                 QStringLiteral("Error transferring https://user:secret@catalogue.example/private?token=secret - server replied: Not Found"));
         open(QIODevice::ReadOnly | QIODevice::Unbuffered);
+        if (connectionFailure) {
+            setError(QNetworkReply::ConnectionRefusedError, QStringLiteral("Connection refused"));
+        } else {
+            setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 404);
+            setError(QNetworkReply::ContentNotFoundError,
+                     QStringLiteral("Error transferring https://user:secret@catalogue.example/private?token=secret - server replied: Not Found"));
+        }
         QTimer::singleShot(0, this, [this] { setFinished(true); emit finished(); });
     }
     void abort() override {}
@@ -52,16 +57,18 @@ protected:
 };
 class MissingCatalogNetwork final : public QNetworkAccessManager {
 public:
-    explicit MissingCatalogNetwork(int &destructions) : destructions_(destructions) {}
+    explicit MissingCatalogNetwork(int &destructions, bool connectionFailure = false)
+        : destructions_(destructions), connectionFailure_(connectionFailure) {}
     ~MissingCatalogNetwork() override { ++destructions_; }
     int requests = 0;
 protected:
     QNetworkReply *createRequest(Operation operation, const QNetworkRequest &request, QIODevice *) override {
         ++requests;
-        return new MissingCatalogReply(operation, request, this);
+        return new MissingCatalogReply(operation, request, this, connectionFailure_);
     }
 private:
     int &destructions_;
+    bool connectionFailure_;
 };
 void answerFile(const QString &path) {
     QTimer::singleShot(300, [path] {
@@ -123,8 +130,18 @@ int main(int argc, char **argv) {
                 assertIsolated(QSettings(format, scope, QStringLiteral("SmallThingz"), QStringLiteral("Dict")));
             }
         }
-        QTimer::singleShot(25000, [] {
-            std::cerr << "UI smoke timed out\n";
+        const char *diagnosticStage = "initial setup";
+        QElapsedTimer diagnosticElapsed;
+        diagnosticElapsed.start();
+        QPointer<QLabel> diagnosticStatus;
+        QPointer<QProgressBar> diagnosticProgress;
+        QPointer<MissingCatalogNetwork> diagnosticNetwork;
+        QTimer::singleShot(25000, &app, [&] {
+            std::cerr << "UI smoke timed out\n"
+                      << "stage=" << diagnosticStage << " elapsed_ms=" << diagnosticElapsed.elapsed()
+                      << " requests=" << (diagnosticNetwork ? diagnosticNetwork->requests : -1) << '\n';
+            if (diagnosticStatus) std::cerr << "status=" << diagnosticStatus->text().toStdString() << '\n';
+            if (diagnosticProgress) std::cerr << "progress_visible=" << diagnosticProgress->isVisible() << '\n';
             for (auto *widget : QApplication::topLevelWidgets())
                 if (widget->isVisible()) std::cerr << widget->metaObject()->className() << ": " << widget->windowTitle().toStdString() << '\n';
             std::exit(EXIT_FAILURE);
@@ -148,9 +165,13 @@ int main(int argc, char **argv) {
         auto *installed = control<QTreeWidget>(dialog, "installedDictionaries");
         auto *status = control<QLabel>(dialog, "libraryStatus");
         auto *progress = control<QProgressBar>(dialog, "libraryProgress");
+        diagnosticStatus = status;
+        diagnosticProgress = progress;
+        diagnosticStage = "initial empty library";
         auto *import = control<QPushButton>(dialog, "importDictionary");
         auto *remove = control<QPushButton>(dialog, "removeDictionary");
         require(installed->topLevelItemCount() == 0 && import->isEnabled() && !remove->isEnabled(), "actionable empty library");
+        diagnosticStage = "import English";
         answerFile(source);
         QTest::mouseClick(import, Qt::LeftButton);
         require(QTest::qWaitFor([&] { return !progress->isVisible() && installed->topLevelItemCount() == 1; }, 15000), "import finishes in UI");
@@ -173,6 +194,7 @@ int main(int argc, char **argv) {
         QFile secondFile(secondSource);
         require(secondFile.open(QIODevice::WriteOnly) && secondFile.write(secondBytes) == secondBytes.size(), "write second distinct dictionary fixture");
         secondFile.close();
+        diagnosticStage = "import French";
         answerFile(secondSource);
         QTest::mouseClick(import, Qt::LeftButton);
         require(QTest::qWaitFor([&] { return !progress->isVisible() && installed->topLevelItemCount() == 2; }, 15000), "second dictionary import finishes");
@@ -183,6 +205,7 @@ int main(int argc, char **argv) {
             if (item->text(0) == QStringLiteral("French")) french = item;
         }
         require(english && french, "distinct real dictionaries are available for selection regression");
+        diagnosticStage = "selected row controls";
         const auto declineSelectedEnglish = [&] {
             bool observedEnglish = false;
             QTimer::singleShot(50, [&] {
@@ -210,6 +233,7 @@ int main(int argc, char **argv) {
         declineSelectedEnglish();
         installed->clearSelection();
         require(!remove->isEnabled(), "current item without selection does not enable destructive action");
+        diagnosticStage = "remove French";
         french->setSelected(true);
         QTimer::singleShot(50, [] {
             for (auto *widget : QApplication::topLevelWidgets())
@@ -218,6 +242,7 @@ int main(int argc, char **argv) {
         QTest::mouseClick(remove, Qt::LeftButton);
         require(QTest::qWaitFor([&] { return !progress->isVisible() && installed->topLevelItemCount() == 1; }, 5000), "remove only selected French fixture");
         require(installed->topLevelItem(0)->text(0) == QStringLiteral("English"), "unselected English survives selected French removal");
+        diagnosticStage = "remove English";
         installed->setCurrentItem(installed->topLevelItem(0));
         require(remove->isEnabled(), "selected installed dictionary enables removal");
         QTimer::singleShot(50, [] {
@@ -237,10 +262,18 @@ int main(int argc, char **argv) {
         require(status->text().startsWith(QStringLiteral("Removed English")), "removal status");
 
         QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{QStringLiteral("https://127.0.0.1:1/dictionaries.list")});
-        LibraryDialog unavailable(nullptr, temp.filePath(QStringLiteral("unavailable")));
+        int unavailableManagerDestructions = 0;
+        auto unavailableManager = std::make_unique<MissingCatalogNetwork>(unavailableManagerDestructions, true);
+        auto *unavailableNetwork = unavailableManager.get();
+        diagnosticStage = "construct connection refusal dialog";
+        diagnosticNetwork = unavailableNetwork;
+        LibraryDialog unavailable(nullptr, temp.filePath(QStringLiteral("unavailable")), std::move(unavailableManager));
         unavailable.show();
         auto *failure = control<QLabel>(unavailable, "libraryStatus");
-        require(QTest::qWaitFor([&] { return failure->text().startsWith(QStringLiteral("Could not finish:")); }, 5000), "catalogue failure is visible");
+        diagnosticStatus = failure;
+        diagnosticProgress = control<QProgressBar>(unavailable, "libraryProgress");
+        diagnosticStage = "wait connection refusal";
+        require(QTest::qWaitFor([&] { return unavailableNetwork->requests == 1 && failure->text() == QStringLiteral("Could not finish: 127.0.0.1: Connection refused"); }, 5000), "catalogue failure is visible");
         require(control<QPushButton>(unavailable, "importDictionary")->isEnabled(), "failed network operation does not disable local import");
         QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{
             QStringLiteral("https://catalogue.example/private?token=secret")});
@@ -249,11 +282,16 @@ int main(int argc, char **argv) {
         {
             auto manager = std::make_unique<MissingCatalogNetwork>(managerDestructions);
             observedManager = manager.get();
+            diagnosticStage = "construct HTTP 404 dialog";
+            diagnosticNetwork = manager.get();
             LibraryDialog missing(nullptr, temp.filePath(QStringLiteral("missing-catalogue")), std::move(manager));
             require(!manager && observedManager->parent() == &missing, "network manager ownership transfers to dialog");
             missing.show();
             auto *missingStatus = control<QLabel>(missing, "libraryStatus");
             auto *missingProgress = control<QProgressBar>(missing, "libraryProgress");
+            diagnosticStatus = missingStatus;
+            diagnosticProgress = missingProgress;
+            diagnosticStage = "wait HTTP 404";
             require(QTest::qWaitFor([&] { return observedManager->requests == 1 && !missingProgress->isVisible(); }, 5000),
                     "asynchronous HTTP 404 callback finishes");
             require(missingStatus->text() == QStringLiteral("Could not finish: catalogue.example: Catalogue is not available yet. Import a dictionary or try again later."),
@@ -262,14 +300,17 @@ int main(int argc, char **argv) {
                     "HTTP 404 does not create catalogue entries");
             auto *localImport = control<QPushButton>(missing, "importDictionary");
             require(localImport->isEnabled(), "HTTP 404 preserves local import");
+            diagnosticStage = "import after HTTP 404";
             answerFile(source);
             QTest::mouseClick(localImport, Qt::LeftButton);
             require(QTest::qWaitFor([&] { return !missingProgress->isVisible() && missing.libraryChanged(); }, 15000),
                     "actual local import succeeds after HTTP 404");
             require(control<QTreeWidget>(missing, "installedDictionaries")->topLevelItemCount() == 1,
                     "HTTP 404 recovery installs the local dictionary");
+            diagnosticStage = "HTTP 404 dialog teardown";
             require(managerDestructions == 0, "adopted manager lives until dialog teardown");
         }
+        diagnosticStage = "verify HTTP 404 manager teardown";
         require(observedManager.isNull() && managerDestructions == 1, "adopted manager is deleted exactly once with the dialog");
         std::cout << "Library UI: empty state, file import, confirmed removal and catalogue failure recovery passed\n";
     } catch (const std::exception &error) {
