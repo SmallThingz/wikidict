@@ -167,6 +167,8 @@ pub const Iterator = struct {
     done: bool = false,
     marker_filter: ?MarkerFilter = null,
     heading_filter: ?MarkerFilter = null,
+    // Caller must independently corroborate an authored language boundary.
+    table_boundary_filter: ?MarkerFilter = null,
     mixed_levels: bool = false,
     all_heading_levels: bool = false,
     link_headings: ?LinkHeadingScopes = null,
@@ -208,6 +210,11 @@ pub const Iterator = struct {
             const line = self.source[line_start..content_end];
             self.cursor = if (newline == self.source.len) self.source.len else newline + 1;
 
+            if (self.balance.comments == 0 and self.balance.tables != 0 and line_start >= self.balance.protected_until) {
+                if (self.table_boundary_filter) |filter| if (parseHeadingControlled(line, self.control_matcher)) |heading| {
+                    if (heading.level == 2 and filter.accepts(filter.ctx, heading.title)) self.balance.tables = 0;
+                };
+            }
             if (!self.balance.isOpen() and line_start >= self.balance.protected_until) {
                 const heading = parseHeadingControlled(line, self.control_matcher);
                 const marker = if (heading == null) self.languageMarker(line) else null;
@@ -977,4 +984,55 @@ test "equals language arguments never supply or change the declared code" {
     try std.testing.expectEqualStrings("unknown", equalsLanguageDeclaration("{{=unknown=|ett}}\nbody").?);
     for ([_][]const u8{ "{{=ett=|x}} trailing", "{{=ett=|{{broken}}", "{{=ett=|x}}{{=en=}}", "<nowiki>{{=ett=|en}}</nowiki>", "{{-ett-|en}}" }) |source|
         try std.testing.expect(equalsLanguageDeclaration(source) == null);
+}
+
+/// Conservative uniqueness check for a caller-corroborated table boundary.
+/// This never changes source, classifies an owner, or executes the callback on
+/// a heading inside a comment or opaque literal body.
+pub fn countUnprotectedL2Headings(source: []const u8, matcher: ?syntax.ControlMatcher, filter: Iterator.MarkerFilter) usize {
+    var balance: Balance = .{};
+    var cursor: usize = 0;
+    var count: usize = 0;
+    while (cursor < source.len) {
+        const end = std.mem.indexOfScalarPos(u8, source, cursor, '\n') orelse source.len;
+        if (balance.comments == 0 and cursor >= balance.protected_until) {
+            if (parseHeadingControlled(source[cursor..end], matcher)) |heading|
+                if (heading.level == 2 and filter.accepts(filter.ctx, heading.title) and outsideNestedOrOpaque(source, cursor)) {
+                    count += 1;
+                };
+        }
+        balance.update(source, cursor, end);
+        cursor = if (end < source.len) end + 1 else end;
+    }
+    return count;
+}
+
+pub fn outsideNestedOrOpaque(source: []const u8, offset: usize) bool {
+    var cursor: usize = 0;
+    while (cursor < offset) {
+        if (syntax.protectedEnd(source, cursor)) |end| {
+            if (end > offset) return false;
+            cursor = end;
+            continue;
+        }
+        if (std.mem.startsWith(u8, source[cursor..], "<!--")) {
+            const close = std.mem.indexOfPos(u8, source, cursor + 4, "-->") orelse return false;
+            if (close + 3 > offset) return false;
+            cursor = close + 3;
+            continue;
+        }
+        if (std.mem.startsWith(u8, source[cursor..], "{{") or std.mem.startsWith(u8, source[cursor..], "[[")) {
+            const pair = syntax.balanced(source, cursor) orelse return false;
+            if (pair.end > offset) return false;
+            cursor = pair.end;
+            continue;
+        }
+        if (source[cursor] == '<') if (syntax.tagAt(source, cursor)) |tag| {
+            if (tag.end > offset) return false;
+            cursor = tag.end;
+            continue;
+        };
+        cursor += 1;
+    }
+    return true;
 }

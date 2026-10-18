@@ -54,6 +54,24 @@ def text_fields(value, path='entry'):
 
 
 
+def annotation_fields(value, path='entry'):
+    """Decoded explanations are plain attribute text, not executable markup.
+
+    Walk spans separately from text_fields' joined-body shortcut. Each annotation
+    keeps its own path; it cannot join body fragments or supply an action target.
+    """
+    if isinstance(value, dict):
+        if ('kind' in value and 'text' in value and
+                isinstance(value.get('explanation'), str) and value['explanation']):
+            yield path + '.explanation', value['explanation']
+        for key, child in value.items():
+            if isinstance(child, (dict, list)):
+                yield from annotation_fields(child, path + '.' + key)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from annotation_fields(child, f'{path}[{index}]')
+
+
 def unresolved_action_target(target):
     # Inspect semantic destinations once; never percent-decode or scan title/redirect metadata.
     return '{{' in target or '}}' in target
@@ -169,13 +187,14 @@ def emitted_views(root, catalog, query):
 
 def scan(root, query):
     require(root.is_dir(), 'root does not exist')
-    result = dict(records=0, issues=[], views=[], search_matches=0,
+    result = dict(records=0, issues=[], annotations=[], views=[], search_matches=0,
                   duplicate_destinations=0, alias_views=0, commands=0,
                   diagnostic_only=True, semantic_acceptance=False, scan_complete=False,
                   scope=dict(record_kinds=list(SUPPORTED_KINDS),
                              inventory='native language accounting and emitted fixed-kind files',
                              aliases='selected CLI export view, including one-hop follows; not raw DAL1 coverage',
                              protected_literal_provenance=False,
+                             annotations='decoded plain attribute text; separate literal evidence, never markup execution or lexical body',
                              behavior_aliases='literal double-underscore word pattern; not an exhaustive registry'),
                   status_meaning='failed: review candidates; passed: no candidates in supported views; error: incomplete scan')
 
@@ -264,6 +283,14 @@ def scan(root, query):
                             view_kind=view['kind'], view_language=view['language'], query_title=title,
                             source_title=redirect['source_title'] if redirect else title,
                             redirect=redirect, path=path, text=text[:500], categories=categories))
+                for path, text in annotation_fields(content):
+                    result['annotations'].append(dict(kind=actual_kind, language=owner, title=actual_title,
+                        view_kind=view['kind'], view_language=view['language'], query_title=title,
+                        source_title=redirect['source_title'] if redirect else title,
+                        redirect=redirect, path=path, text=text[:500], text_length=len(text),
+                        text_truncated=len(text) > 500, spelling_matches=diagnostic_categories(text),
+                        interpretation='decoded-plain-attribute', lexical_body=False,
+                        runtime_markup=False, review_issue=False))
                 for path, target in action_fields(content):
                     if unresolved_action_target(target):
                         result['issues'].append(dict(kind=actual_kind, language=owner, title=actual_title,

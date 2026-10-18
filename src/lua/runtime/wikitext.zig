@@ -215,6 +215,12 @@ pub const Expander = struct {
     template_depth: usize = 0,
     lazy_template_args: std.ArrayList(LazyTemplateArgs) = .empty,
     transclusion_frame: ?*const TransclusionFrame = null,
+    usage_recovery: ?*UsageRecovery = null,
+    const UsageRecovery = struct {
+        args: *rt.Table,
+        exact_wrapper: bool = false,
+        missing_display: bool = false,
+    };
 
     pub fn attach(self: *Expander) void {
         self.host.ctx = self;
@@ -664,6 +670,10 @@ pub const Expander = struct {
         const frame: TransclusionFrame = .{ .title = title, .parent = self.transclusion_frame };
         self.transclusion_frame = &frame;
         defer self.transclusion_frame = frame.parent;
+        if (self.usage_recovery) |recovery| {
+            if (recovery.args == args and std.mem.eql(u8, std.mem.trim(u8, text, " \t\r\n"), "{{#invoke:usex|display|short=1}}"))
+                recovery.exact_wrapper = true;
+        }
         return self.expandWikitext(text, args, title, depth);
     }
 
@@ -2017,6 +2027,7 @@ pub const Expander = struct {
     const InvokeOutcome = union(enum) {
         generated: []const u8,
         error_markup: []const u8,
+        export_error: struct { failure: anyerror, markup: []const u8 },
     };
 
     fn clearInvokeFailure(runtime: *rt.Context) void {
@@ -2112,7 +2123,7 @@ pub const Expander = struct {
             if (err == error.LuaCpuLimit) return .{ .error_markup = try self.scriptTimeoutMarkup(module_name) };
             if (try self.invokeExportErrorMarkup(err, module_name, function_name)) |markup| {
                 clearInvokeFailure(self.runtime);
-                return .{ .error_markup = markup };
+                return .{ .export_error = .{ .failure = err, .markup = markup } };
             }
             if (err != error.AotCallFailed) return err;
             // Operational failures retain their typed name across the native
@@ -2138,7 +2149,7 @@ pub const Expander = struct {
                         if (retry_err == error.LuaCpuLimit) return .{ .error_markup = try self.scriptTimeoutMarkup(module_name) };
                         if (try self.invokeExportErrorMarkup(retry_err, module_name, function_name)) |markup| {
                             clearInvokeFailure(self.runtime);
-                            return .{ .error_markup = markup };
+                            return .{ .export_error = .{ .failure = retry_err, .markup = markup } };
                         }
                         if (retry_err != error.AotCallFailed) return retry_err;
                         if (self.runtime.aotErrorName()) |name| {
@@ -2363,6 +2374,15 @@ pub const Expander = struct {
             // APIs. Preserve those items while returned tag text stays unhooked.
             .generated => |generated| self.expandWikitextMode(generated, params, host_title, depth + 1, false, true),
             .error_markup => |markup| markup,
+            .export_error => |failure| blk: {
+                if (self.usage_recovery) |recovery| {
+                    const module = self.runtime.namespace_catalog.?.ofTitle(module_name);
+                    if (failure.failure == error.InvokeFunctionMissing and recovery.args == params and
+                        recovery.exact_wrapper and module.id == 828 and std.mem.eql(u8, module.text, "usex") and
+                        std.mem.eql(u8, function_name, "display")) recovery.missing_display = true;
+                }
+                break :blk failure.markup;
+            },
         };
     }
 
@@ -2772,7 +2792,7 @@ pub const Expander = struct {
         }
         if (try self.callSymbol(raw_head, .template)) |symbol| {
             const args = try self.buildTemplateArgs(parts.items[1..], params, host_title, depth + 1);
-            return self.expandTemplateBySymbol(symbol, args, host_title, depth + 1);
+            return self.expandTemplateWithUsageRecovery(raw_head, symbol, args, parts.items[1..], host_title, depth + 1);
         }
         const expanded_head = try self.expandWikitext(raw_head, params, host_title, depth + 1);
         const title = stripSubstPrefix(expanded_head);
@@ -2791,7 +2811,114 @@ pub const Expander = struct {
             return std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content});
         }
         const args = try self.buildTemplateArgs(parts.items[1..], params, host_title, depth + 1);
-        return self.expandTemplateByName(title, args, host_title, depth + 1, .link);
+        return self.expandTemplateWithUsageRecovery(title, null, args, parts.items[1..], host_title, depth + 1);
+    }
+
+    // Only the independently captured ux wrapper and a typed missing export
+    // can enter this path. The original visible diagnostic is deliberately kept:
+    // this restores supported example content, not successful Lua execution.
+    fn expandTemplateWithUsageRecovery(self: *Expander, name: []const u8, symbol: ?CallSymbol, args: *rt.Table, raw_args: []const []const u8, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        // Unrelated corpus templates keep their original normalization path:
+        // the prefilter borrows bytes and allocates nothing.
+        const candidate = if (symbol) |value| value.text else name;
+        const colon = std.mem.lastIndexOfScalar(u8, candidate, ':');
+        const basename = std.mem.trim(u8, candidate[if (colon) |at| at + 1 else 0..], " \t\r\n");
+        if (!std.mem.eql(u8, basename, "ux") and !std.mem.eql(u8, basename, "usex")) {
+            return if (symbol) |value|
+                self.expandTemplateBySymbol(value, args, host_title, depth)
+            else
+                self.expandTemplateByName(name, args, host_title, depth, .link);
+        }
+        const title = try self.normalizeTransclusionName(name, host_title);
+        const resolved = self.runtime.namespace_catalog.?.ofTitle(title);
+        const eligible = resolved.id == 10 and (std.mem.eql(u8, resolved.text, "ux") or std.mem.eql(u8, resolved.text, "usex"));
+        var recovery: UsageRecovery = .{ .args = args };
+        const previous = self.usage_recovery;
+        if (eligible) self.usage_recovery = &recovery;
+        defer self.usage_recovery = previous;
+        const expanded = if (symbol) |value|
+            try self.expandTemplateBySymbol(value, args, host_title, depth)
+        else
+            try self.expandTemplateByName(name, args, host_title, depth, .link);
+        if (!eligible or !recovery.exact_wrapper or !recovery.missing_display) return expanded;
+        const recovered = (try self.usageSemanticCall(args, raw_args)) orelse return expanded;
+        work_stats.logLine("warning: native usage content recovery: article={s} template={s} module=usex export=display failure=InvokeFunctionMissing diagnostic=retained\n", .{ host_title[0..@min(host_title.len, 256)], title[0..@min(title.len, 256)] });
+        return std.fmt.allocPrint(self.runtime.allocator, "{s}<br/>{s}", .{ recovered, expanded });
+    }
+
+    fn usageSemanticCall(self: *Expander, args: *rt.Table, raw_args: []const []const u8) anyerror!?[]const u8 {
+        const a = self.runtime.allocator;
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        try out.appendSlice(a, "{{ux");
+        var positional: i64 = 1;
+        for (raw_args) |raw| {
+            const eq = preprocess.findTopDelimiter(raw, '=');
+            const key_text = if (eq) |at| std.mem.trim(u8, raw[0..at], " \t\r\n") else "";
+            var key: Value = undefined;
+            if (eq != null) {
+                if (std.fmt.parseInt(i64, key_text, 10)) |number| {
+                    if (number < 1 or number > 3) {
+                        out.deinit(a);
+                        return null;
+                    }
+                    key = .{ .number = @floatFromInt(number) };
+                } else |_| {
+                    var supported = false;
+                    inline for (.{ "q", "qq", "translation", "t", "tr" }) |name|
+                        if (std.mem.eql(u8, key_text, name)) {
+                            supported = true;
+                        };
+                    if (!supported) {
+                        out.deinit(a);
+                        return null;
+                    }
+                    key = .{ .string = key_text };
+                }
+            } else {
+                if (positional > 3) {
+                    out.deinit(a);
+                    return null;
+                }
+                key = .{ .number = @floatFromInt(positional) };
+                positional += 1;
+            }
+            // #invoke already materialized only surviving arguments. Reusing
+            // those values never evaluates an overwritten or live child twice.
+            const value = args.rawGet(key) orelse {
+                out.deinit(a);
+                return null;
+            };
+            if (value != .string) return error.StringExpected;
+            if (preprocess.findTopDelimiter(value.string, '|') != null or
+                (eq == null and preprocess.findTopDelimiter(value.string, '=') != null) or
+                std.mem.indexOf(u8, value.string, "{{") != null or std.mem.indexOf(u8, value.string, "}}") != null)
+            {
+                out.deinit(a);
+                return null;
+            }
+            try out.append(a, '|');
+            if (eq != null) {
+                try out.appendSlice(a, key_text);
+                try out.append(a, '=');
+            }
+            try out.appendSlice(a, value.string);
+        }
+        const language = args.rawGet(.{ .number = 1 }) orelse {
+            out.deinit(a);
+            return null;
+        };
+        const example = args.rawGet(.{ .number = 2 }) orelse {
+            out.deinit(a);
+            return null;
+        };
+        if (language != .string or example != .string) return error.StringExpected;
+        if (language.string.len == 0 or example.string.len == 0) {
+            out.deinit(a);
+            return null;
+        }
+        try out.appendSlice(a, "}}");
+        return try out.toOwnedSlice(a);
     }
 
     fn scalarText(self: *Expander, value: Value) ![]const u8 {
@@ -3180,6 +3307,7 @@ pub const Expander = struct {
         return switch (try self.invokeWithRecovery(null, module_name, function_name, invoke_args, parent, null, null)) {
             .generated => |generated| generated,
             .error_markup => |markup| markup,
+            .export_error => |failure| failure.markup,
         };
     }
 
@@ -6861,4 +6989,94 @@ test "captured Arabic pagename self loop preserves magic distinction lazy fi def
     try std.testing.expectEqualStrings(fi_expected, try expander.expandFragment("word", "{{fi-noun}}\n# FI DEFINITION", 1_670_803_200));
     try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
     try std.testing.expect(expander.transclusion_frame == null);
+}
+
+const UsageRecoveryTest = struct {
+    fn lookup(_: ?*const anyopaque, name: []const u8) ?u32 {
+        return if (std.mem.eql(u8, name, "Module:usex")) 0 else null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id == 0) "Module:usex" else null;
+    }
+    fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const exports = try ctx.newTable(); // Exact failure class: no display export.
+        return std.heap.smp_allocator.dupe(Value, &.{.{ .table = exports }});
+    }
+    fn get(ctx: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        if (std.mem.eql(u8, title, "Template:ux") or std.mem.eql(u8, title, "Template:usex") or std.mem.eql(u8, title, "Template:Other"))
+            return "{{#invoke:usex|display|short=1}}<noinclude>{{documentation}}</noinclude>";
+        if (std.mem.eql(u8, title, "Template:Counter")) {
+            const reads: *usize = @ptrCast(@alignCast(ctx.?));
+            reads.* += 1;
+            return "[[counted|Counted]]";
+        }
+        // Exact captured template page212527/revision988290. Its table pipes
+        // cannot be reconstructed as raw usage-template delimiters safely.
+        if (std.mem.eql(u8, title, "Template:اقتباس 2")) return "{| style=\"margin:auto; border-collapse:collapse; border-style:none; background-color:{{{bgcolor|transparent}}}; {{\n#if: {{{bgcolor|}}}\n  | border: 1px solid #AAAAAA;\n}}\" class=\"cquote\"\n| width=\"20\" valign=\"top\" style=\"color:#B2B7F2;font-size:{{#switch:{{{size|{{{2|{{{quotewidth|{{{width|20px}}}}}}}}}}}}\n|10px=20px\n|30px=60px\n|40px=80px\n|50px=100px\n|60px=120px\n|#default=35px}};font-family:'Times New Roman',serif;font-weight:bold;text-align:left;padding:10px 10px;\" | ”\n| class=\"citationTemplate\" valign=\"top\" style=\"padding:4px 10px;font-size:115%\" | {{خط/عربي|{{{1|اكتب النص هنا بدون علامات الاقتباس.}}}}}\n| width=\"20\" valign=\"bottom\" style=\"color:#B2B7F2;font-size:{{#switch:{{{size|{{{2|{{{quotewidth|{{{width|20px}}}}}}}}}}}}\n|10px=20px\n|30px=60px\n|40px=80px\n|50px=100px\n|60px=120px\n|#default=36px}};font-family:'Times New Roman',serif;font-weight:bold;text-align:right;padding:10px 10px;\" | “\n|-\n{{#if:{{{4|}}}{{{5|}}}|\n{{!}} colspan=\"3\" style=\"padding-right: 4%\" {{!}} {{#if:{{{4|<noinclude>Origin</noinclude>}}}|<p style=\"font-size:smaller;text-align: right\"><cite style=\"font-style:normal;\">—{{{4}}}{{#if:{{{5|<noinclude>Source</noinclude>}}}|, {{{5}}}}}</cite></p>}}\n}}\n|}<noinclude>\n[[تصنيف:قوالب]]\n</noinclude>";
+        return null;
+    }
+    fn setup(runtime: *rt.Context, reads: *usize) !Expander {
+        const functions = struct {
+            const entries = [_]rt.FunctionFn{rt.stabilize(root)};
+        };
+        runtime.module_root_entries = &functions.entries;
+        runtime.configureModules(null, lookup, name);
+        try rt.bindGlobalTable(runtime, null, 0);
+        try stdlib.install(runtime);
+        return .{ .runtime = runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = reads, .get = get }, .install_scribunto = installTestInvoke };
+    }
+};
+
+test "typed missing usage export preserves five captured examples and declines captured nested table" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    var reads: usize = 0;
+    var expander = try UsageRecoveryTest.setup(&runtime, &reads);
+    const cases = [_]struct { source: []const u8, expected: []const u8, recovered: bool = true }{
+        .{ .source = "{{ux|en|Their '''encounter''' was a matter of chance.}}", .expected = "Their '''encounter''' was a matter of chance.", .recovered = true },
+        .{ .source = "{{ux|de|Gibt es einen '''Zusammenhang''' zwischen Freiheit und Wohlstand| هل هناك '''علاقة''' بين الحرية والرفاه}}", .expected = "هل هناك '''علاقة''' بين الحرية والرفاه", .recovered = true },
+        .{ .source = "{{ux|en|'''incite''' people to violence\n{{اقتباس 2|حرِّض الناس على العنف}}}}", .expected = "", .recovered = false },
+        .{ .source = "{{ux|en|'''Lemme''' go!}}", .expected = "'''Lemme''' go!", .recovered = true },
+        .{ .source = "{{ux|en|Hey, '''lemme''' see that bag. What’s in there?}}", .expected = "What’s in there?", .recovered = true },
+        .{ .source = "{{ux|en|'''Gimme''' the ball.}}", .expected = "'''Gimme''' the ball.", .recovered = true },
+    };
+    for (cases) |case| {
+        const expanded = try expander.expandFragment("Actual usage example", case.source, 1_670_803_200);
+        try std.testing.expect((std.mem.indexOf(u8, expanded, "{{ux|") != null) == case.recovered);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expanded, "Lua error in Module:usex: The function \"display\" does not exist."));
+        if (case.recovered) try std.testing.expect(std.mem.indexOf(u8, expanded, case.expected) != null);
+        try std.testing.expect(expander.usage_recovery == null and runtime.current_frame == null);
+    }
+}
+
+test "typed usage recovery preserves last wins links and single expansion while declining unsupported args" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    var reads: usize = 0;
+    var expander = try UsageRecoveryTest.setup(&runtime, &reads);
+    const once = try expander.expandFragment("Page", "{{ux|en|{{Counter}}|translation=Translated|tr=tr|q=old|q=[[rare|rare]]|qq=[[regional|regional]]}}", 1_670_803_200);
+    try std.testing.expectEqual(@as(usize, 1), reads);
+    try std.testing.expect(std.mem.indexOf(u8, once, "[[counted|Counted]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, once, "q=old") == null);
+    try std.testing.expect(std.mem.indexOf(u8, once, "q=[[rare|rare]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, once, "qq=[[regional|regional]]") != null);
+    reads = 0;
+    const overwritten = try expander.expandFragment("Page", "{{ux|en|2={{Counter}}|2=[[last|Last]]|q=old|q=|qq=old|qq=}}", 1_670_803_200);
+    try std.testing.expectEqual(@as(usize, 0), reads);
+    try std.testing.expect(std.mem.indexOf(u8, overwritten, "{{ux|") != null);
+    try std.testing.expect(std.mem.indexOf(u8, overwritten, "2=[[last|Last]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, overwritten, "q=old") == null);
+    for ([_][]const u8{
+        "{{ux|en|Example|4=extra}}",  "{{ux|en|Example|unknown=extra}}",
+        "{{ux|en|Example|unknown=}}", "{{ux|en|Example|sc=Latn}}",
+        "{{Other|en|Example}}",       "{{#invoke:usex|display|short=1}}",
+    }) |source| {
+        const declined = try expander.expandFragment("Page", source, 1_670_803_200);
+        try std.testing.expect(std.mem.indexOf(u8, declined, "{{ux|") == null);
+        try std.testing.expect(std.mem.indexOf(u8, declined, "Lua error in Module:usex:") != null);
+    }
 }

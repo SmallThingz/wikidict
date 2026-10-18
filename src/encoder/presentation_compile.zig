@@ -115,6 +115,23 @@ fn rubyHasFallback(input: []const u8) bool {
     return false;
 }
 
+// WikiHiero's parserHook ignores its attribute map and renders unlinked glyph
+// images. Support only the attested boolean link spelling as that same no-op;
+// other attributes retain the native compiler's explicit unsupported fallback.
+fn supportedHieroAttributes(raw: []const u8) bool {
+    const attrs = trim(raw);
+    if (attrs.len == 0) return true;
+    const equal = std.mem.indexOfScalar(u8, attrs, '=') orelse return false;
+    if (!std.ascii.eqlIgnoreCase(trim(attrs[0..equal]), "link")) return false;
+    var value = trim(attrs[equal + 1 ..]);
+    if (value.len == 0) return false;
+    if (value[0] == '\'' or value[0] == '"') {
+        if (value.len < 2 or value[value.len - 1] != value[0]) return false;
+        value = value[1 .. value.len - 1];
+    }
+    return std.ascii.eqlIgnoreCase(value, "true") or std.ascii.eqlIgnoreCase(value, "false");
+}
+
 fn htmlAttributePresent(tag: syntax.Tag, key: []const u8) bool {
     var at: usize = 0;
     while (at < tag.attrs.len) {
@@ -182,6 +199,8 @@ pub const FormattingAttributes = struct {
     relation_note: bool = false,
     language: []const u8 = "",
     direction: []const u8 = "",
+    explanation: []const u8 = "",
+    explanation_set: bool = false,
 };
 pub const FragmentPreContext = struct {
     pub const Kind = enum { pre, formatting, link, refused_link };
@@ -400,6 +419,9 @@ pub const Style = struct {
     language: []const u8 = "",
     classes: []const u8 = "",
     direction: []const u8 = "",
+    explanation: []const u8 = "",
+    // Build-only presence: an explicit empty title must suppress inheritance.
+    explanation_set: bool = false,
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -421,6 +443,13 @@ pub const Style = struct {
     // Navigation remains inherited; a newly created holder clears this phase.
     poem_independent_parse: bool = false,
 };
+fn inheritExplanation(style: *Style, parent: Style) void {
+    if (!style.explanation_set and style.explanation.len == 0) {
+        style.explanation = parent.explanation;
+        style.explanation_set = parent.explanation_set or parent.explanation.len != 0;
+    }
+}
+
 pub const SpanFlags = packed struct(u8) {
     bold: bool = false,
     italic: bool = false,
@@ -440,6 +469,9 @@ pub const Span = struct {
     language: []const u8 = "",
     classes: []const u8 = "",
     direction: []const u8 = "",
+    explanation: []const u8 = "",
+    // Build-only scope provenance, omitted from both wire versions.
+    explanation_set: bool = false,
     flags: SpanFlags = .{},
     role: Role = .normal,
 };
@@ -2386,6 +2418,7 @@ pub const Renderer = struct {
         var style = original;
         if (self.poem_depth != 0) {
             const parent = self.poem_base_style;
+            inheritExplanation(&style, parent);
             style.bold = style.bold or parent.bold;
             style.italic = style.italic or parent.italic;
             style.code = style.code or parent.code;
@@ -2459,7 +2492,7 @@ pub const Renderer = struct {
         }
         const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
         const inherited_flags: SpanFlags = @bitCast(@as(u8, @bitCast(flags)) | @as(u8, @bitCast(self.block_formatting)));
-        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .flags = inherited_flags, .role = s.role });
+        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .flags = inherited_flags, .role = s.role });
     }
     pub fn lineBreak(self: *Renderer, s: Style) Error!void {
         var style = s;
@@ -3866,7 +3899,7 @@ pub const Renderer = struct {
         const content = input[tag.end..pair.inner_end];
         if (tag.is("math") and matched_pair != null and trim(tag.attrs).len == 0 and
             (try self.numericPower(content, style) or try self.monomial(content, style) or try self.commonInlineMath(content, style))) return pair.end;
-        if (tag.is("hiero") and matched_pair != null and trim(tag.attrs).len == 0) {
+        if (tag.is("hiero") and matched_pair != null and supportedHieroAttributes(tag.attrs)) {
             if (try hieroglyphs.decodeAlloc(self.a, content)) |glyphs| {
                 var glyph_style = style;
                 glyph_style.code = false;
@@ -3957,6 +3990,8 @@ pub const Renderer = struct {
                 label_style.underline = span.flags.underline;
                 label_style.language = span.language;
                 label_style.direction = span.direction;
+                label_style.explanation = span.explanation;
+                label_style.explanation_set = span.explanation_set;
                 label_style.classes = try self.mediaCaptionClasses(style.classes, span.classes);
                 label_style.role = span.role;
             }
@@ -4249,6 +4284,12 @@ pub const Renderer = struct {
                     try std.fmt.allocPrint(self.a, "{s} {s}", .{ s.classes, safe_classes.items });
             }
         }
+        // Only authored abbreviation titles are semantic explanations. An
+        // explicit empty title clears inherited meaning; missing titles inherit.
+        if (tag.is("abbr")) if (try self.semanticAttribute(tag, "title")) |explanation| {
+            s.explanation = explanation;
+            s.explanation_set = true;
+        };
         return self.htmlLanguageDirection(tag, s);
     }
     // Module:etymon/tree emits child-first fragments, not nested HTML lists.
@@ -4657,7 +4698,7 @@ pub const Renderer = struct {
         if (phonos_spans) |parsed| {
             try self.spans.appendSlice(self.a, parsed);
         } else if (std.mem.indexOf(u8, content, "{|") != null) {
-            try self.blocksInline(try self.renderBody(content), s);
+            try self.blocksInline(try self.renderBodyWithLanguageDirection(content, s), s);
         } else try self.inlineText(content, s, depth + 1);
         if (parenthetical and annotation_start < self.spans.items.len and
             std.mem.eql(u8, self.spans.items[annotation_start].text, "（"))
@@ -5096,6 +5137,7 @@ pub const Renderer = struct {
         }
         if (self.poem_depth != 0) {
             const outer = self.poem_base_style;
+            inheritExplanation(&inherited, outer);
             if (inherited.kind == .text and (outer.kind == .link or outer.kind == .external_link)) {
                 inherited.kind = outer.kind;
                 inherited.target = outer.target;
@@ -5205,16 +5247,20 @@ pub const Renderer = struct {
         if (self.body_language_direction) |style| {
             value.language = style.language;
             value.direction = style.direction;
+            if (style.explanation_set or style.explanation.len != 0) {
+                value.explanation = style.explanation;
+                value.explanation_set = style.explanation_set;
+            }
         }
         return value;
     }
     fn restoreFormattingAttributes(self: *Renderer, value: FormattingAttributes) void {
         self.body_formatting_attributes = value;
-        self.body_language_direction = .{ .language = value.language, .direction = value.direction };
+        self.body_language_direction = .{ .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set };
     }
     fn formattingSeparator(self: *Renderer) Span {
         const value = self.formattingAttributes();
-        return .{ .text = " ", .flags = self.block_formatting, .classes = value.classes, .role = value.role, .language = value.language, .direction = value.direction };
+        return .{ .text = " ", .flags = self.block_formatting, .classes = value.classes, .role = value.role, .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set };
     }
     fn formattingVisibleEndsSpace(spans: []const Span) bool {
         var at = spans.len;
@@ -5856,7 +5902,7 @@ pub const Renderer = struct {
                                 defer self.semantic_capture = previous_capture;
                                 break :blk try self.htmlInlineStyle(tag, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
                             };
-                            self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = scoped_hints.relation_note, .language = scoped_style.language, .direction = scoped_style.direction });
+                            self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = scoped_hints.relation_note, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set });
                             defer {
                                 self.body_formatting_attributes = parent_attribute_storage;
                                 self.body_language_direction = parent_language_direction;
@@ -5882,7 +5928,7 @@ pub const Renderer = struct {
                                     var leading: std.ArrayList(Span) = .empty;
                                     const previous = &blocks.items[index];
                                     if (join_separator and !formattingVisibleEndsSpace(previous.spans))
-                                        try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction });
+                                        try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set });
                                     try leading.appendSlice(self.a, scoped_blocks[0].spans);
                                     try self.appendParagraphSpans(&blocks, index, leading.items, false);
                                     blocks.items[index].relation_note = previous.relation_note or scoped_blocks[0].relation_note;
@@ -5898,7 +5944,7 @@ pub const Renderer = struct {
                                 var leading: std.ArrayList(Span) = .empty;
                                 const previous = &blocks.items[blocks.items.len - 1];
                                 if (join_separator and !formattingVisibleEndsSpace(previous.spans))
-                                    try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction });
+                                    try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set });
                                 try leading.appendSlice(self.a, scoped_blocks[0].spans);
                                 try self.appendParagraphSpans(&blocks, blocks.items.len - 1, leading.items, false);
                                 blocks.items[blocks.items.len - 1].relation_note = previous.relation_note or scoped_blocks[0].relation_note;
@@ -6167,7 +6213,7 @@ pub const Renderer = struct {
                     const parent_attributes = self.body_formatting_attributes;
                     const parent_language_direction = self.body_language_direction;
                     const scoped_style = try self.htmlInlineStyle(tag, self.bodyFormattingStyle(.{}));
-                    self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = parent_attributes.relation_note, .language = scoped_style.language, .direction = scoped_style.direction });
+                    self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = parent_attributes.relation_note, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set });
                     defer {
                         self.body_formatting_attributes = parent_attributes;
                         self.body_language_direction = parent_language_direction;
@@ -6183,7 +6229,7 @@ pub const Renderer = struct {
                     defer self.block_formatting = parent_formatting;
                     const parent_language_direction = self.body_language_direction;
                     const scoped_style = try self.htmlLanguageDirection(tag, parent_language_direction orelse .{});
-                    self.body_language_direction = .{ .language = scoped_style.language, .direction = scoped_style.direction };
+                    self.body_language_direction = .{ .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set };
                     defer self.body_language_direction = parent_language_direction;
                     // Ordinary quoted lines do not open implicit preformatted blocks.
                     // Explicit pre/nowiki and actual list/heading rules stay independent.
@@ -6402,14 +6448,16 @@ pub const Renderer = struct {
             hints.relation_note = true;
         };
         if (self.body_language_direction) |base| {
+            inheritExplanation(&effective, base);
             if (effective.language.len == 0) effective.language = base.language;
             if (effective.direction.len == 0) effective.direction = base.direction;
         }
+        inheritExplanation(&effective, .{ .explanation = self.body_formatting_attributes.explanation, .explanation_set = self.body_formatting_attributes.explanation_set });
         return effective;
     }
     fn renderBodyWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Block {
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .language = style.language, .direction = style.direction };
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set };
         defer self.body_language_direction = previous;
         return self.renderBody(input);
     }
@@ -6419,13 +6467,13 @@ pub const Renderer = struct {
         self.body_link_target = "";
         defer self.body_link_target = previous_target;
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .language = style.language, .direction = style.direction };
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set };
         defer self.body_language_direction = previous;
-        return self.parseBodySpans(input, .{ .language = style.language, .direction = style.direction });
+        return self.parseBodySpans(input, .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set });
     }
     fn cellSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .language = style.language, .direction = style.direction };
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set };
         defer self.body_language_direction = previous;
         return self.cellSpans(input);
     }
@@ -6447,7 +6495,7 @@ pub const Renderer = struct {
         // Apply explicit container fields after inherited parent-item fields.
         const list_style = try self.htmlLanguageDirection(list_tag, style);
         const previous_language_direction = self.body_language_direction;
-        self.body_language_direction = .{ .language = list_style.language, .direction = list_style.direction };
+        self.body_language_direction = .{ .language = list_style.language, .direction = list_style.direction, .explanation = list_style.explanation, .explanation_set = list_style.explanation_set };
         defer self.body_language_direction = previous_language_direction;
         const reversed = list_tag.is("ol") and htmlAttributePresent(list_tag, "reversed");
         const default_start: i32 = if (reversed) htmlListItemCount(input) else 1;
@@ -6665,7 +6713,7 @@ pub const Renderer = struct {
         const previous_language_direction = self.body_language_direction;
         const previous_formatting = self.block_formatting;
         const previous_flow = self.html_list_item_flow;
-        self.restoreFormattingAttributes(.{ .classes = item_style.classes, .role = item_style.role, .relation_note = hints.relation_note, .language = item_style.language, .direction = item_style.direction });
+        self.restoreFormattingAttributes(.{ .classes = item_style.classes, .role = item_style.role, .relation_note = hints.relation_note, .language = item_style.language, .direction = item_style.direction, .explanation = item_style.explanation, .explanation_set = item_style.explanation_set });
         const flags: SpanFlags = .{ .bold = item_style.bold, .italic = item_style.italic, .code = item_style.code, .small = item_style.small, .superscript = item_style.superscript, .subscript = item_style.subscript, .strike = item_style.strike, .underline = item_style.underline };
         self.block_formatting = @bitCast(@as(u8, @bitCast(previous_formatting)) | @as(u8, @bitCast(flags)));
         self.html_list_item_flow = true;
@@ -20788,4 +20836,148 @@ test "interwiki routing preserves namespace priority current wiki labels fragmen
     };
     try std.testing.expectEqual(@as(usize, 4), query_actions);
     try std.testing.expect(query_spans[0].flags.italic and !query_spans[1].flags.italic);
+}
+
+test "captured Arabic hieroglyph compounds preserve surrounding text and links" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]struct { source: []const u8, signs: []const u8 }{
+        .{ .source = "i-mn:n-t-w&t-anx", .signs = "𓇋𓏠𓐰𓈖𓏏𓅱𓐴𓏏𓋹" },
+        .{ .source = "<-i-t:n:ra-Ax-x:n->", .signs = "𓍹𓐼𓇋𓏏𓐰𓈖𓐰𓇳𓅜𓐍𓐰𓈖𓐽𓍺" },
+    }) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(try std.fmt.allocPrint(a, "مستعارة من <hiero>{s}</hiero> المصرية [[مصر|رابط]] بعد", .{case.source}), .{});
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "مستعارة من {s} المصرية رابط بعد", .{case.signs}), try plainText(a, spans));
+        try std.testing.expect(!renderer.fallbacks.any());
+        var found = false;
+        for (spans) |span| if (std.mem.eql(u8, span.text, case.signs)) {
+            found = true;
+            try std.testing.expectEqualStrings("egy", span.language);
+            try std.testing.expectEqualStrings("ltr", span.direction);
+            try std.testing.expectEqualStrings("Egyp", span.classes);
+            try std.testing.expect(!span.flags.code);
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        };
+        try std.testing.expect(found);
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "مصر"));
+    }
+    // Verbatim etymology paragraphs from captured pages 213582/217710.
+    for ([_]struct { source: []const u8, expected: []const u8, target: []const u8 }{
+        .{ .source = "مستعارة من <hiero>i-mn:n-t-w&t-anx</hiero> المصرية (حرفيًّا \"الصورة الحية ل[[آمُون]]\").", .expected = "مستعارة من 𓇋𓏠𓐰𓈖𓏏𓅱𓐴𓏏𓋹 المصرية (حرفيًّا \"الصورة الحية لآمُون\").", .target = "آمُون" },
+        .{ .source = "مشتقة من \"<hiero><-i-t:n:ra-Ax-x:n-></hiero>\" (أُوخَأْ نَ يَاتَيْ؛ \"فَعَّال لِ[[آتُون]]َ\") المصرية.", .expected = "مشتقة من \"𓍹𓐼𓇋𓏏𓐰𓈖𓐰𓇳𓅜𓐍𓐰𓈖𓐽𓍺\" (أُوخَأْ نَ يَاتَيْ؛ \"فَعَّال لِآتُونَ\") المصرية.", .target = "آتُون" },
+    }) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.expected, try plainText(a, spans));
+        try std.testing.expect(!renderer.fallbacks.any());
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, case.target));
+    }
+    for ([_][]const u8{ "<-A35-NotASign->", "<-<-A35->->", "w&n" }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(try std.fmt.allocPrint(a, "قبل <hiero>{s}</hiero> [[مصر|رابط]] بعد", .{source}), .{});
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "قبل {s} رابط بعد", .{source}), try plainText(a, spans));
+        try std.testing.expect(renderer.fallbacks.unsupported_element);
+        var coded: std.ArrayList(u8) = .empty;
+        for (spans) |span| if (span.flags.code) try coded.appendSlice(a, span.text);
+        try std.testing.expectEqualStrings(source, coded.items);
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "مصر"));
+    }
+}
+
+test "captured Arabic hieroglyph link attributes preserve signs without new actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact sign runs from مُدِيْر page 101725 / revision 1085592.
+    const cases = [_]struct { source: []const u8, signs: []const u8 }{
+        .{ .source = "K3-N36", .signs = "𓆝𓈘" },
+        .{ .source = "V26-D46-U7-D40-N36", .signs = "𓎙𓂧𓌻𓂡𓈘" },
+        .{ .source = "D36-I10-U7-D40-N36", .signs = "𓂝𓆓𓌻𓂡𓈘" },
+    };
+    for (cases) |case| for ([_][]const u8{ "", " link=\"true\"", " link='false'", " LINK = TRUE", " link=false " }) |attrs| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(try std.fmt.allocPrint(a, "قبل <hiero{s}>{s}</hiero> [[مصر|رابط]] بعد", .{ attrs, case.source }), .{});
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "قبل {s} رابط بعد", .{case.signs}), try plainText(a, spans));
+        try std.testing.expect(!renderer.fallbacks.any());
+        var found = false;
+        for (spans) |span| if (std.mem.eql(u8, span.text, case.signs)) {
+            found = true;
+            try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+            try std.testing.expectEqualStrings("", span.target);
+            try std.testing.expectEqualStrings("egy", span.language);
+            try std.testing.expectEqualStrings("ltr", span.direction);
+            try std.testing.expectEqualStrings("Egyp", span.classes);
+            try std.testing.expect(!span.flags.code);
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        };
+        try std.testing.expect(found);
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "مصر"));
+    };
+    // The three consecutive attributed tags and breaks are verbatim captured
+    // source; the adjacent action is a distinct preservation control.
+    const captured = "<hiero link=\"true\">K3-N36</hiero><br/><hiero link=\"true\">V26-D46-U7-D40-N36</hiero><br/><hiero link=\"true\">D36-I10-U7-D40-N36</hiero> [[مصر|رابط]]";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(captured, .{});
+    try std.testing.expect(!renderer.fallbacks.any());
+    const blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+    const Section = struct { level: u8 = 2, title: []const u8 = "Arabic", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = &blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+    try std.testing.expectEqualStrings("DPR2", bytes[0..4]);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "مُدِيْر", .language, .{ .code = "ar", .heading = "Arabic" });
+    var visible: std.ArrayList(u8) = .empty;
+    var breaks: usize = 0;
+    var glyph_runs: usize = 0;
+    var actions: usize = 0;
+    for (decoded.entry.sections[0].blocks[0].spans) |span| {
+        if (span.kind == .line_break) {
+            breaks += 1;
+            try visible.append(a, '\n');
+        } else try visible.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.classes, "Egyp")) {
+            glyph_runs += 1;
+            try std.testing.expect(span.kind == .text and !span.code);
+            try std.testing.expectEqualStrings("", span.target);
+            try std.testing.expectEqualStrings("egy", span.language);
+            try std.testing.expectEqualStrings("ltr", span.direction);
+        }
+        if (span.target.len != 0) {
+            actions += 1;
+            try std.testing.expect(span.kind == .link);
+            try std.testing.expectEqualStrings("مصر", span.target);
+            try std.testing.expectEqualStrings("رابط", span.text);
+        }
+    }
+    try std.testing.expectEqualStrings("𓆝𓈘\n𓎙𓂧𓌻𓂡𓈘\n𓂝𓆓𓌻𓂡𓈘 رابط", visible.items);
+    try std.testing.expectEqual(@as(usize, 2), breaks);
+    try std.testing.expectEqual(@as(usize, 3), glyph_runs);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+}
+
+test "unsupported hieroglyph attributes and codes retain protected source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "link", "link=''", "link='maybe'", "dir='rtl'", "link='true' dir='rtl'", "link='false' link='true'", "link='true' class='x'", "link='true' extra", "link='true'junk" }) |attrs| {
+        try std.testing.expect(!supportedHieroAttributes(attrs));
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(try std.fmt.allocPrint(a, "<hiero {s}>K3-N36</hiero> [[مصر|رابط]]", .{attrs}), .{});
+        try std.testing.expectEqualStrings("K3-N36 رابط", try plainText(a, spans));
+        try std.testing.expect(renderer.fallbacks.unsupported_element);
+        var coded: std.ArrayList(u8) = .empty;
+        for (spans) |span| if (span.flags.code) try coded.appendSlice(a, span.text);
+        try std.testing.expectEqualStrings("K3-N36", coded.items);
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "مصر"));
+    }
+    try std.testing.expect(!supportedHieroAttributes("link='true"));
+    var unknown: Renderer = .{ .a = a, .context = .{} };
+    const unknown_spans = try unknown.parseSpans("<hiero link='true'>K3-NotASign</hiero>", .{});
+    try std.testing.expectEqualStrings("K3-NotASign", try plainText(a, unknown_spans));
+    try std.testing.expect(unknown.fallbacks.unsupported_element);
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const literal = try protected.parseSpans("<nowiki><hiero link='true'>K3-N36</hiero></nowiki>", .{});
+    try std.testing.expectEqualStrings("<hiero link='true'>K3-N36</hiero>", try plainText(a, literal));
+    try std.testing.expect(!protected.fallbacks.unsupported_element);
 }

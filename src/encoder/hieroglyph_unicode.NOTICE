@@ -21,6 +21,17 @@ unrecognized syntax. The original captured source has SHA-256
 Colon and asterisk joins follow the captured module's Unicode sign-join
 controls U+13430 and U+13431; a dash separates adjacent signs without adding a
 join control. This bounded conversion does not reproduce WikiHiero's complete
-SVG layout, mirroring, enclosures or every Gardiner variant. Unknown input
+SVG layout, mirroring, arbitrary enclosures or every Gardiner variant. Unknown input
 keeps its readable source and unsupported-element diagnostic. Glyph/font and
 spatial rendering require separate actual frontend review.
+
+Additional changes: support the exact captured compound normalization w&t ->
+w@t (U+13434 OVERLAY MIDDLE), and one balanced bare <-...-> cartouche using
+U+13379 U+1343C / U+1343D U+1337A. No general ampersand, nested enclosure,
+numbered enclosure or alternate enclosure parser is added. These rules follow
+the same captured data revision and its captured Module:egy-hieroglyphs parser
+revision 84891461; unknown syntax still retains the entire original source.
+
+Captured parser attribution (English Wiktionary contributors):
+https://en.wiktionary.org/w/index.php?title=Module:egy-hieroglyphs&oldid=84891461
+https://en.wiktionary.org/w/index.php?title=Module:egy-hieroglyphs&action=history

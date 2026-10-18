@@ -53,6 +53,53 @@ class PresentationDiagnosticTests(unittest.TestCase):
         self.assertEqual(['behavior-switch'], audit.diagnostic_categories(text))
 
 
+    def test_explanations_traverse_span_lists_tables_and_references_once(self):
+        span = dict(kind='text', text='body', trail='', explanation='literal {{x}}')
+        entry = dict(sections=[dict(blocks=[dict(spans=[span], table=dict(
+            caption=[span], rows=[dict(cells=[dict(spans=[span])])]))])],
+            references=[dict(spans=[span])])
+        paths = [path for path, _ in audit.annotation_fields(entry)]
+        self.assertEqual([
+            'entry.sections[0].blocks[0].spans[0].explanation',
+            'entry.sections[0].blocks[0].table.caption[0].explanation',
+            'entry.sections[0].blocks[0].table.rows[0].cells[0].spans[0].explanation',
+            'entry.references[0].spans[0].explanation'], paths)
+        self.assertEqual([], list(audit.annotation_fields([
+            dict(kind='text', text='body'), dict(kind='text', text='body', explanation='')])))
+
+    def test_plain_annotations_do_not_become_body_or_action_failures(self):
+        with Fixture() as f:
+            entry = f.entry('annotated', 'ordinary', language='English')
+            entry['sections'] = [dict(blocks=[dict(spans=[dict(kind='text', text='__NO',
+                trail='', explanation='EDITSECTION__ {{literal}} Lua error')])])]
+            f.language('English', [entry])
+            result = audit.scan(f.root, f.query)
+            self.assertEqual('passed', result['status'])
+            self.assertEqual([], result['issues'])
+            [annotation] = result['annotations']
+            self.assertEqual('EDITSECTION__ {{literal}} Lua error', annotation['text'])
+            self.assertEqual(['source-markup', 'error-prose'], annotation['spelling_matches'])
+            self.assertFalse(annotation['lexical_body'] or annotation['runtime_markup'] or annotation['review_issue'])
+            self.assertFalse(result['semantic_acceptance'])
+            self.assertEqual([], list(audit.action_fields(entry)))
+
+    def test_followed_alias_annotations_keep_owner_join_without_duplication(self):
+        with Fixture() as f:
+            target = f.entry('destination', 'ordinary', language='English')
+            target['sections'] = [dict(blocks=[dict(spans=[dict(kind='link', text='cat',
+                target='cat', explanation='plain <literal> __NOTOC__')])])]
+            alias = dict(target, redirect=dict(source_title='alias', target_title='destination',
+                fragment='', followed=True))
+            f.language('English', [target], aliases={'alias': alias})
+            result = audit.scan(f.root, f.query)
+            self.assertEqual((1, 1), (result['records'], result['duplicate_destinations']))
+            [annotation] = result['annotations']
+            self.assertEqual(('alias', 'destination', 'English'),
+                (annotation['query_title'], annotation['title'], annotation['language']))
+            self.assertTrue(annotation['redirect']['followed'])
+            self.assertEqual('passed', result['status'])
+            self.assertEqual([], result['issues'])
+
     def test_residual_action_targets_are_separate_nonwaivable_candidates(self):
         with Fixture() as f:
             entry = f.entry('citation', 'clean prose', language='Hindi')

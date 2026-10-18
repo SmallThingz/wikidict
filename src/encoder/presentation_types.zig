@@ -1,7 +1,7 @@
 const std = @import("std");
 const format = @import("blob_format.zig");
 
-pub const schema = "dict.presentation.v2";
+pub const schema = "dict.presentation.v3";
 pub const Role = enum { normal, label, pronunciation, headword, example, quotation, citation, reference };
 pub const InlineKind = enum { text, link, external_link, line_break };
 pub const Span = struct {
@@ -12,6 +12,7 @@ pub const Span = struct {
     language: []const u8 = "",
     classes: []const u8 = "",
     direction: []const u8 = "",
+    explanation: []const u8 = "",
     bold: bool = false,
     italic: bool = false,
     code: bool = false,

@@ -377,12 +377,14 @@ fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
     const first = section.blocks[0];
     if (first.kind != .heading or first.level != section.level) return null;
     var navigable = false;
+    var explained = false;
     for (first.spans) |span| {
+        explained = explained or span.explanation.len != 0;
         if (span.kind == .line_break and span.trail.len != 0) return null;
         if ((span.kind == .link or span.kind == .external_link) and
             span.target.len != 0 and (span.text.len != 0 or span.trail.len != 0)) navigable = true;
     }
-    if (!navigable) return null;
+    if (!navigable and !explained) return null;
     var cursor: HeadingBytes = .{ .spans = first.spans };
     var offset: usize = 0;
     var begin: ?usize = null;
@@ -695,6 +697,107 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
     if (details) try entryMetadataProjected(w, entry, color, projection, &captions);
 }
 
+// The details view visits compiled span lists without changing body text or links.
+fn visitEntrySpanLists(entry: model.Entry, visitor: anytype) !bool {
+    if (try visitor.spans(entry.display_title)) return true;
+    if (try visitor.spans(entry.preamble_spans)) return true;
+    for (entry.sections) |section| for (section.blocks) |block| {
+        if (try visitor.spans(block.spans)) return true;
+        if (block.table) |table| {
+            if (try visitor.spans(table.caption)) return true;
+            for (table.rows) |row| for (row.cells) |cell| {
+                if (try visitor.spans(cell.spans)) return true;
+            };
+        }
+    };
+    for (entry.references) |reference| if (try visitor.spans(reference.spans)) return true;
+    return false;
+}
+
+const Abbreviation = struct { label: []const u8, explanation: []const u8 };
+const AbbreviationContext = struct {
+    pub fn hash(_: @This(), item: Abbreviation) u64 {
+        return std.hash.Wyhash.hash(std.hash.Wyhash.hash(0, item.label), item.explanation);
+    }
+    pub fn eql(_: @This(), lhs: Abbreviation, rhs: Abbreviation) bool {
+        return std.mem.eql(u8, lhs.label, rhs.label) and std.mem.eql(u8, lhs.explanation, rhs.explanation);
+    }
+};
+const Abbreviations = struct {
+    allocator: std.mem.Allocator,
+    items: std.ArrayList(Abbreviation) = .empty,
+    seen: std.HashMapUnmanaged(Abbreviation, void, AbbreviationContext, 80) = .empty,
+
+    fn init(allocator: std.mem.Allocator, entry: model.Entry) !Abbreviations {
+        var result: Abbreviations = .{ .allocator = allocator };
+        errdefer result.deinit();
+        _ = try visitEntrySpanLists(entry, &result);
+        return result;
+    }
+    fn deinit(self: *Abbreviations) void {
+        self.seen.deinit(self.allocator);
+        for (self.items.items) |item| self.allocator.free(item.label);
+        self.items.deinit(self.allocator);
+    }
+    fn add(self: *Abbreviations, text: []const u8, explanation: []const u8) !void {
+        const label = std.mem.trim(u8, text, " \t\r\n");
+        if (label.len == 0 or self.seen.contains(.{ .label = label, .explanation = explanation })) return;
+        try self.seen.ensureUnusedCapacity(self.allocator, 1);
+        const owned_label = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(owned_label);
+        const item: Abbreviation = .{ .label = owned_label, .explanation = explanation };
+        try self.items.append(self.allocator, item);
+        self.seen.putAssumeCapacityNoClobber(item, {});
+    }
+    fn spans(self: *Abbreviations, values: []const model.Span) !bool {
+        var label: std.ArrayList(u8) = .empty;
+        defer label.deinit(self.allocator);
+        var at: usize = 0;
+        while (at < values.len) {
+            const explanation = values[at].explanation;
+            if (explanation.len == 0) {
+                at += 1;
+                continue;
+            }
+            label.clearRetainingCapacity();
+            // Formatting may split an abbreviation into adjacent spans. A new
+            // span list is a structural boundary, even if its explanation matches.
+            while (at < values.len and std.mem.eql(u8, values[at].explanation, explanation)) : (at += 1) {
+                const value = values[at];
+                if (value.kind == .line_break) try label.append(self.allocator, '\n') else try label.appendSlice(self.allocator, value.text);
+                try label.appendSlice(self.allocator, value.trail);
+            }
+            try self.add(label.items, explanation);
+        }
+        return false;
+    }
+    fn write(self: *const Abbreviations, w: *std.Io.Writer) !void {
+        if (self.items.items.len == 0) return;
+        try w.writeAll("\nAbbreviations\n");
+        for (self.items.items) |item| {
+            try terminalText(w, item.label);
+            try w.writeAll(": ");
+            try terminalText(w, item.explanation);
+            try w.writeByte('\n');
+        }
+    }
+};
+
+fn entryHasAbbreviations(entry: model.Entry) bool {
+    const Presence = struct {
+        fn spans(_: *@This(), values: []const model.Span) error{}!bool {
+            for (values) |value| {
+                if (value.explanation.len != 0 and
+                    ((value.kind != .line_break and std.mem.trim(u8, value.text, " \t\r\n").len != 0) or
+                        std.mem.trim(u8, value.trail, " \t\r\n").len != 0)) return true;
+            }
+            return false;
+        }
+    };
+    var presence: Presence = .{};
+    return visitEntrySpanLists(entry, &presence) catch unreachable;
+}
+
 fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, projection: ?*PoemProjection, captions: *VisibleMediaCaptions) !void {
     // These references are emitted by this same details route below.
     for (entry.references) |ref| try captions.observeSpans(ref.spans);
@@ -722,6 +825,9 @@ fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, pr
             try w.writeByte('\n');
         }
     }
+    var abbreviations = try Abbreviations.init(std.heap.smp_allocator, entry);
+    defer abbreviations.deinit();
+    try abbreviations.write(w);
 }
 
 pub fn json(w: *std.Io.Writer, response: Response) !void {
@@ -820,7 +926,11 @@ pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.E
         const first: usize = if (sectionHeadingCompanion(section) != null) 1 else 0;
         for (section.blocks[first..]) |block| if (!closed or (meaning and block.kind == .definition)) try captions.emitBlocks(w, &.{block}, color, projection);
     }
-    if (preferences.details) try entryMetadataProjected(w, entry, color, projection, &captions) else if (entry.media.len != 0 or entry.references.len != 0) try w.writeAll("\n  d: media and references\n");
+    if (preferences.details) {
+        try entryMetadataProjected(w, entry, color, projection, &captions);
+    } else if (entryHasAbbreviations(entry)) {
+        try w.writeAll(if (entry.media.len != 0 or entry.references.len != 0) "\n  d: abbreviations, media and references\n" else "\n  d: abbreviations\n");
+    } else if (entry.media.len != 0 or entry.references.len != 0) try w.writeAll("\n  d: media and references\n");
     return selected_offset;
 }
 test "ordered list items render numbers without becoming dictionary meanings" {
@@ -1373,4 +1483,119 @@ test "caption observation keeps table reference and projected span domains local
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "unicode\ncaption") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "[audio] Écho 🔊.ogg\n") != null);
     try std.testing.expect(lines.items.len >= 2);
+}
+
+test "abbreviation details preserve compact styled labels and independent navigation" {
+    const values = [_]model.Span{
+        .{ .kind = .link, .text = "f", .target = "Appendix:Glossary#feminine", .explanation = "feminine gender" },
+        .{ .text = " " },
+        .{ .text = "ab", .explanation = "abbreviation" },
+        .{ .text = "br", .italic = true, .explanation = "abbreviation" },
+        .{ .text = " " },
+        .{ .text = "f", .explanation = "a different meaning" },
+    };
+    const entry: model.Entry = .{ .title = "entry", .kind = .citations, .preamble_spans = &values };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try spansText(&out.writer, &values, false);
+    try std.testing.expectEqualStrings("f abbr f", out.written());
+    out.clearRetainingCapacity();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expectEqualStrings("entry  / citations\nf abbr f\n\nAbbreviations\nf: feminine gender\nabbr: abbreviation\nf: a different meaning\n", out.written());
+    out.clearRetainingCapacity();
+    _ = try entryTextFolded(&out, entry, false, .{ .details = false }, &.{}, 0);
+    try std.testing.expectEqualStrings("entry  / citations\nf abbr f\n\n  d: abbreviations\n", out.written());
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "feminine gender") == null);
+    out.clearRetainingCapacity();
+    _ = try entryTextFolded(&out, entry, false, .{ .details = true }, &.{}, 0);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "abbr: abbreviation\n") != null);
+    out.clearRetainingCapacity();
+    try json(&out.writer, .{ .operation = .search, .query = "entry", .kind = .citations, .language = null, .record_count = 1, .total_matches = 1, .entries = &.{entry} });
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, out.written(), .{});
+    defer parsed.deinit();
+    const first = parsed.value.object.get("entries").?.array.items[0].object.get("preamble_spans").?.array.items[0].object;
+    try std.testing.expectEqualStrings("f", first.get("text").?.string);
+    try std.testing.expectEqualStrings("feminine gender", first.get("explanation").?.string);
+    try std.testing.expectEqualStrings("Appendix:Glossary#feminine", first.get("target").?.string);
+}
+
+test "abbreviation details traverse every compiled span container without crossing boundaries" {
+    const types = @import("blob_encoder").presentation_types;
+    const display = [_]model.Span{.{ .text = "D", .explanation = "display title" }};
+    const preamble = [_]model.Span{.{ .text = "P", .explanation = "preamble" }};
+    const first = [_]model.Span{.{ .text = "ab", .explanation = "shared explanation" }};
+    const second = [_]model.Span{.{ .text = "br", .explanation = "shared explanation" }};
+    const caption = [_]model.Span{.{ .text = "C", .explanation = "caption" }};
+    const cell = [_]model.Span{.{ .text = "T", .explanation = "table cell" }};
+    const reference = [_]model.Span{.{ .text = "R", .explanation = "reference" }};
+    const cells = [_]types.Cell{ .{ .spans = &cell }, .{ .spans = &first } };
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    const blocks = [_]model.Block{
+        .{ .kind = .paragraph, .spans = &first },
+        .{ .kind = .paragraph, .spans = &second },
+        .{ .kind = .table, .table = .{ .caption = &caption, .rows = &rows } },
+    };
+    const sections = [_]model.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+    const references = [_]model.Reference{.{ .number = 1, .group_number = 1, .spans = &reference }};
+    const entry: model.Entry = .{ .title = "entry", .kind = .citations, .display_title = &display, .preamble_spans = &preamble, .sections = &sections, .references = &references };
+    var collected = try Abbreviations.init(std.testing.allocator, entry);
+    defer collected.deinit();
+    try std.testing.expectEqual(@as(usize, 7), collected.items.items.len);
+    const labels = [_][]const u8{ "D", "P", "ab", "br", "C", "T", "R" };
+    for (collected.items.items, labels) |item, label| try std.testing.expectEqualStrings(label, item.label);
+    try std.testing.expect(entryHasAbbreviations(entry));
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try collected.write(&out.writer);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "abbr:") == null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "ab: shared explanation\n"));
+}
+
+test "abbreviation details escape plain metadata and leave unannotated output unchanged" {
+    const values = [_]model.Span{.{ .text = "?", .explanation = "uncertain\x1b[31m\u{202e}" }};
+    var entry: model.Entry = .{ .title = "entry", .kind = .citations, .preamble_spans = &values };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "?: uncertain\\u{1b}[31m\\u{202e}\n") != null);
+    const plain = [_]model.Span{ .{ .text = "?" }, .{ .text = " ", .explanation = "no visible abbreviation" } };
+    entry.preamble_spans = &plain;
+    try std.testing.expect(!entryHasAbbreviations(entry));
+    out.clearRetainingCapacity();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expectEqualStrings("entry  / citations\n? \n", out.written());
+    out.clearRetainingCapacity();
+    _ = try entryTextFolded(&out, entry, false, .{ .details = false }, &.{}, 0);
+    try std.testing.expectEqualStrings("entry  / citations\n? \n", out.written());
+}
+
+test "explained heading companions render once with exact title and level guards" {
+    const heading = [_]model.Span{.{ .text = "Noun", .explanation = "part of speech" }};
+    const meaning = [_]model.Span{.{ .text = "Definition." }};
+    const blocks = [_]model.Block{
+        .{ .kind = .heading, .level = 3, .spans = &heading },
+        .{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &meaning },
+    };
+    const sections = [_]model.Section{.{ .level = 3, .title = "Noun", .blocks = &blocks }};
+    const entry: model.Entry = .{ .title = "entry", .kind = .language, .language = "English", .sections = &sections };
+    try std.testing.expect(sectionHeadingCompanion(sections[0]) != null);
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for ([_]bool{ false, true }) |folded| {
+        out.clearRetainingCapacity();
+        if (folded) _ = try entryTextFolded(&out, entry, false, .{ .details = true }, &.{}, 0) else try entryText(&out.writer, entry, false);
+        const note_start = std.mem.indexOf(u8, out.written(), "\nAbbreviations\n").?;
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written()[0..note_start], "Noun"));
+        try std.testing.expect(std.mem.indexOf(u8, out.written()[0..note_start], "Definition.") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.written()[note_start..], "Noun: part of speech\n") != null);
+    }
+    var wrong_title = sections[0];
+    wrong_title.title = "Other";
+    try std.testing.expect(sectionHeadingCompanion(wrong_title) == null);
+    var wrong_level = sections[0];
+    wrong_level.level = 2;
+    try std.testing.expect(sectionHeadingCompanion(wrong_level) == null);
+    const plain_heading = [_]model.Span{.{ .text = "Noun" }};
+    const plain_blocks = [_]model.Block{.{ .kind = .heading, .level = 3, .spans = &plain_heading }};
+    try std.testing.expect(sectionHeadingCompanion(.{ .level = 3, .title = "Noun", .blocks = &plain_blocks }) == null);
 }

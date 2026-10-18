@@ -2091,6 +2091,7 @@ pub fn main(init: std.process.Init) !void {
     try failureMetadataProbe(&h, dir);
     try expansionFallbackProbe(&h, argv[6], verifier, bin, dir);
     try poemPhaseProbe(&h, pipeline, argv[6], verifier, bin, dir);
+    try abbreviationInteropProbe(&h, verifier, bin, dir);
     h.checks += 1;
 
     const dump = try std.fs.path.join(a, &.{ dir, "fixture.xml" });
@@ -2780,4 +2781,69 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
     const duplicate_token = try std.json.Stringify.valueAlloc(h.a, parsed_phase.value, .{});
     try rejectPoemRecordMetadata(h, records, "duplicate-phase-token", expanded_source, first_title, duplicate_token, error.InvalidPoemMetadata);
     h.checks += poem_phase_cases.len;
+}
+
+// Synthetic interoperability fixture: verbatim abbreviation contexts from
+// enwiktionary acupuncture, page 51086 revision 92130836. Compact labels and
+// authored glossary targets are retained; this is not a corpus acceptance test.
+fn abbreviationInteropProbe(h: *Harness, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const root = try std.fs.path.join(h.a, &.{ dir, "abbreviation-interop" });
+    const title = "Acupuncture abbreviation sample";
+    const control = "Legacy format abbreviation control";
+    const source = "==English==\n===Abbreviations===\n[[Appendix:Glossary#derived terms|<abbr title=\"derived terms\">der.</abbr>]] <abbr class=\"etytree-unc\" title=\"uncertain\">?</abbr> [[Appendix:Glossary#learned borrowing|<abbr title=\"learned borrowing\">lbor.</abbr>]] <span class=\"gender\"><abbr title=\"feminine gender\">f</abbr></span> <span class=\"gender\"><abbr title=\"common gender\">c</abbr></span> <span class=\"gender\"><abbr title=\"masculine gender\">m</abbr></span> <span class=\"gender\"><abbr title=\"neuter gender\">n</abbr></span>\n";
+    const plain = "==English==\n===Noun===\n# Plain [[cat|control]].\n";
+    var writer = try encoder.blob_builder.Writer.init(h.io, h.a, root);
+    defer writer.deinit();
+    const codes: encoder.blob_builder.LanguageCodes = .{ .get_fn = poemFixtureLanguage };
+    writer.language_codes = codes;
+    try writer.addExpandedPage(h.a, .{ .id = 0, .kind = .language }, title, source, source, null);
+    try writer.addExpandedPage(h.a, .{ .id = 0, .kind = .language }, control, plain, plain, null);
+    _ = try writer.finish(codes);
+    try std.Io.Dir.cwd().deleteFile(h.io, try std.fs.path.join(h.a, &.{ root, ".incomplete" }));
+    _ = try verifyFixture(h, verifier, root, null);
+    const annotated = try readPoemRecord(h, root, "English", title);
+    const legacy = try readPoemRecord(h, root, "English", control);
+    try h.require(std.mem.startsWith(u8, annotated.payload, "DPR3") and std.mem.startsWith(u8, legacy.payload, "DPR2"), "normal Writer produces explained DPR3 beside unannotated legacy-format DPR2");
+    const labels = [_][]const u8{ "der.", "?", "lbor.", "f", "c", "m", "n" };
+    const explanations = [_][]const u8{ "derived terms", "uncertain", "learned borrowing", "feminine gender", "common gender", "masculine gender", "neuter gender" };
+    var seen: [7]std.ArrayList(u8) = @splat(.empty);
+    var compact: std.ArrayList(u8) = .empty;
+    var links: usize = 0;
+    for (annotated.stored.entry.sections) |section| for (section.blocks) |block| {
+        try h.require(block.table == null, "abbreviation sample stays a compact paragraph");
+        for (block.spans) |span| {
+            try compact.appendSlice(h.a, span.text);
+            try compact.appendSlice(h.a, span.trail);
+            if (span.explanation.len != 0) {
+                var found = false;
+                for (explanations, 0..) |explanation, i| if (std.mem.eql(u8, span.explanation, explanation)) {
+                    try seen[i].appendSlice(h.a, span.text);
+                    try seen[i].appendSlice(h.a, span.trail);
+                    found = true;
+                };
+                try h.require(found, "only captured authored explanations are emitted");
+            }
+            if (span.kind == .link) {
+                try h.require(std.mem.eql(u8, span.target, "Appendix:Glossary#derived terms") or std.mem.eql(u8, span.target, "Appendix:Glossary#learned borrowing"), "captured glossary actions retain exact targets");
+                links += 1;
+            }
+        }
+    };
+    try h.require(std.mem.eql(u8, compact.items, "der. ? lbor. f c m n") and links == 2, "all seven compact labels and both glossary actions survive native publication");
+    for (labels, 0..) |label, i| try h.require(std.mem.eql(u8, seen[i].items, label), "each explanation annotates its complete compact label only");
+    for ([_][]const u8{ title, control }, 0..) |word, i| {
+        const exported = try h.run(&.{ bin, "export", word, "--root", root, "--language", "English" }, 0);
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(h.a, &.{ root, if (i == 0) "annotated.export.json" else "legacy.export.json" }), .data = exported });
+        var parsed = try std.json.parseFromSlice(std.json.Value, h.a, exported, .{});
+        defer parsed.deinit();
+        const entries = parsed.value.object.get("entries") orelse return error.MissingInteropEntries;
+        try h.require(entries == .array and entries.array.items.len == 1, "normal JSON exports exactly one requested English record");
+        const entry_json = try std.json.Stringify.valueAlloc(h.a, entries.array.items[0], .{});
+        var decoded_json = try std.json.parseFromSlice(encoder.presentation_types.Entry, h.a, entry_json, .{});
+        defer decoded_json.deinit();
+        const expected_entry = if (i == 0) annotated.stored.entry else legacy.stored.entry;
+        try std.testing.expectEqualDeep(expected_entry, decoded_json.value);
+        try h.require(std.mem.eql(u8, decoded_json.value.title, word), "exported title, complete span fields, explanations and navigation equal the native record");
+    }
+    h.checks += 1;
 }

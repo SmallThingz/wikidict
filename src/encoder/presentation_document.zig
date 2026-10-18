@@ -117,6 +117,8 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
             errdefer self.a.free(owned_language);
             const owned_direction = try self.a.dupe(u8, attributes.direction);
             errdefer self.a.free(owned_direction);
+            const owned_explanation = try self.a.dupe(u8, attributes.explanation);
+            errdefer self.a.free(owned_explanation);
             try self.scopes.append(self.a, .{
                 .opening_start = absolute_open,
                 .body_start = base + body_start,
@@ -125,7 +127,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
-                .attributes = .{ .classes = owned_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction },
+                .attributes = .{ .classes = owned_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set },
                 .target = owned_target,
                 .link_quotes = link_quotes,
                 .parent = parent,
@@ -140,6 +142,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
             a.free(scope.attributes.classes);
             a.free(scope.attributes.language);
             a.free(scope.attributes.direction);
+            a.free(scope.attributes.explanation);
         }
         collected.scopes.deinit(a);
         collected.refused_link_openings.deinit(a);
@@ -600,13 +603,14 @@ pub fn compileReportedWithReferencesAndPoemFragmentsAlloc(
     for (@constCast(work.sections)) |*section| {
         if (section.title.len == 0) continue;
         var navigable = false;
+        var explained = false;
         for (section.title_spans) |span| {
+            explained = explained or span.explanation.len != 0;
             if ((span.kind == .link or span.kind == .external_link) and span.target.len != 0 and span.text.len != 0) {
                 navigable = true;
-                break;
             }
         }
-        if (navigable) {
+        if (navigable or explained) {
             const blocks = try a.alloc(compiler.Block, section.blocks.len + 1);
             blocks[0] = .{ .kind = .heading, .spans = section.title_spans, .level = section.level };
             @memcpy(blocks[1..], section.blocks);
@@ -1500,4 +1504,231 @@ test "explicit owner preserves direct L2 POS and nested Counter codec layout" {
         const block = decoded.entry.sections[lexeme.section].blocks[lexeme.definitions[0].block];
         try std.testing.expectEqualStrings("One item.", block.spans[0].text);
     }
+}
+
+test "reported usage examples preserve qualifier links placement and duplicate last wins" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var report: Fallbacks = .{};
+    const source = "{{ux|en|[[work|Work]]|translation=Translation|tr=wərk|q=discard-left|q=[[rare|rare]]|qq=discard-right|qq=[[regional|regional]]}}";
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    const parsed = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var text: std.ArrayList(u8) = .empty;
+    var left = false;
+    var right = false;
+    var example = false;
+    var translation = false;
+    for (parsed.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "rare") or std.mem.eql(u8, span.text, "regional")) {
+            try std.testing.expectEqual(types.Role.label, span.role);
+            try std.testing.expect(!span.italic);
+            try std.testing.expectEqual(types.InlineKind.link, span.kind);
+            try std.testing.expectEqualStrings(span.text, span.target);
+            if (std.mem.eql(u8, span.text, "rare")) left = true else right = true;
+        }
+        if (std.mem.eql(u8, span.text, "Work")) {
+            example = true;
+            try std.testing.expectEqual(types.Role.example, span.role);
+            try std.testing.expect(span.italic);
+            try std.testing.expectEqualStrings("en", span.language);
+            try std.testing.expectEqualStrings("work", span.target);
+        }
+        if (std.mem.eql(u8, span.text, "Translation")) {
+            translation = true;
+            try std.testing.expect(!span.italic);
+            try std.testing.expectEqual(types.Role.normal, span.role);
+        }
+    };
+    try std.testing.expectEqualStrings("(rare) Work (regional)\nTranslation (wərk)", text.items);
+    try std.testing.expect(left and right and example and translation);
+    try std.testing.expect(report.template_presentation and !report.missing_template and !report.literal_markup);
+
+    // An explicitly empty last qualifier removes its earlier value, as it does
+    // in normal template arguments; plain examples keep their existing output.
+    var empty_report: Fallbacks = .{};
+    const empty_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "{{ux|en|Work|Translation|tr=wərk|q=obsolete|q=|qq=obsolete|qq=}}", null, &empty_report);
+    const empty_parsed = try codec.decodeAlloc(a, empty_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var empty_text: std.ArrayList(u8) = .empty;
+    for (empty_parsed.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| try empty_text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("Work\nTranslation (wərk)", empty_text.items);
+    try std.testing.expect(empty_report.template_presentation and !empty_report.missing_template);
+}
+
+test "authored abbreviation explanations preserve compact text nested scope and actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var report: Fallbacks = .{};
+    const source = "<abbr title='outer &amp; inner'>ab<i>br</i><abbr>inherit</abbr><abbr title=''>clear</abbr><abbr title='different'>child</abbr>again</abbr> tail <code><abbr title='code explanation'>c</abbr></code> <nowiki><abbr title='literal'>raw</abbr></nowiki> <abbr title='uncertain'>?</abbr> <abbr title='feminine gender'>[[Appendix:Glossary#feminine|f]]</abbr> <abbr title='common gender'>c</abbr> <abbr title='masculine gender'>m</abbr> <abbr title='neuter gender'>n</abbr> <abbr title='&amp;lt;literal&amp;gt;'>x</abbr>";
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    try std.testing.expectEqualStrings(codec.explained_magic, bytes[0..4]);
+    const parsed = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var compact: std.ArrayList(u8) = .empty;
+    var checks: usize = 0;
+    for (parsed.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try compact.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "ab") or std.mem.eql(u8, span.text, "br") or std.mem.eql(u8, span.text, "inherit") or std.mem.eql(u8, span.text, "again")) {
+            try std.testing.expectEqualStrings("outer & inner", span.explanation);
+            checks += 1;
+        }
+        if (std.mem.eql(u8, span.text, "clear")) {
+            try std.testing.expectEqualStrings("", span.explanation);
+            checks += 1;
+        }
+        if (std.mem.eql(u8, span.text, "child")) {
+            try std.testing.expectEqualStrings("different", span.explanation);
+            checks += 1;
+        }
+        if (std.mem.eql(u8, span.text, "c") and span.code) {
+            try std.testing.expectEqualStrings("code explanation", span.explanation);
+            try std.testing.expect(span.code);
+            checks += 1;
+        }
+        if (std.mem.eql(u8, span.text, "?")) {
+            try std.testing.expectEqualStrings("uncertain", span.explanation);
+            checks += 1;
+        }
+        if (std.mem.eql(u8, span.text, "f")) {
+            try std.testing.expectEqualStrings("feminine gender", span.explanation);
+            try std.testing.expectEqualStrings("Appendix:Glossary#feminine", span.target);
+            try std.testing.expect(span.kind == .link);
+            checks += 1;
+        }
+        if (std.mem.eql(u8, span.text, "c") and !span.code) {
+            try std.testing.expectEqualStrings("common gender", span.explanation);
+            checks += 1;
+        }
+        if (std.mem.eql(u8, span.text, "m")) {
+            try std.testing.expectEqualStrings("masculine gender", span.explanation);
+            checks += 1;
+        }
+        if (std.mem.eql(u8, span.text, "n")) {
+            try std.testing.expectEqualStrings("neuter gender", span.explanation);
+            checks += 1;
+        }
+        if (std.mem.eql(u8, span.text, "x")) {
+            try std.testing.expectEqualStrings("&lt;literal&gt;", span.explanation);
+            checks += 1;
+        }
+        if (std.mem.indexOf(u8, span.text, " tail ") != null) try std.testing.expectEqualStrings("", span.explanation);
+        if (std.mem.indexOf(u8, span.text, "<abbr title='literal'>") != null) {
+            try std.testing.expectEqualStrings("", span.explanation);
+            checks += 1;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 14), checks);
+    try std.testing.expectEqualStrings("abbrinheritclearchildagain tail c <abbr title='literal'>raw</abbr> ? f c m n x", compact.items);
+    try std.testing.expect(!report.any());
+}
+
+test "abbreviation explanations survive rich headings display table captions cells and references" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var report: Fallbacks = .{};
+    const source = "==English==\n===<abbr title='heading'>Noun</abbr>===\n# A word.<ref name=r><abbr title='reference'>ref</abbr></ref>\n{|\n|+ <abbr title='caption'>C</abbr>\n|-\n| <abbr title='cell'>D</abbr>\n|}\n<ref name=r/>\n<references/>";
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, .{ .source = "<abbr title='display'>entry</abbr>", .page_title = "entry" }, &report);
+    const parsed = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualStrings("display", parsed.entry.display_title[0].explanation);
+    var heading = false;
+    var caption = false;
+    var cell = false;
+    for (parsed.entry.sections) |section| for (section.blocks) |block| {
+        for (block.spans) |span| if (std.mem.eql(u8, span.explanation, "heading")) {
+            heading = block.kind == .heading;
+        };
+        if (block.table) |table_value| {
+            for (table_value.caption) |span| if (std.mem.eql(u8, span.explanation, "caption")) {
+                caption = true;
+            };
+            for (table_value.rows) |row| for (row.cells) |cell_value| for (cell_value.spans) |span| if (std.mem.eql(u8, span.explanation, "cell")) {
+                cell = true;
+            };
+        }
+    };
+    try std.testing.expect(heading and caption and cell);
+    try std.testing.expectEqual(@as(usize, 1), parsed.entry.references.len);
+    try std.testing.expectEqualStrings("reference", parsed.entry.references[0].spans[0].explanation);
+    try std.testing.expect(!report.any());
+}
+
+test "abbreviation explanations cross structural and poem boundaries without reviving empty titles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_][]const u8{
+        "<abbr title='outer'><div>before\n{|\n| [[target|linked]] <abbr title=''>clear</abbr> after\n|}\n</div></abbr> tail",
+        "<abbr title='outer'>before\n{|\n| [[target|linked]] <abbr title=''>clear</abbr> after\n|}\n</abbr> tail",
+        "<abbr title='outer'><ol><li>before\n# [[target|linked]]\n<abbr title=''>clear</abbr> after</li></ol></abbr> tail",
+        "<abbr title='outer'><poem>before\n<abbr title=''>clear</abbr>\n[[target|linked]] after</poem></abbr> tail",
+    };
+    for (cases) |source| {
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+        const parsed = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        var before = false;
+        var linked = false;
+        var clear = false;
+        var after = false;
+        var tail = false;
+        for (parsed.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.indexOf(u8, span.text, "before") != null) {
+                try std.testing.expectEqualStrings("outer", span.explanation);
+                before = true;
+            }
+            if (std.mem.eql(u8, span.text, "linked")) {
+                try std.testing.expectEqualStrings("outer", span.explanation);
+                try std.testing.expectEqualStrings("target", span.target);
+                linked = true;
+            }
+            if (std.mem.eql(u8, span.text, "clear")) {
+                try std.testing.expectEqualStrings("", span.explanation);
+                clear = true;
+            }
+            if (std.mem.indexOf(u8, span.text, "after") != null) {
+                try std.testing.expectEqualStrings("outer", span.explanation);
+                after = true;
+            }
+            if (std.mem.indexOf(u8, span.text, "tail") != null) {
+                try std.testing.expectEqualStrings("", span.explanation);
+                tail = true;
+            }
+        };
+        try std.testing.expect(before and linked and clear and after and tail);
+        try std.testing.expect(!report.unclosed_formatting and !report.missing_template);
+    }
+}
+
+test "supported usage recovery content keeps example actions and visible Lua provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var report: Fallbacks = .{};
+    const source = "{{ux|en|[[work|Work]]|translation=Translation|tr=wərk|q=[[rare|rare]]|qq=[[regional|regional]]}}<br/><strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:usex: The function &quot;display&quot; does not exist.</span></strong>";
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var text: std.ArrayList(u8) = .empty;
+    var example = false;
+    var labels: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "Work")) {
+            example = true;
+            try std.testing.expect(span.kind == .link and span.role == .example and span.italic);
+            try std.testing.expectEqualStrings("work", span.target);
+            try std.testing.expectEqualStrings("en", span.language);
+        }
+        if (std.mem.eql(u8, span.text, "rare") or std.mem.eql(u8, span.text, "regional")) {
+            labels += 1;
+            try std.testing.expect(span.kind == .link and span.role == .label and !span.italic);
+            try std.testing.expectEqualStrings(span.text, span.target);
+        }
+    };
+    try std.testing.expect(example and labels == 2);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "Translation") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "wərk") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "Lua error in Module:usex:") != null);
+    try std.testing.expect(report.rendered_lua_error and report.template_presentation and !report.literal_markup);
 }

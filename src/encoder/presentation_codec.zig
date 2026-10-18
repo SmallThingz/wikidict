@@ -4,12 +4,15 @@ const types = @import("presentation_types.zig");
 const A = std.mem.Allocator;
 
 pub const magic = "DPR2";
+pub const explained_magic = "DPR3";
+const Version = enum { plain, explained };
 const max_items: usize = 1 << 20;
 const max_string_bytes: usize = 32 * 1024 * 1024;
 const no_index: u32 = std.math.maxInt(u32);
 
 const Encoder = struct {
     a: A,
+    version: Version = .plain,
     out: std.ArrayList(u8) = .empty,
 
     fn deinit(self: *Encoder) void {
@@ -94,7 +97,9 @@ const Encoder = struct {
             break :blk result;
         };
         const trail: []const u8 = if (comptime @hasField(@TypeOf(value), "trail")) value.trail else "";
-        const strings = [_][]const u8{ value.text, value.target, trail, value.language, value.classes, value.direction };
+        const explanation: []const u8 = if (comptime @hasField(@TypeOf(value), "explanation")) value.explanation else "";
+        const fields = [_][]const u8{ value.text, value.target, trail, value.language, value.classes, value.direction, explanation };
+        const strings = fields[0..if (self.version == .explained) @as(usize, 7) else 6];
         var encoded_len: usize = 3 + strings.len * @sizeOf(u32);
         for (strings) |string_value| {
             if (string_value.len > max_string_bytes) return error.PresentationTooLarge;
@@ -371,6 +376,7 @@ pub const DecodeMetrics = struct {
 
 const Reader = struct {
     a: A,
+    version: Version = .plain,
     bytes: []const u8,
     pos: usize = 0,
     metrics: ?*DecodeMetrics = null,
@@ -456,10 +462,11 @@ const Reader = struct {
             .language = try self.string(),
             .classes = try self.string(),
             .direction = try self.string(),
+            .explanation = if (self.version == .explained) try self.string() else "",
         };
     }
     fn spans(self: *Reader) ![]const types.Span {
-        const len = try self.count(27);
+        const len = try self.count(if (self.version == .explained) 31 else 27);
         const out = try self.a.alloc(types.Span, len);
         for (out) |*value| value.* = try self.span();
         return out;
@@ -579,11 +586,36 @@ const Reader = struct {
     }
 };
 
+fn spansHaveExplanation(values: anytype) bool {
+    for (values) |span_value| {
+        if (comptime @hasField(@TypeOf(span_value), "explanation"))
+            if (span_value.explanation.len != 0) return true;
+    }
+    return false;
+}
+
+// Visit every span that Encoder serializes. Layout contains only indices and
+// scalar fields; media descriptions are plain text, not another span tree.
+fn hasExplanation(display: anytype, sections_value: anytype, preamble: anytype, references_value: anytype) bool {
+    if (spansHaveExplanation(display) or spansHaveExplanation(preamble)) return true;
+    for (sections_value) |section| for (section.blocks) |block_value| {
+        if (spansHaveExplanation(block_value.spans)) return true;
+        if (block_value.table) |table_value| {
+            if (spansHaveExplanation(table_value.caption)) return true;
+            for (table_value.rows) |row_value| for (row_value.cells) |cell_value|
+                if (spansHaveExplanation(cell_value.spans)) return true;
+        }
+    };
+    for (references_value) |reference| if (spansHaveExplanation(reference.spans)) return true;
+    return false;
+}
+
 pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (!std.mem.eql(u8, stored.schema, types.schema)) return error.InvalidPresentation;
-    var encoder: Encoder = .{ .a = a };
+    const version: Version = if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
+    var encoder: Encoder = .{ .a = a, .version = version };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, magic);
+    try encoder.out.appendSlice(a, if (version == .explained) explained_magic else magic);
     try encoder.spans(stored.entry.display_title);
     try encoder.sections(stored.entry.sections);
     try encoder.spans(stored.entry.preamble_spans);
@@ -603,9 +635,10 @@ pub fn encodeBuildAlloc(
     references_value: anytype,
     media_value: anytype,
 ) ![]u8 {
-    var encoder: Encoder = .{ .a = a };
+    const version: Version = if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
+    var encoder: Encoder = .{ .a = a, .version = version };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, magic);
+    try encoder.out.appendSlice(a, if (version == .explained) explained_magic else magic);
     try encoder.spans(display_title);
     try encoder.sections(sections);
     try encoder.count(0); // no preamble is emitted by the bundle compiler
@@ -650,8 +683,9 @@ fn decodeImpl(
     language_metadata: ?format.LanguageMetadata,
     metrics: ?*DecodeMetrics,
 ) !types.Stored {
-    if (payload.len < magic.len or !std.mem.eql(u8, payload[0..magic.len], magic)) return error.InvalidPresentation;
-    var reader: Reader = .{ .a = a, .bytes = payload, .pos = magic.len, .metrics = metrics };
+    if (payload.len < magic.len) return error.InvalidPresentation;
+    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else return error.InvalidPresentation;
+    var reader: Reader = .{ .a = a, .version = version, .bytes = payload, .pos = magic.len, .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
     const preamble = try reader.spans();
@@ -997,4 +1031,67 @@ test "table observations preserve round trips and do not commit failed decode" {
     try std.testing.expectError(error.InvalidPresentation, decodeWithMetricsAlloc(a, corrupt, "wide", .supplemental, null, &metrics));
     try std.testing.expectEqual(@as(?usize, 77), metrics.table_columns_exact);
     try std.testing.expectEqual(@as(usize, 99), metrics.tables);
+}
+
+test "legacy DPR2 compact spans remain readable and byte identical" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Independently framed pre-extension DPR2: eight minimal empty spans and
+    // six empty following lists. This also distinguishes the 27/31 minimum.
+    const legacy = "\x44\x50\x52\x32\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    const parsed = try decodeAlloc(a, legacy, "entry", .supplemental, null);
+    try std.testing.expectEqualStrings("dict.presentation.v3", parsed.schema);
+    try std.testing.expectEqual(@as(usize, 8), parsed.entry.display_title.len);
+    for (parsed.entry.display_title) |span_value| try std.testing.expectEqualStrings("", span_value.explanation);
+    try std.testing.expectEqualStrings(legacy, try encodeAlloc(a, parsed));
+    try std.testing.expectEqualStrings(legacy, try encodeBuildAlloc(a, parsed.entry.display_title, parsed.entry.sections, parsed.entry.organization, parsed.entry.references, parsed.entry.media));
+}
+
+test "DPR3 explanations traverse every stored span container and reject corrupt fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const note = "feminine gender explanation";
+    const annotated = [_]types.Span{.{ .kind = .link, .text = "f", .target = "glossary", .explanation = note, .italic = true }};
+    const blank: []const types.Span = &.{};
+    for (0..6) |location| {
+        const cells = [_]types.Cell{.{ .spans = if (location == 3) &annotated else blank }};
+        const rows = [_]types.Row{.{ .cells = &cells }};
+        const table_value: types.Table = .{ .caption = if (location == 2) &annotated else blank, .rows = &rows };
+        const blocks = [_]types.Block{.{ .kind = .table, .spans = if (location == 1) &annotated else blank, .table = table_value }};
+        const sections_value = [_]types.Section{.{ .level = 3, .title = "Noun", .blocks = &blocks }};
+        const refs = [_]types.Reference{.{ .number = 1, .group_number = 1, .spans = if (location == 4) &annotated else blank }};
+        const stored: types.Stored = .{ .entry = .{ .title = "entry", .kind = .supplemental, .display_title = if (location == 0) &annotated else blank, .sections = &sections_value, .preamble_spans = if (location == 5) &annotated else blank, .references = &refs } };
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqualStrings(explained_magic, bytes[0..4]);
+        var metrics: DecodeMetrics = .{};
+        const parsed = try decodeWithMetricsAlloc(a, bytes, "entry", .supplemental, null, &metrics);
+        const actual = switch (location) {
+            0 => parsed.entry.display_title[0],
+            1 => parsed.entry.sections[0].blocks[0].spans[0],
+            2 => parsed.entry.sections[0].blocks[0].table.?.caption[0],
+            3 => parsed.entry.sections[0].blocks[0].table.?.rows[0].cells[0].spans[0],
+            4 => parsed.entry.references[0].spans[0],
+            else => parsed.entry.preamble_spans[0],
+        };
+        try std.testing.expectEqualStrings(note, actual.explanation);
+        try std.testing.expectEqualStrings("f", actual.text);
+        try std.testing.expectEqualStrings("glossary", actual.target);
+        try std.testing.expect(actual.italic and actual.kind == .link);
+        try std.testing.expectEqual(note.len, metrics.largest_string_bytes);
+        const built = try encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media);
+        if (location != 5) try std.testing.expectEqualStrings(bytes, built) else try std.testing.expectEqualStrings(magic, built[0..4]);
+        const at = std.mem.indexOf(u8, bytes, note).?;
+        const invalid = try a.dupe(u8, bytes);
+        invalid[at] = 0xff;
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, invalid, "entry", .supplemental, null));
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0 .. at + note.len - 1], "entry", .supplemental, null));
+        const oversized = try a.dupe(u8, bytes);
+        std.mem.writeInt(u32, oversized[at - 4 ..][0..4], max_string_bytes + 1, .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, oversized, "entry", .supplemental, null));
+        const unknown = try a.dupe(u8, bytes);
+        unknown[3] = '4';
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, unknown, "entry", .supplemental, null));
+    }
 }

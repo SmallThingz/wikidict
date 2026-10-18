@@ -97,8 +97,10 @@ const SpoolFile = struct {
     offset: u64 = 0,
 
     fn init(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !SpoolFile {
+        const file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+        errdefer file.close(io);
         return .{
-            .file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true }),
+            .file = file,
             .path = try allocator.dupe(u8, path),
         };
     }
@@ -209,18 +211,33 @@ const Spools = struct {
             }
         }.f;
 
+        const owned_root = try allocator.dupe(u8, spool_root);
+        errdefer allocator.free(owned_root);
+        const fixed_names = [_][]const u8{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "supplemental", "aliases" };
+        var fixed: [fixed_names.len]SpoolFile = undefined;
+        var fixed_built: usize = 0;
+        errdefer while (fixed_built != 0) {
+            fixed_built -= 1;
+            fixed[fixed_built].close(io);
+            fixed[fixed_built].deinitPath(allocator);
+        };
+        for (fixed_names, 0..) |name, idx| {
+            fixed[idx] = try initFixed(io, allocator, spool_root, name);
+            fixed_built += 1;
+        }
+
         return .{
             .allocator = allocator,
             .io = io,
-            .root = try allocator.dupe(u8, spool_root),
+            .root = owned_root,
             .language = language,
-            .thesaurus = try initFixed(io, allocator, spool_root, "thesaurus"),
-            .citations = try initFixed(io, allocator, spool_root, "citations"),
-            .reconstruction = try initFixed(io, allocator, spool_root, "reconstruction"),
-            .rhymes = try initFixed(io, allocator, spool_root, "rhymes"),
-            .sign_gloss = try initFixed(io, allocator, spool_root, "sign-gloss"),
-            .supplemental = try initFixed(io, allocator, spool_root, "supplemental"),
-            .aliases = try initFixed(io, allocator, spool_root, "aliases"),
+            .thesaurus = fixed[0],
+            .citations = fixed[1],
+            .reconstruction = fixed[2],
+            .rhymes = fixed[3],
+            .sign_gloss = fixed[4],
+            .supplemental = fixed[5],
+            .aliases = fixed[6],
         };
     }
 
@@ -619,14 +636,28 @@ fn resolveAnBannerHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLang
     return language;
 }
 
-fn corroboratedAnMalayMarker(codes: LanguageCodes, raw: language_source.Section, rendered: language_source.Section) bool {
-    if (!raw.hyphen_marker or !std.mem.eql(u8, raw.heading, "ms")) return false;
+// These four complete AN banners are independently captured declarations.
+// Their local names are not necessarily registry aliases; the aligned raw
+// hyphen code and exact banner together supply the canonical identity. POS
+// abbreviations, arbitrary banners and another edition cannot borrow it.
+fn corroboratedAnHyphenMarker(codes: LanguageCodes, raw: language_source.Section, rendered: language_source.Section) bool {
+    if (!raw.hyphen_marker) return false;
     const declaration = anBannerDeclaration(codes, rendered.heading) orelse return false;
-    if (!std.mem.eql(u8, declaration.target, "Malayo") or !std.mem.eql(u8, declaration.label, "Malayo") or
-        !std.mem.eql(u8, declaration.suffix, "Bahasa Melayu بهاس ملايو")) return false;
-    const declared = codes.resolve("ms") orelse return false;
-    const corroborated = codes.resolve(declaration.suffix) orelse return false;
-    return std.mem.eql(u8, declared.code, "ms") and std.mem.eql(u8, corroborated.code, "ms");
+    const declared = codes.resolve(raw.heading) orelse return false;
+    if (!std.mem.eql(u8, declared.code, raw.heading)) return false;
+    const rows = [_]struct { code: []const u8, label: []const u8, suffix: []const u8 }{
+        .{ .code = "pms", .label = "Piemontés", .suffix = "Piemontèis" },
+        .{ .code = "lad", .label = "Chodigoespañol", .suffix = "Djudeoespanyol" },
+        .{ .code = "fur", .label = "Friulán", .suffix = "Furlan" },
+        .{ .code = "ms", .label = "Malayo", .suffix = "Bahasa Melayu بهاس ملايو" },
+    };
+    for (rows) |row| {
+        if (std.mem.eql(u8, raw.heading, row.code) and
+            std.mem.eql(u8, declaration.target, row.label) and
+            std.mem.eql(u8, declaration.label, row.label) and
+            std.mem.eql(u8, declaration.suffix, row.suffix)) return true;
+    }
+    return false;
 }
 
 // The Arabic declaration form links the words "in language" before the
@@ -673,6 +704,109 @@ fn resolveArabicLanguageHeading(codes: LanguageCodes, value: []const u8) ?Resolv
     const label = std.mem.trim(u8, heading[prefix.len..], " \t");
     if (label.len == 0 or std.mem.indexOfAny(u8, label, "[]{}<>|=\r\n") != null) return null;
     return codes.resolveStrong(label) orelse codes.resolveTrusted(label);
+}
+
+// The two captured AR Norwegian wrappers declare a variant after the umbrella
+// language. Parse only their complete linked declaration; never infer an owner
+// from an arbitrary parenthesis or from a bare Norwegian heading.
+// Complete source-authored Arabic declaration forms used by chrome and
+// d’Alembertian. Keep recognition separate from resolution so an unknown or
+// conflicting declaration remains a boundary instead of borrowing an owner.
+const ArabicLinkedOwner = struct { target: []const u8, label: []const u8, phrase: bool };
+fn arabicLinkedOwner(codes: LanguageCodes, value: []const u8) ?ArabicLinkedOwner {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "ar") or value.len > 4096) return null;
+    const Link = struct {
+        fn take(rest: *[]const u8) ?struct { target: []const u8, label: []const u8 } {
+            if (!std.mem.startsWith(u8, rest.*, "[[")) return null;
+            const close = std.mem.indexOf(u8, rest.*, "]]") orelse return null;
+            const body = rest.*[2..close];
+            if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null) return null;
+            const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+            if (pipe < body.len and std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null) return null;
+            const target = std.mem.trim(u8, body[0..pipe], " \t");
+            const label = std.mem.trim(u8, if (pipe < body.len) body[pipe + 1 ..] else target, " \t");
+            if (target.len == 0 or label.len == 0) return null;
+            rest.* = std.mem.trimStart(u8, rest.*[close + 2 ..], " \t");
+            return .{ .target = target, .label = label };
+        }
+    };
+    var rest = std.mem.trim(u8, value, " \t\r\n");
+    const first = Link.take(&rest) orelse return null;
+    var target_buffer: [256]u8 = undefined;
+    var label_buffer: [512]u8 = undefined;
+    const first_target = arabicDeclarationToken(first.target, &target_buffer) orelse return null;
+    const first_label = arabicDeclarationToken(first.label, &label_buffer) orelse return null;
+    if (std.mem.eql(u8, first_target, "لغة") and std.mem.eql(u8, first_label, "لغة")) {
+        const language = Link.take(&rest) orelse return null;
+        if (rest.len != 0) return null;
+        return .{ .target = language.target, .label = language.label, .phrase = false };
+    }
+    if (!std.mem.eql(u8, rest, ":") or !std.mem.startsWith(u8, first_label, "في اللغة ") or first_label.len == "في اللغة ".len) return null;
+    return .{ .target = first.target, .label = first.label, .phrase = true };
+}
+fn resolveArabicLinkedOwner(codes: LanguageCodes, declaration: ArabicLinkedOwner) ?ResolvedLanguage {
+    var target_buffer: [256]u8 = undefined;
+    var label_buffer: [512]u8 = undefined;
+    const target = arabicDeclarationToken(declaration.target, &target_buffer) orelse return null;
+    const whole_label = arabicDeclarationToken(declaration.label, &label_buffer) orelse return null;
+    const label = if (declaration.phrase) whole_label["في اللغة ".len..] else whole_label;
+    const target_owner = codes.resolveStrong(target) orelse codes.resolveTrusted(target) orelse return null;
+    const label_owner = codes.resolveStrong(label) orelse codes.resolveTrusted(label) orelse return null;
+    return if (std.mem.eql(u8, target_owner.code, label_owner.code)) target_owner else null;
+}
+
+const ArabicNorwegianDeclaration = enum { nb, nn };
+
+fn arabicNorwegianDeclaration(codes: LanguageCodes, value: []const u8) ?ArabicNorwegianDeclaration {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "ar") or value.len > 1024 or
+        std.mem.indexOfAny(u8, value, "\r\n") != null) return null;
+    var buffer: [1024]u8 = undefined;
+    const normalized = arabicDeclarationToken(value, &buffer) orelse return null;
+    var rest = std.mem.trim(u8, normalized, " \t");
+    const Link = struct {
+        fn take(text: *[]const u8, wanted: []const u8) bool {
+            if (!std.mem.startsWith(u8, text.*, "[[")) return false;
+            const close = std.mem.indexOf(u8, text.*, "]]") orelse return false;
+            const body = text.*[2..close];
+            if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null) return false;
+            const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+            if (!std.mem.eql(u8, std.mem.trim(u8, body[0..pipe], " \t"), wanted)) return false;
+            // A label cannot silently change the declaration's meaning.
+            if (pipe < body.len and !std.mem.eql(u8, std.mem.trim(u8, body[pipe + 1 ..], " \t"), wanted)) return false;
+            text.* = std.mem.trimStart(u8, text.*[close + 2 ..], " \t");
+            return true;
+        }
+    };
+    if (!Link.take(&rest, "في") or !std.mem.startsWith(u8, rest, "ال")) return null;
+    rest = rest["ال".len..];
+    if (!Link.take(&rest, "نرويجية") or !std.mem.startsWith(u8, rest, "(")) return null;
+    rest = std.mem.trimStart(u8, rest[1..], " \t");
+    const variant: ArabicNorwegianDeclaration = if (Link.take(&rest, "بوكمول"))
+        .nb
+    else if (Link.take(&rest, "نينوشك"))
+        .nn
+    else
+        return null;
+    if (!std.mem.startsWith(u8, rest, ")")) return null;
+    rest = std.mem.trimStart(u8, rest[1..], " \t");
+    if (!std.mem.eql(u8, rest, ":")) return null;
+    return variant;
+}
+
+fn resolveArabicNorwegianDeclaration(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const variant = arabicNorwegianDeclaration(codes, value) orelse return null;
+    const umbrella = codes.resolveTrusted("نرويجية") orelse return null;
+    if (!std.mem.eql(u8, umbrella.code, "no")) return null;
+    // These exact combined names are the captured named-table authority:
+    // وحدة:لغات/بيانات page214436/rev996464, not invented bare-variant aliases.
+    const code = if (variant == .nb) "nb" else "nn";
+    const label = if (variant == .nb) "نرويجية بوكمول" else "نرويجية نينوشك";
+    const named = codes.resolveTrusted(label) orelse return null;
+    const canonical = codes.resolve(code) orelse return null;
+    if (!std.mem.eql(u8, named.code, code) or !std.mem.eql(u8, canonical.code, code)) return null;
+    return canonical;
 }
 
 fn resolveLinkedDeclaration(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
@@ -786,10 +920,16 @@ fn arabicLemmaDeclaration(codes: LanguageCodes, section: language_source.Section
 }
 
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    if (arabicLinkedOwner(codes, section.heading)) |declaration| return resolveArabicLinkedOwner(codes, declaration);
+    if (codes.namespace_catalog) |namespaces| if (std.mem.eql(u8, namespaces.content_language, "ar")) {
+        if (declarationLabel(codes, section.heading)) |label| return codes.resolve(label);
+    };
     // A balanced standalone equals declaration names its owner in the first
     // field. Sort/display arguments, including nested calls, cannot lend one.
     if (language_source.equalsLanguageDeclaration(section.source)) |code|
         if (std.mem.eql(u8, code, section.heading)) return codes.resolve(code);
+    if (arabicNorwegianDeclaration(codes, section.heading) != null)
+        return resolveArabicNorwegianDeclaration(codes, section.heading);
     const noun = arabicLemmaDeclaration(codes, section);
     if (noun.present) return if (noun.code) |code| codes.resolve(code) else null;
     if (codes.namespace_catalog) |namespaces| if (std.mem.eql(u8, namespaces.content_language, "az")) {
@@ -826,12 +966,17 @@ fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?Resol
 }
 
 fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source.Section) bool {
+    if (arabicLinkedOwner(codes, section.heading) != null) return true;
+    if (arabicNorwegianDeclaration(codes, section.heading) != null) return true;
     if (language_source.equalsLanguageDeclaration(section.source)) |code|
         if (std.mem.eql(u8, code, section.heading)) return true;
     return declarationLabel(codes, section.heading) != null;
 }
 
 fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    if (arabicLinkedOwner(codes, section.heading)) |declaration| return resolveArabicLinkedOwner(codes, declaration);
+    if (arabicNorwegianDeclaration(codes, section.heading) != null)
+        return resolveArabicNorwegianDeclaration(codes, section.heading);
     const noun = arabicLemmaDeclaration(codes, section);
     if (noun.present) return if (noun.code) |code| codes.resolve(code) else null;
     const heading = language_source.classificationSection(section);
@@ -958,6 +1103,8 @@ const LanguageMarkers = struct {
     codes: *const LanguageCodes,
     represented: ?[]const []const u8 = null,
     expanded_sections: []const language_source.Section = &.{},
+    raw_source: ?[]const u8 = null,
+    expanded_source: ?[]const u8 = null,
 };
 
 // An unknown raw equals marker is a boundary only when actual expanded L2
@@ -979,6 +1126,44 @@ fn expandedEqualsDeclaration(section: language_source.Section, code: []const u8)
         std.mem.eql(u8, label[open + 1 .. label.len - 1], code);
 }
 
+fn arabicTableBoundaryOwner(codes: LanguageCodes, heading: []const u8) ?ResolvedLanguage {
+    return resolveCategorizedHeading(codes, heading) orelse codes.resolveStrong(std.mem.trim(u8, heading, " \t\r\n")) orelse codes.resolveTrusted(std.mem.trim(u8, heading, " \t\r\n"));
+}
+fn corroboratedArabicTableBoundary(markers: *const LanguageMarkers, heading: []const u8) bool {
+    const namespaces = markers.codes.namespace_catalog orelse return false;
+    if (!std.mem.eql(u8, namespaces.content_language, "ar")) return false;
+    const raw_source = markers.raw_source orelse return false;
+    const expanded = markers.expanded_source orelse return false;
+    const owner = arabicTableBoundaryOwner(markers.codes.*, heading) orelse return false;
+    const raw_markers: LanguageMarkers = .{ .codes = markers.codes };
+    var raw_sections = languageSections(raw_source, &raw_markers);
+    var declarations: usize = 0;
+    while (raw_sections.next()) |section| {
+        // Only the standalone literal template form, outside raw tables and
+        // opaque bodies, corroborates this recovery. Ordinary POS/translation
+        // headings and raw heading-like cell text cannot provide evidence.
+        const offset = @intFromPtr(section.source.ptr) - @intFromPtr(raw_source.ptr);
+        if (!language_source.outsideNestedOrOpaque(raw_source, offset)) continue;
+        const label = declarationLabel(markers.codes.*, section.heading) orelse continue;
+        const trimmed = std.mem.trim(u8, section.heading, " \t\r\n");
+        if (!std.mem.startsWith(u8, trimmed, "{{")) continue;
+        const raw_owner = markers.codes.resolve(label) orelse continue;
+        if (std.mem.eql(u8, owner.code, raw_owner.code)) declarations += 1;
+    }
+    if (declarations != 1) return false;
+    const Match = struct {
+        codes: LanguageCodes,
+        code: []const u8,
+        fn accepts(ctx: ?*const anyopaque, value: []const u8) bool {
+            const self: *const @This() = @ptrCast(@alignCast(ctx.?));
+            const candidate = arabicTableBoundaryOwner(self.codes, value) orelse return false;
+            return std.mem.eql(u8, candidate.code, self.code);
+        }
+    };
+    const match: Match = .{ .codes = markers.codes.*, .code = owner.code };
+    return language_source.countUnprotectedL2Headings(expanded, null, .{ .ctx = &match, .accepts = Match.accepts }) == 1;
+}
+
 fn languageSections(source: []const u8, context: *const LanguageMarkers) language_source.Iterator {
     var iterator = language_source.Iterator.initWithMarkerFilter(source, .{
         .ctx = context,
@@ -988,12 +1173,11 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
                 const language = markers.codes.resolve(value) orelse return false;
                 if (markers.represented) |codes| {
                     for (codes) |code| if (std.mem.eql(u8, code, language.code)) return true;
-                    // The captured AN -ms- declaration has a canonical mbp
-                    // display-label collision. Only its exact reviewed banner
-                    // and independently registered ms suffix admit the raw code.
-                    if (std.mem.eql(u8, value, "ms")) for (markers.expanded_sections) |section| {
-                        if (corroboratedAnMalayMarker(markers.codes.*, .{ .heading = value, .source = "", .hyphen_marker = true }, section)) return true;
-                    };
+                    // Exact captured AN banners corroborate their raw codes
+                    // even when a local name is absent or collides in the registry.
+                    for (markers.expanded_sections) |section| {
+                        if (corroboratedAnHyphenMarker(markers.codes.*, .{ .heading = value, .source = "", .hyphen_marker = true }, section)) return true;
+                    }
                     return false;
                 }
                 return true;
@@ -1053,6 +1237,15 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
                 for (candidates) |plain|
                     if (markers.codes.resolveStrong(plain) != null or markers.codes.resolveTrusted(plain) != null) return true;
                 return false;
+            }
+        }.accepts,
+    };
+    iterator.table_boundary_filter = .{
+        .ctx = context,
+        .accepts = struct {
+            fn accepts(raw: ?*const anyopaque, heading: []const u8) bool {
+                const markers: *const LanguageMarkers = @ptrCast(@alignCast(raw.?));
+                return corroboratedArabicTableBoundary(markers, heading);
             }
         }.accepts,
     };
@@ -1221,6 +1414,7 @@ fn freeObservedScopes(a: std.mem.Allocator, scopes: []const presentation_documen
         a.free(scope.attributes.classes);
         a.free(scope.attributes.language);
         a.free(scope.attributes.direction);
+        a.free(scope.attributes.explanation);
     }
     if (scopes.len != 0) a.free(scopes);
 }
@@ -1516,6 +1710,55 @@ fn angEnglishNounContinuation(
     return if (std.mem.eql(u8, language.code, "en")) language else null;
 }
 
+// The captured ANG noun-table convention supplies a grammatical cue independent
+// of the homographic Nama language label. Keep both the raw and expanded cue,
+// the preceding explicit Old English declaration, and the registered code.
+fn angNounTableContinuation(
+    codes: LanguageCodes,
+    preceding_raw: []const language_source.Section,
+    raw: language_source.Section,
+    rendered: language_source.Section,
+    current_code: []const u8,
+) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "ang") or
+        !std.mem.eql(u8, current_code, "ang") or raw.hyphen_marker or rendered.hyphen_marker or
+        !std.mem.eql(u8, raw.heading, "Nama") or !std.mem.eql(u8, rendered.heading, "Nama")) return null;
+    var explicit_ang = false;
+    var previous = preceding_raw.len;
+    while (previous > 0) {
+        previous -= 1;
+        const section = preceding_raw[previous];
+        if (section.hyphen_marker) return null;
+        const end = std.mem.indexOfScalar(u8, section.source, '\n') orelse return null;
+        const line = std.mem.trim(u8, section.source[0..end], " \t\r");
+        if (std.mem.eql(u8, line, "=={{sprǣc|ang}}==")) {
+            explicit_ang = true;
+            break;
+        }
+        // This captured adjective heading is a support section, not another
+        // language declaration. An arbitrary intervening heading cannot lend
+        // the old declaration to a later homograph.
+        if (!std.mem.eql(u8, line, "==Tōgeīecendlic==")) return null;
+    }
+    if (!explicit_ang) return null;
+    const raw_end = std.mem.indexOfScalar(u8, raw.source, '\n') orelse return null;
+    const rendered_end = std.mem.indexOfScalar(u8, rendered.source, '\n') orelse return null;
+    if (!std.mem.eql(u8, std.mem.trim(u8, raw.source[0..raw_end], " \t\r"), "==Nama==") or
+        !std.mem.eql(u8, std.mem.trim(u8, rendered.source[0..rendered_end], " \t\r"), "==Nama==")) return null;
+    const body = std.mem.trimStart(u8, raw.source[raw_end + 1 ..], " \t\r\n");
+    const heading_end = std.mem.indexOfScalar(u8, body, '\n') orelse return null;
+    if (!std.mem.eql(u8, std.mem.trim(u8, body[0..heading_end], " \t\r"), "=== {{m}} {{Wordcynn|Nama}} ===")) return null;
+    const table = std.mem.trimStart(u8, body[heading_end + 1 ..], " \t\r\n");
+    if (!std.mem.startsWith(u8, table, "{{Naman-Tabule|")) return null;
+    _ = blobs.wikitext_syntax.balanced(table, 0) orelse return null;
+    const expanded_body = std.mem.trimStart(u8, rendered.source[rendered_end + 1 ..], " \t\r\n");
+    const expanded_heading_end = std.mem.indexOfScalar(u8, expanded_body, '\n') orelse return null;
+    if (!std.mem.eql(u8, std.mem.trim(u8, expanded_body[0..expanded_heading_end], " \t\r"), "=== Werlic [[Help:Wordcynn|Nama]][[Flocc:Nama]] ===")) return null;
+    const language = codes.resolve("ang") orelse return null;
+    return if (std.mem.eql(u8, language.code, "ang")) language else null;
+}
+
 fn processMain(
     page_allocator: std.mem.Allocator,
     spools: *Spools,
@@ -1591,7 +1834,7 @@ fn processMain(
     defer freePreObservation(page_allocator, early_observation);
     const expanded_link_openings = try linkOpeningsAlloc(page_allocator, early_observation.scopes, early_observation.refused_link_openings);
     defer page_allocator.free(expanded_link_openings);
-    const expanded_markers: LanguageMarkers = .{ .codes = &codes };
+    const expanded_markers: LanguageMarkers = .{ .codes = &codes, .raw_source = raw_source, .expanded_source = source };
     var sections = languageSections(source, &expanded_markers);
     if (may_cross_link) sections.link_headings = .{ .source = source, .openings = expanded_link_openings };
     while (sections.next()) |section| try appendClassifiedSection(page_allocator, codes, &page_sections, &owned_headings, section);
@@ -1643,7 +1886,7 @@ fn processMain(
         // headings. Require rendered language evidence for hyphen markers;
         // preserve the distinct equals-style language declaration convention.
         if (raw_section.hyphen_marker and boundaryLanguage(codes, rendered_section) == null and
-            !corroboratedAnMalayMarker(codes, raw_section, rendered_section))
+            !corroboratedAnHyphenMarker(codes, raw_section, rendered_section))
         {
             raw_aligned = false;
             break;
@@ -1710,7 +1953,8 @@ fn processMain(
 
     for (page_sections.items, 0..) |section, index| {
         const ang_continuation = if (raw_aligned and index > 0 and current != null)
-            angEnglishNounContinuation(codes, raw_sections.items[index - 1], raw_sections.items[index], section, groups.items[current.?].language.code)
+            angEnglishNounContinuation(codes, raw_sections.items[index - 1], raw_sections.items[index], section, groups.items[current.?].language.code) orelse
+                angNounTableContinuation(codes, raw_sections.items[0..index], raw_sections.items[index], section, groups.items[current.?].language.code)
         else
             null;
         var resolved: ?ResolvedLanguage = ang_continuation;
@@ -1718,7 +1962,7 @@ fn processMain(
         if (ang_continuation == null) if (resolved) |raw_language| if (boundaryLanguage(codes, section)) |rendered_language| {
             if (!std.mem.eql(u8, raw_language.code, rendered_language.code) and
                 !corroboratedEqualsDeclaration(codes, raw_sections.items[index], section, raw_language.code, rendered_language.code) and
-                !(std.mem.eql(u8, raw_language.code, "ms") and corroboratedAnMalayMarker(codes, raw_sections.items[index], section)))
+                !corroboratedAnHyphenMarker(codes, raw_sections.items[index], section))
             {
                 resolved = null;
                 fallbacks.unresolved_language_heading = true;
@@ -3264,7 +3508,7 @@ test "redirect tail presentation and recoverable tail failures retain exact acco
     defer writer.deinit();
     const alias: blobs.alias_codec.Record = .{ .source_namespace = 0, .source_kind = .language, .source_title = "A", .source_key = "A", .xml_target = "Missing", .target_title = "Missing", .target_namespace = null, .target_kind = null, .target_key = "", .fragment = "Part", .presentation = "" };
     try writer.namespace_coverage.input(a, 0, "", .language, true);
-    try writer.addAliasExpanded(pa, alias, "Tail [[retained]].\n===Details===\nVisible body.", null, .{}, &.{});
+    try writer.addAliasExpanded(pa, alias, "Tail <abbr title=\"retained meaning\">[[retained]]</abbr>.\n===Details===\nVisible body.", null, .{}, &.{});
     var failed = alias;
     failed.source_title = "B";
     failed.source_key = "B";
@@ -3287,6 +3531,21 @@ test "redirect tail presentation and recoverable tail failures retain exact acco
     const doc = try blobs.presentation_codec.decodeAlloc(pa, first.presentation, first.source_title, .alias, null);
     try std.testing.expectEqualStrings("Missing#Part", doc.entry.preamble_spans[0].target);
     try std.testing.expect(std.mem.indexOf(u8, first.presentation, "Visible body.") != null);
+    try std.testing.expect(std.mem.startsWith(u8, first.presentation, "DPR3"));
+    var explained_links: usize = 0;
+    for (doc.entry.preamble_spans) |span| if (std.mem.eql(u8, span.target, "retained")) {
+        try std.testing.expectEqualStrings("retained", span.text);
+        try std.testing.expectEqualStrings("retained meaning", span.explanation);
+        explained_links += 1;
+    };
+    for (doc.entry.sections) |section| for (section.blocks) |block| {
+        for (block.spans) |span| if (std.mem.eql(u8, span.target, "retained")) {
+            try std.testing.expectEqualStrings("retained", span.text);
+            try std.testing.expectEqualStrings("retained meaning", span.explanation);
+            explained_links += 1;
+        };
+    };
+    try std.testing.expectEqual(@as(usize, 1), explained_links);
     const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(pa, &.{ root, "fallback-pages.jsonl" }), pa, .limited(4096));
     try std.testing.expect(std.mem.indexOf(u8, report, "expansion_error:expand:SourceFailure") != null);
 }
@@ -5789,4 +6048,679 @@ test "AN complete identical suffixless declaration resolves but malformed ambigu
     for (bad) |value| try std.testing.expect(resolveAnBannerHeading(codes, value) == null);
     // Missing AN namespace authority cannot use the new direct grammar.
     try std.testing.expect(resolveAnBannerHeading(TestLanguages.codes(), banner) == null);
+}
+
+fn ownedSpoolHandlesForTest(io: std.Io, a: std.mem.Allocator, paths: []const []const u8) ![]std.Io.File {
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+    var dir = try std.Io.Dir.cwd().openDir(io, "/proc/self/fd", .{ .iterate = true });
+    defer dir.close(io);
+    var handles: std.ArrayList(std.Io.File) = .empty;
+    defer handles.deinit(a);
+    var entries = dir.iterate();
+    while (try entries.next(io)) |entry| {
+        var buffer: [8192]u8 = undefined;
+        const len = dir.readLink(io, entry.name, &buffer) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        const target = buffer[0..len];
+        for (paths) |path| {
+            if (!std.mem.eql(u8, target, path)) continue;
+            const fd = try std.fmt.parseInt(std.posix.fd_t, entry.name, 10);
+            try handles.append(a, .{ .handle = fd, .flags = .{ .nonblocking = false } });
+            break;
+        }
+    }
+    return handles.toOwnedSlice(a);
+}
+
+fn expectOwnedSpoolsClosedForTest(io: std.Io, a: std.mem.Allocator, paths: []const []const u8) !void {
+    const handles = try ownedSpoolHandlesForTest(io, a, paths);
+    defer a.free(handles);
+    // On an unfixed parent, close only the exact owned leaks before failing so
+    // this regression cannot contaminate the remaining test process.
+    defer for (handles) |file| file.close(io);
+    try std.testing.expectEqual(@as(usize, 0), handles.len);
+}
+
+test "SpoolFile allocation failure closes owned descriptor before same process retry" {
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const relative = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(relative);
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, relative, a);
+    defer a.free(root);
+    const path = try std.fs.path.join(a, &.{ root, "leaf.tmp" });
+    defer a.free(path);
+    const owned = [_][]const u8{path};
+    for (0..3) |_| {
+        var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+        if (SpoolFile.init(io, failing.allocator(), path)) |value| {
+            var unexpected = value;
+            unexpected.close(io);
+            unexpected.deinitPath(failing.allocator());
+            return error.TestExpectedError;
+        } else |err| try std.testing.expectEqual(error.OutOfMemory, err);
+        try expectOwnedSpoolsClosedForTest(io, a, &owned);
+        try std.testing.expect(failing.has_induced_failure);
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+    }
+    var spool = try SpoolFile.init(io, a, path);
+    defer spool.deinitPath(a);
+    {
+        defer spool.close(io);
+        const handles = try ownedSpoolHandlesForTest(io, a, &owned);
+        defer a.free(handles);
+        try std.testing.expectEqual(@as(usize, 1), handles.len);
+        var page = std.heap.ArenaAllocator.init(a);
+        defer page.deinit();
+        try spool.append(io, page.allocator(), "", "title", "payload");
+    }
+    try expectOwnedSpoolsClosedForTest(io, a, &owned);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024));
+    defer a.free(bytes);
+    const expected = [_]u8{ 0, 0, 0, 0, 5, 0, 0, 0, 7, 0, 0, 0 } ++ "titlepayload".*;
+    try std.testing.expectEqualSlices(u8, &expected, bytes);
+}
+
+test "Spools allocation failures unwind all owned slots root path and retry" {
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const relative = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(relative);
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, relative, a);
+    defer a.free(root);
+    var owned: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (owned.items) |path| a.free(path);
+        owned.deinit(a);
+    }
+    for (0..language_bucket_count) |idx|
+        try owned.append(a, try std.fmt.allocPrint(a, "{s}/.spool/lang-{d:0>2}.tmp", .{ root, idx }));
+    for ([_][]const u8{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "supplemental", "aliases" }) |name|
+        try owned.append(a, try std.fmt.allocPrint(a, "{s}/.spool/{s}.tmp", .{ root, name }));
+    var measured = std.testing.FailingAllocator.init(a, .{});
+    const allocation_count = initial_scope: {
+        var initial = try Spools.init(io, measured.allocator(), root);
+        var closed = false;
+        defer {
+            if (!closed) initial.close();
+            initial.cleanup();
+        }
+        const count = measured.alloc_index;
+        initial.close();
+        closed = true;
+        try expectOwnedSpoolsClosedForTest(io, a, owned.items);
+        break :initial_scope count;
+    };
+    try std.testing.expectEqual(measured.allocated_bytes, measured.freed_bytes);
+    // Derive all real failure indices from the successful acquisition, including
+    // the root path and every later fixed-slot filename/path allocation.
+    try std.testing.expect(allocation_count > 2 * language_bucket_count + 1);
+    for (0..allocation_count) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = fail_index });
+        if (Spools.init(io, failing.allocator(), root)) |value| {
+            var unexpected = value;
+            unexpected.close();
+            unexpected.cleanup();
+            return error.TestExpectedError;
+        } else |err| try std.testing.expectEqual(error.OutOfMemory, err);
+        // No unlink/cleanup happens before this exact owned-file fd assertion.
+        try expectOwnedSpoolsClosedForTest(io, a, owned.items);
+        try std.testing.expect(failing.has_induced_failure);
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+        {
+            var retry = try Spools.init(io, a, root);
+            var closed = false;
+            defer {
+                if (!closed) retry.close();
+                retry.cleanup();
+            }
+            const handles = try ownedSpoolHandlesForTest(io, a, owned.items);
+            defer a.free(handles);
+            try std.testing.expectEqual(owned.items.len, handles.len);
+            retry.close();
+            closed = true;
+            try expectOwnedSpoolsClosedForTest(io, a, owned.items);
+        }
+    }
+}
+
+// Test authority: exact six raw articles and wrappers are retained in
+// captured-six-source-fixtures01.json. Expanded strings are source-instantiated
+// fixtures, not live Lua output or current Reader acceptance.
+const ArabicNorwegianTest = struct {
+    const namespace_tsv = "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const Mode = enum { normal, missing_named, wrong_named, wrong_umbrella, wrong_canonical };
+    fn mode(ctx: ?*const anyopaque) Mode {
+        const value: *const Mode = @ptrCast(@alignCast(ctx orelse return .normal));
+        return value.*;
+    }
+    fn resolve(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+        inline for (.{ .{ "no", "النرويجية" }, .{ "nb", "النرويجية بوكمال" }, .{ "nn", "النرويجية نينورسك" }, .{ "en", "English" }, .{ "fr", "French" } }) |row| {
+            if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1])) {
+                if (mode(ctx) == .wrong_canonical and std.mem.eql(u8, value, "nb")) return .{ .code = "nn", .heading = "النرويجية نينورسك" };
+                return .{ .code = row[0], .heading = row[1] };
+            }
+        }
+        return trusted(ctx, value);
+    }
+    fn trusted(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+        // Exact selected module214436/rev996464 names, with no bare-variant aliases.
+        if (std.mem.eql(u8, value, "نرويجية")) return .{ .code = if (mode(ctx) == .wrong_umbrella) "en" else "no", .heading = "النرويجية" };
+        if (std.mem.eql(u8, value, "نرويجية بوكمول")) {
+            if (mode(ctx) == .missing_named) return null;
+            return .{ .code = if (mode(ctx) == .wrong_named) "nn" else "nb", .heading = "النرويجية بوكمال" };
+        }
+        if (std.mem.eql(u8, value, "نرويجية نينوشك")) return .{ .code = "nn", .heading = "النرويجية نينورسك" };
+        inline for (.{ .{ "en", "English" }, .{ "fr", "French" } }) |row|
+            if (std.mem.eql(u8, value, row[1])) return .{ .code = row[0], .heading = row[1] };
+        return null;
+    }
+    fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+        return if (resolve(ctx, value)) |language| language.code else null;
+    }
+    fn codes(namespaces: *const @import("namespace_registry").Registry, state: ?*const Mode) LanguageCodes {
+        return .{ .namespace_catalog = namespaces, .ctx = state, .get_fn = get, .resolve_fn = resolve, .trusted_fn = trusted };
+    }
+};
+
+test "Arabic Norwegian declarations require exact variant and canonical authority" {
+    var namespaces = try @import("namespace_registry").Registry.init(std.testing.allocator, ArabicNorwegianTest.namespace_tsv);
+    defer namespaces.deinit();
+    const codes = ArabicNorwegianTest.codes(&namespaces, null);
+    inline for (.{ .{ "[[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[بُوكْمُول]]):", "nb" }, .{ "[[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[نِينُوشْك]]):", "nn" }, .{ "[[في|في]] ال[[نرويجية|نرويجية]] ([[بوكمول|بوكمول]]):", "nb" } }) |row| {
+        const section: language_source.Section = .{ .heading = row[0], .source = "" };
+        try std.testing.expectEqualStrings(row[1], resolveArabicNorwegianDeclaration(codes, row[0]).?.code);
+        try std.testing.expectEqualStrings(row[1], resolveSection(codes, section).?.code);
+        try std.testing.expectEqualStrings(row[1], boundaryLanguage(codes, section).?.code);
+        try std.testing.expect(hasExplicitLanguageDeclaration(codes, section));
+        const markers: LanguageMarkers = .{ .codes = &codes };
+        const iterator = languageSections("", &markers);
+        const filter = iterator.heading_filter.?;
+        try std.testing.expect(filter.accepts(filter.ctx, row[0]));
+    }
+    inline for (.{
+        "[[في]] ال[[نرويجية]] ([[بوكمول|نينوشك]]):",
+        "[[في|French]] ال[[نرويجية]] ([[بوكمول]]):",
+        "[[في]] ال[[نرويجية|English]] ([[بوكمول]]):",
+        "[[في]] ال[[نرويجية]] ([[بوكمول|بوكمول|extra]]):",
+        "[[في]] ال[[نرويجية]] ([[بوكمول]] [[نينوشك]]):",
+        "[[في]] ال[[نرويجية]] ([[Unknown]]):",
+        "[[في]] ال[[English]] ([[بوكمول]]):",
+        "[[في]] ال[[نرويجية]] ([[بوكمول]])",
+        "[[في]] ال[[نرويجية]] ([[بوكمول]]): trailing",
+        "[[في]] ال[[نرويجية]] ([[بوكمول]]):[[English]]",
+        "[[في]] ال[[نرويجية]] ([[بوكمول]]):[[تصنيف:نرويجية بوكمول]]",
+        "[[نرويجية]] ([[بوكمول]])",
+        "Norwegian (Bokmål)",
+        "<nowiki>[[في]] ال[[نرويجية]] ([[بوكمول]]):</nowiki>",
+        "[[في]] ال[[نرويجية]] ([[بوكمول]]):\n",
+    }) |bad| try std.testing.expect(resolveArabicNorwegianDeclaration(codes, bad) == null);
+    inline for (.{ ArabicNorwegianTest.Mode.missing_named, .wrong_named, .wrong_umbrella, .wrong_canonical }) |state| {
+        const guarded = ArabicNorwegianTest.codes(&namespaces, &state);
+        const heading = "[[في]] ال[[نرويجية]] ([[بوكمول]]):";
+        try std.testing.expect(arabicNorwegianDeclaration(guarded, heading) != null);
+        try std.testing.expect(resolveArabicNorwegianDeclaration(guarded, heading) == null);
+        try std.testing.expect(resolveSection(guarded, .{ .heading = heading, .source = "" }) == null);
+        try std.testing.expect(boundaryLanguage(guarded, .{ .heading = heading, .source = "" }) == null);
+    }
+    var foreign = try @import("namespace_registry").Registry.init(std.testing.allocator, "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n");
+    defer foreign.deinit();
+    try std.testing.expect(resolveArabicNorwegianDeclaration(ArabicNorwegianTest.codes(&foreign, null), "[[في]] ال[[نرويجية]] ([[بوكمول]]):") == null);
+}
+
+test "six captured Arabic Norwegian entries retain separate senses gender and actions" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, ArabicNorwegianTest.namespace_tsv);
+    defer namespaces.deinit();
+    const codes = ArabicNorwegianTest.codes(&namespaces, null);
+    const Fixture = struct { title: []const u8, raw: []const u8, expanded: []const u8, nb_targets: []const []const u8, nn_targets: []const []const u8 };
+    const fixtures = [_]Fixture{
+        .{ .title = "bruke", .raw = "{{نرويجية (بوكمول)}}\n{{المعاني}}\n{{النوع|فِعْلٌ.}}\n# [[اِسْتَخْدَمَ]]، [[استعمل|اِسْتَعْمَلَ]].\n# [[اِعْتَادَ]].\n# [[اِسْتَهْلَكَ]].\n{{نرويجية (نينوشك)}}\n{{المعاني}}\n{{النوع|فِعْلٌ.}}\n# [[اِسْتَخْدَمَ]]، [[استعمل|اِسْتَعْمَلَ]].\n# [[اِعْتَادَ]].\n# [[اِسْتَهْلَكَ]].\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:br]]\n[[تصنيف:أفعال (بوكمول)]]\n[[تصنيف:أفعال (نينوشك)]]", .expanded = "= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[بُوكْمُول]]): =\n[[تصنيف:نرويجية (بوكمول)]]\n== المعاني ==\nفِعْلٌ.\n# [[اِسْتَخْدَمَ]]، [[استعمل|اِسْتَعْمَلَ]].\n# [[اِعْتَادَ]].\n# [[اِسْتَهْلَكَ]].\n= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[نِينُوشْك]]): =\n[[تصنيف:نرويجية (نينوشك)]]\n== المعاني ==\nفِعْلٌ.\n# [[اِسْتَخْدَمَ]]، [[استعمل|اِسْتَعْمَلَ]].\n# [[اِعْتَادَ]].\n# [[اِسْتَهْلَكَ]].\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:br]]\n[[تصنيف:أفعال (بوكمول)]]\n[[تصنيف:أفعال (نينوشك)]]", .nb_targets = &.{ "استعمل", "اِسْتَخْدَمَ", "اِسْتَهْلَكَ", "اِعْتَادَ" }, .nn_targets = &.{ "استعمل", "اِسْتَخْدَمَ", "اِسْتَهْلَكَ", "اِعْتَادَ" } },
+        .{ .title = "bensinstasjon", .raw = "{{نرويجية (بوكمول)}}\n{{المعاني}}\n{{النوع|اِسْمٌ مُذَكَّرٌ.}}\n# [[مَحَطَّة]] ٱلْ[[وَقُود]].\n{{نرويجية (نينوشك)}}\n{{المعاني}}\n{{النوع|اِسْمٌ مُذَكَّرٌ.}}\n# [[مَحَطَّة]] ٱلْ[[وَقُود]].\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:be]]", .expanded = "= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[بُوكْمُول]]): =\n[[تصنيف:نرويجية (بوكمول)]]\n== المعاني ==\nاِسْمٌ مُذَكَّرٌ.\n# [[مَحَطَّة]] ٱلْ[[وَقُود]].\n= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[نِينُوشْك]]): =\n[[تصنيف:نرويجية (نينوشك)]]\n== المعاني ==\nاِسْمٌ مُذَكَّرٌ.\n# [[مَحَطَّة]] ٱلْ[[وَقُود]].\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:be]]", .nb_targets = &.{ "مَحَطَّة", "وَقُود" }, .nn_targets = &.{ "مَحَطَّة", "وَقُود" } },
+        .{ .title = "bety", .raw = "{{نرويجية (بوكمول)}}\n{{المعاني}}\n{{النوع|فِعْلٌ: [[betyr]] لِلْحَاضِرِ، [[betydde]] أَوْ [[betød]] لِلْمَاضِي ٱلْبَسِيطِ.}}\n# [[عَنَى]]، [[دَلَّ]] عَلَى.\n# [[يُفْهَمُ]] مِنْهُ.\n# [[لَمَّحَ]].\n{{نرويجية (نينوشك)}}\n{{المعاني}}\n{{النوع|فِعْلٌ: [[betyr]] لِلْحَاضِرِ، [[betydde]] لِلْمَاضِي.}}\n# [[عَنَى]].\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:be]]\n[[تصنيف:أفعال (بوكمول)]]\n[[تصنيف:أفعال (نينوشك)]]", .expanded = "= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[بُوكْمُول]]): =\n[[تصنيف:نرويجية (بوكمول)]]\n== المعاني ==\nفِعْلٌ: [[betyr]] لِلْحَاضِرِ، [[betydde]] أَوْ [[betød]] لِلْمَاضِي ٱلْبَسِيطِ.\n# [[عَنَى]]، [[دَلَّ]] عَلَى.\n# [[يُفْهَمُ]] مِنْهُ.\n# [[لَمَّحَ]].\n= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[نِينُوشْك]]): =\n[[تصنيف:نرويجية (نينوشك)]]\n== المعاني ==\nفِعْلٌ: [[betyr]] لِلْحَاضِرِ، [[betydde]] لِلْمَاضِي.\n# [[عَنَى]].\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:be]]\n[[تصنيف:أفعال (بوكمول)]]\n[[تصنيف:أفعال (نينوشك)]]", .nb_targets = &.{ "betydde", "betyr", "betød", "دَلَّ", "عَنَى", "لَمَّحَ", "يُفْهَمُ" }, .nn_targets = &.{ "betydde", "betyr", "عَنَى" } },
+        .{ .title = "bussjåfør", .raw = "{{نرويجية (بوكمول)}}\n{{المعاني}}\n{{النوع|اِسْمٌ مُذَكَّرٌ.}}\n# [[سَائِق]] ٱلْ[[حَافِلَة]].\n{{نرويجية (نينوشك)}}\n{{المعاني}}\n{{النوع|اِسْمٌ مُذَكَّرٌ.}}\n# [[سَائِق]] ٱلْ[[حَافِلَة]].\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:bu]]\n[[تصنيف:نقل (نرويجية)]]", .expanded = "= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[بُوكْمُول]]): =\n[[تصنيف:نرويجية (بوكمول)]]\n== المعاني ==\nاِسْمٌ مُذَكَّرٌ.\n# [[سَائِق]] ٱلْ[[حَافِلَة]].\n= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[نِينُوشْك]]): =\n[[تصنيف:نرويجية (نينوشك)]]\n== المعاني ==\nاِسْمٌ مُذَكَّرٌ.\n# [[سَائِق]] ٱلْ[[حَافِلَة]].\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:bu]]\n[[تصنيف:نقل (نرويجية)]]", .nb_targets = &.{ "حَافِلَة", "سَائِق" }, .nn_targets = &.{ "حَافِلَة", "سَائِق" } },
+        .{ .title = "bussrute", .raw = "{{نرويجية (بوكمول)}}\n{{المعاني}}\n{{النوع|اِسْمٌ مُذَكَّرٌ وَمُؤَنَّثٌ عَلَى حَدٍّ سَوَاء.}}\n# خَطُّ ٱلْحَافِلَة ([[طَرِيق]] ٱلْحَافِلَةِ).\n{{نرويجية (نينوشك)}}\n{{المعاني}}\n{{النوع|اِسْمٌ مُؤَنَّثٌ.}}\n# خَطُّ ٱلْحَافِلَة ([[طَرِيق]] ٱلْحَافِلَةِ).\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:bu]]\n[[تصنيف:نقل (نرويجية)]]", .expanded = "= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[بُوكْمُول]]): =\n[[تصنيف:نرويجية (بوكمول)]]\n== المعاني ==\nاِسْمٌ مُذَكَّرٌ وَمُؤَنَّثٌ عَلَى حَدٍّ سَوَاء.\n# خَطُّ ٱلْحَافِلَة ([[طَرِيق]] ٱلْحَافِلَةِ).\n= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[نِينُوشْك]]): =\n[[تصنيف:نرويجية (نينوشك)]]\n== المعاني ==\nاِسْمٌ مُؤَنَّثٌ.\n# خَطُّ ٱلْحَافِلَة ([[طَرِيق]] ٱلْحَافِلَةِ).\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:bu]]\n[[تصنيف:نقل (نرويجية)]]", .nb_targets = &.{"طَرِيق"}, .nn_targets = &.{"طَرِيق"} },
+        .{ .title = "busstur", .raw = "{{نرويجية (بوكمول)}}\n{{المعاني}}\n{{النوع|اِسْمٌ مُذَكَّرٌ.}}\n# [[رِحْلَة]] بِٱلْحَافِلَةِ.\n{{نرويجية (نينوشك)}}\n{{المعاني}}\n{{النوع|اِسْمٌ مُذَكَّرٌ.}}\n# [[رِحْلَة]] بِٱلْحَافِلَةِ.\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:bu]]\n[[تصنيف:نقل (نرويجية)]]", .expanded = "= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[بُوكْمُول]]): =\n[[تصنيف:نرويجية (بوكمول)]]\n== المعاني ==\nاِسْمٌ مُذَكَّرٌ.\n# [[رِحْلَة]] بِٱلْحَافِلَةِ.\n= [[فِي]] ٱل[[نَرْوِيجِيَّة]] ([[نِينُوشْك]]): =\n[[تصنيف:نرويجية (نينوشك)]]\n== المعاني ==\nاِسْمٌ مُذَكَّرٌ.\n# [[رِحْلَة]] بِٱلْحَافِلَةِ.\n\n[[تصنيف:b (نرويجية)]]\n[[تصنيف:bu]]\n[[تصنيف:نقل (نرويجية)]]", .nb_targets = &.{"رِحْلَة"}, .nn_targets = &.{"رِحْلَة"} },
+    };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/six", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    for (fixtures) |fixture| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, fixture.title, fixture.expanded, fixture.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 12), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    inline for (.{ .{ "nb", "النرويجية بوكمال" }, .{ "nn", "النرويجية نينورسك" } }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, owner[1]));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        for (fixtures) |fixture| {
+            const record = (try index.find(fixture.title)).?;
+            const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+            try std.testing.expectEqualStrings(owner[0], page.entry.language_code);
+            var text: std.ArrayList(u8) = .empty;
+            var targets: std.ArrayList([]const u8) = .empty;
+            for (page.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                try text.appendSlice(a, span.text);
+                if (span.target.len != 0) try targets.append(a, span.target);
+            };
+            const bokmal = std.mem.eql(u8, owner[0], "nb");
+            for (if (bokmal) fixture.nb_targets else fixture.nn_targets) |wanted| {
+                var found = false;
+                for (targets.items) |target| if (std.mem.eql(u8, target, wanted)) {
+                    found = true;
+                    break;
+                };
+                try std.testing.expect(found);
+            }
+            if (std.mem.eql(u8, fixture.title, "bety")) {
+                try std.testing.expectEqual(bokmal, std.mem.indexOf(u8, text.items, "betød") != null);
+                try std.testing.expectEqual(bokmal, std.mem.indexOf(u8, text.items, "لِلْمَاضِي ٱلْبَسِيطِ") != null);
+                try std.testing.expectEqual(bokmal, std.mem.indexOf(u8, text.items, "لَمَّحَ") != null);
+                if (!bokmal) for (targets.items) |target| try std.testing.expect(!std.mem.eql(u8, target, "دَلَّ") and !std.mem.eql(u8, target, "betød") and !std.mem.eql(u8, target, "لَمَّحَ"));
+            }
+            if (std.mem.eql(u8, fixture.title, "bussrute")) {
+                try std.testing.expectEqual(bokmal, std.mem.indexOf(u8, text.items, "مُذَكَّرٌ") != null);
+                try std.testing.expect(std.mem.indexOf(u8, text.items, "مُؤَنَّثٌ") != null);
+            }
+        }
+    }
+}
+
+test "Arabic Norwegian declarations isolate neighbors and missing variant authority" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, ArabicNorwegianTest.namespace_tsv);
+    defer namespaces.deinit();
+    inline for (.{ ArabicNorwegianTest.Mode.normal, .missing_named }) |state| {
+        const codes = ArabicNorwegianTest.codes(&namespaces, &state);
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, @tagName(state) });
+        var writer = try Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        const source = "==English==\n# EN_ONLY [[english-action]]\n= [[في]] ال[[نرويجية]] ([[بوكمول]]): =\n# NB_ONLY [[bokmal-action]]\n= [[في]] ال[[نرويجية]] ([[نينوشك]]): =\n# NN_ONLY [[nynorsk-action]]\n==French==\n# FR_ONLY [[french-action]]\n";
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "neighbors", source, source, null);
+        try std.testing.expectEqual(@as(usize, 4), (try writer.finish(codes)).language_records);
+        const nb_heading = if (state == .normal) "النرويجية بوكمال" else "Unclassified";
+        const nb_code = if (state == .normal) "nb" else "";
+        const owners = [_]struct { heading: []const u8, code: []const u8, sentinel: []const u8, target: []const u8 }{
+            .{ .heading = "English", .code = "en", .sentinel = "EN_ONLY", .target = "english-action" },
+            .{ .heading = nb_heading, .code = nb_code, .sentinel = "NB_ONLY", .target = "bokmal-action" },
+            .{ .heading = "النرويجية نينورسك", .code = "nn", .sentinel = "NN_ONLY", .target = "nynorsk-action" },
+            .{ .heading = "French", .code = "fr", .sentinel = "FR_ONLY", .target = "french-action" },
+        };
+        for (owners) |owner| {
+            var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, owner.heading));
+            defer mapped.deinit();
+            const blob = try blob_format.inspect(mapped.bytes);
+            var index = try blob.buildTrustedIndexAlloc(a);
+            defer index.deinit(a);
+            const record = (try index.find("neighbors")).?;
+            const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+            try std.testing.expectEqualStrings(owner.code, page.entry.language_code);
+            var text: std.ArrayList(u8) = .empty;
+            var action = false;
+            for (page.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                try text.appendSlice(a, span.text);
+                if (std.mem.eql(u8, span.target, owner.target)) action = true;
+            };
+            try std.testing.expect(action);
+            for (owners) |other| try std.testing.expectEqual(std.mem.eql(u8, owner.sentinel, other.sentinel), std.mem.indexOf(u8, text.items, other.sentinel) != null);
+        }
+    }
+}
+
+test "captured AN hyphen banners keep canonical owners despite local alias gaps" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tanwiktionary\n# dump-date\t20261001\n# content-language\tan\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |language| language.code else null;
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            // Canonical current registry rows; intentionally omit the missing
+            // local Piemontés/Chodigoespañol/Friulán aliases and retain the
+            // Malayo display-name collision independently from canonical ms.
+            inline for (.{ .{ "pms", "Piedmontese" }, .{ "lad", "ladino" }, .{ "fur", "friulano" }, .{ "ms", "malayo" }, .{ "scn", "siciliano" }, .{ "an", "aragonés" }, .{ "fr", "francés" }, .{ "oc", "occitano" } }) |row|
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1])) return .{ .code = row[0], .heading = row[1] };
+            if (std.mem.eql(u8, value, "Malayo")) return .{ .code = "mbp", .heading = "Malayo" };
+            inline for (.{ .{ "Aragonés", "an", "aragonés" }, .{ "Francés", "fr", "francés" }, .{ "Franzés", "fr", "francés" }, .{ "Français", "fr", "francés" }, .{ "Occitán", "oc", "occitano" }, .{ "Occitan", "oc", "occitano" }, .{ "Secilián", "scn", "siciliano" }, .{ "secilián", "scn", "siciliano" }, .{ "Sicilianu", "scn", "siciliano" } }) |row|
+                if (std.mem.eql(u8, value, row[0])) return .{ .code = row[1], .heading = row[2] };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve, .namespace_catalog = &namespaces };
+    const banner_pms = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Piedmont.svg|40px]] '''''[[Wiktionary:Piemontés|Piemontés]]''''' <small>- ''Piemontèis''</small></div>";
+    const banner_scn = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag of Sicily.svg|40px]] '''''[[secilián|Secilián]]''''' <small>- ''Sicilianu''</small></div>";
+    const banner_lad = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag of Thessaloniki.svg|40px]] '''''[[Wiktionary:Chodigoespañol|Chodigoespañol]]''''' <small>- ''Djudeoespanyol''</small></div>";
+    const banner_fur = "<div id=\"toc\" class=\"toccolours\" >[[Image:Bandiere_dal_Friûl.svg|40px]] '''''[[Wiktionary:Friulán|Friulán]]''''' <small>- ''Furlan''</small></div>";
+    const banner_ms = "<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>";
+    const banner_an = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Aragon.svg|40px]] '''''[[Wiktionary:Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div>";
+    const banner_fr = "<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_France.svg|40px]] '''''[[Wiktionary:Franzés|Francés]]''''' <small>- ''Français''</small></div>";
+    for ([_]struct { code: []const u8, banner: []const u8 }{ .{ .code = "pms", .banner = banner_pms }, .{ .code = "lad", .banner = banner_lad }, .{ .code = "fur", .banner = banner_fur }, .{ .code = "ms", .banner = banner_ms } }) |row| {
+        const raw: language_source.Section = .{ .heading = row.code, .source = "", .hyphen_marker = true };
+        try std.testing.expect(corroboratedAnHyphenMarker(codes, raw, .{ .heading = row.banner, .source = "" }));
+        try std.testing.expect(!corroboratedAnHyphenMarker(codes, .{ .heading = "adj", .source = "", .hyphen_marker = true }, .{ .heading = row.banner, .source = "" }));
+        try std.testing.expect(!corroboratedAnHyphenMarker(codes, .{ .heading = row.code, .source = "" }, .{ .heading = row.banner, .source = "" }));
+        try std.testing.expect(!corroboratedAnHyphenMarker(codes, raw, .{ .heading = banner_an, .source = "" }));
+        var absent = codes;
+        absent.namespace_catalog = null;
+        try std.testing.expect(!corroboratedAnHyphenMarker(absent, raw, .{ .heading = row.banner, .source = "" }));
+    }
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Source-instantiated banner expansions, not a claimed Lua execution.
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mùsica", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Piedmont.svg|40px]] '''''[[Wiktionary:Piemontés|Piemontés]]''''' <small>- ''Piemontèis''</small></div>=\n==Sustantivo==\n# [[mosica]]\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag of Sicily.svg|40px]] '''''[[secilián|Secilián]]''''' <small>- ''Sicilianu''</small></div>=\n==Sustantivo==\n# [[mosica]]\n", "{{-pms-}}\n{{-noun-}}\n'''mùsica'''\n# [[mosica]]\n\n{{-scn-}}\n{{-noun-}}\n'''mùsica'''\n# [[mosica]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "diya", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Aragon.svg|40px]] '''''[[Wiktionary:Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div>=\n==Sustantivo==\n1. Unidat de tiempo equibalent d'un periodo de 24 oras.\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag of Thessaloniki.svg|40px]] '''''[[Wiktionary:Chodigoespañol|Chodigoespañol]]''''' <small>- ''Djudeoespanyol''</small></div>=\n==Sustantivo==\n1. Unidat de tiempo equibalent d'un periodo de 24 oras.\n", "{{-an-}}\n[[Categoría:AN:Sustantivos masculins]]\n* '''Prenunziazión''': /'di.ʝa/ /'di.a/\n* '''Bariant''': día\n\n{{-noun.masc-}}\n'''diya''' ''m''\n\n1. Unidat de tiempo equibalent d'un periodo de 24 oras.\n\n{{-trans-}}\n* {{ca}}: [[dia]]\n* {{en}}: [[day]]\n* {{es}}: [[día]]\n* {{fr}}: [[jour]]\n* {{it}}: [[giorno]]\n* {{lad}}: [[diya]]\n* {{oc}}: [[jorn]]\n* {{scn}}: [[jornu]]\n|valign=\"top\"|\n|}\n\n{{-lad-}}\n\n{{Prenunziazión}}\n{{Etimolochía}}\n\n{{-noun.masc-}}[[Categoría:LAD:Sustantibos masculins]]\n'''diya''' ''m''\n\n1. Unidat de tiempo equibalent d'un periodo de 24 oras.", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "an", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_France.svg|40px]] '''''[[Wiktionary:Franzés|Francés]]''''' <small>- ''Français''</small></div>=\n==Sustantivo==\n# [[año]], [[añada]]\n=<div id=\"toc\" class=\"toccolours\" >[[Image:Bandiere_dal_Friûl.svg|40px]] '''''[[Wiktionary:Friulán|Friulán]]''''' <small>- ''Furlan''</small></div>=\n==Sustantivo==\n# [[año]], [[añada]]\n==Occitán==\n==Sustantivo==\n# [[año]], [[añada]]\n", "{{-fr-}}\n{{-noun-}}\n'''an'''\n# [[año]], [[añada]]\n\n{{-fur-}}\n{{-noun-}}\n'''an'''\n# [[año]], [[añada]]\n\n{{-oc-}}\n{{-noun-}}\n'''an'''\n# [[año]], [[añada]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "جون", "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=\n==Sustantivo==\n# [[chunio]].\n", "{{-ms-}}\n{{Prenunziazión|/dʒun/}}\n{{Etimolochía|anglés|June}}\n{{grafíaalt|[[Jun]]}}\n{{-noun-}}[[Categoría:MS:Sustantibos]]\n'''جون'''\n# [[chunio]].\n\n==Se beigan también==\n* (''mes''): Dezaga: [[مي]]. Debant: [[جولاي]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Jun", "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=\n==Sustantivo==\n# [[chunio]].\n", "{{-ms-}}\n{{Prenunziazión|/dʒun/}}\n{{Etimolochía|anglés|June}}\n{{grafíaalt|[[جون]]}}\n{{-noun-}}[[Categoría:MS:Sustantibos]]\n'''Jun'''\n# [[chunio]].\n\n==Se beigan también==\n* (''mes''): Dezaga: [[Mei]]. Debant: [[Julai]]", null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 9), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 8), stats.language_blobs);
+    const expected = [_]struct { title: []const u8, owner: []const u8, code: []const u8, own_heading: []const u8, forbidden: []const u8 }{
+        .{ .title = "mùsica", .owner = "Piedmontese", .code = "pms", .own_heading = "Piemontés", .forbidden = "Secilián" },
+        .{ .title = "mùsica", .owner = "siciliano", .code = "scn", .own_heading = "Secilián", .forbidden = "Piemontés" },
+        .{ .title = "diya", .owner = "aragonés", .code = "an", .own_heading = "Aragonés", .forbidden = "Chodigoespañol" },
+        .{ .title = "diya", .owner = "ladino", .code = "lad", .own_heading = "Chodigoespañol", .forbidden = "Aragonés" },
+        .{ .title = "an", .owner = "francés", .code = "fr", .own_heading = "Francés", .forbidden = "Friulán" },
+        .{ .title = "an", .owner = "friulano", .code = "fur", .own_heading = "Friulán", .forbidden = "Francés" },
+        .{ .title = "an", .owner = "occitano", .code = "oc", .own_heading = "Occitán", .forbidden = "Friulán" },
+        .{ .title = "جون", .owner = "malayo", .code = "ms", .own_heading = "Malayo", .forbidden = "Piemontés" },
+        .{ .title = "Jun", .owner = "malayo", .code = "ms", .own_heading = "Malayo", .forbidden = "Friulán" },
+    };
+    for (expected) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row.owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(row.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualStrings(row.code, decoded.entry.language_code);
+        var own: usize = 0;
+        var definitions: usize = 0;
+        var actions: usize = 0;
+        for (decoded.entry.sections) |section| {
+            try std.testing.expect(std.mem.indexOf(u8, section.title, row.forbidden) == null);
+            if (std.mem.indexOf(u8, section.title, row.own_heading) != null) own += 1;
+            for (section.blocks) |block| {
+                if (block.kind == .definition or (block.kind == .paragraph and block.spans.len != 0 and std.mem.indexOf(u8, block.spans[0].text, "24 oras") != null)) definitions += 1;
+                for (block.spans) |span| if (span.kind == .link and (std.mem.eql(u8, span.target, "mosica") or std.mem.eql(u8, span.target, "año") or std.mem.eql(u8, span.target, "añada") or std.mem.eql(u8, span.target, "chunio"))) {
+                    actions += 1;
+                };
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), own);
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        if (!std.mem.eql(u8, row.title, "diya")) try std.testing.expect(actions > 0);
+    }
+}
+
+test "ANG noun tables retain Old English ownership without claiming genuine Nama" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Local = struct {
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |language| language.code else null;
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Nama") or std.mem.eql(u8, value, "nmx")) return .{ .code = "nmx", .heading = "Nama" };
+            if (std.mem.eql(u8, value, "Englisc") or std.mem.eql(u8, value, "ang")) return .{ .code = "ang", .heading = "Englisc" };
+            return TestLanguages.resolve(null, value);
+        }
+        fn trusted(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Nama") or std.mem.eql(u8, value, "Englisc")) return resolve(null, value);
+            return TestLanguages.trusted(null, value);
+        }
+        fn strong(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Nama") or std.mem.eql(u8, value, "Englisc")) return resolve(null, value);
+            return TestLanguages.strong(null, value);
+        }
+    };
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tangwiktionary\n# dump-date\t20261001\n# content-language\tang\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tBysen\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tFlocc\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var codes = TestLanguages.codes();
+    codes.get_fn = Local.get;
+    codes.resolve_fn = Local.resolve;
+    codes.trusted_fn = Local.trusted;
+    codes.strong_fn = Local.strong;
+    codes.namespace_catalog = &namespaces;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ang-noun-table", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact seaxisc7072/rev53032 source; representative expansion retains its
+    // observed three tables, two noun definitions, headings and lexical links.
+    // This is a Writer/codec ownership test, not a fresh Lua expansion claim.
+    const raw = "=={{sprǣc|ang}}==\n\n==Tōgeīecendlic==\n\n=== {{Wordcynn|Tōgeīecendlic}} ===\n{{Tógeíecendlic-Tabule|\n1. Stæpe=Seaxisc\n|2. Stæpe= -\n|3. Stæpe= -\n|Othera_declinunga=Seaxisc (declīnung)\n}}\n\n* of landum þāra Seaxa, oþþe of þǣre þēode Seaxes (þā þe on grēatum worulddǣle belifon)\n\n==Nama==\n=== {{m}} {{Wordcynn|Nama}} ===\n{{Naman-Tabule|\nHwā oþþe hwæt? (Ānfeald)=se Seaxisc\n|Hwā oþþe hwæt? (Manigfeald)=þā Seaxisce\n|Hwæs? (Ānfeald)=þæs Seaxisces\n|Hwæs? (Manigfeald)=þāra Seaxisca\n|Hwǣm? (Ānfeald)=þǣm Seaxisce\n|Hwǣm? (Manigfeald)=þǣm Seaxiscum\n|Hwȳ? (Ānfeald)=þȳ Seaxisce\n|Hwȳ? (Manigfeald)=þǣm Seaxiscum\n|Hwone? (Ānfeald)=þone Seaxisc\n|Hwone? (Manigfeald)=þā Seaxisce\n\n}}\n\n* <small>'''''lēoda'''''</small>, (þā) Seaxa, sum mann þe of Seaxe cymþ\n\n\n\n\n\n\n\n\n\n\n\n\n=== {{n}} {{Wordcynn|Nama}} ===\n{{Naman-Tabule|\nHwā oþþe hwæt? (Ānfeald)=þæt Seaxisc\n|Hwā oþþe hwæt? (Manigfeald)=þā Seaxisc\n|Hwæs? (Ānfeald)=þæs Seaxisces\n|Hwæs? (Manigfeald)=þāra Seaxiscra\n|Hwǣm? (Ānfeald)=þǣm Seaxisce\n|Hwǣm? (Manigfeald)=þǣm Seaxiscum\n|Hwȳ? (Ānfeald)=þȳ Seaxisce\n|Hwȳ? (Manigfeald)=þǣm Seaxiscum\n|Hwone? (Ānfeald)=þæt Seaxisc\n|Hwone? (Manigfeald)=þā Seaxisc\n\n}}\n\n#Sēo sprǣc gesprecen of þǣm lēodum on Seaxe (wierþþ [[Sahsisk]] on seaxisc gecweden)\n#Þæt Seaxisce blēo sumes wordes\n\n====Wordstǣr====\nOfcymþ þæt word [[Seaxe]] and [[-isc]].\n\n\n[[Category:Englisc tōgeīecendlic]]\n[[Category:Tōgeīecendlic ofgangen mid -isc]]\n[[Category:Englisc nama]]\n[[Category:Englisc werlic nama]]\n[[Category:Englisc nāhwæðer nama]]\n[[Category:Mennisc]]\n[[Category:Þēodhād]]";
+    const expanded = "==Englisc==\n\n==Tōgeīecendlic==\n\n=== [[Help:Wordcynn|Tōgeīecendlic]][[Flocc:Tōgeīecendlic]] ===\n{|\n! Grundword !! Wiþmetendlic !! Oferstīgendlic\n|-\n| Seaxisc || - || -\n|-\n| colspan=\"3\" | Ealla ōðra ansīena: [[Seaxisc (declīnung)]]\n|}\n\n* of landum þāra Seaxa, oþþe of þǣre þēode Seaxes (þā þe on grēatum worulddǣle belifon)\n\n==Nama==\n=== Werlic [[Help:Wordcynn|Nama]][[Flocc:Nama]] ===\n{| style=\"float:right; border:1px solid #AAAAAA; margin-left:0.5em; margin-bottom:0.5em;\" rules=\"all\" cellpadding=\"3\" cellspacing=\"0\"\n! width=\"65\" bgcolor=\"#F4F4F4\" | [[Help:Cāsus|Cāsus]]\n! bgcolor=\"#FFFFE0\" | [[Help:Ānfeald|Ānfeald]]\n! bgcolor=\"#FFFFE0\" | [[Help:Manigfeald|Manigfeald]]\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Help:Nemniendlic|Nemniendlic]]'''\n| '''se Seaxisc''' || '''þā Seaxisce'''\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Help:Wrēgendlic|Wrēgendlic]]'''\n| þone Seaxisc || þā Seaxisce\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Help:Āgniendlic|Āgniendlic]]'''\n| þæs Seaxisces || þāra Seaxisca\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Help:Forgifendlic|Forgifendlic]]'''\n| þǣm Seaxisce || þǣm Seaxiscum\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Help:Tōllic|Tōllic]]'''\n| þȳ Seaxisce || þǣm Seaxiscum\n|}\n\n* <small>'''''lēoda'''''</small>, (þā) Seaxa, sum mann þe of Seaxe cymþ\n\n\n\n\n\n\n\n\n\n\n\n\n=== Nāhwæðer [[Help:Wordcynn|Nama]][[Flocc:Nama]] ===\n{| style=\"float:right; border:1px solid #AAAAAA; margin-left:0.5em; margin-bottom:0.5em;\" rules=\"all\" cellpadding=\"3\" cellspacing=\"0\"\n! width=\"65\" bgcolor=\"#F4F4F4\" | [[Help:Cāsus|Cāsus]]\n! bgcolor=\"#FFFFE0\" | [[Help:Ānfeald|Ānfeald]]\n! bgcolor=\"#FFFFE0\" | [[Help:Manigfeald|Manigfeald]]\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Help:Nemniendlic|Nemniendlic]]'''\n| '''þæt Seaxisc''' || '''þā Seaxisc'''\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Help:Wrēgendlic|Wrēgendlic]]'''\n| þæt Seaxisc || þā Seaxisc\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Help:Āgniendlic|Āgniendlic]]'''\n| þæs Seaxisces || þāra Seaxiscra\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Help:Forgifendlic|Forgifendlic]]'''\n| þǣm Seaxisce || þǣm Seaxiscum\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Help:Tōllic|Tōllic]]'''\n| þȳ Seaxisce || þǣm Seaxiscum\n|}\n\n#Sēo sprǣc gesprecen of þǣm lēodum on Seaxe (wierþþ [[Sahsisk]] on seaxisc gecweden)\n#Þæt Seaxisce blēo sumes wordes\n\n====Wordstǣr====\nOfcymþ þæt word [[Seaxe]] and [[-isc]].\n\n\n[[Category:Englisc tōgeīecendlic]]\n[[Category:Tōgeīecendlic ofgangen mid -isc]]\n[[Category:Englisc nama]]\n[[Category:Englisc werlic nama]]\n[[Category:Englisc nāhwæðer nama]]\n[[Category:Mennisc]]\n[[Category:Þēodhād]]";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "seaxisc", expanded, raw, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "seaxisc-with-nama", expanded ++ "\n==Nama==\n# TRUE_NAMA\n", raw ++ "\n=={{sprǣc|nmx}}==\n# TRUE_NAMA\n", null);
+    const prefix_raw = "=={{sprǣc|ang}}==\n# ANG_PREFIX\n";
+    const prefix_expanded = "==Englisc==\n# ANG_PREFIX\n";
+    const cue = "=== {{m}} {{Wordcynn|Nama}} ===\n{{Naman-Tabule|case=form}}\n";
+    const rendered_cue = "=== Werlic [[Help:Wordcynn|Nama]][[Flocc:Nama]] ===\n";
+    const cases = .{
+        .{ "missing-cue", prefix_raw ++ "==Nama==\n# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n# NAMA_BODY\n" },
+        .{ "missing-table", prefix_raw ++ "==Nama==\n=== {{m}} {{Wordcynn|Nama}} ===\n# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n" ++ rendered_cue ++ "# NAMA_BODY\n" },
+        .{ "unclosed-table", prefix_raw ++ "==Nama==\n=== {{m}} {{Wordcynn|Nama}} ===\n{{Naman-Tabule|case=form\n# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n" ++ rendered_cue ++ "# NAMA_BODY\n" },
+        .{ "protected-cue", prefix_raw ++ "==Nama==\n<nowiki>" ++ cue ++ "</nowiki>\n# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n# NAMA_BODY\n" },
+        .{ "late-cue", prefix_raw ++ "==Nama==\n# NAMA_BODY\n" ++ cue, prefix_expanded ++ "==Nama==\n# NAMA_BODY\n" ++ rendered_cue },
+        .{ "uncorroborated-expansion", prefix_raw ++ "==Nama==\n" ++ cue ++ "# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n=== Different heading ===\n# NAMA_BODY\n" },
+        .{ "implicit-prior-owner", prefix_expanded ++ "==Nama==\n" ++ cue ++ "# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n" ++ rendered_cue ++ "# NAMA_BODY\n" },
+        .{ "intervening-owner", prefix_raw ++ "==French==\n# FR_PREFIX\n==Nama==\n" ++ cue ++ "# NAMA_BODY\n", prefix_expanded ++ "==French==\n# FR_PREFIX\n==Nama==\n" ++ rendered_cue ++ "# NAMA_BODY\n" },
+        .{ "intervening-unknown", prefix_raw ++ "==Unknown heading==\n# UNKNOWN\n==Nama==\n" ++ cue ++ "# NAMA_BODY\n", prefix_expanded ++ "==Unknown heading==\n# UNKNOWN\n==Nama==\n" ++ rendered_cue ++ "# NAMA_BODY\n" },
+        .{ "explicit-nama", prefix_raw ++ "=={{sprǣc|nmx}}==\n" ++ cue ++ "# NAMA_BODY\n", prefix_expanded ++ "==Nama==\n" ++ rendered_cue ++ "# NAMA_BODY\n" },
+    };
+    inline for (cases) |row| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row[0], row[2], row[1], null);
+    var other_codes = codes;
+    other_codes.namespace_catalog = null;
+    writer.language_codes = other_codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "without-edition", prefix_expanded ++ "==Nama==\n" ++ rendered_cue ++ "# NAMA_BODY\n", prefix_raw ++ "==Nama==\n" ++ cue ++ "# NAMA_BODY\n", null);
+    writer.language_codes = codes;
+    _ = try writer.finish(codes);
+    var english_map = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Englisc"));
+    defer english_map.deinit();
+    const english = try blob_format.inspect(english_map.bytes);
+    const metadata = try english.languageMetadata();
+    try std.testing.expectEqualStrings("ang", metadata.code);
+    var english_index = try english.buildTrustedIndexAlloc(a);
+    defer english_index.deinit(a);
+    var nama_map = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Nama"));
+    defer nama_map.deinit();
+    const nama = try blob_format.inspect(nama_map.bytes);
+    try std.testing.expectEqualStrings("nmx", (try nama.languageMetadata()).code);
+    var nama_index = try nama.buildTrustedIndexAlloc(a);
+    defer nama_index.deinit(a);
+    try std.testing.expect((try nama_index.find("seaxisc")) == null);
+    for ([_][]const u8{ "seaxisc", "seaxisc-with-nama" }) |title| {
+        const record = (try english_index.find(title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var tables: usize = 0;
+        var definitions: usize = 0;
+        var lexical_links: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| {
+            if (block.table != null) tables += 1;
+            if (block.kind == .definition) definitions += 1;
+            for (block.spans) |span| {
+                if (std.mem.eql(u8, span.target, "Sahsisk") or std.mem.eql(u8, span.target, "Seaxe") or std.mem.eql(u8, span.target, "-isc")) lexical_links += 1;
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "TRUE_NAMA") == null);
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 3), tables);
+        try std.testing.expectEqual(@as(usize, 2), definitions);
+        try std.testing.expectEqual(@as(usize, 3), lexical_links);
+        try std.testing.expect(std.mem.indexOf(u8, record.payload, "se Seaxisc") != null);
+        try std.testing.expect(std.mem.indexOf(u8, record.payload, "þæt Seaxisc") != null);
+        try std.testing.expect(std.mem.indexOf(u8, record.payload, "Þæt Seaxisce blēo") != null);
+    }
+    const genuine = (try nama_index.find("seaxisc-with-nama")).?;
+    try std.testing.expect(std.mem.indexOf(u8, genuine.payload, "TRUE_NAMA") != null);
+    try std.testing.expect(std.mem.indexOf(u8, genuine.payload, "se Seaxisc") == null);
+    inline for (cases) |row| {
+        try std.testing.expect(std.mem.indexOf(u8, (try nama_index.find(row[0])).?.payload, "NAMA_BODY") != null);
+        if (try english_index.find(row[0])) |record| try std.testing.expect(std.mem.indexOf(u8, record.payload, "NAMA_BODY") == null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, (try nama_index.find("without-edition")).?.payload, "NAMA_BODY") != null);
+}
+
+test "Arabic explicit linked declarations and raw corroborated table boundaries preserve owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |owner| owner.code else null;
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "en", "الإنجليزية", "إنجليزية" }, .{ "fr", "الفرنسية", "فرنسية" }, .{ "ca", "الكتالانية", "كاتالونية" }, .{ "de", "الألمانية", "ألمانية" } }) |row|
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]) or std.mem.eql(u8, value, row[2])) return .{ .code = row[0], .heading = row[1] };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve, .strong_fn = Local.resolve, .namespace_catalog = &namespaces };
+    const chrome_heading = "[[إِنْجْلِيزِيَّة|فِي ٱللُّغَةِ ٱلْإِنْجْلِيزِيَّةِ]]:";
+    const dalembert_heading = "[[لُغَة|لغة]] [[إِنْجْلِيزِيَّة|إنجليزية]]";
+    for ([_][]const u8{ chrome_heading, dalembert_heading }) |heading| {
+        const section: language_source.Section = .{ .heading = heading, .source = "" };
+        try std.testing.expectEqualStrings("en", resolveSection(codes, section).?.code);
+        try std.testing.expectEqualStrings("en", boundaryLanguage(codes, section).?.code);
+        try std.testing.expect(hasExplicitLanguageDeclaration(codes, section));
+        var foreign = codes;
+        foreign.namespace_catalog = null;
+        try std.testing.expect(arabicLinkedOwner(foreign, heading) == null);
+    }
+    for ([_][]const u8{
+        "[[إِنْجْلِيزِيَّة|فِي ٱللُّغَةِ ٱلْأَلْمَانِيَّةِ]]:",
+        "[[لغة|لغة]] [[إنجليزية|ألمانية]]",
+        "[[لغة|لغة]] [[unknown|unknown]]",
+    }) |heading| {
+        const section: language_source.Section = .{ .heading = heading, .source = "" };
+        try std.testing.expect(hasExplicitLanguageDeclaration(codes, section));
+        try std.testing.expect(resolveSection(codes, section) == null);
+        try std.testing.expect(boundaryLanguage(codes, section) == null);
+    }
+    for ([_][]const u8{
+        "[[لغة|أخرى]] [[إنجليزية|إنجليزية]]",
+        "prefix [[لغة]] [[إنجليزية]]",
+        "[[إنجليزية|في اللغة الإنجليزية]]: extra",
+        "[[إنجليزية|في اللغة الإنجليزية|extra]]:",
+        "<nowiki>[[لغة]] [[إنجليزية]]</nowiki>",
+        "[[لغة]] [[إنجليزية]] [[فرنسية]]",
+    }) |heading| try std.testing.expect(arabicLinkedOwner(codes, heading) == null);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "chrome", "=[[إِنْجْلِيزِيَّة|فِي ٱللُّغَةِ ٱلْإِنْجْلِيزِيَّةِ]]:=\n=== الكلمة ===\n'''chrome'''\n=== مادة ===\nمصطلح علمي\n=== [[لُغَة|لغة]] ===\n[[إِنْجْلِيزِيَّة|إنجليزية]]\n=== عربية ===\nالمعنى:\n# كروم\n", "{{انجليزية}}\n=== الكلمة ===\n'''chrome'''\n=== مادة ===\nمصطلح علمي\n\n=== [[لُغَة|لغة]] ===\n[[إِنْجْلِيزِيَّة|إنجليزية]]\n\n=== عربية ===\nالمعنى:\n# كروم\n\n[[تصنيف:قاموس علمي]]\n[[تصنيف:إنجليزية]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "d’Alembertian", "== الكلمة ==\n'''d’Alembertian'''\n\n== [[لُغَة|لغة]] [[إِنْجْلِيزِيَّة|إنجليزية]] ==\nd’Alembertian هي مصطلح علمي في اللغة الإنجليزية\n\n== ترجمة المعنى الإنجليزي ==\n\n=== اللغة [[عربية|العربية]] ===\n# مؤشر دالمبير\n\n[[تصنيف:قاموس علمي]]\n[[تصنيف:إنجليزية]]", "== الكلمة ==\n'''d’Alembertian'''\n\n== [[لُغَة|لغة]] [[إِنْجْلِيزِيَّة|إنجليزية]] ==\nd’Alembertian هي مصطلح علمي في اللغة الإنجليزية\n\n== ترجمة المعنى الإنجليزي ==\n\n=== اللغة [[عربية|العربية]] ===\n# مؤشر دالمبير\n\n[[تصنيف:قاموس علمي]]\n[[تصنيف:إنجليزية]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "or", "== إنجليزية ==\n=== المعاني ===\n# [[أَوْ]]\n# [[أم]]\n== فرنسية ==\n=== المعاني ===\n# [[ذَهَبَ]]\n# [[لَكِنْ]]\n=== انظر أيضا ===\n{| class=\"wikitable\" style=\"text-align:center; order\n|+ ''{{أزرق|أدوات ربط فرنسية}}''\n! scope=\"row\" | الحرف\n|[[mais]]||[[ou]]||[[et]]||[[donc]]||[[or]]||[[ni]]||[[car]]\n|-}\n</center><includeonly>[[تصنيف:قوالب تحرير الكلمات الفرنسية]]</includeonly>\n<noinclude>[[تصنيف:قوالب الجداول]]</noinclude>\n== كاتالونية[[تصنيف:كاتالونية]] ==\n=== المعاني ===\n* [[ذَهَبَ]]\n", "== {{اللغة|إنجليزية}} ==\n=== المعاني ===\n# [[أَوْ]]\n# [[أم]]\n==== ترجمات ====\n{{trans-top|conjunction}}\n* {{af}}: {{t+|af|of}}\n* {{sq}}: {{t+|sq|ose}}, {{t+|sq|apo}}, {{t+|sq|a}}\n* Amharic: {{t|am|ወይስ|sc=Ethi}}\n* Arabic: {{t|ar|أَو}}, {{t+|ar|أَم}} {{qualifier|in questions}}, {{t|ar|إِمَّا}}\n* Aragonese: {{t+|an|u}}\n* Aramaic:\n*: {{he}}: [[או]] (’āw)\n*: Syriac: [[ܐܘ]] (’āw)\n* Armenian: {{t+|hy|կամ}}\n* Aromanian: {{t|rup|icã}}\n* Assamese: {{l|as|বা}}\n* Asturian: {{t+|ast|o}}\n* Azeri: {{t+|az|ya}}, {{t+|az|və ya}}\n* Bashkir: {{t|ba|йәки}}, {{t|ba|йә}}\n* Basque: {{t+|eu|edo}}, {{t+|eu|ala}}\n* Belarusian: {{t|be|або́}}\n* Bengali: {{t|bn|বা|tr=ba|sc=Beng}}, {{t+|bn|অথবা|tr=ôthôba|sc=Beng}}, {{t|bn|কিংবা|tr=kingba|sc=Beng}}\n* Breton: {{t+|br|pe}}\n* Bulgarian: {{t+|bg|и́ли}}\n* Burmese: {{t+|my|သို့မဟုတ်|sc=Mymr}}\n* Catalan: {{t+|ca|o}}, {{t|ca|o bé}}\n* Chechen: {{t|ce|я}}\n* Chinese:\n*: Cantonese: {{t|yue|定係|tr=ding6 hai6|sc=Hani}}\n*: Mandarin: {{t+|cmn|或|tr=huò|sc=Hani}}, {{t+|cmn|或者|tr=huòzhě|sc=Hani}}; {{t+|cmn|還是|sc=Hani}}, {{t+|cmn|还是|tr=háishi|sc=Hani}} {{qualifier|in questions}}\n* Chuvash: {{t|cv|е}}\n* Cornish: {{t|kw|po}}\n* Crimean Tatar: {{t|crh|ya}}\n* Czech: {{t+|cs|nebo}}\n* Danish: {{t+|da|eller}}\n* Dutch: {{t+|nl|of}}\n* Egyptian: usually null; sometimes {{t|egy|r-pw}}\n*: <hiero>r: Z1-p-w</hiero>\n* Esperanto: {{t+|eo|aŭ}}\n* Estonian: {{t+|et|või}}\n* Faroese: {{t|fo|ella}}\n* Finnish: {{t+|fi|tai}} {{qualifier|exclusive, only in affirmative clauses}}; {{t+|fi|vai}} (''inclusive, only in '''question''' clauses'')\n* French: {{t+|fr|ou}}\n*: Old French: {{t|fro|ou}}\n* Galician: {{t+|gl|ou}}\n* Georgian: {{t|ka|ანუ}}\n* German: {{t+|de|oder}}\n* Gothic: {{t|got|𐍅𐌰𐌿}}\n* Greek: {{t+|el|ή}}, {{t+|el|είτε}}\n*: Ancient: {{t|grc|ἤ}}\n* Hawaiian: {{t|haw|paha|alt=ā ... paha}}, {{t|haw|a i ʻole}}\n* Hebrew: {{t+|he|אוֹ|tr='o}}\n* Hindi: {{t+|hi|या|tr=yā}}, {{t+|hi|कि|tr=ki|sc=Deva}}, {{t+|hi|वा|tr=vā|sc=Deva}}, {{t+|hi|अथवा|sc=Deva}}\n* Hungarian: {{t+|hu|vagy}}\n* Icelandic: {{t+|is|eða}}\n* Ido: {{t+|io|od}}, {{t+|io|o}}\n* Indonesian: {{t+|id|atau}}\n* Interlingua: {{t+|ia|o}}\n* Irish: {{t|ga|nó}}\n* Italian: {{t+|it|o}}, {{t|it|od}} (''euphonic alt. form used before a vowel''), {{t+|it|oppure}}\n* Japanese: {{t+|ja|または|tr=mata wa}} ({{t+|ja|又は}}), {{t+|ja|あるいは|tr=arui wa}}, {{t+|ja|か|tr=ka}}, {{t+|ja|それとも|tr=soretomo}}\n* Javanese: {{t+|jv|utawa}}, {{t+|jv|utawi}}, {{t|jv|atawa}}\n* Kannada: {{t+|kn|ಅಥವಾ|sc=Knda}}\n* Kashubian: {{t|csb|abò}}\n* Kazakh: {{t+|kk|не}}, {{t+|kk|немесе}}, {{t+|kk|я}}, {{t|kk|яки}}\n* Khmer: {{t+|km|ឬ|tr=reu|sc=Khmr}}\n* Korean: {{t+|ko|또는}}\n* Kurdish:\n*: Sorani: {{t+|ku|یا|tr=ya|sc=ku-Arab}}, {{t|ku|یان|tr=yan|sc=ku-Arab}}\n* Kyrgyz: {{t+|ky|же}}\n* Lao: {{t|lo|ບໍ້|sc=Laoo}}, {{t|lo|ຫລື|sc=Laoo}}, {{t|lo|ຫຼື|sc=Laoo}}\n* Latgalian: {{t|ltg|ci}}, {{t|ltg|voi}}, {{t|ltg|aba}}\n{{trans-mid}}\n* Latin: {{t+|la|aut}}, {{t+|la|seu}}, {{t+|la|vel}}\n* Latvian: {{t|lv|vai}}, {{t|lv|jeb}}\n* Lithuanian: {{t+|lt|arba}}\n* Livonian: {{t|liv|või}}\n* Luxembourgish: {{t|lb|oder}}\n* Lü: {{t-needed|khb}}\n* Macedonian: {{t|mk|или}}\n* Malagasy: {{t+|mg|na}}, {{t+|mg|sa}}\n* Malay: {{t|ms|atau}}\n* Maltese: {{t|mt|jew}}\n* Maori: {{t|mi|rānei}}\n* Mongolian: {{t+|mn|эсвэл}}, {{t+|mn|буюу}}\n* Navajo: {{t|nv|éí doodaiiʼ éí}}, {{t|nv|doodaiiʼ}}\n* Neapolitan: {{t|nap|o}}\n* Northern Thai: {{t-needed|nod}}\n* Norwegian: {{t+|no|eller}}\n*: Bokmål: {{t|nb|ellers}} ''(otherwise)''\n*: Nynorsk: {{t|nn|elles}} ''(otherwise)''\n* Novial: {{t|nov|o}}\n* Old English: {{t|ang|hwæþer þe}}, {{t|ang|oþþe}}\n* Old Prussian: {{t|prg|anga, adder}}\n* Ottoman Turkish: {{t|ota|ویا|tr=veyā|sc=ota-Arab}}\n* Pashto: {{t+|ps|که|tr=ka}}, {{t|ps|لا|tr=lâ}}, {{t+|ps|يا|tr=yâ}}\n* Persian: {{t+|fa|یا|tr=yâ}}\n* Polish: {{t+|pl|albo}}, {{t+|pl|lub}}, {{t+|pl|czy}}\n* Portuguese: {{t+|pt|ou}}\n* Quechua: {{t|qu|icha}}\n* Rapa Nui: {{t|rap|o}}\n* Romanian: {{t+|ro|ori}}, {{t+|ro|sau}}\n* Russian: {{t+|ru|и́ли}}, {{t+|ru|ли́бо}}\n* Sardinian: {{t|sc|o}}\n* Scots: {{t|sco|or}}\n* Scottish Gaelic: {{t|gd|no}}, {{t|gd|neo}}, {{t|gd|air neo}}\n* Serbo-Croatian:\n*: Cyrillic: {{t|sh|или}}\n*: Roman: {{t+|sh|ili}}\n* Shan: {{t-needed|shn}}\n* Sindhi: {{t|sd|یا|tr=yā}}\n* Sinhalese: {{t|si|හෝ|sc=Sinh}}\n* Slovak: {{t|sk|alebo}}, {{t|sk|abo}}\n* Slovene: {{t+|sl|àli}}\n* Sorbian:\n*: Lower Sorbian: {{t|dsb|abo}}\n*: Upper Sorbian: {{t+|hsb|abo}}\n* Spanish: {{t+|es|o}}, {{qualifier|before words beginning in 'o-' or 'ho-'}} {{t+|es|u}}\n* Sudovian: {{t|xsv|ader}}\n* Swahili: {{t|sw|au}}\n* Swedish: {{t+|sv|eller}}\n* Tagalog: {{t|tl|o}}\n* Tajik: {{t+|tg|ё}}\n* Tamil: {{t+|ta|அல்லது|sc=Taml}}\n* Tatar: {{t|tt|яки}}, {{t|tt|яисә}}, {{t|tt|я}}\n* Telugu: {{t+|te|లేదా}}, {{t+|te|గాని}}\n* Thai: {{t+|th|หรือ}}, {{t|th|หรือว่า|tr=rĕu-wâa}}\n* Turkish: {{t+|tr|veya}}, {{t+|tr|ya da}}\n* Turkmen: {{t|tk|ýa}}, {{t|tk|ýada}}\n* Ukrainian: {{t+|uk|чи}}, {{t+|uk|або́}}\n* Urdu: {{t|ur|يا|tr=yā}}\n* Uyghur: {{t+|ug|ياكى|sc=ug-Arab}}\n* Uzbek: {{t+|uz|yoki}}\n* Vietnamese: {{t+|vi|hay}}, {{t|vi|hay là}}, {{t+|vi|hoặc}}\n* Vilamovian: {{t|wym|ober}}\n* Volapük: (before consonants) {{t+|vo|u}}, (before vowels) {{t+|vo|ud}}\n* Welsh: {{t|cy|neu}}\n* West Frisian: {{t+|fy|of}}\n* Yagnobi: {{t|yai|ё}}\n* Yiddish: {{t|yi|אָדער|tr=oder|sc=Hebr}}\n* Zhuang: {{t|za|rox}}, {{t|za|roxnaeuz}}\n{{trans-bottom}}\n\n== {{اللغة|فرنسية}} ==\n=== المعاني ===\n# [[ذَهَبَ]]\n# [[لَكِنْ]]\n=== انظر أيضا ===\n{{أدوات ربط فرنسية}}\n\n== {{اللغة|كاتالونية}} ==\n=== المعاني ===\n* [[ذَهَبَ]]", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "heading-cell-negative", "== فرنسية ==\n{|\n|\n== كاتالونية ==\n# cell-only\n|}\n", "== {{اللغة|فرنسية}} ==\n{|\n|\n== {{اللغة|كاتالونية}} ==\n# cell-only\n|}\n", null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 6), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_blobs);
+    const expected = [_]struct { owner: []const u8, code: []const u8, title: []const u8 }{
+        .{ .owner = "الإنجليزية", .code = "en", .title = "chrome" },
+        .{ .owner = "الإنجليزية", .code = "en", .title = "d’Alembertian" },
+        .{ .owner = "الإنجليزية", .code = "en", .title = "or" },
+        .{ .owner = "الفرنسية", .code = "fr", .title = "or" },
+        .{ .owner = "الكتالانية", .code = "ca", .title = "or" },
+        .{ .owner = "الفرنسية", .code = "fr", .title = "heading-cell-negative" },
+    };
+    for (expected) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row.owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(row.title)).?;
+        const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualStrings(row.code, page.entry.language_code);
+        if (std.mem.eql(u8, row.title, "chrome") or std.mem.eql(u8, row.title, "d’Alembertian")) {
+            const meaning = if (std.mem.eql(u8, row.title, "chrome")) "كروم" else "مؤشر دالمبير";
+            var exact_meanings: usize = 0;
+            var heading_actions: usize = 0;
+            for (page.entry.sections) |section| for (section.blocks) |block| {
+                if (block.kind == .definition and block.spans.len == 1 and std.mem.eql(u8, block.spans[0].text, meaning)) exact_meanings += 1;
+                for (block.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "إِنْجْلِيزِيَّة")) {
+                    heading_actions += 1;
+                };
+            };
+            try std.testing.expectEqual(@as(usize, 1), exact_meanings);
+            try std.testing.expect(heading_actions >= 1);
+        }
+        if (std.mem.eql(u8, row.title, "or")) {
+            var gold: usize = 0;
+            var but: usize = 0;
+            var english: usize = 0;
+            for (page.entry.sections) |section| {
+                if (std.mem.eql(u8, row.code, "fr")) try std.testing.expect(std.mem.indexOf(u8, section.title, "كاتالونية") == null);
+                for (section.blocks) |block| for (block.spans) |span| {
+                    if (span.kind != .link) continue;
+                    if (std.mem.eql(u8, span.target, "ذَهَبَ")) gold += 1;
+                    if (std.mem.eql(u8, span.target, "لَكِنْ")) but += 1;
+                    if (std.mem.eql(u8, span.target, "أَوْ")) english += 1;
+                };
+            }
+            const en = std.mem.eql(u8, row.code, "en");
+            try std.testing.expectEqual(@as(usize, if (en) 0 else 1), gold);
+            try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, row.code, "fr")) 1 else 0), but);
+            try std.testing.expectEqual(@as(usize, if (en) 1 else 0), english);
+        }
+        if (std.mem.eql(u8, row.code, "ca")) try std.testing.expect((try index.find("heading-cell-negative")) == null);
+    }
+    const marker_codes: LanguageMarkers = .{ .codes = &codes, .raw_source = "== {{اللغة|كاتالونية}} ==\n# body\n", .expanded_source = "{|\n== كاتالونية ==\n|}\n== كاتالونية ==\n# body\n" };
+    try std.testing.expect(!corroboratedArabicTableBoundary(&marker_codes, "كاتالونية"));
+    for ([_][]const u8{ "<nowiki>\n== {{اللغة|كاتالونية}} ==\n</nowiki>", "{{outer|\n== {{اللغة|كاتالونية}} ==\n}}", "<!--\n== {{اللغة|كاتالونية}} ==\n-->" }) |raw| {
+        const protected: LanguageMarkers = .{ .codes = &codes, .raw_source = raw, .expanded_source = "{|\n== كاتالونية ==\n" };
+        try std.testing.expect(!corroboratedArabicTableBoundary(&protected, "كاتالونية"));
+    }
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    try std.testing.expect(std.mem.indexOf(u8, report, "malformed_table") != null);
 }

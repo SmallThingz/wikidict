@@ -370,6 +370,38 @@ def exercise(reader: ReaderPty, initial_width: int) -> None:
                           "history clear confirmation respected"])
 
 
+def exercise_abbreviations(reader: ReaderPty) -> None:
+    """Additional real native-fixture checks; never included in the historical 132."""
+    title = "Acupuncture abbreviation sample"
+    legacy = "Legacy format abbreviation control"
+    meanings = ("derived terms", "uncertain", "learned borrowing", "feminine gender",
+                "common gender", "masculine gender", "neuter gender")
+    reader.wait(lambda: reader.page_is("search", 1, 2), "native abbreviation fixture startup")
+    reader.search("Acupuncture", 1, title)
+    reader.action(ENTER, lambda: reader.entry_focused() and "der. ? lbor. f c m n" in reader.text(),
+                  "native DPR3 compact labels in focused reading")
+    require(all(value not in reader.text() for value in meanings), "Compact view unexpectedly expands explanations")
+    reader.snapshot("native-abbreviations-compact")
+    reader.action("d", lambda: "Abbreviations" in reader.text()
+                  and all(value in reader.text() for value in meanings),
+                  "d exposes all seven native abbreviation explanations")
+    require("der. ? lbor. f c m n" in reader.text(), "Details replaced compact authored labels")
+    reader.snapshot("native-abbreviations-details")
+    reader.action("d", lambda: all(value not in reader.text() for value in meanings)
+                  and "der. ? lbor. f c m n" in reader.text(), "d restores compact reading")
+    reader.action(ESCAPE, lambda: reader.page_is("search", 1, 1)
+                  and not reader.entry_focused(), "Escape returns from abbreviation reading")
+    reader.search("Legacy", 1, legacy)
+    reader.action(ENTER, lambda: reader.entry_focused() and "Plain control." in reader.text(),
+                  "normal navigation reads legacy-format DPR2 control")
+    reader.action("d", lambda: "Plain control." in reader.text()
+                  and "Abbreviations" not in reader.text()
+                  and all(value not in reader.text() for value in meanings),
+                  "legacy details contain no stale abbreviation explanations")
+    reader.snapshot("native-abbreviations-legacy")
+    reader.finish(b"q")
+
+
 def copy_fixture(source: Path, destination: Path) -> None:
     # Only explicitly marked, non-symlinked fixtures can enter the write workflow.
     for path in source.rglob("*"):
@@ -387,6 +419,7 @@ def main() -> int:
                         help="Parent directory for a new, uniquely named report folder")
     parser.add_argument("--timeout", type=float, default=5.0,
                         help="Per-state/CLI timeout in seconds (default: 5)")
+    parser.add_argument("--abbreviation-root", type=Path, help="Explicitly marked owned copy of genuine native abbreviation-interop output")
     args = parser.parse_args()
     require(0.2 <= args.timeout <= 15, "Timeout must be between 0.2 and 15 seconds")
     binary, source = args.binary.resolve(strict=True), args.fixture_root.resolve(strict=True)
@@ -434,6 +467,35 @@ def main() -> int:
                         report["status"] = "failed"
         case["elapsed_seconds"] = round(time.monotonic() - case_started, 3)
         report["cases"].append(case)
+    report["abbreviation_cases"] = []
+    if args.abbreviation_root is not None:
+        annotated_source = args.abbreviation_root.resolve(strict=True)
+        require((annotated_source / ".reader-fixture").is_file(), "Unmarked abbreviation fixture refused")
+        require(parent != annotated_source and annotated_source not in parent.parents,
+                "Reports must remain outside original abbreviation fixture")
+        for width in (40, 80, 120):
+            case = {"width": width, "status": "passed", "checks": [], "snapshots": []}
+            reader = None
+            with tempfile.TemporaryDirectory(prefix=f"abbreviations-{width}-", dir=report_dir) as owned:
+                root = Path(owned) / "root"
+                try:
+                    require(time.monotonic() < budget_end, "110-second test budget exhausted")
+                    copy_fixture(annotated_source, root)
+                    reader = ReaderPty(binary, root, width, 32, report_dir / f"abbreviations-width-{width}",
+                                       args.timeout, budget_end, pyte)
+                    exercise_abbreviations(reader)
+                except Exception as error:
+                    case.update(status="failed", error=f"{type(error).__name__}: {error}")
+                    report["status"] = "failed"
+                finally:
+                    if reader is not None:
+                        case["checks"], case["snapshots"] = reader.checks, reader.snapshots
+                        try:
+                            reader.close()
+                        except Exception as error:
+                            case.update(status="failed", cleanup_error=f"{type(error).__name__}: {error}")
+                            report["status"] = "failed"
+            report["abbreviation_cases"].append(case)
     report["elapsed_seconds"] = round(time.monotonic() - started, 3)
     (report_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                                             encoding="utf-8")

@@ -137,11 +137,21 @@ pub fn render(p: anytype, t: Template, style: anytype, depth: usize) Error!bool 
     }
     if (is(name, &.{ "ux", "uxi", "uxa", "usex", "co", "coi", "coa" })) {
         if (t.get(2).len == 0) return false;
+        // Qualifiers surround the example, outside its italic/language style.
+        // Preserve inline links in both labels; named() keeps last-wins args.
+        if (t.named("q").len != 0) {
+            var qualifier = style;
+            qualifier.role = .label;
+            try p.text("(", qualifier);
+            try p.inlineText(t.named("q"), qualifier, depth + 1);
+            try p.text(") ", qualifier);
+        }
         var s = style;
         s.italic = true;
         s.role = .example;
         s.language = t.get(1);
         try p.inlineText(t.get(2), s, depth + 1);
+        try label(p, t.named("qq"), style, depth);
         const translation = first(t.named("translation"), first(t.named("t"), t.get(3)));
         if (translation.len != 0) {
             try p.lineBreak(style);
