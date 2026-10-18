@@ -5614,8 +5614,11 @@ test "undefined equals support does not erase registered neighboring owners" {
         defer writer.deinit();
         writer.language_codes = codes;
         const middle = if (std.mem.eql(u8, mode, "literal")) "{{=fm2=}}\n" else "===Support===\n";
-        const expanded = "==[[Nederlands|Nederlands (nl)]]==\n# DUTCH_ONLY\n" ++ middle ++
-            "# SUPPORT_ONLY\n==[[Noors|Nieu-Noors (nn)]]==\n# NYNORSK_ONLY\n";
+        const expanded = try std.mem.concat(a, u8, &.{
+            "==[[Nederlands|Nederlands (nl)]]==\n# DUTCH_ONLY\n",
+            middle,
+            "# SUPPORT_ONLY\n==[[Noors|Nieu-Noors (nn)]]==\n# NYNORSK_ONLY\n",
+        });
         try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "voetbalploeg", expanded, raw, null);
         try std.testing.expectEqual(@as(usize, 2), (try writer.finish(codes)).language_records);
         inline for (.{ .{ "Nederlands", "nl" }, .{ "Nynorsk", "nn" } }) |row| {

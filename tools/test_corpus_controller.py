@@ -1541,5 +1541,309 @@ class SourceLimitationTests(unittest.TestCase):
         with self.assertRaises(ValueError):f.check()
 
 
+class LuaReviewFixture:
+    rawref = SourceLimitationFixture.rawref
+    save = SourceLimitationFixture.save
+
+    def __init__(self, top):
+        self.top = top
+        self.serial = 0
+        self.source, self.rows, self.review = content_review_fixture(
+            top, controller.PILOT, fallback_reasons=['rendered_lua_error'], unclassified=True)
+        self.accepted = self.rows[0]['accepted']
+        self.edition = self.rows[0]['edition']
+        self.er = self.review['editions'][0]
+        self.owner_records = {'Unclassified': 293, 'English': 701}
+        self.alias_records = 89
+        self.inventory_root = None
+        self.lookup_roots = {}
+        self.lookup_changes = {}
+        self.command_changes = {}
+        self.inventory_changes = {}
+        self.inventory_command_changes = {}
+        self.item_changes = {}
+        self.producer_changes = {}
+        self.dependency_changes = {}
+        self.trace_changes = {}
+        self.output_changes = {}
+        self.binding_changes = {}
+        self.result_changes = {}
+        self.execution_changes = {}
+        self.transport_changes = {}
+        self.closure_changes = {}
+        self.qualification_changes = {}
+        self.extra_body_error = False
+        self.drop_command = False
+        self.drop_snapshot = False
+        self.message = 'Lua error in Module:Fixture at line 7: bad argument'
+
+    def seal(self):
+        complete = controller.read_ref(self.accepted['complete'])
+        inputs = complete['build_inputs']
+        raw = self.rawref('source.wikitext', b'==English==\n{{fixture-call|bad}}\n# retained lexical sense\n')
+        snapshot = self.save('source-snapshot.json', dict(self.source, files={}))
+        producer = dict(namespace=0, title='entry', page_id=51, revision_id=73,
+            build_inputs=inputs, raw_source=raw, source_input=inputs['files'][0])
+        producer.update(self.producer_changes)
+        producer_ref = self.save('producer.json', producer)
+        dependency_raw = self.rawref('dependency.lua', b'return {run=function(value) error("bad argument") end}\n')
+        dependency = dict(namespace=828, title='Module:Fixture', page_id=151, revision_id=173,
+            source_input=inputs['files'][0], raw_source=dependency_raw)
+        dependency.update(self.dependency_changes)
+        dependency_ref = self.save('dependency.json', dependency)
+        reader = self.rawref('reader', b'Synthetic Reader identity only; never executed')
+        self.reader = reader
+        qualification = dict(schema='wikidict.durable-fresh-qualification-result.v1',passed=True, source_guard=True, installed_reader=reader)
+        qualification.update(self.qualification_changes)
+        qualification_ref = self.save('qualification-result.json', qualification)
+        stderr = self.rawref('stderr', b'')
+        owners = ['Unclassified', 'English']
+        inventory = dict(schema='dict.languages.v1', scope='entry', query='entry',
+            accounting=[dict(heading=x, records=self.owner_records[x], code='' if x=='Unclassified' else 'en',
+                classification='unverified' if x=='Unclassified' else 'language') for x in owners],
+            languages=owners, heading_count=2, language_count=1, translingual_count=0, unverified_count=1)
+        inventory.update(self.inventory_changes)
+        inventory_ref = self.save('inventory.json', inventory)
+        identities = []
+        def command(argv, stdout, changes):
+            identity = dict(pid=1001+len(identities), start_time_ticks=5001+len(identities),
+                process_group=1000, session=1000)
+            identities.append(identity)
+            # Literal normal-batch command schema: no fictional error/remaining-process fields.
+            value = dict(argv=argv, exit_code=0, identity=identity, reaped=True, stderr=stderr, stdout=stdout)
+            value.update(changes)
+            return self.save('command.json', value)
+        inventory_command = command([reader['path'],'languages','entry','--root',self.inventory_root or self.accepted['root'],
+            '--format','json'], inventory_ref, self.inventory_command_changes)
+        exports = []
+        expected_errors = []
+        self.commands = [inventory_command]
+        for owner in owners:
+            spans = [dict(kind='text', text='retained lexical sense', classes='')]
+            for index in range(2 if owner=='Unclassified' else 1):
+                spans.append(dict(kind='text', text=self.message, classes='error scribunto-error'))
+                expected_errors.append(dict(owner=owner,
+                    path=['entries',0,'sections',0,'blocks',0,'spans',index+1], message=self.message))
+            if self.extra_body_error and owner=='English':
+                spans.append(dict(kind='text', text='Lua error in Module:Extra at line 9: extra failure', classes='scribunto-error'))
+            body = dict(schema='dict.results.v1', operation='lookup', kind='language', query='entry', language=owner,
+                offset=0, record_count=self.owner_records[owner]+self.alias_records, total_matches=1, has_more=False,
+                entries=[dict(title='entry',language=owner,language_code='' if owner=='Unclassified' else 'en',
+                    sections=[dict(title=owner,level=2,blocks=[dict(kind='definition',spans=spans)])])])
+            body.update(self.lookup_changes.get(owner, {}))
+            lookup = self.save('lookup.json', body)
+            cmd = command([reader['path'],'lookup','entry','--root',self.lookup_roots.get(owner,self.accepted['root']),'--format','json',
+                '--language',owner], lookup, self.command_changes.get(owner, {}))
+            self.commands.append(cmd)
+            exports.append(dict(owner=owner,lookup=lookup,command=cmd))
+        inputs_selected = [reader, qualification_ref, self.accepted['complete'], self.accepted['complete_snapshot']]
+        if self.drop_snapshot: inputs_selected.pop()
+        binding = dict(schema='wikidict.saved-publication-reader-triage-binding.v1', reader=reader,
+            inputs=inputs_selected, requests=[dict(edition=self.edition,key='fixture-0',root=self.accepted['root'],title='entry')],
+            production_seconds=0)
+        binding.update(self.binding_changes)
+        binding_ref = self.save('binding.json', binding)
+        row = dict(edition=self.edition,title='entry',inventory=inventory_ref,inventory_command=inventory_command,
+            owners=[dict(owner=x['owner'],command=x['command'],export=x['lookup']) for x in exports])
+        result = dict(schema='wikidict.saved-publication-reader-triage.v1', passed=True,error=None,reader=reader,rows=[row],
+            production_seconds=0,semantic_acceptance_claimed=False)
+        result.update(self.result_changes)
+        result_ref = self.save('query-result.json', result)
+        execution = dict(exit_code=0,worker_result=result_ref,binding=binding_ref,production_seconds=0)
+        execution.update(self.execution_changes)
+        execution_ref = self.save('execution.json', execution)
+        transport = dict(exit_code=0,reaped=True,error=None)
+        transport.update(self.transport_changes)
+        transport_ref = self.save('transport.json', transport)
+        closed_commands = list(self.commands)
+        if self.drop_command: closed_commands.pop()
+        closure = dict(schema='wikidict.bounded-reader-queries-independent-closure.v1', outcome='passed-closed',
+            passed=True,cleanup_proven=True,all_recorded_identities_absent=True,
+            all_owned_groups_and_sessions_empty=True,remaining_owned_processes=[],
+            result=result_ref,execution=execution_ref,transport=transport_ref,binding=binding_ref,reader=reader,
+            commands=closed_commands,recorded_identities=identities,title_requests=1,command_count=3,
+            semantic_acceptance=False,unit_tests_executed=False,producer_executed=False,product_cli_executed=True,
+            qualification_scope='Synthetic saved-query metadata fixture; no CLI executed',production_seconds=0)
+        closure.update(self.closure_changes)
+        closure_ref = self.save('query-closure.json', closure)
+        output = dict(schema='wikidict.manual-page-review.v1',verdict='pass-with-documented-source-defect',
+            complete=self.accepted['complete'],raw_source=raw,producer_row=producer_ref,
+            independent_limitations=[],all_positive_owners_accounted=True,full_payload_reviewed=True,
+            all_non_error_content_conserved=True,known_owners_preserved=True,all_actions_reviewed=True,
+            query_closure=closure_ref,reader_qualification=qualification_ref,
+            language_inventory=inventory_ref,inventory_command=inventory_command,owner_exports=exports,
+            lua_error_spans=expected_errors,fallback=dict(namespace=0,title='entry',reasons=['rendered_lua_error']))
+        output.update(self.output_changes)
+        self.output = output
+        output_ref = self.save('manual-output-review.json', output)
+        output_evidence = [inventory_ref,inventory_command,qualification_ref,closure_ref,output_ref]
+        for x in exports: output_evidence.extend([x['lookup'],x['command']])
+        trace_evidence = [raw,producer_ref,snapshot,dependency_raw,dependency_ref]
+        trace = dict(schema='wikidict.manual-lua-source-trace.v1',edition=self.edition,date=complete['date'],
+            namespace=0,title='entry',page_id=51,revision_id=73,raw_source=raw,producer_row=producer_ref,
+            source_snapshot=snapshot,complete=self.accepted['complete'],build_inputs=inputs,
+            captured_source_defect=True,product_runtime_defect=False,explanation='Synthetic authored argument mismatch.',
+            evidence=trace_evidence,captured_dependencies=[dependency_ref],lua_error_spans=expected_errors,
+            causes=[dict(span=error,kind='authored-argument-mismatch',explanation='Literal captured caller passes unsupported argument.',
+                evidence=[raw,dependency_ref,dependency_raw]) for error in expected_errors])
+        trace.update(self.trace_changes)
+        trace_ref = self.save('source-trace.json', trace)
+        item = dict(schema='wikidict.source-authored-lua-defect.v1',edition=self.edition,date=complete['date'],
+            namespace=0,title='entry',page_id=51,revision_id=73,raw_source=raw,producer_row=producer_ref,
+            source_snapshot=snapshot,source_trace=trace_ref,complete=self.accepted['complete'],build_inputs=inputs,
+            source_evidence=[raw,producer_ref,snapshot,trace_ref],output_review=output_ref,output_evidence=output_evidence)
+        item.update(self.item_changes)
+        self.item = self.save('lua-defect.json', item)
+        self.er['source_authored_lua_defects'] = [self.item]
+        self.er['content_review'].update(no_build_render_errors=False,no_product_build_render_errors=True,
+            source_authored_lua_defects_present=True,source_lua_defect_count=1,source_lua_error_message_count=3)
+        return self
+
+    def check(self):
+        return controller.validate_content_review(self.review,self.source,self.rows,controller.PILOT,scope='pilot')
+
+
+class SourceLuaDefectTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.top = Path(self.tmp.name).resolve()
+        self.serial = 0
+
+    def fixture(self):
+        self.serial += 1
+        root = self.top / str(self.serial)
+        root.mkdir()
+        return LuaReviewFixture(root)
+
+    def test_default_remains_strict_and_complete_clean_legacy_review_is_unchanged(self):
+        source,rows,value = content_review_fixture(self.top/'clean',controller.PILOT)
+        self.assertIs(controller.validate_content_review(value,source,rows,controller.PILOT,scope='pilot'),value)
+        f=self.fixture().seal();del f.er['source_authored_lua_defects']
+        with self.assertRaises(ValueError):f.check()
+
+    def test_full_multiowner_alias_store_review_preserves_three_repeated_semantic_errors(self):
+        f=self.fixture().seal();before=copy.deepcopy(f.review)
+        self.assertIs(f.check(),f.review)
+        self.assertEqual(before,f.review)
+        self.assertFalse(f.er['content_review']['no_build_render_errors'])
+        self.assertEqual(f.er['content_review']['source_lua_error_message_count'],3)
+        for cmd in f.commands:
+            value=controller.read_ref(cmd)
+            self.assertNotIn('remaining_owned_processes',value)
+            self.assertNotIn('error',value)
+        self.assertEqual(len(f.output['owner_exports']),2)
+
+    def test_extra_or_missing_error_spans_cannot_be_waived_by_existing_source_trace(self):
+        f=self.fixture();f.extra_body_error=True;f.seal()
+        with self.assertRaisesRegex(ValueError,'extra/missing'):f.check()
+        f=self.fixture();f.output_changes={'lua_error_spans':[]};f.seal()
+        with self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.trace_changes={'lua_error_spans':[]};f.seal()
+        with self.assertRaises(ValueError):f.check()
+
+    def test_independent_missing_templates_or_unresolved_owners_and_action_loss_stay_failures(self):
+        for changes in (dict(independent_limitations=['missing_template']),dict(independent_limitations=['unresolved_language_heading']),
+                        dict(all_actions_reviewed=False),dict(all_non_error_content_conserved=False),
+                        dict(full_payload_reviewed=False),dict(known_owners_preserved=False)):
+            f=self.fixture();f.output_changes=changes;f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+
+    def test_source_page_revision_input_or_producer_identity_cannot_borrow_the_review(self):
+        for changes in (dict(page_id=52),dict(revision_id=74),dict(title='elsewhere'),dict(source_input=['wrong-input'])):
+            f=self.fixture();f.producer_changes=changes;f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.item_changes={'complete':{'path':'/not-selected/complete','bytes':1,'sha256':'0'*64}};f.seal()
+        with self.assertRaises(ValueError):f.check()
+
+    def test_captured_dependency_and_source_cause_must_be_complete_and_non_product(self):
+        for changes in (dict(page_id=0),dict(revision_id=0),dict(source_input=['wrong-input']),dict(raw_source={})):
+            f=self.fixture();f.dependency_changes=changes;f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+        for changes in (dict(captured_dependencies=[]),dict(product_runtime_defect=True),dict(captured_source_defect=False),
+                        dict(explanation=''),dict(causes=[])):
+            f=self.fixture();f.trace_changes=changes;f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+
+    def test_normal_reader_batch_is_required_and_aggregate_cleanup_is_not_invented_per_command(self):
+        f=self.fixture();f.output_changes={'query_closure':None};f.seal()
+        with self.assertRaises(ValueError):f.check()
+        for key in ('passed','cleanup_proven','all_recorded_identities_absent','all_owned_groups_and_sessions_empty'):
+            f=self.fixture();f.closure_changes={key:False};f.seal()
+            with self.subTest(key=key),self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.drop_command=True;f.seal()
+        with self.assertRaisesRegex(ValueError,'omitted from closure'):f.check()
+
+    def test_command_identity_membership_reaping_root_and_reader_must_match_actual_closed_batch(self):
+        for changes in (dict(identity=dict(pid=999,start_time_ticks=999,process_group=999,session=999)),dict(reaped=False),
+                        dict(exit_code=1),dict(argv=['/other/reader','lookup','entry','--root','/wrong','--language','English'])):
+            f=self.fixture();f.command_changes={'English':changes};f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.inventory_command_changes={'argv':['/other/reader','languages','entry','--root','/wrong']};f.seal()
+        with self.assertRaises(ValueError):f.check()
+        # Correct Reader/PID/closure and export membership still cannot authorize another root.
+        for inventory in (True,False):
+            f=self.fixture()
+            if inventory:f.inventory_root='/diagnostic/root'
+            else:f.lookup_roots={'English':'/diagnostic/root'}
+            f.seal()
+            with self.subTest(inventory=inventory),self.assertRaises(ValueError):f.check()
+
+    def test_completion_snapshot_request_and_saved_result_must_join_the_same_publication(self):
+        f=self.fixture();f.drop_snapshot=True;f.seal()
+        with self.assertRaisesRegex(ValueError,'snapshot differs'):f.check()
+        f=self.fixture();f.binding_changes={'requests':[dict(edition='other',title='entry',root='/wrong')]};f.seal()
+        with self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.result_changes={'rows':[]};f.seal()
+        with self.assertRaises(ValueError):f.check()
+
+    def test_reader_qualification_result_and_execution_transport_joins_remain_required(self):
+        for changes in (dict(passed=False),dict(source_guard=False),dict(installed_reader={}),dict(schema='wikidict.qualification-independent-closure.v1')):
+            f=self.fixture();f.qualification_changes=changes;f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+        for role in ('binding','result'):
+            f=self.fixture();setattr(f,role+'_changes',dict(reader={}));f.seal()
+            with self.subTest(role=role),self.assertRaises(ValueError):f.check()
+        for role,changes in (('execution',dict(exit_code=1)),('execution',dict(worker_result={})),
+                             ('transport',dict(exit_code=1)),('transport',dict(reaped=False)),('transport',dict(error='failed'))):
+            f=self.fixture();setattr(f,role+'_changes',changes);f.seal()
+            with self.subTest(role=role,changes=changes),self.assertRaises(ValueError):f.check()
+
+    def test_exact_title_matches_are_independent_of_whole_store_and_owner_counts(self):
+        for changes in (dict(record_count=292),dict(record_count=True),dict(total_matches=382),dict(total_matches=True),
+                        dict(offset=1),dict(has_more=True),dict(entries=[]),dict(language='Unclassified'),dict(query='other')):
+            f=self.fixture();f.lookup_changes={'English':changes};f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+
+    def test_missing_owner_export_or_forged_full_review_claim_does_not_cover_owner_loss(self):
+        for changes in (dict(owner_exports=[]),dict(all_positive_owners_accounted=False)):
+            f=self.fixture();f.output_changes=changes;f.seal()
+            with self.subTest(changes=changes),self.assertRaises(ValueError):f.check()
+
+    def test_true_error_counts_and_claims_cannot_be_relabelled_zero_or_product_clean(self):
+        for key,value in (('no_build_render_errors',True),('no_product_build_render_errors',False),
+                          ('source_authored_lua_defects_present',False),('source_lua_defect_count',0),
+                          ('source_lua_error_message_count',1)):
+            f=self.fixture().seal();f.er['content_review'][key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):f.check()
+
+    def test_mixed_unused_duplicate_or_unmatched_fallbacks_and_final_scope_remain_strict(self):
+        path=self.top/'fallback.jsonl';row=dict(namespace=0,title='entry',reasons=['rendered_lua_error'])
+        limits={(0,'entry'):row}
+        for rows in ([dict(row,reasons=['rendered_lua_error','missing_template'])],[dict(row,title='other')],[row,row],[]):
+            path.write_text(''.join(json.dumps(x)+'\n' for x in rows))
+            with self.subTest(rows=rows),self.assertRaises(ValueError):
+                controller._review_fallbacks(path,len(rows),source_lua_defects=limits)
+        f=self.fixture().seal()
+        with self.assertRaises(ValueError):
+            controller.validate_content_review(f.review,f.source,f.rows,[x['edition'] for x in f.rows],scope='final')
+        f.review['unresolved_render_failures']=['independent actual failure']
+        with self.assertRaises(ValueError):f.check()
+
+    def test_changed_authenticated_source_evidence_is_not_reused(self):
+        f=self.fixture().seal();Path(f.item['path']).write_text('{}')
+        with self.assertRaises(ValueError):f.check()
+
+
 if __name__ == '__main__':
     unittest.main()

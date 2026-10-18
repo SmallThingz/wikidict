@@ -532,6 +532,117 @@ def _review_evidence(values):
                 descriptor(reference['path']) == reference, 'Content review evidence changed')
 
 
+def _review_query_commands(output_review, output_evidence, accepted, title):
+    """Join saved normal batch commands to their actual completed lifecycle."""
+    closure_ref = output_review.get('query_closure')
+    if closure_ref is None:
+        return None  # Retain the original run_command evidence contract.
+    require(closure_ref in output_evidence, 'Query closure evidence missing')
+    closure = read_ref(closure_ref)
+    require(closure.get('schema') == 'wikidict.bounded-reader-queries-independent-closure.v1' and
+            all(closure.get(k) is True for k in ('passed', 'cleanup_proven',
+                'all_recorded_identities_absent', 'all_owned_groups_and_sessions_empty')) and
+            closure.get('remaining_owned_processes') == [], 'Normal query lifecycle is not closed')
+    result = read_ref(closure['result']); binding = read_ref(closure['binding'])
+    execution = read_ref(closure['execution']); transport = read_ref(closure['transport'])
+    require(result.get('passed') is True and result.get('error') is None and
+            execution.get('exit_code') == 0 and execution.get('worker_result') == closure['result'] and
+            execution.get('binding') == closure['binding'] and transport.get('exit_code') == 0 and
+            transport.get('reaped') is True and transport.get('error') is None,
+            'Normal query result/terminal differs')
+    reader = closure['reader']
+    require(reader == binding.get('reader') == result.get('reader') and reader in binding['inputs'],
+            'Normal query Reader identity differs')
+    qualification_ref = output_review.get('reader_qualification')
+    require(qualification_ref in output_evidence and qualification_ref in binding['inputs'],
+            'Normal query Reader qualification missing')
+    qualification = read_ref(qualification_ref)
+    require(qualification.get('schema') == 'wikidict.durable-fresh-qualification-result.v1' and
+            qualification.get('passed') is True and qualification.get('source_guard') is True and
+            qualification.get('installed_reader') == reader, 'Normal query Reader was not qualified')
+    # Both the published complete and an immutable same-byte snapshot must have been selected.
+    require(accepted['complete'] in binding['inputs'] and
+            any(ref != accepted['complete'] and ref.get('bytes') == accepted['complete']['bytes'] and
+                ref.get('sha256') == accepted['complete']['sha256'] for ref in binding['inputs']),
+            'Normal query accepted completion/snapshot differs')
+    complete = read_ref(accepted['complete'])
+    requests = [row for row in binding['requests'] if row.get('edition') == complete['edition'] and
+                row.get('title') == title and row.get('root') == accepted['root']]
+    rows = [row for row in result['rows'] if row.get('edition') == complete['edition'] and row.get('title') == title]
+    require(len(requests) == len(rows) == 1, 'Normal query selected page is missing or ambiguous')
+    row = rows[0]
+    require(row.get('inventory') == output_review.get('language_inventory') and
+            row.get('inventory_command') == output_review.get('inventory_command') and
+            row.get('owners') == [dict(owner=x['owner'], command=x['command'], export=x['lookup'])
+                                  for x in output_review.get('owner_exports', [])],
+            'Normal query exports differ from its saved result')
+    commands = [row['inventory_command']] + [x['command'] for x in row['owners']]
+    for command_ref in commands:
+        require(command_ref in closure['commands'], 'Normal query command omitted from closure')
+        command = read_ref(command_ref)
+        require(command.get('exit_code') == 0 and command.get('reaped') is True and
+                command.get('identity') in closure['recorded_identities'] and
+                command.get('argv', [None])[0] == reader['path'],
+                'Normal query command identity/terminal differs')
+    return commands
+
+
+
+def _review_command_closed(command, reference, query_commands):
+    if query_commands is not None:
+        return reference in query_commands and command.get('exit_code') == 0 and command.get('reaped') is True
+    return (command.get('exit_code') == 0 and command.get('error') is None and
+            command.get('remaining_owned_processes') == [])
+
+
+
+def _review_owner_exports(output_review, output_evidence, accepted, title):
+    """Exact normal title exports shared by the two bounded source-review paths."""
+    query_commands = _review_query_commands(output_review, output_evidence, accepted, title)
+    inventory_ref = output_review.get('language_inventory')
+    require(inventory_ref in output_evidence, 'Source limitation owner inventory evidence missing')
+    inventory_command_ref = output_review.get('inventory_command')
+    require(inventory_command_ref in output_evidence, 'Normal inventory command evidence missing')
+    inventory_command = read_ref(inventory_command_ref); inventory_argv = inventory_command.get('argv', [])
+    require(_review_command_closed(inventory_command, inventory_command_ref, query_commands) and inventory_command.get('stdout') == inventory_ref and
+            inventory_argv[1:3] == ['languages', title] and '--root' in inventory_argv and
+            inventory_argv[inventory_argv.index('--root') + 1] == accepted['root'],
+            'Owner inventory is not from the selected accepted payload')
+    inventory = read_ref(inventory_ref)
+    require(inventory.get('schema') == 'dict.languages.v1' and inventory.get('query') == title,
+            'Source limitation language inventory differs')
+    owners = {row['heading']: row['records'] for row in inventory['accounting'] if row['records'] > 0}
+    require(len(owners) == sum(row['records'] > 0 for row in inventory['accounting']),
+            'Source limitation owner inventory is ambiguous')
+    exports = output_review.get('owner_exports')
+    require(isinstance(exports, list) and len(exports) == len(owners) and
+            {row.get('owner') for row in exports} == set(owners), 'Source limitation owner exports incomplete')
+    bodies = {}
+    for export in exports:
+        require(export['lookup'] in output_evidence and export['command'] in output_evidence,
+                'Source limitation owner export evidence missing')
+        command = read_ref(export['command']); argv = command.get('argv', [])
+        require(_review_command_closed(command, export['command'], query_commands) and command.get('stdout') == export['lookup'] and
+                '--root' in argv and argv[argv.index('--root') + 1] == accepted['root'] and
+                '--language' in argv and argv[argv.index('--language') + 1] == export['owner'] and
+                len(argv) >= 3 and argv[1:3] == ['lookup', title],
+                'Source limitation output is not from the selected published payload')
+        body = read_ref(export['lookup'])
+        # Reader store count includes aliases; inventory records count only language definitions.
+        # Exact lookup returns one title, independently of either whole-store count.
+        require(body.get('schema') == 'dict.results.v1' and body.get('query') == title and
+                body.get('language') == export['owner'] and body.get('operation') == 'lookup' and
+                body.get('offset') == 0 and type(body.get('record_count')) is int and
+                body['record_count'] >= owners[export['owner']] and
+                type(body.get('total_matches')) is int and body['total_matches'] == 1 and
+                body.get('has_more') is False and len(body.get('entries', [])) == 1 and
+                all(entry.get('title') == title and entry.get('language') == export['owner'] for entry in body['entries']),
+                'Source limitation output owner/record completeness differs')
+        bodies[export['owner']] = body
+    return bodies
+
+
+
 def _review_source_limitations(review, accepted, complete):
     """Authenticate explicit source limitations; diagnostic pages cannot authorize a final output."""
     references = review.get('source_authored_unresolved_declarations', [])
@@ -613,48 +724,9 @@ def _review_source_limitations(review, accepted, complete):
                 all(output_review.get(k) is True for k in ('all_positive_owners_accounted',
                     'whole_page_payload_conserved', 'known_owners_preserved')),
                 'Source limitation whole-page/owner conservation review differs')
-        inventory_ref = output_review.get('language_inventory')
-        require(inventory_ref in output_evidence, 'Source limitation owner inventory evidence missing')
-        inventory_command_ref = output_review.get('inventory_command')
-        require(inventory_command_ref in output_evidence, 'Normal inventory command evidence missing')
-        inventory_command = read_ref(inventory_command_ref); inventory_argv = inventory_command.get('argv', [])
-        require(inventory_command.get('exit_code') == 0 and inventory_command.get('error') is None and
-                inventory_command.get('remaining_owned_processes') == [] and inventory_command.get('stdout') == inventory_ref and
-                inventory_argv[1:3] == ['languages', title] and '--root' in inventory_argv and
-                inventory_argv[inventory_argv.index('--root') + 1] == accepted['root'],
-                'Owner inventory is not from the selected accepted payload')
-        inventory = read_ref(inventory_ref)
-        require(inventory.get('schema') == 'dict.languages.v1' and inventory.get('query') == title,
-                'Source limitation language inventory differs')
-        owners = {row['heading']: row['records'] for row in inventory['accounting'] if row['records'] > 0}
-        require('Unclassified' in owners and len(owners) == sum(row['records'] > 0 for row in inventory['accounting']),
-                'Source limitation owner inventory is ambiguous')
-        exports = output_review.get('owner_exports')
-        require(isinstance(exports, list) and len(exports) == len(owners) and
-                {row.get('owner') for row in exports} == set(owners), 'Source limitation owner exports incomplete')
-        unclassified = None
-        for export in exports:
-            require(export['lookup'] in output_evidence and export['command'] in output_evidence,
-                    'Source limitation owner export evidence missing')
-            command = read_ref(export['command']); argv = command.get('argv', [])
-            require(command.get('exit_code') == 0 and command.get('error') is None and
-                    command.get('remaining_owned_processes') == [] and command.get('stdout') == export['lookup'] and
-                    '--root' in argv and argv[argv.index('--root') + 1] == accepted['root'] and
-                    '--language' in argv and argv[argv.index('--language') + 1] == export['owner'] and
-                    len(argv) >= 3 and argv[1:3] == ['lookup', title],
-                    'Source limitation output is not from the selected published payload')
-            body = read_ref(export['lookup'])
-            # Reader store count includes aliases; inventory records count only language definitions.
-            # Exact lookup returns one title, independently of either whole-store count.
-            require(body.get('schema') == 'dict.results.v1' and body.get('query') == title and
-                    body.get('language') == export['owner'] and body.get('operation') == 'lookup' and
-                    body.get('offset') == 0 and type(body.get('record_count')) is int and
-                    body['record_count'] >= owners[export['owner']] and
-                    type(body.get('total_matches')) is int and body['total_matches'] == 1 and
-                    body.get('has_more') is False and len(body.get('entries', [])) == 1 and
-                    all(entry.get('title') == title and entry.get('language') == export['owner'] for entry in body['entries']),
-                    'Source limitation output owner/record completeness differs')
-            if export['owner'] == 'Unclassified': unclassified = body
+        bodies = _review_owner_exports(output_review, output_evidence, accepted, title)
+        require('Unclassified' in bodies, 'Source limitation owner inventory is ambiguous')
+        unclassified = bodies['Unclassified']
         require(any(section.get('title') == label for entry in unclassified['entries'] for section in entry.get('sections', [])),
                 'Original unsupported declaration label was not retained')
         require(output_review.get('fallback') == dict(namespace=0, title=title, reasons=['unresolved_language_heading']),
@@ -663,10 +735,106 @@ def _review_source_limitations(review, accepted, complete):
     return result
 
 
-def _review_fallbacks(path, expected_count, namespace_counts=None, source_limitations=None):
+
+def _review_lua_spans(bodies):
+    """Enumerate actual semantic error spans, including repeated equal messages."""
+    result = []
+    def visit(value, owner, path):
+        if isinstance(value, dict):
+            if 'scribunto-error' in value.get('classes', '').split():
+                require(value.get('kind') == 'text' and isinstance(value.get('text'), str) and
+                        value['text'].startswith('Lua error in '), 'Unexpected Lua error span shape')
+                result.append(dict(owner=owner, path=path, message=value['text']))
+            for key, child in value.items(): visit(child, owner, path + [key])
+        elif isinstance(value, list):
+            for index, child in enumerate(value): visit(child, owner, path + [index])
+    for owner, body in bodies.items(): visit(body, owner, [])
+    return result
+
+
+
+def _review_source_lua_defects(review, accepted, complete):
+    """Only exact captured-source Lua defects with full saved output review qualify."""
+    references = review.get('source_authored_lua_defects', [])
+    require(isinstance(references, list) and len(references) <= 4096, 'Invalid source Lua defect inventory')
+    result = {}; message_count = 0
+    for reference in references:
+        _review_evidence([reference]); item = read_ref(reference)
+        require(item.get('schema') == 'wikidict.source-authored-lua-defect.v1' and
+                item.get('edition') == complete['edition'] and item.get('date') == complete['date'] and
+                item.get('complete') == accepted['complete'] and item.get('build_inputs') == complete['build_inputs'],
+                'Source Lua defect belongs to another accepted publication')
+        title = item.get('title'); key = (0, title)
+        require(type(item.get('namespace')) is int and item['namespace'] == 0 and
+                isinstance(title, str) and title and key not in result and
+                type(item.get('page_id')) is int and item['page_id'] > 0 and
+                type(item.get('revision_id')) is int and item['revision_id'] > 0,
+                'Invalid or duplicate source Lua page identity')
+        evidence = item.get('source_evidence'); _review_evidence(evidence)
+        require(all(item.get(k) in evidence for k in ('raw_source', 'producer_row', 'source_trace', 'source_snapshot')),
+                'Source Lua authority omitted')
+        producer = read_ref(item['producer_row'])
+        require(all(producer.get(k) == item[k] for k in ('namespace', 'title', 'page_id', 'revision_id')) and
+                producer.get('raw_source') == item['raw_source'] and producer.get('build_inputs') == complete['build_inputs'] and
+                producer.get('source_input') in complete['build_inputs']['files'], 'Source Lua producer identity differs')
+        snapshot = read_ref(item['source_snapshot'])
+        require(dict(head=snapshot['head'], fingerprint=snapshot['fingerprint']) == accepted['source'] and
+                snapshot['fingerprint'] == complete['build_inputs']['source'], 'Source Lua producer source differs')
+        trace = read_ref(item['source_trace'])
+        require(trace.get('schema') == 'wikidict.manual-lua-source-trace.v1' and
+                all(trace.get(k) == item[k] for k in ('edition', 'date', 'namespace', 'title', 'page_id', 'revision_id',
+                    'raw_source', 'producer_row', 'source_snapshot', 'complete', 'build_inputs')) and
+                trace.get('captured_source_defect') is True and trace.get('product_runtime_defect') is False and
+                isinstance(trace.get('explanation'), str) and trace['explanation'].strip(),
+                'Captured Lua source cause is not established')
+        _review_evidence(trace.get('evidence'))
+        dependencies = trace.get('captured_dependencies')
+        require(isinstance(dependencies, list) and dependencies, 'Captured Lua dependency identities missing')
+        for dependency_ref in dependencies:
+            require(dependency_ref in trace['evidence'], 'Captured Lua dependency evidence omitted')
+            dependency = read_ref(dependency_ref)
+            require(type(dependency.get('page_id')) is int and dependency['page_id'] > 0 and
+                    type(dependency.get('revision_id')) is int and dependency['revision_id'] > 0 and
+                    dependency.get('source_input') in complete['build_inputs']['files'] and
+                    dependency.get('raw_source') in trace['evidence'], 'Captured Lua dependency source differs')
+        output_evidence = item.get('output_evidence'); _review_evidence(output_evidence)
+        require(item.get('output_review') in output_evidence, 'Full Lua page output review missing')
+        output = read_ref(item['output_review'])
+        require(output.get('schema') == 'wikidict.manual-page-review.v1' and
+                output.get('verdict') == 'pass-with-documented-source-defect' and
+                output.get('complete') == accepted['complete'] and output.get('raw_source') == item['raw_source'] and
+                output.get('producer_row') == item['producer_row'] and output.get('independent_limitations') == [] and
+                all(output.get(k) is True for k in ('all_positive_owners_accounted', 'full_payload_reviewed',
+                    'all_non_error_content_conserved', 'known_owners_preserved', 'all_actions_reviewed')),
+                'Full Lua page content/owner review is not established')
+        require(output.get('query_closure') is not None, 'Closed normal Reader query evidence required for Lua review')
+        bodies = _review_owner_exports(output, output_evidence, accepted, title)
+        errors = _review_lua_spans(bodies)
+        require(errors and errors == output.get('lua_error_spans') == trace.get('lua_error_spans'),
+                'Source Lua error spans differ or have extra/missing errors')
+        causes = trace.get('causes')
+        require(isinstance(causes, list) and len(causes) == len(errors), 'Every actual Lua span needs its source cause')
+        for cause, error in zip(causes, errors):
+            require(cause.get('span') == error and cause.get('kind') in
+                    ('captured-missing-module', 'captured-module-api-mismatch', 'authored-argument-mismatch') and
+                    isinstance(cause.get('explanation'), str) and cause['explanation'].strip() and
+                    isinstance(cause.get('evidence'), list) and cause['evidence'] and
+                    all(ref in trace['evidence'] for ref in cause['evidence']), 'Exact captured Lua cause evidence missing')
+        fallback = dict(namespace=0, title=title, reasons=['rendered_lua_error'])
+        require(output.get('fallback') == fallback, 'Lua-only fallback disposition differs')
+        result[key] = fallback; message_count += len(errors)
+    return result, message_count
+
+
+
+def _review_fallbacks(path, expected_count, namespace_counts=None, source_limitations=None, source_lua_defects=None):
     # Stream every row, including errors after any possible sample prefix.
     before = path.stat(); count = 0; reason_counts = {}; namespaces = {}; used = set()
     source_limitations = source_limitations or {}
+    source_lua_defects = source_lua_defects or {}
+    require(not set(source_limitations) & set(source_lua_defects), 'Overlapping source dispositions')
+    dispositions = dict(source_limitations)
+    dispositions.update(source_lua_defects)
     with path.open('rb') as stream:
         while True:
             raw = stream.readline(REVIEW_METADATA_LIMIT + 1)
@@ -679,12 +847,13 @@ def _review_fallbacks(path, expected_count, namespace_counts=None, source_limita
             require(isinstance(reasons, list) and reasons and
                     all(isinstance(reason, str) and reason for reason in reasons) and len(set(reasons)) == len(reasons), 'Invalid fallback review reasons')
             key = (row['namespace'], row['title'])
-            source_limited = key in source_limitations
+            source_limited = key in dispositions
             if source_limited:
-                require(key not in used and row == source_limitations[key], 'Source limitation fallback row differs or repeats')
+                require(key not in used and row == dispositions[key], 'Source limitation fallback row differs or repeats')
                 used.add(key)
             for reason in reasons:
-                require((source_limited and reason == 'unresolved_language_heading') or reason.split(':', 1)[0] not in
+                require((source_limited and ((key in source_limitations and reason == 'unresolved_language_heading') or
+                        (key in source_lua_defects and reason == 'rendered_lua_error'))) or reason.split(':', 1)[0] not in
                         ('expansion_error', 'missing_language_heading', 'unresolved_language_heading',
                          'rendered_lua_error', 'rendered_extension_error', 'render_limit',
                          'template_presentation', 'missing_template'),
@@ -696,10 +865,11 @@ def _review_fallbacks(path, expected_count, namespace_counts=None, source_limita
     require(all(getattr(before, field) == getattr(after, field) == getattr(path.stat(), field)
                 for field in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')),
             'Fallback review report changed while streaming')
-    require(set(source_limitations) == used, 'Unused source limitation disposition')
+    require(set(dispositions) == used, 'Unused source limitation disposition')
     require(count == expected_count, 'Fallback review count differs from actual completion')
     if namespace_counts is not None: namespace_counts.update(namespaces)
     return reason_counts
+
 
 
 def validate_content_review(value, source, rows, expected_editions, *, scope):
@@ -759,8 +929,9 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
                 type(review.get('fallback_pages')) is int and review['fallback_pages'] == fallback_count,
                 'Explicit fallback disposition count differs')
         source_limitations = _review_source_limitations(review, accepted, complete)
+        source_lua_defects, source_lua_messages = _review_source_lua_defects(review, accepted, complete)
         fallback_namespaces = {}
-        reasons = _review_fallbacks(root / 'fallback-pages.jsonl', fallback_count, fallback_namespaces, source_limitations)
+        reasons = _review_fallbacks(root / 'fallback-pages.jsonl', fallback_count, fallback_namespaces, source_limitations, source_lua_defects)
         # Reuse the producer's exact bounded coverage/conservation validators.
         import build_wiktionaries as builder
         coverage = builder.validate_page_coverage(root, require_total=True)
@@ -817,7 +988,14 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
                   content.get('product_unresolved_language_errors') is False and
                   type(content.get('source_limitation_count')) is int and
                   content['source_limitation_count'] == len(source_limitations))) and
-                content.get('no_build_render_errors') is True and
+                ((not source_lua_defects and content.get('no_build_render_errors') is True) or
+                 (source_lua_defects and content.get('no_build_render_errors') is False and
+                  content.get('no_product_build_render_errors') is True and
+                  content.get('source_authored_lua_defects_present') is True and
+                  type(content.get('source_lua_defect_count')) is int and
+                  content['source_lua_defect_count'] == len(source_lua_defects) and
+                  type(content.get('source_lua_error_message_count')) is int and
+                  content['source_lua_error_message_count'] == source_lua_messages)) and
                 isinstance(content.get('explanation'), str) and content['explanation'].strip(),
                 'Actual source intent and native output content review required')
         _review_evidence(content.get('source_evidence')); _review_evidence(content.get('output_evidence'))
@@ -840,6 +1018,7 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
                 require(isinstance(disposition.get('explanation'), str) and disposition['explanation'].strip(),
                         'Source-verified limitation needs actual source/output explanation: ' + kind)
     return value
+
 
 def command(cfg, edition, workers, memory_limit_bytes=MEMORY_INITIAL):
     require(type(memory_limit_bytes) is int and memory_limit_bytes in (MEMORY_INITIAL, MEMORY),
