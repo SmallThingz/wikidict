@@ -32,7 +32,7 @@ def write_namespace_fixture(folder, edition=None, date=None):
     return {'namespace-registry':namespace,'language-registry':language}
 
 
-def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observation='first', alias='اسم_الصفحة', parser_functions=False, content_language='ar'):
+def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observation='first', alias='اسم_الصفحة', parser_functions=False, content_language='ar', complete_magic_projection=False):
     import prepare_magic_words as magic
     folder.mkdir(parents=True,exist_ok=True)
     namespace=magic.document({'query':{'general':{'wikiid':edition,'lang':content_language}}})
@@ -44,6 +44,11 @@ def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observa
     if parser_functions:
         words += [{'name':name,'aliases':[name]+(['استدعاء'] if name=='invoke' else [])}
                   for name in sorted(magic.PARSER_FUNCTIONS)]
+    if complete_magic_projection:
+        # Capture these facts in the original v1 raw response. The successive
+        # real projections require int and language and retain captured lst.
+        words += [dict(name=name, **{'case-sensitive':False}, aliases=[alias])
+                  for name,alias in (('int','INT:'),('language','#language'),('lst','#section'))]
     raw=magic.document({'query':{'general':{'wikiid':edition,'lang':content_language,'sitename':observation},'magicwords':words}})
     def fetcher(url):
         return raw,dict(source_url=url,response_url=url,status=200,
@@ -3153,14 +3158,15 @@ class LoopMessageSelectionTests(unittest.TestCase):
         import prepare_magic_words_language as language_magic
         import prepare_magic_words_lst as lst_magic
         original=write_magic_fixture(self.project/'magic-capture', self.wiki, self.date,
-                                     parser_functions=True, content_language='bn')
-        parser_root=original.parent.parent/magic.DERIVED_DIRECTORY
-        magic.derive_snapshot(original,parser_root)
+                                     parser_functions=True, content_language='bn', complete_magic_projection=True)
         int_root=original.parent.parent/int_magic.DERIVED_DIRECTORY
         int_magic.derive_snapshot(original,int_root)
         language_root=original.parent.parent/language_magic.DERIVED_DIRECTORY
         language_magic.derive_snapshot(int_root,language_root)
         lst_magic.derive_snapshot(language_root,self.root/lst_magic.DERIVED_DIRECTORY)
+        projection=(self.root/lst_magic.DERIVED_DIRECTORY/'magic-words.tsv').read_bytes()
+        for row in (b'int\t0\tINT:\n',b'language\t0\t#language\n',b'lst\t0\t#section\n'):
+            self.assertIn(row,projection)
 
     def rebind(self, root, generator=None):
         messages=self.messages
