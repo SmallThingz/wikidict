@@ -5712,13 +5712,16 @@ test "unknown equals declaration cannot borrow a registered rendered target owne
 
 test "standalone equals owner ignores nested arguments and refuses unknown codes" {
     const Local = struct {
+        fn trusted(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage {
+            return null;
+        }
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             if (std.mem.eql(u8, value, "ett")) return .{ .code = "ett", .heading = "Etruscan" };
             if (std.mem.eql(u8, value, "en")) return .{ .code = "en", .heading = "English" };
             return null;
         }
     };
-    const codes: LanguageCodes = .{ .resolve_fn = Local.resolve };
+    const codes: LanguageCodes = .{ .resolve_fn = Local.resolve, .trusted_fn = Local.trusted };
     const declared = resolveSection(codes, .{ .heading = "ett", .source = "{{=ett=|{{sort|en}}|display=[[English]]}}\n# BODY" }).?;
     try std.testing.expectEqualStrings("ett", declared.code);
     try std.testing.expectEqualStrings("Etruscan", declared.heading);
