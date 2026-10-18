@@ -32,10 +32,10 @@ def write_namespace_fixture(folder, edition=None, date=None):
     return {'namespace-registry':namespace,'language-registry':language}
 
 
-def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observation='first', alias='اسم_الصفحة', parser_functions=False):
+def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observation='first', alias='اسم_الصفحة', parser_functions=False, content_language='ar'):
     import prepare_magic_words as magic
     folder.mkdir(parents=True,exist_ok=True)
-    namespace=magic.document({'query':{'general':{'wikiid':edition,'lang':'ar'}}})
+    namespace=magic.document({'query':{'general':{'wikiid':edition,'lang':content_language}}})
     (folder/'namespace-siteinfo.raw.json').write_bytes(namespace)
     (folder/'capture.complete.json').write_bytes(magic.document(dict(wiki=edition,date=date,
         artifacts={'namespace-siteinfo.raw.json':magic.digest(namespace)})))
@@ -44,7 +44,7 @@ def write_magic_fixture(folder, edition='arwiktionary', date='20261001', observa
     if parser_functions:
         words += [{'name':name,'aliases':[name]+(['استدعاء'] if name=='invoke' else [])}
                   for name in sorted(magic.PARSER_FUNCTIONS)]
-    raw=magic.document({'query':{'general':{'wikiid':edition,'lang':'ar','sitename':observation},'magicwords':words}})
+    raw=magic.document({'query':{'general':{'wikiid':edition,'lang':content_language,'sitename':observation},'magicwords':words}})
     def fetcher(url):
         return raw,dict(source_url=url,response_url=url,status=200,
             started_utc='2026-10-05T00:00:00+00:00',retrieved_utc='2026-10-05T00:00:01+00:00',
@@ -3146,6 +3146,21 @@ class LoopMessageSelectionTests(unittest.TestCase):
                        'language_registries':[dict(wiki=self.wiki,date=self.date,name=language.name,
                            size=language.stat().st_size,sha256=b.sha256_file(language))]}
         self.groups={(self.wiki,self.date):[self.item]}
+        # Exercise the real resolver's mandatory full LST projection as well as
+        # message selection; each predecessor embeds authenticated raw evidence.
+        import prepare_magic_words as magic
+        import prepare_magic_words_int as int_magic
+        import prepare_magic_words_language as language_magic
+        import prepare_magic_words_lst as lst_magic
+        original=write_magic_fixture(self.project/'magic-capture', self.wiki, self.date,
+                                     parser_functions=True, content_language='bn')
+        parser_root=original.parent.parent/magic.DERIVED_DIRECTORY
+        magic.derive_snapshot(original,parser_root)
+        int_root=original.parent.parent/int_magic.DERIVED_DIRECTORY
+        int_magic.derive_snapshot(original,int_root)
+        language_root=original.parent.parent/language_magic.DERIVED_DIRECTORY
+        language_magic.derive_snapshot(int_root,language_root)
+        lst_magic.derive_snapshot(language_root,self.root/lst_magic.DERIVED_DIRECTORY)
 
     def rebind(self, root, generator=None):
         messages=self.messages
@@ -3182,7 +3197,7 @@ class LoopMessageSelectionTests(unittest.TestCase):
 
     def resolve(self):
         with patch.object(b,'PROJECT',self.project):
-            return b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads)[(self.wiki,self.date)]
+            return b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads)[(self.wiki,self.date)]['auxiliary_snapshots']
 
     def test_loop_pair_preferred_and_prior_pair_bytes_unchanged(self):
         old=self.collect('language-messages',prior=True)

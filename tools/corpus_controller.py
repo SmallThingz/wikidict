@@ -185,7 +185,7 @@ def _validate_unrelated_registry_appends(before, after, edition, date, changes):
         codes = {line.split('\t', 1)[0] for line in original.decode('utf-8').splitlines()
                  if line and not line.startswith('#')}
         aliases = change['aliases']; headings = change.get('local_headings', [])
-        keys = set(); directives = []
+        keys = set(); folded_owners = {}; directives = []
         require(isinstance(aliases, list) and isinstance(headings, list)
                 and 0 < len(aliases) + len(headings) <= 32,
                 'Registry append needs explicit finite directives')
@@ -197,8 +197,10 @@ def _validate_unrelated_registry_appends(before, after, edition, date, changes):
                 code, label = pair; key = label.casefold()
                 require(code in codes and label and label == label.strip() and len(label) <= 1024
                         and all(ord(ch) >= 32 and not 127 <= ord(ch) < 160 for ch in label)
-                        and key not in keys, 'Registry append directive code or label invalid')
-                keys.add(key)
+                        and label not in keys and (key not in folded_owners or folded_owners[key] == code),
+                        'Registry append directive code or label invalid')
+                keys.add(label)
+                folded_owners[key] = code
                 directive = ('# ' + kind + '\t' + code + '\t' + label + '\n').encode('utf-8')
                 require(directive not in original, 'Registry append repeats an existing directive')
                 directives.append(directive)

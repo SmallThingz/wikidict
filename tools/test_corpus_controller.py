@@ -9,6 +9,8 @@ from unittest import mock
 
 import corpus_controller as controller
 
+AN14_REVIEWED_ALIASES = [['it', 'Italián'], ['scn', 'Secilián'], ['scn', 'secilián'], ['pl', 'Polonés'], ['be', 'Belarruso'], ['eu', 'Vasco'], ['fi', 'Finlandés'], ['fi', 'Suomen kieli'], ['nci', 'Náhuatl clásico'], ['nci', 'Nahuatlahtolli'], ['mul', 'Internacional'], ['mul', 'internacional'], ['ms', 'Bahasa Melayu بهاس ملايو'], ['fr', 'Franzés']]
+
 FRESH = 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
 
@@ -1000,15 +1002,19 @@ class ControllerPreparationTests(unittest.TestCase):
 
 
 
-    def four_registry_appends_context(self, root):
+    def four_registry_appends_context(self, root, an_aliases=None):
         old, current, snapshot, changes = self.registry_appends_context(root)
         before, after = controller.read_ref(snapshot), controller.read_ref(current['manifest'])
         original = root / 'an.original.tsv'
-        original.write_text('# wikidict-language-registry-v2\n# content-language\tan\nit\tItalian\n')
+        aliases = [['it', 'Italián']] if an_aliases is None else copy.deepcopy(an_aliases)
+        codes = sorted({code for code, _ in aliases})
+        original.write_text('# wikidict-language-registry-v2\n# content-language\tan\n' +
+            ('it\tItalian\n' if an_aliases is None else ''.join(code + '\tExisting ' + code + '\n' for code in codes)))
         derived = root / 'an.derived.tsv'
-        derived.write_bytes(original.read_bytes() + '# local-alias\tit\tItalián\n'.encode())
+        derived.write_bytes(original.read_bytes() + ''.join('# local-alias\t' + code + '\t' + label + '\n'
+            for code, label in aliases).encode())
         change = dict(edition='anwiktionary', original_registry=controller.descriptor(original),
-            derived_registry=controller.descriptor(derived), aliases=[['it', 'Italián']])
+            derived_registry=controller.descriptor(derived), aliases=aliases)
         row = dict(wiki='anwiktionary', date='20261001', name='language-registry.tsv',
             content_language='an', size=change['original_registry']['bytes'],
             sha256=change['original_registry']['sha256'])
@@ -1090,6 +1096,28 @@ class ControllerPreparationTests(unittest.TestCase):
                     receipt, old, current, snapshot, extra)]
                 with self.assertRaises(ValueError): controller.load_preparations(current)
 
+
+    def test_an14_case_distinct_same_owner_retains_nineteen_preparation_intervals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, current, snapshot, changes = self.four_registry_appends_context(root, AN14_REVIEWED_ALIASES)
+            self.assertEqual(426, changes[-1]['derived_registry']['bytes'] - changes[-1]['original_registry']['bytes'])
+            refs, originals = [], {}
+            durations = [38590.353032794985 / 18] * 18 + [1354.0153575069999]
+            for i, seconds in enumerate(durations):
+                receipt = self.preparation(root / str(i), old, 'case-distinct-' + str(i),
+                    outcome=['passed', 'failed', 'superseded'][i % 3], seconds=seconds)
+                value = controller.read_ref(receipt)
+                for key in ('result', 'closure'):
+                    path = Path(value[key]['path']); originals[str(path)] = path.read_bytes()
+                refs.append(self.manifest_receipt(root / str(i), receipt, old, current, snapshot,
+                    dict(unrelated_registry_appends=changes)))
+            current['production_preparations'] = refs + refs
+            rows = controller.load_preparations(current)
+            self.assertEqual(19, len(rows))
+            self.assertAlmostEqual(39944.368390301985, sum(row['elapsed_seconds'] for row in rows))
+            self.assertTrue(all(row['manifest_transition']['runtime_reuse_credit'] is False for row in rows))
+            self.assertEqual(originals, {path: Path(path).read_bytes() for path in originals})
 
 class ControllerMemoryPolicyTests(unittest.TestCase):
     def cfg(self, root):
@@ -1939,16 +1967,20 @@ class SourceLuaDefectTests(unittest.TestCase):
 
 class Source78PilotTimeHistoryTests(unittest.TestCase):
     """Closed source78 pilot costs survive; every target publication is rebuilt."""
-    def fixture(self, root):
+    def fixture(self, root, an_aliases=None):
         source = dict(controller.SOURCE78_PILOT)
         target = dict(head='9' * 40, fingerprint='a' * 64)
         manifest_path = root / 'dumps/manifest.json'
         registry = root / 'an.original.tsv'
-        registry.write_text('# wikidict-language-registry-v2\n# content-language\tan\nit\tItalian\n')
+        aliases = [['it', 'Italián']] if an_aliases is None else copy.deepcopy(an_aliases)
+        codes = sorted({code for code, _ in aliases})
+        registry.write_text('# wikidict-language-registry-v2\n# content-language\tan\n' +
+            ('it\tItalian\n' if an_aliases is None else ''.join(code + '\tExisting ' + code + '\n' for code in codes)))
         derived = root / 'an.derived.tsv'
-        derived.write_bytes(registry.read_bytes() + '# local-alias\tit\tItalián\n'.encode())
+        derived.write_bytes(registry.read_bytes() + ''.join('# local-alias\t' + code + '\t' + label + '\n'
+            for code, label in aliases).encode())
         change = dict(edition='anwiktionary', original_registry=controller.descriptor(registry),
-                      derived_registry=controller.descriptor(derived), aliases=[['it', 'Italián']])
+                      derived_registry=controller.descriptor(derived), aliases=aliases)
         before = dict(requested_editions=all_editions(),
             files=[dict(wiki='arwiktionary', date='20261001', name='synthetic.xml.bz2', size=1, sha1='0' * 40)],
             auxiliary_capture_roots={e: str(root / 'capture' / e) for e in all_editions()},
@@ -2039,12 +2071,13 @@ class Source78PilotTimeHistoryTests(unittest.TestCase):
         with mock.patch.object(controller, 'process_identity', side_effect=AssertionError('Closed history never queries live processes')):
             return controller.history(Path(cfg['state_directory']), controller.production_context(cfg), cfg)
 
-    def interrupted_fixture(self, root):
-        cfg, _ = self.fixture(root)
+    def interrupted_fixture(self, root, an_aliases=None, interrupted_seconds=None):
+        cfg, _ = self.fixture(root, an_aliases)
         tr = cfg['production_manifest_transition']; pilot = controller.read_ref(tr['pilot_closure'])
         entry = pilot['attempts'][1]; folder = Path(entry['result']['path']).parent
         row = controller.read_ref(entry['result']); wd = controller.read_ref(entry['watchdog'])
         row.update(cleanup_proven=False, error=None)
+        if interrupted_seconds is not None: row['elapsed_seconds'] = interrupted_seconds
         wd.update(termination_reason='interrupted', error='Build supervisor interrupted by signal 15',
                   child_pid=900003, child_start_time_ticks=3, guardian_pid=900004)
         write_json(folder/'watchdog.json', wd); row['watchdog']=controller.descriptor(folder/'watchdog.json')
@@ -2139,6 +2172,9 @@ class Source78PilotTimeHistoryTests(unittest.TestCase):
     def test_real_main_does_not_skip_old_passed_or_failed_without_retry_flag(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory);cfg, _ = self.fixture(root);rows = self.rows(cfg);seen = []
+            real_descriptor = controller.descriptor
+            def selected_descriptor(path):
+                return cfg['compiler'] if Path(path) == Path(cfg['compiler']['path']) else real_descriptor(path)
             write_json(root / 'cfg.json', cfg)
             def execute(current, edition, workers, folder, sequence, context, locks, memory):
                 seen.append((edition, sequence))
@@ -2149,7 +2185,7 @@ class Source78PilotTimeHistoryTests(unittest.TestCase):
                  mock.patch.object(controller, 'source_guard'), \
                  mock.patch.object(controller, 'gate', return_value={}), \
                  mock.patch.object(controller, 'load_preparations', return_value=[]), \
-                 mock.patch.object(controller, 'descriptor', return_value=cfg['compiler']), \
+                 mock.patch.object(controller, 'descriptor', side_effect=selected_descriptor), \
                  mock.patch.object(controller, 'validate_pipeline_paths'), \
                  mock.patch.object(controller, 'selected_phase_editions', return_value=['arwiktionary', 'aawiktionary']), \
                  mock.patch.object(controller, 'Lock'), \
@@ -2204,6 +2240,40 @@ class Source78PilotTimeHistoryTests(unittest.TestCase):
                 with self.assertRaises((ValueError,FileNotFoundError)):self.rows(cfg)
                 if mode=='missing-result':self.assertFalse((first/'result.json').exists())
 
+
+    def test_an14_case_distinct_same_owner_keeps_exact_interrupted_time_without_output_credit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg, pin = self.interrupted_fixture(root, AN14_REVIEWED_ALIASES, 4090.5811582690003)
+            originals = {str(p): p.read_bytes() for p in root.rglob('*.json')}
+            with mock.patch.object(controller, 'SOURCE78_INTERRUPTED_PILOT', pin):
+                rows = self.rows(cfg)
+                failed = next(row for row in rows if row['attempt_id'] == pin['attempt_id'])
+                self.assertEqual(4090.5811582690003, failed['elapsed_seconds'])
+                self.assertIs(failed['cleanup_proven'], False)
+                self.assertTrue(all(row['history_time_only'] and row['accepted'] is None for row in rows))
+                summary = controller.summarize(rows + copy.deepcopy(rows), all_editions())
+                ar = next(row for row in summary['editions'] if row['edition'] == 'arwiktionary')
+                self.assertAlmostEqual(4100.581158269, ar['observed_build_seconds'])
+                self.assertEqual(0, summary['accepted_cohort_input_pages'])
+                self.assertEqual(set(controller.PILOT[:7]), {row['edition'] for row in summary['editions'] if row['timing_excluded']})
+            self.assertEqual(originals, {str(p): p.read_bytes() for p in root.rglob('*.json')})
+
+    def test_case_distinct_aliases_still_refuse_exact_duplicates_and_cross_owner_folds(self):
+        for extra in (['it', 'Italián'], ['fr', 'ITALIÁN']):
+            for route in ('preparations', 'pilot-history'):
+                with self.subTest(extra=extra, route=route), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory); aliases = AN14_REVIEWED_ALIASES + [extra]
+                    if route == 'pilot-history':
+                        cfg, _ = self.fixture(root, aliases)
+                        with self.assertRaises(ValueError): self.rows(cfg)
+                    else:
+                        helper = ControllerPreparationTests()
+                        old, current, snapshot, changes = helper.four_registry_appends_context(root, aliases)
+                        receipt = helper.preparation(root / 'prep', old, 'bad-case-distinct')
+                        current['production_preparations'] = [helper.manifest_receipt(root / 'prep', receipt,
+                            old, current, snapshot, dict(unrelated_registry_appends=changes))]
+                        with self.assertRaises(ValueError): controller.load_preparations(current)
 
 if __name__ == '__main__':
     unittest.main()
