@@ -20746,8 +20746,10 @@ test "interwiki routing preserves namespace priority current wiki labels fragmen
     var captions: usize = 0;
     for (inherited_spans) |span| if (std.mem.eql(u8, span.text, "caption")) {
         captions += 1;
-        try std.testing.expectEqual(ir.InlineKind.text, span.kind);
-        try std.testing.expectEqualStrings("", span.target);
+        // Rejected inner navigation remains plain caption content; the final
+        // media label correctly supplies its owning image's ordinary action.
+        try std.testing.expectEqual(ir.InlineKind.link, span.kind);
+        try std.testing.expectEqualStrings("File:Cat.jpg", span.target);
         try std.testing.expect(span.flags.italic);
     };
     try std.testing.expectEqual(@as(usize, 1), captions);
