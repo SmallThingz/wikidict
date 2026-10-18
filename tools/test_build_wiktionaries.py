@@ -3122,28 +3122,39 @@ class LoopMessageSelectionTests(unittest.TestCase):
         self.root.mkdir(parents=True)
         self.downloads=self.project/'dumps'
         self.wiki,self.date='bnwiktionary','20261001'
-        self.namespace=write_namespace_fixture(self.root,self.wiki,self.date)['namespace-registry']
-        (self.root/'language-registry.tsv').unlink()  # Registry is selected from downloads below.
-        self.namespace.write_text(self.namespace.read_text().replace('content-language\ten','content-language\tbn'))
+        self.namespace=self.root/'namespace-registry.tsv'
         self.item=dict(wiki=self.wiki,date=self.date,name='bnwiktionary-20261001-pages-meta-current.xml.bz2',
                        url='https://dumps.wikimedia.org/synthetic-local-fixture',size=1,sha1='0'*40)
-        for name,raw in [('dump-siteinfo.xml',b'<siteinfo/>'),
-                         ('namespace-siteinfo.raw.json',b'{}'),('pagetable-dumpstatus.raw.json',b'{}')]:
+        # Build one coherent synthetic dated XML/current siteinfo namespace
+        # capture using the real projector; the resolver validates this whole
+        # authority, including its discovered legacy site-info role.
+        import namespace_registry_snapshot as namespace_projection
+        import site_info_snapshot as site_info
+        namespaces={str(i):dict(id=i,name=name,canonical=name,case='case-sensitive',
+                                content=i==0,defaultcontentmodel='wikitext')
+                    for i,name in ((0,''),(10,'Template'),(14,'Category'))}
+        inventory=[dict(id=row['id'],name=row['name'],case=row['case'])
+                   for row in namespaces.values()]
+        query=dict(general=dict(wikiid=self.wiki,lang='bn',server='//bn.wiktionary.org'),
+                   namespaces=namespaces,namespacealiases=[])
+        raw_siteinfo=json.dumps(dict(query=query)).encode()
+        xml=('<mediawiki><siteinfo><dbname>'+self.wiki+'</dbname><namespaces>'+
+             ''.join('<namespace key="'+str(row['id'])+'" case="'+row['case']+'">'+
+                     row['name']+'</namespace>' for row in inventory)+
+             '</namespaces></siteinfo></mediawiki>').encode()
+        for name,raw in [('dump-siteinfo.xml',xml),
+                         ('namespace-siteinfo.raw.json',raw_siteinfo),('pagetable-dumpstatus.raw.json',b'{}')]:
             (self.root/name).write_bytes(raw)
         artifacts={name:b.sha256_file(self.root/name) for name in
                    ('dump-siteinfo.xml','namespace-siteinfo.raw.json','pagetable-dumpstatus.raw.json')}
         capture=dict(wiki=self.wiki,date=self.date,source_xml=self.item,namespace_mismatches=[],
-                     artifacts=artifacts,retrieved_utc='2026-10-18T00:00:00Z',
+                     dump_namespace_inventory=inventory,artifacts=artifacts,
+                     retrieved_utc='2026-10-18T00:00:00Z',
                      siteinfo_source_url='https://bn.wiktionary.org/w/api.php',
                      siteinfo_temporal_scope='synthetic-local-fixture')
         (self.root/'capture.complete.json').write_text(json.dumps(capture))
-        sidecar=dict(wiki=self.wiki,date=self.date,source_dump_files=[self.item],
-                     raw_siteinfo_sha256=artifacts['namespace-siteinfo.raw.json'],
-                     dump_siteinfo_sha256=artifacts['dump-siteinfo.xml'],
-                     retrieved_utc=capture['retrieved_utc'],source_url=capture['siteinfo_source_url'],
-                     supplementary_api_scope=capture['siteinfo_temporal_scope'],
-                     output_sha256=b.sha256_file(self.namespace))
-        (self.root/'namespace-registry.manifest.json').write_text(json.dumps(sidecar))
+        namespace_projection.build(self.root)
+        site_info.validate_snapshot(self.root/'namespace-siteinfo.raw.json',self.wiki,self.date)
         language=self.downloads/self.wiki/self.date/'language-registry.tsv'
         language.parent.mkdir(parents=True)
         language.write_text('# content-language\tbn\nbn\tবাংলা\nen\tEnglish\n')
