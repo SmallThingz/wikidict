@@ -84,6 +84,10 @@ fn run(init: std.process.Init) !u8 {
                 try reportOpenError(init.io, opts, err);
                 return 2;
             }
+            if (err == error.EditionScopeMismatch) {
+                std.debug.print("dict: choose a separate empty folder for another edition or unlabelled dictionaries.\n", .{});
+                return 2;
+            }
             if (err == error.InstallReportFailed) {
                 std.debug.print("dict: dictionary installed, but confirmation output failed.\n", .{});
                 return 2;

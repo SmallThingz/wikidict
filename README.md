@@ -396,6 +396,11 @@ zig-out/bin/dict catalog
 zig-out/bin/dict install FILE_OR_HTTPS_URL --root DIRECTORY --sha256 HASH
 ```
 
+Use a separate root folder for each edition and snapshot date. Canonically named
+release files retain that scope; the CLI refuses imports from another edition
+or unlabelled files into a scoped root. Unlabelled local files remain supported
+in their own unscoped root.
+
 ## Repository layout
 
 ```text
