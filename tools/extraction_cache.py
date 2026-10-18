@@ -350,7 +350,8 @@ def read_object_plan(llvm_dir):
         raise ValueError("Oversized LLVM batch plan")
     plans = []
     seen = set()
-    for line in plan_path.read_text().splitlines():
+    lines = plan_path.read_text().splitlines()
+    for line in lines:
         if not line or line.startswith("#"):
             continue
         fields = line.split("\t")
@@ -369,8 +370,9 @@ def read_object_plan(llvm_dir):
         plans.append(fields)
         if len(plans) > MAX_BATCHES:
             raise ValueError("Oversized LLVM batch plan")
-    if not plans:
-        raise ValueError("Empty LLVM batch plan")
+    if not plans and lines != ["# dict-llvm-batch-plan-v1",
+                              "# opt\tfile\tcount\tfirst\tlast\tsource_bytes"]:
+        raise ValueError("Empty LLVM batch plan lacks producer framing")
     return plans
 
 
@@ -424,7 +426,7 @@ def valid_abi_provenance(value):
 
 def object_names(expected):
     bitcode = expected.get("bitcode")
-    if not isinstance(bitcode, list) or not bitcode or len(bitcode) > MAX_BATCHES:
+    if not isinstance(bitcode, list) or len(bitcode) > MAX_BATCHES:
         raise ValueError("Invalid cached object identity")
     return [f"module_batch_{index:06d}.o" for index in range(len(bitcode))] + ["program.o"]
 

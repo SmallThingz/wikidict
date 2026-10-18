@@ -261,6 +261,80 @@ class ObjectCacheTest(unittest.TestCase):
         for name, hit in zip(self.names, bits):
             self.assertEqual(hit == "1", (output / name).is_file(), name)
 
+    def zero_llvm(self, name):
+        root = self.llvm(name)
+        (root / "batch-plan.tsv").write_text(
+            "# dict-llvm-batch-plan-v1\n"
+            "# opt\tfile\tcount\tfirst\tlast\tsource_bytes\n")
+        for filename in ("module_batch_o2_000000.bc", "module_batch_o0_000000.bc"):
+            (root / filename).unlink()
+        return root
+
+    def test_zero_batches_cache_only_program_and_allow_consumed_bitcode(self):
+        first = self.zero_llvm("zero-first")
+        self.assertEqual([], cache.read_object_plan(first))
+        self.assertEqual(cache.MISS, self.probe(first))
+        self.assertEqual("0\n", (first / ".object-hits").read_text())
+        identity = json.loads((first / ".object-identity.json").read_text())["identity"]
+        self.assertEqual(["program.o"], cache.object_names(identity))
+        self.assertEqual(["program.o"], [name for name, _ in cache.object_entries(identity)])
+        with self.assertRaises(ValueError):
+            self.publish(first)
+        (first / "program.o").write_bytes(b"zero-module native program")
+        # Clang consumes bitcode; publication uses the authenticated pre-probe identity.
+        (first / "program.bc").unlink()
+        self.assertEqual(0, self.publish(first))
+        second = self.zero_llvm("zero-second")
+        self.assertEqual(0, self.probe(second))
+        self.assertEqual("1\n", (second / ".object-hits").read_text())
+        self.assertEqual(b"zero-module native program", (second / "program.o").read_bytes())
+        self.assertEqual([], list(second.glob("module_batch_*.o")))
+
+    def test_zero_batches_require_framing_and_all_program_inputs(self):
+        for index, contents in enumerate(("", "# unrelated\n", "# dict-llvm-batch-plan-v1\n",
+                                          "# dict-llvm-batch-plan-v1\n-O2\tbroken\n")):
+            with self.subTest(plan=contents):
+                root = self.zero_llvm("zero-bad-plan-" + str(index))
+                (root / "batch-plan.tsv").write_text(contents)
+                with self.assertRaises(ValueError):
+                    self.probe(root)
+                self.assertFalse((root / ".object-hits").exists())
+        for index, name in enumerate(("program.bc", "program.meta", "value_leaf.bc")):
+            with self.subTest(missing=name):
+                root = self.zero_llvm("zero-missing-" + str(index))
+                (root / name).unlink()
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    self.probe(root)
+                self.assertFalse((root / ".object-hits").exists())
+
+    def test_zero_batches_reject_corrupt_program_and_changed_publication_metadata(self):
+        first = self.zero_llvm("zero-seed")
+        self.assertEqual(cache.MISS, self.probe(first))
+        (first / "program.o").write_bytes(b"zero-module native program")
+        self.assertEqual(0, self.publish(first))
+        restored = self.zero_llvm("zero-corrupt")
+        self.assertEqual(0, self.probe(restored))
+        (restored / "program.o").write_bytes(b"corrupt")
+        repaired = self.zero_llvm("zero-repaired")
+        self.assertEqual(cache.MISS, self.probe(repaired))
+        self.assertEqual("0\n", (repaired / ".object-hits").read_text())
+        (repaired / "program.o").write_bytes(b"")
+        with self.assertRaises(ValueError):
+            self.publish(repaired)
+        (repaired / "program.o").write_bytes(b"repaired native program")
+        self.assertEqual(0, self.publish(repaired))
+        final = self.zero_llvm("zero-final")
+        self.assertEqual(0, self.probe(final))
+        self.assertEqual(b"repaired native program", (final / "program.o").read_bytes())
+        for index, name in enumerate(("batch-plan.tsv", "program.meta")):
+            with self.subTest(changed=name):
+                root = self.zero_llvm("zero-publish-change-" + str(index))
+                self.assertEqual(0, self.probe(root))
+                with (root / name).open("a") as stream:
+                    stream.write("changed")
+                with self.assertRaises(ValueError):
+                    self.publish(root)
+
     def test_round_trip_corruption_is_local_and_can_be_repaired(self):
         self.seed()
         second = self.llvm("second")
