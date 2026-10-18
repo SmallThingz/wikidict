@@ -567,8 +567,6 @@ pub fn compileReportedWithReferencesAndPoemFragmentsAlloc(
     poem_phase: ?*const PoemPhase,
     fragments: []const SourceFragment,
 ) ![]u8 {
-    _ = kind;
-    _ = language_code;
     const work = try workAllocWithPoemFragments(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
@@ -618,7 +616,12 @@ pub fn compileReportedWithReferencesAndPoemFragmentsAlloc(
     // Build semantic layout only after recovery has normalized all build-only
     // template spans and inserted the addressable heading companion. Existing
     // block indices therefore refer to the final serialized array, including 0.
-    const layout = try semantic.build(a, work.sections);
+    const synthetic_unclassified = kind == .language and language_code.len == 0 and
+        std.mem.eql(u8, language orelse "", "Unclassified");
+    const layout = if (synthetic_unclassified)
+        try semantic.buildUnclassified(a, work.sections)
+    else
+        try semantic.build(a, work.sections);
     return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);
 }
 
@@ -1448,4 +1451,53 @@ test "unresolved action targets cannot cross reported compilation and DPR2" {
     var unprotected_report: Fallbacks = .{};
     _ = try compileReportedAlloc(a, "unresolved label", .language, "English", "en", "[https://example.test/?q=&#123;&#123;missing&#125;&#125; {{missing-label}}]", null, &unprotected_report);
     try std.testing.expect(unprotected_report.missing_template);
+}
+
+test "AM glossary term headings retain bodies and actions without invented counter lexeme" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact source excerpts from AM page 1697/revision 18624, retaining the
+    // preceding term and following term that establish the glossary boundary.
+    const source = "[[computer glossary A|A]]\n[[computer glossary Z|Z]]\n==count== \t\n# ይቆጠር\nመቁጠር ወይንም ቁጥር\n\n==counter== \t\n# ቆጣሪ \t\n==country code== \t\n# የአገር ኮድ \t\n";
+    const encoded = try compileAlloc(a, "computer glossary C", .language, "Unclassified", "", source, null);
+    const decoded = try codec.decodeAlloc(a, encoded, "computer glossary C", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualStrings("Unclassified", decoded.entry.language.?);
+    try std.testing.expectEqualStrings("", decoded.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 4), decoded.entry.sections.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3 }, decoded.entry.organization.other_sections);
+    for (decoded.entry.sections[1..], [_][]const u8{ "count", "counter", "country code" }) |section, title| {
+        try std.testing.expectEqualStrings(title, section.title);
+        try std.testing.expectEqual(@as(u8, 2), section.level);
+        try std.testing.expect(section.blocks[0].kind == .definition);
+    }
+    try std.testing.expectEqualStrings("ይቆጠር", decoded.entry.sections[1].blocks[0].spans[0].text);
+    try std.testing.expectEqualStrings("መቁጠር ወይንም ቁጥር", decoded.entry.sections[1].blocks[1].spans[0].text);
+    try std.testing.expectEqualStrings("ቆጣሪ \t", decoded.entry.sections[2].blocks[0].spans[0].text);
+    try std.testing.expectEqualStrings("የአገር ኮድ \t", decoded.entry.sections[3].blocks[0].spans[0].text);
+    var actions: usize = 0;
+    for (decoded.entry.sections[0].blocks[0].spans) |span| {
+        if (span.kind != .link) continue;
+        try std.testing.expectEqualStrings(if (actions == 0) "A" else "Z", span.text);
+        try std.testing.expectEqualStrings(if (actions == 0) "computer glossary A" else "computer glossary Z", span.target);
+        actions += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), actions);
+}
+
+test "explicit owner preserves direct L2 POS and nested Counter codec layout" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "==Counter==\n# One item.\n", "==English==\n===Counter===\n# One item.\n" }) |source| {
+        const encoded = try compileAlloc(a, "item", .language, "English", "en", source, null);
+        const decoded = try codec.decodeAlloc(a, encoded, "item", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes.len);
+        const lexeme = decoded.entry.organization.lexemes[0];
+        try std.testing.expectEqualStrings("Counter", lexeme.kind);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        const block = decoded.entry.sections[lexeme.section].blocks[lexeme.definitions[0].block];
+        try std.testing.expectEqualStrings("One item.", block.spans[0].text);
+    }
 }

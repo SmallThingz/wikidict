@@ -269,7 +269,9 @@ class ReaderPty:
 
 
 def exercise(reader: ReaderPty, initial_width: int) -> None:
-    reader.wait(lambda: reader.page_is("search", 1, len(TITLES)) and "cat" in reader.text(),
+    reader.wait(lambda: reader.page_is("search", 1, len(TITLES)) and "cat" in reader.text()
+                and "Enter read" in reader.screen.display[-2]
+                and ("Ctrl-C quit" if reader.width >= 81 else "^C quit") in reader.screen.display[-2],
                 "no-argument startup through DICT_ROOT")
     reader.snapshot("startup")
     require(reader.cli("saved") == [], "Fixture copy started with saved words")

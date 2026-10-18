@@ -2195,3 +2195,215 @@ test "AF parameterized Etruscan declaration keeps actual record with uncaptured 
         try std.testing.expect(link_found);
     }
 }
+
+// Actual captured AN language declaration bytes, with clearly synthetic lexical
+// bodies. No frozen full-page expansion or post-repair production acceptance is claimed.
+const AnScopedBannerRegression = struct {
+    const Fixture = struct { code: []const u8, raw: []const u8, expanded: []const u8 };
+    const registry_source = "# content-language\tan\n# mediawiki\nan\taragonés\tAragonés\tan\nit\titaliano\tItaliano\tit\nscn\tsiciliano\tSiciliano\tSicilianu\tscn\npl\tpolaco\tPolaco\tPolski\tpl\nbe\tbielorruso\tBielorruso\tБеларуская\tbe\neu\teuskera\tEuskera\tEuskara\teu\nfi\tfinés\tFinés\tSuomi\tfi\nms\tmalayo\tMalayo\tBahasa Melayu\tms\n# iso-639-3\nmbp\tMalayo\tmbp\nnci\tClassical Nahuatl\tnci\nnah\tNāhuatl\tnah\nmul\tMultiple languages\tmul\nadj\tAdioukrou\tadj\n";
+    const reviewed_aliases = "# local-alias\tit\tItalián\n# local-alias\tscn\tSecilián\n# local-alias\tscn\tsecilián\n# local-alias\tpl\tPolonés\n# local-alias\tbe\tBelarruso\n# local-alias\teu\tVasco\n# local-alias\tfi\tFinlandés\n# local-alias\tfi\tSuomen kieli\n# local-alias\tnci\tNáhuatl clásico\n# local-alias\tnci\tNahuatlahtolli\n# local-alias\tmul\tInternacional\n# local-alias\tmul\tinternacional\n# local-alias\tms\tBahasa Melayu بهاس ملايو\n";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tanwiktionary\n# dump-date\t20261001\n# content-language\tan\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const fixtures = [_]Fixture{
+        .{ .code = "it", .raw = "{{-it-}}\n# [[retained-it|Owner body it]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Italy.svg|40px]] '''''[[Wiktionary:Italián|Italián]]''''' <small>- ''Italiano''</small></div>=\n__NOTOC__\n__NOEDITSECTION__\n\n[[Category:Parabras en italiano]]\n==Sustantivo==\n# [[retained-it|Owner body it]]\n" },
+        .{ .code = "scn", .raw = "{{-scn-}}\n# [[retained-scn|Owner body scn]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag of Sicily.svg|40px]] '''''[[secilián|Secilián]]''''' <small>- ''Sicilianu''</small></div>=\n__NOTOC__\n__NOEDITSECTION__\n\n[[Category:Parabras en seziliano]]\n==Sustantivo==\n# [[retained-scn|Owner body scn]]\n" },
+        .{ .code = "pl", .raw = "{{-pl-}}\n# [[retained-pl|Owner body pl]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Poland.svg|40px]] '''''[[Wiktionary:Polonés|Polonés]]''''' <small>- ''Polski''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en polonés]]\n==Sustantivo==\n# [[retained-pl|Owner body pl]]\n" },
+        .{ .code = "be", .raw = "{{-be-}}\n# [[retained-be|Owner body be]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Belarus.svg|40px]] '''''[[Wiktionary:Belarruso|Belarruso]]''''' <small>- ''Беларуская''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en belarruso]]\n==Sustantivo==\n# [[retained-be|Owner body be]]\n" },
+        .{ .code = "eu", .raw = "{{-eu-}}\n# [[retained-eu|Owner body eu]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_the_Basque_Country.svg|40px]] '''''[[Wiktionary:Vasco|Vasco]]''''' <small>- ''Euskara''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en basco]]\n==Sustantivo==\n# [[retained-eu|Owner body eu]]\n" },
+        .{ .code = "fi", .raw = "{{-fi-}}\n# [[retained-fi|Owner body fi]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Finland.svg|40px]] '''''[[Wiktionary:Finlandés|Finlandés]]''''' <small>- ''Suomen kieli''</small></div>=\n__NOTOC__\n__NOEDITSECTION__\n\n[[Category:Parabras en finlandés]]\n==Sustantivo==\n# [[retained-fi|Owner body fi]]\n" },
+        .{ .code = "nci", .raw = "{{-nci-}}\n# [[retained-nci|Owner body nci]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag of the Nahuas.svg|40px]] '''''[[Wiktionary:Nāhuatl|Náhuatl clásico]]''''' <small>- ''Nahuatlahtolli''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en náhuatl clásico]]\n==Sustantivo==\n# [[retained-nci|Owner body nci]]\n" },
+        .{ .code = "mul", .raw = "{{-mul-}}\n# [[retained-mul|Owner body mul]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_the United Nations.svg|40px]] '''''[[internacional|Internacional]]''''' </div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras internacionales]]\n==Sustantivo==\n# [[retained-mul|Owner body mul]]\n" },
+        .{ .code = "ms", .raw = "{{-ms-}}\n# [[retained-ms|Owner body ms]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en malayo]]\n==Sustantivo==\n# [[retained-ms|Owner body ms]]\n" },
+    };
+
+    fn registry(a: std.mem.Allocator, reviewed: bool) !language_registry.Registry {
+        var value = language_registry.Registry.empty(a);
+        errdefer value.deinit();
+        try value.addTsv(registry_source);
+        if (reviewed) try value.addTsv(reviewed_aliases);
+        return value;
+    }
+
+    fn assertRecord(a: std.mem.Allocator, root: []const u8, heading: []const u8, title: []const u8, code: []const u8, body: []const u8) !void {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(heading, &filename) });
+        var mapped = try mmapPath(std.testing.io, path);
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(title)).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(code, decoded.entry.language_code);
+        var found = false;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, body)) found = true;
+        };
+        try std.testing.expect(found);
+    }
+};
+
+test "AN captured aliases and raw ms banner preserve all nine owners through real Registry Writer DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const F = AnScopedBannerRegression;
+    var namespaces = try namespace_registry.Registry.init(a, F.namespace_source);
+    defer namespaces.deinit();
+    for ([_]bool{ false, true }) |reviewed| {
+        var registry = try F.registry(a, reviewed);
+        defer registry.deinit();
+        // These exact globally conflicting/broader labels must never be reassigned.
+        try std.testing.expect(registry.resolve("Malayo") == null);
+        try std.testing.expectEqualStrings("nah", registry.resolve("Nāhuatl").?.code);
+        try std.testing.expect(registry.resolveTrusted("Adioukrou") == null);
+        const codes = languageCodes(&registry, &namespaces);
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, if (reviewed) "reviewed" else "unreviewed" });
+        var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        for (F.fixtures) |fixture| {
+            const title = try std.fmt.allocPrint(a, "fixture-{s}", .{fixture.code});
+            try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, fixture.expanded, fixture.raw, null);
+        }
+        // Existing generic linked-language evidence also permits this ordinary
+        // suffixless Italian banner. With reviewed identical target/label, the
+        // complete AN declaration grammar now also corroborates that same owner.
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ordinary-suffixless-it", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Italy.svg|40px]] '''''[[Wiktionary:Italián|Italián]]'''''</div>=\n__NOTOC__\n__NOEDITSECTION__\n\n[[Category:Parabras en italiano]]\n# [[ordinary-it|Independent linked Italian body]]\n", "{{-it-}}\n# [[ordinary-it|Independent linked Italian body]]\n", null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, F.fixtures.len + 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, if (reviewed) F.fixtures.len else 1), stats.language_blobs);
+        try std.testing.expectEqual(@as(usize, if (reviewed) 0 else F.fixtures.len + 1), stats.fallback_pages);
+        for (F.fixtures) |fixture| {
+            const title = try std.fmt.allocPrint(a, "fixture-{s}", .{fixture.code});
+            const body = try std.fmt.allocPrint(a, "retained-{s}", .{fixture.code});
+            const heading = if (reviewed) registry.resolve(fixture.code).?.heading else "Unclassified";
+            try F.assertRecord(a, root, heading, title, if (reviewed) fixture.code else "", body);
+        }
+        try F.assertRecord(a, root, if (reviewed) registry.resolve("it").?.heading else "Unclassified", "ordinary-suffixless-it", if (reviewed) "it" else "", "ordinary-it");
+        try std.testing.expect(registry.resolve("Malayo") == null);
+        try std.testing.expectEqualStrings("nah", registry.resolve("Nāhuatl").?.code);
+    }
+}
+
+test "AN scoped banner corroboration refuses wrong codes POS markers conflicting suffixes and mismatched suffixless declarations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const F = AnScopedBannerRegression;
+    var namespaces = try namespace_registry.Registry.init(a, F.namespace_source);
+    defer namespaces.deinit();
+    var registry = try F.registry(a, true);
+    defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/rejected", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const negatives = [_]struct { title: []const u8, raw: []const u8, expanded: []const u8 }{
+        .{ .title = "wrong-raw-code", .raw = "{{-mbp-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en malayo]]\n# [[negative-body|Retained negative body]]\n" },
+        .{ .title = "pos-code", .raw = "{{-adj-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en malayo]]\n# [[negative-body|Retained negative body]]\n" },
+        .{ .title = "wrong-ms-suffix", .raw = "{{-ms-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Malayo|Malayo]]''''' <small>- ''English''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en malayo]]\n# [[negative-body|Retained negative body]]\n" },
+        .{ .title = "wrong-ms-label", .raw = "{{-ms-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" > [[Image:Flag of Malaysia.svg|40px]] '''''[[Wiktionary:Polonés|Polonés]]''''' <small>- ''Bahasa Melayu بهاس ملايو''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en malayo]]\n# [[negative-body|Retained negative body]]\n" },
+        .{ .title = "wrong-nci-code", .raw = "{{-nah-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag of the Nahuas.svg|40px]] '''''[[Wiktionary:Nāhuatl|Náhuatl clásico]]''''' <small>- ''Nahuatlahtolli''</small></div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras en náhuatl clásico]]\n# [[negative-body|Retained negative body]]\n" },
+        .{ .title = "mismatched-mul-target", .raw = "{{-mul-}}\n# [[negative-body|Retained negative body]]\n", .expanded = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_the United Nations.svg|40px]] '''''[[Italián|Internacional]]''''' </div>=__NOTOC__ __NOEDITSECTION__\n\n[[Category:Parabras internacionales]]\n# [[negative-body|Retained negative body]]\n" },
+    };
+    for (negatives) |fixture| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, fixture.title, fixture.expanded, fixture.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, negatives.len), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, negatives.len), stats.fallback_pages);
+    for (negatives) |fixture| try F.assertRecord(a, root, "Unclassified", fixture.title, "", "negative-body");
+    try std.testing.expect(registry.resolve("Malayo") == null);
+    try std.testing.expectEqualStrings("nah", registry.resolve("Nāhuatl").?.code);
+}
+
+test "AN Malay corroboration is edition scoped and preserves ordinary generic linked owner evidence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const F = AnScopedBannerRegression;
+    const foreign = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    var namespaces = try namespace_registry.Registry.init(a, foreign);
+    defer namespaces.deinit();
+    var registry = try F.registry(a, true);
+    defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/foreign", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Reviewed nci/mul labels remain ordinary generic evidence in any edition;
+    // only ambiguous Malay needs the new AN-specific corroboration.
+    for (F.fixtures[6..9]) |fixture| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, fixture.code, fixture.expanded, fixture.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    for (F.fixtures[6..9]) |fixture| {
+        const body = try std.fmt.allocPrint(a, "retained-{s}", .{fixture.code});
+        const ordinary = !std.mem.eql(u8, fixture.code, "ms");
+        try F.assertRecord(a, root, if (ordinary) registry.resolve(fixture.code).?.heading else "Unclassified", fixture.code, if (ordinary) fixture.code else "", body);
+    }
+}
+
+test "AN authored direct Catalan banner and French Franzes alias keep separate Writer owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const F = AnScopedBannerRegression;
+    var namespaces = try namespace_registry.Registry.init(a, F.namespace_source);
+    defer namespaces.deinit();
+    var registry = try F.registry(a, true);
+    defer registry.deinit();
+    try registry.addTsv("ca\tcatalán\tCatalán\tCatalà\tcatalà\tca\tCatalan\tcat\nfr\tfrancés\tFrancés\tFrançais\tfrançais\tfr\tFrench\tfra\tfre\n");
+    try std.testing.expect(registry.resolve("Franzés") == null);
+    try registry.addTsv("# local-alias\tfr\tFranzés\n");
+    try std.testing.expectEqualStrings("fr", registry.resolve("Franzés").?.code);
+    try std.testing.expect(registry.resolve("Malayo") == null);
+    try std.testing.expectEqualStrings("nah", registry.resolve("Nāhuatl").?.code);
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/direct", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact source banner from escoltar2904/rev29039; original authored body
+    // links retained as a compact source excerpt, no -ca- marker invented.
+    const catalan = "=<div id=\"toc\" class=\"toccolours\" >'''''[[Wiktionary:Catalán|Catalán]]'''''</div>=\n*[[ascuitar|Ascuitar]]\n*[[ascuitar|Ascuitar]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "escoltar", catalan, catalan, null);
+    // Captured -fr- and ordinary -an- declaration bytes, synthetic body actions
+    // explicitly separate. This is not an actual frozen mai expansion claim.
+    const french = "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_France.svg|40px]] '''''[[Wiktionary:Franzés|Francés]]''''' <small>- ''Français''</small></div>=\n# [[french-only|French body]]\n";
+    const aragonese = "=<div id=\"toc\" class=\"toccolours\" >'''''[[Wiktionary:Aragonés|Aragonés]]''''' <small>- ''Aragonés''</small></div>=\n# [[aragonese-only|Aragonese body]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mixed-fr", aragonese ++ french, "{{-an-}}\n# [[aragonese-only|Aragonese body]]\n{{-fr-}}\n# [[french-only|French body]]\n", null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_blobs);
+    try F.assertRecord(a, root, registry.resolve("ca").?.heading, "escoltar", "ca", "ascuitar");
+    try F.assertRecord(a, root, registry.resolve("fr").?.heading, "mixed-fr", "fr", "french-only");
+    try F.assertRecord(a, root, registry.resolve("an").?.heading, "mixed-fr", "an", "aragonese-only");
+    for ([_][]const u8{ "fr", "an" }) |code| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(registry.resolve(code).?.heading, &filename) });
+        var mapped = try mmapPath(std.testing.io, path);
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("mixed-fr")).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        const forbidden = if (std.mem.eql(u8, code, "fr")) "aragonese-only" else "french-only";
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try std.testing.expect(!std.mem.eql(u8, span.target, forbidden));
+        };
+    }
+}

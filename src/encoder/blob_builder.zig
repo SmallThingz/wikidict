@@ -562,7 +562,9 @@ fn resolveLinkedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLangua
 
 // Frozen AN language templates emit this complete toc declaration. Resolve the
 // banner itself; raw support headings can legitimately change boundary counts.
-fn resolveAnBannerHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+const AnBannerDeclaration = struct { target: []const u8, label: []const u8, suffix: []const u8 };
+
+fn anBannerDeclaration(codes: LanguageCodes, value: []const u8) ?AnBannerDeclaration {
     const namespaces = codes.namespace_catalog orelse return null;
     if (!std.mem.eql(u8, namespaces.content_language, "an") or value.len > 4096) return null;
     const syntax = blobs.wikitext_syntax;
@@ -591,17 +593,40 @@ fn resolveAnBannerHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLang
     var target = std.mem.trim(u8, body[0..pipe], " \t");
     if (std.mem.startsWith(u8, target, "Wiktionary:")) target = target[11..];
     const label = std.mem.trim(u8, body[pipe + 1 ..], " \t");
-    const language = codes.resolve(label) orelse return null;
-    const target_language = codes.resolve(target) orelse return null;
-    if (!std.mem.eql(u8, language.code, target_language.code)) return null;
     rest = std.mem.trimStart(u8, rest[link.end..], " \t");
     if (!std.mem.startsWith(u8, rest, "'''''")) return null;
     rest = std.mem.trimStart(u8, rest[5..], " \t");
+    if (rest.len == 0) return .{ .target = target, .label = label, .suffix = "" };
     if (rest.len < 21 or !std.mem.startsWith(u8, rest, "<small>- ''") or !std.mem.endsWith(u8, rest, "''</small>")) return null;
-    const suffix = rest[11 .. rest.len - 10];
-    const suffix_language = codes.resolve(suffix) orelse return null;
-    if (!std.mem.eql(u8, language.code, suffix_language.code)) return null;
+    return .{ .target = target, .label = label, .suffix = rest[11 .. rest.len - 10] };
+}
+
+fn resolveAnBannerHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const declaration = anBannerDeclaration(codes, value) orelse return null;
+    const language = codes.resolve(declaration.label) orelse return null;
+    const target_language = codes.resolve(declaration.target) orelse return null;
+    // A complete suffixless declaration is independently authored in AN
+    // escoltar (page2904/rev29039). The exact target/label must agree; no
+    // trailing text, second link or weak category inference can provide it.
+    if (declaration.suffix.len == 0) {
+        if (!std.mem.eql(u8, declaration.target, declaration.label) or
+            !std.mem.eql(u8, language.code, target_language.code)) return null;
+        return language;
+    }
+    const suffix_language = codes.resolve(declaration.suffix) orelse return null;
+    if (!std.mem.eql(u8, language.code, target_language.code) or
+        !std.mem.eql(u8, language.code, suffix_language.code)) return null;
     return language;
+}
+
+fn corroboratedAnMalayMarker(codes: LanguageCodes, raw: language_source.Section, rendered: language_source.Section) bool {
+    if (!raw.hyphen_marker or !std.mem.eql(u8, raw.heading, "ms")) return false;
+    const declaration = anBannerDeclaration(codes, rendered.heading) orelse return false;
+    if (!std.mem.eql(u8, declaration.target, "Malayo") or !std.mem.eql(u8, declaration.label, "Malayo") or
+        !std.mem.eql(u8, declaration.suffix, "Bahasa Melayu بهاس ملايو")) return false;
+    const declared = codes.resolve("ms") orelse return false;
+    const corroborated = codes.resolve(declaration.suffix) orelse return false;
+    return std.mem.eql(u8, declared.code, "ms") and std.mem.eql(u8, corroborated.code, "ms");
 }
 
 // The Arabic declaration form links the words "in language" before the
@@ -1611,7 +1636,9 @@ fn processMain(
         // boundary: e.g. Aymara's -ay-/-adj- can line up with noun/adjective
         // headings. Require rendered language evidence for hyphen markers;
         // preserve the distinct equals-style language declaration convention.
-        if (raw_section.hyphen_marker and boundaryLanguage(codes, rendered_section) == null) {
+        if (raw_section.hyphen_marker and boundaryLanguage(codes, rendered_section) == null and
+            !corroboratedAnMalayMarker(codes, raw_section, rendered_section))
+        {
             raw_aligned = false;
             break;
         }
@@ -5727,4 +5754,32 @@ test "standalone equals owner ignores nested arguments and refuses unknown codes
     try std.testing.expectEqualStrings("Etruscan", declared.heading);
     try std.testing.expect(resolveSection(codes, .{ .heading = "unknown", .source = "{{=unknown=|{{sort|en}}|display=[[English]]}}\n# BODY" }) == null);
     try std.testing.expect(resolveSection(codes, .{ .heading = "ett", .source = "{{=unknown=|{{sort|en}}}}\n# BODY" }) == null);
+}
+
+test "AN complete identical suffixless declaration resolves but malformed ambiguous and mixed labels do not" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tanwiktionary\n# dump-date\t20261001\n# content-language\tan\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &namespaces;
+    const banner = "<div id=\"toc\" class=\"toccolours\" >'''''[[Wiktionary:Catalán|Catalán]]'''''</div>";
+    try std.testing.expectEqualStrings("ca", resolveAnBannerHeading(codes, banner).?.code);
+    const bad = [_][]const u8{
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Wiktionary:Catalán|Aragonés]]'''''</div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Wiktionary:Unknown|Unknown]]'''''</div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Wiktionary:Catalán|Catalán]]''''</div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Wiktionary:Catalán|Catalán]]''''' tail</div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Wiktionary:Catalán|Catalán]]''''' [[Aragonés]]</div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Wiktionary:Catalán|Catalán]]''''' <small>- ''Aragonés''</small></div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''''[[Wiktionary:Catalán|Catalán]]'''''",
+    };
+    for (bad) |value| try std.testing.expect(resolveAnBannerHeading(codes, value) == null);
+    // Missing AN namespace authority cannot use the new direct grammar.
+    try std.testing.expect(resolveAnBannerHeading(TestLanguages.codes(), banner) == null);
 }

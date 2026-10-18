@@ -153,6 +153,7 @@ const LazyTemplateArgs = struct {
     named_numeric_keys: []const f64,
     caller_params: *rt.Table,
     caller_title: []const u8,
+    caller_transclusion_frame: ?*const Expander.TransclusionFrame,
     depth: usize,
 };
 
@@ -666,6 +667,21 @@ pub const Expander = struct {
         return self.expandWikitext(text, args, title, depth);
     }
 
+    fn templateLoopWarning(self: *Expander, requested_title: []const u8, resolved_title: []const u8) anyerror!?[]const u8 {
+        // Parser::braceSubstitution checks the resolved redirect target, but
+        // substitutes the requested canonical title into the localized warning.
+        var ancestor = self.transclusion_frame;
+        while (ancestor) |frame| {
+            if (std.mem.eql(u8, frame.title, resolved_title)) {
+                const warning = try message_lib.interfaceMessagePlain(self.runtime, "parser-template-loop-warning", &.{.{ .string = requested_title }});
+                rt.work_stats.logLine("warning: ordinary template loop: requested={s} resolved={s}\n", .{ requested_title[0..@min(requested_title.len, 256)], resolved_title[0..@min(resolved_title.len, 256)] });
+                return try std.fmt.allocPrint(self.runtime.allocator, "<span class=\"error\">{s}</span>", .{warning});
+            }
+            ancestor = frame.parent;
+        }
+        return null;
+    }
+
     fn expandTemplateSource(self: *Expander, title: []const u8, raw: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
         if (work_stats.current()) |work| {
             work.template_preprocess_calls +|= 1;
@@ -708,6 +724,7 @@ pub const Expander = struct {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
                 return self.missingTemplateResult(raw_name, title, missing);
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
+            if (try self.templateLoopWarning(title, body.title)) |warning| return warning;
             return self.expandTransclusionText(body.title, body.text, args, depth + 1);
         }
         const raw = if (self.provider.get_transclusion) |get|
@@ -716,6 +733,7 @@ pub const Expander = struct {
         else
             (try hostPageContent(self, self.runtime.allocator, title)) orelse
                 return self.missingTemplateResult(raw_name, title, missing);
+        if (try self.templateLoopWarning(title, title)) |warning| return warning;
         return self.expandTemplateSource(title, raw, args, depth);
     }
 
@@ -728,6 +746,7 @@ pub const Expander = struct {
         if (self.provider.get_template_symbol == null) if (self.provider.get_transclusion_body) |get| {
             const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return self.missingTemplateMarkup(title);
             defer if (!body.borrowed) self.runtime.allocator.free(body.text);
+            if (try self.templateLoopWarning(title, body.title)) |warning| return warning;
             return self.expandTransclusionText(body.title, body.text, args, depth + 1);
         };
         const raw = if (self.provider.get_template_symbol) |get|
@@ -736,6 +755,7 @@ pub const Expander = struct {
             (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return self.missingTemplateMarkup(title)
         else
             (try hostPageContent(self, self.runtime.allocator, title)) orelse return self.missingTemplateMarkup(title);
+        if (try self.templateLoopWarning(title, title)) |warning| return warning;
         return self.expandTemplateSource(title, raw, args, depth);
     }
 
@@ -1089,6 +1109,11 @@ pub const Expander = struct {
         const lazy = self.lazyTemplateArgsFor(params) orelse return null;
         const raw = lazy.raw_values.rawGet(key) orelse return null;
         if (raw != .string) return error.StringExpected;
+        // PPTemplateFrame expands argument nodes in its parent frame. A nested
+        // invocation supplied by the caller is not recursion by this callee.
+        const callee_frame = self.transclusion_frame;
+        self.transclusion_frame = lazy.caller_transclusion_frame;
+        defer self.transclusion_frame = callee_frame;
         const expanded_raw = try self.expandWikitext(raw.string, lazy.caller_params, lazy.caller_title, lazy.depth + 1);
         const trim_value = key == .string or
             (key == .number and std.mem.indexOfScalar(f64, lazy.named_numeric_keys, key.number) != null);
@@ -1161,6 +1186,7 @@ pub const Expander = struct {
             .named_numeric_keys = try named_numeric_keys.toOwnedSlice(page_a),
             .caller_params = caller_params,
             .caller_title = host_title,
+            .caller_transclusion_frame = self.transclusion_frame,
             .depth = depth,
         });
         return out;
@@ -4776,7 +4802,10 @@ test "edition title magic prevents Arabic wrapper recursion without shadowing te
     const args = try runtime.newTable();
     try args.rawSet(a, .{ .number = 1 }, .{ .string = "قالب:آخر" });
     try std.testing.expectEqualStrings("آخر", try Expander.hostFrameParserFunction(&expander, a, "اسم_الصفحة", args));
-    try std.testing.expectError(error.TemplateDepth, expander.expandFragment("Page", "{{Loop}}", 1_670_803_200));
+    expander.provider.interface_message = ordinaryLoopTestMessage;
+    const loop = try expander.expandFragment("Page", "{{Loop}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, loop, "<span class=\"error\">Fixture loop: ") != null);
+    try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
     runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
     source.words = &english_words;
     try std.testing.expectEqualStrings("ordinary-template", try expander.expandFragment("Page", "{{اسم_الصفحة}}", 1_670_803_200));
@@ -4951,7 +4980,10 @@ test "parser nesting budget is independent from template recursion budget" {
     for (0..60) |_| try nested.appendSlice(std.testing.allocator, "}}");
     try std.testing.expectEqualStrings("ok", try expander.expandFragment("Page", nested.items, 1_670_803_200));
 
-    try std.testing.expectError(error.TemplateDepth, expander.expandFragment("Page", "{{Loop}}", 1_670_803_200));
+    expander.provider.interface_message = ordinaryLoopTestMessage;
+    const loop = try expander.expandFragment("Page", "{{Loop}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, loop, "<span class=\"error\">Fixture loop: ") != null);
+    try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
 }
 
 test "plain pages defer Scribunto installation until mw is required" {
@@ -6665,4 +6697,168 @@ test "captured statistics aliases format all seven counters and preserve raw zer
     expander.provider.site_statistics = null;
     try std.testing.expectError(error.SiteInfoSnapshotMissing, expander.expandFragment("Notice", "{{NUMBEROFARTICLES}}", 1_670_803_200));
     try std.testing.expectEqualStrings("Site statistics snapshot missing field=numberofarticles", runtime.last_error.string);
+}
+
+fn ordinaryLoopTestMessage(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8, key: []const u8) !?Provider.InterfaceMessage {
+    if (std.mem.eql(u8, key, "parser-template-loop-warning")) return .{ .source = "Fixture loop: $1" };
+    return null;
+}
+
+const OrdinaryLoopRegression = struct {
+    const aliases = rt.namespace_registry.magic_words;
+    words: ?*const aliases.Registry = null,
+    message_available: bool = true,
+    pagename_reads: usize = 0,
+    loop_warnings: usize = 0,
+    fn resolve(raw: ?*anyopaque, name: []const u8, form: aliases.Form) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        return (self.words orelse return null).resolve(name, form);
+    }
+    fn message(raw: ?*anyopaque, _: std.mem.Allocator, _: []const u8, key: []const u8) !?Provider.InterfaceMessage {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        if (!self.message_available) return null;
+        if (std.mem.eql(u8, key, "parser-template-loop-warning")) {
+            self.loop_warnings += 1;
+            return .{ .source = "حلقة قالب: $1" };
+        }
+        return null;
+    }
+    fn get(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        if (std.mem.eql(u8, title, "Template:Loop")) return "before{{Loop}}after";
+        if (std.mem.eql(u8, title, "Template:Final")) return "pre{{Alias}}post";
+        if (std.mem.eql(u8, title, "Template:A")) return "a{{B}}z";
+        if (std.mem.eql(u8, title, "Template:B")) return "b{{A}}y";
+        if (std.mem.eql(u8, title, "Template:Echo")) return "{{{1|EMPTY}}}";
+        if (std.mem.eql(u8, title, "Template:Named")) return "{{{x|EMPTY}}}";
+        if (std.mem.eql(u8, title, "Template:Unused")) return "SAFE";
+        if (std.mem.startsWith(u8, title, "Template:Depth")) {
+            const n = try std.fmt.parseInt(usize, title[14..], 10);
+            return if (n < 12) try std.fmt.allocPrint(a, "{{{{Depth{d}}}}}", .{n + 1}) else "END";
+        }
+        if (std.mem.eql(u8, title, "قالب:اسم الصفحة")) {
+            self.pagename_reads += 1;
+            // Exact captured page162072/revision751114,165 decoded bytes.
+            return "{{#if:{{{1|}}}|{{اسم_الصفحة:{{{1|}}}}}|{{اسم_الصفحة}}}}<includeonly>[[{{اسم الصفحة}}]]</includeonly><noinclude>\n{{توثيق}}</noinclude>";
+        }
+        // Actual en-noun ordinary-template tail; only the unrelated Lua head
+        // call is replaced with a controlled marker, not claimed as executed.
+        if (std.mem.eql(u8, title, "قالب:en-noun")) return "ENHEAD<!--\n\n-->{{#switch:{{namespace}}-{{pagename}}|-{{{1}}}|-{{{2}}}=[[تصنيف:english invariant nouns]]}}<!--\n\n-->{{#if:{{{sg|}}}|[[تصنيف:headword-line template with deprecated head parameter]]}}<!--\n-->{{#if:{{{sort|}}}|[[تصنيف:codecat's test category]]}}<!--\n\n-->{{#ifeq:{{{2|}}}|-|[[تصنيف:codecat's test category]]}}<!--\n-->{{#ifeq:{{{3|}}}|-|[[تصنيف:codecat's test category]]}}<!--\n-->{{#ifeq:{{{4|}}}|-|[[تصنيف:codecat's test category]]}}<!--\n\n--><noinclude>{{documentation}}</noinclude>";
+        if (std.mem.eql(u8, title, "قالب:namespace")) return "";
+        if (std.mem.eql(u8, title, "قالب:fi-noun"))
+            // Exact captured page162227/revision949259,270 decoded bytes.
+            return "{{head|fi|{{#ifeq:{{{proper|}}}|true|proper nouns|nouns}}|head={{{head|{{{sg|{{pagename}}}}}}}}|sort={{{sort|}}}<!--\n-->|g={{#if:{{{plonly|}}}|p}}|cat2={{#if:{{{plonly|}}}|pluralia tantum}}}}<noinclude>{{documentation}}[[تصنيف:finnish headword-line templates|noun]]";
+        // Controlled consumer for the actual fi-noun lazy head default. The
+        // captured Lua/module head implementation is outside this native fixture.
+        if (std.mem.eql(u8, title, "قالب:head")) return "HEAD={{{head|NONE}}}";
+        return null;
+    }
+    fn body(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?Provider.TransclusionBody {
+        const final = if (std.mem.eql(u8, title, "Template:Alias")) "Template:Final" else if (std.mem.eql(u8, title, "قالب:pagename")) "قالب:اسم الصفحة" else title;
+        const text = (try get(raw, a, final)) orelse return null;
+        return .{ .text = try preprocess.transcludeDecodedForParsingAlloc(a, text), .title = final, .borrowed = false };
+    }
+    fn symbol(_: ?*anyopaque, _: *rt.Context, name: []const u8, kind: CallSymbolKind) !?CallSymbol {
+        return if (kind == .template and std.mem.eql(u8, name, "SymbolLoop")) .{ .id = 99, .text = "Loop" } else null;
+    }
+    fn symbolBody(_: ?*anyopaque, _: std.mem.Allocator, id: usize) !?[]const u8 {
+        return if (id == 99) "before{{SymbolLoop}}after" else null;
+    }
+};
+
+test "ordinary template cycles emit localized warnings in place and unwind for siblings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: OrdinaryLoopRegression = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = OrdinaryLoopRegression.get, .exists = TestProvider.exists, .interface_message = OrdinaryLoopRegression.message } };
+    const loop = "before<span class=\"error\">حلقة قالب: Template:Loop</span>after";
+    const expected = try std.fmt.allocPrint(a, "{s}|{s}\n# RETAINED DEFINITION", .{ loop, loop });
+    try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", "{{Loop}}|{{Loop}}\n# RETAINED DEFINITION", 1_670_803_200));
+    try std.testing.expectEqualStrings("ab<span class=\"error\">حلقة قالب: Template:A</span>yz", try expander.expandFragment("Page", "{{A}}", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
+    try std.testing.expect(expander.transclusion_frame == null);
+    expander.provider.resolve_call_symbol = OrdinaryLoopRegression.symbol;
+    expander.provider.get_template_symbol = OrdinaryLoopRegression.symbolBody;
+    try std.testing.expectEqualStrings(loop, try expander.expandFragment("Page", "{{SymbolLoop}}", 1_670_803_200));
+    source.message_available = false;
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, expander.expandFragment("Page", "{{Loop}}", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
+    try std.testing.expect(expander.transclusion_frame == null);
+    source.message_available = true;
+    try std.testing.expectEqualStrings("OK", try expander.expandFragment("Page", "{{Echo|OK}}", 1_670_803_200));
+}
+
+test "ordinary redirected template cycles check final title and retain requested warning title" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: OrdinaryLoopRegression = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = OrdinaryLoopRegression.get, .exists = TestProvider.exists, .get_transclusion_body = OrdinaryLoopRegression.body, .interface_message = OrdinaryLoopRegression.message } };
+    const one = "pre<span class=\"error\">حلقة قالب: Template:Alias</span>post";
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s}|{s}|TAIL", .{ one, one }), try expander.expandFragment("Page", "{{Alias}}|{{Alias}}|TAIL", 1_670_803_200));
+    try std.testing.expect(expander.transclusion_frame == null);
+    try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
+}
+
+test "ordinary lazy arguments expand in caller ancestry without weakening physical depth limits" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: OrdinaryLoopRegression = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = OrdinaryLoopRegression.get, .exists = TestProvider.exists, .interface_message = OrdinaryLoopRegression.message } };
+    try std.testing.expectEqualStrings("  ok  |trim|SAFE|end", try expander.expandFragment("Page", "{{Echo|{{Echo|  ok  }}}}|{{Named|x=  {{Named|x=trim}}  }}|{{Unused|{{Loop}}}}|{{Echo|end}}", 1_670_803_200));
+    expander.max_template_depth = 3;
+    try std.testing.expectError(error.TemplateDepth, expander.expandFragment("Page", "{{Depth0}}", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
+    try std.testing.expect(expander.transclusion_frame == null);
+    try std.testing.expectEqual(@as(usize, 0), expander.lazy_template_args.items.len);
+    expander.max_template_depth = 128;
+    try std.testing.expectEqualStrings("after-error", try expander.expandFragment("Page", "{{Echo|after-error}}", 1_670_803_200));
+}
+
+test "captured Arabic pagename self loop preserves magic distinction lazy fi defaults and following definitions" {
+    const aliases = rt.namespace_registry.magic_words;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try rt.namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tتصنيف\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var words = try aliases.Registry.init(a, aliases.header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\npagename\t1\tاسم_الصفحة\npagename\t1\tPAGENAME\n", "arwiktionary", "20261001", "ar");
+    defer words.deinit();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &namespaces;
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: OrdinaryLoopRegression = .{ .words = &words };
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = OrdinaryLoopRegression.get, .exists = TestProvider.exists, .get_transclusion_body = OrdinaryLoopRegression.body, .resolve_title_magic = OrdinaryLoopRegression.resolve, .interface_message = OrdinaryLoopRegression.message } };
+    const wrapper = "word[[<span class=\"error\">حلقة قالب: قالب:اسم الصفحة</span>]]";
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "word|{s}\n# RETAINED DEFINITION", .{wrapper}), try expander.expandFragment("word", "{{اسم_الصفحة}}|{{pagename}}\n# RETAINED DEFINITION", 1_670_803_200));
+    source.loop_warnings = 0;
+    try std.testing.expectEqualStrings("ENHEAD\n# EN DEFINITION", try expander.expandFragment("word", "{{en-noun}}\n# EN DEFINITION", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 1), source.loop_warnings);
+    source.pagename_reads = 0;
+    try std.testing.expectEqualStrings("HEAD=explicit\n# FI DEFINITION", try expander.expandFragment("word", "{{fi-noun|head=explicit}}\n# FI DEFINITION", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), source.pagename_reads);
+    const fi_expected = try std.fmt.allocPrint(a, "HEAD={s}\n# FI DEFINITION", .{wrapper});
+    try std.testing.expectEqualStrings(fi_expected, try expander.expandFragment("word", "{{fi-noun}}\n# FI DEFINITION", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), expander.template_depth);
+    try std.testing.expect(expander.transclusion_frame == null);
 }

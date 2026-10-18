@@ -3101,3 +3101,147 @@ class FileMetadataV2ReplayReuseTest(unittest.TestCase):
         with patch.object(self.helper,'producer',return_value=changed),patch.object(self.helper,'validate_snapshot',wraps=self.helper.validate_snapshot) as replay:
             with self.assertRaisesRegex(ValueError,'collector or dependency'):self.validate()
             self.assertEqual(replay.call_count,1)
+
+
+
+class LoopMessageSelectionTests(unittest.TestCase):
+    """Real capture/replay and resolver; all outer source bytes are synthetic."""
+    def setUp(self):
+        import prepare_language_messages_v2 as messages
+        from test_prepare_language_messages_v2 import Transport
+        self.messages,self.Transport=messages,Transport
+        self.temp=tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project=Path(self.temp.name)
+        self.root=self.project/'auxiliary'/'bnwiktionary'/'20261001'
+        self.root.mkdir(parents=True)
+        self.downloads=self.project/'dumps'
+        self.wiki,self.date='bnwiktionary','20261001'
+        self.namespace=write_namespace_fixture(self.root,self.wiki,self.date)['namespace-registry']
+        (self.root/'language-registry.tsv').unlink()  # Registry is selected from downloads below.
+        self.namespace.write_text(self.namespace.read_text().replace('content-language\ten','content-language\tbn'))
+        self.item=dict(wiki=self.wiki,date=self.date,name='bnwiktionary-20261001-pages-meta-current.xml.bz2',
+                       url='https://dumps.wikimedia.org/synthetic-local-fixture',size=1,sha1='0'*40)
+        for name,raw in [('dump-siteinfo.xml',b'<siteinfo/>'),
+                         ('namespace-siteinfo.raw.json',b'{}'),('pagetable-dumpstatus.raw.json',b'{}')]:
+            (self.root/name).write_bytes(raw)
+        artifacts={name:b.sha256_file(self.root/name) for name in
+                   ('dump-siteinfo.xml','namespace-siteinfo.raw.json','pagetable-dumpstatus.raw.json')}
+        capture=dict(wiki=self.wiki,date=self.date,source_xml=self.item,namespace_mismatches=[],
+                     artifacts=artifacts,retrieved_utc='2026-10-18T00:00:00Z',
+                     siteinfo_source_url='https://bn.wiktionary.org/w/api.php',
+                     siteinfo_temporal_scope='synthetic-local-fixture')
+        (self.root/'capture.complete.json').write_text(json.dumps(capture))
+        sidecar=dict(wiki=self.wiki,date=self.date,source_dump_files=[self.item],
+                     raw_siteinfo_sha256=artifacts['namespace-siteinfo.raw.json'],
+                     dump_siteinfo_sha256=artifacts['dump-siteinfo.xml'],
+                     retrieved_utc=capture['retrieved_utc'],source_url=capture['siteinfo_source_url'],
+                     supplementary_api_scope=capture['siteinfo_temporal_scope'],
+                     output_sha256=b.sha256_file(self.namespace))
+        (self.root/'namespace-registry.manifest.json').write_text(json.dumps(sidecar))
+        language=self.downloads/self.wiki/self.date/'language-registry.tsv'
+        language.parent.mkdir(parents=True)
+        language.write_text('# content-language\tbn\nbn\tবাংলা\nen\tEnglish\n')
+        self.manifest={'auxiliary_capture_roots':{self.wiki:str(self.root.relative_to(self.project))},
+                       'language_registries':[dict(wiki=self.wiki,date=self.date,name=language.name,
+                           size=language.stat().st_size,sha256=b.sha256_file(language))]}
+        self.groups={(self.wiki,self.date):[self.item]}
+
+    def rebind(self, root, generator=None):
+        messages=self.messages
+        inventory=messages.owned_payload(root)
+        hashes={}
+        for kind in messages.KINDS:
+            path=root/(kind+'.manifest.json')
+            record=json.loads(path.read_text())
+            record['artifacts']=inventory
+            raw=(root/(kind+'.tsv')).read_bytes()
+            record.update(output_bytes=len(raw),output_sha256=messages.evidence.digest(raw))
+            if generator is not None:record['generator_sha256']=generator
+            path.write_bytes(messages.evidence.encoded(record))
+            hashes[path.name]=messages.evidence.digest(path.read_bytes())
+        (root/messages.COMPLETE).write_bytes(messages.evidence.encoded(
+            {'schema':messages.SCHEMA,'manifests':hashes}))
+
+    def collect(self, directory, prior=False):
+        messages=self.messages
+        args=SimpleNamespace(wiki=self.wiki,date=self.date,namespace_registry=self.namespace,
+             output=self.root/directory,languages=['bn','en'],
+             messages=[f'Key-{i:03d}' for i in range(66)],delay=0,wall_seconds=60)
+        if prior:
+            required=messages.REQUIRED_MESSAGE_KEYS
+            try:
+                messages.REQUIRED_MESSAGE_KEYS=frozenset()
+                messages.capture(args,transport=self.Transport(),sleep=lambda _:None)
+            finally:
+                messages.REQUIRED_MESSAGE_KEYS=required
+            self.rebind(args.output,messages.PRE_LOOP_WARNING_GENERATOR_SHA256)
+        else:
+            messages.capture(args,transport=self.Transport(),sleep=lambda _:None)
+        return args.output
+
+    def resolve(self):
+        with patch.object(b,'PROJECT',self.project):
+            return b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads)[(self.wiki,self.date)]
+
+    def test_loop_pair_preferred_and_prior_pair_bytes_unchanged(self):
+        old=self.collect('language-messages',prior=True)
+        before={p.name:p.read_bytes() for p in old.iterdir()}
+        new=self.collect('language-messages-loop-v1')
+        selected=self.resolve()
+        for kind in self.messages.KINDS:
+            self.assertEqual(selected[kind],new/(kind+'.tsv'))
+            verified=self.messages.validate_snapshot(selected[kind],self.wiki,self.date)
+            self.assertEqual(len(verified['keys']),67)
+            self.assertIn('parser-template-loop-warning',verified['keys'])
+        self.assertEqual(before,{p.name:p.read_bytes() for p in old.iterdir()})
+        self.assertEqual(selected['namespace-registry'],self.namespace)
+
+    def test_absent_loop_directory_preserves_real_prior_sixty_six(self):
+        old=self.collect('language-messages',prior=True)
+        selected=self.resolve()
+        self.assertEqual(selected['interface-messages'],old/'interface-messages.tsv')
+        record=self.messages.validate_snapshot(selected['interface-messages'],self.wiki,self.date)
+        self.assertEqual(len(record['keys']),66)
+        self.assertNotIn('parser-template-loop-warning',record['keys'])
+
+    def test_partial_loop_pair_refuses_instead_of_legacy_fallback(self):
+        self.collect('language-messages',prior=True)
+        new=self.collect('language-messages-loop-v1')
+        (new/'language-fallbacks.tsv').unlink()
+        with self.assertRaises((ValueError,FileNotFoundError)):
+            self.resolve()
+
+    def test_prior_and_unknown_producer_cannot_claim_preferred_profile(self):
+        for mode in ('prior-sixty-six','unknown'):
+            with self.subTest(mode=mode):
+                if (self.root/'language-messages-loop-v1').exists():
+                    (self.root/'language-messages-loop-v1').rename(self.root/'previous-loop-case')
+                new=self.collect('language-messages-loop-v1',prior=mode=='prior-sixty-six')
+                if mode=='unknown':self.rebind(new,'0'*64)
+                with self.assertRaisesRegex(ValueError,'producer|original collector'):
+                    self.resolve()
+
+    def test_missing_warning_under_new_producer_is_not_a_loop_profile(self):
+        new=self.collect('language-messages-loop-v1',prior=True)
+        self.rebind(new,self.messages.producer()['generator_sha256'])
+        with self.assertRaisesRegex(ValueError,'Required parser message'):
+            self.resolve()
+
+    def test_resealed_message_or_accepted_receipt_tampering_refuses(self):
+        for mode in ('localized-row','accepted-receipt'):
+            with self.subTest(mode=mode):
+                if (self.root/'language-messages-loop-v1').exists():
+                    (self.root/'language-messages-loop-v1').rename(self.root/'previous-loop-case')
+                new=self.collect('language-messages-loop-v1')
+                if mode=='localized-row':
+                    p=new/'interface-messages.tsv'
+                    p.write_text(p.read_text().replace('বাংলা parser-template-loop-warning','forged warning',1))
+                else:
+                    record=json.loads((new/'interface-messages.manifest.json').read_text())
+                    p=new/record['requests'][-1]['accepted_receipt']
+                    receipt=json.loads(p.read_text());receipt['accepted']=False
+                    p.write_bytes(self.messages.evidence.encoded(receipt))
+                self.rebind(new)
+                with self.assertRaisesRegex(ValueError,'Rendered TSV|accepted API receipt'):
+                    self.resolve()

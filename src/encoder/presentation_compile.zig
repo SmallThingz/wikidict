@@ -3489,6 +3489,239 @@ pub const Renderer = struct {
         }
         return true;
     }
+    const InlineMathScript = enum { normal, sub, super };
+    const InlineMathToken = struct { text: []const u8, italic: bool = false, script: InlineMathScript = .normal };
+    const InlineMathParser = struct {
+        a: std.mem.Allocator,
+        input: []const u8,
+        at: usize = 0,
+        depth: usize = 0,
+        tokens: std.ArrayList(InlineMathToken) = .empty,
+        const Atom = struct { start: usize, wrap_for_script: bool = false };
+
+        fn space(p: *@This()) void {
+            while (p.at < p.input.len and std.ascii.isWhitespace(p.input[p.at])) : (p.at += 1) {}
+        }
+        fn put(p: *@This(), text: []const u8, italic: bool, script: InlineMathScript) Error!bool {
+            if (p.tokens.items.len >= 1024) return false;
+            try p.tokens.append(p.a, .{ .text = text, .italic = italic, .script = script });
+            return true;
+        }
+        fn name(p: *@This()) []const u8 {
+            const start = p.at;
+            while (p.at < p.input.len and std.ascii.isAlphabetic(p.input[p.at])) : (p.at += 1) {}
+            return p.input[start..p.at];
+        }
+        fn symbol(name_: []const u8) ?[]const u8 {
+            const names = [_][]const u8{ "alpha", "beta", "gamma", "pi", "theta", "delta", "lambda", "mu", "Sigma", "Pi", "sum", "prod", "le", "neq", "pm", "dots", "ldots", "rightarrow", "leftrightarrows", "cdot" };
+            const values = [_][]const u8{ "α", "β", "γ", "π", "θ", "δ", "λ", "μ", "Σ", "Π", "∑", "∏", "≤", "≠", "±", "…", "…", "→", "⇆", "·" };
+            for (names, values) |key, value| if (std.mem.eql(u8, name_, key)) return value;
+            return null;
+        }
+        fn group(p: *@This(), script: InlineMathScript) Error!bool {
+            p.space();
+            if (p.at == p.input.len or p.input[p.at] != '{') return false;
+            p.at += 1;
+            const start = p.tokens.items.len;
+            return try p.sequence('}', false, script) and p.tokens.items.len != start;
+        }
+        fn argument(p: *@This(), script: InlineMathScript) Error!bool {
+            p.space();
+            if (p.at == p.input.len) return false;
+            if (p.input[p.at] == '{') return p.group(script);
+            // A bare argument is one TeX token, not a balanced visible group.
+            // Keep these spellings unsupported rather than changing their scope.
+            if (p.input[p.at] == '(' or p.input[p.at] == '[' or std.mem.startsWith(u8, p.input[p.at..], "\\left")) return false;
+            if (std.ascii.isDigit(p.input[p.at])) {
+                const digit = p.at;
+                p.at += 1;
+                // Preserve the existing conservative unsupported policy for ^12;
+                // never reinterpret it as ^{12}. TeX itself means ^1 then baseline 2.
+                if (p.at < p.input.len and std.ascii.isDigit(p.input[p.at])) return false;
+                return p.put(p.input[digit..p.at], false, script);
+            }
+            const start = p.tokens.items.len;
+            _ = try p.atom(script) orelse return false;
+            return p.tokens.items.len != start;
+        }
+        fn atom(p: *@This(), script: InlineMathScript) Error!?Atom {
+            if (p.depth >= 32) return null;
+            p.depth += 1;
+            defer p.depth -= 1;
+            p.space();
+            if (p.at == p.input.len) return null;
+            const start = p.tokens.items.len;
+            const ch = p.input[p.at];
+            if (ch == '{') {
+                if (!try p.group(script)) return null;
+                return .{ .start = start, .wrap_for_script = true };
+            }
+            if (ch == '(' or ch == '[') {
+                p.at += 1;
+                if (!try p.put(if (ch == '(') "(" else "[", false, script)) return null;
+                if (!try p.sequence(if (ch == '(') ')' else ']', false, script)) return null;
+                if (!try p.put(if (ch == '(') ")" else "]", false, script)) return null;
+                return .{ .start = start };
+            }
+            if (ch == '\\') {
+                p.at += 1;
+                if (p.at == p.input.len) return null;
+                if (p.input[p.at] == ',' or p.input[p.at] == ' ') {
+                    const thin = p.input[p.at] == ',';
+                    p.at += 1;
+                    if (!try p.put(if (thin) "\xe2\x80\x89" else " ", false, script)) return null;
+                    return .{ .start = start };
+                }
+                const command = p.name();
+                if (command.len == 0) return null;
+                if (symbol(command)) |value| {
+                    const italic = oneOf(command, &.{ "alpha", "beta", "gamma", "pi", "theta", "delta", "lambda", "mu" });
+                    if (!try p.put(value, italic, script)) return null;
+                    return .{ .start = start };
+                }
+                if (std.mem.eql(u8, command, "log")) {
+                    if (!try p.put("log", false, script)) return null;
+                    return .{ .start = start };
+                }
+                if (oneOf(command, &.{ "mathrm", "mbox" })) {
+                    p.space();
+                    if (p.at == p.input.len or p.input[p.at] != '{') return null;
+                    p.at += 1;
+                    const text_start = p.at;
+                    while (p.at < p.input.len and p.input[p.at] != '}') : (p.at += 1) {
+                        const c = p.input[p.at];
+                        if (!(std.ascii.isAlphanumeric(c) or (std.mem.eql(u8, command, "mbox") and c == ' '))) return null;
+                    }
+                    if (p.at == p.input.len or p.at == text_start) return null;
+                    if (!try p.put(p.input[text_start..p.at], false, script)) return null;
+                    p.at += 1;
+                    return .{ .start = start };
+                }
+                if (std.mem.eql(u8, command, "frac")) {
+                    // Linear division must remain one atom next to functions,
+                    // other fractions, and postfix scripts, not just at top level.
+                    if (!try p.put("((", false, script) or !try p.group(script) or !try p.put(")/(", false, script) or !try p.group(script) or !try p.put("))", false, script)) return null;
+                    return .{ .start = start };
+                }
+                if (std.mem.eql(u8, command, "sqrt")) {
+                    p.space();
+                    if (p.at < p.input.len and p.input[p.at] == '[') {
+                        if (script != .normal) return null;
+                        p.at += 1;
+                        const index_start = p.tokens.items.len;
+                        if (!try p.sequence(']', false, .super) or p.tokens.items.len == index_start) return null;
+                    }
+                    if (!try p.put("√(", false, script) or !try p.argument(script) or !try p.put(")", false, script)) return null;
+                    return .{ .start = start, .wrap_for_script = true };
+                }
+                if (std.mem.eql(u8, command, "left")) {
+                    p.space();
+                    if (p.at == p.input.len) return null;
+                    const opening = p.input[p.at];
+                    const closing: u8 = switch (opening) {
+                        '(' => ')',
+                        '[' => ']',
+                        '|' => '|',
+                        else => return null,
+                    };
+                    p.at += 1;
+                    if (!try p.put(p.input[p.at - 1 .. p.at], false, script) or !try p.sequence(closing, true, script) or !try p.put(p.input[p.at - 1 .. p.at], false, script)) return null;
+                    return .{ .start = start };
+                }
+                return null;
+            }
+            if (std.ascii.isDigit(ch)) {
+                const number_start = p.at;
+                p.at += 1;
+                while (p.at < p.input.len and std.ascii.isDigit(p.input[p.at])) : (p.at += 1) {}
+                if (p.at + 1 < p.input.len and p.input[p.at] == '.' and std.ascii.isDigit(p.input[p.at + 1])) {
+                    p.at += 1;
+                    while (p.at < p.input.len and std.ascii.isDigit(p.input[p.at])) : (p.at += 1) {}
+                }
+                if (!try p.put(p.input[number_start..p.at], false, script)) return null;
+                return .{ .start = start };
+            }
+            if (std.ascii.isAlphabetic(ch) or std.mem.indexOfScalar(u8, "+-=/*.,|:", ch) != null) {
+                p.at += 1;
+                if (!try p.put(p.input[p.at - 1 .. p.at], std.ascii.isAlphabetic(ch), script)) return null;
+                return .{ .start = start };
+            }
+            return null;
+        }
+        fn sequence(p: *@This(), closing: u8, right: bool, script: InlineMathScript) Error!bool {
+            if (p.depth >= 32) return false;
+            p.depth += 1;
+            defer p.depth -= 1;
+            while (true) {
+                p.space();
+                if (p.at == p.input.len) return closing == 0;
+                if (right and std.mem.startsWith(u8, p.input[p.at..], "\\right")) {
+                    p.at += 1;
+                    if (!std.mem.eql(u8, p.name(), "right")) return false;
+                    p.space();
+                    if (p.at == p.input.len or p.input[p.at] != closing) return false;
+                    p.at += 1;
+                    return true;
+                }
+                if (!right and closing != 0 and p.input[p.at] == closing) {
+                    p.at += 1;
+                    return true;
+                }
+                const leading_script = p.input[p.at] == '^' or p.input[p.at] == '_';
+                const base: Atom = if (leading_script) .{ .start = p.tokens.items.len } else (try p.atom(script) orelse return false);
+                var superscript = false;
+                var subscript = false;
+                var wrapped = false;
+                while (true) {
+                    p.space();
+                    if (p.at == p.input.len or (p.input[p.at] != '^' and p.input[p.at] != '_' and p.input[p.at] != '\'')) break;
+                    if (script != .normal) return false;
+                    const mark = p.input[p.at];
+                    if ((mark == '_' and subscript) or (mark != '_' and superscript)) return false;
+                    if (base.wrap_for_script and !wrapped) {
+                        if (p.tokens.items.len >= 1022) return false;
+                        try p.tokens.insert(p.a, base.start, .{ .text = "(" });
+                        if (!try p.put(")", false, .normal)) return false;
+                        wrapped = true;
+                    }
+                    p.at += 1;
+                    if (mark == '_') subscript = true else superscript = true;
+                    if (mark == '\'') {
+                        if (!try p.put("′", false, .super)) return false;
+                    } else if (!try p.argument(if (mark == '_') .sub else .super)) return false;
+                }
+            }
+        }
+    };
+
+    // Common captured inline mathematics, with an explicit linear rendering.
+    // Unknown syntax is atomic: no presentation spans escape a failed parse.
+    fn commonInlineMath(self: *Renderer, content: []const u8, style: Style) Error!bool {
+        if (content.len == 0 or content.len > 4096) return false;
+        var parser: InlineMathParser = .{ .a = self.a, .input = content };
+        defer parser.tokens.deinit(self.a);
+        if (!try parser.sequence(0, false, .normal) or parser.tokens.items.len == 0) return false;
+        if (style.superscript or style.subscript) {
+            for (parser.tokens.items) |token| if (token.script != .normal) return false;
+        }
+        var boundary_style = style;
+        boundary_style.direction = "";
+        boundary_style.italic = false;
+        // One scope across all styled atoms; per-span direction isolates would
+        // not establish the equation's order inside an RTL paragraph.
+        try self.protectedLiteral("\xe2\x81\xa6", boundary_style);
+        for (parser.tokens.items) |token| {
+            var token_style = style;
+            token_style.direction = "";
+            token_style.italic = token.italic;
+            token_style.superscript = token_style.superscript or token.script == .super;
+            token_style.subscript = token_style.subscript or token.script == .sub;
+            try self.protectedLiteral(token.text, token_style);
+        }
+        try self.protectedLiteral("\xe2\x81\xa9", boundary_style);
+        return true;
+    }
+
     // Sanitizer escapes unmatched registered extension openers before inline and
     // structural parsing. Matched scopes and nowiki remain opaque; allowed HTML
     // pre keeps its separate parsed whitespace/layout behavior.
@@ -3561,7 +3794,7 @@ pub const Renderer = struct {
         };
         const content = input[tag.end..pair.inner_end];
         if (tag.is("math") and matched_pair != null and trim(tag.attrs).len == 0 and
-            (try self.numericPower(content, style) or try self.monomial(content, style))) return pair.end;
+            (try self.numericPower(content, style) or try self.monomial(content, style) or try self.commonInlineMath(content, style))) return pair.end;
         if (tag.is("hiero") and matched_pair != null and trim(tag.attrs).len == 0) {
             if (try hieroglyphs.decodeAlloc(self.a, content)) |glyphs| {
                 var glyph_style = style;
@@ -3885,6 +4118,24 @@ pub const Renderer = struct {
         return try self.poemCleanField(try self.entityText(normalized.attr(name) orelse return null));
     }
 
+    // A deliberately small declaration subset, not a CSS engine. Complex
+    // values/comments/escapes and unsupported font-weight values are ignored
+    // as one attribute. In an accepted simple list the last bold/normal wins.
+    fn htmlFontWeight(self: *Renderer, tag: syntax.Tag) Error!?bool {
+        const css = (try self.semanticAttribute(tag, "style")) orelse return null;
+        if (std.mem.indexOfAny(u8, css, "'\"(){}[]\\!") != null or
+            std.mem.indexOf(u8, css, "/*") != null or std.mem.indexOf(u8, css, "*/") != null) return null;
+        var weight: ?bool = null;
+        var declarations = std.mem.splitScalar(u8, css, ';');
+        while (declarations.next()) |raw| {
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+            if (!std.ascii.eqlIgnoreCase(trim(raw[0..colon]), "font-weight")) continue;
+            const value = trim(raw[colon + 1 ..]);
+            if (std.ascii.eqlIgnoreCase(value, "bold")) weight = true else if (std.ascii.eqlIgnoreCase(value, "normal")) weight = false else return null;
+        }
+        return weight;
+    }
+
     fn htmlInlineStyle(self: *Renderer, tag: syntax.Tag, style: Style) Error!Style {
         var s = style;
         if (oneOf(tag.name, &.{ "b", "strong" })) s.bold = true;
@@ -3895,6 +4146,7 @@ pub const Renderer = struct {
         if (tag.is("sub")) s.subscript = true;
         if (tag.is("small")) s.small = true;
         if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) s.code = true;
+        if (try self.htmlFontWeight(tag)) |bold| s.bold = bold;
         if ((try self.semanticAttribute(tag, "class"))) |classes| {
             const decoded_classes = classes;
             var safe_classes: std.ArrayList(u8) = .empty;
@@ -4281,6 +4533,9 @@ pub const Renderer = struct {
         }
         const pair = matched orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
         var s = try self.htmlInlineStyle(tag, style);
+        const inherited_formatting = self.block_formatting;
+        if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
+        defer self.block_formatting = inherited_formatting;
         const content = input[tag.end..pair.inner_end];
         // This attribute is emitted only after the runtime validates captured
         // AUDIO metadata. Keep canonical file, caption and language independent.
@@ -5518,6 +5773,7 @@ pub const Renderer = struct {
                             const parent_formatting = self.block_formatting;
                             self.block_formatting = @bitCast(@as(u8, @bitCast(parent_formatting)) | @as(u8, @bitCast(flags)));
                             defer self.block_formatting = parent_formatting;
+                            if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
                             if (self.pre_scope_observer) |observer|
                                 try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, .formatting, self.block_formatting, "", self.formattingAttributes());
                             // Removing an inline opener must not move its same-line
@@ -5831,6 +6087,9 @@ pub const Renderer = struct {
                 } else if (try self.appendEtymologyTree(&blocks, clean[tag.end..pair.inner_end], tag)) {
                     // The accepted tree already emitted its data-only nested list.
                 } else {
+                    const parent_formatting = self.block_formatting;
+                    if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
+                    defer self.block_formatting = parent_formatting;
                     const parent_language_direction = self.body_language_direction;
                     const scoped_style = try self.htmlLanguageDirection(tag, parent_language_direction orelse .{});
                     self.body_language_direction = .{ .language = scoped_style.language, .direction = scoped_style.direction };
@@ -6325,6 +6584,7 @@ pub const Renderer = struct {
             self.block_formatting = previous_formatting;
             self.html_list_item_flow = previous_flow;
         }
+        if (try self.htmlFontWeight(item)) |bold| self.block_formatting.bold = bold;
         const children = try self.renderBodySlice(input, true, true, null, null);
         const detail_path = if (path[path.len - 1] == '*' or path[path.len - 1] == '#')
             try std.fmt.allocPrint(self.a, "{s}:", .{path})
@@ -7417,7 +7677,7 @@ test "opaque extensions render safely without leaking parser delimiters" {
     try std.testing.expectEqualStrings("A cat", r.media.items[0].caption);
 
     // Authored witness: billion revision 1153469 uses 10^{12}.
-    // Other numeric forms and complex MdC grouping are unsupported controls.
+    // Unsupported numeric spellings and complex MdC grouping remain controls.
     // The supported subset does not implement general TeX or MdC layout.
     const power_cases = [_]struct { source: []const u8, base: []const u8, exponent: []const u8 }{
         .{ .source = "<math>10^{12}</math>", .base = "10", .exponent = "12" },
@@ -7438,16 +7698,7 @@ test "opaque extensions render safely without leaking parser delimiters" {
         .{ .source = "<math>10^12</math>", .visible = "10^12" },
         .{ .source = "<math>10^</math>", .visible = "10^" },
         .{ .source = "<math>10^{}</math>", .visible = "10^{}" },
-        .{ .source = "<math>10^{{12}}</math>", .visible = "10^{{12}}" },
-        .{ .source = "<math>10^{1+2}</math>", .visible = "10^{1+2}" },
-        .{ .source = "<math>10^{-2}</math>", .visible = "10^{-2}" },
-        .{ .source = "<math>10^{12}+1</math>", .visible = "10^{12}+1" },
-        .{ .source = "<math>prefix10^3</math>", .visible = "prefix10^3" },
-        .{ .source = "<math>10^3tail</math>", .visible = "10^3tail" },
-        .{ .source = "<math> 10^3 </math>", .visible = " 10^3 " },
         .{ .source = "<math>10^{٣}</math>", .visible = "10^{٣}" },
-        .{ .source = "<math>\\frac{1}{2}</math>", .visible = "\\frac{1}{2}" },
-        .{ .source = "<math>10^{\\alpha}</math>", .visible = "10^{\\alpha}" },
         .{ .source = "<math display='block'>10^{12}</math>", .visible = "10^{12}" },
         .{ .source = "<hiero>(r: Z1)-p-w</hiero>", .visible = "(r: Z1)-p-w" },
         .{ .source = "<ce>H2O</ce>", .visible = "H2O" },
@@ -19947,17 +20198,13 @@ test "complete monomial grammar preserves one-token exponents without general Te
     }
 }
 
-test "malformed monomial tails remain wholly opaque and preserve following actions" {
+test "unsupported monomial tails remain wholly opaque and preserve following actions" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const cases = [_][]const u8{
-        "-5x^2y^{3/2}+z", "-5x^{-2}y^{3/2}tail!", "x^12",             "x^10y^2",
-        "x^^2",           "x^",                   "x^-",              "x^{-}",
-        "x^{}",           "x^{3/0}",              "x^{3/00}",         "x^{3/-2}",
-        "x^{{2}}",        "x^{3/2",               "x^{3/2}}",         "x^{1+2}",
-        "x_{2}",          "x^2\\alpha",           "x^{\\frac{3}{2}}", "2.5x",
-        "-x",             " x^2 ",
+        "-5x^{-2}y^{3/2}tail!", "x^12",     "x^10y^2", "x^^2", "x^", "x^{}",
+        "x^{3/2",               "x^{3/2}}",
         "α^2",
     };
     for (cases) |source| {
@@ -19991,4 +20238,350 @@ test "malformed monomial tails remain wholly opaque and preserve following actio
     try std.testing.expectEqualStrings("<math>-5x^2y^3</math>", try plainText(a, literal_spans));
     try std.testing.expect(!literal.fallbacks.any());
     for (literal_spans) |span| try std.testing.expect(!span.flags.italic and !span.flags.superscript);
+}
+
+fn capturedInlineMathCheck(content: []const u8, visible: []const u8, subscript: bool, superscript: bool) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans(try std.fmt.allocPrint(a, "<math>{s}</math> after [[B]]", .{content}), .{});
+    const text = try flattened(a, spans);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "\xe2\x81\xa6{s}\xe2\x81\xa9 after B", .{visible}), text);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "\xe2\x81\xa6"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "\xe2\x81\xa9"));
+    try std.testing.expect(!r.fallbacks.unsupported_element);
+    var sub_seen = false;
+    var super_seen = false;
+    for (spans) |span| {
+        sub_seen = sub_seen or span.flags.subscript;
+        super_seen = super_seen or span.flags.superscript;
+        try std.testing.expect(!span.flags.code);
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("B", span.target);
+            try std.testing.expect(!span.flags.subscript and !span.flags.superscript and !span.flags.italic);
+        }
+    }
+    try std.testing.expectEqual(subscript, sub_seen);
+    try std.testing.expectEqual(superscript, super_seen);
+}
+
+const CapturedMathRange = struct { start: usize, len: usize, italic: bool, sub: bool = false, super: bool = false };
+fn capturedMathRangeCheck(content: []const u8, visible: []const u8, ranges: []const CapturedMathRange) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans(try std.fmt.allocPrint(a, "<math>{s}</math> [[B]]", .{content}), .{});
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "\xe2\x81\xa6{s}\xe2\x81\xa9 B", .{visible}), try flattened(a, spans));
+    for (ranges) |range| {
+        const begin = "\xe2\x81\xa6".len + range.start;
+        const end = begin + range.len;
+        try std.testing.expect(range.len > 0 and range.start + range.len <= visible.len);
+        var offset: usize = 0;
+        var covered: usize = 0;
+        for (spans) |span| {
+            const span_end = offset + span.text.len;
+            const overlap_begin = @max(begin, offset);
+            const overlap_end = @min(end, span_end);
+            if (overlap_begin < overlap_end) {
+                covered += overlap_end - overlap_begin;
+                try std.testing.expectEqual(range.italic, span.flags.italic);
+                try std.testing.expectEqual(range.sub, span.flags.subscript);
+                try std.testing.expectEqual(range.super, span.flags.superscript);
+                try std.testing.expect(!span.flags.code);
+                try std.testing.expectEqualStrings("", span.direction);
+            }
+            offset = span_end;
+        }
+        try std.testing.expectEqual(range.len, covered);
+    }
+    for (spans) |span| if (span.kind == .link) {
+        try std.testing.expectEqualStrings("B", span.target);
+        try std.testing.expect(!span.flags.italic and !span.flags.subscript and !span.flags.superscript and !span.flags.code);
+    };
+}
+
+test "captured AF common inline math retains fractions roots bounds and exact symbolic distinctions" {
+    const cases = [_]struct { source: []const u8, visible: []const u8, sub: bool = false, super: bool = false }{
+        .{ .source = "a/b", .visible = "a/b" },
+        .{ .source = "\\frac{\\Sigma x_i}{n}", .visible = "((Σxi)/(n))", .sub = true },
+        .{ .source = "\\frac{n}{\\Sigma {\\frac{1}{x_i}}}", .visible = "((n)/(Σ((1)/(xi))))", .sub = true },
+        .{ .source = "x_{1,2}= \\frac{-b\\pm\\sqrt{b^2 -4ac}}{2a}", .visible = "x1,2=((-b±√(b2-4ac))/(2a))", .sub = true, .super = true },
+        .{ .source = "\\sqrt[n]{x}", .visible = "n√(x)", .super = true },
+        .{ .source = "\\sqrt[3]5", .visible = "3√(5)", .super = true },
+        .{ .source = "\\sqrt[5]{7y^3}", .visible = "5√(7y3)", .super = true },
+        .{ .source = "x^2 - 4/x + 7x^{3/2}\\,", .visible = "x2-4/x+7x3/2\xe2\x80\x89", .super = true },
+        .{ .source = "\\mbox{pH} = -\\log_{10} \\left[ \\mbox{H}^+ \\right]", .visible = "pH=-log10[H+]", .sub = true, .super = true },
+        .{ .source = "SnCl_4", .visible = "SnCl4", .sub = true },
+        .{ .source = "1\\, \\mathrm{N}=1\\, \\mathrm{kg} \\cdot \\mathrm{m} / \\mathrm{s}^{2}", .visible = "1\xe2\x80\x89N=1\xe2\x80\x89kg·m/s2", .super = true },
+        .{ .source = "k_{obs} = 0.0245703\\ en\\ 0.000226852\\ s^{-1}", .visible = "kobs=0.0245703 en 0.000226852 s-1", .sub = true, .super = true },
+        .{ .source = " \\sum_{k=1}^n T_k ", .visible = "∑k=1nTk", .sub = true, .super = true },
+        .{ .source = "L(\\theta) = L(\\theta|x_1,x_2,\\ldots,x_n) = \\prod_{k=1}^n f_\\theta(x_k)", .visible = "L(θ)=L(θ|x1,x2,…,xn)=∏k=1nfθ(xk)", .sub = true, .super = true },
+        .{ .source = "\\Sigma+\\Pi+\\sum+\\prod+\\mu+\\pi+\\theta+\\alpha+\\beta+\\gamma+\\delta+\\lambda", .visible = "Σ+Π+∑+∏+μ+π+θ+α+β+γ+δ+λ" },
+        .{ .source = "0 \\le \\theta \\le \\frac{\\pi}{2}", .visible = "0≤θ≤((π)/(2))" },
+        .{ .source = "m\\neq n", .visible = "m≠n" },
+        .{ .source = "A \\rightarrow B+C", .visible = "A→B+C" },
+        .{ .source = "R_1R_2C=CR_3R_4 \\leftrightarrows R_1R_2C=CR_3R_4", .visible = "R1R2C=CR3R4⇆R1R2C=CR3R4", .sub = true },
+        .{ .source = "\\dots,-1,0,1,\\ldots,...,....", .visible = "…,-1,0,1,…,...,...." },
+        .{ .source = "^{13}C-KMR", .visible = "13C-KMR", .super = true },
+        .{ .source = "^alog x", .visible = "alogx", .super = true },
+        .{ .source = "f'(x)", .visible = "f′(x)", .super = true },
+    };
+    for (cases) |case| try capturedInlineMathCheck(case.source, case.visible, case.sub, case.super);
+    // Character ranges, not assumed span boundaries, prove script attachment.
+    const ph = "pH=-log10[H+]";
+    try capturedMathRangeCheck("\\mbox{pH} = -\\log_{10} \\left[ \\mbox{H}^+ \\right]", ph, &.{
+        .{ .start = 0, .len = 2, .italic = false },
+        .{ .start = std.mem.indexOf(u8, ph, "log").?, .len = 3, .italic = false },
+        .{ .start = std.mem.indexOf(u8, ph, "10").?, .len = 2, .italic = false, .sub = true },
+        .{ .start = std.mem.indexOf(u8, ph, "[H").? + 1, .len = 1, .italic = false },
+        .{ .start = std.mem.indexOf(u8, ph, "+").?, .len = 1, .italic = false, .super = true },
+    });
+    try capturedMathRangeCheck("^{13}C-KMR", "13C-KMR", &.{
+        .{ .start = 0, .len = 2, .italic = false, .super = true },
+        .{ .start = 2, .len = 1, .italic = true },
+    });
+    const quadratic = "x1,2=((-b±√(b2-4ac))/(2a))";
+    const root_b = std.mem.indexOf(u8, quadratic, "b2").?;
+    const denominator = std.mem.indexOf(u8, quadratic, "2a").?;
+    try capturedMathRangeCheck("x_{1,2}= \\frac{-b\\pm\\sqrt{b^2 -4ac}}{2a}", quadratic, &.{
+        .{ .start = 0, .len = 1, .italic = true },
+        .{ .start = 1, .len = 3, .italic = false, .sub = true },
+        .{ .start = root_b, .len = 1, .italic = true },
+        .{ .start = root_b + 1, .len = 1, .italic = false, .super = true },
+        .{ .start = denominator, .len = 1, .italic = false },
+        .{ .start = denominator + 1, .len = 1, .italic = true },
+    });
+    try capturedMathRangeCheck("\\sqrt[n]{x}", "n√(x)", &.{
+        .{ .start = 0, .len = 1, .italic = true, .super = true },
+        .{ .start = std.mem.indexOf(u8, "n√(x)", "x").?, .len = 1, .italic = true },
+    });
+}
+
+test "common inline math groups whole compound atoms before postfix scripts" {
+    try capturedInlineMathCheck("\\frac{a}{b}^2", "((a)/(b))2", false, true);
+    try capturedInlineMathCheck("{a+b}^2", "(a+b)2", false, true);
+    try capturedInlineMathCheck("\\sqrt{x}^2", "(√(x))2", false, true);
+    try capturedInlineMathCheck("\\log\\frac{a}{b}", "log((a)/(b))", false, false);
+    try capturedInlineMathCheck("\\frac{a}{b}\\frac{c}{d}", "((a)/(b))((c)/(d))", false, false);
+    try capturedInlineMathCheck("x^{(a+b)}", "x(a+b)", false, true);
+    try capturedInlineMathCheck("\\sqrt{(x+1)}", "√((x+1))", false, false);
+    try capturedInlineMathCheck("\\sqrt{\\frac{1}{3}}", "√(((1)/(3)))", false, false);
+}
+
+test "previously unsupported valid numeric expressions now retain explicit text and scripts" {
+    const cases = [_]struct { source: []const u8, visible: []const u8, super: bool = true, sub: bool = false }{
+        .{ .source = "10^{{12}}", .visible = "1012" },
+        .{ .source = "10^{1+2}", .visible = "101+2" },
+        .{ .source = "10^{-2}", .visible = "10-2" },
+        .{ .source = "10^{12}+1", .visible = "1012+1" },
+        .{ .source = "prefix10^3", .visible = "prefix103" },
+        .{ .source = "10^3tail", .visible = "103tail" },
+        .{ .source = " 10^3 ", .visible = "103" },
+        .{ .source = "\\frac{1}{2}", .visible = "((1)/(2))", .super = false },
+        .{ .source = "10^{\\alpha}", .visible = "10α" },
+        .{ .source = "-5x^2y^{3/2}+z", .visible = "-5x2y3/2+z" },
+        .{ .source = "x^-", .visible = "x-" },
+        .{ .source = "x^{-}", .visible = "x-" },
+        .{ .source = "x^{3/0}", .visible = "x3/0" },
+        .{ .source = "x^{3/00}", .visible = "x3/00" },
+        .{ .source = "x^{3/-2}", .visible = "x3/-2" },
+        .{ .source = "x^{{2}}", .visible = "x2" },
+        .{ .source = "x^{1+2}", .visible = "x1+2" },
+        .{ .source = "x_{2}", .visible = "x2", .super = false, .sub = true },
+        .{ .source = "x^2\\alpha", .visible = "x2α" },
+        .{ .source = "x^{\\frac{3}{2}}", .visible = "x((3)/(2))" },
+        .{ .source = "2.5x", .visible = "2.5x", .super = false },
+        .{ .source = "-x", .visible = "-x", .super = false },
+        .{ .source = " x^2 ", .visible = "x2" },
+    };
+    for (cases) |case| try capturedInlineMathCheck(case.source, case.visible, case.sub, case.super);
+}
+
+test "common math whole LTR scope preserves upright formatting scripts and following RTL prose" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("قبل <math>1\\,\\mathrm{N}=1\\,\\mathrm{kg}\\cdot\\mathrm{m}/\\mathrm{s}^{2}</math> بعد [[B]]", .{ .direction = "rtl" });
+    try std.testing.expectEqualStrings("قبل \xe2\x81\xa61\xe2\x80\x89N=1\xe2\x80\x89kg·m/s2\xe2\x81\xa9 بعد B", try flattened(a, spans));
+    var in_math = false;
+    var open_seen = false;
+    var close_seen = false;
+    var power = false;
+    for (spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "\xe2\x81\xa6") != null) {
+            in_math = true;
+            open_seen = true;
+        }
+        if (in_math) {
+            try std.testing.expectEqualStrings("", span.direction);
+            try std.testing.expect(!span.flags.italic and !span.flags.code);
+            if (span.flags.superscript) {
+                power = true;
+                try std.testing.expectEqualStrings("2", span.text);
+            }
+        }
+        if (std.mem.indexOf(u8, span.text, "\xe2\x81\xa9") != null) {
+            in_math = false;
+            close_seen = true;
+        }
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("B", span.target);
+            try std.testing.expectEqualStrings("rtl", span.direction);
+            try std.testing.expect(!span.flags.superscript and !span.flags.subscript and !span.flags.italic);
+        }
+    }
+    try std.testing.expect(open_seen and close_seen and power and !in_math);
+}
+
+fn commonMathRefusalCheck(content: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans(try std.fmt.allocPrint(a, "<math>{s}</math> after [[B]]", .{content}), .{});
+    const text = try flattened(a, spans);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s} after B", .{content}), text);
+    try std.testing.expect(r.fallbacks.unsupported_element);
+    try std.testing.expect(std.mem.indexOf(u8, text, "\xe2\x81\xa6") == null and std.mem.indexOf(u8, text, "\xe2\x81\xa9") == null);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+    for (spans) |span| try std.testing.expect(!span.flags.superscript and !span.flags.subscript);
+}
+
+test "common math unknown malformed and unrepresentable nested scripts preserve complete raw input" {
+    for ([_][]const u8{
+        "x+\\unknown{a}",     "x+\\alphabogus", "\\frac{a}",                       "\\frac{}{b}",
+        "\\frac{a}{b",        "\\sqrt[]x",      "\\sqrt[3",                        "\\left[x\\right)",
+        "(a+b]",              "x^{a_b}",        "x_{a^b}",                         "x^a^b",
+        "x_1_2",              "x^(a+b)",        "x_[a+b]",                         "\\sqrt(x+1)",
+        "\\sqrt[x](x+1)",     "10^12",          "x+\\begin{matrix}a\\end{matrix}", "\\def\\x{a}",
+        "\\mathrm{a\\alpha}", "\\mbox{a{b}}",   "x+\\text{word}",
+    }) |content| try commonMathRefusalCheck(content);
+}
+
+test "common math bounded input tokens and nesting preserve raw fallback" {
+    var input: [4097]u8 = undefined;
+    @memset(&input, 'a');
+    input[0] = '=';
+    try commonMathRefusalCheck(&input);
+    var tokens: [1201]u8 = undefined;
+    for (&tokens, 0..) |*ch, i| ch.* = if (i % 2 == 0) 'a' else '+';
+    try commonMathRefusalCheck(&tokens);
+    var depth: std.ArrayList(u8) = .empty;
+    defer depth.deinit(std.testing.allocator);
+    for (0..33) |_| try depth.appendSlice(std.testing.allocator, "\\sqrt");
+    try depth.append(std.testing.allocator, 'x');
+    try commonMathRefusalCheck(depth.items);
+}
+
+test "protected common math examples and unsupported attributes keep original commands without bidi scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body = "<math>x_{1,2}=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}</math>";
+    for ([_][]const u8{ "nowiki", "source", "syntaxhighlight" }) |tag| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(try std.fmt.allocPrint(a, "<{s}>{s}</{s}> [[B]]", .{ tag, body, tag }), .{});
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s} B", .{body}), try flattened(a, spans));
+        try std.testing.expect(!r.fallbacks.unsupported_element);
+        for (spans) |span| try std.testing.expect(!span.flags.superscript and !span.flags.subscript);
+    }
+    var attrs: Renderer = .{ .a = a, .context = .{} };
+    const spans = try attrs.parseSpans("<math display='block'>\\frac{a}{b}</math>", .{});
+    try std.testing.expectEqualStrings("\\frac{a}{b}", try flattened(a, spans));
+    try std.testing.expect(attrs.fallbacks.unsupported_element);
+}
+
+test "AB authored closure notice keeps CSS bold text and action without following bleed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    // Exact first line of abwiktionary page1098/revision8915 (193-byte source).
+    const source = "<div align=\"center\" style=\"font-weight: bold\">This wiki is closed; see [[m:Proposals for closing projects/Closure of Abkhaz Wiktionary]].</div>\nAfter [[B]]";
+    const blocks = try r.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqualStrings("This wiki is closed; see m:Proposals for closing projects/Closure of Abkhaz Wiktionary.", try flattened(a, blocks[0].spans));
+    var notice_link = false;
+    for (blocks[0].spans) |span| {
+        if (trim(span.text).len != 0) try std.testing.expect(span.flags.bold);
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("m:Proposals for closing projects/Closure of Abkhaz Wiktionary", span.target);
+            notice_link = true;
+        }
+    }
+    try std.testing.expect(notice_link);
+    try std.testing.expectEqualStrings("After B", try flattened(a, blocks[1].spans));
+    for (blocks[1].spans) |span| try std.testing.expect(!span.flags.bold);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[1].spans, .link, "B"));
+    try std.testing.expect(!r.fallbacks.any());
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(r.block_formatting)));
+}
+
+test "simple font weight respects nested normal and valid duplicate declaration scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var inline_r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try inline_r.parseSpans("<b>outer <span style='font-weight: normal'>plain [[N]] <b>strong</b></span> outer</b> end", .{});
+    var plain = false;
+    var strong = false;
+    var final_plain = false;
+    for (spans) |span| {
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("N", span.target);
+            try std.testing.expect(!span.flags.bold);
+            plain = true;
+        }
+        if (std.mem.eql(u8, span.text, "strong")) {
+            try std.testing.expect(span.flags.bold);
+            strong = true;
+        }
+        if (std.mem.indexOf(u8, span.text, "end") != null) {
+            try std.testing.expect(!span.flags.bold);
+            final_plain = true;
+        }
+    }
+    try std.testing.expect(plain and strong and final_plain);
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<div style='FONT-WEIGHT: normal; color:red; font-weight: BOLD'>\n* [[A]]\n<div style='font-weight: bold; font-weight: normal'>[[B]]</div>\n[[C]]\n</div>\n[[D]]");
+    var seen: [4]bool = @splat(false);
+    for (blocks) |block| for (block.spans) |span| {
+        if (span.kind != .link) continue;
+        const i: usize = if (std.mem.eql(u8, span.target, "A")) 0 else if (std.mem.eql(u8, span.target, "B")) 1 else if (std.mem.eql(u8, span.target, "C")) 2 else if (std.mem.eql(u8, span.target, "D")) 3 else continue;
+        try std.testing.expectEqual(i == 0 or i == 2, span.flags.bold);
+        seen[i] = true;
+    };
+    for (seen) |found| try std.testing.expect(found);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(r.block_formatting)));
+}
+
+test "unsupported complex and malformed font weight does not guess or escape its scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const attributes = [_][]const u8{
+        "color: 'x;font-weight:bold'",                      "x: func(a;font-weight:bold)",                      "/* font-weight:bold */",
+        "font-weight: bolder",                              "font-weight: bold!important",                      "font-weight: bold; x: 'unterminated",
+        "not-font-weight: bold",                            "font-weight bold",                                 "font-weight: boldness",
+        "font-weight:bold; --x:{x:0; font-weight:normal;}", "font-weight:normal; --x:{x:0; font-weight:bold;}", "font-weight:normal; --x:[x:0; font-weight:bold;]",
+    };
+    for (attributes) |css| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "<span style=\"{s}\">[[A]]</span> [[B]]", .{css});
+        const spans = try r.parseSpans(source, .{});
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "A"));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "B"));
+        for (spans) |span| try std.testing.expect(!span.flags.bold);
+    }
+    var unclosed: Renderer = .{ .a = a, .context = .{} };
+    const spans = try unclosed.parseSpans("<span style='font-weight:bold'>unclosed [[B]]", .{});
+    for (spans) |span| try std.testing.expect(!span.flags.bold);
+    try std.testing.expect(unclosed.fallbacks.unclosed_formatting);
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const protected_spans = try protected.parseSpans("<nowiki><div style='font-weight:bold'>A</div></nowiki> [[B]]", .{});
+    try std.testing.expectEqualStrings("<div style='font-weight:bold'>A</div> B", try flattened(a, protected_spans));
+    for (protected_spans) |span| try std.testing.expect(!span.flags.bold);
 }

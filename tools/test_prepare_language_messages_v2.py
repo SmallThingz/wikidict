@@ -63,7 +63,7 @@ class MessageV2Test(unittest.TestCase):
     def options(self, count, name='capture', languages=None):
         return SimpleNamespace(wiki=WIKI, date=DATE, namespace_registry=self.namespace,
             output=self.base / name, languages=languages or ['bn'],
-            messages=keys(count), delay=0, wall_seconds=60)
+            messages=[*keys(count - 1), 'parser-template-loop-warning'], delay=0, wall_seconds=60)
 
     def collect(self, count, name='capture', languages=None, retry=False):
         args = self.options(count, name, languages)
@@ -88,7 +88,7 @@ class MessageV2Test(unittest.TestCase):
             {'schema': capture.SCHEMA, 'manifests': hashes}))
 
     def test_boundaries_chunk_replay_and_both_builder_dispatches(self):
-        for count in (17, 24, 32, 33, 63, 64, 65, 66):
+        for count in (17, 24, 32, 33, 63, 64, 65, 66, 67):
             with self.subTest(count=count):
                 args, transport, result = self.collect(count, str(count), ['bn', 'fr'])
                 self.assertEqual(capture.verify(args.output), result)
@@ -136,21 +136,21 @@ class MessageV2Test(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'original collector'):
                 capture.verify(args.output)
 
-    def test_sixty_seven_rejected_before_capture_or_transport(self):
-        args = self.options(67)
+    def test_sixty_eight_rejected_before_capture_or_transport(self):
+        args = self.options(68)
         transport = Transport()
         with self.assertRaisesRegex(ValueError, 'excessive requested'):
             capture.capture(args, transport=transport, sleep=lambda _: None)
         self.assertFalse(args.output.exists())
         self.assertEqual(transport.calls, [])
 
-    def test_sixty_seven_resealed_selection_rejected_by_replay(self):
+    def test_sixty_eight_resealed_selection_rejected_by_replay(self):
         args, _, _ = self.collect(64)
         path = args.output / (capture.PREFIX + 'requested.json')
         config = json.loads(path.read_text())
-        config['keys'] = keys(67)
+        config['keys'] = keys(68)
         path.write_bytes(capture.evidence.encoded(config))
-        self.rebind(args.output, lambda value: value.update(keys=keys(67)))
+        self.rebind(args.output, lambda value: value.update(keys=keys(68)))
         with self.assertRaisesRegex(ValueError, 'Invalid captured language/message selection'):
             capture.verify(args.output)
 
@@ -226,6 +226,51 @@ class MessageV2Test(unittest.TestCase):
             capture.capture(args, transport=transport, sleep=lambda _: None)
         self.assertEqual(len(transport.calls), 1)
         self.assertFalse((args.output / capture.COMPLETE).exists())
+
+    def test_required_loop_warning_localized_capture_and_exact_replay(self):
+        args = self.options(66, 'required-warning', ['bn', 'fr'])
+        args.messages = keys(66)  # Caller omission must still capture the native requirement.
+        transport = Transport()
+        result = capture.capture(args, transport=transport, sleep=lambda _: None)
+        self.assertEqual(len(result['interface-messages']['keys']), 67)
+        self.assertIn('parser-template-loop-warning', result['interface-messages']['keys'])
+        self.assertEqual(len(transport.calls), 7)
+        text = (args.output / 'interface-messages.tsv').read_text()
+        for language in ('bn', 'fr'):
+            self.assertIn(language + '\tparser-template-loop-warning\tV\t' +
+                          capture.escaped('বাংলা parser-template-loop-warning\n\t\\ $1') + '\n', text)
+        self.assertEqual(capture.verify(args.output), result)
+        # Rehashing the paired manifests cannot launder a localized payload change.
+        path = args.output / 'interface-messages.tsv'
+        path.write_text(text.replace('বাংলা parser-template-loop-warning', 'changed warning', 1))
+        self.rebind(args.output)
+        with self.assertRaisesRegex(ValueError, 'Rendered TSV'):
+            capture.verify(args.output)
+
+    def test_prior_sixty_six_without_warning_and_new_required_selection(self):
+        # Genuine synthetic previous-producer evidence can omit the new key.
+        args = self.options(66, 'prior-sixty-six')
+        args.messages = keys(66)
+        original_required = capture.REQUIRED_MESSAGE_KEYS
+        try:
+            capture.REQUIRED_MESSAGE_KEYS = frozenset()
+            capture.capture(args, transport=Transport(), sleep=lambda _: None)
+        finally:
+            capture.REQUIRED_MESSAGE_KEYS = original_required
+        self.rebind(args.output, lambda value: value.update(
+            generator_sha256=capture.PRE_LOOP_WARNING_GENERATOR_SHA256))
+        self.assertEqual(len(capture.verify(args.output)['interface-messages']['keys']), 66)
+        # The exact same evidence under the NEW producer must require the key.
+        self.rebind(args.output, lambda value: value.update(
+            generator_sha256=capture.producer()['generator_sha256']))
+        with self.assertRaisesRegex(ValueError, 'Required parser message'):
+            capture.verify(args.output)
+        args = self.options(67, 'prior-over-limit')
+        capture.capture(args, transport=Transport(), sleep=lambda _: None)
+        self.rebind(args.output, lambda value: value.update(
+            generator_sha256=capture.PRE_LOOP_WARNING_GENERATOR_SHA256))
+        with self.assertRaisesRegex(ValueError, 'original collector'):
+            capture.verify(args.output)
 
     def test_retry_evidence_is_preserved_across_chunks(self):
         args, transport, _ = self.collect(24, retry=True)

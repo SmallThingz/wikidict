@@ -138,8 +138,14 @@ def phase_end(log_path, edition, date):
 
 def _validate_unrelated_registry_appends(before, after, edition, date, changes):
     """Append proofs authenticate historical time only; no native reuse credit."""
-    require(date == '20261001' and isinstance(changes, list) and 0 < len(changes) <= 3,
+    require(date == '20261001' and isinstance(changes, list) and 0 < len(changes) <= 4,
             'Registry append timing proof has invalid scope')
+    if len(changes) == 4:
+        require(all(isinstance(change, dict) and isinstance(change.get('edition'), str)
+                    for change in changes)
+                and {change.get('edition') for change in changes}
+                    == {'arwiktionary', 'afwiktionary', 'amwiktionary', 'anwiktionary'},
+                'Fourth registry timing proof requires the reviewed Arabic/Afrikaans/Amharic/Aragonese lineage')
     old_rows, new_rows = before.get('language_registries'), after.get('language_registries')
     require(isinstance(old_rows, list) and isinstance(new_rows, list)
             and len(old_rows) == len(new_rows)
@@ -409,7 +415,9 @@ def summarize(attempt_results, editions, preparations=()):
         observed_cohort_preparation_seconds=preparation_elapsed, unknown_timing_editions=unknown,
         final_observed_pages_per_second=pages / elapsed if complete and not unknown and elapsed > 0 else None,
         lost_historical_seconds=None, historical_timings_reconstructed=False,
-        timing_scope='observed fresh-run intervals only; excludes lost historical work and seven original editions',
+        timing_scope=('observed current-run and authenticated source78 pilot intervals; excludes lost work and seven original editions'
+                      if any(x.get('history_time_only') for x in unique.values()) else
+                      'observed fresh-run intervals only; excludes lost historical work and seven original editions'),
         residual_review_complete=False)
 
 
@@ -1047,10 +1055,181 @@ def production_context(cfg):
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
+SOURCE78_PILOT = {'head': '9390ccf1b1b011b51e7154f89d0e268493537527',
+                  'fingerprint': '3d44db123af4f09cb297cb695469c5d7b7276c23d09994c4fda1cb8d1f8a955d'}
+
+
+SOURCE78_INTERRUPTED_PILOT = dict(
+    closure=dict(path='/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/production-handoff-final-full-aux01/current-qualified-source01/pilot-observer01/independent-maintenance-closure.actual01.json',
+                 bytes=127180, sha256='b44fba7a22239a74f6500e22347587679c8c519f9849f3069557da4606d81f42'),
+    attempt_id='000008-arwiktionary-w4-ab2296a73729')
+
+
+def _load_source78_pilot_history(cfg, transition):
+    """One closed source78 pilot contributes time, never current publications."""
+    require(set(transition) == {'scope', 'reason', 'runtime_reuse_credit',
+            'from_configuration', 'from_manifest_snapshot', 'to_manifest',
+            'to_source_snapshot', 'qualification_result', 'qualification_closure',
+            'pilot_closure', 'an_registry_append'}
+            and isinstance(transition['reason'], str) and transition['reason'].strip()
+            and transition['runtime_reuse_credit'] is False,
+            'Explicit source78 pilot time-only proof required')
+    old = read_ref(transition['from_configuration'])
+    require(old.get('armed') is True and old.get('production_manifest_transition') is None
+            and old.get('source') == SOURCE78_PILOT and cfg['source'] != SOURCE78_PILOT,
+            'Only the original source78 pilot can cross this boundary')
+    for key in (*CONTEXT_KEYS, 'state_directory', 'artifact_root', 'build_timeout_seconds'):
+        if key not in ('source', 'manifest'):
+            require(old.get(key) == cfg.get(key), 'Pilot time-only transition changes ' + key)
+    require(transition['to_manifest'] == cfg['manifest']
+            and old['manifest']['path'] == cfg['manifest']['path'], 'Pilot manifest target differs')
+    original = transition['from_manifest_snapshot']
+    require(all(original.get(k) == old['manifest'][k] for k in ('bytes', 'sha256')),
+            'Pilot original manifest snapshot differs')
+    before, after = read_ref(original), read_ref(cfg['manifest'])
+    require(before.get('auxiliary_capture_roots') == after.get('auxiliary_capture_roots')
+            and 'enwiktionary' in before.get('requested_editions', [])
+            and isinstance(transition['an_registry_append'], dict)
+            and transition['an_registry_append'].get('edition') == 'anwiktionary',
+            'Pilot time-only carry permits only AN registry input changes')
+    # The unchanged append validator is anchored to an actual unaffected edition.
+    # This authenticates bytes only; even AN's old acceptance remains ineligible.
+    _validate_unrelated_registry_appends(before, after, 'enwiktionary', cfg['date'],
+                                        [transition['an_registry_append']])
+    require(transition['qualification_closure'] == cfg['qualification'],
+            'Pilot target qualification differs')
+    qualified = read_ref(transition['qualification_result'])
+    closed = read_ref(transition['qualification_closure'])
+    snapshot = read_ref(transition['to_source_snapshot'])
+    require(qualified.get('schema') == 'wikidict.durable-fresh-qualification-result.v1'
+            and closed.get('schema') == 'wikidict.durable-fresh-qualification-independent-closure.v1'
+            and qualified.get('passed') is True and qualified.get('source_guard') is True
+            and qualified.get('error') is None
+            and set(qualified.get('phases', {})) == {'native', 'python'}
+            and all(p.get('exit_code') == 0 for p in qualified['phases'].values())
+            and closed.get('outcome') == 'passed-closed' and closed.get('qualification_passed') is True
+            and closed.get('cleanup_proven') is True and closed.get('source_guard') is True
+            and closed.get('result') == transition['qualification_result'],
+            'Actual new-source ordinary qualification and closure required')
+    require(all(doc.get('source_snapshot') == transition['to_source_snapshot']
+                and doc.get('source_head') == cfg['source']['head']
+                and doc.get('source_fingerprint') == cfg['source']['fingerprint']
+                for doc in (qualified, closed))
+            and {k: snapshot[k] for k in ('head', 'fingerprint')} == cfg['source'],
+            'Pilot target qualified source snapshot differs')
+    pilot = read_ref(transition['pilot_closure'])
+    maintenance = transition['pilot_closure'] == SOURCE78_INTERRUPTED_PILOT['closure']
+    interrupted = []
+    if maintenance:
+        require(pilot.get('outcome') == 'failed-closed' and pilot.get('passed_mechanical') is False
+                and pilot.get('ordinary_watchdog_closed') is False
+                and pilot.get('both_locks_free_same_inode') is True
+                and pilot.get('original_observer_cleanup_proven') is False,
+                'Exact interrupted pilot independent cleanup differs')
+    require(pilot.get('schema') == 'wikidict.production-controller-independent-owned-cleanup.v1'
+            and pilot.get('configuration') == transition['from_configuration']
+            and pilot.get('source') == SOURCE78_PILOT and pilot.get('source_guard') is True
+            and pilot.get('cleanup_proven') is True
+            and pilot.get('all_recorded_identities_absent') is True
+            and pilot.get('all_owned_groups_and_sessions_empty') is True
+            and pilot.get('remaining_owned_processes') == []
+            and pilot.get('semantic_acceptance') is False and pilot.get('all198_complete') is False,
+            'Original pilot must be independently closed, without publication credit')
+    terminal = read_ref(pilot['terminal']); launch = read_ref(pilot['launch'])
+    require(terminal.get('schema') == 'wikidict.production-controller-terminal.v1'
+            and terminal.get('controller_joined') is True
+            and type(terminal.get('controller_exit_status')) is int
+            and terminal.get('source') == SOURCE78_PILOT
+            and terminal.get('cleanup', {}).get('cleanup_proven') is (False if maintenance else True)
+            and pilot.get('original_terminal') == terminal
+            and launch.get('configuration') == transition['from_configuration']
+            and terminal.get('launch') == pilot['launch'], 'Original joined pilot terminal differs')
+    entries = pilot.get('attempts')
+    require(isinstance(entries, list) and entries and len(entries) <= 4096,
+            'Closed pilot attempt inventory required')
+    result_refs = [entry.get('result') for entry in entries if isinstance(entry, dict)]
+    observed_refs = [row.get('result') for row in terminal['cleanup']['attempts']]
+    require(all(isinstance(r, dict) and set(r) == {'path', 'bytes', 'sha256'} for r in result_refs + observed_refs)
+            and len(result_refs) == len(entries) == len(observed_refs)
+            and sorted(result_refs, key=lambda r: r['path']) == sorted(observed_refs, key=lambda r: r['path']),
+            'Pilot terminal and independent attempt inventories differ')
+    context = production_context(old); attempts = {}
+    for entry in entries:
+        row = read_ref(entry['result']); start = read_ref(entry['start']); wd = read_ref(entry['watchdog'])
+        folder = Path(entry['result']['path']).parent
+        require(folder.parent == Path(old['state_directory']) / 'attempts'
+                and Path(entry['result']['path']) == folder / 'result.json'
+                and Path(entry['start']['path']) == folder / 'start.json'
+                and row.get('attempt_id') == start.get('attempt_id') == folder.name
+                and start.get('context') == context
+                and all(start.get(k) == row.get(k) for k in ('attempt_id', 'sequence', 'edition'))
+                and start.get('date') == cfg['date'] and row.get('edition') in PILOT
+                and row['attempt_id'] not in attempts,
+                'Original pilot attempt identity/context differs')
+        interrupted_row = maintenance and row['attempt_id'] == SOURCE78_INTERRUPTED_PILOT['attempt_id']
+        if interrupted_row:
+            intent = read_ref(pilot['authorized_interruption_intent'])
+            signal = read_ref(pilot['authorized_interruption_signal'])
+            guardian = read_ref(entry['guardian']); launched = read_ref(entry['launch'])
+            require(intent.get('schema') == 'wikidict.owned-diagnosed-build-interruption-intent.v1'
+                    and intent.get('configuration') == transition['from_configuration']
+                    and intent.get('signal') == 15 and intent.get('boot_id') == pilot.get('host_boot_id')
+                    and intent.get('attempt_start') == entry['start'] and intent.get('attempt_launch') == entry['launch']
+                    and signal.get('intent') == pilot['authorized_interruption_intent']
+                    and signal.get('schema') == 'wikidict.owned-diagnosed-build-interruption-signal.v1'
+                    and signal.get('helper_invocations') == 1 and signal.get('helper_returned') is True
+                    and signal.get('error') is None and signal.get('cleanup_proven') is False
+                    and signal.get('controller_and_observer_signalled') is False and signal.get('other_owner_signalled') is False
+                    and launched.get('identity') == {k: intent['target'][k] for k in ('pid', 'start_time_ticks')}
+                    and launched.get('private_session') == intent['target']['pid'] == intent['target']['process_group'] == intent['target']['session']
+                    and guardian.get('status') == 'disarmed' and guardian.get('reason') == 'normal_done'
+                    and guardian.get('supervisor_pid') == intent['target']['pid']
+                    and guardian.get('supervisor_start') == intent['target']['start_time_ticks']
+                    and guardian.get('root_pid') == wd.get('child_pid') and guardian.get('root_start') == wd.get('child_start_time_ticks')
+                    and guardian.get('guardian_pid') == wd.get('guardian_pid')
+                    and row.get('edition') == 'arwiktionary' and row.get('outcome') == 'failed'
+                    and row.get('accepted') is None and row.get('exit_code') == 1 and row.get('error') is None
+                    and row.get('controller_interrupted') is False and row.get('cleanup_proven') is False
+                    and wd.get('termination_reason') == 'interrupted'
+                    and wd.get('error') == 'Build supervisor interrupted by signal 15' and wd.get('child_exit_status') == -15,
+                    'Only the exact independently cleaned authorized AR interruption contributes time')
+            interrupted.append(row['attempt_id'])
+        require(entry.get('original_result') == row and entry.get('original_watchdog') == wd
+                and row.get('watchdog') == entry['watchdog']
+                and row.get('cleanup_proven') is (False if interrupted_row else True)
+                and (interrupted_row or wd.get('error') is None) and wd.get('guardian_exit_status') == 0
+                and type(wd.get('child_exit_status')) is int
+                and wd.get('termination_reason') not in (None, 'starting', 'running', 'monitor_error', 'cleanup_error', 'guardian_lost')
+                and wd.get('memory_limit_bytes') == row.get('memory_limit_bytes'),
+                'Original pilot result/watchdog terminal differs')
+        seconds = row.get('elapsed_seconds')
+        require(seconds is None or (type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0),
+                'Original pilot interval invalid')
+        accepted = row.get('accepted')
+        if accepted is not None:
+            complete = read_ref(accepted['complete_snapshot'])
+            require(accepted['source'] == SOURCE78_PILOT
+                    and all(accepted['complete'][k] == accepted['complete_snapshot'][k] for k in ('bytes', 'sha256'))
+                    and complete['edition'] == row['edition'] and complete['date'] == cfg['date']
+                    and complete['now_unix'] == cfg['now_unix']
+                    and complete['build_inputs']['source'] == SOURCE78_PILOT['fingerprint']
+                    and complete['build_inputs'] == accepted['build_inputs']
+                    and type(accepted['input_pages']) is int and accepted['input_pages'] >= 0
+                    and accepted['input_pages'] == complete['input_pages'],
+                    'Historical publication evidence differs')
+        attempts[row['attempt_id']] = dict(start=entry['start'], result=entry['result'])
+    require(not maintenance or interrupted == [SOURCE78_INTERRUPTED_PILOT['attempt_id']],
+            'Interrupted pilot must retain exactly its authorized failed interval')
+    return dict(context=context, configuration=old, time_only=True,
+                attempts=attempts, closure=transition['pilot_closure'])
+
+
 def load_history_transition(cfg):
     transition = cfg.get('production_manifest_transition')
     if transition is None:
         return None
+    if isinstance(transition, dict) and transition.get('scope') == 'source78-pilot-retry-time-only':
+        return _load_source78_pilot_history(cfg, transition)
     require(isinstance(transition, dict) and set(transition) == {
             'scope', 'reason', 'from_configuration', 'from_manifest_snapshot', 'to_manifest'}
             and transition['scope'] == 'english-auxiliary-only-non-english-history'
@@ -1089,6 +1268,11 @@ def validate_history_context(start, row, context, transition=None, cfg=None):
         return
     require(all(start[k] == row[k] for k in ('attempt_id', 'sequence', 'edition')),
             'Transition attempt identity differs')
+    if transition.get('time_only'):
+        item = transition['attempts'].get(row['attempt_id'])
+        require(item is not None and read_ref(item['start']) == start and read_ref(item['result']) == row,
+                'Historical pilot row is not in the closed immutable inventory')
+        return
     require(start['edition'] != 'enwiktionary' or row.get('accepted') is None,
             'Prior English acceptance cannot cross its metadata transition')
     if row.get('accepted') is not None:
@@ -1128,6 +1312,8 @@ def history(state, context, cfg=None):
         require(start['context'] == context or (transition is not None and start['context'] == transition['context']),
                 'Run directory has another source/input configuration')
         terminal = folder / 'result.json'
+        require(not (transition and transition.get('time_only') and start['context'] == transition['context'])
+                or terminal.exists(), 'Closed historical pilot cannot synthesize a missing terminal')
         if not terminal.exists():
             launch = read_json(folder / 'launch.json') if (folder / 'launch.json').exists() else None
             require(process_identity(start['controller']['pid']) != start['controller'], 'Another controller still owns an unfinished attempt')
@@ -1148,7 +1334,14 @@ def history(state, context, cfg=None):
         validate_history_context(start, row, context, transition, cfg)
         if row.get('accepted'):
             read_ref(row['accepted']['complete_snapshot'])
+        if transition and transition.get('time_only') and start['context'] == transition['context']:
+            row = dict(row, accepted=None, historical_accepted=row.get('accepted'), history_time_only=True,
+                       original_result=transition['attempts'][row['attempt_id']]['result'],
+                       historical_pilot_closure=transition['closure'])
         rows.append(row)
+    if transition and transition.get('time_only'):
+        require({r['attempt_id'] for r in rows if r.get('history_time_only')} == set(transition['attempts']),
+                'Closed historical pilot attempt directory is missing')
     return rows
 
 
@@ -1288,7 +1481,7 @@ def main(argv=None):
         selected = selected_phase_editions(editions, args.phase, args.defer_english)
         sequence = max((x['sequence'] for x in rows), default=0)
         for edition in selected:
-            prior = [x for x in rows if x['edition'] == edition]
+            prior = [x for x in rows if x['edition'] == edition and not x.get('history_time_only')]
             if prior and prior[-1].get('accepted') and not args.revalidate:
                 accepted = prior[-1]['accepted']
                 if publication_present(accepted):

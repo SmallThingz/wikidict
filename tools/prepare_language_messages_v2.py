@@ -26,8 +26,11 @@ MAX_MANIFEST = 64 * 1024
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_URL = 7 * 1024
 MAX_REQUESTS = 128
-# The full Arabic profile has64 keys; captured Commons data adds2 license keys.
-MAX_MESSAGE_KEYS = 66
+# Full Arabic/Commons profile66 plus the ordinary parser loop warning.
+MAX_MESSAGE_KEYS = 67
+REQUIRED_MESSAGE_KEYS = frozenset({'parser-template-loop-warning'})
+# Exact previous66-key collector remains replayable with its original scope.
+PRE_LOOP_WARNING_GENERATOR_SHA256 = 'c05acb502ac9646d41ddb3285a066e76e678b6d0fefc94550d054dc07e5535b8'
 # This exact previous collector retains its original64-key scope. Dependencies,
 # ordered request replay and every retained evidence byte remain mandatory.
 PRE_LICENSE_GENERATOR_SHA256 = 'ee9c7745aa4bcea3bb44060fd49d086ae49ad1aa47fb2cd82527fbe6f47ebd08'
@@ -256,7 +259,7 @@ def capture(args, transport=None, sleep=time.sleep):
     namespace = evidence.small(args.namespace_registry)
     content_language = namespace_identity(namespace, args.wiki, args.date)
     languages = sorted(set(args.languages or [content_language]))
-    keys = sorted(set(args.messages))
+    keys = sorted(set(args.messages) | REQUIRED_MESSAGE_KEYS)
     if (not 1 <= len(languages) <= 50 or any(not language_code(x) for x in languages)
             or not 1 <= len(keys) <= MAX_MESSAGE_KEYS or len({normalize_key(k) for k in keys}) != len(keys)):
         raise ValueError('Invalid, duplicate-normalized, or excessive requested language/message inventory')
@@ -358,9 +361,10 @@ def verify(root, require_complete=True):
     if {k: v for k, v in manifest.items() if k not in per_output} != {k: v for k, v in other.items() if k not in per_output}:
         raise ValueError('Paired language/message manifests differ')
     identity = producer()
-    prior_scope = (manifest.get('generator_sha256') == PRE_LICENSE_GENERATOR_SHA256
-                   and isinstance(manifest.get('keys'), list)
-                   and 1 <= len(manifest['keys']) <= 64)
+    prior_limit = {PRE_LICENSE_GENERATOR_SHA256: 64,
+                   PRE_LOOP_WARNING_GENERATOR_SHA256: 66}.get(manifest.get('generator_sha256'))
+    prior_scope = (prior_limit is not None and isinstance(manifest.get('keys'), list)
+                   and 1 <= len(manifest['keys']) <= prior_limit)
     if (manifest.get('dependency_sha256') != identity['dependency_sha256']
             or manifest.get('generator_sha256') != identity['generator_sha256'] and not prior_scope):
         raise ValueError('Capture requires its original collector and dependencies')
@@ -397,6 +401,8 @@ def verify(root, require_complete=True):
             or not isinstance(keys, list) or not 1 <= len(keys) <= MAX_MESSAGE_KEYS
             or len({normalize_key(k) for k in keys}) != len(keys)):
         raise ValueError('Invalid captured language/message selection')
+    if not prior_scope and not REQUIRED_MESSAGE_KEYS <= set(keys):
+        raise ValueError('Required parser message missing from capture selection')
     fallbacks, messages, observed_languages, seen = {}, {}, set(), set()
     expected_messages = [(language, chunk) for language in languages for chunk in message_chunks(keys)]
     message_position = 0

@@ -878,7 +878,7 @@ const State = struct {
                 }
             }
             const hints: []const u8 = if (self.nav == .learn) "Tab game  Esc search  Ctrl-C quit" else switch (self.focus) {
-                .search => "type to search  ↑↓ results  Enter read  Tab switch  Ctrl-U clear  Ctrl-C quit",
+                .search => if (sz.cols < 81) "type  ↑↓ select  Enter read  ^C quit" else "type to search  ↑↓ results  Enter read  Tab switch  Ctrl-U clear  Ctrl-C quit",
                 .matches => if (self.nav == .history) "Enter read  Del remove  / search  ? help" else "/ search  ↑↓ select  Enter read  PgUp/PgDn page  ? help  q quit",
                 .entry => "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  [ ] section  e fold  d all  s save  ? help",
             };

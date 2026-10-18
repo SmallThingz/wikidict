@@ -648,7 +648,18 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
         raise ValueError('Preferred site-info requires its versioned capture profile')
     if directory=='language-names-autonyms-v1' and helper.__name__!='prepare_language_names_autonyms':
         raise ValueError('Preferred autonym names require their versioned capture profile')
-    for path in snapshots.values():helper.validate_snapshot(path,edition,date)
+    if directory=='language-messages-loop-v1':
+        import prepare_language_messages_v2 as messages
+        if helper is not messages:
+            raise ValueError('Preferred loop messages require the current v2 capture profile')
+    for path in snapshots.values():
+        record=helper.validate_snapshot(path,edition,date)
+        if directory=='language-messages-loop-v1':
+            keys=record.get('keys')
+            if (record.get('generator_sha256')!=messages.producer()['generator_sha256']
+                    or not isinstance(keys,list) or not 1<=len(keys)<=67
+                    or 'parser-template-loop-warning' not in keys):
+                raise ValueError('Preferred loop messages require the new producer and loop-warning key')
     return snapshots
 
 
@@ -686,8 +697,12 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 if (root/marker).exists():validate_capture_artifacts(root,read_small_json(root/marker))
             preferred=discover_auxiliary_generation(root,'wikibase-entities',
                 ('wikibase-entities','wikibase-entity-terms'),edition,date)
-            preferred.update(discover_auxiliary_generation(root,'language-messages',
-                ('language-fallbacks','interface-messages'),edition,date))
+            message_snapshots=discover_auxiliary_generation(root,'language-messages-loop-v1',
+                ('language-fallbacks','interface-messages'),edition,date)
+            if not message_snapshots:
+                message_snapshots=discover_auxiliary_generation(root,'language-messages',
+                    ('language-fallbacks','interface-messages'),edition,date)
+            preferred.update(message_snapshots)
             preferred.update(discover_auxiliary_generation(root,'commons-data',
                 ('commons-data',),edition,date))
             names_generation=discover_auxiliary_generation(root,'language-names-autonyms-v1',

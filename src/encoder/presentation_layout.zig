@@ -84,6 +84,15 @@ fn analyze(a: A, kind: []const u8, index: usize, etymology: ?usize, blocks: []co
 }
 /// Uses the entry arena. The result only refers to existing semantic source sections.
 pub fn build(a: A, sections: anytype) !Layout {
+    return buildInContext(a, sections, false);
+}
+/// A synthetic unresolved owner supplies no evidence that an L2 term label is
+/// a language boundary or a part of speech. Keep nested POS structure, but do
+/// not turn those unverified boundary labels into language grouping metadata.
+pub fn buildUnclassified(a: A, sections: anytype) !Layout {
+    return buildInContext(a, sections, true);
+}
+fn buildInContext(a: A, sections: anytype, unclassified: bool) !Layout {
     var lexemes: std.ArrayList(Lexeme) = .empty;
     var other: std.ArrayList(usize) = .empty;
     var origin: ?usize = null;
@@ -91,11 +100,11 @@ pub fn build(a: A, sections: anytype) !Layout {
     var active: ?usize = null;
     var related: std.ArrayList(usize) = .empty;
     for (sections, 0..) |section, i| {
-        const kind = partOfSpeech(section.title);
+        const kind = if (unclassified and section.level == 2) null else partOfSpeech(section.title);
         const etymology = part.named(section.title, "Etymology");
         if (section.level == 2) {
             origin = null;
-            if (kind == null and !etymology) current_language = section.title;
+            if (!unclassified and kind == null and !etymology) current_language = section.title;
         }
         if (active) |previous| {
             const parent = sections[lexemes.items[previous].section];
@@ -186,4 +195,28 @@ test "renderer relation hints feed layout without reparsing source" {
     try std.testing.expect(layout.lexemes[0].definitions[0].form == null);
     try std.testing.expectEqualSlices(usize, &.{2}, layout.lexemes[0].definitions[0].examples);
     try std.testing.expectEqualSlices(usize, &.{1}, layout.lexemes[0].definitions[0].notes);
+}
+
+test "unclassified term boundaries do not invent language or POS but retain nested structure" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Unclassified", .level = 2 },
+        .{ .title = "count", .level = 2, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+        .{ .title = "counter", .level = 2, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+        .{ .title = "country code", .level = 2, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+        .{ .title = "Noun", .level = 3, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+    };
+    const layout = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+    try std.testing.expectEqualStrings("Noun", layout.lexemes[0].kind);
+    try std.testing.expectEqualStrings("", layout.lexemes[0].language);
+    try std.testing.expectEqual(@as(usize, 4), layout.lexemes[0].section);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3 }, layout.other_sections);
+    // Existing callers keep their explicit-owner/monolingual L2 POS behavior.
+    const existing = try build(a, &sections);
+    try std.testing.expectEqual(@as(usize, 2), existing.lexemes.len);
+    try std.testing.expectEqualStrings("Counter", existing.lexemes[0].kind);
 }
