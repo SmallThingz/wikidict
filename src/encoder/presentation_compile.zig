@@ -2114,6 +2114,77 @@ pub const Renderer = struct {
         return null;
     }
 
+    const LinkDestination = struct { target: []const u8, external: bool = false };
+    fn currentWikiTarget(self: *const Renderer, original: []const u8) []const u8 {
+        const registry = self.context.namespace_catalog orelse return original;
+        var title = original;
+        for (0..8) |_| {
+            if (self.namespaceOfTarget(title) != null) return title;
+            const colon = std.mem.indexOfScalar(u8, title, ':') orelse return title;
+            const prefix = std.mem.trim(u8, title[0..colon], " \t");
+            var next: ?[]const u8 = null;
+            for (registry.interwiki_rows) |row| {
+                if (row.is_current_wiki and std.ascii.eqlIgnoreCase(row.prefix, prefix)) {
+                    const body = std.mem.trimStart(u8, title[colon + 1 ..], " \t");
+                    if (body.len != 0) next = body;
+                    break;
+                }
+            }
+            title = next orelse return title;
+        }
+        return original;
+    }
+    fn interwikiDestination(self: *Renderer, title: []const u8, depth: usize) Error!LinkDestination {
+        const ordinary: LinkDestination = .{ .target = title };
+        if (depth >= 8 or self.namespaceOfTarget(title) != null) return ordinary;
+        const registry = self.context.namespace_catalog orelse return ordinary;
+        const colon = std.mem.indexOfScalar(u8, title, ':') orelse return ordinary;
+        const prefix = std.mem.trim(u8, title[0..colon], " \t");
+        for (registry.interwiki_rows) |row| {
+            if (!std.ascii.eqlIgnoreCase(row.prefix, prefix)) continue;
+            var body = std.mem.trimStart(u8, title[colon + 1 ..], " \t");
+            if (row.is_current_wiki) {
+                if (body.len == 0) return ordinary;
+                return self.interwikiDestination(body, depth + 1);
+            }
+            if (starts(body, ":")) body = std.mem.trimStart(u8, body[1..], " \t");
+            const hash = std.mem.indexOfScalar(u8, body, '#');
+            const page = if (hash) |at| body[0..at] else body;
+            const encoded = try self.interwikiUrlPart(page);
+            var url: std.ArrayList(u8) = .empty;
+            var at: usize = 0;
+            while (std.mem.indexOfPos(u8, row.url, at, "$1")) |found| {
+                try url.appendSlice(self.a, row.url[at..found]);
+                try url.appendSlice(self.a, encoded);
+                at = found + 2;
+            }
+            try url.appendSlice(self.a, row.url[at..]);
+            if (hash) |start| {
+                try url.append(self.a, '#');
+                try url.appendSlice(self.a, try self.interwikiUrlPart(body[start + 1 ..]));
+            }
+            const result = try url.toOwnedSlice(self.a);
+            // Reuse the existing external-action admissibility contract.
+            if (!safeUrl(result) or unresolvedActionTarget(result)) {
+                self.fallbacks.rejected_external_target = true;
+                return .{ .target = "" };
+            }
+            return .{ .target = result, .external = true };
+        }
+        return ordinary;
+    }
+    fn interwikiUrlPart(self: *Renderer, value: []const u8) Error![]const u8 {
+        var out: std.Io.Writer.Allocating = .init(self.a);
+        for (value) |ch| {
+            if (ch == ' ') {
+                out.writer.writeByte('_') catch return error.OutOfMemory;
+            } else if (std.ascii.isAlphanumeric(ch) or std.mem.indexOfScalar(u8, "-._~/:()", ch) != null) {
+                out.writer.writeByte(ch) catch return error.OutOfMemory;
+            } else out.writer.print("%{X:0>2}", .{ch}) catch return error.OutOfMemory;
+        }
+        return out.toOwnedSlice() catch return error.OutOfMemory;
+    }
+
     fn nestedLabelRefusal(self: *const Renderer, target: []const u8, label: []const u8, explicit: bool) ?bool {
         const namespace = self.namespaceOfTarget(target);
         if (!explicit and namespace == 6) return null;
@@ -4802,6 +4873,13 @@ pub const Renderer = struct {
                         target = target[1..];
                         if (!token.link_has_pipe) label_value = target;
                     }
+                    // Current-wiki aliases are local title normalization, before
+                    // category membership, file rendering, and nested-label rules.
+                    const local_target = self.currentWikiTarget(target);
+                    if (!std.mem.eql(u8, local_target, target)) {
+                        target = local_target;
+                        if (!token.link_has_pipe) label_value = target;
+                    }
                     // Ordinary links cannot contain another link in their label.
                     // Preserve malformed outer text even when it would not navigate.
                     // Non-explicit File namespace links intentionally allow captions.
@@ -4870,19 +4948,32 @@ pub const Renderer = struct {
                                     return;
                                 }
                             }
+                            const destination = try self.interwikiDestination(target, 0);
+                            var action_style = s;
+                            if (destination.target.len == 0) {
+                                action_style.kind = .text;
+                                action_style.target = "";
+                            }
                             if (!token.link_has_pipe or generated_label) {
                                 // Decoded default and generated labels are title text, not another wikitext input.
-                                var link_style = s;
-                                link_style.kind = .link;
-                                link_style.target = target;
+                                var link_style = action_style;
+                                link_style.kind = if (destination.target.len == 0) .text else if (destination.external) .external_link else .link;
+                                link_style.target = destination.target;
                                 try self.text(label_value, link_style);
+                            } else if (destination.external) {
+                                // Captured map URLs are already semantic data, not
+                                // authored URL wikitext for entity decoding again.
+                                var mapped_style = action_style;
+                                mapped_style.kind = .external_link;
+                                mapped_style.target = destination.target;
+                                try self.inlineText(label_value, mapped_style, depth + 2);
                             } else {
-                                try self.link(label_value, target, s, depth + 1, false);
+                                try self.link(label_value, destination.target, action_style, depth + 1, false);
                             }
                             if (trail.len != 0) {
-                                var trail_style = s;
-                                trail_style.kind = .link;
-                                trail_style.target = target;
+                                var trail_style = action_style;
+                                trail_style.kind = if (destination.target.len == 0) .text else if (destination.external) .external_link else .link;
+                                trail_style.target = destination.target;
                                 try self.text(trail, trail_style);
                             }
                         } else {
@@ -20584,4 +20675,115 @@ test "unsupported complex and malformed font weight does not guess or escape its
     const protected_spans = try protected.parseSpans("<nowiki><div style='font-weight:bold'>A</div></nowiki> [[B]]", .{});
     try std.testing.expectEqualStrings("<div style='font-weight:bold'>A</div> B", try flattened(a, protected_spans));
     for (protected_spans) |span| try std.testing.expect(!span.flags.bold);
+}
+
+test "selected AF interwiki map turns Newton navigation into external actions without changing labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    // Exact selected AF captured rows, including its own Wikipedia language.
+    try registry.attachInterwikiMap("w\t1\t0\t0\t0\thttps://af.wikipedia.org/wiki/$1\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\nnl\t1\t0\t0\t0\thttps://nl.wiktionary.org/wiki/$1\n");
+    var r: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const spans = try r.parseSpans("[[w:Isaac Newton]] [[w:Newton (eenheid)|Wikipedia]] [[en:newton|(en)]] [[nl:newton|(nl)]] [[N]]", .{});
+    var actions: std.ArrayList(Span) = .empty;
+    for (spans) |span| if (span.target.len != 0) {
+        try actions.append(a, span);
+    };
+    try std.testing.expectEqual(@as(usize, 5), actions.items.len);
+    inline for (.{ "https://af.wikipedia.org/wiki/Isaac_Newton", "https://af.wikipedia.org/wiki/Newton_(eenheid)", "https://en.wiktionary.org/wiki/newton", "https://nl.wiktionary.org/wiki/newton" }, 0..) |expected, i| {
+        try std.testing.expectEqual(ir.InlineKind.external_link, actions.items[i].kind);
+        try std.testing.expectEqualStrings(expected, actions.items[i].target);
+    }
+    try std.testing.expectEqual(ir.InlineKind.link, actions.items[4].kind);
+    try std.testing.expectEqualStrings("N", actions.items[4].target);
+    try std.testing.expectEqualStrings("w:Isaac Newton Wikipedia (en) (nl) N", try flattened(a, spans));
+    try std.testing.expect(!r.fallbacks.literal_markup and !r.fallbacks.unsupported_element);
+}
+
+test "interwiki routing preserves namespace priority current wiki labels fragments and protected literals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap("w\t1\t0\t0\t0\thttps://af.wikipedia.org/wiki/$1\nCategory\t1\t0\t0\t0\thttps://wrong.example/$1\nself\t1\t1\t0\t0\thttps://wrong.example/$1\n");
+    var r: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const spans = try r.parseSpans("[[W:Café &amp; 50%#naïve part|''caption'']] [[self:Local#Part|local]] [[:Category:Known|category]] [[unknown:Page|unknown]] <nowiki>[[w:raw]]</nowiki>", .{});
+    var actions: std.ArrayList(Span) = .empty;
+    for (spans) |span| if (span.target.len != 0) {
+        try actions.append(a, span);
+    };
+    try std.testing.expectEqual(@as(usize, 4), actions.items.len);
+    try std.testing.expectEqual(ir.InlineKind.external_link, actions.items[0].kind);
+    try std.testing.expectEqualStrings("https://af.wikipedia.org/wiki/Caf%C3%A9_%26_50%25#na%C3%AFve_part", actions.items[0].target);
+    try std.testing.expectEqualStrings("caption", actions.items[0].text);
+    try std.testing.expect(actions.items[0].flags.italic);
+    inline for (.{ "Local#Part", "Category:Known", "unknown:Page" }, 1..) |expected, i| {
+        try std.testing.expectEqual(ir.InlineKind.link, actions.items[i].kind);
+        try std.testing.expectEqualStrings(expected, actions.items[i].target);
+    }
+    try std.testing.expectEqualStrings("caption local category unknown [[w:raw]]", try flattened(a, spans));
+    var absent: Renderer = .{ .a = a, .context = .{} };
+    const unchanged = try absent.parseSpans("[[w:Isaac Newton|Isaac]]", .{});
+    try std.testing.expectEqual(ir.InlineKind.link, unchanged[0].kind);
+    try std.testing.expectEqualStrings("w:Isaac Newton", unchanged[0].target);
+    var invalid_registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer invalid_registry.deinit();
+    try invalid_registry.attachInterwikiMap("w\t1\t0\t0\t0\tnot-an-external-url/$1\n");
+    var invalid: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &invalid_registry } };
+    const refused = try invalid.parseSpans("[[w:Page|''caption'']]", .{});
+    try std.testing.expectEqualStrings("caption", try flattened(a, refused));
+    try std.testing.expect(invalid.fallbacks.rejected_external_target);
+    for (refused) |span| {
+        try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+        try std.testing.expectEqualStrings("", span.target);
+        try std.testing.expect(span.flags.italic);
+    }
+    var inherited: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &invalid_registry } };
+    const inherited_spans = try inherited.parseSpans("[[File:Cat.jpg|thumb|[[w:Page|''caption'']]]]", .{});
+    var captions: usize = 0;
+    for (inherited_spans) |span| if (std.mem.eql(u8, span.text, "caption")) {
+        captions += 1;
+        try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+        try std.testing.expectEqualStrings("", span.target);
+        try std.testing.expect(span.flags.italic);
+    };
+    try std.testing.expectEqual(@as(usize, 1), captions);
+    try std.testing.expect(inherited.fallbacks.rejected_external_target);
+    var direct: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    var current: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const direct_spans = try direct.parseSpans("before[[Category:Known]]after [[File:Cat.jpg|thumb|caption]] [[:Category:Known|category]] [[:File:Cat.jpg|file]]", .{});
+    const current_spans = try current.parseSpans("before[[self:Category:Known]]after [[self:File:Cat.jpg|thumb|caption]] [[:self:Category:Known|category]] [[:self:File:Cat.jpg|file]]", .{});
+    try std.testing.expectEqualDeep(direct_spans, current_spans);
+    try std.testing.expectEqual(@as(usize, 1), direct.media.items.len);
+    try std.testing.expectEqual(direct.media.items.len, current.media.items.len);
+    try std.testing.expectEqualStrings(direct.media.items[0].file, current.media.items[0].file);
+    try std.testing.expectEqualStrings(direct.media.items[0].caption, current.media.items[0].caption);
+    var trailed: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const trail_spans = try trailed.parseSpans("[[w:cat|''cat'']]s", .{});
+    try std.testing.expectEqualStrings("cats", try flattened(a, trail_spans));
+    try std.testing.expectEqual(@as(usize, 2), trail_spans.len);
+    for (trail_spans) |span| {
+        try std.testing.expectEqual(ir.InlineKind.external_link, span.kind);
+        try std.testing.expectEqualStrings("https://af.wikipedia.org/wiki/cat", span.target);
+    }
+    try std.testing.expect(trail_spans[0].flags.italic and !trail_spans[1].flags.italic);
+    // The API map URL is data. Its literal entity-looking query value must
+    // agree for styled piped labels, default labels, and their link trails.
+    var query_registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer query_registry.deinit();
+    try query_registry.attachInterwikiMap("q\t1\t0\t0\t0\thttps://example.test/?literal=&amp;&title=$1\n");
+    var query: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &query_registry } };
+    const query_spans = try query.parseSpans("[[q:cat|''cat'']]s [[q:cat]]s", .{});
+    try std.testing.expectEqualStrings("cats q:cats", try flattened(a, query_spans));
+    var query_actions: usize = 0;
+    for (query_spans) |span| if (span.target.len != 0) {
+        query_actions += 1;
+        try std.testing.expectEqual(ir.InlineKind.external_link, span.kind);
+        try std.testing.expectEqualStrings("https://example.test/?literal=&amp;&title=cat", span.target);
+    };
+    try std.testing.expectEqual(@as(usize, 4), query_actions);
+    try std.testing.expect(query_spans[0].flags.italic and !query_spans[1].flags.italic);
 }

@@ -976,6 +976,14 @@ pub fn main(init: std.process.Init) !void {
 
     var namespaces = try namespace_registry.Registry.load(init.io, a, options.expander_root);
     defer namespaces.deinit();
+    const interwiki_path = try std.fs.path.join(a, &.{ options.expander_root, "interwiki-map.tsv" });
+    defer a.free(interwiki_path);
+    const interwiki_bytes = std.Io.Dir.cwd().readFileAlloc(init.io, interwiki_path, a, .limited(4 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    defer if (interwiki_bytes) |bytes| a.free(bytes);
+    if (interwiki_bytes) |bytes| try namespaces.attachInterwikiMap(bytes);
     var registry = try loadLanguageRegistry(init.io, a, options.expander_root, &namespaces);
     defer registry.deinit();
     const behavior_path = try std.fs.path.join(a, &.{ options.expander_root, "behavior-switches.tsv" });
@@ -2426,4 +2434,60 @@ test "AN authored direct Catalan banner and French Franzes alias keep separate W
             try std.testing.expect(!std.mem.eql(u8, span.target, forbidden));
         };
     }
+}
+
+test "selected interwiki metadata survives real Registry Writer and DPR2 alongside Newton math" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tafwiktionary\n# dump-date\t20261001\n# content-language\taf\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tSjabloon\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tKategorie\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\n");
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap("w\t1\t0\t0\t0\thttps://af.wikipedia.org/wiki/$1\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\nnl\t1\t0\t0\t0\thttps://nl.wiktionary.org/wiki/$1\n");
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv("af\tAfrikaans\n");
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/interwiki", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const raw = "{{=af=}}\n[[w:Isaac Newton]] [[w:Newton (eenheid)|Wikipedia]] [[en:newton|(en)]] [[nl:newton|(nl)]] <math>1\\, \\mathrm{N}=1\\, \\mathrm{kg} \\cdot \\mathrm{m} / \\mathrm{s}^{2}</math> [[N]]";
+    const expanded = "==Afrikaans==\n[[w:Isaac Newton]] [[w:Newton (eenheid)|Wikipedia]] [[en:newton|(en)]] [[nl:newton|(nl)]] <math>1\\, \\mathrm{N}=1\\, \\mathrm{kg} \\cdot \\mathrm{m} / \\mathrm{s}^{2}</math> [[N]]";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "newton", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    const path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename("Afrikaans", &filename) });
+    var mapped = try mmapPath(std.testing.io, path);
+    defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("newton")).?;
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    var targets: std.ArrayList([]const u8) = .empty;
+    var visible: std.ArrayList(u8) = .empty;
+    var superscript_two: usize = 0;
+    var local_n: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .external_link) try targets.append(a, span.target);
+        if (span.kind == .link and std.mem.eql(u8, span.target, "N")) {
+            local_n += 1;
+            try std.testing.expect(!span.superscript and !span.italic);
+        }
+        if (span.superscript and std.mem.eql(u8, span.text, "2")) superscript_two += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 4), targets.items.len);
+    inline for (.{ "https://af.wikipedia.org/wiki/Isaac_Newton", "https://af.wikipedia.org/wiki/Newton_(eenheid)", "https://en.wiktionary.org/wiki/newton", "https://nl.wiktionary.org/wiki/newton" }, 0..) |expected, i| try std.testing.expectEqualStrings(expected, targets.items[i]);
+    try std.testing.expectEqual(@as(usize, 1), local_n);
+    try std.testing.expectEqual(@as(usize, 1), superscript_two);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "\u{2066}1\u{2009}N=1\u{2009}kg·m/s2\u{2069}") != null);
 }

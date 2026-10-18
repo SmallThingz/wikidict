@@ -20,6 +20,7 @@ pub const Spec = struct {
     aliases: []const []const u8,
 };
 const Alias = struct { key: []const u8, index: usize };
+pub const InterwikiRow = struct { prefix: []const u8, url: []const u8, is_current_wiki: bool };
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     source_sha256: [32]u8,
@@ -29,6 +30,8 @@ pub const Registry = struct {
     content_language: []const u8,
     entries: []const Spec,
     names: []const Alias,
+    // Optional immutable site metadata, owned by this registry arena.
+    interwiki_rows: []const InterwikiRow = &.{},
 
     pub fn load(io: std.Io, a: std.mem.Allocator, root: []const u8) !Registry {
         const path = try std.fs.path.join(a, &.{ root, "namespace-registry.tsv" });
@@ -105,6 +108,28 @@ pub const Registry = struct {
         const result: Registry = .{ .arena = arena, .source_sha256 = source_sha256, .mapper = mapper, .wiki = wiki, .dump_date = date, .content_language = language, .entries = try entries.toOwnedSlice(a), .names = try names.toOwnedSlice(a) };
         for ([_]i32{ 0, 10, 14 }) |id| if (result.byId(id) == null) return error.InvalidNamespaceRegistry;
         return result;
+    }
+    /// Attach only the selected edition's existing captured six-column map.
+    /// Ordinary namespace callers remain unchanged until this is explicitly called.
+    pub fn attachInterwikiMap(self: *Registry, raw: []const u8) !void {
+        if (raw.len > 4 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(raw)) return error.InvalidInterwikiSnapshot;
+        const a = self.arena.allocator();
+        var rows: std.ArrayList(InterwikiRow) = .empty;
+        var lines = std.mem.splitScalar(u8, raw, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const prefix = try interwikiField(a, fields.next() orelse return error.InvalidInterwikiSnapshot);
+            _ = try interwikiBoolean(fields.next() orelse return error.InvalidInterwikiSnapshot);
+            const current = try interwikiBoolean(fields.next() orelse return error.InvalidInterwikiSnapshot);
+            _ = try interwikiBoolean(fields.next() orelse return error.InvalidInterwikiSnapshot);
+            _ = try interwikiBoolean(fields.next() orelse return error.InvalidInterwikiSnapshot);
+            const url = try interwikiField(a, fields.next() orelse return error.InvalidInterwikiSnapshot);
+            if (fields.next() != null or prefix.len == 0 or std.mem.indexOfAny(u8, prefix, ": \t\r\n") != null) return error.InvalidInterwikiSnapshot;
+            for (rows.items) |row| if (std.ascii.eqlIgnoreCase(row.prefix, prefix)) return error.InvalidInterwikiSnapshot;
+            try rows.append(a, .{ .prefix = prefix, .url = url, .is_current_wiki = current });
+        }
+        self.interwiki_rows = try rows.toOwnedSlice(a);
     }
     pub fn deinit(self: *Registry) void {
         self.mapper.deinit();
@@ -375,3 +400,47 @@ test "Chinese module case policy applies only to the first codepoint" {
 }
 
 pub const german_test_fixture = @embedFile("fixtures/de-namespace-registry.tsv");
+
+fn interwikiBoolean(raw: []const u8) !bool {
+    if (std.mem.eql(u8, raw, "1")) return true;
+    if (std.mem.eql(u8, raw, "0")) return false;
+    return error.InvalidInterwikiSnapshot;
+}
+fn interwikiField(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < raw.len) : (i += 1) {
+        var ch = raw[i];
+        if (ch == '\\') {
+            i += 1;
+            if (i == raw.len) return error.InvalidInterwikiSnapshot;
+            ch = switch (raw[i]) {
+                't' => '\t',
+                'n' => '\n',
+                'r' => '\r',
+                '\\' => '\\',
+                else => return error.InvalidInterwikiSnapshot,
+            };
+        }
+        try out.append(a, ch);
+    }
+    return out.toOwnedSlice(a);
+}
+
+test "captured interwiki attachment owns rows and refuses ambiguous or malformed maps" {
+    const a = std.testing.allocator;
+    var registry = try Registry.init(a, english_test_fixture);
+    defer registry.deinit();
+    try std.testing.expectEqual(@as(usize, 0), registry.interwiki_rows.len);
+    const raw = try a.dupe(u8, "w\t1\t0\t0\t0\thttps://af.wikipedia.org/wiki/$1\nself\t1\t1\t0\t0\thttps://af.wiktionary.org/wiki/$1\n");
+    defer a.free(raw);
+    try registry.attachInterwikiMap(raw);
+    @memset(raw, 'x');
+    try std.testing.expectEqualStrings("w", registry.interwiki_rows[0].prefix);
+    try std.testing.expectEqualStrings("https://af.wikipedia.org/wiki/$1", registry.interwiki_rows[0].url);
+    try std.testing.expect(!registry.interwiki_rows[0].is_current_wiki and registry.interwiki_rows[1].is_current_wiki);
+    try std.testing.expectError(error.InvalidInterwikiSnapshot, registry.attachInterwikiMap("w\t1\t0\t0\t0\thttps://one/$1\nW\t1\t0\t0\t0\thttps://two/$1\n"));
+    try std.testing.expectError(error.InvalidInterwikiSnapshot, registry.attachInterwikiMap("w\t1\tbad\t0\t0\thttps://one/$1\n"));
+    try std.testing.expectError(error.InvalidInterwikiSnapshot, registry.attachInterwikiMap("w\t1\t0\t0\thttps://one/$1\n"));
+    try std.testing.expectEqual(@as(usize, 2), registry.interwiki_rows.len);
+}
