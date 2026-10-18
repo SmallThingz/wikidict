@@ -761,6 +761,10 @@ fn arabicLemmaDeclaration(codes: LanguageCodes, section: language_source.Section
 }
 
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    // A balanced standalone equals declaration names its owner in the first
+    // field. Sort/display arguments, including nested calls, cannot lend one.
+    if (language_source.equalsLanguageDeclaration(section.source)) |code|
+        if (std.mem.eql(u8, code, section.heading)) return codes.resolve(code);
     const noun = arabicLemmaDeclaration(codes, section);
     if (noun.present) return if (noun.code) |code| codes.resolve(code) else null;
     if (codes.namespace_catalog) |namespaces| if (std.mem.eql(u8, namespaces.content_language, "az")) {
@@ -5704,4 +5708,20 @@ test "unknown equals declaration cannot borrow a registered rendered target owne
         inline for (.{ "BOKMAL_ONLY", "NYNORSK_ONLY", "UNKNOWN_ONLY" }) |sentinel|
             try std.testing.expectEqual(std.mem.eql(u8, sentinel, row[2]), std.mem.indexOf(u8, text.items, sentinel) != null);
     }
+}
+
+test "standalone equals owner ignores nested arguments and refuses unknown codes" {
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "ett")) return .{ .code = "ett", .heading = "Etruscan" };
+            if (std.mem.eql(u8, value, "en")) return .{ .code = "en", .heading = "English" };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .resolve_fn = Local.resolve };
+    const declared = resolveSection(codes, .{ .heading = "ett", .source = "{{=ett=|{{sort|en}}|display=[[English]]}}\n# BODY" }).?;
+    try std.testing.expectEqualStrings("ett", declared.code);
+    try std.testing.expectEqualStrings("Etruscan", declared.heading);
+    try std.testing.expect(resolveSection(codes, .{ .heading = "unknown", .source = "{{=unknown=|{{sort|en}}|display=[[English]]}}\n# BODY" }) == null);
+    try std.testing.expect(resolveSection(codes, .{ .heading = "ett", .source = "{{=unknown=|{{sort|en}}}}\n# BODY" }) == null);
 }
