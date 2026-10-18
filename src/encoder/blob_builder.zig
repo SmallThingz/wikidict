@@ -5553,6 +5553,9 @@ test "unknown equals declaration preserves adjacent Norwegian variant ownership"
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const Local = struct {
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |language| language.code else null;
+        }
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             inline for (.{ .{ "nb", "Bokmal" }, .{ "nn", "Nynorsk" }, .{ "no", "Noors" } }) |row|
                 if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]))
@@ -5560,7 +5563,7 @@ test "unknown equals declaration preserves adjacent Norwegian variant ownership"
             return null;
         }
     };
-    const codes: LanguageCodes = .{ .resolve_fn = Local.resolve };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve };
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
     var writer = try Writer.init(std.testing.io, a, root);
     defer writer.deinit();
@@ -5597,6 +5600,9 @@ test "undefined equals support does not erase registered neighboring owners" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const Local = struct {
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |language| language.code else null;
+        }
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             inline for (.{ .{ "nl", "Nederlands" }, .{ "nn", "Nynorsk" }, .{ "no", "Noors" } }) |row|
                 if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]))
@@ -5604,7 +5610,7 @@ test "undefined equals support does not erase registered neighboring owners" {
             return null;
         }
     };
-    const codes: LanguageCodes = .{ .resolve_fn = Local.resolve };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve };
     // voetbalploeg rev193320 puts undefined {{=fm2=}} after its Dutch
     // inflection and before pronunciation. No language declaration backs it.
     const raw = "{{=nl=}}\n# DUTCH_ONLY\n{{=fm2=}}\n# SUPPORT_ONLY\n{{=nn=}}\n# NYNORSK_ONLY\n";
@@ -5660,6 +5666,9 @@ test "unknown equals declaration cannot borrow a registered rendered target owne
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const Local = struct {
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |language| language.code else null;
+        }
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             inline for (.{ .{ "nb", "Bokmal" }, .{ "nn", "Nynorsk" }, .{ "no", "Noors" } }) |row|
                 if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]))
@@ -5667,7 +5676,7 @@ test "unknown equals declaration cannot borrow a registered rendered target owne
             return null;
         }
     };
-    const codes: LanguageCodes = .{ .resolve_fn = Local.resolve };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve };
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
     var writer = try Writer.init(std.testing.io, a, root);
     defer writer.deinit();
