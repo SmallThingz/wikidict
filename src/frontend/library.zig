@@ -158,6 +158,7 @@ fn reportInstalled(w: *std.Io.Writer, count: usize, destination: []const u8) !vo
 
 pub fn install(io: std.Io, a: A, root: []const u8, input: []const u8, expected: []const u8, w: *std.Io.Writer) !void {
     if (input.len == 0) return error.Usage;
+    try @import("blob_files").requireComplete(io, a, root);
     try std.Io.Dir.cwd().createDirPath(io, root);
     const temporary = try std.fmt.allocPrint(a, "{s}/.install-{d}.part", .{ root, std.os.linux.getpid() });
     defer a.free(temporary);
@@ -217,6 +218,7 @@ pub fn install(io: std.Io, a: A, root: []const u8, input: []const u8, expected: 
     defer a.free(lock_path);
     const lock = try std.Io.Dir.cwd().createFile(io, lock_path, .{ .truncate = false, .lock = .exclusive });
     defer lock.close(io);
+    try @import("blob_files").requireComplete(io, a, root);
     var publish_manifest = false;
     if (kind == .language) {
         const prior = std.Io.Dir.cwd().readFileAlloc(io, manifest, a, .limited(16 * 1024 * 1024)) catch |err| switch (err) {
@@ -573,5 +575,54 @@ test "installer buffered confirmation failure reports committed filesystem state
     const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
     try expectInstallBytes(io, a, raw, incoming);
     try expectInstallBytes(io, a, manifest, "heading\nEnglish\n");
+    try expectNoInstallParts(io, root);
+}
+
+test "installer preserves incomplete build root and installs into completed empty catalogue" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/library", .{tmp.sub_path});
+    const source = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}/input.wikblb", .{tmp.sub_path});
+    const marker = try std.fs.path.join(fixture, &.{ root, ".incomplete" });
+    const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
+    try std.Io.Dir.cwd().createDirPath(io, root);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = "heading\n" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "build in progress\n" });
+    const enc = @import("blob_encoder");
+    const payload = try enc.presentation_codec.encodeAlloc(fixture, .{ .entry = .{
+        .title = "cat",
+        .kind = .language,
+        .language = "English",
+        .language_code = "en",
+    } });
+    const input = try installFixtureBlob(fixture, .language, payload);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = input });
+    var log: std.Io.Writer.Allocating = .init(a);
+    defer log.deinit();
+    try std.testing.expectError(error.DictionaryBuildIncomplete, install(io, a, root, source, "", &log.writer));
+    try std.testing.expectEqual(@as(usize, 0), log.written().len);
+    try expectInstallBytes(io, a, manifest, "heading\n");
+    try expectInstallBytes(io, a, marker, "build in progress\n");
+    try expectInstallBytes(io, a, source, input);
+    var directory = try std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true });
+    defer directory.close(io);
+    var entries = directory.iterate();
+    var count: usize = 0;
+    while (try entries.next(io)) |entry| {
+        try std.testing.expect(std.mem.eql(u8, entry.name, "languages.tsv") or std.mem.eql(u8, entry.name, ".incomplete"));
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
+    // Remove only the producer marker: no complete.json or fabricated empty blob is required.
+    try std.Io.Dir.cwd().deleteFile(io, marker);
+    try install(io, a, root, source, "", &log.writer);
+    const destination = try store.pathAlloc(fixture, root, .language, "English");
+    try expectInstallBytes(io, a, destination, input);
+    try std.testing.expect((try store.catalog.find(try std.Io.Dir.cwd().readFileAlloc(io, manifest, fixture, .limited(1024)), "English")) != null);
     try expectNoInstallParts(io, root);
 }

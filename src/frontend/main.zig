@@ -80,6 +80,10 @@ fn run(init: std.process.Init) !u8 {
             std.debug.print("dict: catalogue unavailable ({s}). Try 'dict catalog HTTPS_URL', or install a local file with 'dict install FILE --root DIRECTORY'.\n", .{@errorName(err)});
             return 2;
         } else library.install(init.io, init.gpa, opts.root, opts.query, opts.sha256, w) catch |err| {
+            if (err == error.DictionaryBuildIncomplete) {
+                try reportOpenError(init.io, opts, err);
+                return 2;
+            }
             if (err == error.InstallReportFailed) {
                 std.debug.print("dict: dictionary installed, but confirmation output failed.\n", .{});
                 return 2;
@@ -233,9 +237,13 @@ fn reportOpenError(io: std.Io, opts: args.Options, err: anyerror) !void {
     var buffer: [2048]u8 = undefined;
     var stderr = std.Io.File.stderr().writerStreaming(io, &buffer);
     const w = &stderr.interface;
-    try w.writeAll("dict: could not open ");
-    try output.terminalText(w, if (opts.kind == .language) opts.language else @tagName(opts.kind));
-    try w.writeAll(" in ");
+    if (opts.command == .install) {
+        try w.writeAll("dict: could not install in ");
+    } else {
+        try w.writeAll("dict: could not open ");
+        try output.terminalText(w, if (opts.kind == .language) opts.language else @tagName(opts.kind));
+        try w.writeAll(" in ");
+    }
     try output.terminalText(w, opts.root);
     try w.print(" ({s}).\n", .{@errorName(err)});
     try w.writeAll(switch (err) {
