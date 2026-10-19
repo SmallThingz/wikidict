@@ -6259,15 +6259,19 @@ pub const Renderer = struct {
                 previous_list_path = previous_list_path[0..retained];
             }
             if (html_tag) |tag| {
-                const pair = blockWrapperPair(clean, tag).?;
+                // Logical lines stop at the ordinary HTML pair. A DIV/table
+                // crossing must be proved against the remaining source, and
+                // every pair-relative slice must use that same source domain.
+                const wrapper_source = if (tag.is("div")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean;
+                const pair = blockWrapperPair(wrapper_source, tag).?;
                 if (tag.is("table")) {
                     if (std.mem.eql(u8, (try self.semanticAttribute(tag, "class")) orelse "", "translations") and
-                        !hasAuthoredTableGroup(clean[tag.end..pair.inner_end]))
+                        !hasAuthoredTableGroup(wrapper_source[tag.end..pair.inner_end]))
                     {
                         // Translation tables are layout wrappers around wiki lists,
                         // with optional tr/td end tags. Keep their reading blocks.
                         var body: std.ArrayList(u8) = .empty;
-                        const content = clean[tag.end..pair.inner_end];
+                        const content = wrapper_source[tag.end..pair.inner_end];
                         var cursor: usize = 0;
                         while (cursor < content.len) {
                             // Literal extension bodies and comments are not table wrappers.
@@ -6289,10 +6293,10 @@ pub const Renderer = struct {
                         try blocks.appendSlice(self.a, try self.renderBodyWithLanguageDirection(body.items, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{})));
                     } else {
                         var fostered: std.ArrayList(Block) = .empty;
-                        if (try self.htmlTable(clean[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{}))) |table_value| {
+                        if (try self.htmlTable(wrapper_source[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{}))) |table_value| {
                             try blocks.appendSlice(self.a, fostered.items);
                             try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value });
-                        } else try self.block(&blocks, .preformatted, clean[0..pair.end], "", "", 0);
+                        } else try self.block(&blocks, .preformatted, wrapper_source[0..pair.end], "", "", 0);
                     }
                 } else if (htmlHeadingLevel(tag)) |level| {
                     // HTML headings are typed blocks, including after lexical
@@ -6305,10 +6309,10 @@ pub const Renderer = struct {
                         self.body_formatting_attributes = parent_attributes;
                         self.body_language_direction = parent_language_direction;
                     }
-                    try self.bodyRawBlock(&blocks, input, clean[tag.end..pair.inner_end], &body_quotes, .heading, "", "", level);
+                    try self.bodyRawBlock(&blocks, input, wrapper_source[tag.end..pair.inner_end], &body_quotes, .heading, "", "", level);
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
-                    try self.htmlList(&blocks, clean[tag.end..pair.inner_end], tag, "", 0, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
-                } else if (try self.appendEtymologyTree(&blocks, clean[tag.end..pair.inner_end], tag)) {
+                    try self.htmlList(&blocks, wrapper_source[tag.end..pair.inner_end], tag, "", 0, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
+                } else if (try self.appendEtymologyTree(&blocks, wrapper_source[tag.end..pair.inner_end], tag)) {
                     // The accepted tree already emitted its data-only nested list.
                 } else {
                     const parent_formatting = self.block_formatting;
@@ -6323,13 +6327,13 @@ pub const Renderer = struct {
                     const parent_blockquote_flow = self.html_blockquote_flow;
                     if (tag.is("blockquote")) self.html_blockquote_flow = true;
                     errdefer self.html_blockquote_flow = parent_blockquote_flow;
-                    const scoped_quote = try self.rawBodyQuoteSeed(input, clean[tag.end..pair.inner_end], &body_quotes);
-                    try blocks.appendSlice(self.a, try self.renderBodySlice(clean[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(clean.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote));
+                    const scoped_quote = try self.rawBodyQuoteSeed(input, wrapper_source[tag.end..pair.inner_end], &body_quotes);
+                    try blocks.appendSlice(self.a, try self.renderBodySlice(wrapper_source[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote));
                     // Legacy blockquote state is lexical: an inner closer exits
                     // quote mode even while an outer DOM quote remains open.
                     if (tag.is("blockquote")) self.html_blockquote_flow = false;
                 }
-                pos = @intFromPtr(clean.ptr) - @intFromPtr(input.ptr) + pair.end;
+                pos = @intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr) + pair.end;
                 if (pos < input.len and input[pos] == '\n') {
                     pos += 1;
                 } else if (pos < input.len) {
