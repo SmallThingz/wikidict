@@ -137,6 +137,7 @@ pub const Registry = struct {
     sensitive: std.StringHashMapUnmanaged(Winners) = .empty,
     insensitive: std.StringHashMapUnmanaged(Winners) = .empty,
     expanded_functions: bool = false,
+    raw_suffix_available: bool = false,
 
     pub fn init(a: std.mem.Allocator, raw: []const u8, wiki: []const u8, date: []const u8, language: []const u8) !Registry {
         if (raw.len > max_bytes or !std.unicode.utf8ValidateSlice(raw)) return error.InvalidMagicWordsSnapshot;
@@ -152,6 +153,7 @@ pub const Registry = struct {
         try identityLine(&lines, "# content-language\t", language);
         var sensitive: std.StringHashMapUnmanaged(Winners) = .empty;
         var insensitive: std.StringHashMapUnmanaged(Winners) = .empty;
+        var raw_suffix_available = false;
         while (lines.next()) |line| {
             if (line.len == 0) continue;
             var fields = std.mem.splitScalar(u8, line, '\t');
@@ -176,6 +178,7 @@ pub const Registry = struct {
                 continue;
             }
             if (std.mem.eql(u8, id, "rawsuffix")) {
+                raw_suffix_available = true;
                 try addAlias(a_owned, map, key, id, .raw_suffix);
                 continue;
             }
@@ -190,7 +193,7 @@ pub const Registry = struct {
             try addAlias(a_owned, map, function_alias, id, .parser_function);
         }
         if (sensitive.count() + insensitive.count() == 0) return error.InvalidMagicWordsSnapshot;
-        return .{ .arena = arena, .sensitive = sensitive, .insensitive = insensitive, .expanded_functions = expanded };
+        return .{ .arena = arena, .sensitive = sensitive, .insensitive = insensitive, .expanded_functions = expanded, .raw_suffix_available = raw_suffix_available };
     }
 
     pub fn deinit(self: *Registry) void {
@@ -252,6 +255,7 @@ test "title aliases preserve edition identity spelling case flags and Unicode" {
     try std.testing.expectEqualStrings("pagename", registry.resolve("PAGENAME", .variable).?);
     try std.testing.expectEqualStrings("fullpagename", registry.resolve("título", .parser_function).?);
     try std.testing.expect(registry.resolve("اسم الصفحة", .variable) == null);
+    try std.testing.expect(!registry.raw_suffix_available);
     try std.testing.expect(registry.resolve("pagename", .variable) == null);
     try std.testing.expectError(error.MagicWordsIdentityMismatch, Registry.init(std.testing.allocator, fixture ++ "pagename\t1\tPAGENAME\n", "enwiktionary", "20261001", "en"));
     try std.testing.expectError(error.MagicWordsIdentityMismatch, Registry.init(std.testing.allocator, fixture ++ "pagename\t1\tPAGENAME\n", "arwiktionary", "20260901", "ar"));
@@ -347,6 +351,7 @@ test "category count options preserve captured case and stay outside callable do
     try std.testing.expectEqualStrings("pagesincategory_subcats", words.resolve("تصنيفات_فرعية", .category_option).?);
     try std.testing.expectEqualStrings("rawsuffix", words.resolve("آر", .raw_suffix).?);
     try std.testing.expectEqualStrings("rawsuffix", words.resolve("R", .raw_suffix).?);
+    try std.testing.expect(words.raw_suffix_available);
     try std.testing.expect(words.resolve("r", .raw_suffix) == null);
     try std.testing.expect(words.resolve("all", .parser_function) == null);
     try std.testing.expect(words.resolve("R", .variable) == null);

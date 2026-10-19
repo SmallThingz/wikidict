@@ -398,6 +398,7 @@ pub const Provider = struct {
             .interwiki_map = if (self.interwiki_available) interwikiMap else null,
             .stable_interwiki_map = self.interwiki_available,
             .resolve_title_magic = if (self.title_magic_words != null) resolveTitleMagic else null,
+            .raw_suffix_profile = if (self.title_magic_words) |words| words.raw_suffix_available else false,
             .resolve_parser_function = if (self.title_magic_words != null and self.title_magic_words.?.expanded_functions) resolveParserFunction else null,
             .wikibase_sitelink = if (self.wikibase_sitelinks_available) wikibaseSitelink else null,
             .wikibase_entity_text = if (self.wikibase_entity_text_available) wikibaseEntityText else null,

@@ -143,6 +143,7 @@ pub const Provider = struct {
     language_known_tag: ?*const fn (?*anyopaque, []const u8) anyerror!bool = null,
     // When present, the edition snapshot is authoritative, including nonmatches.
     resolve_title_magic: ?*const fn (?*anyopaque, []const u8, rt.namespace_registry.magic_words.Form) anyerror!?[]const u8 = null,
+    raw_suffix_profile: bool = false,
     resolve_parser_function: ?*const fn (?*anyopaque, []const u8) anyerror!?[]const u8 = null,
     resolve_call_symbol: ?*const fn (?*anyopaque, *rt.Context, []const u8, CallSymbolKind) anyerror!?CallSymbol = null,
     get_template_symbol: ?*const fn (?*anyopaque, std.mem.Allocator, usize) anyerror!?[]const u8 = null,
@@ -1292,6 +1293,7 @@ pub const Expander = struct {
     fn categoryRaw(self: *Expander, raw: []const u8) !bool {
         const value = std.mem.trim(u8, raw, " \t\r\n");
         if (self.provider.resolve_title_magic) |resolve| return (try resolve(self.provider.ctx, value, .raw_suffix)) != null;
+        if (self.provider.raw_suffix_profile) return error.RawSuffixSnapshotMissing;
         return std.mem.eql(u8, value, "R");
     }
 
@@ -1340,7 +1342,10 @@ pub const Expander = struct {
             return error.SiteInfoSnapshotMissing;
         };
         const raw = try std.fmt.allocPrint(self.runtime.allocator, "{d}", .{captured[index]});
-        if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, option, " \t\r\n"), "R")) return raw;
+        const trimmed_option = std.mem.trim(u8, option, " \t\r\n");
+        // Exact R remains compatible with immutable older alias profiles.
+        // Newer profiles add edition-local spellings with captured case rules.
+        if ((!self.provider.raw_suffix_profile and std.mem.eql(u8, trimmed_option, "R")) or try self.categoryRaw(trimmed_option)) return raw;
         const formatted = self.provider.site_statistics_formatted orelse return error.SiteStatisticsFormatSnapshotMissing;
         return formatted[index];
     }
@@ -2704,7 +2709,7 @@ pub const Expander = struct {
                 if (raw_args.len > 2) for (raw_args[2..]) |extra| {
                     _ = try self.expandWikitext(extra, params, host_title, depth + 1);
                 };
-                return self.categoryCount(category, arg1, arg2);
+                return try self.categoryCount(category, arg1, arg2);
             }
             if (isRevisionMagicName(name)) {
                 const page = try self.expandWikitext(first, params, host_title, depth + 1);
@@ -6908,6 +6913,27 @@ test "captured statistics aliases format all seven counters and preserve raw zer
     expander.provider.site_statistics = null;
     try std.testing.expectError(error.SiteInfoSnapshotMissing, expander.expandFragment("Notice", "{{NUMBEROFARTICLES}}", 1_670_803_200));
     try std.testing.expectEqualStrings("Site statistics snapshot missing field=numberofarticles", runtime.last_error.string);
+    // The old profile assertions above still exercise exact R without any
+    // rawsuffix rows. Add captured Arabic token spellings in a separate profile.
+    var raw_words = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "numberoffiles\t1\tNUMBEROFFILES\nrawsuffix\t1\tأر\nrawsuffix\t1\tآر\nrawsuffix\t1\tR\n", "arwiktionary", "20261001", "ar");
+    defer raw_words.deinit();
+    source.words = &raw_words;
+    expander.provider.raw_suffix_profile = true;
+    expander.provider.site_statistics = .{ 248, 0, 1234, 8985, 651, 0, 1 };
+    expander.provider.site_statistics_formatted = .{ "248", "0", "1٬234", "8٬985", "651", "0", "1" };
+    try std.testing.expectEqualStrings("1234|1234|1234|1٬234|1٬234", try expander.expandFragment("Notice", "{{NUMBEROFFILES:أر}}|{{NUMBEROFFILES: آر }}|{{NUMBEROFFILES:R}}|{{NUMBEROFFILES:r}}|{{NUMBEROFFILES:unknown}}", 1_670_803_200));
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = "آر" });
+    try std.testing.expectEqualStrings("1234", try Expander.hostFrameParserFunction(&expander, a, "NUMBEROFFILES", args));
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = "r" });
+    try std.testing.expectEqualStrings("1٬234", try Expander.hostFrameParserFunction(&expander, a, "NUMBEROFFILES", args));
+    var lower_words = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "numberoffiles\t1\tNUMBEROFFILES\nrawsuffix\t1\tr\n", "arwiktionary", "20261001", "ar");
+    defer lower_words.deinit();
+    source.words = &lower_words;
+    try std.testing.expectEqualStrings("1٬234|1234", try expander.expandFragment("Notice", "{{NUMBEROFFILES:R}}|{{NUMBEROFFILES:r}}", 1_670_803_200));
+    expander.provider.resolve_title_magic = null;
+    try std.testing.expectError(error.RawSuffixSnapshotMissing, expander.expandFragment("Notice", "{{NUMBEROFFILES:R}}", 1_670_803_200));
 }
 
 fn ordinaryLoopTestMessage(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8, key: []const u8) !?Provider.InterfaceMessage {
