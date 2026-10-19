@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Generate the Unicode 16.0.0 HTML first-strong lookup from pinned UCD data.
+
+Usage: generate_unicode_bidi.py DerivedBidiClass.txt unicode_bidi.zig
+Offline only. The input is the authoritative extracted property, including
+ordered @missing defaults. No application/build-time fetch is performed.
+"""
+import hashlib
+from pathlib import Path
+import re
+import sys
+
+VERSION = "16.0.0"
+SOURCE_SHA256 = "71ed943a49c58568d8d92e80ecc2ba2f06e62aee9c8ebb0e6e8bd2c3ed8b180e"
+SOURCE_URL = "https://www.unicode.org/Public/16.0.0/ucd/extracted/DerivedBidiClass.txt"
+LICENSE_NOTICE = 'UNICODE LICENSE V3\n\nCOPYRIGHT AND PERMISSION NOTICE\n\nCopyright © 1991-2026 Unicode, Inc.\n\nNOTICE TO USER: Carefully read the following legal agreement. BY\nDOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR\nSOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE\nTERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT\nDOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.\n\nPermission is hereby granted, free of charge, to any person obtaining a\ncopy of data files and any associated documentation (the "Data Files") or\nsoftware and any associated documentation (the "Software") to deal in the\nData Files or Software without restriction, including without limitation\nthe rights to use, copy, modify, merge, publish, distribute, and/or sell\ncopies of the Data Files or Software, and to permit persons to whom the\nData Files or Software are furnished to do so, provided that either (a)\nthis copyright and permission notice appear with all copies of the Data\nFiles or Software, or (b) this copyright and permission notice appear in\nassociated Documentation.\n\nTHE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY\nKIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF\nTHIRD PARTY RIGHTS.\n\nIN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE\nBE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,\nOR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,\nWHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,\nARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA\nFILES OR SOFTWARE.\n\nExcept as contained in this notice, the name of a copyright holder shall\nnot be used in advertising or otherwise to promote the sale, use or other\ndealings in these Data Files or Software without prior written\nauthorization of the copyright holder.\n'
+LIMIT = 0x110000
+CLASSES = {"L", "R", "AL", "EN", "ES", "ET", "AN", "CS", "NSM", "BN", "B", "S", "WS", "ON", "LRE", "LRO", "RLE", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI"}
+DEFAULTS = {"Left_To_Right": 1, "Right_To_Left": 2, "Arabic_Letter": 2, "European_Terminator": 0}
+
+
+def bounds(value):
+    parts = value.split("..")
+    lo = int(parts[0], 16)
+    hi = int(parts[-1], 16)
+    if not 0 <= lo <= hi < LIMIT:
+        raise ValueError("Invalid Unicode range")
+    return lo, hi
+
+
+def generate(raw):
+    if hashlib.sha256(raw).hexdigest() != SOURCE_SHA256:
+        raise ValueError("DerivedBidiClass.txt SHA-256 mismatch")
+    lines = raw.decode("utf-8").splitlines()
+    if lines[0] != "# DerivedBidiClass-16.0.0.txt":
+        raise ValueError("Unexpected UCD version")
+    values = bytearray(LIMIT)
+    missing = []
+    explicit = []
+    for line in lines:
+        match = re.fullmatch(r"# @missing: ([0-9A-F.]+); ([A-Za-z_]+)", line)
+        if match:
+            lo, hi = bounds(match[1])
+            missing.append((lo, hi, DEFAULTS[match[2]]))
+            continue
+        content = line.partition("#")[0].strip()
+        if not content:
+            continue
+        fields = [part.strip() for part in content.split(";")]
+        if len(fields) != 2 or fields[1] not in CLASSES:
+            raise ValueError("Unexpected property record")
+        lo, hi = bounds(fields[0])
+        explicit.append((lo, hi, 1 if fields[1] == "L" else 2 if fields[1] in {"R", "AL"} else 0))
+    if not missing or missing[0] != (0, LIMIT - 1, 1):
+        raise ValueError("Missing global L default")
+    # UAX44 ordered defaults: narrower/later defaults override earlier defaults;
+    # every explicit property record then overrides every default.
+    for lo, hi, value in missing:
+        values[lo:hi + 1] = bytes([value]) * (hi - lo + 1)
+    previous_hi = -1
+    for lo, hi, value in sorted(explicit):
+        if lo <= previous_hi:
+            raise ValueError("Overlapping explicit property records")
+        previous_hi = hi
+        values[lo:hi + 1] = bytes([value]) * (hi - lo + 1)
+    ranges = []
+    cp = 0
+    while cp < LIMIT:
+        value = values[cp]
+        end = cp
+        while end + 1 < LIMIT and values[end + 1] == value:
+            end += 1
+        if value:
+            ranges.append((cp, end, value))
+        cp = end + 1
+    header = f"""// Generated by tools/generate_unicode_bidi.py; do not edit.
+// Unicode {VERSION}: {SOURCE_URL}
+// Source SHA-256: {SOURCE_SHA256}
+// All @missing defaults applied before explicit records; L => ltr, R/AL => rtl.
+// Every other Bidi_Class returns null. This is not a bidi layout engine.
+// Unicode data license: https://www.unicode.org/license.txt
+pub const unicode_version = "{VERSION}";
+pub const Direction = enum {{ ltr, rtl }};
+const Range = struct {{ first: u21, last: u21, direction: Direction }};
+
+pub fn strongDirection(cp: u21) ?Direction {{
+    var lo: usize = 0;
+    var hi: usize = ranges.len;
+    while (lo < hi) {{
+        const mid = lo + (hi - lo) / 2;
+        const range = ranges[mid];
+        if (cp < range.first) {{
+            hi = mid;
+        }} else if (cp > range.last) {{
+            lo = mid + 1;
+        }} else return range.direction;
+    }}
+    return null;
+}}
+
+const ranges = [_]Range{{
+"""
+    body = "".join(f"    .{{ .first = 0x{lo:X}, .last = 0x{hi:X}, .direction = .{'ltr' if value == 1 else 'rtl'} }},\n" for lo, hi, value in ranges)
+    return "\n".join(("// " + line if line else "//") for line in LICENSE_NOTICE.splitlines()) + "\n\n" + header + body + "};\n", len(missing), len(explicit), len(ranges)
+
+
+def main():
+    if len(sys.argv) != 3:
+        raise SystemExit(__doc__)
+    source, output = map(Path, sys.argv[1:])
+    text, defaults, records, ranges = generate(source.read_bytes())
+    with output.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(text)
+    print(f"defaults={defaults} explicit_records={records} merged_strong_ranges={ranges}")
+
+
+if __name__ == "__main__":
+    main()

@@ -516,6 +516,8 @@ pub const SpanFlags = packed struct(u8) {
 pub const Span = struct {
     // Build-only validation origin. Never serialized into DPR2.
     provenance: Provenance = .parsed,
+    // Build-only DOM eligibility for a containing auto-direction scope.
+    bidi_auto_excluded: bool = false,
     kind: ir.InlineKind = .text,
     text: []const u8,
     target: []const u8 = "",
@@ -1881,6 +1883,8 @@ pub const Renderer = struct {
     body_link_target: []const u8 = "",
     // Only an active structural parent supplies this lexical lang/dir base.
     body_language_direction: ?Style = null,
+    // Build-only lexical bidi nesting; never serialized as runtime HTML.
+    bidi_scope_depth: usize = 0,
     body_formatting_attributes: FormattingAttributes = .{},
     body_paragraph_join: ?*BodyParagraphJoin = null,
     navigation_target_probe: ?*?[]const u8 = null,
@@ -4573,10 +4577,140 @@ pub const Renderer = struct {
         return true;
     }
 
+    const BidiScope = struct { opening: []const u8, closing: []const u8 = "\xe2\x81\xa9", automatic: bool = false };
+    const unicode_bidi = @import("unicode_bidi.zig");
+
+    fn firstBidiDirection(spans: []const Span) unicode_bidi.Direction {
+        for (spans) |span| {
+            if (span.bidi_auto_excluded) continue;
+            var characters = (std.unicode.Utf8View.init(span.text) catch continue).iterator();
+            while (characters.nextCodepoint()) |cp| if (unicode_bidi.strongDirection(cp)) |direction| return direction;
+        }
+        return .ltr; // HTML auto/undefined BDI with no strong descendant text.
+    }
+
+    fn validBidiDirection(self: *Renderer, tag: syntax.Tag) Error!bool {
+        const raw = (try self.semanticAttribute(tag, "dir")) orelse return false;
+        return std.ascii.eqlIgnoreCase(raw, "ltr") or std.ascii.eqlIgnoreCase(raw, "rtl") or std.ascii.eqlIgnoreCase(raw, "auto");
+    }
+
+    fn compiledBidiScope(self: *Renderer, tag: syntax.Tag) Error!?BidiScope {
+        const raw = try self.semanticAttribute(tag, "dir");
+        const direction: []const u8 = if (raw) |value|
+            if (std.ascii.eqlIgnoreCase(value, "ltr")) "ltr" else if (std.ascii.eqlIgnoreCase(value, "rtl")) "rtl" else if (std.ascii.eqlIgnoreCase(value, "auto")) "auto" else ""
+        else
+            "";
+        if (tag.is("bdo")) {
+            if (std.mem.eql(u8, direction, "ltr")) return .{ .opening = "\xe2\x81\xa6\xe2\x80\xad", .closing = "\xe2\x80\xac\xe2\x81\xa9" };
+            if (std.mem.eql(u8, direction, "rtl")) return .{ .opening = "\xe2\x81\xa7\xe2\x80\xae", .closing = "\xe2\x80\xac\xe2\x81\xa9" };
+            return null; // Do not invent override semantics for an invalid/missing direction.
+        }
+        // BDI defaults to auto, not its DOM parent's direction. Explicit child
+        // dir scopes inside a compiled bidi scope also span all styled atoms.
+        if (!tag.is("bdi") and (self.bidi_scope_depth == 0 or direction.len == 0)) return null;
+        return .{
+            .opening = if (std.mem.eql(u8, direction, "rtl")) "\xe2\x81\xa7" else "\xe2\x81\xa6",
+            .automatic = direction.len == 0 or std.mem.eql(u8, direction, "auto"),
+        };
+    }
+
+    fn bidiBoundary(value: []const u8, neighbor: Span) Span {
+        var result = neighbor;
+        result.text = value;
+        result.kind = .text;
+        result.target = "";
+        result.direction = "";
+        result.explanation = "";
+        result.explanation_set = false;
+        result.provenance = .protected_literal;
+        // Retain layout classes (especially Poem) without creating an action.
+        return result;
+    }
+
+    fn bidiSeparatorLength(value: []const u8) usize {
+        if (value.len == 0) return 0;
+        if (value[0] == '\n' or value[0] == '\r') return 1;
+        if (starts(value, "\xe2\x80\xa8") or starts(value, "\xe2\x80\xa9")) return 3;
+        return 0;
+    }
+
+    fn wrapBidiSpans(self: *Renderer, start: usize, scope: BidiScope) Error!void {
+        const original = self.spans.items[start..];
+        // Resolve auto once over the whole element, not once per output line.
+        // Descendant text has already been decoded; raw link targets and HTML
+        // attributes are not scan input. Authored Unicode isolates are not DOM
+        // exclusions: their L/R/AL text still participates in this HTML rule.
+        const opening: []const u8 = if (scope.automatic)
+            if (firstBidiDirection(original) == .rtl) "\xe2\x81\xa7" else "\xe2\x81\xa6"
+        else
+            scope.opening;
+        var wrapped: std.ArrayList(Span) = .empty;
+        defer wrapped.deinit(self.a);
+        var opened = false;
+        var last: Span = .{ .text = "" };
+        // Children have already consumed their normal budget. Build the entire
+        // balanced replacement first; shortage preserves those children and
+        // reports a limit, rather than dropping a generated PDF/PDI later.
+        const maximum = original.len + (max_nodes -| self.nodes);
+        for (original) |span| {
+            if (span.text.len == 0) try wrapped.append(self.a, span);
+            var offset: usize = 0;
+            while (offset < span.text.len) {
+                const separator = bidiSeparatorLength(span.text[offset..]);
+                if (separator != 0 or span.kind == .line_break) {
+                    if (opened) {
+                        try wrapped.append(self.a, bidiBoundary(scope.closing, last));
+                        opened = false;
+                    }
+                    var part = span;
+                    const length = if (span.kind == .line_break) span.text.len - offset else separator;
+                    part.text = span.text[offset .. offset + length];
+                    try wrapped.append(self.a, part);
+                    offset += length;
+                } else {
+                    var end = offset + 1;
+                    while (end < span.text.len and bidiSeparatorLength(span.text[end..]) == 0) : (end += 1) {}
+                    if (!opened) {
+                        try wrapped.append(self.a, bidiBoundary(opening, span));
+                        opened = true;
+                    }
+                    var part = span;
+                    part.text = span.text[offset..end];
+                    try wrapped.append(self.a, part);
+                    last = part;
+                    offset = end;
+                }
+                if (wrapped.items.len + @intFromBool(opened) > maximum) {
+                    self.fallbacks.render_limit = true;
+                    return;
+                }
+            }
+        }
+        if (opened) try wrapped.append(self.a, bidiBoundary(scope.closing, last));
+        self.nodes += wrapped.items.len -| original.len;
+        self.spans.items.len = start;
+        try self.spans.appendSlice(self.a, wrapped.items);
+    }
+
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
         const raw_tag = opaque_scan.tagAt(input, at, no_more_nowiki_close) orelse return null;
         const tag = try self.normalizedTag(raw_tag);
+        if (self.bidi_scope_depth != 0 and !tag.closing and !tag.self_closing and
+            oneOf(tag.name, &.{ "script", "style", "textarea" }))
+        {
+            if (syntax.matchingTag(input, tag)) |excluded| {
+                const start = self.spans.items.len;
+                const parent_depth = self.bidi_scope_depth;
+                self.bidi_scope_depth = 0;
+                defer self.bidi_scope_depth = parent_depth;
+                // Keep the existing visible literal/error path exactly once;
+                // only eligibility for the containing auto scan is excluded.
+                try self.inlineText(input[at..excluded.end], style, depth + 1);
+                for (self.spans.items[start..]) |*span| span.bidi_auto_excluded = true;
+                return excluded.end;
+            }
+        }
         if (tag.is("br")) {
             if (!tag.closing) try self.lineBreak(style);
             return tag.end;
@@ -4703,6 +4837,21 @@ pub const Renderer = struct {
         if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
         defer self.block_formatting = inherited_formatting;
         const content = input[tag.end..pair.inner_end];
+        const bidi_scope = if (matched != null) try self.compiledBidiScope(tag) else null;
+        const parent_bidi_depth = self.bidi_scope_depth;
+        const parent_body_direction = self.body_language_direction;
+        const parent_poem_style = self.poem_base_style;
+        if (bidi_scope != null) {
+            s.direction = "";
+            if (self.body_language_direction) |*base| base.direction = "";
+            self.poem_base_style.direction = "";
+            self.bidi_scope_depth += 1;
+        }
+        defer if (bidi_scope != null) {
+            self.bidi_scope_depth = parent_bidi_depth;
+            self.body_language_direction = parent_body_direction;
+            self.poem_base_style = parent_poem_style;
+        };
         // This attribute is emitted only after the runtime validates captured
         // AUDIO metadata. Keep canonical file, caption and language independent.
         if (tag.is("span")) if (self.poemItemBefore(input, at)) |item| {
@@ -4748,6 +4897,7 @@ pub const Renderer = struct {
         if (tag.is("ruby")) s.ruby_parentheses = !rubyHasFallback(content);
         if (annotation) s.ruby_parentheses = false;
         const annotation_start = self.spans.items.len;
+        const bidi_start = annotation_start;
         if (parenthetical) try self.text("（", s);
         if (phonos_spans) |parsed| {
             try self.spans.appendSlice(self.a, parsed);
@@ -4779,6 +4929,14 @@ pub const Renderer = struct {
             }
             if (visible) try self.text("）", s) else _ = self.spans.orderedRemove(annotation_start);
         }
+        if (bidi_scope) |scope| try self.wrapBidiSpans(bidi_start, scope);
+        // Resolve this scope before excluding it from its parent's scan. Each
+        // emitted Span is a value copy; no preceding text or shared child array
+        // is mutated, and the eligibility bit is omitted from wire/API fields.
+        if (parent_bidi_depth != 0 and (tag.is("bdi") or try self.validBidiDirection(tag)))
+            for (self.spans.items[bidi_start..]) |*span| {
+                span.bidi_auto_excluded = true;
+            };
         if (block_boundary) try self.lineBreak(style);
         return pair.end;
     }
@@ -21259,5 +21417,171 @@ test "DIV scope retains complete wiki tables across inner closing tags" {
             if (span.kind == .link and std.mem.eql(u8, span.target, if (index == 2) "sibling" else "tail")) found_tail = true;
         };
         try std.testing.expect(found_tail);
+    }
+}
+
+fn expectBalancedCompiledBidi(spans: anytype) !void {
+    var stack: [64]u8 = undefined;
+    var depth: usize = 0;
+    for (spans) |span| {
+        var offset: usize = 0;
+        while (offset < span.text.len) : (offset += 1) {
+            const rest = span.text[offset..];
+            const isolate = starts(rest, "\xe2\x81\xa6") or starts(rest, "\xe2\x81\xa7") or starts(rest, "\xe2\x81\xa8");
+            const override = starts(rest, "\xe2\x80\xad") or starts(rest, "\xe2\x80\xae");
+            const pdi = starts(rest, "\xe2\x81\xa9");
+            const pdf = starts(rest, "\xe2\x80\xac");
+            if (isolate or override) {
+                try std.testing.expect(depth < stack.len);
+                stack[depth] = if (isolate) 1 else 2;
+                depth += 1;
+            } else if (pdi or pdf) {
+                try std.testing.expect(depth != 0);
+                depth -= 1;
+                try std.testing.expectEqual(@as(u8, if (pdi) 1 else 2), stack[depth]);
+            } else if (Renderer.bidiSeparatorLength(rest) != 0) try std.testing.expectEqual(@as(usize, 0), depth);
+            if (isolate or override or pdi or pdf) {
+                try std.testing.expect(span.kind == .text and span.target.len == 0 and span.direction.len == 0 and span.explanation.len == 0);
+                offset += 2;
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), depth);
+}
+
+test "compiled bidi scopes retain overrides across styled actions and default auto nesting" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("before <bdo dir=rtl lang=he>a<b>b</b>[[C|c]]</bdo> after [[Tail]]", .{ .direction = "ltr" });
+    try std.testing.expectEqualStrings("before \u{2067}\u{202e}abc\u{202c}\u{2069} after Tail", try flattened(a, spans));
+    try expectBalancedCompiledBidi(spans);
+    var bold = false;
+    var link = false;
+    var tail = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "b")) bold = span.flags.bold and std.mem.eql(u8, span.language, "he") and span.direction.len == 0;
+        if (span.kind == .link and std.mem.eql(u8, span.target, "C")) link = std.mem.eql(u8, span.text, "c") and std.mem.eql(u8, span.language, "he") and span.direction.len == 0;
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Tail")) tail = std.mem.eql(u8, span.direction, "ltr");
+    }
+    try std.testing.expect(bold and link and tail);
+    const nested = try r.parseSpans("<bdi>a<bdo dir=ltr>אב</bdo>z</bdi>", .{ .direction = "rtl" });
+    try std.testing.expectEqualStrings("\u{2066}a\u{2066}\u{202d}אב\u{202c}\u{2069}z\u{2069}", try flattened(a, nested));
+    try expectBalancedCompiledBidi(nested);
+    const child = try r.parseSpans("<bdo dir=rtl>a<span dir=ltr>b<b>c</b>[[D|d]]</span>e</bdo>", .{});
+    try std.testing.expectEqualStrings("\u{2067}\u{202e}a\u{2066}bcd\u{2069}e\u{202c}\u{2069}", try flattened(a, child));
+    try expectBalancedCompiledBidi(child);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(child, .link, "D"));
+    const empty = try r.parseSpans("<bdi></bdi>tail", .{});
+    try std.testing.expectEqualStrings("tail", try flattened(a, empty));
+    try std.testing.expect(!r.fallbacks.any());
+    const auto_cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "<bdi>A<br>א</bdi>", .expected = "\u{2066}A\u{2069}\n\u{2066}א\u{2069}" },
+        .{ .source = "<bdi>א<br>A</bdi>", .expected = "\u{2067}א\u{2069}\n\u{2067}A\u{2069}" },
+        .{ .source = "<bdi>123 !</bdi>", .expected = "\u{2066}123 !\u{2069}" },
+        .{ .source = "<bdi><bdi>א</bdi>A</bdi>", .expected = "\u{2066}\u{2067}א\u{2069}A\u{2069}" },
+        .{ .source = "<bdi>א<span dir=ltr>A</span>B</bdi>", .expected = "\u{2067}א\u{2066}A\u{2069}B\u{2069}" },
+        .{ .source = "<bdi><span dir=invalid>א</span>A</bdi>", .expected = "\u{2067}אA\u{2069}" },
+        .{ .source = "<bdi>&#x5d0;A</bdi>", .expected = "\u{2067}אA\u{2069}" },
+        .{ .source = "<bdi>&amp;#x5d0;א</bdi>", .expected = "\u{2066}&#x5d0;א\u{2069}" },
+        .{ .source = "<bdi>[[English target|א]]A</bdi>", .expected = "\u{2067}אA\u{2069}" },
+        .{ .source = "<bdi>\u{2068}א\u{2069}A</bdi>", .expected = "\u{2067}\u{2068}א\u{2069}A\u{2069}" },
+        .{ .source = "<bdi>&#x200f;A</bdi>", .expected = "\u{2067}\u{200f}A\u{2069}" },
+        .{ .source = "<bdi>&#x061c;A</bdi>", .expected = "\u{2067}\u{061c}A\u{2069}" },
+        .{ .source = "<bdi>&#x200e;א</bdi>", .expected = "\u{2066}\u{200e}א\u{2069}" },
+    };
+    for (auto_cases) |case| {
+        const result = try r.parseSpans(case.source, .{ .direction = "rtl" });
+        try std.testing.expectEqualStrings(case.expected, try flattened(a, result));
+        try expectBalancedCompiledBidi(result);
+    }
+    for ([_][]const u8{ "script", "style", "textarea" }) |tag| {
+        const source = try std.fmt.allocPrint(a, "<bdi><{s}>A</{s}>א</bdi>", .{ tag, tag });
+        const result = try r.parseSpans(source, .{});
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "\u{2067}<{s}>A</{s}>א\u{2069}", .{ tag, tag }), try flattened(a, result));
+        try expectBalancedCompiledBidi(result);
+    }
+}
+
+test "compiled bidi scopes keep protected source literal and remain balanced at normal limits" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const literal = "<bdo dir=rtl>abc</bdo>";
+    for ([_][]const u8{ "nowiki", "source", "syntaxhighlight", "pre" }) |tag| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(try std.fmt.allocPrint(a, "<{s}>{s}</{s}> [[Tail]]", .{ tag, literal, tag }), .{});
+        try std.testing.expectEqualStrings(literal ++ " Tail", try flattened(a, spans));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "Tail"));
+    }
+    var escaped: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("<bdi>plain</bdi>", try flattened(a, try escaped.parseSpans("&lt;bdi&gt;plain&lt;/bdi&gt;", .{})));
+    // Exercise the ordinary emission-budget seam with one existing child, not
+    // a large input: no generated opener may survive without its closer.
+    var limited: Renderer = .{ .a = a, .context = .{} };
+    try limited.spans.append(a, .{ .text = "abc", .kind = .link, .target = "A" });
+    limited.nodes = max_nodes - 1;
+    try limited.wrapBidiSpans(0, .{ .opening = "\xe2\x81\xa7\xe2\x80\xae", .closing = "\xe2\x80\xac\xe2\x81\xa9" });
+    try std.testing.expect(limited.fallbacks.render_limit);
+    try std.testing.expectEqualStrings("abc", try flattened(a, limited.spans.items));
+    try std.testing.expectEqualStrings("A", limited.spans.items[0].target);
+    try expectBalancedCompiledBidi(limited.spans.items);
+}
+
+test "compiled bidi scopes close within paragraph Poem pre and table cell domains through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const broken = try r.parseSpans("<bdo dir=rtl>a<br>b</bdo> [[Tail]]", .{});
+    try std.testing.expectEqualStrings("\u{2067}\u{202e}a\u{202c}\u{2069}\n\u{2067}\u{202e}b\u{202c}\u{2069} Tail", try flattened(a, broken));
+    try expectBalancedCompiledBidi(broken);
+    var poem: Renderer = .{ .a = a, .context = .{} };
+    const poem_spans = try poem.parseSpans("<poem><bdo dir=rtl>a\nb</bdo></poem> [[Outside]]", .{});
+    try expectBalancedCompiledBidi(poem_spans);
+    const poem_text = try flattened(a, poem_spans);
+    try std.testing.expect(std.mem.indexOf(u8, poem_text, "\u{2067}\u{202e}a\u{202c}\u{2069}\n\u{2067}\u{202e}b\u{202c}\u{2069}") != null);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(poem_spans, .link, "Outside"));
+    for (poem_spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "\u{2067}") != null or std.mem.indexOf(u8, span.text, "\u{202c}") != null)
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-poem") != null);
+    }
+    var pre: Renderer = .{ .a = a, .context = .{} };
+    pre.parsed_pre = true;
+    const pre_spans = try pre.parseSpans("<bdi>A\nא</bdi>", .{});
+    try std.testing.expectEqualStrings("\u{2066}A\u{2069}\n\u{2066}א\u{2069}", try flattened(a, pre_spans));
+    try expectBalancedCompiledBidi(pre_spans);
+    var leading: Renderer = .{ .a = a, .context = .{} };
+    const leading_blocks = try leading.renderBody(" <bdi>abc</bdi>\n");
+    try std.testing.expectEqual(@as(usize, 1), leading_blocks.len);
+    try std.testing.expectEqual(Kind.preformatted, leading_blocks[0].kind);
+    try std.testing.expectEqualStrings("\u{2066}abc\u{2069}", try flattened(a, leading_blocks[0].spans));
+    try expectBalancedCompiledBidi(leading_blocks[0].spans);
+    var body: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try body.renderBody("first <bdi>abc</bdi>\n\nnext [[Tail]]\n<table><tr><th><bdo dir=rtl>row</bdo></th><td><bdi lang=he>[[Cell|אב]]</bdi></td></tr></table>");
+    var table_seen = false;
+    for (blocks) |block_value| {
+        try expectBalancedCompiledBidi(block_value.spans);
+        if (block_value.table) |table| {
+            table_seen = true;
+            try std.testing.expect(table.rows[0].cells[0].header);
+            try std.testing.expectEqualStrings("\u{2067}\u{202e}row\u{202c}\u{2069}", try flattened(a, table.rows[0].cells[0].spans));
+            try std.testing.expectEqualStrings("\u{2067}אב\u{2069}", try flattened(a, table.rows[0].cells[1].spans));
+            for (table.rows) |row| for (row.cells) |cell| try expectBalancedCompiledBidi(cell.spans);
+            try std.testing.expect(unclosedExternalRecoveryHasLink(table.rows[0].cells[1].spans, .link, "Cell"));
+        }
+    }
+    try std.testing.expect(table_seen);
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &[_]Section{.{ .blocks = blocks }}, blob.presentation_types.Layout{}, body.refs.items, body.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "bidi scopes", .language, .{ .code = "en", .heading = "English" });
+    // Exact typed wire equality detects missing controls, actions, layout
+    // classes and flags; balance alone would also accept an empty result.
+    try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
+    for (decoded.entry.sections[0].blocks) |block_value| {
+        try expectBalancedCompiledBidi(block_value.spans);
+        if (block_value.table) |table| for (table.rows) |row| for (row.cells) |cell| try expectBalancedCompiledBidi(cell.spans);
     }
 }
