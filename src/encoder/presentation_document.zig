@@ -1912,4 +1912,43 @@ test "nonleading example scopes preserve wiki sense continuation and next sense 
     try std.testing.expect(first and example and qualifier and next and linked and arabic and override);
     try std.testing.expectEqual(@as(usize, 3), cells);
     try std.testing.expect(!report.unclosed_formatting and !report.literal_markup and !report.malformed_table and !report.rendered_lua_error);
+    // Real boundaries still reset numbering; genuine child progress is kept
+    // at the table itself rather than reconstructed from an old parent seed.
+    for ([_]struct { between: []const u8, expected: []const u8, html: bool = false }{
+        .{ .between = "", .expected = "2", .html = true },
+        .{ .between = "\n", .expected = "1" },
+        .{ .between = "===Boundary===\n", .expected = "1" },
+        .{ .between = "# [[progress|Progress definition]]\n", .expected = "3" },
+    }) |control| {
+        const controlled_input = try std.fmt.allocPrint(a, "==English==\n===Verb===\n# [[first|First definition]]\n#: <i class=\"e-example\" lang=\"en\">example\n{s}{s}\n</i>\n# [[next|Next definition]]\n", .{ control.between, if (control.html) "<table><tr><td>[[cell|cell]]</td></tr></table>" else "{|\n| [[cell|cell]]\n|}" });
+        var controlled_report: Fallbacks = .{};
+        const controlled_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", controlled_input, null, &controlled_report);
+        const controlled = try codec.decodeAlloc(a, controlled_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        var found_next = false;
+        var found_cell = false;
+        var found_progress = false;
+        for (controlled.entry.sections) |section| for (section.blocks) |block| {
+            for (block.spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, "next")) {
+                    found_next = true;
+                    try std.testing.expect(block.kind == .definition);
+                    try std.testing.expectEqualStrings(control.expected, block.number);
+                    try std.testing.expect(span.role == .normal and !span.italic);
+                }
+                if (span.kind == .link and std.mem.eql(u8, span.target, "progress")) {
+                    found_progress = true;
+                    try std.testing.expectEqualStrings("2", block.number);
+                }
+            }
+            if (block.table) |table| for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, "cell")) {
+                    found_cell = true;
+                    try std.testing.expect(span.role == .example and span.italic);
+                }
+            };
+        };
+        try std.testing.expect(found_next and found_cell);
+        try std.testing.expectEqual(std.mem.indexOf(u8, control.between, "progress") != null, found_progress);
+        try std.testing.expect(!controlled_report.unclosed_formatting and !controlled_report.malformed_table and !controlled_report.literal_markup);
+    }
 }

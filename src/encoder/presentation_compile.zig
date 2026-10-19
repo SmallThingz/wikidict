@@ -6191,8 +6191,19 @@ pub const Renderer = struct {
                 para = null;
             }
             if (prefix == 0) {
-                @memset(&counts, 0);
-                previous_list_path = "";
+                // A physical table inside a scoped wiki example keeps only
+                // still-active numbered ancestors. Actual blank/heading
+                // boundaries already cleared them; never restore old seeds.
+                var retained: usize = 0;
+                if (!self.html_list_item_flow and (table_indent != null or (if (html_tag) |tag| tag.is("table") else false))) if (initial_list) |seed| {
+                    const limit = @min(counts.len, @min(previous_list_path.len, seed.path.len -| 1));
+                    var common: usize = 0;
+                    while (common < limit and listRoot(previous_list_path[common]) == listRoot(seed.path[common])) : (common += 1) {
+                        if (seed.path[common] == '#') retained = common + 1;
+                    }
+                };
+                @memset(counts[retained..], 0);
+                previous_list_path = previous_list_path[0..retained];
             }
             if (html_tag) |tag| {
                 const pair = syntax.matchingTag(clean, tag).?;
@@ -6639,7 +6650,7 @@ pub const Renderer = struct {
                     // The existing body owner must apply its scope before an
                     // inner formatting wrapper is considered. Hoisting the
                     // inner opener would flatten the owner's lexical prefix.
-                    if (!tag.closing and (oneOf(tag.name, &.{ "blockquote", "div", "p", "center" }) or htmlHeadingLevel(tag) != null) and
+                    if (!tag.closing and (oneOf(tag.name, &.{ "blockquote", "div", "p", "center", "table", "ul", "ol", "dl", "noinclude" }) or htmlHeadingLevel(tag) != null) and
                         syntax.matchingTag(input[at..], tag) != null) return null;
                     if (!tag.closing and (blockFormattingFlags(tag) != null or tag.is("span"))) {
                         const rest = input[at..];

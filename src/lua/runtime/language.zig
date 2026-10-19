@@ -413,7 +413,12 @@ pub fn parseTimestampText(runtime: *const rt.Context, raw_value: ?[]const u8) !i
     if (std.ascii.eqlIgnoreCase(raw, "today"))
         return floorDiv(try currentUnix(runtime), std.time.s_per_day) * std.time.s_per_day;
     if (try parseMonthRelative(runtime, raw)) |timestamp| return timestamp;
-    inline for (.{ .{ "now +", @as(i64, 1) }, .{ "now -", @as(i64, -1) } }) |entry| {
+    inline for (.{
+        .{ "now +", @as(i64, 1), false },
+        .{ "now -", @as(i64, -1), false },
+        .{ "today +", @as(i64, 1), true },
+        .{ "today -", @as(i64, -1), true },
+    }) |entry| {
         if (std.ascii.startsWithIgnoreCase(raw, entry[0])) {
             const suffix = std.mem.trim(u8, raw[entry[0].len..], " \t\r\n");
             const space = std.mem.indexOfScalar(u8, suffix, ' ') orelse return error.InvalidDate;
@@ -422,7 +427,9 @@ pub fn parseTimestampText(runtime: *const rt.Context, raw_value: ?[]const u8) !i
             if (!std.ascii.eqlIgnoreCase(unit, "day") and !std.ascii.eqlIgnoreCase(unit, "days"))
                 return error.InvalidDate;
             const signed = std.math.mul(i64, entry[1], count) catch return error.InvalidDate;
-            return addDays(try currentUnix(runtime), signed);
+            const current = try currentUnix(runtime);
+            const base = if (entry[2]) floorDiv(current, std.time.s_per_day) * std.time.s_per_day else current;
+            return addDays(base, signed);
         }
     }
     inline for (.{ .{ '+', @as(i64, 1) }, .{ '-', @as(i64, -1) } }) |entry| {
@@ -1463,6 +1470,34 @@ test "AOT language objects expose MediaWiki helpers" {
     const dated = try callField(&runtime, language, "formatDate", &.{ language, .{ .string = "Y-m-d" }, .{ .string = "now" } });
     defer rt.freeResults(dated);
     try std.testing.expectEqualStrings("2022-12-12", dated[0].string);
+    // Captured CS1 access-date validation asks for midnight today plus two days.
+    // Non-midnight clocks distinguish today from now; epoch/year boundaries
+    // exercise floor division and date rollover through the public helper.
+    const relative_cases = [_]struct { now: i64, raw: []const u8, expected: []const u8 }{
+        .{ .now = 1_670_846_410, .raw = "today + 2 days", .expected = "2022-12-14 00:00:00" },
+        .{ .now = 1_670_846_410, .raw = "today - 1 day", .expected = "2022-12-11 00:00:00" },
+        .{ .now = 1_670_846_410, .raw = "ToDaY + 0 days", .expected = "2022-12-12 00:00:00" },
+        .{ .now = 1_670_846_410, .raw = "now + 2 days", .expected = "2022-12-14 12:00:10" },
+        .{ .now = 1_670_846_410, .raw = "now - 1 day", .expected = "2022-12-11 12:00:10" },
+        .{ .now = -1, .raw = "today + 1 day", .expected = "1970-01-01 00:00:00" },
+        .{ .now = 1_704_110_400, .raw = "today - 1 day", .expected = "2023-12-31 00:00:00" },
+    };
+    for (relative_cases) |case| {
+        host.now_unix = case.now;
+        const result = try callField(&runtime, language, "formatDate", &.{ language, .{ .string = "Y-m-d H:i:s" }, .{ .string = case.raw } });
+        defer rt.freeResults(result);
+        try std.testing.expectEqualStrings(case.expected, result[0].string);
+    }
+    host.now_unix = 1_670_846_410;
+    const access_upper = try callField(&runtime, language, "formatDate", &.{ language, .{ .string = "U" }, .{ .string = "today + 2 days" } });
+    defer rt.freeResults(access_upper);
+    try std.testing.expectEqualStrings("1670976000", access_upper[0].string);
+    for ([_][]const u8{ "today + 2 weeks", "today + days", "today + 9223372036854775807 days", "today + 2 days junk" }) |raw| {
+        try std.testing.expectError(error.InvalidDate, parseTimestampText(&runtime, raw));
+    }
+    host.now_unix = null;
+    try std.testing.expectError(error.MissingCurrentTime, parseTimestampText(&runtime, "today + 2 days"));
+    host.now_unix = 1_670_803_200;
     const formatted = try callField(&runtime, language, "formatNum", &.{ language, .{ .number = 12345.67 } });
     defer rt.freeResults(formatted);
     try std.testing.expectEqualStrings("12,345.67", formatted[0].string);
