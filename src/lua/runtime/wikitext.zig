@@ -7310,9 +7310,11 @@ test "category count parser uses captured aliases counts title scope and exact f
         "{{PAGESINCAT:صفحات للحذف السريع|تصنيفات_فرعية}}|{{PAGESINCATEGORY:صفحات للحذف السريع|FILES}}|" ++
         "{{PAGESINCATEGORY:صفحات للحذف السريع|R}}|{{PAGESINCATEGORY:صفحات للحذف السريع|آر|SUBCATS}}|" ++
         "{{PAGESINCATEGORY:صفحات للحذف السريع|unknown|R}}", 1_670_803_200));
-    try std.testing.expectEqualStrings("25|20|2|0|0|ordinary-template", try expander.expandFragment("Notice", "{{PAGESINCATEGORY:english__nouns#section|R}}|{{PAGESINCAT:English nouns|pages|R}}|" ++
+    try std.testing.expectEqualStrings("25|20|2|0|0|ordinary-template", try expander.expandFragment("Notice", "{{PAGESINCATEGORY:English__nouns#section|R}}|{{PAGESINCAT:English nouns|pages|R}}|" ++
         "{{PAGESINCAT:English nouns|R|files}}|{{PAGESINCATEGORY:Category:English nouns|R}}|" ++
         "{{PAGESINCATEGORY:[invalid]|R}}|{{pagesincategory:English nouns|R}}", 1_670_803_200));
+    // The captured English Category namespace is case-sensitive.
+    try std.testing.expectEqualStrings("0", try expander.expandFragment("Notice", "{{PAGESINCATEGORY:english__nouns#section|R}}", 1_670_803_200));
     try std.testing.expectEqualStrings("0", try expander.expandFragment("Notice", "{{PAGESINCATEGORY:Missing category}}", 1_670_803_200));
     try std.testing.expectEqualStrings("3389|3428", try expander.expandFragment("Notice", "{{PAGESINCATEGORY:صفحات للحذف السريع|BOTH|subcats}}|{{PAGESINCATEGORY:صفحات للحذف السريع|R|all|{{Ignored}}}}", 1_670_803_200));
     try std.testing.expectEqual(@as(usize, 1), source.ignored_reads);
