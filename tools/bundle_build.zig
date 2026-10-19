@@ -14,6 +14,7 @@ const Options = struct {
     site_statistics_format_snapshot: ?[]const u8 = null,
     commons_data_snapshot: ?[]const u8 = null,
     category_stats_snapshot: ?[]const u8 = null,
+    category_statistics_format_snapshot: ?[]const u8 = null,
     interface_messages_snapshot: ?[]const u8 = null,
     category_tree_snapshot: ?[]const u8 = null,
     interwiki_map_snapshot: ?[]const u8 = null,
@@ -68,6 +69,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.category_stats_snapshot != null) return error.Usage;
             options.category_stats_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--category-statistics-format-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.category_statistics_format_snapshot != null) return error.Usage;
+            options.category_statistics_format_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--interface-messages-snapshot")) {
             index += 1;
             if (index >= args.len or options.interface_messages_snapshot != null) return error.Usage;
@@ -897,6 +902,7 @@ test "structured Wikibase and language fallback snapshot options are strict" {
         .{ "--date-numbering-snapshot", "date_numbering_snapshot" },
         .{ "--site-info-snapshot", "site_info_snapshot" },
         .{ "--site-statistics-format-snapshot", "site_statistics_format_snapshot" },
+        .{ "--category-statistics-format-snapshot", "category_statistics_format_snapshot" },
     };
     inline for (cases) |case| {
         const options = try parseOptions(&.{ "dump.xml", "out", case[0], "snapshot.tsv" });
@@ -954,6 +960,8 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "commons-data.tsv");
     if (options.category_stats_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "category-stats.tsv");
+    if (options.category_statistics_format_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "category-statistics-format.json");
     if (options.interface_messages_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "interface-messages.tsv");
     if (options.category_tree_snapshot) |snapshot|

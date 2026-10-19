@@ -348,3 +348,195 @@ test "formatted statistics bind captured raw values identity and exact locale st
     defer a.free(markup);
     try std.testing.expectError(error.InvalidSiteStatisticsFormatSnapshot, FormattedStatistics.init(a, markup, site, namespace, "bclwiktionary", "20261001", "bcl"));
 }
+
+/// Finite formatnum observations for exactly the values in the pinned category
+/// statistics, including missing-category zero. No locale/count inference.
+// Shared finite capture bound covers the measured retained corpus domains.
+pub const max_category_formatted_values: usize = 8192;
+
+pub const CategoryFormattedStatistics = struct {
+    arena: std.heap.ArenaAllocator,
+    values: std.AutoHashMapUnmanaged(u32, []const u8),
+
+    fn member(value: std.json.Value, name: []const u8) !std.json.Value {
+        if (value != .object) return error.InvalidCategoryStatisticsFormatSnapshot;
+        return value.object.get(name) orelse error.InvalidCategoryStatisticsFormatSnapshot;
+    }
+
+    fn text(value: std.json.Value, name: []const u8) ![]const u8 {
+        const result = try member(value, name);
+        if (result != .string) return error.InvalidCategoryStatisticsFormatSnapshot;
+        return result.string;
+    }
+
+    fn decimal(raw: []const u8) !u32 {
+        if (raw.len == 0 or raw.len > 10 or (raw.len > 1 and raw[0] == '0'))
+            return error.InvalidCategoryStatisticsFormatSnapshot;
+        for (raw) |c| if (!std.ascii.isDigit(c)) return error.InvalidCategoryStatisticsFormatSnapshot;
+        return std.fmt.parseInt(u32, raw, 10) catch error.InvalidCategoryStatisticsFormatSnapshot;
+    }
+
+    pub fn init(a: A, bytes: []const u8, site_bytes: []const u8, category_bytes: []const u8, namespace_sha256: [32]u8, wiki: []const u8, date: []const u8, language: []const u8) !CategoryFormattedStatistics {
+        if (bytes.len > 4 * 1024 * 1024 or category_bytes.len > 64 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(bytes) or !std.unicode.utf8ValidateSlice(category_bytes))
+            return error.InvalidCategoryStatisticsFormatSnapshot;
+        var site = try Snapshot.init(a, site_bytes, wiki, date, language);
+        defer site.deinit();
+        const parsed_site = try std.json.parseFromSlice(std.json.Value, a, site_bytes, .{ .duplicate_field_behavior = .@"error" });
+        defer parsed_site.deinit();
+        const namespace_hex = std.fmt.bytesToHex(namespace_sha256, .lower);
+        if (!std.mem.eql(u8, try text(parsed_site.value, "namespace_registry_sha256"), &namespace_hex))
+            return error.CategoryStatisticsFormatIdentityMismatch;
+        var arena = std.heap.ArenaAllocator.init(a);
+        errdefer arena.deinit();
+        const owned = arena.allocator();
+        var scratch_arena = std.heap.ArenaAllocator.init(a);
+        defer scratch_arena.deinit();
+        const scratch = scratch_arena.allocator();
+        var domain: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        try domain.put(scratch, 0, {});
+        var category_keys: std.StringHashMapUnmanaged(void) = .empty;
+        var lines = std.mem.splitScalar(u8, category_bytes, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const key = fields.next() orelse return error.InvalidCategoryStatisticsFormatSnapshot;
+            const all = try decimal(fields.next() orelse return error.InvalidCategoryStatisticsFormatSnapshot);
+            const subcats = try decimal(fields.next() orelse return error.InvalidCategoryStatisticsFormatSnapshot);
+            const files = try decimal(fields.next() orelse return error.InvalidCategoryStatisticsFormatSnapshot);
+            if (key.len == 0 or fields.next() != null or subcats > all or files > all - subcats)
+                return error.InvalidCategoryStatisticsFormatSnapshot;
+            const entry = try category_keys.getOrPut(scratch, key);
+            if (entry.found_existing) return error.InvalidCategoryStatisticsFormatSnapshot;
+            for ([_]u32{ all, all - subcats - files, subcats, files }) |count|
+                try domain.put(scratch, count, {});
+            if (domain.count() > max_category_formatted_values) return error.CategoryStatisticsFormatDomainTooLarge;
+        }
+        const parsed = std.json.parseFromSlice(std.json.Value, scratch, bytes, .{ .duplicate_field_behavior = .@"error" }) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return error.InvalidCategoryStatisticsFormatSnapshot,
+        };
+        defer parsed.deinit();
+        const value = parsed.value;
+        if (value != .object or value.object.count() != 8 or
+            !std.mem.eql(u8, try text(value, "schema"), "wikidict.category-statistics-format.v1"))
+            return error.InvalidCategoryStatisticsFormatSnapshot;
+        if (!std.mem.eql(u8, try text(value, "wiki"), wiki) or
+            !std.mem.eql(u8, try text(value, "date"), date) or
+            !std.mem.eql(u8, try text(value, "content_language"), language))
+            return error.CategoryStatisticsFormatIdentityMismatch;
+        var site_digest: [32]u8 = undefined;
+        var category_digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(site_bytes, &site_digest, .{});
+        std.crypto.hash.sha2.Sha256.hash(category_bytes, &category_digest, .{});
+        if (!std.mem.eql(u8, try text(value, "namespace_registry_sha256"), &namespace_hex) or
+            !std.mem.eql(u8, try text(value, "site_info_sha256"), &std.fmt.bytesToHex(site_digest, .lower)) or
+            !std.mem.eql(u8, try text(value, "category_stats_sha256"), &std.fmt.bytesToHex(category_digest, .lower)))
+            return error.CategoryStatisticsFormatIdentityMismatch;
+        const rows = try member(value, "values");
+        if (rows != .array or rows.array.items.len != domain.count())
+            return error.InvalidCategoryStatisticsFormatSnapshot;
+        var values: std.AutoHashMapUnmanaged(u32, []const u8) = .empty;
+        var previous: ?u32 = null;
+        for (rows.array.items) |row| {
+            if (row != .object or row.object.count() != 2) return error.InvalidCategoryStatisticsFormatSnapshot;
+            const count = try decimal(try text(row, "raw"));
+            if ((if (previous) |last| count <= last else false) or !domain.contains(count))
+                return error.InvalidCategoryStatisticsFormatSnapshot;
+            previous = count;
+            const formatted = try text(row, "formatted");
+            if (formatted.len == 0 or formatted.len > 256 or !std.unicode.utf8ValidateSlice(formatted) or
+                std.mem.indexOfAny(u8, formatted, "<>{}|[]") != null)
+                return error.InvalidCategoryStatisticsFormatSnapshot;
+            var codepoints = (try std.unicode.Utf8View.init(formatted)).iterator();
+            while (codepoints.nextCodepoint()) |cp|
+                if (cp < 32 or (cp >= 127 and cp <= 159)) return error.InvalidCategoryStatisticsFormatSnapshot;
+            try values.put(owned, count, try owned.dupe(u8, formatted));
+        }
+        return .{ .arena = arena, .values = values };
+    }
+
+    pub fn get(self: *const CategoryFormattedStatistics, raw: u32) ?[]const u8 {
+        return self.values.get(raw);
+    }
+
+    pub fn deinit(self: *CategoryFormattedStatistics) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+};
+
+test "category formatted statistics require exact pinned domain and own locale observations" {
+    const a = std.testing.allocator;
+    const namespace: [32]u8 = @splat(0);
+    const namespace_hex = std.fmt.bytesToHex(namespace, .lower);
+    const site = try std.fmt.allocPrint(a, "{{\"namespace_registry_sha256\":\"{s}\",{s}", .{ namespace_hex, test_raw[1..] });
+    defer a.free(site);
+    const categories = "One\t12\t2\t1\nEmpty\t0\t0\t0\n";
+    var site_digest: [32]u8 = undefined;
+    var category_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(site, &site_digest, .{});
+    std.crypto.hash.sha2.Sha256.hash(categories, &category_digest, .{});
+    const site_hex = std.fmt.bytesToHex(site_digest, .lower);
+    const category_hex = std.fmt.bytesToHex(category_digest, .lower);
+    const Row = struct { raw: []const u8, formatted: []const u8 };
+    const Proof = struct {
+        schema: []const u8 = "wikidict.category-statistics-format.v1",
+        wiki: []const u8 = "arwiktionary",
+        date: []const u8 = "20261001",
+        content_language: []const u8 = "ar",
+        namespace_registry_sha256: []const u8,
+        site_info_sha256: []const u8,
+        category_stats_sha256: []const u8,
+        values: []const Row,
+    };
+    var rows = [_]Row{
+        .{ .raw = "0", .formatted = "٠" },
+        .{ .raw = "1", .formatted = "١" },
+        .{ .raw = "2", .formatted = "٢" },
+        .{ .raw = "9", .formatted = "٩" },
+        .{ .raw = "12", .formatted = "١٢" },
+    };
+    var proof: Proof = .{ .namespace_registry_sha256 = &namespace_hex, .site_info_sha256 = &site_hex, .category_stats_sha256 = &category_hex, .values = &rows };
+    const encoded = try std.json.Stringify.valueAlloc(a, proof, .{});
+    var snapshot = try CategoryFormattedStatistics.init(a, encoded, site, categories, namespace, "arwiktionary", "20261001", "ar");
+    defer snapshot.deinit();
+    a.free(encoded);
+    try std.testing.expectEqualStrings("٩", snapshot.get(9).?);
+    try std.testing.expect(snapshot.get(7) == null);
+    inline for (.{ "site_info_sha256", "category_stats_sha256", "namespace_registry_sha256" }) |name| {
+        const saved = @field(proof, name);
+        @field(proof, name) = "wrong";
+        const bad = try std.json.Stringify.valueAlloc(a, proof, .{});
+        defer a.free(bad);
+        try std.testing.expectError(error.CategoryStatisticsFormatIdentityMismatch, CategoryFormattedStatistics.init(a, bad, site, categories, namespace, "arwiktionary", "20261001", "ar"));
+        @field(proof, name) = saved;
+    }
+    inline for (.{ "wiki", "date", "content_language" }) |name| {
+        const saved = @field(proof, name);
+        @field(proof, name) = "different";
+        const bad = try std.json.Stringify.valueAlloc(a, proof, .{});
+        defer a.free(bad);
+        try std.testing.expectError(error.CategoryStatisticsFormatIdentityMismatch, CategoryFormattedStatistics.init(a, bad, site, categories, namespace, "arwiktionary", "20261001", "ar"));
+        @field(proof, name) = saved;
+    }
+    try std.testing.expectError(error.InvalidCategoryStatisticsFormatSnapshot, CategoryFormattedStatistics.init(a, "{\"schema\":0,\"schema\":1}", site, categories, namespace, "arwiktionary", "20261001", "ar"));
+    proof.values = rows[0..4];
+    const missing = try std.json.Stringify.valueAlloc(a, proof, .{});
+    defer a.free(missing);
+    try std.testing.expectError(error.InvalidCategoryStatisticsFormatSnapshot, CategoryFormattedStatistics.init(a, missing, site, categories, namespace, "arwiktionary", "20261001", "ar"));
+    proof.values = &rows;
+    for ([_][]const u8{ "02", "1", "7", "4294967296" }) |bad_raw| {
+        rows[2].raw = bad_raw;
+        const bad = try std.json.Stringify.valueAlloc(a, proof, .{});
+        defer a.free(bad);
+        try std.testing.expectError(error.InvalidCategoryStatisticsFormatSnapshot, CategoryFormattedStatistics.init(a, bad, site, categories, namespace, "arwiktionary", "20261001", "ar"));
+    }
+    rows[2].raw = "2";
+    try std.testing.expectError(error.InvalidCategoryStatisticsFormatSnapshot, CategoryFormattedStatistics.init(a, "\xc0", site, categories, namespace, "arwiktionary", "20261001", "ar"));
+    for ([_][]const u8{ "", "<b>2</b>", "2\n" }) |bad_format| {
+        rows[2].formatted = bad_format;
+        const bad = try std.json.Stringify.valueAlloc(a, proof, .{});
+        defer a.free(bad);
+        try std.testing.expectError(error.InvalidCategoryStatisticsFormatSnapshot, CategoryFormattedStatistics.init(a, bad, site, categories, namespace, "arwiktionary", "20261001", "ar"));
+    }
+}

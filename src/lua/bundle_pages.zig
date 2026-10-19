@@ -226,6 +226,7 @@ pub const Provider = struct {
     category_stats: std.StringHashMapUnmanaged(CategoryStats) = .empty,
     category_stats_storage: ?Mapped = null,
     category_stats_available: bool = false,
+    category_statistics_format: ?site_info_lib.CategoryFormattedStatistics = null,
     interface_messages: std.StringHashMapUnmanaged(InterfaceMessageEntry) = .empty,
     interface_messages_storage: ?Mapped = null,
     interface_messages_available: bool = false,
@@ -270,6 +271,7 @@ pub const Provider = struct {
         try self.loadExternalData();
         try self.loadSiteInfo();
         try self.loadCategoryStats();
+        try self.loadCategoryStatisticsFormat();
         try self.loadInterfaceMessages();
         try self.loadCategoryTree();
         try self.loadFileMetadata();
@@ -317,6 +319,7 @@ pub const Provider = struct {
         if (self.external_data_storage) |*mapped| mapped.deinit();
         if (self.site_info) |*snapshot| snapshot.deinit();
         if (self.site_statistics_format) |*snapshot| snapshot.deinit();
+        if (self.category_statistics_format) |*snapshot| snapshot.deinit();
         self.category_stats.deinit(self.a);
         if (self.category_stats_storage) |*mapped| mapped.deinit();
         var message_keys = self.interface_messages.keyIterator();
@@ -388,6 +391,7 @@ pub const Provider = struct {
             .site_script = if (self.site_info) |snapshot| snapshot.script else null,
             .site_article_path = if (self.site_info) |snapshot| snapshot.article_path else null,
             .category_stats = if (self.category_stats_available) categoryStats else null,
+            .category_statistics_formatted = if (self.category_statistics_format != null) categoryStatisticsFormatted else null,
             .interface_message = if (self.interface_messages_available) interfaceMessage else null,
             .category_tree = if (self.category_tree_available) categoryTree else null,
             .file_metadata = if (self.file_metadata_available) fileMetadata else null,
@@ -557,6 +561,15 @@ pub const Provider = struct {
         self.category_stats = entries;
         self.category_stats_storage = mapped;
         self.category_stats_available = true;
+    }
+
+    fn loadCategoryStatisticsFormat(self: *Provider) !void {
+        var formatted = (try self.mapOptional("category-statistics-format.json")) orelse return;
+        defer formatted.deinit();
+        const categories = self.category_stats_storage orelse return error.CategoryStatisticsFormatInputsMissing;
+        var site = (try self.mapOptional("namespace-siteinfo.raw.json")) orelse return error.CategoryStatisticsFormatInputsMissing;
+        defer site.deinit();
+        self.category_statistics_format = try site_info_lib.CategoryFormattedStatistics.init(self.a, formatted.bytes, site.bytes, categories.bytes, self.namespace_catalog.source_sha256, self.namespace_catalog.wiki, self.namespace_catalog.dump_date, self.namespace_catalog.content_language);
     }
 
     fn loadInterfaceMessages(self: *Provider) !void {
@@ -1305,6 +1318,12 @@ pub const Provider = struct {
     fn categoryStats(ctx: ?*anyopaque, db_key: []const u8) anyerror!?CategoryStats {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return self.category_stats.get(db_key);
+    }
+
+    fn categoryStatisticsFormatted(ctx: ?*anyopaque, raw: u32) anyerror!?[]const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        const snapshot = if (self.category_statistics_format) |*value| value else return error.CategoryStatisticsFormatSnapshotMissing;
+        return snapshot.get(raw) orelse error.CategoryStatisticsFormatValueMissing;
     }
 
     fn interfaceMessage(ctx: ?*anyopaque, a: A, language: []const u8, key: []const u8) anyerror!?InterfaceMessage {
@@ -2420,4 +2439,63 @@ test "provider redirect metadata requires SQL fragments while transclusion stays
     const body = (try Provider.getTransclusionBody(&provider, pa, "Template:Alias")).?;
     try std.testing.expectEqualStrings("Template:Target", body.title);
     try std.testing.expectEqualStrings("target body", body.text);
+}
+
+test "provider category formatting binds loaded counts and preserves owned strings" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const catalog = try lua_program.namespace_registry.englishTestRegistry();
+    {
+        var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+        defer provider.deinit();
+        try std.testing.expect(provider.api().category_statistics_formatted == null);
+    }
+    const namespace_hex = std.fmt.bytesToHex(catalog.source_sha256, .lower);
+    const site = try std.fmt.allocPrint(a, "{{\"namespace_registry_sha256\":\"{s}\",\"query\":{{\"general\":{{\"wikiid\":\"enwiktionary\",\"lang\":\"en\",\"server\":\"//en.wiktionary.org\"}}}}}}", .{namespace_hex});
+    defer a.free(site);
+    const categories = "One\t12\t2\t1\n";
+    var site_digest: [32]u8 = undefined;
+    var category_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(site, &site_digest, .{});
+    std.crypto.hash.sha2.Sha256.hash(categories, &category_digest, .{});
+    const site_hex = std.fmt.bytesToHex(site_digest, .lower);
+    const category_hex = std.fmt.bytesToHex(category_digest, .lower);
+    const Row = struct { raw: []const u8, formatted: []const u8 };
+    const formatted = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.category-statistics-format.v1",
+        .wiki = "enwiktionary",
+        .date = catalog.dump_date,
+        .content_language = "en",
+        .namespace_registry_sha256 = @as([]const u8, &namespace_hex),
+        .site_info_sha256 = @as([]const u8, &site_hex),
+        .category_stats_sha256 = @as([]const u8, &category_hex),
+        .values = [_]Row{
+            .{ .raw = "0", .formatted = "0" },
+            .{ .raw = "1", .formatted = "1" },
+            .{ .raw = "2", .formatted = "2" },
+            .{ .raw = "9", .formatted = "9" },
+            .{ .raw = "12", .formatted = "12" },
+        },
+    }, .{});
+    defer a.free(formatted);
+    try tmp.dir.writeFile(io, .{ .sub_path = "category-statistics-format.json", .data = formatted });
+    try std.testing.expectError(error.CategoryStatisticsFormatInputsMissing, Provider.init(io, a, root, catalog, "unused-dump.xml"));
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = site });
+    try tmp.dir.writeFile(io, .{ .sub_path = "category-stats.tsv", .data = categories });
+    {
+        var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+        defer provider.deinit();
+        const api = provider.api();
+        const callback = api.category_statistics_formatted.?;
+        try std.testing.expectEqualStrings("9", (try callback(api.ctx, 9)).?);
+        try std.testing.expectEqualStrings("0", (try callback(api.ctx, 0)).?);
+        try std.testing.expectError(error.CategoryStatisticsFormatValueMissing, callback(api.ctx, 7));
+    }
+    // Same wiki/site identity but changed loaded counts must reject the old map.
+    try tmp.dir.writeFile(io, .{ .sub_path = "category-stats.tsv", .data = "One\t13\t2\t1\n" });
+    try std.testing.expectError(error.CategoryStatisticsFormatIdentityMismatch, Provider.init(io, a, root, catalog, "unused-dump.xml"));
 }

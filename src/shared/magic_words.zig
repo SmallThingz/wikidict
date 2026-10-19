@@ -5,7 +5,7 @@ const lower = @import("unicode_lower");
 pub const header = "# wikidict-magic-words-v1";
 pub const parser_header = "# wikidict-magic-words-v2";
 pub const max_bytes = 1024 * 1024;
-pub const Form = enum { variable, parser_function };
+pub const Form = enum { variable, parser_function, category_option, raw_suffix };
 
 // MediaWiki 1.47.0-wmf.22 registers bare variables and parser functions in
 // different orders. Within each case map, later registrations replace earlier
@@ -25,17 +25,19 @@ pub const statistics_ids = [_][]const u8{
     "numberofpages", "numberofarticles",    "numberoffiles",  "numberofedits",
     "numberofusers", "numberofactiveusers", "numberofadmins",
 };
+pub const category_option_ids = [_][]const u8{ "pagesincategory_all", "pagesincategory_pages", "pagesincategory_subcats", "pagesincategory_files" };
+pub const raw_suffix_ids = [_][]const u8{"rawsuffix"};
 const variable_ids = statistics_ids ++ title_ids;
-const function_ids = statistics_ids ++ [_][]const u8{
-    "ns",            "urlencode",       "lcfirst",          "ucfirst",       "lc",           "uc",              "localurl",
-    "fullurl",       "fullurle",        "canonicalurl",     "formatnum",     "plural",       "language",        "padleft",
-    "padright",      "anchorencode",    "defaultsort",      "pagename",      "pagenamee",    "fullpagename",    "fullpagenamee",
-    "subpagename",   "subpagenamee",    "rootpagename",     "rootpagenamee", "basepagename", "basepagenamee",   "talkpagename",
-    "talkpagenamee", "subjectpagename", "subjectpagenamee", "namespace",     "namespacee",   "namespacenumber", "talkspace",
-    "talkspacee",    "subjectspace",    "subjectspacee",    "int",           "special",      "tag",             "formatdate",
-    "displaytitle",  "expr",            "if",               "ifeq",          "ifexpr",       "iferror",         "switch",
-    "ifexist",       "time",            "titleparts",       "len",           "sub",          "categorytree",    "invoke",
-    "lst",
+// Filtered supported hooks in CoreParserFunctions::registerFunctions order;
+// option tokens have their own domains and never enter this callable order.
+const function_ids = [_][]const u8{
+    "ns",              "urlencode",        "lcfirst",             "ucfirst",       "lc",              "uc",            "localurl",     "fullurl",         "fullurle",      "canonicalurl",
+    "formatnum",       "plural",           "language",            "padleft",       "padright",        "anchorencode",  "defaultsort",  "pagesincategory", "pagename",      "pagenamee",
+    "fullpagename",    "fullpagenamee",    "subpagename",         "subpagenamee",  "rootpagename",    "rootpagenamee", "basepagename", "basepagenamee",   "talkpagename",  "talkpagenamee",
+    "subjectpagename", "subjectpagenamee", "namespace",           "namespacee",    "namespacenumber", "talkspace",     "talkspacee",   "subjectspace",    "subjectspacee", "numberofarticles",
+    "numberoffiles",   "numberofusers",    "numberofactiveusers", "numberofpages", "numberofadmins",  "numberofedits", "int",          "special",         "tag",           "formatdate",
+    "displaytitle",    "expr",             "if",                  "ifeq",          "ifexpr",          "iferror",       "switch",       "ifexist",         "time",          "titleparts",
+    "len",             "sub",              "categorytree",        "invoke",        "lst",
 };
 
 pub const hash_function_ids = [_][]const u8{
@@ -62,7 +64,12 @@ fn functionHead(id: []const u8) []const u8 {
 }
 
 fn priority(id: []const u8, form: Form) usize {
-    const ids: []const []const u8 = if (form == .variable) &variable_ids else &function_ids;
+    const ids: []const []const u8 = switch (form) {
+        .variable => &variable_ids,
+        .parser_function => &function_ids,
+        .category_option => &category_option_ids,
+        .raw_suffix => &raw_suffix_ids,
+    };
     for (ids, 0..) |candidate, rank| if (std.mem.eql(u8, id, candidate)) return rank;
     unreachable;
 }
@@ -70,14 +77,26 @@ fn priority(id: []const u8, form: Form) usize {
 const Winners = struct {
     variable: ?[]const u8 = null,
     parser_function: ?[]const u8 = null,
+    category_option: ?[]const u8 = null,
+    raw_suffix: ?[]const u8 = null,
 
     fn include(self: *Winners, id: []const u8, form: Form) void {
-        const winner = if (form == .variable) &self.variable else &self.parser_function;
+        const winner = switch (form) {
+            .variable => &self.variable,
+            .parser_function => &self.parser_function,
+            .category_option => &self.category_option,
+            .raw_suffix => &self.raw_suffix,
+        };
         if (winner.* == null or priority(id, form) > priority(winner.*.?, form)) winner.* = id;
     }
 
     fn select(self: Winners, form: Form) ?[]const u8 {
-        return if (form == .variable) self.variable else functionHead(self.parser_function orelse return null);
+        return switch (form) {
+            .variable => self.variable,
+            .parser_function => functionHead(self.parser_function orelse return null),
+            .category_option => self.category_option,
+            .raw_suffix => self.raw_suffix,
+        };
     }
 };
 
@@ -93,7 +112,11 @@ pub fn statisticsId(raw: []const u8) ?usize {
 
 fn canonicalId(raw: []const u8, expanded: bool) ?[]const u8 {
     if (titleId(raw)) |id| return id;
-    if (expanded) for (function_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
+    if (expanded) {
+        for (function_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
+        for (category_option_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
+        for (raw_suffix_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
+    }
     return null;
 }
 
@@ -143,6 +166,19 @@ pub const Registry = struct {
             const a_owned = arena.allocator();
             const key = if (case_sensitive) alias else try lower.lowerAlloc(a_owned, alias);
             if (titleId(id) != null or statisticsId(id) != null) try addAlias(a_owned, map, key, id, .variable);
+            var category_option = false;
+            for (category_option_ids) |candidate| if (std.mem.eql(u8, id, candidate)) {
+                category_option = true;
+                break;
+            };
+            if (category_option) {
+                try addAlias(a_owned, map, key, id, .category_option);
+                continue;
+            }
+            if (std.mem.eql(u8, id, "rawsuffix")) {
+                try addAlias(a_owned, map, key, id, .raw_suffix);
+                continue;
+            }
             // Parser::setFunctionHook adds a hash before removing one trailing
             // colon. The source spelling is not title-normalized or deduplicated.
             var function_alias = key;
@@ -293,4 +329,37 @@ test "captured statistics require expanded snapshot and preserve alias sensitivi
     try std.testing.expectEqualStrings("numberofarticles", (words.resolve("КОЛИЧЕСТВО_СТАТЕЙ", .parser_function)).?);
     try std.testing.expect((words.resolve("количество_статей", .variable)) == null);
     try std.testing.expectError(error.InvalidMagicWordsSnapshot, Registry.init(a, header ++ identity ++ row, "abwiktionary", "20261001", "ab"));
+}
+
+test "category count options preserve captured case and stay outside callable domains" {
+    const a = std.testing.allocator;
+    var words = try Registry.init(a, parser_header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "pagesincategory\t1\tPAGESINCATEGORY\npagesincategory\t1\tصفحات_في_التصنيف\n" ++
+        "pagesincategory_all\t0\tكل\npagesincategory_all\t0\tall\npagesincategory_pages\t0\tصفحات\n" ++
+        "pagesincategory_subcats\t0\tتصنيفات_فرعية\npagesincategory_files\t0\tfiles\nrawsuffix\t1\tآر\nrawsuffix\t1\tR\n", "arwiktionary", "20261001", "ar");
+    defer words.deinit();
+    try std.testing.expectEqualStrings("pagesincategory", words.resolve("PAGESINCATEGORY", .parser_function).?);
+    try std.testing.expectEqualStrings("pagesincategory", words.resolve("صفحات_في_التصنيف", .parser_function).?);
+    try std.testing.expect(words.resolve("pagesincategory", .parser_function) == null);
+    try std.testing.expect(words.resolve("PAGESINCATEGORY", .variable) == null);
+    try std.testing.expectEqualStrings("pagesincategory_all", words.resolve("ALL", .category_option).?);
+    try std.testing.expectEqualStrings("pagesincategory_pages", words.resolve("صفحات", .category_option).?);
+    try std.testing.expectEqualStrings("pagesincategory_subcats", words.resolve("تصنيفات_فرعية", .category_option).?);
+    try std.testing.expectEqualStrings("rawsuffix", words.resolve("آر", .raw_suffix).?);
+    try std.testing.expectEqualStrings("rawsuffix", words.resolve("R", .raw_suffix).?);
+    try std.testing.expect(words.resolve("r", .raw_suffix) == null);
+    try std.testing.expect(words.resolve("all", .parser_function) == null);
+    try std.testing.expect(words.resolve("R", .variable) == null);
+    inline for (.{
+        "pagesincategory\t1\tX\npagename\t1\tX\nns\t1\tY\nnumberofpages\t1\tY\nnumberofarticles\t1\tZ\nnumberofedits\t1\tZ\n",
+        "numberofedits\t1\tZ\nnumberofarticles\t1\tZ\nnumberofpages\t1\tY\nns\t1\tY\npagename\t1\tX\npagesincategory\t1\tX\n",
+    }) |rows| {
+        var overlap = try Registry.init(a, parser_header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++ rows ++ "pagesincategory_pages\t1\tR\nrawsuffix\t1\tR\n", "arwiktionary", "20261001", "ar");
+        defer overlap.deinit();
+        try std.testing.expectEqualStrings("pagename", overlap.resolve("X", .parser_function).?);
+        try std.testing.expectEqualStrings("numberofpages", overlap.resolve("Y", .parser_function).?);
+        try std.testing.expectEqualStrings("numberofedits", overlap.resolve("Z", .parser_function).?);
+        try std.testing.expectEqualStrings("pagesincategory_pages", overlap.resolve("R", .category_option).?);
+        try std.testing.expectEqualStrings("rawsuffix", overlap.resolve("R", .raw_suffix).?);
+    }
 }

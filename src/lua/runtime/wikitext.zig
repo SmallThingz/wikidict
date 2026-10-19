@@ -117,6 +117,7 @@ pub const Provider = struct {
     exists: *const fn (?*anyopaque, []const u8) anyerror!bool,
     external_data: ?*const fn (?*anyopaque, []const u8) anyerror!?ExternalData = null,
     category_stats: ?*const fn (?*anyopaque, []const u8) anyerror!?CategoryStats = null,
+    category_statistics_formatted: ?*const fn (?*anyopaque, u32) anyerror!?[]const u8 = null,
     interface_message: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, []const u8) anyerror!?InterfaceMessage = null,
     file_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!FileMetadata = null,
     category_tree: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, CategoryTreeScope) anyerror![]const []const u8 = null,
@@ -1277,6 +1278,54 @@ pub const Expander = struct {
         if (self.provider.resolve_parser_function != null)
             return if (isTitleMagicName(name)) name else null;
         return self.resolveTitleMagic(name, .parser_function);
+    }
+
+    fn categoryOption(self: *Expander, raw: []const u8) !?[]const u8 {
+        const value = std.mem.trim(u8, raw, " \t\r\n");
+        if (self.provider.resolve_title_magic) |resolve| return resolve(self.provider.ctx, value, .category_option);
+        // Unconfigured unit callers retain the existing English-only fallback.
+        inline for (.{ "all", "pages", "subcats", "files" }) |mode|
+            if (std.ascii.eqlIgnoreCase(value, mode)) return "pagesincategory_" ++ mode;
+        return null;
+    }
+
+    fn categoryRaw(self: *Expander, raw: []const u8) !bool {
+        const value = std.mem.trim(u8, raw, " \t\r\n");
+        if (self.provider.resolve_title_magic) |resolve| return (try resolve(self.provider.ctx, value, .raw_suffix)) != null;
+        return std.mem.eql(u8, value, "R");
+    }
+
+    fn categoryCount(self: *Expander, name: []const u8, arg1: []const u8, arg2: []const u8) ![]const u8 {
+        const get = self.provider.category_stats orelse return error.CategoryStatisticsSnapshotMissing;
+        const first = try self.categoryOption(arg1);
+        const second = try self.categoryOption(arg2);
+        const raw_first = try self.categoryRaw(arg1);
+        const raw_second = try self.categoryRaw(arg2);
+        const option = (if (raw_first) second else first) orelse "pagesincategory_all";
+        const mode = if (std.mem.eql(u8, option, "pagesincategory_pages")) "pages" else if (std.mem.eql(u8, option, "pagesincategory_subcats")) "subcats" else if (std.mem.eql(u8, option, "pagesincategory_files")) "files" else "all";
+        const registry = self.runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+        const category_spec = registry.byId(14) orelse return error.UnknownNamespace;
+        var count: u32 = 0;
+        const title: ?[]u8 = registry.normalizeTitle(self.runtime.allocator, name, 14, .literal) catch |err| switch (err) {
+            error.InvalidPageTitle => null,
+            else => return err,
+        };
+        if (title) |canonical| {
+            const text = registry.ofTitle(canonical).text;
+            if (title_lib.validTitleBody(self.runtime, category_spec, text)) {
+                const without_fragment = text[0 .. std.mem.indexOfScalar(u8, text, '#') orelse text.len];
+                const key = try self.runtime.allocator.dupe(u8, without_fragment);
+                for (key) |*byte| if (byte.* == ' ') {
+                    byte.* = '_';
+                };
+                work_stats.noteCategory(key, mode);
+                const stats = (try get(self.provider.ctx, key)) orelse Provider.CategoryStats{ .all = 0, .subcats = 0, .files = 0 };
+                count = if (std.mem.eql(u8, mode, "pages")) stats.pages() else if (std.mem.eql(u8, mode, "subcats")) stats.subcats else if (std.mem.eql(u8, mode, "files")) stats.files else stats.all;
+            }
+        }
+        if (raw_first or raw_second) return std.fmt.allocPrint(self.runtime.allocator, "{d}", .{count});
+        const formatted = self.provider.category_statistics_formatted orelse return error.CategoryStatisticsFormatSnapshotMissing;
+        return (try formatted(self.provider.ctx, count)) orelse error.CategoryStatisticsFormatSnapshotMissing;
     }
 
     fn namespacedPageAlloc(self: *Expander, spec: namespace_lib.Spec, text: []const u8) ![]const u8 {
@@ -2646,6 +2695,17 @@ pub const Expander = struct {
                 const option = try self.expandWikitext(first, params, host_title, depth + 1);
                 return (try self.statisticsMagic(name, option)) orelse unreachable;
             }
+            if (std.ascii.eqlIgnoreCase(name, "pagesincategory")) {
+                const category = try self.expandWikitext(first, params, host_title, depth + 1);
+                const arg1 = if (raw_args.len > 0) try self.expandWikitext(raw_args[0], params, host_title, depth + 1) else "";
+                const arg2 = if (raw_args.len > 1) try self.expandWikitext(raw_args[1], params, host_title, depth + 1) else "";
+                // Parser::callParserFunction expands every ordinary argument;
+                // the PHP callback uses only its first three values.
+                if (raw_args.len > 2) for (raw_args[2..]) |extra| {
+                    _ = try self.expandWikitext(extra, params, host_title, depth + 1);
+                };
+                return self.categoryCount(category, arg1, arg2);
+            }
             if (isRevisionMagicName(name)) {
                 const page = try self.expandWikitext(first, params, host_title, depth + 1);
                 return (try self.revisionMagic(name, page)) orelse unreachable;
@@ -3745,6 +3805,25 @@ pub const Expander = struct {
                 else => return error.StringExpected,
             } else "";
             return (try self.statisticsMagic(name, option)) orelse unreachable;
+        }
+        if (std.ascii.eqlIgnoreCase(name, "pagesincategory")) {
+            const third = args.rawGet(.{ .number = 3 });
+            const category = if (first) |value| switch (value) {
+                .nil => "",
+                .string => |text| text,
+                else => return error.StringExpected,
+            } else "";
+            const arg1 = if (second) |value| switch (value) {
+                .nil => "",
+                .string => |text| text,
+                else => return error.StringExpected,
+            } else "";
+            const arg2 = if (third) |value| switch (value) {
+                .nil => "",
+                .string => |text| text,
+                else => return error.StringExpected,
+            } else "";
+            return self.categoryCount(category, arg1, arg2);
         }
         if (try self.parserTitleMagic(name)) |canonical| {
             const page: ?[]const u8 = if (first) |value| switch (value) {
@@ -7142,4 +7221,89 @@ test "parser URLs and server magic use captured edition metadata without English
     expander.provider.site_server = null;
     for ([_][]const u8{ "{{SERVER}}", "{{SERVERNAME}}", "{{fullurl:A}}", "{{localurl:A}}" }) |input|
         try std.testing.expectError(error.SiteInfoSnapshotMissing, expander.expandFragment("Page", input, 1_670_803_200));
+}
+
+test "category count parser uses captured aliases counts title scope and exact formatting" {
+    const aliases = rt.namespace_registry.magic_words;
+    const Source = struct {
+        words: *const aliases.Registry,
+        last_key: []const u8 = "",
+        fail: bool = false,
+        ignored_reads: usize = 0,
+        fn get(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (std.mem.eql(u8, title, "Template:Ignored")) self.ignored_reads += 1;
+            return "ordinary-template";
+        }
+        fn exists(_: ?*anyopaque, _: []const u8) !bool {
+            return false;
+        }
+        fn resolve(raw: ?*anyopaque, value: []const u8, form: aliases.Form) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            return self.words.resolve(value, form);
+        }
+        fn parser(raw: ?*anyopaque, value: []const u8) !?[]const u8 {
+            return resolve(raw, value, .parser_function);
+        }
+        fn stats(raw: ?*anyopaque, key: []const u8) !?Provider.CategoryStats {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (self.fail) return error.TestCategoryReadFailure;
+            self.last_key = key;
+            if (std.mem.eql(u8, key, "صفحات_للحذف_السريع")) return .{ .all = 3428, .subcats = 3389, .files = 0 };
+            if (std.mem.eql(u8, key, "English_nouns")) return .{ .all = 25, .subcats = 3, .files = 2 };
+            return null;
+        }
+        fn formatted(_: ?*anyopaque, count: u32) !?[]const u8 {
+            return switch (count) {
+                3428 => "3٬428",
+                3389 => "3٬389",
+                39 => "39",
+                0 => "0",
+                else => null,
+            };
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var words = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "pagesincategory\t1\tPAGESINCATEGORY\npagesincategory\t1\tPAGESINCAT\npagesincategory\t1\tصفحات_في_التصنيف\n" ++
+        "pagesincategory_all\t0\tall\npagesincategory_all\t0\tكل\npagesincategory_pages\t0\tpages\npagesincategory_pages\t0\tصفحات\n" ++
+        "pagesincategory_subcats\t0\tsubcats\npagesincategory_subcats\t0\tتصنيفات_فرعية\npagesincategory_files\t0\tfiles\n" ++
+        "rawsuffix\t1\tR\nrawsuffix\t1\tآر\npagesincategory_pages\t1\tBOTH\nrawsuffix\t1\tBOTH\n", "arwiktionary", "20261001", "ar");
+    defer words.deinit();
+    var source: Source = .{ .words = &words };
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = Source.get, .exists = Source.exists, .resolve_title_magic = Source.resolve, .resolve_parser_function = Source.parser, .category_stats = Source.stats, .category_statistics_formatted = Source.formatted } };
+    // Exact dated AR category row: all3428/subcats3389/files0 => pages39.
+    try std.testing.expectEqualStrings("3٬428|39|3٬389|0|3428|3389|3428", try expander.expandFragment("Notice", "{{PAGESINCATEGORY:صفحات للحذف السريع}}|{{صفحات_في_التصنيف:صفحات للحذف السريع|صفحات}}|" ++
+        "{{PAGESINCAT:صفحات للحذف السريع|تصنيفات_فرعية}}|{{PAGESINCATEGORY:صفحات للحذف السريع|FILES}}|" ++
+        "{{PAGESINCATEGORY:صفحات للحذف السريع|R}}|{{PAGESINCATEGORY:صفحات للحذف السريع|آر|SUBCATS}}|" ++
+        "{{PAGESINCATEGORY:صفحات للحذف السريع|unknown|R}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("25|20|2|0|0|ordinary-template", try expander.expandFragment("Notice", "{{PAGESINCATEGORY:english__nouns#section|R}}|{{PAGESINCAT:English nouns|pages|R}}|" ++
+        "{{PAGESINCAT:English nouns|R|files}}|{{PAGESINCATEGORY:Category:English nouns|R}}|" ++
+        "{{PAGESINCATEGORY:[invalid]|R}}|{{pagesincategory:English nouns|R}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("0", try expander.expandFragment("Notice", "{{PAGESINCATEGORY:Missing category}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("3389|3428", try expander.expandFragment("Notice", "{{PAGESINCATEGORY:صفحات للحذف السريع|BOTH|subcats}}|{{PAGESINCATEGORY:صفحات للحذف السريع|R|all|{{Ignored}}}}", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 1), source.ignored_reads);
+    const args = try runtime.newTable();
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = "صفحات للحذف السريع" });
+    try args.rawSet(a, .{ .number = 2 }, .{ .string = "subcats" });
+    try args.rawSet(a, .{ .number = 3 }, .{ .string = "R" });
+    try std.testing.expectEqualStrings("3389", try Expander.hostFrameParserFunction(&expander, a, "PAGESINCATEGORY", args));
+    try args.rawSet(a, .{ .number = 5 }, .{ .string = "{{Ignored}}" });
+    try std.testing.expectEqualStrings("3389", try Expander.hostFrameParserFunction(&expander, a, "PAGESINCATEGORY", args));
+    try std.testing.expectEqual(@as(usize, 1), source.ignored_reads);
+    try std.testing.expectError(error.CategoryStatisticsFormatSnapshotMissing, expander.expandFragment("Notice", "{{PAGESINCATEGORY:English nouns}}", 1_670_803_200));
+    expander.provider.category_statistics_formatted = null;
+    try std.testing.expectError(error.CategoryStatisticsFormatSnapshotMissing, expander.expandFragment("Notice", "{{PAGESINCATEGORY:صفحات للحذف السريع}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("3428", try expander.expandFragment("Notice", "{{PAGESINCATEGORY:صفحات للحذف السريع|R}}", 1_670_803_200));
+    source.fail = true;
+    try std.testing.expectError(error.TestCategoryReadFailure, expander.expandFragment("Notice", "{{PAGESINCATEGORY:صفحات للحذف السريع|R}}", 1_670_803_200));
+    expander.provider.category_stats = null;
+    try std.testing.expectError(error.CategoryStatisticsSnapshotMissing, expander.expandFragment("Notice", "{{PAGESINCATEGORY:Missing|R}}", 1_670_803_200));
 }
