@@ -1034,7 +1034,7 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY_INITIAL):
     require(type(memory_limit_bytes) is int and memory_limit_bytes in (MEMORY_INITIAL, MEMORY),
             'Production memory budget must be 4 or 8 GiB')
     argv = [sys.executable, '-B', str(ROOT / 'tools/build_wiktionaries.py'),
-        '--resource-mode', 'watchdog', '--watchdog-address-space', 'unlimited',
+        '--resource-mode', 'watchdog', '--compress-shards', '--watchdog-address-space', 'unlimited',
         '--watchdog-memory-limit-mib', str(memory_limit_bytes // 1024**2),
         '--cpu-admission', 'affinity', '--threads', str(workers), '--jobs', '1',
         '--expansion-workers', str(workers), '--build-timeout-seconds', str(cfg['build_timeout_seconds']),

@@ -1162,6 +1162,8 @@ class ControllerMemoryPolicyTests(unittest.TestCase):
             self.assertEqual('unlimited', argv[argv.index('--watchdog-address-space')+1])
             self.assertEqual('affinity', argv[argv.index('--cpu-admission')+1])
             self.assertEqual('watchdog', argv[argv.index('--resource-mode')+1])
+            self.assertEqual(1, argv.count('--compress-shards'))
+            self.assertNotIn('--compress-output', argv)  # This belongs to native merge, not the builder CLI.
             for flag in ['--threads', '--expansion-workers']:
                 self.assertEqual('4', argv[argv.index(flag)+1])
             self.assertEqual('1', argv[argv.index('--jobs')+1])

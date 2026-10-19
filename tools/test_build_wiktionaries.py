@@ -808,9 +808,44 @@ class BuildTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'stop before merge'):
                     b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',1,[{'wiki':'test','date':'20260901'}],123,compress_shards=True)
             self.assertTrue(admit.call_args.kwargs['allow_compressed'])
+            self.assertTrue(admit.call_args.kwargs['compressed_output'])
             self.assertEqual([x[0]for x in events],['build','verify','compress','build','verify','compress'])
             self.assertTrue((workspace/'shards/00000000/aliases.wikblb.xz').exists())
             self.assertTrue((workspace/'shards/00000001/aliases.wikblb.xz').exists())
+
+    def test_direct_xz_merge_keeps_recovery_until_deep_verify_and_logical_seal(self):
+        for verify_failure in (True,False):
+            with self.subTest(verify_failure=verify_failure),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander';exp.mkdir(parents=True)
+                (workspace/'expander/.incomplete').write_text('expander ready')
+                (exp/'page-index.tsv').write_text('p0\n');(exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+                cache=workspace/'input';cache.mkdir();(cache/'.complete.json').write_text(json.dumps({'source_pages':1}))
+                staging=root/'staging';events=[];payload=b'WIKBLB08\x08alias'
+                def run(command):
+                    if 'build-blobs' in command:
+                        dest=Path(command[command.index('--')+2]);dest.mkdir();write_coverage(dest,command)
+                        (dest/'aliases.wikblb').write_bytes(payload)
+                    elif 'merge-blobs' in command:
+                        args=command[command.index('--')+1:];self.assertEqual(args[0],'--compress-output');self.assertEqual(Path(args[1]),staging)
+                        staging.mkdir();write_namespace_coverage(staging,1);(staging/'aliases.wikblb.xz').write_bytes(lzma.compress(payload));events.append('merge')
+                    elif 'verify-blobs' in command and Path(command[-1])==staging:
+                        events.append('verify')
+                        if verify_failure:raise ValueError('merged verification failed')
+                def encode(path,block_size,workers):Path(str(path)+'.xz').write_bytes(lzma.compress(path.read_bytes()))
+                def cleanup(path):
+                    self.assertEqual(path,workspace);self.assertEqual(events,['merge','verify'])
+                    saved=json.loads((staging/b.VERIFIED_INVENTORY_NAME).read_text())
+                    self.assertEqual(saved['files']['aliases.wikblb'],dict(size=len(payload),sha256=hashlib.sha256(payload).hexdigest()))
+                    self.assertTrue((staging/b.VERIFIED_MARKER).is_file());events.append('cleanup')
+                with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_PAGES',1),patch.object(b,'run_checked',side_effect=run),patch.object(b,'compress',side_effect=encode),patch.object(b,'require_merge_disk_space',return_value={}) as admission,patch.object(b,'cleanup_shard_workspace',side_effect=cleanup):
+                    if verify_failure:
+                        with self.assertRaisesRegex(ValueError,'merged verification failed'):
+                            b.build_sharded(root/'dump',staging,workspace,root/'registry','zig',1,[{'wiki':'test','date':'20260901'}],123,compress_shards=True)
+                    else:b.build_sharded(root/'dump',staging,workspace,root/'registry','zig',1,[{'wiki':'test','date':'20260901'}],123,compress_shards=True)
+                self.assertTrue(admission.call_args.kwargs['compressed_output'])
+                self.assertTrue((workspace/'shards/00000000/aliases.wikblb.xz').exists())
+                self.assertEqual(events,['merge','verify']+([] if verify_failure else ['cleanup']))
+                if verify_failure:self.assertFalse((staging/b.VERIFIED_INVENTORY_NAME).exists())
 
     def test_merge_disk_rejection_preserves_verified_shards_before_native_merge(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2587,6 +2622,52 @@ class VerifiedPublicationInventoryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'stderr exceeds bound'):b.verified_xz_record(path,15)
             self.assertEqual(len(children),1);self.assertIsNotNone(children[0].returncode)
             self.assertTrue(children[0].stdout.closed and children[0].stderr.closed)
+
+    def test_fresh_compressed_seal_keeps_logical_v1_and_publication_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);staging=root/'staging';staging.mkdir()
+            with patch.object(b,'PROJECT',root):
+                write_coverage(staging);(staging/b.NOW_UNIX_NAME).write_text('123\n')
+                payload=b'WIKBLB08\x07ordinary compiled bytes'
+                blob=staging/'supplemental.wikblb.xz';blob.write_bytes(lzma.compress(payload))
+                with self.assertRaisesRegex(ValueError,'compressed leftovers'):
+                    b.seal_verified_publication_inventory(staging)
+                b.seal_verified_publication_inventory(staging,fresh_compressed=True)
+                seal=json.loads((staging/b.VERIFIED_INVENTORY_NAME).read_text())
+                self.assertEqual(seal['version'],1)
+                self.assertEqual(seal['files']['supplemental.wikblb'],dict(size=len(payload),sha256=hashlib.sha256(payload).hexdigest()))
+                self.assertNotIn('supplemental.wikblb.xz',seal['files'])
+                expected,checked=b.validate_verified_publication_inventory(staging)
+                self.assertEqual(expected,seal['files']);self.assertIn('supplemental.wikblb.xz',checked)
+                (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+                with patch.object(b,'compress_many') as encode,patch.object(b.os,'rename',side_effect=OSError('interrupt publication')):
+                    with self.assertRaisesRegex(OSError,'interrupt publication'):
+                        b._publish_verified_staging(staging,root/'final','test','20260901')
+                    encode.assert_not_called()
+                # The interrupted XZ-only tree uses the unchanged strict v1 resume path.
+                with patch.object(b,'compress_many') as encode:
+                    b._publish_verified_staging(staging,root/'final','test','20260901')
+                    encode.assert_not_called()
+                final=root/'final';self.assertEqual(lzma.decompress((final/blob.name).read_bytes()),payload)
+                self.assertEqual(json.loads((final/'complete.json').read_text())['publication_files'][blob.name]['sha256'],b.sha256_file(final/blob.name))
+
+    def test_fresh_compressed_seal_rejects_survivors_twins_unknown_and_changed_bytes(self):
+        for fault in ('marker','raw-twin','extra','wrong-kind','changed'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);staging=root/'staging';staging.mkdir()
+                with patch.object(b,'PROJECT',root):
+                    write_coverage(staging);payload=b'WIKBLB08\x07ordinary'
+                    blob=staging/'supplemental.wikblb.xz';blob.write_bytes(lzma.compress(payload))
+                    if fault=='marker':(staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+                    elif fault=='raw-twin':(staging/'supplemental.wikblb').write_bytes(payload)
+                    elif fault=='extra':(staging/'extra.wikblb.xz').write_bytes(blob.read_bytes())
+                    elif fault=='wrong-kind':blob.write_bytes(lzma.compress(b'WIKBLB08\x08wrong'))
+                    original=b.verified_xz_record
+                    def changed(path,size):
+                        result=original(path,size);path.write_bytes(lzma.compress(payload+b'changed'));return result
+                    with patch.object(b,'verified_xz_record',side_effect=changed if fault=='changed' else original):
+                        with self.assertRaises(ValueError):b.seal_verified_publication_inventory(staging,fresh_compressed=True)
+                    self.assertFalse((staging/b.VERIFIED_INVENTORY_NAME).exists());self.assertTrue(blob.exists())
 
     def test_inventory_cannot_be_resealed_from_compressed_survivors(self):
         with tempfile.TemporaryDirectory() as tmp:

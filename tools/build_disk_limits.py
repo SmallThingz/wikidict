@@ -99,8 +99,8 @@ def compressed_blob_size(path, kind):
 
 
 def require_merge_disk_space(shard_paths, destination, reserve_bytes,
-                             *, metadata_paths=(), metadata_texts=(), allow_compressed=False):
-    """Require room for one additional raw output, sidecars, and a policy reserve.
+                             *, metadata_paths=(), metadata_texts=(), allow_compressed=False, compressed_output=False):
+    """Require raw output room or streaming headroom, plus sidecars/metadata.
 
     Call immediately before merge while owning the edition lock. Shards must
     already have passed the native verifier. Raw merge bytes are at most the
@@ -109,6 +109,9 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
     transport size, to the merged-output reservation. Stored transport bytes are
     reported separately and already consume space. XZ listing/header checks do
     not replace the ordinary native verifier.
+    With compressed_output, reserve only sidecars/metadata and the existing
+    policy headroom. No XZ ratio or full compressed-output fit is assumed; the
+    unchanged watchdog disk floor handles ongoing growth.
     Existing shards already consume space; do not require their bytes twice.
     The watchdog handles later capacity loss. Compressed input size is unused.
     Optional metadata paths are subsequent copies (absent paths are skipped);
@@ -116,6 +119,7 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
     allocation/metadata and concurrent writes, not unmeasured output growth.
     """
     if type(allow_compressed) is not bool: raise ValueError('Invalid compressed shard mode')
+    if type(compressed_output) is not bool: raise ValueError('Invalid compressed merge output mode')
     reserve_bytes = _bytes(reserve_bytes)
     if reserve_bytes == 0:
         raise ValueError('Disk reserve must be positive')
@@ -217,7 +221,10 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
         if not isinstance(content, str):
             raise ValueError('Metadata must be serialized text')
         metadata = _add(metadata, len(content.encode('utf-8')))
-    required = _add(raw, fallback, manifests, coverage, metadata, reserve_bytes)
+    # Streaming XZ never allocates a full raw merged copy. Its total transport
+    # size is unknown: the existing reserve is write headroom, not a fit bound.
+    output_bound = 0 if compressed_output else raw
+    required = _add(output_bound, fallback, manifests, coverage, metadata, reserve_bytes)
     for path, expected_identity in checked.items():
         if _identity(path.lstat()) != expected_identity:
             raise ValueError(f'Merge artifact changed during admission: {path}')
@@ -228,6 +235,10 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
         raise ValueError('Invalid destination filesystem block size')
     available = _bytes(_bytes(space.f_bavail) * space.f_frsize)
     receipt = dict(raw_shard_bytes=raw, raw_blob_count=blob_count,
+                   compressed_output=compressed_output, logical_shard_bytes=raw,
+                   raw_output_reservation_bytes=output_bound,
+                   streaming_output_headroom_bytes=reserve_bytes if compressed_output else 0,
+                   compressed_output_size_bound_bytes=None if compressed_output else raw,
                    stored_shard_blob_bytes=stored, compressed_shard_blob_bytes=compressed,
                    fallback_bytes=fallback, language_manifest_bound_bytes=manifests,
                    namespace_coverage_bound_bytes=coverage, metadata_bytes=metadata,

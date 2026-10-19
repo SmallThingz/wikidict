@@ -65,6 +65,26 @@ fn mergeOne(
     kind: format.BlobKind,
     input_paths: []const []const u8,
 ) !usize {
+    return mergeOneMode(io, a, output_path, kind, input_paths, null);
+}
+
+const xz_argv = [_][]const u8{ "xz", "--compress", "--format=xz", "--check=crc64", "-0", "--threads=1", "--block-size=1MiB", "--stdout" };
+
+fn syncParent(io: std.Io, path: []const u8) !void {
+    const dir = try std.Io.Dir.cwd().openDir(io, std.fs.path.dirname(path) orelse ".", .{});
+    defer dir.close(io);
+    const file: std.Io.File = .{ .handle = dir.handle, .flags = .{ .nonblocking = false } };
+    try file.sync(io);
+}
+
+fn mergeOneMode(
+    io: std.Io,
+    a: std.mem.Allocator,
+    output_path: []const u8,
+    kind: format.BlobKind,
+    input_paths: []const []const u8,
+    encoder_argv: ?[]const []const u8,
+) !usize {
     var sources: std.ArrayList(MergeSource) = .empty;
     defer {
         for (sources.items) |*source| source.reader.deinit();
@@ -88,10 +108,26 @@ fn mergeOne(
     if (sources.items.len == 0) return 0;
     try format.validateMetadata(kind, metadata.?);
 
-    var file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .truncate = true });
+    const target = if (encoder_argv != null) try std.fmt.allocPrint(a, "{s}.xz", .{output_path}) else output_path;
+    defer if (encoder_argv != null) a.free(target);
+    const part = if (encoder_argv != null) try std.fmt.allocPrint(a, "{s}.part", .{target}) else target;
+    defer if (encoder_argv != null) a.free(part);
+    if (encoder_argv != null) {
+        // Fresh output roots are required by main; never replace a committed blob.
+        if (std.Io.Dir.cwd().access(io, target, .{})) |_| return error.OutputExists else |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        }
+    }
+    var file = try std.Io.Dir.cwd().createFile(io, part, .{ .truncate = true, .exclusive = encoder_argv != null });
     defer file.close(io);
+    var committed = false;
+    defer if (encoder_argv != null and !committed) std.Io.Dir.cwd().deleteFile(io, part) catch {};
+    var child: ?std.process.Child = null;
+    defer if (child) |*process| process.kill(io);
+    if (encoder_argv) |argv| child = try std.process.spawn(io, .{ .argv = argv, .stdin = .pipe, .stdout = .{ .file = file }, .stderr = .inherit });
     var buffer: [256 * 1024]u8 = undefined;
-    var writer = file.writer(io, &buffer);
+    var writer = (if (child) |process| process.stdin.? else file).writer(io, &buffer);
     const out = &writer.interface;
     const header = format.encodeHeader(kind);
     try out.writeAll(&header);
@@ -120,6 +156,17 @@ fn mergeOne(
         if (sources.items[index].current != null) try heapPush(&heap, a, sources.items, index);
     }
     try out.flush();
+    if (child) |*process| {
+        process.stdin.?.close(io);
+        process.stdin = null;
+        const term = try process.wait(io);
+        child = null;
+        if (!term.success()) return error.EncoderFailed;
+        try file.sync(io);
+        try std.Io.Dir.cwd().rename(part, std.Io.Dir.cwd(), target, io);
+        committed = true;
+        try syncParent(io, target);
+    }
     return count;
 }
 
@@ -131,6 +178,7 @@ const LanguageMergePool = struct {
     roots: []const []const u8,
     headings: []const []const u8,
     counts: []usize,
+    compress_output: bool = false,
     next: std.atomic.Value(usize) = .init(0),
     stop: std.atomic.Value(bool) = .init(false),
 
@@ -162,6 +210,7 @@ const LanguageMergePool = struct {
                 paths[i] = try std.fs.path.join(a, &.{ root, catalog.language_directory, filename });
             }
             const output_path = try std.fs.path.join(a, &.{ self.pool.language_root, filename });
+            if (self.pool.compress_output) return mergeOneMode(self.pool.io, a, output_path, .language, paths, &xz_argv);
             const partial_path = try std.fmt.allocPrint(a, "{s}.part", .{output_path});
             errdefer std.Io.Dir.cwd().deleteFile(self.pool.io, partial_path) catch {};
             const count = try mergeOne(self.pool.io, a, partial_path, .language, paths);
@@ -184,6 +233,7 @@ fn mergeLanguagesParallel(
     language_root: []const u8,
     roots: []const []const u8,
     headings: []const []const u8,
+    compress_output: bool,
 ) !usize {
     if (headings.len == 0) return 0;
     const counts = try a.alloc(usize, headings.len);
@@ -194,6 +244,7 @@ fn mergeLanguagesParallel(
         .roots = roots,
         .headings = headings,
         .counts = counts,
+        .compress_output = compress_output,
     };
     var workers: [2]LanguageMergePool.Worker = .{
         .{ .pool = &pool },
@@ -260,12 +311,14 @@ fn mergeFallbackReports(io: std.Io, a: std.mem.Allocator, output_root: []const u
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len < 3) {
-        std.debug.print("usage: dict-blob-merge OUTPUT_ROOT SHARD_ROOT SHARD_ROOT...\n", .{});
+    const compress_output = args.len > 1 and std.mem.eql(u8, args[1], "--compress-output");
+    const first: usize = if (compress_output) 2 else 1;
+    if (args.len < first + 2) {
+        std.debug.print("usage: dict-blob-merge [--compress-output] OUTPUT_ROOT SHARD_ROOT SHARD_ROOT...\n", .{});
         return error.Usage;
     }
     const a = std.heap.smp_allocator;
-    const output_root = args[1];
+    const output_root = args[first];
     var output_exists = true;
     std.Io.Dir.cwd().access(init.io, output_root, .{}) catch |err| switch (err) {
         error.FileNotFound => output_exists = false,
@@ -277,7 +330,7 @@ pub fn main(init: std.process.Init) !void {
     defer a.free(language_root);
     try std.Io.Dir.cwd().createDirPath(init.io, language_root);
 
-    const roots = args[2..];
+    const roots = args[first + 1 ..];
     const headings = try loadHeadings(init.io, a, roots);
     defer {
         for (headings) |heading| a.free(heading);
@@ -293,7 +346,7 @@ pub fn main(init: std.process.Init) !void {
 
     var input_paths = try a.alloc([]const u8, roots.len);
     defer a.free(input_paths);
-    const language_records = try mergeLanguagesParallel(init.io, a, language_root, roots, headings);
+    const language_records = try mergeLanguagesParallel(init.io, a, language_root, roots, headings, compress_output);
     for (headings) |heading| try catalog.writeEntry(&manifest.interface, heading);
     try manifest.interface.flush();
 
@@ -305,7 +358,7 @@ pub fn main(init: std.process.Init) !void {
         defer for (input_paths) |path| a.free(path);
         const output_path = try std.fs.path.join(a, &.{ output_root, filename });
         defer a.free(output_path);
-        const records = try mergeOne(init.io, a, output_path, kind, input_paths);
+        const records = try mergeOneMode(init.io, a, output_path, kind, input_paths, if (compress_output) &xz_argv else null);
         if (kind == .alias) alias_records += records else fixed_records += records;
     }
     try mergeFallbackReports(init.io, a, output_root, roots);
@@ -342,6 +395,28 @@ test "streamed merge keeps cross-source payload association and global title lif
     defer a.free(bytes);
     try std.testing.expectEqualSlices(u8, "WIKBLB08\x07a\x00\x01Ab\x00\x01Bc\x00\x01Cd\x00\x01De\x00\x00f\x00\x01Fg\x00\x01G", bytes);
     _ = try format.inspect(bytes);
+    const xz_out = try std.fs.path.join(a, &.{ root, "compressed-output" });
+    defer a.free(xz_out);
+    try std.testing.expectEqual(@as(usize, 7), try mergeOneMode(io, a, xz_out, .supplemental, &.{ left, right }, &xz_argv));
+    const xz_path = try std.fmt.allocPrint(a, "{s}.xz", .{xz_out});
+    defer a.free(xz_path);
+    const decoded = try std.process.run(a, io, .{ .argv = &.{ "xz", "--decompress", "--stdout", "--", xz_path }, .stdout_limit = .limited(4096), .stderr_limit = .limited(4096) });
+    defer a.free(decoded.stdout);
+    defer a.free(decoded.stderr);
+    try std.testing.expect(decoded.term.success());
+    try std.testing.expectEqualSlices(u8, bytes, decoded.stdout);
+    var compressed_reader = try file_reader.Reader.init(io, a, xz_out);
+    defer compressed_reader.deinit();
+    try compressed_reader.validate();
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, xz_out, .{}));
+    const failed_out = try std.fs.path.join(a, &.{ root, "failed-output" });
+    defer a.free(failed_out);
+    try std.testing.expectError(error.EncoderFailed, mergeOneMode(io, a, failed_out, .supplemental, &.{ left, right }, &.{ "sh", "-c", "cat; exit 7" }));
+    for ([_][]const u8{ ".xz", ".xz.part" }) |suffix| {
+        const failed_path = try std.fmt.allocPrint(a, "{s}{s}", .{ failed_out, suffix });
+        defer a.free(failed_path);
+        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, failed_path, .{}));
+    }
     // The same merge contract applies to mixed and fully compressed shards.
     try file_reader.writeTestXz(io, a, left);
     try std.Io.Dir.cwd().deleteFile(io, left);

@@ -87,6 +87,49 @@ class MergeDiskAdmissionTests(unittest.TestCase):
         self.assertTrue(target.is_file());self.assertFalse(self.destination.exists())
         with self.assertRaises(ValueError): self.admit([one,two])
 
+    def test_streamed_output_admission_uses_headroom_not_logical_or_stored_total(self):
+        shard,raw=self.shard()
+        payload=raw.read_bytes()+b'x'*65536
+        raw.write_bytes(payload);target=Path(str(raw)+'.xz')
+        target.write_bytes(lzma.compress(payload));raw.unlink()
+        ordinary=self.admit([shard],allow_compressed=True)
+        streamed=self.admit([shard],allow_compressed=True,compressed_output=True)
+        self.assertEqual(ordinary['required_free_bytes']-streamed['required_free_bytes'],len(payload))
+        self.assertEqual(streamed['logical_shard_bytes'],len(payload))
+        self.assertEqual(streamed['stored_shard_blob_bytes'],target.stat().st_size)
+        self.assertEqual(streamed['raw_output_reservation_bytes'],0)
+        self.assertEqual(streamed['streaming_output_headroom_bytes'],128)
+        self.assertIsNone(streamed['compressed_output_size_bound_bytes'])
+        required=streamed['required_free_bytes']
+        self.admit([shard],required,allow_compressed=True,compressed_output=True)
+        with self.assertRaisesRegex(ValueError,'Insufficient merge disk space'):
+            self.admit([shard],required-1,allow_compressed=True,compressed_output=True)
+        with self.assertRaisesRegex(ValueError,'Insufficient merge disk space'):
+            self.admit([shard],required,allow_compressed=True)
+        self.assertTrue(target.is_file());self.assertFalse(self.destination.exists())
+
+    def test_streamed_output_keeps_manifest_duplicate_and_identity_checks(self):
+        shard,raw=self.shard();target=Path(str(raw)+'.xz')
+        target.write_bytes(lzma.compress(raw.read_bytes()))
+        with self.assertRaises(ValueError):self.admit([shard],allow_compressed=True,compressed_output=True)
+        target.unlink();(shard/'languages.tsv').write_text('heading\nOther\n')
+        with self.assertRaisesRegex(ValueError,'manifest/raw file mismatch'):
+            self.admit([shard],compressed_output=True)
+        (shard/'languages.tsv').write_text('heading\nEnglish\n')
+        original=d._identity;calls=0
+        def changed(info):
+            nonlocal calls
+            value=original(info)
+            if info.st_ino==raw.stat().st_ino:
+                calls+=1
+                if calls==3:return value[:-1]+(value[-1]+1,)
+            return value
+        with mock.patch.object(d,'_identity',side_effect=changed):
+            with self.assertRaisesRegex(ValueError,'changed during admission'):
+                self.admit([shard],compressed_output=True)
+        with self.assertRaisesRegex(ValueError,'Invalid compressed merge output mode'):
+            self.admit([shard],compressed_output=1)
+
     def test_compressed_shard_rejects_duplicate_transport_wrong_kind_and_truncation(self):
         shard, raw = self.shard()
         payload=raw.read_bytes();target=Path(str(raw)+'.xz')

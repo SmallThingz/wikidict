@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 from compress_blobs import compress, compress_many, default_workers, verify_round_trip
-from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space
+from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space, compressed_blob_size
 from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files
 
@@ -1751,9 +1751,9 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if staging.exists(): remove_artifact_tree(staging)
     admission=require_merge_disk_space(shard_paths,staging,BUILD_DISK_RESERVE_BYTES,
         metadata_paths=(expander_build/'compile-plan.tsv',),metadata_texts=metadata_texts,
-        **({'allow_compressed':True} if compress_shards else {}))
+        **({'allow_compressed':True,'compressed_output':True} if compress_shards else {}))
     phase_event(edition,date,'merge_disk_admission','admitted',**admission)
-    timed_run([zig,'build','-j1','-Doptimize=fast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]],
+    timed_run([zig,'build','-j1','-Doptimize=fast','merge-blobs','--',*(['--compress-output'] if compress_shards else []),str(staging),*[str(path) for path in shard_paths]],
               edition,date,'merge',shards=len(shard_paths))
     timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(staging)],
               edition,date,'merged_verify',shards=len(shard_paths))
@@ -1775,7 +1775,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         raise ValueError('Derived page redirects changed during sharded build')
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
     persist_build_identity(staging,build_identity)
-    seal_verified_publication_inventory(staging)
+    seal_verified_publication_inventory(staging,**({'fresh_compressed':True} if compress_shards else {}))
     (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
@@ -1899,16 +1899,45 @@ def publication_inventory(root, *, allow_raw=False):
     if not required.issubset(inventory):raise ValueError('Missing required publication report or language manifest')
     return inventory
 
-def seal_verified_publication_inventory(staging):
+def seal_verified_publication_inventory(staging, *, fresh_compressed=False):
     """Seal native-verified logical bytes before compression can remove raw twins."""
     files=publication_inventory(staging,allow_raw=True)
-    if any(name.endswith('.wikblb.xz') for name in files):
+    if type(fresh_compressed) is not bool:raise ValueError('Invalid fresh compressed seal mode')
+    if not fresh_compressed and any(name.endswith('.wikblb.xz') for name in files):
         raise ValueError('Cannot establish verified inventory from compressed leftovers')
+    if fresh_compressed:
+        # Only the fresh merge path calls this, immediately after ordinary deep
+        # verification. Resume continues to require the existing sealed inventory.
+        if any((staging/name).exists() for name in (VERIFIED_MARKER,VERIFIED_INVENTORY_NAME,'complete.json')):
+            raise ValueError('Cannot reseal existing publication as fresh compressed output')
+        kinds={name+'.wikblb':kind for kind,name in enumerate(
+            ('thesaurus','citations','reconstruction','rhymes','sign-gloss','supplemental','aliases'),2)}
+        with (staging/'languages.tsv').open('rb') as source:manifest=source.read(16*1024*1024+1)
+        lines=manifest.splitlines()
+        if len(manifest)>16*1024*1024 or not lines or lines[0]!=b'heading' or any(not line for line in lines[1:]) or len(set(lines[1:]))!=len(lines[1:]):
+            raise ValueError('Invalid fresh compressed language manifest')
+        expected={'languages/'+hashlib.sha256(heading).hexdigest()+'.wikblb':1 for heading in lines[1:]}
+        expected.update({name:kind for name,kind in kinds.items() if name+'.xz' in files})
+        blobs={name for name in files if name.endswith(('.wikblb','.wikblb.xz'))}
+        if blobs!={name+'.xz' for name in expected}:
+            raise ValueError('Unexpected or missing fresh compressed payload')
+        logical={name:record for name,record in files.items() if name not in blobs}
+        for name,kind in expected.items():
+            target=artifact_path(staging/(name+'.xz'));before=index_identity(target.stat())
+            size=compressed_blob_size(target,kind)
+            decoded=verified_xz_record(target,size)
+            if decoded['size']!=size or index_identity(target.stat())!=before:
+                raise ValueError('Fresh compressed payload changed while reading: '+name)
+            logical[name]=decoded
+        if publication_inventory(staging,allow_raw=True)!=files:
+            raise ValueError('Fresh compressed publication changed while sealing')
+        files=logical
     raw=json.dumps({'version':1,'files':files},sort_keys=True).encode()+b'\n'
     if len(raw)>8*1024*1024:raise ValueError('Verified publication inventory exceeds bound')
     path=artifact_path(staging/VERIFIED_INVENTORY_NAME)
     with path.open('xb') as out:
         out.write(raw);out.flush();os.fsync(out.fileno())
+    if fresh_compressed:sync_shard_directory(staging)
 
 
 def verified_xz_record(path, expected_size):
