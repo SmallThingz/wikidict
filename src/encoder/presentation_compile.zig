@@ -6508,6 +6508,29 @@ pub const Renderer = struct {
                     };
                     number = try out.toOwnedSlice();
                 }
+                // A list marker does not turn a proved DIV/table crossing into
+                // inline text. Match in the original body domain before its
+                // ordinary logical line cuts at the inner DIV closer, and keep
+                // the resulting tables as blocks under the admitted list path.
+                const wrapper_offset = @intFromPtr(body.ptr) - @intFromPtr(input.ptr);
+                const wrapper_source = input[wrapper_offset..];
+                if (try self.semanticTagAt(wrapper_source, 0)) |tag| {
+                    if (std.mem.eql(u8, path, "*") and !tag.closing and tag.is("div")) {
+                        if (blockWrapperPair(wrapper_source, tag)) |pair| {
+                            const ordinary = syntax.matchingTag(wrapper_source, tag).?;
+                            if (pair.end > ordinary.end) {
+                                const seed = try self.rawBodyQuoteSeed(input, wrapper_source[0..pair.end], &body_quotes);
+                                const nested = try self.renderBodySlice(wrapper_source[0..pair.end], false, false, if (origin) |base| base + wrapper_offset else null, seed);
+                                try blocks.appendSlice(self.a, try self.indentTableBlocks(nested, path));
+                                pos = wrapper_offset + pair.end;
+                                if (pos < input.len and input[pos] == '\n') {
+                                    pos += 1;
+                                } else if (pos < input.len) inline_line_end = syntax.logicalEnd(input, pos);
+                                continue;
+                            }
+                        }
+                    }
+                }
                 try self.bodyRawBlock(&blocks, input, body, &body_quotes, kind, path, number, 0);
             }
         }
@@ -21149,6 +21172,70 @@ test "DIV scope retains complete wiki tables across inner closing tags" {
     try std.testing.expectEqual(@as(usize, 1), tables);
     try std.testing.expect(after and community and wikimedia);
     try std.testing.expect(!renderer.fallbacks.malformed_table);
+    // The real References caller adds a small scope and three wiki bullets
+    // around the same included body; a top-level DIV alone misses this path.
+    const caller = try std.fmt.allocPrint(a, "<small>* هذه الصفحة معتمدة جزئيا أو كليا على \n* {s}\n* {s}\n* {s}\n</small>\n[[after]]", .{ captured, captured, captured });
+    var listed: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const listed_blocks = try listed.renderBody(caller);
+    var listed_tables: usize = 0;
+    var listed_community: usize = 0;
+    var listed_commons: usize = 0;
+    var listed_after = false;
+    var caller_text = false;
+    for (listed_blocks) |block| {
+        const text = try flattened(a, block.spans);
+        try std.testing.expect(std.mem.indexOf(u8, text, "|}") == null);
+        caller_text = caller_text or std.mem.indexOf(u8, text, "هذه الصفحة معتمدة جزئيا أو كليا على") != null;
+        for (block.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "after")) {
+            listed_after = true;
+            try std.testing.expect(!span.flags.small);
+        };
+        if (block.table) |table| {
+            listed_tables += 1;
+            try std.testing.expectEqualStrings("*", block.list_path);
+            try std.testing.expectEqual(@as(usize, 4), table.rows.len);
+            for (table.rows) |row| {
+                try std.testing.expectEqual(@as(usize, 2), row.cells.len);
+                for (row.cells) |cell| {
+                    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, cell.spans), "|}") == null);
+                    for (cell.spans) |span| {
+                        if (span.kind == .link and std.mem.eql(u8, span.target, "ويكاموس:بوابة المجتمع")) {
+                            listed_community += 1;
+                            try std.testing.expect(span.flags.small);
+                        }
+                        if (span.kind == .external_link and std.mem.indexOf(u8, span.target, "commons.wikimedia.org") != null) listed_commons += 1;
+                    }
+                }
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), listed_tables);
+    try std.testing.expectEqual(@as(usize, 3), listed_community);
+    try std.testing.expectEqual(@as(usize, 3), listed_commons);
+    try std.testing.expect(caller_text and listed_after);
+    try std.testing.expect(!listed.fallbacks.malformed_table);
+    // A close-tag suffix cannot invent another physical wiki list boundary.
+    var suffix: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const suffix_blocks = try suffix.renderBody(try std.fmt.allocPrint(a, "* {s} # [[same-line]]\n[[tail]]", .{captured}));
+    var suffix_tables: usize = 0;
+    var same_line = false;
+    var suffix_tail = false;
+    for (suffix_blocks) |block| {
+        if (block.table != null) {
+            suffix_tables += 1;
+            try std.testing.expectEqualStrings("*", block.list_path);
+        }
+        for (block.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, "same-line")) {
+                same_line = true;
+                try std.testing.expectEqual(Kind.paragraph, block.kind);
+                try std.testing.expect(std.mem.indexOf(u8, try flattened(a, block.spans), "#") != null);
+            }
+            if (span.kind == .link and std.mem.eql(u8, span.target, "tail")) suffix_tail = true;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), suffix_tables);
+    try std.testing.expect(same_line and suffix_tail);
     const controls = [_][]const u8{
         "<div>\n{|\n| <div>[[nested]]</div>\n</div>\n|}</div>\n[[tail]]",
         "<div><nowiki>\n{|\n</div>\n|}</nowiki>[[inside]]</div>[[tail]]",
