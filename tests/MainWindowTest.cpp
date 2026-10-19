@@ -4,6 +4,7 @@
 #include <QAbstractTextDocumentLayout>
 #include <QAccessible>
 #include <QApplication>
+#include <QAction>
 #include <QComboBox>
 #include <QDialog>
 #include <QDesktopServices>
@@ -26,11 +27,13 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMenu>
 #include <QStatusBar>
 #include <QPalette>
 #include <QPointer>
 #include <QPushButton>
 #include <QScopeGuard>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSet>
 #include <QSettings>
@@ -47,6 +50,7 @@
 #include <QTextBrowser>
 #include <QTextCursor>
 #include <QTextDocument>
+#include <QTextDocumentFragment>
 #include <QTextFragment>
 #include <QTextLayout>
 #include <QTextTable>
@@ -211,6 +215,11 @@ private slots:
         QVERIFY(!window.language_->isEnabled());
         auto *library = window.findChild<QPushButton *>(QStringLiteral("openDictionaries"));
         QVERIFY(library && library->isEnabled());
+        // Synthetic empty-library state, captured before ordinary recovery.
+        window.resize(780, 480);
+        QCoreApplication::processEvents();
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-synthetic-empty.png")));
         window.openRoot(fixture_, QStringLiteral("cat"));
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
@@ -556,6 +565,305 @@ private slots:
             QVERIFY(ink[3].left() > ink[2].right());
             QVERIFY(ink[4].left() > ink[3].right());
         }
+
+        // Exact captured AR names, encoded only after authoritative MdC mapping.
+        // This tests reader shaping; it does not decode MdC or certify all enclosures.
+        const QString tut = QString::fromUtf8("𓇋𓏠𓐰𓈖𓏏𓅱𓐴𓏏𓋹");
+        const QString akhenaten = QString::fromUtf8("𓍹𓐼𓇋𓏏𓐰𓈖𓐰𓇳𓅜𓐍𓐰𓈖𓐽𓍺");
+        const QString before = QString::fromUtf8("قبل ");
+        const QString after = QString::fromUtf8(" بعد ");
+        const QString caption = QString::fromUtf8("الرابط");
+        const auto inkFor = [](const QString &text, const QFont &font) {
+            QTextLayout layout(text, font);
+            layout.beginLayout();
+            QTextLine line = layout.createLine();
+            if (line.isValid()) line.setLineWidth(1000);
+            layout.endLayout();
+            QList<QRectF> ink;
+            for (const QGlyphRun &run : layout.glyphRuns()) {
+                const auto indexes = run.glyphIndexes();
+                const auto positions = run.positions();
+                for (qsizetype i = 0; i < indexes.size() && i < positions.size(); ++i) {
+                    const QRectF bounds = run.rawFont().pathForGlyph(indexes[i]).boundingRect();
+                    if (!bounds.isEmpty()) ink.append(bounds.translated(positions[i]));
+                }
+            }
+            return ink;
+        };
+        window.resize(780, 480);
+        window.show();
+        QCoreApplication::processEvents();
+        for (const QString &encoded : {tut, akhenaten}) {
+            const QJsonArray captured{
+                QJsonObject{{QStringLiteral("text"), before}, {QStringLiteral("language"), QStringLiteral("ar")},
+                            {QStringLiteral("direction"), QStringLiteral("rtl")}},
+                QJsonObject{{QStringLiteral("text"), encoded}, {QStringLiteral("classes"), QStringLiteral("Egyp")},
+                            {QStringLiteral("language"), QStringLiteral("egy")}, {QStringLiteral("direction"), QStringLiteral("ltr")}},
+                QJsonObject{{QStringLiteral("text"), after}, {QStringLiteral("language"), QStringLiteral("ar")},
+                            {QStringLiteral("direction"), QStringLiteral("rtl")}},
+                QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")}, {QStringLiteral("text"), caption},
+                            {QStringLiteral("target"), QStringLiteral("egy-following")}, {QStringLiteral("direction"), QStringLiteral("rtl")}}
+            };
+            window.reading_->setHtml(window.spansHtml(captured));
+            QTextDocument *document = window.reading_->document();
+            document->setTextWidth(window.reading_->viewport()->width());
+            const QSizeF size = document->documentLayout()->documentSize();
+            QCoreApplication::processEvents();
+            // Same existing Qt screenshot path, resolved inside the owned test cwd.
+            // Retain actual pixels before the new shaping assertions can fail.
+            QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+            const QString screenshot = encoded == tut
+                ? QStringLiteral(".tmp/ui-screenshots/desktop-egyptian-tut.png")
+                : QStringLiteral(".tmp/ui-screenshots/desktop-egyptian-akhenaten.png");
+            QVERIFY(window.grab().save(screenshot));
+            QVERIFY(qIsFinite(size.width()) && qIsFinite(size.height()));
+            QVERIFY(size.width() > 0 && size.height() > 0);
+            const QTextCursor signs = document->find(encoded);
+            QVERIFY(!signs.isNull());
+            QCOMPARE(signs.selectedText(), encoded);
+            const QFont font = signs.charFormat().font();
+            QVERIFY(font.families().contains(QStringLiteral("NewGardinerOmni")));
+            QVERIFY(!document->find(before.trimmed()).isNull());
+            QVERIFY(!document->find(after.trimmed()).isNull());
+            QVERIFY(!document->find(after.trimmed()).charFormat().font().families()
+                         .contains(QStringLiteral("NewGardinerOmni")));
+            QCOMPARE(document->find(caption).charFormat().anchorHref(), QStringLiteral("dict:egy-following"));
+            const QTextBlock block = signs.block();
+            qsizetype painted = 0;
+            for (const QGlyphRun &run : block.layout()->glyphRuns(signs.selectionStart() - block.position(), encoded.size())) {
+                QCOMPARE(run.rawFont().familyName(), QStringLiteral("NewGardinerOmni"));
+                const auto indexes = run.glyphIndexes();
+                const auto positions = run.positions();
+                QCOMPARE(indexes.size(), positions.size());
+                for (qsizetype i = 0; i < indexes.size(); ++i) {
+                    QVERIFY(indexes[i] != 0);
+                    const QRectF bounds = run.rawFont().pathForGlyph(indexes[i]).boundingRect().translated(positions[i]);
+                    QVERIFY(qIsFinite(bounds.left()) && qIsFinite(bounds.top()) &&
+                            qIsFinite(bounds.width()) && qIsFinite(bounds.height()));
+                    if (!bounds.isEmpty()) ++painted;
+                }
+            }
+            QVERIFY(painted > 0);
+            if (encoded == tut) {
+                QString withoutInsertion = encoded;
+                withoutInsertion.remove(QString::fromUtf8("𓐴"));
+                // Ignore invisible control glyphs: require an actual ink-layout change.
+                QVERIFY(inkFor(encoded, font) != inkFor(withoutInsertion, font));
+            }
+        }
+    }
+
+    void abbreviationExplanationsPreserveCopyLinksAndKeyboardAccess() {
+        // Required ordinary native test-bundle output; no hand-built interoperability fallback.
+        QString interopRoot = qEnvironmentVariable("DICT_ABBREVIATION_INTEROP_ROOT");
+        if (interopRoot.isEmpty()) interopRoot = QDir(fixture_).filePath(QStringLiteral("abbreviation-interop"));
+        const QString source = QDir(interopRoot).filePath(QStringLiteral(
+            "languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"));
+        QVERIFY2(QFileInfo::exists(source), qPrintable(source));
+        QTemporaryDir imported(QStringLiteral(".tmp/ui-native-abbreviations-XXXXXX"));
+        QVERIFY(imported.isValid());
+        const QString root = imported.path() + QStringLiteral("/library");
+        std::atomic_bool cancelled = false;
+        auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled,
+            [](const QString &, qint64, qint64) {});
+        LibraryStorage::commitImport(root, *prepared);
+        {
+            DictApi actual(root);
+            actual.select(QStringLiteral("English"), QStringLiteral("language"));
+            const std::array<QPair<QString, QString>, 2> samples{{
+                {QStringLiteral("Acupuncture abbreviation sample"), QStringLiteral("annotated.export.json")},
+                {QStringLiteral("Legacy format abbreviation control"), QStringLiteral("legacy.export.json")}
+            }};
+            for (const auto &sample : samples) {
+                QFile exported(QDir(interopRoot).filePath(sample.second));
+                QVERIFY2(exported.open(QIODevice::ReadOnly), qPrintable(exported.fileName()));
+                QJsonParseError exportError;
+                const QJsonDocument expected = QJsonDocument::fromJson(exported.readAll(), &exportError);
+                QCOMPARE(exportError.error, QJsonParseError::NoError);
+                QVERIFY(expected.isObject());
+                const QJsonArray expectedEntries = expected.object().value(QStringLiteral("entries")).toArray();
+                QCOMPARE(expectedEntries.size(), 1);
+                QVERIFY(expectedEntries.first().isObject());
+                QJsonParseError lookupError;
+                const QJsonDocument observed = QJsonDocument::fromJson(actual.lookup(sample.first), &lookupError);
+                QCOMPARE(lookupError.error, QJsonParseError::NoError);
+                QVERIFY(observed.isObject());
+                const QJsonArray actualEntries = observed.object().value(QStringLiteral("entries")).toArray();
+                QCOMPARE(actualEntries.size(), 1);
+                // Compare the entire typed Entry, not operation-specific export/lookup envelopes.
+                QCOMPARE(actualEntries.first(), expectedEntries.first());
+                QCOMPARE(actualEntries.first().toObject().value(QStringLiteral("title")).toString(), sample.first);
+            }
+        }
+        MainWindow window(root, QStringLiteral("Acupuncture abbreviation sample"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(780, 480);
+        window.show();
+        QTRY_COMPARE_WITH_TIMEOUT(title(window), QStringLiteral("Acupuncture abbreviation sample"), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.reading_->toPlainText().isEmpty(), 30000);
+        const QVector<QPair<QString, QString>> nativeExplanations{
+            {QStringLiteral("der."), QStringLiteral("derived terms")},
+            {QStringLiteral("?"), QStringLiteral("uncertain")},
+            {QStringLiteral("lbor."), QStringLiteral("learned borrowing")},
+            {QStringLiteral("f"), QStringLiteral("feminine gender")},
+            {QStringLiteral("c"), QStringLiteral("common gender")},
+            {QStringLiteral("m"), QStringLiteral("masculine gender")},
+            {QStringLiteral("n"), QStringLiteral("neuter gender")}
+        };
+        QCOMPARE(window.readingExplanations(), nativeExplanations);
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("der. ? lbor. f c m n")));
+        const QTextCursor derived = window.reading_->document()->find(QStringLiteral("der."));
+        const QTextCursor learned = window.reading_->document()->find(QStringLiteral("lbor."));
+        QVERIFY(!derived.isNull() && !learned.isNull());
+        QCOMPARE(QUrl::fromPercentEncoding(derived.charFormat().anchorHref().mid(5).toUtf8()),
+                 QStringLiteral("Appendix:Glossary#derived terms"));
+        QCOMPARE(QUrl::fromPercentEncoding(learned.charFormat().anchorHref().mid(5).toUtf8()),
+                 QStringLiteral("Appendix:Glossary#learned borrowing"));
+        QVERIFY(derived.charFormat().anchorHref().startsWith(QStringLiteral("dict:")));
+        QVERIFY(learned.charFormat().anchorHref().startsWith(QStringLiteral("dict:")));
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-native-abbreviations-reader.png")));
+        QVERIFY(window.openWord(QStringLiteral("Legacy format abbreviation control")));
+        QTRY_COMPARE_WITH_TIMEOUT(title(window), QStringLiteral("Legacy format abbreviation control"), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(window.reading_->toPlainText().contains(QStringLiteral("Plain control.")), 30000);
+        QVERIFY(window.readingExplanations().isEmpty());
+        const QTextCursor control = window.reading_->document()->find(QStringLiteral("control"));
+        QVERIFY(!control.isNull());
+        QCOMPARE(control.charFormat().anchorHref(), QStringLiteral("dict:cat"));
+        const QString feminine = QStringLiteral("feminine gender");
+        const QString styled = QString::fromUtf8("expanded <plain> \"quoted\" العربية");
+        const QJsonArray spans{
+            QJsonObject{{"kind", "link"}, {"text", "f"}, {"target", "cat"}, {"explanation", feminine}},
+            QJsonObject{{"text", " "}},
+            QJsonObject{{"text", "ab"}, {"bold", true}, {"explanation", styled}},
+            QJsonObject{{"text", "br"}, {"italic", true}, {"explanation", styled}},
+            QJsonObject{{"text", " "}},
+            QJsonObject{{"text", "f"}, {"explanation", "masculine meaning in another context"}},
+            QJsonObject{{"text", " "}},
+            QJsonObject{{"text", "?"}, {"explanation", "uncertain"}}
+        };
+        window.reading_->setHtml(window.spansHtml(spans));
+        QCoreApplication::processEvents();
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-abbreviations-reader.png")));
+        QCOMPARE(window.reading_->toPlainText(), QStringLiteral("f abbr f ?"));
+        QTextDocument *document = window.reading_->document();
+        const QTextCursor first = document->find(QStringLiteral("f"));
+        QCOMPARE(first.charFormat().toolTip(), feminine); // Actual Qt HTML import, no fallback parser.
+        QCOMPARE(first.charFormat().anchorHref(), QStringLiteral("dict:cat"));
+        const auto explanations = window.readingExplanations();
+        QCOMPARE(explanations.size(), 4);
+        QCOMPARE(explanations.at(0), qMakePair(QStringLiteral("f"), feminine));
+        QCOMPARE(explanations.at(1), qMakePair(QStringLiteral("abbr"), styled));
+        QCOMPARE(explanations.at(2).first, QStringLiteral("f"));
+        QVERIFY(explanations.at(2).second != feminine);
+        QCOMPARE(explanations.at(3), qMakePair(QStringLiteral("?"), QStringLiteral("uncertain")));
+        window.reading_->selectAll();
+        QCOMPARE(window.reading_->textCursor().selection().toPlainText(), QStringLiteral("f abbr f ?"));
+        window.activateWindow();
+        window.reading_->setFocus();
+        auto focusContext = [&] {
+            auto describe = [](QWidget *widget) {
+                return widget ? QString::fromLatin1(widget->metaObject()->className()) + QStringLiteral("/") + widget->objectName() : QStringLiteral("none");
+            };
+            return QStringLiteral("active=%1 focus=%2 modal=%3 popup=%4 windowActive=%5 readerVisible=%6 readerEnabled=%7")
+                .arg(describe(QApplication::activeWindow()), describe(QApplication::focusWidget()),
+                     describe(QApplication::activeModalWidget()), describe(QApplication::activePopupWidget()))
+                .arg(window.isActiveWindow()).arg(window.reading_->isVisible()).arg(window.reading_->isEnabled());
+        };
+        QTRY_VERIFY2(window.reading_->hasFocus(), qPrintable(focusContext()));
+        bool inspected = false;
+        bool timedOut = false;
+        QTimer fallback;
+        fallback.setSingleShot(true);
+        connect(&fallback, &QTimer::timeout, &window, [&] {
+            timedOut = true;
+            for (QDialog *dialog : window.findChildren<QDialog *>()) dialog->reject();
+            for (QMenu *menu : window.findChildren<QMenu *>()) menu->close();
+        });
+        fallback.start(2000);
+        QTimer::singleShot(0, &window, [&] {
+            auto *menu = window.findChild<QMenu *>(QStringLiteral("readerContextMenu"));
+            QVERIFY(menu);
+            auto *action = menu->findChild<QAction *>(QStringLiteral("entryAbbreviations"));
+            QVERIFY(action);
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = window.findChild<QDialog *>(QStringLiteral("abbreviationsDialog"));
+                QVERIFY(dialog);
+                auto *details = dialog->findChild<QTextBrowser *>(QStringLiteral("abbreviationExplanations"));
+                QVERIFY(details);
+                QCoreApplication::processEvents();
+                QVERIFY(dialog->grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-abbreviations-dialog.png")));
+                QCOMPARE(details->accessibleName(), QStringLiteral("Abbreviation explanations"));
+                QVERIFY(details->toPlainText().contains(styled));
+                QVERIFY(details->toPlainText().contains(QStringLiteral("f: feminine gender")));
+                QVERIFY(details->toPlainText().contains(QStringLiteral("?: uncertain")));
+                inspected = true;
+                dialog->reject();
+            });
+            menu->setActiveAction(action);
+            QTest::keyClick(menu, Qt::Key_Return);
+        });
+        QTest::keyClick(window.reading_, Qt::Key_F10, Qt::ShiftModifier);
+        fallback.stop();
+        QVERIFY(!timedOut);
+        QVERIFY(inspected);
+        QTRY_VERIFY2(window.reading_->hasFocus(), qPrintable(focusContext()));
+        QCOMPARE(window.reading_->toPlainText(), QStringLiteral("f abbr f ?"));
+        QCOMPARE(document->find(QStringLiteral("f")).charFormat().anchorHref(), QStringLiteral("dict:cat"));
+        window.reading_->setHtml(window.spansHtml(QJsonArray{QJsonObject{{"text", "ordinary"}}}));
+        QVERIFY(window.readingExplanations().isEmpty());
+        // Explained-only heading companions are rich even without a navigation target.
+        const QJsonObject heading{{"kind", "heading"}, {"level", 3},
+            {"spans", QJsonArray{QJsonObject{{"text", "Noun"}, {"explanation", "noun meaning"}}}}};
+        const QJsonObject section{{"title", "Noun"}, {"level", 3}, {"blocks", QJsonArray{heading}}};
+        window.collapsedSections_.clear();
+        window.reading_->setHtml(window.entryHtml(QJsonObject{{"sections", QJsonArray{section}}}));
+        QCOMPARE(window.reading_->toPlainText().count(QStringLiteral("Noun")), 1);
+        QCOMPARE(window.reading_->document()->find(QStringLiteral("Noun")).charFormat().toolTip(), QStringLiteral("noun meaning"));
+        QCOMPARE(window.readingExplanations().size(), 1);
+        // A title-only annotation must use the same ordinary reader keyboard route.
+        QJsonObject titleResponse = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("Legacy format abbreviation control"))).object();
+        QJsonObject titleEntry = titleResponse.value(QStringLiteral("entries")).toArray().first().toObject();
+        titleEntry.insert(QStringLiteral("display_title"), QJsonArray{
+            QJsonObject{{"text", "f"}, {"explanation", "title feminine gender"}}});
+        titleResponse.insert(QStringLiteral("entries"), QJsonArray{titleEntry});
+        window.renderResponse(QJsonDocument(titleResponse).toJson(), false);
+        QVERIFY(window.title_->isVisible());
+        QTextDocument displayedTitle;
+        displayedTitle.setHtml(window.title_->text());
+        QCOMPARE(displayedTitle.toPlainText(), QStringLiteral("f"));
+        const QVector<QPair<QString, QString>> titleOnly{{QStringLiteral("f"), QStringLiteral("title feminine gender")}};
+        QCOMPARE(window.readingExplanations(), titleOnly);
+        inspected = false;
+        timedOut = false;
+        window.reading_->setFocus();
+        fallback.start(2000);
+        QTimer::singleShot(0, &window, [&] {
+            auto *menu = window.findChild<QMenu *>(QStringLiteral("readerContextMenu"));
+            QVERIFY(menu);
+            auto *action = menu->findChild<QAction *>(QStringLiteral("entryAbbreviations"));
+            QVERIFY(action);
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = window.findChild<QDialog *>(QStringLiteral("abbreviationsDialog"));
+                QVERIFY(dialog);
+                auto *details = dialog->findChild<QTextBrowser *>(QStringLiteral("abbreviationExplanations"));
+                QVERIFY(details);
+                QVERIFY(details->toPlainText().contains(QStringLiteral("f: title feminine gender")));
+                inspected = true;
+                dialog->reject();
+            });
+            menu->setActiveAction(action);
+            QTest::keyClick(menu, Qt::Key_Return);
+        });
+        QTest::keyClick(window.reading_, Qt::Key_F10, Qt::ShiftModifier);
+        fallback.stop();
+        QVERIFY(!timedOut);
+        QVERIFY(inspected);
+        QTRY_VERIFY2(window.reading_->hasFocus(), qPrintable(focusContext()));
+        QVERIFY(window.openWord(QStringLiteral("Legacy format abbreviation control")));
+        QTRY_COMPARE_WITH_TIMEOUT(title(window), QStringLiteral("Legacy format abbreviation control"), 30000);
+        QVERIFY(window.readingExplanations().isEmpty());
     }
 
     void cancellationKeepsLastWorkingDictionary() {
@@ -893,6 +1201,32 @@ private slots:
         QVERIFY(inside);
         if (!queued) {
             QVERIFY(window.loading_ && !window.api_);
+            // Existing held worker makes this loading state deterministic.
+            window.resize(780, 480);
+            QCoreApplication::processEvents();
+            auto *sidebar = window.findChild<QScrollArea *>(QStringLiteral("readerSidebarScroll"));
+            QVERIFY(sidebar);
+            QVERIFY(window.results_->height() >= window.results_->minimumSizeHint().height());
+            QPushButton *settings = nullptr;
+            for (QPushButton *button : sidebar->findChildren<QPushButton *>()) {
+                QVERIFY(button->height() >= button->minimumSizeHint().height());
+                QVERIFY(button->width() >= button->minimumSizeHint().width());
+                if (button->text() == QStringLiteral("Settings")) settings = button;
+            }
+            QVERIFY(settings);
+            QCOMPARE(sidebar->horizontalScrollBar()->maximum(), 0);
+            sidebar->verticalScrollBar()->setValue(0);
+            QCoreApplication::processEvents();
+            QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+            QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-synthetic-held-loading.png")));
+            window.activateWindow();
+            window.cancelOpening_->setFocus();
+            QTRY_VERIFY(window.cancelOpening_->hasFocus());
+            for (int steps = 0; steps < 24 && !settings->hasFocus(); ++steps)
+                QTest::keyClick(QApplication::focusWidget(), Qt::Key_Tab);
+            QTRY_VERIFY(settings->hasFocus());
+            QTRY_VERIFY(sidebar->viewport()->rect().contains(QRect(settings->mapTo(sidebar->viewport(), QPoint()), settings->size())));
+            QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-synthetic-held-loading-keyboard.png")));
             release.release(); blocker.waitForFinished();
         }
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
@@ -1447,6 +1781,11 @@ private slots:
         QCOMPARE(window.results_->count(), 0);
         const QString literal = QStringLiteral("No exact entry for “<b>missing</b>”. Try a suggestion or another collection.");
         QCOMPARE(window.resultStatus_->text(), literal);
+        // Capture the ordinary missing-word state before the isolated label-render oracle.
+        window.resize(780, 480);
+        QCoreApplication::processEvents();
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-synthetic-no-exact-match.png")));
         window.resultStatus_->setFixedSize(440, 120);
         QLabel plain(window.resultStatus_->parentWidget());
         QLabel rich(window.resultStatus_->parentWidget());

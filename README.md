@@ -8,8 +8,11 @@ This repository contains:
 - a native Qt 6 reader using the core C ABI;
 - a browser reader under `web/`.
 
-Both consume compiled WIKBLB08/DPR2 presentation data. Lua, templates and wikitext
-remain build-time concerns in the core repository.
+The native Qt 0.4.0 reader and browser reader support compiled WIKBLB08
+presentation in DPR2 and DPR3 formats, including DPR3 abbreviation explanations.
+Older app versions do not support DPR3 dictionaries; update the app before
+importing them. Lua, templates and wikitext remain build-time concerns in the core
+repository.
 
 ## Native Qt reader
 

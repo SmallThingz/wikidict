@@ -44,7 +44,7 @@ void appendLength(QByteArray &bytes, quint64 value) {
         bytes.append(char(byte | (value ? 128 : 0)));
     } while (value);
 }
-QByteArray aliasRecord(const QByteArray &source = "Cats", const QByteArray &target = "cat") {
+QByteArray aliasRecord(const QByteArray &source = "Cats", const QByteArray &target = "cat", const QByteArray &presentationOverride = {}) {
     const QByteArray fixture = read(QStringLiteral("tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"));
     qsizetype at = 9;
     for (int field = 0; field < 3; ++field) { at = fixture.indexOf('\0', at) + 1; require(at > 0, "fixture framing"); }
@@ -56,7 +56,7 @@ QByteArray aliasRecord(const QByteArray &source = "Cats", const QByteArray &targ
         if (!(byte & 128)) break;
     }
     require(length <= quint64(fixture.size() - at), "fixture payload extent");
-    const QByteArray presentation = fixture.mid(at, qsizetype(length));
+    const QByteArray presentation = presentationOverride.isEmpty() ? fixture.mid(at, qsizetype(length)) : presentationOverride;
     QByteArray payload("DAL1", 4);
     payload.append(QByteArray(4, '\0'));
     payload.append(char(1)); payload.append(char(1));
@@ -83,6 +83,29 @@ int main(int argc, char **argv) {
         std::atomic_bool cancelled = false;
         qint64 events = 0;
         const auto progress = [&](const QString &, qint64, qint64) { ++events; };
+        // These exercise both Qt importer header gates, not native DPR3 decoding.
+        // Empty presentation arrays have no version-specific per-span fields.
+        for (const QByteArray &magic : {QByteArray("DPR2"), QByteArray("DPR3"), QByteArray("DPR4")}) {
+            const QByteArray presentation = magic + QByteArray(28, '\0');
+            QByteArray ordinary = blob("English", {"annotation"});
+            ordinary.chop(5); // existing one-byte length plus DPR2 marker
+            appendLength(ordinary, quint64(presentation.size())); ordinary.append(presentation);
+            const QString gateRoot = temporary.filePath(QStringLiteral("gate-") + QString::fromLatin1(magic));
+            write(source, ordinary);
+            if (magic == "DPR4")
+                rejects([&] { LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress); }, "reject unsupported ordinary presentation version");
+            else {
+                auto accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
+                require(accepted->dictionary.words == 1, "accept ordinary DPR2 and DPR3 header gates");
+            }
+            write(source, aliasBlob(aliasRecord("Cats", "cat", presentation)));
+            if (magic == "DPR4")
+                rejects([&] { LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress); }, "reject unsupported DAL1 presentation version");
+            else {
+                auto accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
+                require(accepted->dictionary.kind == QStringLiteral("alias"), "accept DPR2 and DPR3 DAL1 embedded header gates");
+            }
+        }
         const QByteArray original = blob("English", {"apple", "banana"});
         write(source, original);
         auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled, progress);

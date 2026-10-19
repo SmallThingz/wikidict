@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {entryClue,hitKey,refreshSavedClue} from './preview.js';
 
-const span=(text,script='',extra={})=>({kind:'text',text,trail:'',script,...extra});
+const span=(text,classes='',extra={})=>({kind:'text',text,trail:'',classes,...extra});
 const block=(kind,...spans)=>({kind,spans});
 const entry=(...blocks)=>({title:'Fallback title',sections:[{title:'Any section',blocks}]});
 

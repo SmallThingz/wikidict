@@ -3,6 +3,7 @@
 #include "MediaPanel.hpp"
 
 #include <QApplication>
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -25,10 +26,12 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMenu>
 #include <QPalette>
 #include <QPushButton>
 #include <QProgressBar>
 #include <QRandomGenerator>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSet>
@@ -42,8 +45,11 @@
 #include <QSplitter>
 #include <QTabWidget>
 #include <QTextBrowser>
+#include <QTextBlock>
 #include <QTextBoundaryFinder>
+#include <QTextDocument>
 #include <QTextEdit>
+#include <QTextFragment>
 #include <QTextOption>
 #include <QTimer>
 #include <QUrl>
@@ -75,7 +81,7 @@ QJsonArray sectionHeadingSpans(const QJsonObject &section) {
         first.value(QStringLiteral("level")).toInt() != section.value(QStringLiteral("level")).toInt()) return {};
     const QJsonArray spans = first.value(QStringLiteral("spans")).toArray();
     QString label;
-    bool actionable = false;
+    bool rich = false;
     for (const QJsonValue &value : spans) {
         const QJsonObject span = value.toObject();
         const QString kind = span.value(QStringLiteral("kind")).toString();
@@ -88,7 +94,9 @@ QJsonArray sectionHeadingSpans(const QJsonObject &section) {
         } else label += text + trail;
         if ((kind == QStringLiteral("link") || kind == QStringLiteral("external_link")) &&
             !span.value(QStringLiteral("target")).toString().isEmpty() && (!text.isEmpty() || !trail.isEmpty()))
-            actionable = true;
+            rich = true;
+        if (!span.value(QStringLiteral("explanation")).toString().isEmpty() && (!text.isEmpty() || !trail.isEmpty()))
+            rich = true;
     }
     const auto edgeSpace = [](QChar c) {
         return c == QChar(' ') || c == QChar('\t') || c == QChar('\r') || c == QChar('\n') || c == QChar(0x00a0);
@@ -96,7 +104,7 @@ QJsonArray sectionHeadingSpans(const QJsonObject &section) {
     qsizetype start = 0, end = label.size();
     while (start < end && edgeSpace(label[start])) ++start;
     while (end > start && edgeSpace(label[end - 1])) --end;
-    return actionable && label.mid(start, end - start) == title ? spans : QJsonArray{};
+    return rich && label.mid(start, end - start) == title ? spans : QJsonArray{};
 }
 
 QStringList poemClassTokens(const QJsonObject &span) {
@@ -417,8 +425,14 @@ void MainWindow::setupUi() {
 
     auto *splitter = new QSplitter(this);
     splitter->setObjectName(QStringLiteral("readerSplit"));
-    auto *sidebar = new QWidget(splitter);
+    auto *sideScroll = new QScrollArea(splitter);
+    sideScroll->setObjectName(QStringLiteral("readerSidebarScroll"));
+    sideScroll->setFrameShape(QFrame::NoFrame);
+    sideScroll->setWidgetResizable(true);
+    sideScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *sidebar = new QWidget;
     auto *side = new QVBoxLayout(sidebar);
+    side->setSizeConstraint(QLayout::SetMinimumSize);
     side->setContentsMargins(18, 18, 14, 18);
     side->setSpacing(10);
     auto *brand = new QLabel(QStringLiteral("dict."), sidebar);
@@ -490,6 +504,9 @@ void MainWindow::setupUi() {
     sideActions->addWidget(learnButton, 2, 0);
     sideActions->addWidget(settingsButton, 2, 1);
     side->addLayout(sideActions);
+    sideScroll->setWidget(sidebar);
+    sideScroll->setMinimumWidth(sidebar->minimumSizeHint().width()
+        + sideScroll->style()->pixelMetric(QStyle::PM_ScrollBarExtent));
 
     auto *content = new QWidget(splitter);
     readerContent_ = content;
@@ -563,6 +580,9 @@ void MainWindow::setupUi() {
     reading_->setOpenExternalLinks(false);
     reading_->setFrameShape(QFrame::NoFrame);
     reading_->setAccessibleName(QStringLiteral("Dictionary entry"));
+    reading_->installEventFilter(this);
+    reading_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(reading_, &QTextBrowser::customContextMenuRequested, this, &MainWindow::showReaderContextMenu);
     json_ = new QTextEdit(entryTabs_);
     json_->setReadOnly(true);
     json_->setLineWrapMode(QTextEdit::NoWrap);
@@ -572,7 +592,7 @@ void MainWindow::setupUi() {
     entryTabs_->addTab(json_, QStringLiteral("Entry data"));
     right->addWidget(entryTabs_, 1);
 
-    splitter->addWidget(sidebar);
+    splitter->addWidget(sideScroll);
     splitter->addWidget(content);
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
@@ -812,6 +832,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
         updateReaderLayout();
     if (event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
+        if (watched == reading_ && (key->key() == Qt::Key_Menu ||
+            (key->key() == Qt::Key_F10 && key->modifiers() == Qt::ShiftModifier))) {
+            showReaderContextMenu(reading_->cursorRect().center());
+            return true;
+        }
         if (watched == results_ && (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)) {
             if (auto *item = results_->currentItem()) openWord(item->data(Qt::UserRole).toString());
             return true;
@@ -923,6 +948,70 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     const QString destination = fragment ? *fragment :
         (redirect.value(QStringLiteral("followed")).toBool() ? redirect.value(QStringLiteral("fragment")).toString() : QString());
     jumpToFragment(destination);
+}
+
+QVector<QPair<QString, QString>> MainWindow::readingExplanations() const {
+    QVector<QPair<QString, QString>> result;
+    const auto collect = [&](const QTextDocument &document) {
+        int previousEnd = -1;
+        for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const QTextFragment fragment = it.fragment();
+                if (!fragment.isValid()) continue;
+                const QString explanation = fragment.charFormat().toolTip();
+                if (explanation.isEmpty()) { previousEnd = -1; continue; }
+                if (!result.isEmpty() && previousEnd == fragment.position() && result.last().second == explanation)
+                    result.last().first += fragment.text();
+                else result.append({fragment.text(), explanation});
+                previousEnd = fragment.position() + fragment.length();
+            }
+        }
+    };
+    // QLabel exposes the exact rendered rich-text HTML, not a public QTextDocument.
+    QTextDocument titleDocument;
+    titleDocument.setHtml(title_->text());
+    collect(titleDocument);
+    collect(*reading_->document());
+    return result;
+}
+void MainWindow::showReaderContextMenu(const QPoint &position) {
+    std::unique_ptr<QMenu> menu(reading_->createStandardContextMenu());
+    menu->setParent(reading_);
+    menu->setObjectName(QStringLiteral("readerContextMenu"));
+    QAction *explain = nullptr;
+    if (!readingExplanations().isEmpty()) {
+        menu->addSeparator();
+        explain = menu->addAction(QStringLiteral("Abbreviations…"));
+        explain->setObjectName(QStringLiteral("entryAbbreviations"));
+    }
+    QAction *chosen = menu->exec(reading_->viewport()->mapToGlobal(position));
+    const bool showExplanations = explain && chosen == explain;
+    menu.reset();
+    if (showExplanations) showAbbreviations();
+}
+void MainWindow::showAbbreviations() {
+    const auto explanations = readingExplanations();
+    if (explanations.isEmpty()) return;
+    auto dialog = std::make_unique<QDialog>(this);
+    dialog->setObjectName(QStringLiteral("abbreviationsDialog"));
+    dialog->setWindowTitle(QStringLiteral("Abbreviations"));
+    auto *layout = new QVBoxLayout(dialog.get());
+    auto *details = new QTextBrowser(dialog.get());
+    details->setObjectName(QStringLiteral("abbreviationExplanations"));
+    details->setAccessibleName(QStringLiteral("Abbreviation explanations"));
+    details->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    QStringList lines;
+    for (const auto &item : explanations) lines.append(item.first + QStringLiteral(": ") + item.second);
+    details->setPlainText(lines.join(QStringLiteral("\n\n")));
+    layout->addWidget(details);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog.get());
+    connect(buttons, &QDialogButtonBox::rejected, dialog.get(), &QDialog::reject);
+    layout->addWidget(buttons);
+    dialog->resize(420, 300);
+    dialog->exec();
+    dialog.reset();
+    activateWindow();
+    reading_->setFocus(Qt::OtherFocusReason);
 }
 
 void MainWindow::refreshReading() {
@@ -1061,6 +1150,10 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (kind == QStringLiteral("line_break")) { out += QStringLiteral("<br>"); continue; }
             const QString classes = span.value(QStringLiteral("classes")).toString();
             QString text = (span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString()).toHtmlEscaped();
+            const QString explanation = span.value(QStringLiteral("explanation")).toString();
+            if (!explanation.isEmpty())
+                text = QStringLiteral("<span title=\"%1\">%2</span>")
+                    .arg(explanation.toHtmlEscaped(), text);
             // Keep the script font on the characters themselves: Qt's full-page
             // body style can otherwise replace an outer span's font inside <b>.
             if (!span.value(QStringLiteral("code")).toBool() &&

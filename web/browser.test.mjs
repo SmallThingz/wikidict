@@ -10,13 +10,15 @@ import assert from 'node:assert/strict';
 import {aliasCases,aliasPayload,dictionaryBlob,presentation} from './alias-fixtures.mjs';
 const root=fileURLToPath(new URL('../build/web/',import.meta.url)),report=fileURLToPath(new URL('../artifacts/web/',import.meta.url));
 await mkdir(report,{recursive:true});
+const nativeOnly=process.argv.includes('--native-only');
 const fixture=process.env.WIKBLB_FIXTURE||fileURLToPath(new URL('../tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb',import.meta.url));
-const raw=await readFile(fixture),xz=execFileSync('xz',['-1','--block-size=64KiB','-c'],{input:raw});
+const raw=nativeOnly?null:await readFile(fixture),xz=nativeOnly?null:execFileSync('xz',['-1','--block-size=64KiB','-c'],{input:raw});
 const server=createServer(async(req,res)=>{try{const name=decodeURIComponent(new URL(req.url,'http://localhost').pathname),file=path.resolve(root,'.'+(name==='/'?'/index.html':name));if(!file.startsWith(root))throw Error('path');const bytes=await readFile(file);res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.ttf')?'font/ttf':'text/html');res.end(bytes);}catch{res.writeHead(404);res.end();}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM||'/opt/brave-bin/brave',headless:true,args:['--no-sandbox']});
 const errors=[];
 try{
+ if(!nativeOnly){
  const rendererBundle=await buildRendererTestBundle({entryPoints:[fileURLToPath(new URL('./renderer.js',import.meta.url))],bundle:true,format:'iife',globalName:'WikidictRendererQA',write:false});
  const rendererPage=await browser.newPage();rendererPage.on('pageerror',e=>errors.push(e.message));
  await rendererPage.setContent('<main id="compiled-renderer-fixture"></main>');
@@ -84,7 +86,165 @@ try{
  await rendererPage.getByRole('link',{name:'Unmatched fragment',exact:true}).click();
  assert.deepEqual(await rendererPage.evaluate(()=>window.referenceNavigations),['a title #reference-2 & 猫','#reference-404']);
 
+
+ // Explanation disclosure is independent of compact labels and their existing link action.
+ const explained=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture');window.explanationLinks=[];
+  const value=(text,extra={})=>({kind:'text',text,trail:'',explanation:'plain <meaning> & text',...extra});
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Annotations',kind:'language',language:'English',
+   display_title:[value('Display')],preamble_spans:[value('Preamble')],sections:[{title:'Meaning',blocks:[
+    {kind:'definition',spans:[value('der.',{kind:'link',target:'Appendix:Glossary#derived terms',explanation:'derived terms',bold:true}),value(' tail',{explanation:''})]},
+    {kind:'paragraph',spans:[value('split ',{explanation:'split label'}),value('label',{italic:true,explanation:'split label'})]},
+    {kind:'table',spans:[],table:{caption:[value('Caption')],rows:[{cells:[{header:false,colspan:1,rowspan:1,spans:[value('Cell')]}]}]}}
+   ]}],references:[{number:1,group_number:1,group:'',spans:[value('Reference')]}]},target=>window.explanationLinks.push(target),{collapseOtherSections:false,collapseDetails:false}));
+  const link=host.querySelector('.definition a'),id=link.getAttribute('aria-describedby');
+  return {compact:host.querySelector('.definition .body').textContent,href:link.getAttribute('href'),description:host.querySelector('#'+id).textContent,
+   labels:[...host.querySelectorAll('.abbreviation-explanations dt')].map(n=>n.textContent),
+   noMarkup:host.querySelectorAll('.abbreviation-explanations meaning').length,
+   annotatedContainers:['h1','caption','td','.reference'].map(selector=>!!host.querySelector(selector)?.querySelector('abbr')),
+   annotatedPreamble:[...host.querySelectorAll('details')].some(el=>el.querySelector(':scope > summary')?.textContent==='About this entry' && !!el.querySelector('abbr'))};
+ });
+ assert.equal(explained.compact,'der. tail');assert.equal(explained.href,'#'+encodeURIComponent('Appendix:Glossary#derived terms'));assert.equal(explained.description,'derived terms');
+ assert.deepEqual(explained.labels,['Display','Preamble','der.','split label','Caption','Cell','Reference']);assert.equal(explained.noMarkup,0);
+ assert.deepEqual(explained.annotatedContainers,[true,true,true,true]);assert.equal(explained.annotatedPreamble,true);
+ const annotations=rendererPage.locator('details.abbreviation-explanations');
+ await annotations.locator('summary').focus();await rendererPage.keyboard.press('Enter');assert.equal(await annotations.evaluate(el=>el.open),true);
+ assert.equal(await annotations.getByText('plain <meaning> & text',{exact:true}).first().isVisible(),true);
+ const annotatedLink=rendererPage.getByRole('link',{name:'der.',exact:true});await annotatedLink.focus();await rendererPage.keyboard.press('Enter');
+ assert.deepEqual(await rendererPage.evaluate(()=>window.explanationLinks),['Appendix:Glossary#derived terms']);
+ await rendererPage.evaluate(()=>{const host=document.getElementById('compiled-renderer-fixture');host.replaceChildren(WikidictRendererQA.renderEntry({title:'Plain',kind:'language',sections:[{title:'Meaning',blocks:[{kind:'definition',spans:[{kind:'text',text:'No annotation'}]}]}]},()=>{}));});
+ assert.equal(await rendererPage.locator('.abbreviation-explanations,abbr[title]').count(),0);
+
+
+
+ const trailCoverage=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture');
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Trails',kind:'language',sections:[{title:'Body',blocks:[{kind:'paragraph',spans:[
+   {kind:'link',text:'linked',target:'Target',trail:'suffix',explanation:'linked trail'},
+   {kind:'line_break',text:'',trail:'continued',explanation:'line trail'}
+  ]},
+   {kind:'paragraph',spans:[{kind:'line_break',text:'',trail:'line only',explanation:'only line'}]},
+   {kind:'paragraph',spans:[{kind:'text',text:'',trail:'plain only',explanation:'only text'}]},
+   {kind:'paragraph',spans:[{kind:'text',text:'',trail:'',explanation:'empty is not content'}]}
+  ]}]},()=>{}, {collapseOtherSections:false}));
+  const body=host.querySelector('.body'),link=body.querySelector('a');
+  return {text:body.textContent,linkedText:link.textContent,trailText:link.nextSibling.textContent,trailTag:link.nextSibling.tagName,trailTitle:link.nextSibling.title,
+   breaks:body.querySelectorAll('br').length,lastText:body.lastChild.textContent,lastTag:body.lastChild.tagName,lastTitle:body.lastChild.title,
+   notes:[...host.querySelectorAll('.abbreviation-explanations dt')].map(el=>el.textContent),
+   paragraphCount:host.querySelectorAll('.block.paragraph').length,
+   trailOnly:[...host.querySelectorAll('.block.paragraph .body')].slice(1).map(el=>({text:el.textContent,trailTag:el.lastChild.tagName,trailTitle:el.lastChild.title}))};
+ });
+ assert.deepEqual(trailCoverage,{text:'linkedsuffixcontinued',linkedText:'linked',trailText:'suffix',trailTag:'ABBR',trailTitle:'linked trail',breaks:1,lastText:'continued',lastTag:'ABBR',lastTitle:'line trail',notes:['linkedsuffix','continued','line only','plain only'],paragraphCount:3,trailOnly:[{text:'line only',trailTag:'ABBR',trailTitle:'only line'},{text:'plain only',trailTag:'ABBR',trailTitle:'only text'}]});
+ const headingCoverage=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture');window.headingLinks=[];
+  const text=(text,extra={})=>({kind:'text',text,trail:'',...extra});
+  const section=(title,spans,level=2)=>({title,level:2,blocks:[{kind:'heading',level,spans},{kind:'paragraph',spans:[text('Retained body')]}]});
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Companions',kind:'language',sections:[
+   section('Explained',[text('\u00a0Explained\u00a0',{explanation:'heading note'})]),
+   section('Linked',[text('Linked',{kind:'link',target:'Heading target'})]),
+   section('Plain',[text('Plain')]),section('Mismatch',[text('Other',{explanation:'other note'})]),
+   section('WrongLevel',[text('WrongLevel',{explanation:'level note'})],3),
+   section('Break',[text('Break',{explanation:'break note'}),{kind:'line_break',text:'',trail:' '}]),
+   section('EdgeBreak',[{kind:'line_break',text:'',trail:''},text('EdgeBreak',{explanation:'edge note'})])
+  ]},target=>window.headingLinks.push(target),{collapseOtherSections:true}));
+  return ['Explained','Linked','Plain','Mismatch','WrongLevel','Break','EdgeBreak'].map(id=>{
+   const el=host.querySelector('#'+id);return {id,summary:el.querySelector(':scope > summary').textContent.trim(),headingCount:el.querySelectorAll('.block.heading').length};
+  });
+ });
+ assert.deepEqual(headingCoverage.map(x=>x.headingCount),[0,0,1,1,1,1,0]);
+ assert.deepEqual(headingCoverage.map(x=>x.summary),['Explained','Linked','Plain','Mismatch','WrongLevel','Break','EdgeBreak']);
+ const headingSection=rendererPage.locator('#Linked'),headingLink=headingSection.locator(':scope > summary a');
+ assert.equal(await headingSection.evaluate(el=>el.open),false);await headingLink.focus();await rendererPage.keyboard.press('Enter');
+ assert.deepEqual(await rendererPage.evaluate(()=>window.headingLinks),['Heading target']);assert.equal(await headingSection.evaluate(el=>el.open),false);
+ await headingSection.locator(':scope > summary').focus();await rendererPage.keyboard.press('Enter');assert.equal(await headingSection.evaluate(el=>el.open),true);
+
  await rendererPage.close();
+ }
+
+ // Native fixture context is isolated from the existing IndexedDB/library contracts.
+ const abbreviationRoot=process.env.WIKBLB_ABBREVIATION_ROOT||fileURLToPath(new URL('../tests/fixtures/abbreviation-interop/',import.meta.url));
+ const abbreviationBlob=path.join(abbreviationRoot,'languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb');
+ const nativeContext=await browser.newContext();
+ try{
+  const nativePage=await nativeContext.newPage();nativePage.on('pageerror',e=>errors.push(e.message));
+  await nativePage.goto(`http://127.0.0.1:${server.address().port}`);
+  await nativePage.locator('#file').setInputFiles(abbreviationBlob);await nativePage.getByText(/English · 2 words/).waitFor();
+  await nativePage.getByRole('button',{name:'Search',exact:true}).click();
+  await nativePage.getByRole('searchbox').fill('Acupuncture abbreviation sample');
+  await nativePage.getByRole('button',{name:'Open Acupuncture abbreviation sample',exact:true}).click();
+  await nativePage.locator('#entry h1').filter({hasText:'Acupuncture abbreviation sample'}).waitFor();
+  const nativeBody=nativePage.locator('#entry .block.paragraph .body');
+  const bodySection=nativePage.locator('#entry details:not(.abbreviation-explanations)').filter({has:nativePage.locator('.block.paragraph .body')});
+  assert.equal(await bodySection.count(),1);
+  if(!await bodySection.evaluate(el=>el.open))await bodySection.locator(':scope > summary').click();
+  await nativeBody.scrollIntoViewIfNeeded();assert.equal(await nativeBody.isVisible(),true);
+  assert.equal(await nativeBody.textContent(),'der. ? lbor. f c m n');
+  const nativeNotes=nativePage.locator('#entry details.abbreviation-explanations');
+  if(!await nativeNotes.evaluate(el=>el.open))await nativeNotes.locator(':scope > summary').click();
+  assert.equal(await nativeNotes.evaluate(el=>el.open),true);
+  assert.deepEqual(await nativeNotes.locator('dt').allTextContents(),['der.','?','lbor.','f','c','m','n']);
+  assert.deepEqual(await nativeNotes.locator('dd').allTextContents(),['derived terms','uncertain','learned borrowing','feminine gender','common gender','masculine gender','neuter gender']);
+  for(const [width,height] of [[360,800],[1440,900]]){
+   await nativePage.setViewportSize({width,height});
+   try{
+    if(await nativeNotes.evaluate(el=>el.open))await nativeNotes.locator(':scope > summary').click();
+    await nativeBody.scrollIntoViewIfNeeded();assert.equal(await nativeBody.isVisible(),true);
+    assert.equal(await nativePage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'native reader horizontal overflow');
+    await nativePage.screenshot({path:path.join(report,`abbreviations-native-reader-${width}.png`),fullPage:true});
+    await nativeNotes.locator(':scope > summary').click();assert.equal(await nativeNotes.evaluate(el=>el.open),true);
+    const descriptions=nativeNotes.locator('dd');assert.equal(await descriptions.count(),7);
+    for(let i=0;i<7;i++){
+     const description=descriptions.nth(i);await description.scrollIntoViewIfNeeded();assert.equal(await description.isVisible(),true);
+     assert.equal(await description.evaluate(el=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0&&r.top>=0&&r.bottom<=innerHeight;}),true,'native explanation outside viewport');
+    }
+    assert.equal(await nativePage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'native disclosure horizontal overflow');
+    await nativePage.screenshot({path:path.join(report,`abbreviations-native-disclosure-${width}.png`),fullPage:true});
+    // Ordinary reader navigation must expose the complete attribution above the dock.
+    await nativePage.locator('#entry h1').click();await nativePage.keyboard.press('End');
+    await nativePage.waitForFunction(()=>{
+     const scroller=document.scrollingElement;if(!scroller)return false;
+     const atEnd=()=>Math.abs(scroller.scrollHeight-scroller.clientHeight-scroller.scrollTop)<=1;
+     if(!atEnd())return false;const top=scroller.scrollTop;
+     return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(atEnd()&&Math.abs(scroller.scrollTop-top)<=1))));
+    },null,{timeout:5000});
+    const footer=nativePage.locator('#entry footer');assert.equal(await footer.count(),1);
+    assert.equal(await footer.getByRole('link',{name:'Wiktionary contributors',exact:true}).count(),1);
+    assert.ok((await footer.innerText()).includes('CC BY-SA 4.0'));
+    const footerBounds=await footer.evaluate(el=>{
+     const rect=r=>({left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height});
+     const dock=document.getElementById('dock').getBoundingClientRect();
+     return {viewport:{width:innerWidth,height:innerHeight},dock:rect(dock),
+      safeBottom:Math.min(dock.top,innerHeight-dock.height),footer:rect(el.getBoundingClientRect()),
+      content:[...el.querySelectorAll('a,span')].map(n=>({text:n.textContent,href:n.getAttribute('href'),...rect(n.getBoundingClientRect())}))};
+    });
+    await writeFile(path.join(report,`abbreviations-native-footer-${width}.json`),JSON.stringify(footerBounds,null,2));
+    await nativePage.screenshot({path:path.join(report,`abbreviations-native-footer-${width}.png`),fullPage:false});
+    for(const bounds of [footerBounds.footer,...footerBounds.content]){
+     assert.ok(bounds.width>0&&bounds.height>0&&bounds.left>=0&&bounds.right<=footerBounds.viewport.width&&bounds.top>=0&&bounds.bottom<=footerBounds.safeBottom,
+      'native attribution clipped by viewport or dock: '+JSON.stringify(footerBounds));
+    }
+
+   }catch(error){
+    // Preserve actual failing pixels before the isolated browser context closes.
+    try{await nativePage.screenshot({path:path.join(report,`abbreviations-native-failure-${width}.png`),fullPage:true});}catch{}
+    throw error;
+   }
+  }
+  const glossary=nativePage.getByRole('link',{name:'der.',exact:true});
+  assert.equal(await glossary.getAttribute('href'),'#'+encodeURIComponent('Appendix:Glossary#derived terms'));
+  const describedBy=await glossary.getAttribute('aria-describedby');assert.ok(describedBy);
+  assert.equal(await nativePage.locator('#'+describedBy).textContent(),'derived terms');
+  assert.equal(await nativePage.getByRole('link',{name:'lbor.',exact:true}).getAttribute('href'),'#'+encodeURIComponent('Appendix:Glossary#learned borrowing'));
+  await nativePage.getByRole('button',{name:'Search',exact:true}).click();await nativePage.getByRole('searchbox').fill('Legacy format abbreviation control');
+  await nativePage.getByRole('button',{name:'Open Legacy format abbreviation control',exact:true}).click();
+  await nativePage.locator('#entry h1').filter({hasText:'Legacy format abbreviation control'}).waitFor();
+  assert.equal(await nativePage.locator('#entry .abbreviation-explanations,#entry abbr[title]').count(),0);
+  assert.equal(await nativePage.getByRole('link',{name:'control',exact:true}).getAttribute('href'),'#cat');
+ }finally{await nativeContext.close();}
+
+ if(nativeOnly){
+  assert.deepEqual(errors,[]);await writeFile(path.join(report,'native-report.json'),JSON.stringify({status:'passed',scope:'native-abbreviation-only',errors},null,2));console.log('WEB_NATIVE_ABBREVIATIONS_PASS');
+ }else{
  const page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`http://127.0.0.1:${server.address().port}`);await page.getByRole('button',{name:'Import dictionary',exact:true}).waitFor();
  await page.locator('#file').setInputFiles(fixture);await page.getByText(/English · 182 words/).waitFor();
@@ -212,4 +372,5 @@ try{
  await delivery.locator('#file').setInputFiles({name:englishAsset,mimeType:'application/octet-stream',buffer:english});await delivery.getByText(/English · 1 words/).waitFor();
  await delivery.getByRole('button',{name:'Search',exact:true}).click();await delivery.getByRole('searchbox').fill('cat');await delivery.getByRole('button',{name:'Open cat',exact:true}).click();await delivery.locator('#entry h1').filter({hasText:/^cat$/}).waitFor();assert.ok((await delivery.locator('#entry').innerText()).includes('English target definition'));
  assert.deepEqual(errors,[]);await writeFile(path.join(report,'report.json'),JSON.stringify({status:'passed',rawBytes:raw.length,xzBytes:xz.length,aliasCases:8,aliasRawAndXZ:true,savedAliasContext:true,mediaRequests,mediaDownloads,errors},null,2));console.log('WEB_BINARY_PARITY_AND_ALIAS_PASS');
+ }
 }finally{await browser.close();server.close();}

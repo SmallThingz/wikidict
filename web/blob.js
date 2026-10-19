@@ -1,4 +1,4 @@
-// WIKBLB08 contains compiled DPR2 pages or typed DAL1 redirect envelopes.
+// WIKBLB08 contains compiled DPR2/DPR3 pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
@@ -6,7 +6,7 @@ const blocks = ['paragraph','blank','definition','example','quotation','list_ite
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
 export function decode(bytes, metadata) {
-  let p=0, budget=1000000;
+  let p=0, budget=1000000, explained=false;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   const take=n=>{require(n>=0 && n<=bytes.length-p);const start=p;p+=n;return bytes.subarray(start,p);};
   const byte=()=>take(1)[0], u16=()=>{const at=p;take(2);return view.getUint16(at,true);}, u32=()=>{const at=p;take(4);return view.getUint32(at,true);};
@@ -18,19 +18,21 @@ export function decode(bytes, metadata) {
   const index=limit=>{const n=u32();require(n<limit);return n;};
   const optional=limit=>{const n=u32();require(n===0xffffffff||n<limit);};
   const indices=limit=>list(4,()=>index(limit));
-  const spans=()=>list(27,()=>{
+  const spans=()=>list(explained?31:27,()=>{
     const kind=tag(['text','link','external_link','line_break']),role=tag(roles),flags=byte();
-    const s={kind,role,text:string(),target:string(),trail:string(),language:string(),script:string(),direction:string()};
+    const s={kind,role,text:string(),target:string(),trail:string(),language:string(),classes:string(),direction:string(),explanation:explained?string():''};
     ['bold','italic','code','small','superscript','subscript','strike','underline'].forEach((f,i)=>s[f]=!!(flags&(1<<i)));return s;
   });
   const block=()=>{
-    const kind=tag(blocks),depth=byte();byte();const value={kind,depth,spans:spans()};
+    const kind=tag(blocks),depth=byte(),level=byte();const value={kind,depth,level,spans:spans()};
     if(presence()) value.feature={kind:string(),language:string(),data:string(),tail_kind:string(),tail:string()};
     value.path=string();value.number=string();
     if(presence()) value.table={caption:spans(),rows:list(4,()=>({cells:list(9,()=>{const header=presence(),colspan=u16(),rowspan=u16();require(colspan>=1&&colspan<=100&&rowspan>=1&&rowspan<=100);return {header,colspan,rowspan,spans:spans()};})}))};
     return value;
   };
-  require(utf8.decode(take(4))==='DPR2','Dictionary contains uncompiled records');
+  const magic=utf8.decode(take(4));
+  require(magic==='DPR2'||magic==='DPR3','Dictionary contains uncompiled records');
+  explained=magic==='DPR3';
   const entry={...metadata,display_title:spans(),sections:list(9,()=>({level:byte(),title:string(),blocks:list(17,block)})),preamble_spans:spans()};
   list(29,()=>{string();string();const s=index(entry.sections.length);optional(entry.sections.length);const n=entry.sections[s].blocks.length;
     list(18,(_,sense)=>{index(n);optional(sense);indices(n);indices(n);indices(n);if(presence()){string();string();string();}});
@@ -93,7 +95,8 @@ export async function buildIndex(source) {
       const {alias}=decodeAlias(await source.read(p,length),title);
       rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
     }else{
-      require(utf8.decode(await source.read(p,4))==='DPR2');
+      const magic=utf8.decode(await source.read(p,4));
+      require(magic==='DPR2'||magic==='DPR3');
       rows.push({title,offset:p,length});
     }
     require(rows.length<=10000000);p+=length;

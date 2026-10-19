@@ -71,3 +71,20 @@ The reader regression also searches and opens a BOM-prefixed title through the
 JSON API, which must preserve the same heading and title identities.
 
 `fixtures/fragment-cases/` contains one synthetic English `cat` record with Etymology after Noun. The alias search regression uses it to verify scrolling and unfolding a later destination; the original 182-entry fixture is unchanged.
+
+## Native abbreviation interoperability fixture
+
+`fixtures/abbreviation-interop/` supplies the ordinary native test-bundle's small
+English blob and `annotated.export.json` / `legacy.export.json`. The synthetic
+Acupuncture abbreviation sample uses seven verbatim captured abbreviation
+contexts and actual DPR3 output; Legacy format abbreviation control uses fresh
+unannotated DPR2 output. This is interoperability test data, not corpus acceptance.
+The fixture must be copied from a qualified core `zig build test-bundle` output,
+with its producer receipt and exact asset hashes retained before qualification.
+No manually framed or JSON-only substitute is accepted. Missing files fail tests.
+The standard CTest fixture copy includes this directory; an optional
+`DICT_ABBREVIATION_INTEROP_ROOT` selects a fresh generated root instead.
+The reader test imports the real blob through LibraryStorage, compares complete
+FFI Entry objects to the normal CLI exports, and checks native rendered labels,
+explanations, glossary links and navigation to the unannotated control before
+separate synthetic styling and keyboard edge cases.

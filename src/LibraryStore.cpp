@@ -185,7 +185,7 @@ void validateAlias(const QByteArray &payload, const QByteArray &key) {
         fields.append(input.read(qint64(length)));
         if (i < 6 && (!fields.last().isValidUtf8() || fields.last().contains('\0') || (i < 4 && fields.last().isEmpty()))) invalid();
     }
-    if (!input.atEnd() || fields[5].size() > 255 || !fields[6].startsWith("DPR2")) invalid();
+    if (!input.atEnd() || fields[5].size() > 255 || !(fields[6].startsWith("DPR2") || fields[6].startsWith("DPR3"))) invalid();
     const auto lookupKey = [&](const QByteArray &title, unsigned char kind) {
         if (kind == 1 || kind == 7) return title;
         const qsizetype colon = title.indexOf(':');
@@ -230,8 +230,11 @@ Dictionary validate(const QString &path, const std::atomic_bool &cancel, const P
             fail(QStringLiteral("The dictionary contains an invalid or truncated record."));
         const qint64 end = file.pos() + qint64(length);
         if (result.kind == QStringLiteral("alias")) validateAlias(file.read(qint64(length)), title);
-        else if (file.read(4) != QByteArrayLiteral("DPR2"))
-            fail(QStringLiteral("The dictionary contains entries that are not compiled presentation data."));
+        else {
+            const QByteArray presentationMagic = file.read(4);
+            if (presentationMagic != QByteArrayLiteral("DPR2") && presentationMagic != QByteArrayLiteral("DPR3"))
+                fail(QStringLiteral("The dictionary contains entries that are not compiled presentation data."));
+        }
         if (!file.seek(end)) fail(file.errorString());
         ++result.words;
         if (file.pos() - lastProgress > 1024 * 1024) {

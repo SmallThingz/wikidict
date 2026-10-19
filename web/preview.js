@@ -2,7 +2,7 @@ const mediaClasses = new Set(['wikidict-media', 'audiotable']);
 
 function previewText(block) {
   return (block.spans || [])
-    .filter(span => !(span.script || '').split(/\s+/).some(token => mediaClasses.has(token)))
+    .filter(span => !(span.classes || '').split(/\s+/).some(token => mediaClasses.has(token)))
     .map(span => (span.kind === 'line_break' ? ' ' : span.text || '') + (span.trail || ''))
     .join('').trim();
 }

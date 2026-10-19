@@ -37,7 +37,7 @@ test('leading Unicode BOM remains part of compiled alias and ordinary field iden
 test('core-encoded DAL1 fixture and empty raw/XZ collections retain alias-only selections',async()=>{
  const native=await readFile('../tests/fixtures/alias-cases/aliases.wikblb');
  const a=await dictionary('native','enwiktionary-20261001-aliases.wikblb',native),b=await dictionary('packed','aliases.wikblb.xz',native,true);
- assert.deepEqual(a.rows,b.rows);assert.equal(a.rows.length,5);
+ assert.deepEqual(a.rows,b.rows);assert.deepEqual(a.rows.map(row=>row.title).sort(),['Annexe:École','Cats','History of cat','Loop A','Loop B','Missing']);
  for(const xz of [false,true])for(const kind of [2,3,4,5,6,7,8]){
    const empty=await dictionary('empty','enwiktionary-20261001-empty.wikblb',dictionaryBlob(kind,[]),xz);
    assert.equal(empty.rows.length,0);
