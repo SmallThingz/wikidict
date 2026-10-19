@@ -71,7 +71,8 @@ fn mergeOne(
 const xz_argv = [_][]const u8{ "xz", "--compress", "--format=xz", "--check=crc64", "-0", "--threads=1", "--block-size=1MiB", "--stdout" };
 
 fn syncParent(io: std.Io, path: []const u8) !void {
-    const dir = try std.Io.Dir.cwd().openDir(io, std.fs.path.dirname(path) orelse ".", .{});
+    // Default non-iterable directories use O_PATH on Linux, which cannot be fsynced.
+    const dir = try std.Io.Dir.cwd().openDir(io, std.fs.path.dirname(path) orelse ".", .{ .iterate = true });
     defer dir.close(io);
     const file: std.Io.File = .{ .handle = dir.handle, .flags = .{ .nonblocking = false } };
     try file.sync(io);
