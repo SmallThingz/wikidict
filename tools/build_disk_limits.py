@@ -140,10 +140,10 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, 'rb') as source:
             if _identity(os.fstat(source.fileno())) != _identity(before):
-                raise ValueError(f'Merge artifact changed: {path}')
+                raise ValueError(f'Merge artifact changed during admission: {path}')
             data = source.read(limit + 1)
         if len(data) != before.st_size:
-            raise ValueError(f'Merge artifact changed: {path}')
+            raise ValueError(f'Merge artifact changed during admission: {path}')
         return data
 
     def raw_size(path, kind):
@@ -151,7 +151,7 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, 'rb') as source:
             if _identity(os.fstat(source.fileno())) != _identity(info):
-                raise ValueError(f'Merge artifact changed: {path}')
+                raise ValueError(f'Merge artifact changed during admission: {path}')
             if source.read(9) != b'WIKBLB08' + bytes([kind]):
                 raise ValueError(f'Expected raw WIKBLB08 shard: {path}')
         return info.st_size
