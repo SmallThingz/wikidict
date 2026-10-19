@@ -2052,7 +2052,12 @@ fn processMain(
         source[0 .. @intFromPtr(page_sections.items[0].source.ptr) - @intFromPtr(source.ptr)]
     else
         "";
-    const shared_prefix = try sharedImagePrefix(page_allocator, codes, page_prefix);
+    // A complete page-wide hatnote is context for every emitted owner, even
+    // Unclassified; only its prefix is shared, never another owner's body.
+    const shared_prefix: ?[]const u8 = if (pageWideHatnotePrefix(page_prefix))
+        page_prefix
+    else
+        try sharedImagePrefix(page_allocator, codes, page_prefix);
 
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
     defer {
@@ -2206,7 +2211,7 @@ fn processMain(
     // sections and pending unresolved regions must not gain attribution.
     const preserve_prefix = shared_prefix == null and page_prefix.len != 0 and
         groups.items.len == 1 and groups.items[0].language.code.len != 0 and
-        (!fallbacks.unresolved_language_heading or pageWideHatnotePrefix(page_prefix));
+        !fallbacks.unresolved_language_heading;
     const pre_observation: presentation_document.PreObservation = if (may_cross_link)
         early_observation
     else if (may_cross_pre and groups.items.len > 1)
@@ -4513,7 +4518,11 @@ test "single resolved language preserves structured prefix without ambiguous att
     const hatnote = "<div class=\"disambig-see-also\">''انظر أيضًا:'' '''[[مِنْجَار]]'''</div>\n";
     const later_unknown = "==عربية==\n# known body\n==Unknown topic==\n# unknown body\n";
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "hatnote-warning", hatnote ++ later_unknown, "{{أيضا|مِنْجَار}}\n" ++ later_unknown, null);
-    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "hatnote-multilingual", hatnote ++ "==English==\n# english\n==French==\n# french\n", hatnote ++ "==English==\n# english\n==French==\n# french\n", null);
+    // Page-wide context is shared once per owner, including an unknown owner;
+    // lexical bodies still follow their own exact resolved/unknown boundaries.
+    const multilingual_hatnote = "<div class=\"disambig-see-also\">''انظر أيضًا:'' '''[[M]]'''</div>\n";
+    const hatnote_owners = "==English==\n# EN_FIRST\n==French==\n# FR_ONLY\n==English==\n# EN_REPEATED\n==لغة مجهولة==\n# UNKNOWN_ONLY\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "hatnote-multilingual", multilingual_hatnote ++ hatnote_owners, "{{أيضا|M}}\n" ++ hatnote_owners, null);
     inline for (.{
         .{ "hatnote-prose", hatnote ++ "unscoped prefix\n" },
         .{ "hatnote-partial", "<div class=\"disambig-see-also\">''انظر أيضًا:'' '''[[مِنْجَار]]'''\n" },
@@ -4561,19 +4570,42 @@ test "single resolved language preserves structured prefix without ambiguous att
         const entry_value = try Local.entry(a, root_path, "العربية", title);
         try std.testing.expect(std.mem.indexOf(u8, try Local.text(a, entry_value), "مِنْجَار") == null);
     }
-    inline for (.{ "English", "French" }) |owner| {
+    inline for (.{ "English", "French", "Unclassified" }) |owner| {
         const entry_value = try Local.entry(a, root_path, owner, "hatnote-multilingual");
-        try std.testing.expect(std.mem.indexOf(u8, try Local.text(a, entry_value), "مِنْجَار") == null);
+        var global_actions: usize = 0;
+        for (entry_value.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, "M")) {
+                try std.testing.expect(span.bold);
+                global_actions += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), global_actions);
+        const owner_text = try Local.text(a, entry_value);
+        inline for (.{ "EN_FIRST", "EN_REPEATED", "FR_ONLY", "UNKNOWN_ONLY" }) |body| {
+            const belongs = if (std.mem.eql(u8, owner, "English"))
+                std.mem.startsWith(u8, body, "EN_")
+            else if (std.mem.eql(u8, owner, "French"))
+                std.mem.eql(u8, body, "FR_ONLY")
+            else
+                std.mem.eql(u8, body, "UNKNOWN_ONLY");
+            try std.testing.expectEqual(belongs, std.mem.indexOf(u8, owner_text, body) != null);
+        }
+        try std.testing.expectEqualStrings(if (std.mem.eql(u8, owner, "Unclassified")) "" else if (std.mem.eql(u8, owner, "English")) "en" else "fr", entry_value.language_code);
     }
     const prefix_report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root_path, "fallback-pages.jsonl" }), a, .unlimited);
     var report_lines = std.mem.splitScalar(u8, prefix_report, '\n');
     var hatnote_warning = false;
+    var multilingual_warning = false;
     while (report_lines.next()) |line| {
         if (std.mem.indexOf(u8, line, "hatnote-warning") != null) {
             hatnote_warning = std.mem.indexOf(u8, line, "unresolved_language_heading") != null;
         }
+        if (std.mem.indexOf(u8, line, "hatnote-multilingual") != null) {
+            multilingual_warning = std.mem.indexOf(u8, line, "unresolved_language_heading") != null;
+        }
     }
     try std.testing.expect(hatnote_warning);
+    try std.testing.expect(multilingual_warning);
     // A page without any resolved boundary retains its whole source as Unclassified.
     std.debug.print("QATAR_STAGE whole-source unknown preservation\n", .{});
     const unknown_entry = try Local.entry(a, root_path, "Unclassified", "only-unknown");
