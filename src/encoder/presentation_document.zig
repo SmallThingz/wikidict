@@ -1835,3 +1835,81 @@ test "ordinary example HTML preserves nested table cells actions and explicit la
     try std.testing.expect(std.mem.indexOf(u8, text.items, "Lua error") == null);
     try std.testing.expect(!report.rendered_lua_error and !report.literal_markup and !report.malformed_table and !report.unclosed_formatting);
 }
+
+test "nonleading example scopes preserve wiki sense continuation and next sense numbering" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var report: Fallbacks = .{};
+    // Captured incite uses #: before ux; the materialized quotation is a real
+    // wiki table. Qualifier links also keep a lexical prefix before the i scope.
+    const input = "==English==\n===Verb===\n# [[first|First definition]]\n#: <span class=\"label-content\">([[rare|rare]])</span> <i class=\"e-example\" lang=\"en\">'''incite''' people to violence\n{| class=\"cquote\"\n| ” || <span class=\"script-arabic\">حرِّض الناس على العنف</span> [[target|linked]] <span lang=\"ar\">[[عربي|عربي]]</span> || “\n|}\n</i>\n# [[next|Next definition]]\n";
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", input, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var first = false;
+    var baseline_language: []const u8 = "";
+    var example = false;
+    var qualifier = false;
+    var next = false;
+    var linked = false;
+    var arabic = false;
+    var override = false;
+    var cells: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        for (block.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, "first")) {
+                first = true;
+                baseline_language = span.language;
+                try std.testing.expect(block.kind == .definition);
+                try std.testing.expectEqualStrings("#", block.list_path);
+                try std.testing.expectEqualStrings("1", block.number);
+                try std.testing.expect(span.role == .normal and !span.italic);
+            }
+            if (std.mem.eql(u8, span.text, "incite")) {
+                example = true;
+                try std.testing.expectEqualStrings("#:", block.list_path);
+                try std.testing.expect(span.role == .example and span.italic and span.bold);
+                try std.testing.expectEqualStrings("en", span.language);
+            }
+            if (span.kind == .link and std.mem.eql(u8, span.target, "rare")) {
+                qualifier = true;
+                try std.testing.expectEqualStrings("#:", block.list_path);
+                try std.testing.expect(span.role == .label and !span.italic);
+            }
+            if (span.kind == .link and std.mem.eql(u8, span.target, "next")) {
+                next = true;
+                try std.testing.expect(block.kind == .definition);
+                try std.testing.expect(first);
+                try std.testing.expectEqualStrings(baseline_language, span.language);
+                try std.testing.expectEqualStrings("#", block.list_path);
+                try std.testing.expectEqualStrings("2", block.number);
+                try std.testing.expect(span.role == .normal and !span.italic);
+            }
+        }
+        if (block.table) |table| for (table.rows) |row| for (row.cells) |cell| {
+            cells += 1;
+            for (cell.spans) |span| {
+                if (std.mem.indexOf(u8, span.text, "حرِّض الناس على العنف") != null) {
+                    arabic = true;
+                    try std.testing.expect(span.role == .example and span.italic);
+                    try std.testing.expectEqualStrings("en", span.language);
+                }
+                if (std.mem.eql(u8, span.text, "linked")) {
+                    linked = true;
+                    try std.testing.expect(span.kind == .link and span.role == .example and span.italic);
+                    try std.testing.expectEqualStrings("target", span.target);
+                    try std.testing.expectEqualStrings("en", span.language);
+                }
+                if (std.mem.eql(u8, span.text, "عربي")) {
+                    override = true;
+                    try std.testing.expect(span.kind == .link and span.role == .example and span.italic);
+                    try std.testing.expectEqualStrings("عربي", span.target);
+                    try std.testing.expectEqualStrings("ar", span.language);
+                }
+            }
+        };
+    };
+    try std.testing.expect(first and example and qualifier and next and linked and arabic and override);
+    try std.testing.expectEqual(@as(usize, 3), cells);
+    try std.testing.expect(!report.unclosed_formatting and !report.literal_markup and !report.malformed_table and !report.rendered_lua_error);
+}

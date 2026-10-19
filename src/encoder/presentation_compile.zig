@@ -5234,6 +5234,7 @@ pub const Renderer = struct {
         // Flags identify formatting wrappers; their attributes use the same
         // sanitized style helper as the ordinary inline HTML path.
         if (tag.closing or tag.self_closing) return null;
+        if (tag.is("abbr")) return .{};
         if (oneOf(tag.name, &.{ "b", "strong" })) return .{ .bold = true };
         if (oneOf(tag.name, &.{ "i", "em", "cite", "var", "dfn" })) return .{ .italic = true };
         if (oneOf(tag.name, &.{ "u", "ins" })) return .{ .underline = true };
@@ -5861,9 +5862,17 @@ pub const Renderer = struct {
             // Match across the whole body before line splitting discards that
             // wrapper. Keep list/table structure and inherit its flags while
             // rendering the enclosed blocks; never repair unmatched markup.
-            const item_formatting = if (self.html_list_item_flow) try self.htmlListItemFormattingAt(input, start, physical_end) else null;
+            // A non-leading inline wrapper can enclose later physical blocks
+            // in ordinary prose or an already parsed wiki list item too.
+            // Preserve the existing heading/table/implicit-pre owners first.
+            const ordinary_formatting = !self.pre_block and !link_label_scope and
+                (anchored_inline or (clean.ptr == line.ptr and
+                    headingLineControlled(physical_line, control_matcher) == null and
+                    wikiTableIndent(trim(physical_line)) == null)) and
+                std.mem.indexOfScalar(u8, input[start..physical_end], '<') != null;
+            const item_formatting = if (self.html_list_item_flow or ordinary_formatting) try self.htmlListItemFormattingAt(input, start, physical_end) else null;
             if (item_formatting != null or clean.ptr == line.ptr) if (if (item_formatting) |opening| @as(?syntax.Tag, opening.tag) else try self.semanticTagAt(clean, 0)) |tag| {
-                if (if (self.html_list_item_flow and tag.is("span")) @as(?SpanFlags, .{}) else blockFormattingFlags(tag)) |flags| {
+                if (if ((self.html_list_item_flow or item_formatting != null) and tag.is("span")) @as(?SpanFlags, .{}) else blockFormattingFlags(tag)) |flags| {
                     const offset = if (item_formatting) |opening| opening.offset else @intFromPtr(clean.ptr) - @intFromPtr(input.ptr);
                     const rest = input[offset..];
                     if (syntax.matchingTag(rest, tag)) |pair| {
@@ -5873,14 +5882,14 @@ pub const Renderer = struct {
                         if (!first_line_inline or std.mem.indexOfScalar(u8, rest[tag.end..pair.inner_end], '\n') != null or bodyPreCandidate(rest[tag.end..pair.inner_end]) or mayHaveMultilineLinks(rest[tag.end..pair.inner_end])) {
                             const body = rest[tag.end..pair.inner_end];
                             const joining_format = formatting_join_pending;
-                            const join_separator = if (self.html_list_item_flow and offset > start)
+                            const join_separator = if ((self.html_list_item_flow or ordinary_formatting) and offset > start)
                                 std.ascii.isWhitespace(input[offset - 1]) or (body.len != 0 and std.ascii.isWhitespace(body[0]))
                             else if (joining_format)
                                 link_inline_join orelse false
                             else
                                 true;
                             var list_state: BodyListSeed = .{ .path = list_prefix.path, .previous_path = "", .counts = @splat(0) };
-                            const list_seed: ?BodyListSeed = if (self.html_list_item_flow and list_prefix.path.len != 0)
+                            const list_seed: ?BodyListSeed = if (list_prefix.path.len != 0)
                                 .{ .path = list_prefix.path, .previous_path = previous_list_path, .counts = counts, .result = &list_state }
                             else
                                 null;

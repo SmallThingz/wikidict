@@ -577,6 +577,50 @@ fn resolveLinkedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLangua
     return resolved;
 }
 
+// A mixed plain-text/wikilink AR heading can spell an exact registered
+// language (e.g. ال[[عربية]]). Resolve that complete visible spelling, and
+// require every link target to independently name the same trusted owner.
+// No template expansion, entity decoding, category or script inference.
+fn resolveMixedArabicLinkedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "ar") or value.len > 4096) return null;
+    const heading = std.mem.trim(u8, value, " \t");
+    var visible: [4096]u8 = undefined;
+    var length: usize = 0;
+    var cursor: usize = 0;
+    var linked_owner: ?ResolvedLanguage = null;
+    var plain = false;
+    while (cursor < heading.len) {
+        if (std.mem.startsWith(u8, heading[cursor..], "[[")) {
+            const pair = blobs.wikitext_syntax.balanced(heading, cursor) orelse return null;
+            const body = heading[cursor + 2 .. pair.inner_end];
+            if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null) return null;
+            const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+            if (pipe < body.len and std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null) return null;
+            const target = std.mem.trim(u8, body[0..pipe], " \t");
+            const label = if (pipe < body.len) body[pipe + 1 ..] else target;
+            if (target.len == 0 or label.len == 0) return null;
+            const owner = codes.resolveStrong(target) orelse codes.resolveTrusted(target) orelse return null;
+            if (linked_owner) |previous| if (!std.mem.eql(u8, previous.code, owner.code)) return null;
+            linked_owner = owner;
+            @memcpy(visible[length .. length + label.len], label);
+            length += label.len;
+            cursor = pair.end;
+        } else {
+            const byte = heading[cursor];
+            if (std.mem.indexOfScalar(u8, "[]{}<>|=\r\n'", byte) != null) return null;
+            if (!std.ascii.isWhitespace(byte)) plain = true;
+            visible[length] = byte;
+            length += 1;
+            cursor += 1;
+        }
+    }
+    if (!plain or linked_owner == null) return null;
+    const whole = std.mem.trim(u8, visible[0..length], " \t");
+    const owner = codes.resolveStrong(whole) orelse codes.resolveTrusted(whole) orelse return null;
+    return if (std.mem.eql(u8, owner.code, linked_owner.?.code)) owner else null;
+}
+
 // Frozen AN language templates emit this complete toc declaration. Resolve the
 // banner itself; raw support headings can legitimately change boundary counts.
 const AnBannerDeclaration = struct { target: []const u8, label: []const u8, suffix: []const u8 };
@@ -924,6 +968,7 @@ fn arabicLemmaDeclaration(codes: LanguageCodes, section: language_source.Section
     // A trusted L2 language declaration must not be reassigned by nested POS.
     if (codes.resolveStrong(heading) != null or codes.resolveTrusted(heading) != null or
         resolveLinkedHeading(codes, heading) != null or resolveLinkedDeclaration(codes, heading) != null or
+        resolveMixedArabicLinkedHeading(codes, heading) != null or
         resolveArabicLanguageHeading(codes, heading) != null or
         hasExplicitLanguageDeclaration(codes, section)) return .{};
     const markers: LanguageMarkers = .{ .codes = &codes };
@@ -958,6 +1003,7 @@ fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?Resol
 
     if (resolveArabicLanguageHeading(codes, classified)) |resolved| return resolved;
     if (resolveLinkedHeading(codes, classified)) |resolved| return resolved;
+    if (resolveMixedArabicLinkedHeading(codes, classified)) |resolved| return resolved;
     if (resolveLinkedDeclaration(codes, classified)) |resolved| return resolved;
 
     const candidates = [_][]const u8{
@@ -999,6 +1045,7 @@ fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?Res
     if (codes.resolve(std.mem.trim(u8, heading, " \t\r\n"))) |resolved| return resolved;
     if (codes.resolve(std.mem.trim(u8, heading, " \t\r\n\'\""))) |resolved| return resolved;
     if (resolveLinkedHeading(codes, heading)) |resolved| return resolved;
+    if (resolveMixedArabicLinkedHeading(codes, heading)) |resolved| return resolved;
     var cursor: usize = 0;
     var found: ?ResolvedLanguage = null;
     while (std.mem.indexOfPos(u8, heading, cursor, "[[")) |open| {
@@ -6513,8 +6560,17 @@ test "captured AN hyphen banners keep canonical owners despite local alias gaps"
     conflict_sections.items[1].heading = "Francés";
     coalesceCorroboratedAnRawRegions(codes, support_raw, &conflict_sections, &rendered_support);
     try std.testing.expectEqual(@as(usize, 3), conflict_sections.items.len);
-    conflict_sections.items[1] = .{ .heading = "zz", .source = "{{=zz}}\n# unknown\n" };
-    coalesceCorroboratedAnRawRegions(codes, support_raw, &conflict_sections, &rendered_support);
+    // Use a valid declaration and real slices of the same supplied raw page.
+    // A detached malformed literal violates the coalescer's iterator contract.
+    const unknown_raw = "{{-haw-}}\n# [[yo]]\n{{=zz=}}\n# unknown\n{{-sw-}}\n# [[ó]]\n";
+    // This direct coalescer check keeps syntactic boundaries before filtering.
+    var unknown_iterator = language_source.Iterator.init(unknown_raw);
+    conflict_sections.clearRetainingCapacity();
+    while (unknown_iterator.next()) |section| try conflict_sections.append(a, section);
+    try std.testing.expectEqual(@as(usize, 3), conflict_sections.items.len);
+    try std.testing.expectEqualStrings("zz", conflict_sections.items[1].heading);
+    try std.testing.expectEqualStrings("zz", language_source.equalsLanguageDeclaration(conflict_sections.items[1].source).?);
+    coalesceCorroboratedAnRawRegions(codes, unknown_raw, &conflict_sections, &rendered_support);
     try std.testing.expectEqual(@as(usize, 3), conflict_sections.items.len);
     const wrong_rendered = [_]language_source.Section{ .{ .heading = banner_haw, .source = "" }, .{ .heading = banner_an, .source = "" } };
     coalesceCorroboratedAnRawRegions(codes, support_raw, &support_sections, &wrong_rendered);
@@ -6858,6 +6914,9 @@ test "captured definite Arabic language declarations retain trusted owners and u
         "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
     defer namespaces.deinit();
     const Local = struct {
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |language| language.code else null;
+        }
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             inline for (.{ .{ "en", "الإنجليزية", "إنجليزية" }, .{ "fr", "الفرنسية", "فرنسية" }, .{ "ar", "العربية", "عربية" } }) |row|
                 if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]) or std.mem.eql(u8, value, row[2])) return .{ .code = row[0], .heading = row[1] };
@@ -6866,7 +6925,7 @@ test "captured definite Arabic language declarations retain trusted owners and u
     };
     // Only the selected canonical TSV/local-name suffixes are authoritative;
     // the unhamza spelling is an explicit unknown, never a guessed alias.
-    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .namespace_catalog = &namespaces, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve };
     const complete = language_source.Section{ .heading = "اللغة الإنجليزية", .source = "== اللغة الإنجليزية ==\n# meaning\n[[تصنيف:عربية]]" };
     try std.testing.expectEqualStrings("en", resolveSection(codes, complete).?.code);
     try std.testing.expectEqualStrings("en", boundaryLanguage(codes, complete).?.code);
@@ -6919,4 +6978,75 @@ test "captured definite Arabic language declarations retain trusted owners and u
         };
         try std.testing.expectEqual(@as(usize, 1), found);
     }
+}
+
+test "captured mixed Arabic linked heading resolves exact trusted visible owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |language| language.code else null;
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "ar", "العربية", "عربية" }, .{ "fr", "الفرنسية", "فرنسية" }, .{ "en", "الإنجليزية", "إنجليزية" } }) |row|
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]) or std.mem.eql(u8, value, row[2])) return .{ .code = row[0], .heading = row[1] };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .namespace_catalog = &namespaces, .trusted_fn = Local.resolve };
+    const section = language_source.Section{ .heading = "ال[[عربية]]", .source = "== ال[[عربية]] ==\n# meaning\n[[تصنيف:فرنسية]]" };
+    try std.testing.expectEqualStrings("ar", resolveSection(codes, section).?.code);
+    try std.testing.expectEqualStrings("ar", boundaryLanguage(codes, section).?.code);
+    const nested = language_source.Section{ .heading = "ال[[فرنسية]]", .source = "== ال[[فرنسية]] ==\n=== اسم إنجليزي ===\n# [[retained]]\n" };
+    try std.testing.expectEqualStrings("en", language_source.arabicNounSubtree(nested, null).code.?);
+    try std.testing.expect(!arabicLemmaDeclaration(codes, nested).present);
+    try std.testing.expectEqualStrings("fr", resolveSection(codes, nested).?.code);
+    try std.testing.expectEqualStrings("fr", boundaryLanguage(codes, nested).?.code);
+    inline for (.{ "ال[[عربية|فرنسية]]", "ال[[مجهولة|عربية]]", "ال[[عربية]] extra", "ال[[عربية]] [[فرنسية]]", "ال[[عربية|عربية|extra]]", "ال{{عربية}}", "<nowiki>ال[[عربية]]</nowiki>", "ال[[عربية]]\n", "[[عربية]]" }) |heading|
+        try std.testing.expect(resolveMixedArabicLinkedHeading(codes, heading) == null);
+    var absent = codes;
+    absent.namespace_catalog = null;
+    try std.testing.expect(resolveMixedArabicLinkedHeading(absent, section.heading) == null);
+    const raw = "== ال[[عربية]] ==\n\n=== تأصيل ===\nكلمة نادرة تعود للجذر هبرز. استخدمها العرب لوصف الأشياء النفيسة والخالصة التي لا تشوبها شائبة، وهي من الكلمات التي توحي بالفخامة والقيمة العالية.\n\n=== نطق ===\n* النطق: هِبْرِزيّ (بكسر الهاء وسكون الباء وكسر الراء).\n\n=== اسم ===\n'''الهِبْرِزيّ'''\n\n# وصف لكل ما هو خالص ونفيس، مثل الذهب النقي الذي لا غش فيه.\n# يُطلق أيضاً على الرجل الجميل الحسن الوجه والهيئة، أو الكريم الذي صفت أخلاقه.\n#: مثال: قدم التاجر لزبونه معدناً هبرزياً نادراً.\n\n==== مرادفات ====\n* نفيس\n* خالص\n* وسيم\n\n==== أضداد ====\n* زائف\n* قبيح\n* رخيص\n\n==== ترجمات ====\n* الإنجليزية: Pure gold\n* الفرنسية: Pur\n\n[[تصنيف:عربية]]";
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // This captured page has no templates: the exact full authored source
+    // itself is the native rendering input, not a claimed Lua replay.
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "هبرزي", raw, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "العربية"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("هبرزي")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    try std.testing.expectEqualStrings("ar", decoded.entry.language_code);
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(a);
+    var definitions: usize = 0;
+    var heading_action: usize = 0;
+    for (decoded.entry.sections) |part| for (part.blocks) |block| {
+        if (block.kind == .definition) definitions += 1;
+        for (block.spans) |span| {
+            try text.appendSlice(a, span.text);
+            if (span.kind == .link and std.mem.eql(u8, span.target, "عربية")) heading_action += 1;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 2), definitions);
+    try std.testing.expectEqual(@as(usize, 1), heading_action);
+    inline for (.{ "وصف لكل ما هو خالص ونفيس", "يُطلق أيضاً على الرجل الجميل", "قدم التاجر لزبونه", "الهِبْرِزيّ", "وسيم", "زائف", "Pure gold", "Pur" }) |expected|
+        try std.testing.expect(std.mem.indexOf(u8, text.items, expected) != null);
 }
