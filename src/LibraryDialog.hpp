@@ -26,12 +26,15 @@ public:
     ~LibraryDialog() override;
     QString selectedRoot() const { return root_; }
     bool libraryChanged() const { return changed_; }
+    bool originalRootChanged() const { return originalRootChanged_; }
 protected:
     void reject() override;
 private:
+    friend class MainWindowTest;
     void refreshInstalled();
     void refreshCatalogView();
     void chooseRoot();
+    void noteRootChange(const QString &root);
     void importFile();
     void removeSelected();
     void refreshCatalogs();
@@ -48,6 +51,8 @@ private:
     void cancelOperation();
     void saveSources();
     QString root_;
+    QString originalRoot_;
+    bool originalRootChanged_ = false;
     bool changed_ = false;
     bool busy_ = false;
     bool closeWhenDone_ = false;

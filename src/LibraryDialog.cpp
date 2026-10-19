@@ -54,6 +54,8 @@ LibraryDialog::LibraryDialog(QWidget *parent, const QString &root,
     : QDialog(parent), root_(root.isEmpty()
           ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)).filePath(QStringLiteral("dictionaries"))
           : QDir(root).absolutePath()) {
+    originalRoot_ = QFileInfo(root_).canonicalFilePath();
+    if (originalRoot_.isEmpty()) originalRoot_ = root_;
     setWindowTitle(QStringLiteral("Dictionary library"));
     setObjectName(QStringLiteral("libraryDialog"));
     resize(780, 680);
@@ -236,14 +238,27 @@ LibraryStorage::Progress LibraryDialog::progressCallback() {
 }
 void LibraryDialog::runWorker(std::function<void()> task, std::function<void(const QString &)> finished) {
     auto error = std::make_shared<QString>();
-    auto *worker = QThread::create([task = std::move(task), error] {
-        try { task(); } catch (const std::exception &e) { *error = exceptionText(e); }
+    auto unrestored = std::make_shared<bool>(false);
+    const QString root = root_;
+    auto *worker = QThread::create([task = std::move(task), error, unrestored] {
+        try { task(); }
+        catch (const LibraryStorage::UnrestoredMutation &e) {
+            *unrestored = true;
+            *error = exceptionText(e);
+        }
+        catch (const std::exception &e) { *error = exceptionText(e); }
         catch (...) { *error = QStringLiteral("An unexpected dictionary error occurred."); }
     });
     worker_ = worker;
-    connect(worker, &QThread::finished, this, [this, worker, finished = std::move(finished), error] {
+    connect(worker, &QThread::finished, this, [this, worker, finished = std::move(finished), error, unrestored, root] {
         worker_ = nullptr;
         worker->deleteLater();
+        // Publish the changed-root fact even when the normal completion reports an error.
+        if (*unrestored) {
+            noteRootChange(root);
+            changed_ = true;
+            refreshInstalled();
+        }
         finished(*error);
     });
     worker->start();
@@ -302,11 +317,17 @@ void LibraryDialog::refreshCatalogView() {
     }
     if (!catalog_.isEmpty()) availableSummary_->setText(QStringLiteral("%1 of %2 dictionaries shown").arg(available_->topLevelItemCount()).arg(catalog_.size()));
 }
+void LibraryDialog::noteRootChange(const QString &root) {
+    const QString canonical = QFileInfo(root).canonicalFilePath();
+    if ((canonical.isEmpty() ? QDir(root).absolutePath() : canonical) == originalRoot_)
+        originalRootChanged_ = true;
+}
 void LibraryDialog::chooseRoot() {
     const QString folder = QFileDialog::getExistingDirectory(this, QStringLiteral("Choose dictionary folder"), root_);
     // Accepting the current folder is an explicit reload after an external update.
     if (folder.isEmpty()) return;
     root_ = folder;
+    noteRootChange(root_); // Choosing the original folder explicitly reloads external changes.
     changed_ = true;
     rootLabel_->setText(root_);
     status_->clear();
@@ -338,8 +359,9 @@ void LibraryDialog::startImport(const QString &file, const QByteArray &hash, qin
         status_->setText(QStringLiteral("Finishing installation"));
         cancelButton_->setEnabled(false);
         runWorker([root, prepared] { LibraryStorage::commitImport(root, **prepared); },
-            [this, prepared](const QString &commitError) {
+            [this, prepared, root](const QString &commitError) {
                 if (!commitError.isEmpty()) { finishOperation(commitError, true); return; }
+                noteRootChange(root);
                 changed_ = true;
                 refreshInstalled();
                 const auto &dictionary = (*prepared)->dictionary;
@@ -360,8 +382,9 @@ void LibraryDialog::removeSelected() {
     cancelButton_->setEnabled(false);
     const QString root = root_;
     runWorker([root, dictionary] { LibraryStorage::removeDictionary(root, dictionary); },
-        [this, dictionary](const QString &error) {
+        [this, dictionary, root](const QString &error) {
             if (!error.isEmpty()) { finishOperation(error, true); return; }
+            noteRootChange(root);
             changed_ = true;
             refreshInstalled();
             finishOperation(QStringLiteral("Removed %1.").arg(dictionary.heading));

@@ -8,10 +8,16 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 
 class QTemporaryDir;
 
 namespace LibraryStorage {
+// A failed rollback left the installed root different from its prior state.
+class UnrestoredMutation final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 inline constexpr qint64 MaxDownloadBytes = 32LL * 1024 * 1024 * 1024;
 inline constexpr qint64 SpaceReserve = 32LL * 1024 * 1024;
 

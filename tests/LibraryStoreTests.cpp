@@ -1,4 +1,5 @@
 #include "LibraryStore.hpp"
+#include "LibraryStoreRecovery_p.hpp"
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -83,6 +84,48 @@ int main(int argc, char **argv) {
         std::atomic_bool cancelled = false;
         qint64 events = 0;
         const auto progress = [&](const QString &, qint64, qint64) { ++events; };
+        // Exercise the same recovery routine called by commitImport's catch path.
+        for (const bool blocked : {false, true}) {
+            QTemporaryDir transaction(temporary.filePath(QStringLiteral("rollback-XXXXXX")));
+            require(transaction.isValid(), "rollback transaction root");
+            LibraryStorage::PreparedImport state;
+            state.directory = std::make_unique<QTemporaryDir>(transaction.filePath(QStringLiteral("recovery-XXXXXX")));
+            require(state.directory->isValid(), "rollback recovery directory");
+            state.dictionary.path = transaction.filePath(QStringLiteral("dictionary.wikblb"));
+            state.stagedFile = transaction.filePath(QStringLiteral("staged.wikblb"));
+            const QString other = state.dictionary.path + QStringLiteral(".xz");
+            const QString oldRaw = state.directory->filePath(QStringLiteral("previous-0"));
+            const QString oldCompressed = state.directory->filePath(QStringLiteral("previous-1"));
+            const QString marker = transaction.filePath(QStringLiteral(".desktop-edition"));
+            const QByteArray newBytes = QByteArrayLiteral("new published payload");
+            const QByteArray rawBytes = QByteArrayLiteral("previous raw payload");
+            const QByteArray compressedBytes = QByteArrayLiteral("previous compressed payload");
+            const QByteArray occupiedBytes = QByteArrayLiteral("do not overwrite this destination");
+            write(state.dictionary.path, newBytes);
+            write(oldRaw, rawBytes);
+            write(oldCompressed, compressedBytes);
+            write(marker, QByteArrayLiteral("new edition marker"));
+            if (blocked) write(state.stagedFile, occupiedBytes);
+            bool unrestored = false;
+            try {
+                LibraryStorage::detail::rollbackImport(state,
+                    {{state.dictionary.path, oldRaw}, {other, oldCompressed}}, marker, true, true);
+            } catch (const LibraryStorage::UnrestoredMutation &) { unrestored = true; }
+            require(unrestored == blocked, "typed failure only when recovery remains incomplete");
+            require(!QFileInfo::exists(marker), "marker rollback still attempted after unpublish failure");
+            require(read(other) == compressedBytes && !QFileInfo::exists(oldCompressed), "later independent backup restored after first obstruction");
+            if (blocked) {
+                require(!state.directory->autoRemove(), "unrestored recovery directory retained");
+                require(read(state.dictionary.path) == newBytes, "occupied installed destination not overwritten");
+                require(read(state.stagedFile) == occupiedBytes, "occupied staged destination not overwritten");
+                require(read(oldRaw) == rawBytes, "blocked prior payload retained exactly");
+                state.directory->setAutoRemove(true); // Test-owned fixture only, after preservation assertions.
+            } else {
+                require(state.directory->autoRemove(), "fully restored recovery needs no retained directory");
+                require(read(state.dictionary.path) == rawBytes && !QFileInfo::exists(oldRaw), "prior raw payload restored exactly");
+                require(read(state.stagedFile) == newBytes, "unpublished new payload restored to staging");
+            }
+        }
         // These exercise both Qt importer header gates, not native DPR3 decoding.
         // Empty presentation arrays have no version-specific per-span fields.
         for (const QByteArray &magic : {QByteArray("DPR2"), QByteArray("DPR3"), QByteArray("DPR4")}) {

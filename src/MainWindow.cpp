@@ -11,6 +11,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDebug>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFontDatabase>
@@ -262,13 +263,14 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
         auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit, fragment] {
             if (serial != loadSerial_ || cancelled->load()) return;
             if (!loaded->error.isEmpty()) {
+                qWarning().noquote() << "Dictionary opening failed:" << root << loaded->error;
                 setLoading(false);
                 if (api_) {
                     QSignalBlocker kindBlocker(kind_);
                     QSignalBlocker languageBlocker(language_);
                     kind_->setCurrentIndex(kind_->findData(api_->kind()));
                     language_->setCurrentText(api_->language());
-                    resultStatus_->setText(QStringLiteral("Could not open dictionaries: %1").arg(loaded->error));
+                    resultStatus_->setText(QStringLiteral("Could not open the selected dictionary. Your current dictionary is still open."));
                 } else {
                     // No reader owns the previous entry or its suggestions anymore.
                     json_->clear();
@@ -278,7 +280,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     bookmark_->setEnabled(false);
                     title_->setText(QStringLiteral("Open your dictionaries"));
                     meta_->setText(QStringLiteral("Your words stay on this computer."));
-                    reading_->setHtml(QStringLiteral("<p>%1</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>").arg(loaded->error.toHtmlEscaped()));
+                    reading_->setHtml(QStringLiteral("<p>Could not open this dictionary.</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>"));
                     resultStatus_->setText(QStringLiteral("No dictionary open"));
                 }
                 return;
@@ -403,14 +405,18 @@ void MainWindow::chooseRoot() {
         if (cancelLoad_) cancelLoad_->store(true);
         ++loadSerial_;
         deferredDatasetPublication_ = {};
-        api_.reset();
-        searchTitles_.clear();
-        sampleWords_.clear();
-        currentEntry_ = {};
-        currentJson_.clear();
-        media_->setEntry({});
-        visits_.clear();
-        visitIndex_ = -1;
+        // A different folder is only a candidate until opening succeeds. An
+        // edited or explicitly reloaded original folder cannot keep its old reader.
+        if (dialog.originalRootChanged()) {
+            api_.reset();
+            searchTitles_.clear();
+            sampleWords_.clear();
+            currentEntry_ = {};
+            currentJson_.clear();
+            media_->setEntry({});
+            visits_.clear();
+            visitIndex_ = -1;
+        }
         openRoot(dialog.selectedRoot(), word);
     } else if (deferredDatasetPublication_) {
         auto publish = std::move(deferredDatasetPublication_);

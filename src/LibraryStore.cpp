@@ -1,4 +1,5 @@
 #include "LibraryStore.hpp"
+#include "LibraryStoreRecovery_p.hpp"
 
 #include <QBuffer>
 #include <QCryptographicHash>
@@ -126,7 +127,7 @@ void restoreBackups(const QList<QPair<QString, QString>> &backups, QTemporaryDir
     }
     if (!restored) {
         directory.setAutoRemove(false);
-        fail(QStringLiteral("The operation failed and an existing dictionary could not be restored. Its files are preserved in %1.").arg(directory.path()));
+        throw UnrestoredMutation((QStringLiteral("The operation failed and an existing dictionary could not be restored. Its files are preserved in %1.").arg(directory.path())).toStdString());
     }
 }
 void clearDerivedIndex(const QString &path) {
@@ -282,6 +283,20 @@ void decompress(const QString &source, const QString &destination, const QString
         throw;
     }
 }
+}
+
+void detail::rollbackImport(PreparedImport &prepared,
+        const QList<QPair<QString, QString>> &backups, const QString &markerPath,
+        bool published, bool markerCommitted) {
+    const bool publishedRestored = !published || QFile::rename(prepared.dictionary.path, prepared.stagedFile);
+    if (!publishedRestored) prepared.directory->setAutoRemove(false);
+    // An occupied destination must not prevent independent recovery actions.
+    const bool markerRestored = !markerCommitted || QFile::remove(markerPath);
+    restoreBackups(backups, *prepared.directory);
+    if (!publishedRestored)
+        throw UnrestoredMutation(QStringLiteral("The import could not be rolled back. Recovery files remain in %1.").arg(prepared.directory->path()).toStdString());
+    if (!markerRestored)
+        throw UnrestoredMutation(QStringLiteral("The dictionary was restored, but its edition marker could not be rolled back.").toStdString());
 }
 
 PreparedImport::~PreparedImport() = default;
@@ -485,13 +500,7 @@ void commitImport(const QString &root, PreparedImport &prepared) {
         }
         if (!index.commit()) fail(QStringLiteral("Cannot finish updating the dictionary list: %1").arg(index.errorString()));
     } catch (...) {
-        if (published && !QFile::rename(dictionary.path, prepared.stagedFile)) {
-            prepared.directory->setAutoRemove(false);
-            fail(QStringLiteral("The import could not be rolled back. Recovery files remain in %1.").arg(prepared.directory->path()));
-        }
-        const bool markerRestored = !markerCommitted || QFile::remove(markerPath);
-        restoreBackups(backups, *prepared.directory);
-        if (!markerRestored) fail(QStringLiteral("The dictionary was restored, but its edition marker could not be rolled back."));
+        detail::rollbackImport(prepared, backups, markerPath, published, markerCommitted);
         throw;
     }
     auto cache = metadata(root);

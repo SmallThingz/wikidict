@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 #include "LibraryStore.hpp"
+#include "LibraryDialog.hpp"
 
 #include <QAbstractTextDocumentLayout>
 #include <QAccessible>
@@ -31,6 +32,7 @@
 #include <QStatusBar>
 #include <QPalette>
 #include <QPointer>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QScrollArea>
@@ -206,7 +208,7 @@ private slots:
         QCOMPARE(window.title_->text(), QStringLiteral("Open your dictionaries"));
         QCOMPARE(window.resultStatus_->text(), QStringLiteral("No dictionary open"));
         const QString guidance = window.reading_->toPlainText();
-        QVERIFY(guidance.contains(QStringLiteral("No readable dictionary was found for this collection. Import a dictionary in Library.")));
+        QVERIFY(guidance.contains(QStringLiteral("Could not open this dictionary.")));
         QVERIFY(!guidance.contains(QStringLiteral("select:")));
         QVERIFY(!guidance.contains(QStringLiteral("FileNotFound")));
         QVERIFY(!window.search_->isEnabled());
@@ -895,6 +897,9 @@ private slots:
     void libraryModalDefersQueuedLoadUntilAfterActualRemoval() {
         QTemporaryDir directory(QStringLiteral(".tmp/ui-modal-remove-XXXXXX"));
         QVERIFY(directory.isValid());
+        QTemporaryDir rejected(QStringLiteral(".tmp/ui-removed-then-switch-XXXXXX"));
+        QVERIFY(rejected.isValid());
+        const QString rejectedRoot = QDir(rejected.path()).absolutePath();
         const QString root = QDir(directory.path()).absolutePath();
         std::atomic_bool cancelled = false;
         for (const QString &file : {
@@ -905,7 +910,12 @@ private slots:
         }
         const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
         QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
-        auto restoreSources = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), sources); });
+        const bool nativeDisabled = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        auto restoreSources = qScopeGuard([&] {
+            QSettings().setValue(QStringLiteral("library/catalogSources"), sources);
+            QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, nativeDisabled);
+        });
         MainWindow window(root, QStringLiteral("cat")); window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
@@ -952,6 +962,26 @@ private slots:
             QVERIFY(!QFileInfo::exists(root + QStringLiteral("/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb")));
             QVERIFY(QFileInfo::exists(root + QStringLiteral("/aliases.wikblb")));
             removed = true;
+            // Editing the original root still invalidates it after selecting a different folder.
+            auto *choose = dialog->findChild<QPushButton *>(QStringLiteral("chooseDictionaryFolder"));
+            QVERIFY(choose);
+            bool selected = false;
+            QTimer deadline;
+            deadline.setSingleShot(true);
+            QObject::connect(&deadline, &QTimer::timeout, dialog, [dialog] {
+                for (auto *picker : dialog->findChildren<QFileDialog *>())
+                    if (picker->isVisible()) picker->reject();
+            });
+            deadline.start(2000);
+            QTimer::singleShot(0, dialog, [&] {
+                auto *picker = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
+                QVERIFY(picker);
+                picker->setDirectory(rejectedRoot); picker->selectFile(rejectedRoot);
+                selected = QMetaObject::invokeMethod(picker, "accept", Qt::DirectConnection);
+            });
+            QTest::mouseClick(choose, Qt::LeftButton);
+            deadline.stop();
+            QVERIFY(selected);
             QVERIFY(pending);
             pending->blockSignals(false);
             QVERIFY(QMetaObject::invokeMethod(pending.data(), "finished", Qt::DirectConnection));
@@ -965,6 +995,10 @@ private slots:
         window.chooseRoot();
         QVERIFY(removed && deliveredInsideModal);
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QVERIFY(!window.api_);
+        QVERIFY(window.currentEntry_.isEmpty());
+        QVERIFY(window.visits_.isEmpty());
+        QCOMPARE(window.visitIndex_, -1);
         QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
         QVERIFY(window.currentEntry_.isEmpty() || !window.currentEntry_.value(QStringLiteral("redirect")).toObject().value(QStringLiteral("followed")).toBool());
     }
@@ -1132,6 +1166,195 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("newterm"));
         QVERIFY(!window.currentEntry_.isEmpty());
         QVERIFY(!window.reading_->toPlainText().isEmpty());
+    }
+
+    void failedLibraryFolderSelectionPreservesReaderAndNavigation() {
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        const bool nativeDisabled = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        auto restore = qScopeGuard([&] {
+            QSettings().setValue(QStringLiteral("library/catalogSources"), sources);
+            QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, nativeDisabled);
+        });
+        for (const bool malformed : {false, true}) {
+            QTemporaryDir candidate(QStringLiteral(".tmp/ui-rejected-root-XXXXXX"));
+            QVERIFY(candidate.isValid());
+            const QString rejectedRoot = QDir(candidate.path()).absolutePath();
+            if (malformed) {
+                QFile manifest(rejectedRoot + QStringLiteral("/languages.tsv"));
+                QVERIFY(manifest.open(QIODevice::WriteOnly));
+                QCOMPARE(manifest.write("invalid manifest\n"), qint64(17));
+            }
+            MainWindow window(fixture_, QStringLiteral("cat")); window.resize(780, 480); window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+            QVERIFY(window.openWord(QStringLiteral("dog")));
+            QTRY_COMPARE(title(window), QStringLiteral("dog"));
+            const QByteArray json = window.currentJson_;
+            const QString reading = window.reading_->toPlainText();
+            window.saveVisit();
+            const auto visits = window.visits_;
+            const auto collapsed = window.collapsedSections_;
+            const int scroll = window.reading_->verticalScrollBar()->value();
+            const int visitIndex = window.visitIndex_;
+            const QString rootSetting = QSettings().value(QStringLiteral("reader/root")).toString();
+            bool selected = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto *library = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                QVERIFY(library && library->objectName() == QStringLiteral("libraryDialog"));
+                auto close = qScopeGuard([&] { library->done(QDialog::Rejected); });
+                auto *choose = library->findChild<QPushButton *>(QStringLiteral("chooseDictionaryFolder"));
+                QVERIFY(choose);
+                QTimer deadline;
+                deadline.setSingleShot(true);
+                QObject::connect(&deadline, &QTimer::timeout, library, [library] {
+                    for (auto *picker : library->findChildren<QFileDialog *>())
+                        if (picker->isVisible()) picker->reject();
+                });
+                deadline.start(2000);
+                QTimer::singleShot(0, library, [&] {
+                    auto *picker = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
+                    QVERIFY(picker);
+                    picker->setDirectory(rejectedRoot); picker->selectFile(rejectedRoot);
+                    selected = QMetaObject::invokeMethod(picker, "accept", Qt::DirectConnection);
+                });
+                QTest::mouseClick(choose, Qt::LeftButton);
+                deadline.stop();
+                QVERIFY(selected);
+            });
+            window.chooseRoot();
+            QVERIFY(selected);
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+            QVERIFY(window.api_ && window.search_->isEnabled());
+            QCOMPARE(window.api_->root(), fixture_);
+            QCOMPARE(window.currentJson_, json);
+            QCOMPARE(window.reading_->toPlainText(), reading);
+            QCOMPARE(window.visitIndex_, visitIndex);
+            QCOMPARE(window.visits_.size(), visits.size());
+            for (qsizetype i = 0; i < visits.size(); ++i) {
+                QCOMPARE(window.visits_[i].title, visits[i].title);
+                QCOMPARE(window.visits_[i].language, visits[i].language);
+                QCOMPARE(window.visits_[i].kind, visits[i].kind);
+                QCOMPARE(window.visits_[i].scroll, visits[i].scroll);
+                QCOMPARE(window.visits_[i].collapsed, visits[i].collapsed);
+            }
+            QCOMPARE(window.collapsedSections_, collapsed);
+            QCOMPARE(window.reading_->verticalScrollBar()->value(), scroll);
+            QCOMPARE(QSettings().value(QStringLiteral("reader/root")).toString(), rootSetting);
+            QVERIFY(window.resultStatus_->text() == QStringLiteral("Could not open the selected dictionary. Your current dictionary is still open."));
+            QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-rejected-root-%1.png").arg(malformed ? QStringLiteral("invalid") : QStringLiteral("empty"))));
+            window.navigate(-1);
+            QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        }
+    }
+
+    void libraryWorkerDistinguishesUnrestoredMutationFromRestoredErrors() {
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        auto restoreSources = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), sources); });
+        // The worker fixture injects the typed result after real filesystem recovery attempts.
+        // The same message on ordinary failures must not mark a root as changed.
+        for (const int mode : {0, 1, 2}) { // validation, restored error, unrestored error
+            QTemporaryDir directory(QStringLiteral(".tmp/ui-recovery-status-XXXXXX"));
+            QTemporaryDir recovery(QStringLiteral(".tmp/ui-recovery-files-XXXXXX"));
+            QVERIFY(directory.isValid() && recovery.isValid());
+            const QString root = QDir(directory.path()).absolutePath();
+            const QString backup = QDir(recovery.path()).absoluteFilePath(QStringLiteral("dictionary.wikblb"));
+            std::atomic_bool cancelled = false;
+            auto prepared = LibraryStorage::prepareImport(root, fixture_ + QStringLiteral("/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"), {}, -1, cancelled, [](const QString &, qint64, qint64) {});
+            LibraryStorage::commitImport(root, *prepared);
+            const QString dictionary = prepared->dictionary.path;
+            QFile original(dictionary);
+            QVERIFY(original.open(QIODevice::ReadOnly));
+            const QByteArray originalBytes = original.readAll();
+            QVERIFY(!originalBytes.isEmpty());
+            original.close();
+            MainWindow window(root, QStringLiteral("cat")); window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+            QVERIFY(window.openWord(QStringLiteral("dog")));
+            QTRY_COMPARE(title(window), QStringLiteral("dog"));
+            const QByteArray json = window.currentJson_;
+            const QString reading = window.reading_->toPlainText();
+            const int visitIndex = window.visitIndex_;
+            const qsizetype visitCount = window.visits_.size();
+            bool completed = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = static_cast<LibraryDialog *>(QApplication::activeModalWidget());
+                QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
+                auto closeOnSetupFailure = qScopeGuard([dialog] { dialog->done(QDialog::Rejected); });
+                dialog->setBusy(true, QStringLiteral("Testing recovery status"));
+                dialog->runWorker([dictionary, backup, mode] {
+                    const char *message = "The dictionary could not be restored.";
+                    if (mode != 0) {
+                        if (!QFile::rename(dictionary, backup)) throw std::runtime_error("Recovery fixture could not move the dictionary");
+                        if (mode == 1) {
+                            if (!QFile::rename(backup, dictionary)) throw std::runtime_error("Recovery fixture could not restore the dictionary");
+                        } else {
+                            if (!QDir().mkpath(dictionary)) throw std::runtime_error("Recovery fixture could not block the original path");
+                            if (QFile::rename(backup, dictionary)) throw std::runtime_error("Recovery fixture unexpectedly restored the dictionary");
+                            throw LibraryStorage::UnrestoredMutation(message);
+                        }
+                    }
+                    throw std::runtime_error(message);
+                }, [&, dialog](const QString &error) {
+                    auto close = qScopeGuard([dialog] { dialog->done(QDialog::Rejected); });
+                    dialog->finishOperation(error, true);
+                    QCOMPARE(error, QStringLiteral("The dictionary could not be restored."));
+                    QCOMPARE(dialog->libraryChanged(), mode == 2);
+                    QCOMPARE(dialog->originalRootChanged(), mode == 2);
+                    auto *status = dialog->findChild<QLabel *>(QStringLiteral("libraryStatus"));
+                    auto *choose = dialog->findChild<QPushButton *>(QStringLiteral("chooseDictionaryFolder"));
+                    auto *importButton = dialog->findChild<QPushButton *>(QStringLiteral("importDictionary"));
+                    auto *cancel = dialog->findChild<QPushButton *>(QStringLiteral("cancelLibraryOperation"));
+                    auto *progress = dialog->findChild<QProgressBar *>(QStringLiteral("libraryProgress"));
+                    QVERIFY(status && choose && importButton && cancel && progress);
+                    QCOMPARE(status->text(), QStringLiteral("Could not finish: The dictionary could not be restored."));
+                    QVERIFY(choose->isEnabled() && importButton->isEnabled());
+                    QVERIFY(!cancel->isVisible() && !progress->isVisible());
+                    dialog->activateWindow();
+                    choose->setFocus();
+                    QTRY_VERIFY(choose->hasFocus());
+                    for (int steps = 0; steps < 16 && !importButton->hasFocus(); ++steps)
+                        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Tab);
+                    QTRY_VERIFY(importButton->hasFocus());
+                    const QString suffix = mode == 0 ? QStringLiteral("validation")
+                        : mode == 1 ? QStringLiteral("restored") : QStringLiteral("unrestored");
+                    QVERIFY(dialog->grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-worker-recovery-%1.png").arg(suffix)));
+                    QTest::keyClick(importButton, Qt::Key_Escape);
+                    QTRY_VERIFY(!dialog->isVisible());
+                    completed = true;
+                });
+                closeOnSetupFailure.dismiss();
+            });
+            window.chooseRoot();
+            QVERIFY(completed);
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+            if (mode == 2) {
+                QVERIFY(QFileInfo(dictionary).isDir() && QFileInfo(backup).isFile());
+                QFile retained(backup);
+                QVERIFY(retained.open(QIODevice::ReadOnly));
+                QCOMPARE(retained.readAll(), originalBytes);
+                QVERIFY(!window.api_ && window.currentEntry_.isEmpty() && window.currentJson_.isEmpty());
+                QVERIFY(window.visits_.isEmpty());
+                QCOMPARE(window.visitIndex_, -1);
+                QVERIFY(!window.back_->isEnabled());
+                QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Could not open this dictionary.")));
+            } else {
+                QVERIFY(QFileInfo(dictionary).isFile() && !QFileInfo::exists(backup));
+                QFile restored(dictionary);
+                QVERIFY(restored.open(QIODevice::ReadOnly));
+                QCOMPARE(restored.readAll(), originalBytes);
+                QVERIFY(window.api_ && window.search_->isEnabled());
+                QCOMPARE(window.currentJson_, json);
+                QCOMPARE(window.reading_->toPlainText(), reading);
+                QCOMPARE(window.visitIndex_, visitIndex);
+                QCOMPARE(window.visits_.size(), visitCount);
+                window.navigate(-1);
+                QTRY_COMPARE(title(window), QStringLiteral("cat"));
+            }
+        }
     }
 
     void unchangedLibraryClosePreservesDisplayedEntry() {
