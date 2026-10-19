@@ -17,12 +17,14 @@ pub const Section = struct {
 pub fn explicitLanguageDeclaration(raw: []const u8, content_language: []const u8) ?[]const u8 {
     const declaration = if (std.mem.eql(u8, content_language, "ar")) "اللغة" else if (std.mem.eql(u8, content_language, "az")) "Dil" else return null;
     const heading = std.mem.trim(u8, raw, " \t");
-    if (std.mem.eql(u8, content_language, "ar") and std.mem.startsWith(u8, heading, "لغة") and
-        heading.len > "لغة".len and (heading["لغة".len] == ' ' or heading["لغة".len] == '\t'))
-    {
-        const label = std.mem.trim(u8, heading["لغة".len..], " \t");
-        if (label.len == 0 or std.mem.indexOfAny(u8, label, "{}[]<>|=\r\n") != null) return null;
-        return label;
+    if (std.mem.eql(u8, content_language, "ar")) {
+        for ([_][]const u8{ "لغة", "اللغة" }) |prefix| {
+            if (!std.mem.startsWith(u8, heading, prefix) or heading.len <= prefix.len or
+                (heading[prefix.len] != ' ' and heading[prefix.len] != '\t')) continue;
+            const label = std.mem.trim(u8, heading[prefix.len..], " \t");
+            if (label.len == 0 or std.mem.indexOfAny(u8, label, "{}[]<>|=\r\n") != null) return null;
+            return label;
+        }
     }
     if (!std.mem.startsWith(u8, heading, "{{") or !std.mem.endsWith(u8, heading, "}}")) return null;
     const body = heading[2 .. heading.len - 2];
@@ -522,6 +524,12 @@ pub const CategoryIterator = struct {
 };
 
 test "explicit Arabic language declarations do not depend on known labels" {
+    try std.testing.expectEqualStrings("الإنجليزية", explicitLanguageDeclaration("اللغة الإنجليزية", "ar").?);
+    try std.testing.expectEqualStrings("الانجليزية", explicitLanguageDeclaration("اللغة الانجليزية", "ar").?);
+    try std.testing.expectEqualStrings("مجهولة", explicitLanguageDeclaration("اللغة مجهولة", "ar").?);
+    inline for (.{ "اللغة", "اللغةالإنجليزية", "اللغة [[إنجليزية]]", "اللغة إنجليزية|فرنسية", "اللغة إنجليزية\nفرنسية" }) |heading|
+        try std.testing.expect(explicitLanguageDeclaration(heading, "ar") == null);
+    try std.testing.expect(explicitLanguageDeclaration("اللغة الإنجليزية", "en") == null);
     try std.testing.expect(explicitLanguageDeclaration("لغة ألمانية", "ar") != null);
     try std.testing.expectEqualStrings("ألمانية", explicitLanguageDeclaration("لغة ألمانية", "ar").?);
     try std.testing.expectEqualStrings("مجهولة", explicitLanguageDeclaration("لغة مجهولة", "ar").?);

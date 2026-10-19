@@ -707,12 +707,14 @@ fn resolveArabicLanguageHeading(codes: LanguageCodes, value: []const u8) ?Resolv
     const namespaces = codes.namespace_catalog orelse return null;
     if (!std.mem.eql(u8, namespaces.content_language, "ar")) return null;
     const heading = std.mem.trim(u8, value, " \t\r\n");
-    const prefix = "لغة";
-    if (!std.mem.startsWith(u8, heading, prefix) or heading.len <= prefix.len or
-        (heading[prefix.len] != ' ' and heading[prefix.len] != '\t')) return null;
-    const label = std.mem.trim(u8, heading[prefix.len..], " \t");
-    if (label.len == 0 or std.mem.indexOfAny(u8, label, "[]{}<>|=\r\n") != null) return null;
-    return codes.resolveStrong(label) orelse codes.resolveTrusted(label);
+    for ([_][]const u8{ "لغة", "اللغة" }) |prefix| {
+        if (!std.mem.startsWith(u8, heading, prefix) or heading.len <= prefix.len or
+            (heading[prefix.len] != ' ' and heading[prefix.len] != '\t')) continue;
+        const label = std.mem.trim(u8, heading[prefix.len..], " \t");
+        if (label.len == 0 or std.mem.indexOfAny(u8, label, "[]{}<>|=\r\n") != null) return null;
+        return codes.resolveStrong(label) orelse codes.resolveTrusted(label);
+    }
+    return null;
 }
 
 // The two captured AR Norwegian wrappers declare a variant after the umbrella
@@ -6841,4 +6843,80 @@ test "Arabic explicit linked declarations and raw corroborated table boundaries 
     }
     const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
     try std.testing.expect(std.mem.indexOf(u8, report, "malformed_table") != null);
+}
+
+test "captured definite Arabic language declarations retain trusted owners and unknown boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tملف\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "en", "الإنجليزية", "إنجليزية" }, .{ "fr", "الفرنسية", "فرنسية" }, .{ "ar", "العربية", "عربية" } }) |row|
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]) or std.mem.eql(u8, value, row[2])) return .{ .code = row[0], .heading = row[1] };
+            return null;
+        }
+    };
+    // Only the selected canonical TSV/local-name suffixes are authoritative;
+    // the unhamza spelling is an explicit unknown, never a guessed alias.
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve };
+    const complete = language_source.Section{ .heading = "اللغة الإنجليزية", .source = "== اللغة الإنجليزية ==\n# meaning\n[[تصنيف:عربية]]" };
+    try std.testing.expectEqualStrings("en", resolveSection(codes, complete).?.code);
+    try std.testing.expectEqualStrings("en", boundaryLanguage(codes, complete).?.code);
+    try std.testing.expect(hasExplicitLanguageDeclaration(codes, complete));
+    const unknown = language_source.Section{ .heading = "اللغة الانجليزية", .source = "== اللغة الانجليزية ==\n# unknown\n" };
+    try std.testing.expect(resolveSection(codes, unknown) == null);
+    try std.testing.expect(boundaryLanguage(codes, unknown) == null);
+    try std.testing.expect(hasExplicitLanguageDeclaration(codes, unknown));
+    inline for (.{ "اللغة", "اللغةالإنجليزية", "اللغة [[إنجليزية|فرنسية]]", "اللغة إنجليزية|فرنسية", "اللغة إنجليزية فرنسية" }) |heading|
+        try std.testing.expect(resolveArabicLanguageHeading(codes, heading) == null);
+    var foreign = codes;
+    foreign.namespace_catalog = null;
+    try std.testing.expect(resolveArabicLanguageHeading(foreign, complete.heading) == null);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const raw_napa = "{{أيضا|ملفوف نابا }}\n== اللغة الإنجليزية ==\n=== Napa cabbage ===\n'''الكلمة''' نوعها.\n# [[اسْم|اسم]].\n#* «Napa or napa cabbage is a type of Chinese cabbage originating near the Beijing region of China and is widely used in East Asian cuisine.» <ref>en.wikipedia.org/wiki/Napa_cabbage</ref>\n#: نابا أو الملفوف نابا هو نوع من الملفوف الصيني تنشأ بالقرب من بكين المنطقة من الصين، ويستخدم على نطاق واسع في المطبخ شرق آسيا ..\n\n=== المراجع ===\n{{المراجع}}\n\n[[(Brassica rapa subsp. pekinensis or Brassica rapa Pekinensis Group)]]\n\n[[تصنيف:عربية]]";
+    const raw_catecholamine = "== اللغة الانجليزية ==\n{{wikipedia}}\n\n=== التأصيل ===\nمن {{لاحقة|en|catechol|-amine}}.\n\n=== النطق ===\n* {{أصد|/katəˈkəʊləmiːn/|/katəˈkɒləmiːn/}}\n\n=== اسم ===\n# مجموعة من المركبات المشتقة من الحمض الأميني تيروسين.\n== انظر أيضًا ==\n* [[dopamine]]\n\n[[تصنيف:C (إنجليزية)]]";
+    const raw_dopamine = "== اللغة الإنجليزية ==\n[[ملف:Dopamine.svg|تصغير|البنية الكيميائية '''لل[[دُوبَامِين|دوبامين]]''']]\n{{wikipedia}}\n\n=== التأصيل ===\nمن {{لاحقة|en|dopa|-amine}}.\n\n=== اسم ===\n* هرمونٌ وناقلٌ عصبيٌ يُصنَّف كيميائياً ضمن الكاتيكولامينات والفينئيثيلامينات ويَلعب دورًا محوريًا في التَّحفيز والرغبة والإدمان.\n=== النطق ===\n* {{أصد|/ˈdəʊ.pə.miːn/}}\n* {{audio|LL-Q1860 (eng)-Back ache-dopamine.wav|lang=en|النطق الإنجليزي}}\n==== مرادفات ====\n* [[DA]]\n=== من نفس الجذر ===\n* [[-dopa]]\n* [[dopaminergic]]\n* [[dopaminoceptive]]\n* [[hydroxydopamine]]\n\n[[تصنيف:d (إنجليزية)]]\n[[تصنيف:أسماء إنجليزية]]\n[[تصنيف:نواقل عصبية (إنجليزية)]]";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ملفوف نابا", "== اللغة الإنجليزية ==\n=== Napa cabbage ===\n# [[اسْم|اسم]].\n#: نابا أو الملفوف نابا هو نوع من الملفوف الصيني\n[[تصنيف:عربية]]\n", raw_napa, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "catecholamine", "== اللغة الانجليزية ==\n=== اسم ===\n# مجموعة من المركبات المشتقة من الحمض الأميني تيروسين.\n== انظر أيضًا ==\n* [[dopamine]]\n", raw_catecholamine, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "dopamine", "== اللغة الإنجليزية ==\n=== اسم ===\n* هرمونٌ وناقلٌ عصبيٌ يُصنَّف كيميائياً ضمن الكاتيكولامينات والفينئيثيلامينات ويَلعب دورًا محوريًا في التَّحفيز والرغبة والإدمان.\n=== من نفس الجذر ===\n* [[dopaminergic]]\n", raw_dopamine, null);
+    const neighbors = "== اللغة الإنجليزية ==\n# [[first]]\n== اللغة مجهولة ==\n# [[middle]]\n== اللغة الفرنسية ==\n# [[last]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "neighbors", neighbors, neighbors, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 6), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_blobs);
+    const expected = [_]struct { title: []const u8, owner: []const u8, code: []const u8, target: []const u8, forbidden: []const u8 }{
+        .{ .title = "ملفوف نابا", .owner = "الإنجليزية", .code = "en", .target = "اسْم", .forbidden = "" },
+        .{ .title = "dopamine", .owner = "الإنجليزية", .code = "en", .target = "dopaminergic", .forbidden = "" },
+        .{ .title = "catecholamine", .owner = "Unclassified", .code = "", .target = "dopamine", .forbidden = "" },
+        .{ .title = "neighbors", .owner = "الإنجليزية", .code = "en", .target = "first", .forbidden = "middle" },
+        .{ .title = "neighbors", .owner = "Unclassified", .code = "", .target = "middle", .forbidden = "first" },
+        .{ .title = "neighbors", .owner = "الفرنسية", .code = "fr", .target = "last", .forbidden = "middle" },
+    };
+    for (expected) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row.owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(row.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualStrings(row.code, decoded.entry.language_code);
+        var found: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, row.target)) found += 1;
+            if (row.forbidden.len != 0) try std.testing.expect(!std.mem.eql(u8, span.target, row.forbidden));
+        };
+        try std.testing.expectEqual(@as(usize, 1), found);
+    }
 }

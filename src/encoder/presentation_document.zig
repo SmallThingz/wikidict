@@ -1817,18 +1817,18 @@ test "ordinary example HTML preserves nested table cells actions and explicit la
     for (inline_spans) |span| {
         if (std.mem.eql(u8, span.text, "linked")) {
             inline_link = true;
-            try std.testing.expect(span.role == .example and span.italic);
+            try std.testing.expect(span.role == .example and span.flags.italic);
             try std.testing.expectEqualStrings("target", span.target);
             try std.testing.expectEqualStrings("en", span.language);
         }
         if (std.mem.eql(u8, span.text, "عربي")) {
             inline_override = true;
-            try std.testing.expect(span.role == .example and span.italic);
+            try std.testing.expect(span.role == .example and span.flags.italic);
             try std.testing.expectEqualStrings("ar", span.language);
         }
         if (std.mem.indexOf(u8, span.text, "tail") != null) {
             inline_tail = true;
-            try std.testing.expect(span.role == .normal and !span.italic);
+            try std.testing.expect(span.role == .normal and !span.flags.italic);
         }
     }
     try std.testing.expect(inline_link and inline_override and inline_tail);
