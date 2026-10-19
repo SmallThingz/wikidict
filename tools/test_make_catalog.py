@@ -13,6 +13,47 @@ def language_blob(code='en', heading='English'):
 
 
 class CatalogTest(unittest.TestCase):
+    def test_alias_discovery_and_catalogue_use_raw_and_xz_transport_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            alias_blob = b'WIKBLB08\x08'
+            raw = root / 'raw-aliases.wikblb'
+            raw.write_bytes(alias_blob)
+            twin = root / 'packed-aliases.wikblb'
+            twin.write_bytes(alias_blob)
+            compressed = root / 'packed-aliases.wikblb.xz'
+            compressed.write_bytes(lzma.compress(alias_blob))
+            selected = c.catalogue_files(root)
+            self.assertEqual(set(selected), {raw, compressed})
+            rows = c.catalogue(selected, 'https://example.test/release').splitlines()[1:]
+            self.assertEqual(len(rows), 2)
+            expected = {
+                f'https://example.test/release/{path.name}\tAliases\t{path.stat().st_size}\t{hashlib.sha256(path.read_bytes()).hexdigest()}'
+                for path in (raw, compressed)
+            }
+            self.assertEqual(set(rows), expected)
+            self.assertNotEqual(compressed.stat().st_size, len(alias_blob))
+            self.assertNotEqual(hashlib.sha256(compressed.read_bytes()).hexdigest(), hashlib.sha256(alias_blob).hexdigest())
+
+    def test_all_blob_kind_labels_and_rejection_bounds_are_preserved(self):
+        labels = {1: 'English', 2: 'Thesaurus', 3: 'Citations', 4: 'Reconstructions',
+                  5: 'Rhymes', 6: 'Sign glosses', 7: 'Supplemental pages', 8: 'Aliases'}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for kind, label in labels.items():
+                with self.subTest(kind=kind):
+                    path = root / f'kind-{kind}.wikblb'
+                    path.write_bytes(language_blob() if kind == 1 else b'WIKBLB08' + bytes([kind]))
+                    self.assertEqual(c.blob_label(path), label)
+            for kind in (0, 9, 255):
+                for compressed in (False, True):
+                    with self.subTest(invalid_kind=kind, compressed=compressed):
+                        path = root / ('invalid.wikblb.xz' if compressed else 'invalid.wikblb')
+                        body = b'WIKBLB08' + bytes([kind]) + b'\0'
+                        path.write_bytes(lzma.compress(body) if compressed else body)
+                        with self.assertRaisesRegex(ValueError, 'invalid blob kind'):
+                            c.catalogue([path], 'https://example.test/release')
+
     def test_raw_and_xz_catalogue_use_transport_size_and_checksum(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

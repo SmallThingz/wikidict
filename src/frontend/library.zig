@@ -395,6 +395,17 @@ pub fn install(io: std.Io, a: A, root: []const u8, input: []const u8, expected: 
             try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_part, .data = text.written() });
             publish_manifest = true;
         }
+    } else if (kind == .alias) {
+        var prior = std.Io.Dir.cwd().openFile(io, manifest, .{}) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return err,
+        };
+        if (prior) |*file_handle| {
+            file_handle.close(io);
+        } else {
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_part, .data = store.catalog.manifest_header ++ "\n" });
+            publish_manifest = true;
+        }
     }
     try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(destination).?);
     var transaction: InstallTransaction = .{
@@ -451,6 +462,35 @@ test "installer accepts internal compiled aliases and empty feature framing" {
         try std.testing.expectEqual(enc.blob_format.BlobKind.alias, file.view.kind);
         try std.testing.expectEqual(@as(usize, 1), file.recordCount());
     }
+    const manifest = try std.fs.path.join(fixture, &.{ root, store.catalog.manifest_filename });
+    try expectInstallBytes(io, a, manifest, store.catalog.manifest_header ++ "\n");
+    {
+        var db = try store.Store.open(io, a, root, .language, "English");
+        defer db.deinit();
+        try std.testing.expect(db.neutral_main);
+        try std.testing.expect(db.heading() == null);
+        try std.testing.expectEqual(@as(usize, 1), db.count());
+        const label = try db.labelAlloc(a);
+        defer a.free(label);
+        try std.testing.expectEqualStrings("Redirects", label);
+        var raw = try db.recordAlloc(a, (try db.find("A")).?);
+        defer raw.deinit();
+        var doc = try @import("model.zig").fromRecord(a, raw.record);
+        defer doc.deinit();
+        try std.testing.expectEqualStrings("A", doc.entry.title);
+        try std.testing.expect(doc.entry.language == null);
+        try std.testing.expectEqualStrings("B", doc.entry.redirect.?.target_title);
+        try std.testing.expect(!doc.entry.redirect.?.followed);
+    }
+    // Installing aliases into an existing root must not rewrite its catalogue,
+    // including an invalid catalogue whose repair is a separate operation.
+    for ([_][]const u8{ "heading\nEnglish\n", "heading\n\n" }) |prior_manifest| {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = prior_manifest });
+        try install(io, a, root, source, "", &log.writer);
+        try expectInstallBytes(io, a, manifest, prior_manifest);
+        try expectInstallBytes(io, a, alias_path, bytes);
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest, .data = store.catalog.manifest_header ++ "\n" });
     const empty = try enc.blob_format.buildAlloc(fixture, .thesaurus, "", &.{});
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = empty });
     try install(io, a, root, source, "", &log.writer);
@@ -460,8 +500,7 @@ test "installer accepts internal compiled aliases and empty feature framing" {
         defer file.deinit();
         try std.testing.expectEqual(@as(usize, 0), file.recordCount());
     }
-    const manifest = try std.fs.path.join(fixture, &.{ root, "languages.tsv" });
-    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().openFile(io, manifest, .{}));
+    try expectInstallBytes(io, a, manifest, store.catalog.manifest_header ++ "\n");
     try std.testing.expectEqual(@as(?store.Kind, null), store.parseKind("alias"));
 
     alias.presentation = "DPR2broken";
