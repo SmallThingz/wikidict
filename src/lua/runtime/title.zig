@@ -846,7 +846,7 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     defer arena.deinit();
     var runtime = try rt.Context.init(arena.allocator(), 0);
     defer runtime.deinit();
-    var host = host_api.Host{ .current_title = "Template:Foo/Sub", .page_exists = testPageExists, .page_content = testPageContent, .page_redirect = testPageRedirect, .page_id = testPageId, .page_content_model = testPageContentModel };
+    var host = host_api.Host{ .site_server = "//en.wiktionary.org", .site_script = "/w/index.php", .site_article_path = "/wiki/$1", .current_title = "Template:Foo/Sub", .page_exists = testPageExists, .page_content = testPageContent, .page_redirect = testPageRedirect, .page_id = testPageId, .page_content_model = testPageContentModel };
     host_api.set(&runtime, &host);
     const mw = try runtime.newNativeNamespace(.mw);
     try installForTest(&runtime, mw);
@@ -964,6 +964,63 @@ test "AOT title exposes namespace fragment and subpage semantics" {
     try std.testing.expectEqualStrings("template body", content_property.string);
     try runtime.setIndex(title, .{ .string = "fragment" }, .{ .string = " next_part " });
     try std.testing.expectEqualStrings(" next part", (try runtime.getIndex(title, .{ .string = "fragment" })).string);
+}
+
+test "title URL methods require captured site configuration and preserve URL contracts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{};
+    host_api.set(&runtime, &host);
+    const mw = try runtime.newNativeNamespace(.mw);
+    try installForTest(&runtime, mw);
+    const title_lib = mw.rawGet(.{ .string = "title" }).?.table;
+    const made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "A B#Frag" }});
+    defer rt.freeResults(made);
+    const title = made[0];
+    inline for (.{ "fullUrl", "canonicalUrl", "localUrl" }) |method| {
+        try std.testing.expectError(error.SiteInfoSnapshotMissing, callField(&runtime, title, method, &.{title}));
+    }
+    host.site_server = "//ar.wiktionary.org";
+    host.site_script = "/w/index.php";
+    host.site_article_path = "/wiki/$1";
+    var effect = false;
+    const previous = rt.beginLoadDataEffectProbe(&effect);
+    defer rt.endLoadDataEffectProbe(previous);
+    const full = try callField(&runtime, title, "fullUrl", &.{title});
+    defer rt.freeResults(full);
+    try std.testing.expectEqualStrings("//ar.wiktionary.org/wiki/A_B#Frag", full[0].string);
+    const canonical = try callField(&runtime, title, "canonicalUrl", &.{title});
+    defer rt.freeResults(canonical);
+    try std.testing.expectEqualStrings("https://ar.wiktionary.org/wiki/A_B#Frag", canonical[0].string);
+    const local = try callField(&runtime, title, "localUrl", &.{title});
+    defer rt.freeResults(local);
+    try std.testing.expectEqualStrings("/wiki/A_B", local[0].string);
+    const query = try runtime.newTable();
+    try query.rawSet(runtime.allocator, .{ .string = "z" }, .{ .number = 2 });
+    try query.rawSet(runtime.allocator, .{ .string = "a" }, .{ .number = 1 });
+    const queried = try callField(&runtime, title, "fullUrl", &.{ title, .{ .table = query }, .{ .string = "http" } });
+    defer rt.freeResults(queried);
+    try std.testing.expectEqualStrings("http://ar.wiktionary.org/w/index.php?title=A_B&a=1&z=2#Frag", queried[0].string);
+    const local_query = try callField(&runtime, title, "localUrl", &.{ title, .{ .string = "action=edit&section=0" } });
+    defer rt.freeResults(local_query);
+    try std.testing.expectEqualStrings("/w/index.php?title=A_B&action=edit&section=0", local_query[0].string);
+    try std.testing.expectError(error.InvalidTitleUrlProtocol, callField(&runtime, title, "fullUrl", &.{ title, .nil, .{ .string = "ftp" } }));
+    host.site_server = "https://captured.example:8443";
+    host.site_script = "/custom/run.php";
+    host.site_article_path = "/view/$1/end?lang=x";
+    const custom = try callField(&runtime, title, "fullUrl", &.{title});
+    defer rt.freeResults(custom);
+    try std.testing.expectEqualStrings("https://captured.example:8443/view/A_B/end?lang=x#Frag", custom[0].string);
+    const custom_query = try callField(&runtime, title, "canonicalUrl", &.{ title, .{ .table = query } });
+    defer rt.freeResults(custom_query);
+    try std.testing.expectEqualStrings("https://captured.example:8443/custom/run.php?title=A_B&a=1&z=2#Frag", custom_query[0].string);
+    host.site_article_path = null;
+    try std.testing.expectError(error.SiteInfoSnapshotMissing, callField(&runtime, title, "fullUrl", &.{title}));
+    host_api.set(&runtime, null);
+    try std.testing.expectError(error.SiteInfoSnapshotMissing, callField(&runtime, title, "canonicalUrl", &.{title}));
+    try std.testing.expect(!effect);
 }
 
 test "AOT title subpage fields respect namespace settings" {

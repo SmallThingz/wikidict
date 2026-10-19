@@ -1413,8 +1413,8 @@ pub const Expander = struct {
         if (std.mem.eql(u8, head, "!")) return "|";
         if (std.mem.eql(u8, head, "!!")) return "||";
         if (std.mem.eql(u8, head, "=")) return "=";
-        if (std.ascii.eqlIgnoreCase(head, "SERVER")) return uri_lib.site_server;
-        if (std.ascii.eqlIgnoreCase(head, "SERVERNAME")) return uri_lib.site_server_name;
+        if (std.ascii.eqlIgnoreCase(head, "SERVER")) return (try host_api.siteUrlConfig(self.runtime)).server;
+        if (std.ascii.eqlIgnoreCase(head, "SERVERNAME")) return try uri_lib.configuredServerName(self.runtime);
         if (!std.ascii.startsWithIgnoreCase(head, "CURRENT")) return null;
         const now = self.host.now_unix orelse return error.MissingCurrentTime;
         const civil = language_lib.civilFromUnix(now);
@@ -1972,7 +1972,7 @@ pub const Expander = struct {
     fn expandUrlParser(self: *Expander, raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize, kind: uri_lib.WikiUrlKind, escaped: bool) anyerror![]const u8 {
         const title = std.mem.trim(u8, try self.expandWikitext(raw, params, host_title, depth + 1), " \t\r\n");
         const query: ?[]const u8 = if (args.len == 0) null else try self.expandWikitext(args[0], params, host_title, depth + 1);
-        return uri_lib.buildWikiUrlRawQuery(self.runtime.allocator, title, query, kind, escaped, null);
+        return uri_lib.buildSiteWikiUrlRawQuery(self.runtime.allocator, title, query, kind, escaped, null, try host_api.siteUrlConfig(self.runtime));
     }
 
     fn expandUrlencodeParser(self: *Expander, raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
@@ -2841,84 +2841,85 @@ pub const Expander = struct {
         else
             try self.expandTemplateByName(name, args, host_title, depth, .link);
         if (!eligible or !recovery.exact_wrapper or !recovery.missing_display) return expanded;
-        const recovered = (try self.usageSemanticCall(args, raw_args)) orelse return expanded;
-        work_stats.logLine("warning: native usage content recovery: article={s} template={s} module=usex export=display failure=InvokeFunctionMissing diagnostic=retained\n", .{ host_title[0..@min(host_title.len, 256)], title[0..@min(title.len, 256)] });
-        return std.fmt.allocPrint(self.runtime.allocator, "{s}<br/>{s}", .{ recovered, expanded });
+        const recovered = (try self.usageSemanticHtml(args, raw_args)) orelse return expanded;
+        work_stats.logLine("warning: native usage content recovery: article={s} template={s} module=usex export=display failure=InvokeFunctionMissing diagnostic=build-log recovery=recovered\n", .{ host_title[0..@min(host_title.len, 256)], title[0..@min(title.len, 256)] });
+        return recovered;
     }
 
-    fn usageSemanticCall(self: *Expander, args: *rt.Table, raw_args: []const []const u8) anyerror!?[]const u8 {
+    fn usageSemanticHtml(self: *Expander, args: *rt.Table, raw_args: []const []const u8) anyerror!?[]const u8 {
         const a = self.runtime.allocator;
-        var out: std.ArrayList(u8) = .empty;
-        errdefer out.deinit(a);
-        try out.appendSlice(a, "{{ux");
         var positional: i64 = 1;
+        // Validate the original ordered argument roster, including overwritten
+        // unsupported keys. Values are the already materialized last winners.
         for (raw_args) |raw| {
             const eq = preprocess.findTopDelimiter(raw, '=');
             const key_text = if (eq) |at| std.mem.trim(u8, raw[0..at], " \t\r\n") else "";
             var key: Value = undefined;
             if (eq != null) {
                 if (std.fmt.parseInt(i64, key_text, 10)) |number| {
-                    if (number < 1 or number > 3) {
-                        out.deinit(a);
-                        return null;
-                    }
+                    if (number < 1 or number > 3) return null;
                     key = .{ .number = @floatFromInt(number) };
                 } else |_| {
                     var supported = false;
-                    inline for (.{ "q", "qq", "translation", "t", "tr" }) |name|
-                        if (std.mem.eql(u8, key_text, name)) {
+                    inline for (.{ "q", "qq", "translation", "t", "tr" }) |field|
+                        if (std.mem.eql(u8, key_text, field)) {
                             supported = true;
                         };
-                    if (!supported) {
-                        out.deinit(a);
-                        return null;
-                    }
+                    if (!supported) return null;
                     key = .{ .string = key_text };
                 }
             } else {
-                if (positional > 3) {
-                    out.deinit(a);
-                    return null;
-                }
+                if (positional > 3) return null;
                 key = .{ .number = @floatFromInt(positional) };
                 positional += 1;
             }
-            // #invoke already materialized only surviving arguments. Reusing
-            // those values never evaluates an overwritten or live child twice.
-            const value = args.rawGet(key) orelse {
-                out.deinit(a);
-                return null;
-            };
+            const value = args.rawGet(key) orelse return null;
             if (value != .string) return error.StringExpected;
-            if (preprocess.findTopDelimiter(value.string, '|') != null or
-                (eq == null and preprocess.findTopDelimiter(value.string, '=') != null) or
-                std.mem.indexOf(u8, value.string, "{{") != null or std.mem.indexOf(u8, value.string, "}}") != null)
-            {
-                out.deinit(a);
-                return null;
-            }
-            try out.append(a, '|');
-            if (eq != null) {
-                try out.appendSlice(a, key_text);
-                try out.append(a, '=');
-            }
-            try out.appendSlice(a, value.string);
+            // A still-unexpanded template is not repaired by this boundary.
+            if (std.mem.indexOf(u8, value.string, "{{") != null or std.mem.indexOf(u8, value.string, "}}") != null) return null;
         }
-        const language = args.rawGet(.{ .number = 1 }) orelse {
-            out.deinit(a);
-            return null;
-        };
-        const example = args.rawGet(.{ .number = 2 }) orelse {
-            out.deinit(a);
-            return null;
-        };
-        if (language != .string or example != .string) return error.StringExpected;
-        if (language.string.len == 0 or example.string.len == 0) {
-            out.deinit(a);
-            return null;
+        const language_value = args.rawGet(.{ .number = 1 }) orelse return null;
+        const example_value = args.rawGet(.{ .number = 2 }) orelse return null;
+        if (language_value != .string or example_value != .string) return error.StringExpected;
+        if (language_value.string.len == 0 or example_value.string.len == 0) return null;
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        const q = try usageArgument(args, .{ .string = "q" });
+        if (q.len != 0) {
+            try out.appendSlice(a, "<span class=\"label-content\">(");
+            try out.appendSlice(a, q);
+            try out.appendSlice(a, ")</span> ");
         }
-        try out.appendSlice(a, "}}");
+        // Expanded argument bytes are content, never re-parsed as template
+        // delimiters. The ordinary HTML compiler owns nested tables and links.
+        try out.appendSlice(a, "<i class=\"e-example\" lang=\"");
+        try appendAttrEscaped(&out, a, language_value.string);
+        try out.appendSlice(a, "\">");
+        try out.appendSlice(a, example_value.string);
+        try out.appendSlice(a, "</i>");
+        try appendUsageLabel(&out, a, try usageArgument(args, .{ .string = "qq" }));
+        var translation = try usageArgument(args, .{ .string = "translation" });
+        if (translation.len == 0) translation = try usageArgument(args, .{ .string = "t" });
+        if (translation.len == 0) translation = try usageArgument(args, .{ .number = 3 });
+        if (translation.len != 0) {
+            try out.appendSlice(a, "<br/>");
+            try out.appendSlice(a, translation);
+        }
+        try appendUsageLabel(&out, a, try usageArgument(args, .{ .string = "tr" }));
         return try out.toOwnedSlice(a);
+    }
+
+    fn usageArgument(args: *rt.Table, key: Value) ![]const u8 {
+        const value = args.rawGet(key) orelse return "";
+        if (value != .string) return error.StringExpected;
+        return value.string;
+    }
+
+    fn appendUsageLabel(out: *std.ArrayList(u8), a: std.mem.Allocator, value: []const u8) !void {
+        if (value.len == 0) return;
+        try out.appendSlice(a, " <span class=\"label-content\">(");
+        try out.appendSlice(a, value);
+        try out.appendSlice(a, ")</span>");
     }
 
     fn scalarText(self: *Expander, value: Value) ![]const u8 {
@@ -4434,6 +4435,9 @@ test "native AOT wikitext expands templates parser functions and invoke" {
     expander.provider.page_metadata = TestProvider.pageMetadata;
     const current_magic = try expander.expandFragment("Appendix:Page/Sub", "{{CURRENTDAYNAME}}|{{CURRENTWEEK}}|{{CURRENTMONTHNAMEGEN}}|{{PAGEID}}|{{REVISIONID}}|{{REVISIONTIMESTAMP}}|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}|{{REVISIONUSER}}", 1_670_803_200);
     try std.testing.expectEqualStrings("Monday|50|December|42|420|20240304050607|2024-03-4|Test editor", current_magic);
+    expander.provider.site_server = "//en.wiktionary.org";
+    expander.provider.site_script = "/w/index.php";
+    expander.provider.site_article_path = "/wiki/$1";
     const site_magic = try expander.expandFragment("Page", "{{SERVER}}|{{SERVERNAME}}", 1_670_803_200);
     try std.testing.expectEqualStrings("//en.wiktionary.org|en.wiktionary.org", site_magic);
     const urlencode_param = try expander.expandFragment("Page", "{{urlencode:flundra 1°|PARAM}}", 1_670_803_200);
@@ -7010,8 +7014,9 @@ const UsageRecoveryTest = struct {
             reads.* += 1;
             return "[[counted|Counted]]";
         }
-        // Exact captured template page212527/revision988290. Its table pipes
-        // cannot be reconstructed as raw usage-template delimiters safely.
+        // Exact captured child page157504/revision583504, not a stubbed success.
+        if (std.mem.eql(u8, title, "Template:خط/عربي")) return "<span class=\"script-arabic\">{{{2|{{{1|العربية}}}}}}</span><noinclude>{{توثيق}}</noinclude>";
+        // Exact captured quotation page212527/revision988290.
         if (std.mem.eql(u8, title, "Template:اقتباس 2")) return "{| style=\"margin:auto; border-collapse:collapse; border-style:none; background-color:{{{bgcolor|transparent}}}; {{\n#if: {{{bgcolor|}}}\n  | border: 1px solid #AAAAAA;\n}}\" class=\"cquote\"\n| width=\"20\" valign=\"top\" style=\"color:#B2B7F2;font-size:{{#switch:{{{size|{{{2|{{{quotewidth|{{{width|20px}}}}}}}}}}}}\n|10px=20px\n|30px=60px\n|40px=80px\n|50px=100px\n|60px=120px\n|#default=35px}};font-family:'Times New Roman',serif;font-weight:bold;text-align:left;padding:10px 10px;\" | ”\n| class=\"citationTemplate\" valign=\"top\" style=\"padding:4px 10px;font-size:115%\" | {{خط/عربي|{{{1|اكتب النص هنا بدون علامات الاقتباس.}}}}}\n| width=\"20\" valign=\"bottom\" style=\"color:#B2B7F2;font-size:{{#switch:{{{size|{{{2|{{{quotewidth|{{{width|20px}}}}}}}}}}}}\n|10px=20px\n|30px=60px\n|40px=80px\n|50px=100px\n|60px=120px\n|#default=36px}};font-family:'Times New Roman',serif;font-weight:bold;text-align:right;padding:10px 10px;\" | “\n|-\n{{#if:{{{4|}}}{{{5|}}}|\n{{!}} colspan=\"3\" style=\"padding-right: 4%\" {{!}} {{#if:{{{4|<noinclude>Origin</noinclude>}}}|<p style=\"font-size:smaller;text-align: right\"><cite style=\"font-style:normal;\">—{{{4}}}{{#if:{{{5|<noinclude>Source</noinclude>}}}|, {{{5}}}}}</cite></p>}}\n}}\n|}<noinclude>\n[[تصنيف:قوالب]]\n</noinclude>";
         return null;
     }
@@ -7027,7 +7032,7 @@ const UsageRecoveryTest = struct {
     }
 };
 
-test "typed missing usage export preserves five captured examples and declines captured nested table" {
+test "typed missing usage export preserves six captured examples including nested quotation table" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
@@ -7037,16 +7042,21 @@ test "typed missing usage export preserves five captured examples and declines c
     const cases = [_]struct { source: []const u8, expected: []const u8, recovered: bool = true }{
         .{ .source = "{{ux|en|Their '''encounter''' was a matter of chance.}}", .expected = "Their '''encounter''' was a matter of chance.", .recovered = true },
         .{ .source = "{{ux|de|Gibt es einen '''Zusammenhang''' zwischen Freiheit und Wohlstand| هل هناك '''علاقة''' بين الحرية والرفاه}}", .expected = "هل هناك '''علاقة''' بين الحرية والرفاه", .recovered = true },
-        .{ .source = "{{ux|en|'''incite''' people to violence\n{{اقتباس 2|حرِّض الناس على العنف}}}}", .expected = "", .recovered = false },
+        .{ .source = "{{ux|en|'''incite''' people to violence\n{{اقتباس 2|حرِّض الناس على العنف}}}}", .expected = "حرِّض الناس على العنف", .recovered = true },
         .{ .source = "{{ux|en|'''Lemme''' go!}}", .expected = "'''Lemme''' go!", .recovered = true },
         .{ .source = "{{ux|en|Hey, '''lemme''' see that bag. What’s in there?}}", .expected = "What’s in there?", .recovered = true },
         .{ .source = "{{ux|en|'''Gimme''' the ball.}}", .expected = "'''Gimme''' the ball.", .recovered = true },
     };
     for (cases) |case| {
         const expanded = try expander.expandFragment("Actual usage example", case.source, 1_670_803_200);
-        try std.testing.expect((std.mem.indexOf(u8, expanded, "{{ux|") != null) == case.recovered);
-        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expanded, "Lua error in Module:usex: The function \"display\" does not exist."));
+        try std.testing.expect((std.mem.indexOf(u8, expanded, "<i class=\"e-example\"") != null) == case.recovered);
+        try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, expanded, "Lua error in Module:usex: The function \"display\" does not exist."));
         if (case.recovered) try std.testing.expect(std.mem.indexOf(u8, expanded, case.expected) != null);
+        if (std.mem.indexOf(u8, case.source, "incite") != null) {
+            try std.testing.expect(std.mem.indexOf(u8, expanded, "{|") != null and std.mem.indexOf(u8, expanded, "|}") != null);
+            try std.testing.expect(std.mem.indexOf(u8, expanded, "<span class=\"script-arabic\">حرِّض الناس على العنف</span>") != null);
+            try std.testing.expect(std.mem.indexOf(u8, expanded, "{{") == null);
+        }
         try std.testing.expect(expander.usage_recovery == null and runtime.current_frame == null);
     }
 }
@@ -7062,13 +7072,13 @@ test "typed usage recovery preserves last wins links and single expansion while 
     try std.testing.expectEqual(@as(usize, 1), reads);
     try std.testing.expect(std.mem.indexOf(u8, once, "[[counted|Counted]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, once, "q=old") == null);
-    try std.testing.expect(std.mem.indexOf(u8, once, "q=[[rare|rare]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, once, "qq=[[regional|regional]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, once, "([[rare|rare]])</span>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, once, "([[regional|regional]])</span>") != null);
     reads = 0;
     const overwritten = try expander.expandFragment("Page", "{{ux|en|2={{Counter}}|2=[[last|Last]]|q=old|q=|qq=old|qq=}}", 1_670_803_200);
     try std.testing.expectEqual(@as(usize, 0), reads);
-    try std.testing.expect(std.mem.indexOf(u8, overwritten, "{{ux|") != null);
-    try std.testing.expect(std.mem.indexOf(u8, overwritten, "2=[[last|Last]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, overwritten, "<i class=\"e-example\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, overwritten, "[[last|Last]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, overwritten, "q=old") == null);
     for ([_][]const u8{
         "{{ux|en|Example|4=extra}}",  "{{ux|en|Example|unknown=extra}}",
@@ -7076,7 +7086,53 @@ test "typed usage recovery preserves last wins links and single expansion while 
         "{{Other|en|Example}}",       "{{#invoke:usex|display|short=1}}",
     }) |source| {
         const declined = try expander.expandFragment("Page", source, 1_670_803_200);
-        try std.testing.expect(std.mem.indexOf(u8, declined, "{{ux|") == null);
+        try std.testing.expect(std.mem.indexOf(u8, declined, "<i class=\"e-example\"") == null);
         try std.testing.expect(std.mem.indexOf(u8, declined, "Lua error in Module:usex:") != null);
     }
+}
+
+test "parser URLs and server magic use captured edition metadata without English fallback" {
+    const Purge = struct {
+        fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            // Verbatim captured AR template page161412 revision753650.
+            if (std.mem.eql(u8, title, "Template:إفراغ الكاش")) return "<span class=\"noprint plainlinks purgelink\">[{{fullurl:{{{page|{{FULLPAGENAME}}}}}|action=purge}} <span title=\"إفراغ كاش الصفحة\">{{{1|إفراغ الكاش}}}</span>]</span><noinclude>\n[[تصنيف:قوالب|{{اسم_الصفحة}}]]\n</noinclude>";
+            return null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = Purge.get, .exists = TestProvider.exists } };
+    const cases = [_]struct { server: []const u8, name: []const u8 }{
+        .{ .server = "//ar.wiktionary.org", .name = "ar.wiktionary.org" },
+        .{ .server = "//en.wiktionary.org", .name = "en.wiktionary.org" },
+        .{ .server = "https://captured.example", .name = "captured.example" },
+    };
+    for (cases) |case| {
+        expander.provider.site_server = case.server;
+        expander.provider.site_script = "/w/index.php";
+        expander.provider.site_article_path = "/wiki/$1";
+        const magic = try expander.expandFragment("Page", "{{SERVER}}|{{SERVERNAME}}", 1_670_803_200);
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(arena.allocator(), "{s}|{s}", .{ case.server, case.name }), magic);
+        const full = try expander.expandFragment("Page", "{{fullurl:A B#Frag|action=edit&section=0}}", 1_670_803_200);
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(arena.allocator(), "{s}/w/index.php?title=A_B&action=edit&section=0#Frag", .{case.server}), full);
+        const purge = try expander.expandFragment("بوابة:النحو والإعراب", "{{إفراغ الكاش|حدّث محتوى الصفحة}}", 1_670_803_200);
+        const actual_action = try std.fmt.allocPrint(arena.allocator(), "[{s}/w/index.php?title=%D8%A8%D9%88%D8%A7%D8%A8%D8%A9:%D8%A7%D9%84%D9%86%D8%AD%D9%88_%D9%88%D8%A7%D9%84%D8%A5%D8%B9%D8%B1%D8%A7%D8%A8&action=purge ", .{case.server});
+        try std.testing.expect(std.mem.indexOf(u8, purge, actual_action) != null);
+        try std.testing.expect(std.mem.indexOf(u8, purge, "حدّث محتوى الصفحة</span>") != null);
+    }
+    expander.provider.site_server = "https://captured.example";
+    expander.provider.site_script = "/custom/run.php";
+    expander.provider.site_article_path = "/view/$1/end?lang=x";
+    try std.testing.expectEqualStrings("/view/A_B/end?lang=x#Frag", try expander.expandFragment("Page", "{{localurl:A B#Frag}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("/custom/run.php?title=A_B&action=edit&section=0", try expander.expandFragment("Page", "{{localurl:A B|action=edit&section=0}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("https://captured.example/view/A_B/end?lang=x#Frag", try expander.expandFragment("Page", "{{canonicalurl:A B#Frag}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("https://captured.example/custom/run.php?title=A_B&amp;action=edit&amp;section=0", try expander.expandFragment("Page", "{{fullurle:A B|action=edit&section=0}}", 1_670_803_200));
+    expander.provider.site_server = null;
+    for ([_][]const u8{ "{{SERVER}}", "{{SERVERNAME}}", "{{fullurl:A}}", "{{localurl:A}}" }) |input|
+        try std.testing.expectError(error.SiteInfoSnapshotMissing, expander.expandFragment("Page", input, 1_670_803_200));
 }

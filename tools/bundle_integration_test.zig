@@ -2175,7 +2175,11 @@ pub fn main(init: std.process.Init) !void {
             "24\t0\t536861726564\t\t65cc81\n" ++
             "5000\t0\t416273656e745f61727469636c65\t\t\n# end\t4\n",
     });
-    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespace_registry, "--page-redirects-snapshot", redirect_snapshot, "--category-tree-snapshot", category_snapshot, "--interface-messages-snapshot", message_snapshot, "--language-registry-snapshot", language_registry, "--llvm-workers", "1", "--page-workers", "2" }, 0);
+    // This main fixture authors SERVER/SERVERNAME and must supply its edition
+    // URL metadata just like the existing structured Arabic fixture does.
+    const site_info = try std.fs.path.join(a, &.{ dir, "siteinfo.raw.json" });
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = site_info, .data = "{\"query\":{\"general\":{\"wikiid\":\"enwiktionary\",\"lang\":\"en\",\"server\":\"//en.wiktionary.org\",\"script\":\"/w/index.php\",\"articlepath\":\"/wiki/$1\"}}}" });
+    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespace_registry, "--page-redirects-snapshot", redirect_snapshot, "--category-tree-snapshot", category_snapshot, "--interface-messages-snapshot", message_snapshot, "--language-registry-snapshot", language_registry, "--site-info-snapshot", site_info, "--llvm-workers", "1", "--page-workers", "2" }, 0);
     _ = try h.run(&.{ verifier, root }, 0);
     const language_manifest_path = try std.fs.path.join(a, &.{ root, "languages.tsv" });
     const language_manifest = try std.Io.Dir.cwd().readFileAlloc(init.io, language_manifest_path, a, .limited(4096));
@@ -2799,7 +2803,6 @@ fn abbreviationInteropProbe(h: *Harness, verifier: []const u8, bin: []const u8, 
     try writer.addExpandedPage(h.a, .{ .id = 0, .kind = .language }, title, fixture_source, fixture_source, null);
     try writer.addExpandedPage(h.a, .{ .id = 0, .kind = .language }, control, plain, plain, null);
     _ = try writer.finish(codes);
-    try std.Io.Dir.cwd().deleteFile(h.io, try std.fs.path.join(h.a, &.{ root, ".incomplete" }));
     _ = try verifyFixture(h, verifier, root, null);
     const annotated = try readPoemRecord(h, root, "English", title);
     const legacy = try readPoemRecord(h, root, "English", control);

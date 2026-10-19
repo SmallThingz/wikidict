@@ -1673,7 +1673,16 @@ test "abbreviation explanations cross structural and poem boundaries without rev
         var clear = false;
         var after = false;
         var tail = false;
-        for (parsed.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        var observed: std.ArrayList(types.Span) = .empty;
+        defer observed.deinit(a);
+        for (parsed.entry.sections) |section| for (section.blocks) |block| {
+            try observed.appendSlice(a, block.spans);
+            if (block.table) |table| {
+                try observed.appendSlice(a, table.caption);
+                for (table.rows) |row| for (row.cells) |cell| try observed.appendSlice(a, cell.spans);
+            }
+        };
+        for (observed.items) |span| {
             if (std.mem.indexOf(u8, span.text, "before") != null) {
                 try std.testing.expectEqualStrings("outer", span.explanation);
                 before = true;
@@ -1695,7 +1704,7 @@ test "abbreviation explanations cross structural and poem boundaries without rev
                 try std.testing.expectEqualStrings("", span.explanation);
                 tail = true;
             }
-        };
+        }
         try std.testing.expect(before and linked and clear and after and tail);
         try std.testing.expect(!report.unclosed_formatting and !report.missing_template);
     }
@@ -1731,4 +1740,98 @@ test "supported usage recovery content keeps example actions and visible Lua pro
     try std.testing.expect(std.mem.indexOf(u8, text.items, "wərk") != null);
     try std.testing.expect(std.mem.indexOf(u8, text.items, "Lua error in Module:usex:") != null);
     try std.testing.expect(report.rendered_lua_error and report.template_presentation and !report.literal_markup);
+}
+
+test "ordinary example HTML preserves nested table cells actions and explicit language scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var report: Fallbacks = .{};
+    const source = "<span class=\"label-content\">([[rare|rare]])</span> <i class=\"e-example\" lang=\"en\">'''incite''' people to violence\n{| class=\"cquote\"\n| ”\n| <span class=\"script-arabic\">حرِّض الناس على العنف</span> [[target|linked]] <span lang=\"ar\">[[عربي|عربي]]</span>\n| “\n|}\n</i> <span class=\"label-content\">([[regional|regional]])</span><br/>Translation <span class=\"label-content\">(tr)</span> tail";
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var text: std.ArrayList(u8) = .empty;
+    var example = false;
+    var arabic = false;
+    var linked = false;
+    var override = false;
+    var labels: usize = 0;
+    var after = false;
+    var observed: std.ArrayList(types.Span) = .empty;
+    defer observed.deinit(a);
+    var actual_cells: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        try observed.appendSlice(a, block.spans);
+        if (block.table) |table| {
+            try observed.appendSlice(a, table.caption);
+            for (table.rows) |row| for (row.cells) |cell| {
+                actual_cells += 1;
+                try observed.appendSlice(a, cell.spans);
+            };
+        }
+    };
+    for (observed.items) |span| {
+        try text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "incite")) {
+            example = true;
+            try std.testing.expect(span.role == .example and span.italic and span.bold);
+            try std.testing.expectEqualStrings("en", span.language);
+        }
+        if (std.mem.indexOf(u8, span.text, "حرِّض الناس على العنف") != null) {
+            arabic = true;
+            try std.testing.expect(span.role == .example and span.italic);
+            // Captured script-arabic is a class, not an authored lang override.
+            try std.testing.expectEqualStrings("en", span.language);
+        }
+        if (std.mem.eql(u8, span.text, "linked")) {
+            linked = true;
+            try std.testing.expect(span.kind == .link and span.role == .example and span.italic);
+            try std.testing.expectEqualStrings("target", span.target);
+            try std.testing.expectEqualStrings("en", span.language);
+        }
+        if (std.mem.eql(u8, span.text, "عربي")) {
+            override = true;
+            try std.testing.expect(span.kind == .link and span.role == .example and span.italic);
+            try std.testing.expectEqualStrings("عربي", span.target);
+            try std.testing.expectEqualStrings("ar", span.language);
+        }
+        if (std.mem.eql(u8, span.text, "rare") or std.mem.eql(u8, span.text, "regional")) {
+            labels += 1;
+            try std.testing.expect(span.kind == .link and span.role == .label and !span.italic);
+            try std.testing.expectEqualStrings(span.text, span.target);
+        }
+        if (std.mem.indexOf(u8, span.text, "Translation") != null or std.mem.indexOf(u8, span.text, "tail") != null) {
+            after = true;
+            try std.testing.expect(span.role == .normal and !span.italic);
+        }
+    }
+    try std.testing.expect(example and arabic and linked and override and after and labels == 2);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "”") != null and std.mem.indexOf(u8, text.items, "“") != null);
+    try std.testing.expectEqual(@as(usize, 3), actual_cells);
+    // Span-only consumers use the existing block-aware flattening route too.
+    var inline_renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const inline_spans = try inline_renderer.parseSpans(source, .{});
+    var inline_link = false;
+    var inline_override = false;
+    var inline_tail = false;
+    for (inline_spans) |span| {
+        if (std.mem.eql(u8, span.text, "linked")) {
+            inline_link = true;
+            try std.testing.expect(span.role == .example and span.italic);
+            try std.testing.expectEqualStrings("target", span.target);
+            try std.testing.expectEqualStrings("en", span.language);
+        }
+        if (std.mem.eql(u8, span.text, "عربي")) {
+            inline_override = true;
+            try std.testing.expect(span.role == .example and span.italic);
+            try std.testing.expectEqualStrings("ar", span.language);
+        }
+        if (std.mem.indexOf(u8, span.text, "tail") != null) {
+            inline_tail = true;
+            try std.testing.expect(span.role == .normal and !span.italic);
+        }
+    }
+    try std.testing.expect(inline_link and inline_override and inline_tail);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "Lua error") == null);
+    try std.testing.expect(!report.rendered_lua_error and !report.literal_markup and !report.malformed_table and !report.unclosed_formatting);
 }

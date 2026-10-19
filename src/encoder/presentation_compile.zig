@@ -4273,6 +4273,7 @@ pub const Renderer = struct {
                 if (std.mem.eql(u8, class, "headword-line") or std.mem.eql(u8, class, "headword")) s.role = .headword;
                 if (s.role != .headword and (std.mem.eql(u8, class, "label-content") or std.mem.eql(u8, class, "qualifier-content"))) s.role = .label;
                 if (std.mem.eql(u8, class, "IPA")) s.role = .pronunciation;
+                if (std.mem.eql(u8, class, "e-example")) s.role = .example;
                 if (std.mem.eql(u8, class, "nyms")) {
                     if (self.semantic_capture) |hints| hints.relation_note = true;
                 }
@@ -4698,7 +4699,20 @@ pub const Renderer = struct {
         if (phonos_spans) |parsed| {
             try self.spans.appendSlice(self.a, parsed);
         } else if (std.mem.indexOf(u8, content, "{|") != null) {
-            try self.blocksInline(try self.renderBodyWithLanguageDirection(content, s), s);
+            // Nested wiki tables retain this ordinary inline wrapper's semantic
+            // scope. Explicit child language/direction/formatting still wins.
+            const parent_attributes = self.body_formatting_attributes;
+            const parent_language_direction = self.body_language_direction;
+            const parent_flags = self.block_formatting;
+            self.restoreFormattingAttributes(.{ .classes = s.classes, .role = s.role, .relation_note = parent_attributes.relation_note, .language = s.language, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set });
+            const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
+            self.block_formatting = @bitCast(@as(u8, @bitCast(parent_flags)) | @as(u8, @bitCast(flags)));
+            defer {
+                self.body_formatting_attributes = parent_attributes;
+                self.body_language_direction = parent_language_direction;
+                self.block_formatting = parent_flags;
+            }
+            try self.blocksInline(try self.renderBody(content), s);
         } else try self.inlineText(content, s, depth + 1);
         if (parenthetical and annotation_start < self.spans.items.len and
             std.mem.eql(u8, self.spans.items[annotation_start].text, "（"))

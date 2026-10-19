@@ -931,7 +931,10 @@ fn arabicLemmaDeclaration(codes: LanguageCodes, section: language_source.Section
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
     if (arabicLinkedOwner(codes, section.heading)) |declaration| return resolveArabicLinkedOwner(codes, declaration);
     if (codes.namespace_catalog) |namespaces| if (std.mem.eql(u8, namespaces.content_language, "ar")) {
-        if (declarationLabel(codes, section.heading)) |label| return codes.resolve(label);
+        // Plain "لغة NAME" already has the Strong/Trusted resolver below.
+        // Only the literal template declaration adds the generic-code route.
+        if (std.mem.startsWith(u8, std.mem.trim(u8, section.heading, " \t\r\n"), "{{"))
+            if (declarationLabel(codes, section.heading)) |label| return codes.resolve(label);
     };
     // A balanced standalone equals declaration names its owner in the first
     // field. Sort/display arguments, including nested calls, cannot lend one.
@@ -1768,6 +1771,43 @@ fn angNounTableContinuation(
     return if (std.mem.eql(u8, language.code, "ang")) language else null;
 }
 
+// Raw AN pages retain ordinary L2 support headings while the captured
+// language templates expand to L1 banners. Preserve those support bytes in
+// their explicit raw-marker region, but only after every rendered region
+// independently agrees with exactly one canonical hyphen marker.
+fn coalesceCorroboratedAnRawRegions(codes: LanguageCodes, raw: []const u8, sections: *std.ArrayList(language_source.Section), rendered: []const language_source.Section) void {
+    const namespaces = codes.namespace_catalog orelse return;
+    if (!std.mem.eql(u8, namespaces.content_language, "an") or sections.items.len == rendered.len) return;
+    var count: usize = 0;
+    for (sections.items) |section| {
+        if (!section.hyphen_marker) {
+            if (count == 0 or hasExplicitLanguageDeclaration(codes, section) or resolveSection(codes, section) != null) return;
+            continue;
+        }
+        if (count >= rendered.len) return;
+        const owner = codes.resolve(section.heading) orelse return;
+        if (!std.mem.eql(u8, owner.code, section.heading)) return;
+        const exact_banner = corroboratedAnHyphenMarker(codes, section, rendered[count]);
+        const other = boundaryLanguage(codes, rendered[count]);
+        if (!exact_banner and (other == null or !std.mem.eql(u8, owner.code, other.?.code))) return;
+        count += 1;
+    }
+    if (count != rendered.len or count == 0) return;
+    var written: usize = 0;
+    for (sections.items) |section| {
+        if (section.hyphen_marker) {
+            sections.items[written] = section;
+            written += 1;
+        } else {
+            const previous = &sections.items[written - 1];
+            const start = @intFromPtr(previous.source.ptr) - @intFromPtr(raw.ptr);
+            const end = @intFromPtr(section.source.ptr) - @intFromPtr(raw.ptr) + section.source.len;
+            previous.source = raw[start..end];
+        }
+    }
+    sections.items.len = written;
+}
+
 fn processMain(
     page_allocator: std.mem.Allocator,
     spools: *Spools,
@@ -1887,6 +1927,7 @@ fn processMain(
         }
         while (raw_it.next()) |section| try appendClassifiedSection(page_allocator, codes, &raw_sections, &owned_headings, section);
     }
+    if (raw_source) |raw| coalesceCorroboratedAnRawRegions(codes, raw, &raw_sections, page_sections.items);
     var raw_aligned = raw_sections.items.len != 0 and raw_sections.items.len == page_sections.items.len;
     if (raw_aligned) for (raw_sections.items, page_sections.items) |raw_section, rendered_section| {
         // A short template name can be both a POS marker and an ISO code.
@@ -6283,7 +6324,7 @@ test "Arabic Norwegian declarations require exact variant and canonical authorit
         try std.testing.expect(resolveSection(guarded, .{ .heading = heading, .source = "" }) == null);
         try std.testing.expect(boundaryLanguage(guarded, .{ .heading = heading, .source = "" }) == null);
     }
-    var foreign = try @import("namespace_registry").Registry.init(std.testing.allocator, "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n");
+    var foreign = try @import("namespace_registry").Registry.init(std.testing.allocator, @import("namespace_registry").english_test_fixture);
     defer foreign.deinit();
     try std.testing.expect(resolveArabicNorwegianDeclaration(ArabicNorwegianTest.codes(&foreign, null), "[[في]] ال[[نرويجية]] ([[بوكمول]]):") == null);
 }
@@ -6453,6 +6494,33 @@ test "captured AN hyphen banners keep canonical owners despite local alias gaps"
         absent.namespace_catalog = null;
         try std.testing.expect(!corroboratedAnHyphenMarker(absent, raw, .{ .heading = row.banner, .source = "" }));
     }
+    // Raw L2 support headings stay inside the independently corroborated
+    // hyphen region; neither a real neighboring owner nor an unresolved
+    // explicit declaration may be folded into it.
+    const support_raw = "{{-haw-}}\n# [[yo]]\n==Se beiga tamién==\n* [[support]]\n{{-sw-}}\n# [[ó]]\n";
+    const raw_context: LanguageMarkers = .{ .codes = &codes };
+    var support_iterator = languageSections(support_raw, &raw_context);
+    var support_sections: std.ArrayList(language_source.Section) = .empty;
+    defer support_sections.deinit(a);
+    while (support_iterator.next()) |section| try support_sections.append(a, section);
+    try std.testing.expectEqual(@as(usize, 3), support_sections.items.len);
+    const rendered_support = [_]language_source.Section{ .{ .heading = banner_haw, .source = "" }, .{ .heading = banner_sw, .source = "" } };
+    var conflict_sections: std.ArrayList(language_source.Section) = .empty;
+    defer conflict_sections.deinit(a);
+    try conflict_sections.appendSlice(a, support_sections.items);
+    conflict_sections.items[1].heading = "Francés";
+    coalesceCorroboratedAnRawRegions(codes, support_raw, &conflict_sections, &rendered_support);
+    try std.testing.expectEqual(@as(usize, 3), conflict_sections.items.len);
+    conflict_sections.items[1] = .{ .heading = "zz", .source = "{{=zz}}\n# unknown\n" };
+    coalesceCorroboratedAnRawRegions(codes, support_raw, &conflict_sections, &rendered_support);
+    try std.testing.expectEqual(@as(usize, 3), conflict_sections.items.len);
+    const wrong_rendered = [_]language_source.Section{ .{ .heading = banner_haw, .source = "" }, .{ .heading = banner_an, .source = "" } };
+    coalesceCorroboratedAnRawRegions(codes, support_raw, &support_sections, &wrong_rendered);
+    try std.testing.expectEqual(@as(usize, 3), support_sections.items.len);
+    coalesceCorroboratedAnRawRegions(codes, support_raw, &support_sections, &rendered_support);
+    try std.testing.expectEqual(@as(usize, 2), support_sections.items.len);
+    try std.testing.expectEqualStrings("{{-haw-}}\n# [[yo]]\n==Se beiga tamién==\n* [[support]]\n", support_sections.items[0].source);
+    try std.testing.expectEqualStrings("{{-sw-}}\n# [[ó]]\n", support_sections.items[1].source);
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
     var writer = try Writer.init(std.testing.io, a, root);
     defer writer.deinit();

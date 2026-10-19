@@ -160,11 +160,22 @@ fn appendAmpEscaped(out: *std.ArrayList(u8), a: std.mem.Allocator, source: []con
     try out.appendSlice(a, source[start..]);
 }
 
+// SERVERNAME uses the same parsed captured server as ordinary URI objects,
+// rather than a default language wiki. This metadata read is not effectful.
+pub fn configuredServerName(runtime: *rt.Context) ![]const u8 {
+    const server = (try host_api.siteUrlConfig(runtime)).server;
+    const fields = try runtime.newTable();
+    try parseUriFields(runtime, fields, server);
+    const host = fields.rawGet(.{ .string = "host" }) orelse return error.InvalidUri;
+    if (host != .string or host.string.len == 0) return error.InvalidUri;
+    return host.string;
+}
+
 pub fn buildWikiUrlRawQuery(a: std.mem.Allocator, raw_title: []const u8, query: ?[]const u8, kind: WikiUrlKind, escaped: bool, proto_override: ?[]const u8) ![]const u8 {
     return buildSiteWikiUrlRawQuery(a, raw_title, query, kind, escaped, proto_override, .{ .server = site_server, .script = "/w/index.php", .article_path = "/wiki/$1" });
 }
 
-fn buildSiteWikiUrlRawQuery(a: std.mem.Allocator, raw_title: []const u8, query: ?[]const u8, kind: WikiUrlKind, escaped: bool, proto_override: ?[]const u8, site: host_api.SiteUrlConfig) ![]const u8 {
+pub fn buildSiteWikiUrlRawQuery(a: std.mem.Allocator, raw_title: []const u8, query: ?[]const u8, kind: WikiUrlKind, escaped: bool, proto_override: ?[]const u8, site: host_api.SiteUrlConfig) ![]const u8 {
     const title = std.mem.trim(u8, raw_title, " \t\r\n");
     const hash = std.mem.indexOfScalar(u8, title, '#');
     const base_title = if (hash) |i| title[0..i] else title;
@@ -225,12 +236,12 @@ pub fn buildTitleUrl(runtime: *rt.Context, raw_title: []const u8, query_value: V
         if (std.ascii.eqlIgnoreCase(value, "canonical")) "https" else if (std.ascii.eqlIgnoreCase(value, "relative")) null else value
     else
         null;
-    if (kind != .local) return buildWikiUrlRawQuery(runtime.allocator, raw_title, query, kind, false, effective_proto);
+    if (kind != .local) return buildSiteWikiUrlRawQuery(runtime.allocator, raw_title, query, kind, false, effective_proto, try host_api.siteUrlConfig(runtime));
 
     // MediaWiki Title::getLocalURL() does not include a title fragment.
     const hash = std.mem.indexOfScalar(u8, raw_title, '#');
     const without_fragment = if (hash) |at| raw_title[0..at] else raw_title;
-    return buildWikiUrlRawQuery(runtime.allocator, without_fragment, query, kind, false, null);
+    return buildSiteWikiUrlRawQuery(runtime.allocator, without_fragment, query, kind, false, null, try host_api.siteUrlConfig(runtime));
 }
 
 fn queryScalarText(a: std.mem.Allocator, value: Value) !?[]const u8 {
