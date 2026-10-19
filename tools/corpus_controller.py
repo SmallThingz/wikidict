@@ -746,6 +746,70 @@ def _review_source_limitations(review, accepted, complete):
 
 
 
+def _review_unsectioned_notices(review, accepted, complete):
+    """Authenticate nonlexical notices; never infer a language or waive lexical errors."""
+    references = review.get('source_authored_unsectioned_notices', [])
+    require(isinstance(references, list) and len(references) <= 4096, 'Invalid unsectioned notice inventory')
+    result = {}
+    for reference in references:
+        _review_evidence([reference]); item = read_ref(reference)
+        require(item.get('schema') == 'wikidict.source-authored-unsectioned-notice.v1' and
+                item.get('edition') == complete['edition'] and item.get('date') == complete['date'] and
+                item.get('complete') == accepted['complete'] and item.get('build_inputs') == complete['build_inputs'],
+                'Unsectioned notice belongs to another accepted publication')
+        title = item.get('title')
+        require(type(item.get('namespace')) is int and item['namespace'] == 0 and isinstance(title, str) and title and
+                type(item.get('page_id')) is int and item['page_id'] > 0 and
+                type(item.get('revision_id')) is int and item['revision_id'] > 0,
+                'Unsectioned notice page identity missing')
+        key = (0, title); require(key not in result, 'Duplicate unsectioned notice page')
+        evidence = item.get('source_evidence'); _review_evidence(evidence)
+        for name in ('raw_source', 'producer_row', 'source_review'):
+            require(item.get(name) in evidence, 'Unsectioned notice source authority missing')
+        producer = read_ref(item['producer_row'])
+        require(all(producer.get(k) == item[k] for k in ('namespace', 'title', 'page_id', 'revision_id')) and
+                producer.get('build_inputs') == complete['build_inputs'] and
+                producer.get('raw_source') == item['raw_source'] and
+                producer.get('source_input') in complete['build_inputs']['files'],
+                'Unsectioned notice producer identity differs')
+        authority = read_ref(item['source_review'])
+        require(authority.get('schema') == 'wikidict.nonlexical-notice-source-review.v1' and
+                authority.get('raw_source') == item['raw_source'] and authority.get('producer_row') == item['producer_row'] and
+                all(authority.get(k) is True for k in ('whole_source_reviewed', 'nonlexical_notice',
+                    'no_authored_language_declaration', 'no_authored_lexical_sections', 'producer_default_owner_observed')) and
+                isinstance(authority.get('explanation'), str) and authority['explanation'].strip(),
+                'Unsectioned notice source intent not established')
+        _review_evidence(authority.get('evidence'))
+        require(authority.get('source_snapshot') in authority['evidence'] and
+                authority.get('classifier_source') in authority['evidence'], 'Unsectioned notice classifier authority missing')
+        snapshot = read_ref(authority['source_snapshot'])
+        require(dict(head=snapshot['head'], fingerprint=snapshot['fingerprint']) == accepted['source'] and
+                snapshot['fingerprint'] == complete['build_inputs']['source'] and
+                snapshot['files']['src/encoder/blob_builder.zig'] == authority['classifier_source'],
+                'Unsectioned notice source review belongs to another producer')
+        expected = authority.get('expected_entries_by_owner')
+        require(isinstance(expected, dict) and expected and all(isinstance(owner, str) and owner and
+                isinstance(entries, list) and entries for owner, entries in expected.items()),
+                'Unsectioned notice exact source-derived presentation missing')
+        output_evidence = item.get('output_evidence'); _review_evidence(output_evidence)
+        require(item.get('output_review') in output_evidence, 'Unsectioned notice output review missing')
+        output = read_ref(item['output_review'])
+        require(output.get('schema') == 'wikidict.manual-page-review.v1' and
+                output.get('verdict') == 'pass-with-documented-source-limitation' and
+                output.get('complete') == accepted['complete'] and output.get('raw_source') == item['raw_source'] and
+                output.get('producer_row') == item['producer_row'] and
+                all(output.get(k) is True for k in ('all_positive_owners_accounted', 'whole_page_payload_conserved',
+                    'known_owners_preserved', 'notice_text_actions_styles_and_rules_conserved')),
+                'Unsectioned notice whole-page conservation review differs')
+        bodies = _review_owner_exports(output, output_evidence, accepted, title)
+        require({owner: body['entries'] for owner, body in bodies.items()} == expected,
+                'Unsectioned notice source-derived body/action/style/rule contract differs')
+        row = dict(namespace=0, title=title, reasons=['missing_language_heading'])
+        require(output.get('fallback') == row, 'Unsectioned notice fallback differs')
+        result[key] = row
+    return result
+
+
 def _review_lua_spans(bodies):
     """Enumerate actual semantic error spans, including repeated equal messages."""
     result = []
@@ -837,14 +901,18 @@ def _review_source_lua_defects(review, accepted, complete):
 
 
 
-def _review_fallbacks(path, expected_count, namespace_counts=None, source_limitations=None, source_lua_defects=None):
+def _review_fallbacks(path, expected_count, namespace_counts=None, source_limitations=None, source_lua_defects=None, unsectioned_notices=None):
     # Stream every row, including errors after any possible sample prefix.
     before = path.stat(); count = 0; reason_counts = {}; namespaces = {}; used = set()
     source_limitations = source_limitations or {}
     source_lua_defects = source_lua_defects or {}
-    require(not set(source_limitations) & set(source_lua_defects), 'Overlapping source dispositions')
+    unsectioned_notices = unsectioned_notices or {}
+    require(not (set(source_limitations) & set(source_lua_defects) or
+                 set(unsectioned_notices) & (set(source_limitations) | set(source_lua_defects))),
+            'Overlapping source dispositions')
     dispositions = dict(source_limitations)
     dispositions.update(source_lua_defects)
+    dispositions.update(unsectioned_notices)
     with path.open('rb') as stream:
         while True:
             raw = stream.readline(REVIEW_METADATA_LIMIT + 1)
@@ -863,7 +931,8 @@ def _review_fallbacks(path, expected_count, namespace_counts=None, source_limita
                 used.add(key)
             for reason in reasons:
                 require((source_limited and ((key in source_limitations and reason == 'unresolved_language_heading') or
-                        (key in source_lua_defects and reason == 'rendered_lua_error'))) or reason.split(':', 1)[0] not in
+                        (key in source_lua_defects and reason == 'rendered_lua_error') or
+                        (key in unsectioned_notices and reason == 'missing_language_heading'))) or reason.split(':', 1)[0] not in
                         ('expansion_error', 'missing_language_heading', 'unresolved_language_heading',
                          'rendered_lua_error', 'rendered_extension_error', 'render_limit',
                          'template_presentation', 'missing_template'),
@@ -939,9 +1008,10 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
                 type(review.get('fallback_pages')) is int and review['fallback_pages'] == fallback_count,
                 'Explicit fallback disposition count differs')
         source_limitations = _review_source_limitations(review, accepted, complete)
+        unsectioned_notices = _review_unsectioned_notices(review, accepted, complete)
         source_lua_defects, source_lua_messages = _review_source_lua_defects(review, accepted, complete)
         fallback_namespaces = {}
-        reasons = _review_fallbacks(root / 'fallback-pages.jsonl', fallback_count, fallback_namespaces, source_limitations, source_lua_defects)
+        reasons = _review_fallbacks(root / 'fallback-pages.jsonl', fallback_count, fallback_namespaces, source_limitations, source_lua_defects, unsectioned_notices)
         # Reuse the producer's exact bounded coverage/conservation validators.
         import build_wiktionaries as builder
         coverage = builder.validate_page_coverage(root, require_total=True)
@@ -1008,6 +1078,14 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
                   content['source_lua_error_message_count'] == source_lua_messages)) and
                 isinstance(content.get('explanation'), str) and content['explanation'].strip(),
                 'Actual source intent and native output content review required')
+        notice_fields = ('source_unsectioned_notices_present', 'source_unsectioned_notice_count',
+                         'no_product_missing_language_errors')
+        if unsectioned_notices or any(key in content for key in notice_fields):
+            require(content.get('source_unsectioned_notices_present') is bool(unsectioned_notices) and
+                    type(content.get('source_unsectioned_notice_count')) is int and
+                    content['source_unsectioned_notice_count'] == len(unsectioned_notices) and
+                    content.get('no_product_missing_language_errors') is True,
+                    'Explicit source-authored unsectioned notice disposition required')
         _review_evidence(content.get('source_evidence')); _review_evidence(content.get('output_evidence'))
         dispositions = review.get('dispositions')
         require(isinstance(dispositions, dict) and set(dispositions) == {'fallbacks', 'unclassified', 'empty'} and

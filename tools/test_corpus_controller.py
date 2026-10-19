@@ -1522,6 +1522,112 @@ class ContentReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'differs from accepted build inputs'):self.check(data)
 
 
+class UnsectionedNoticeFixture:
+    """Synthetic review evidence only; never a tested native publication."""
+    def __init__(self, top):
+        self.top=top;self.serial=0
+        self.source,self.rows,self.review=content_review_fixture(top,controller.PILOT,fallback_reasons=['missing_language_heading'])
+        self.accepted=self.rows[0]['accepted'];self.er=self.review['editions'][0]
+        self.producer_changes={};self.item_changes={};self.authority_changes={};self.output_changes={};self.body_changes={}
+        self.raw="<div style='font-weight:bold'>This wiki is closed; see [https://example.test/closure closure].</div>\n----\n''Number of Articles: 0''"
+        self.entry=dict(title='entry',language='Test language',language_code='test',sections=[dict(level=2,title='',blocks=[
+            dict(kind='paragraph',spans=[dict(kind='text',text='This wiki is closed; see ',bold=True),
+                dict(kind='external_link',text='closure',target='https://example.test/closure',bold=True),dict(kind='text',text='.',bold=True)]),
+            dict(kind='rule',spans=[]),dict(kind='paragraph',spans=[dict(kind='text',text='Number of Articles: 0',italic=True,bold=False)])])])
+    def save(self,name,value):
+        self.serial+=1;p=self.top/('notice-%d-%s'%(self.serial,name))
+        p.write_bytes(value if isinstance(value,bytes)else json.dumps(value,ensure_ascii=False,sort_keys=True).encode())
+        return controller.descriptor(p)
+    def seal(self):
+        complete=controller.read_ref(self.accepted['complete']);raw=self.save('source',self.raw.encode())
+        producer=dict(namespace=0,title='entry',page_id=51,revision_id=73,build_inputs=complete['build_inputs'],raw_source=raw,source_input=complete['build_inputs']['files'][0])
+        producer.update(self.producer_changes);producer=self.save('producer',producer)
+        classifier=self.save('classifier',b'// synthetic classifier authority, not executed\n')
+        snapshot=self.save('snapshot',dict(self.source,files={'src/encoder/blob_builder.zig':classifier}))
+        authority=dict(schema='wikidict.nonlexical-notice-source-review.v1',raw_source=raw,producer_row=producer,
+            whole_source_reviewed=True,nonlexical_notice=True,no_authored_language_declaration=True,no_authored_lexical_sections=True,
+            producer_default_owner_observed=True,explanation='Whole source is a closure notice; no lexical declaration is present.',
+            source_snapshot=snapshot,classifier_source=classifier,evidence=[snapshot,classifier],expected_entries_by_owner={'Test language':[copy.deepcopy(self.entry)]})
+        authority.update(self.authority_changes);authority=self.save('authority',authority)
+        inventory=self.save('inventory',dict(schema='dict.languages.v1',query='entry',accounting=[dict(heading='Test language',records=17)]))
+        invcmd=self.save('inventory-command',dict(argv=['/synthetic/reader','languages','entry','--root',self.accepted['root']],exit_code=0,error=None,remaining_owned_processes=[],stdout=inventory))
+        body=dict(schema='dict.results.v1',query='entry',language='Test language',operation='lookup',offset=0,record_count=21,total_matches=1,has_more=False,entries=[copy.deepcopy(self.entry)])
+        body.update(self.body_changes);lookup=self.save('lookup',body)
+        cmd=self.save('lookup-command',dict(argv=['/synthetic/reader','lookup','entry','--root',self.accepted['root'],'--language','Test language'],exit_code=0,error=None,remaining_owned_processes=[],stdout=lookup))
+        output=dict(schema='wikidict.manual-page-review.v1',verdict='pass-with-documented-source-limitation',complete=self.accepted['complete'],raw_source=raw,producer_row=producer,
+            all_positive_owners_accounted=True,whole_page_payload_conserved=True,known_owners_preserved=True,notice_text_actions_styles_and_rules_conserved=True,
+            language_inventory=inventory,inventory_command=invcmd,owner_exports=[dict(owner='Test language',lookup=lookup,command=cmd)],fallback=dict(namespace=0,title='entry',reasons=['missing_language_heading']))
+        output.update(self.output_changes);output=self.save('output-review',output)
+        item=dict(schema='wikidict.source-authored-unsectioned-notice.v1',edition=complete['edition'],date=complete['date'],complete=self.accepted['complete'],build_inputs=complete['build_inputs'],
+            namespace=0,title='entry',page_id=51,revision_id=73,raw_source=raw,producer_row=producer,source_review=authority,source_evidence=[raw,producer,authority],
+            output_review=output,output_evidence=[output,inventory,invcmd,lookup,cmd])
+        item.update(self.item_changes);self.item=self.save('limitation',item)
+        self.er['source_authored_unsectioned_notices']=[self.item]
+        self.er['content_review'].update(source_unsectioned_notices_present=True,source_unsectioned_notice_count=1,no_product_missing_language_errors=True)
+        return self
+    def check(self):return controller.validate_content_review(self.review,self.source,self.rows,controller.PILOT,scope='pilot')
+
+
+class UnsectionedNoticeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.top=Path(self.tmp.name).resolve();self.serial=0
+    def fixture(self):
+        self.serial+=1;p=self.top/str(self.serial);p.mkdir();return UnsectionedNoticeFixture(p)
+    def test_exact_notice_preserves_diagnostic_and_independent_language_claims(self):
+        f=self.fixture().seal();before=copy.deepcopy(f.review);raw=Path(f.accepted['reports']['fallback-pages.jsonl']['path']).read_bytes()
+        self.assertIs(f.check(),f.review);self.assertEqual(before,f.review);self.assertEqual(raw,Path(f.accepted['reports']['fallback-pages.jsonl']['path']).read_bytes())
+        self.assertTrue(f.er['content_review']['no_unresolved_language_declarations'])
+        del f.er['source_authored_unsectioned_notices']
+        with self.assertRaisesRegex(ValueError,'remains unresolved'):f.check()
+        source,rows,review=content_review_fixture(self.top/'clean',controller.PILOT)
+        content=review['editions'][0]['content_review']
+        content.update(source_unsectioned_notices_present=False,source_unsectioned_notice_count=0,no_product_missing_language_errors=True)
+        controller.validate_content_review(review,source,rows,controller.PILOT,scope='pilot')
+        for key,value in (('source_unsectioned_notices_present',True),('source_unsectioned_notice_count',1)):
+            old=content[key];content[key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):controller.validate_content_review(review,source,rows,controller.PILOT,scope='pilot')
+            content[key]=old
+    def test_other_completion_revision_input_or_source_cannot_borrow_notice_proof(self):
+        for change in (dict(revision_id=74),dict(page_id=52),dict(title='other'),dict(source_input=['other'])):
+            f=self.fixture();f.producer_changes=change;f.seal()
+            with self.subTest(change=change),self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.item_changes={'complete':dict(path='/historical/complete',bytes=1,sha256='0'*64)};f.seal()
+        with self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.authority_changes={'source_snapshot':dict(path='/historical/source',bytes=1,sha256='0'*64)};f.seal()
+        with self.assertRaises(ValueError):f.check()
+    def test_lexical_or_unreviewed_source_and_false_clear_claims_refused(self):
+        for key in ('whole_source_reviewed','nonlexical_notice','no_authored_language_declaration','no_authored_lexical_sections','producer_default_owner_observed'):
+            f=self.fixture();f.authority_changes={key:False};f.seal()
+            with self.subTest(key=key),self.assertRaises(ValueError):f.check()
+        for key,value in (('source_unsectioned_notices_present',False),('source_unsectioned_notice_count',0),('no_product_missing_language_errors',False)):
+            f=self.fixture().seal();f.er['content_review'][key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):f.check()
+    def test_lost_text_action_style_rule_or_owner_cannot_pass_whole_body_review(self):
+        for part in ('text','action','bold','italic','rule','owner','pagination'):
+            f=self.fixture();entry=copy.deepcopy(f.entry);blocks=entry['sections'][0]['blocks']
+            if part=='text':blocks[0]['spans'][0]['text']='truncated'
+            elif part=='action':blocks[0]['spans'][1]['target']='https://example.test/wrong'
+            elif part=='bold':blocks[0]['spans'][1]['bold']=False
+            elif part=='italic':blocks[2]['spans'][0]['italic']=False
+            elif part=='rule':blocks.pop(1)
+            elif part=='owner':entry['language']='Other'
+            f.body_changes={'entries':[entry]}
+            if part=='pagination':f.body_changes['has_more']=True
+            f.seal()
+            with self.subTest(part=part),self.assertRaises(ValueError):f.check()
+        f=self.fixture();f.output_changes={'owner_exports':[]};f.seal()
+        with self.assertRaises(ValueError):f.check()
+    def test_exact_single_row_no_overlap_duplicates_unused_or_extra_error(self):
+        f=self.fixture().seal();f.er['source_authored_unsectioned_notices']*=2
+        with self.assertRaises(ValueError):f.check()
+        p=self.top/'fallback';row=dict(namespace=0,title='entry',reasons=['missing_language_heading']);notices={(0,'entry'):row}
+        for rows in ([],[row,row],[dict(row,title='other')],[dict(row,reasons=['missing_language_heading','expansion_error'])]):
+            p.write_text(''.join(json.dumps(r)+'\n'for r in rows))
+            with self.subTest(rows=rows),self.assertRaises(ValueError):controller._review_fallbacks(p,len(rows),unsectioned_notices=notices)
+        p.write_text(json.dumps(row)+'\n')
+        with self.assertRaises(ValueError):controller._review_fallbacks(p,1,source_limitations=notices,unsectioned_notices=notices)
+
+
 class SourceLimitationFixture:
     def __init__(self,top,*,label='رموز',inline=False):
         self.top=top;self.serial=0;self.label=label
