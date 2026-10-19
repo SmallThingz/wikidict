@@ -2284,13 +2284,17 @@ test "AN captured aliases and raw ms banner preserve all nine owners through rea
         try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ordinary-suffixless-it", "=<div id=\"toc\" class=\"toccolours\" >[[Image:Flag_of_Italy.svg|40px]] '''''[[Wiktionary:Italián|Italián]]'''''</div>=\n__NOTOC__\n__NOEDITSECTION__\n\n[[Category:Parabras en italiano]]\n# [[ordinary-it|Independent linked Italian body]]\n", "{{-it-}}\n# [[ordinary-it|Independent linked Italian body]]\n", null);
         const stats = try writer.finish(codes);
         try std.testing.expectEqual(@as(usize, F.fixtures.len + 1), stats.language_records);
-        try std.testing.expectEqual(@as(usize, if (reviewed) F.fixtures.len else 1), stats.language_blobs);
-        try std.testing.expectEqual(@as(usize, if (reviewed) 0 else F.fixtures.len + 1), stats.fallback_pages);
+        // Complete ms/mul banners independently corroborate their raw codes;
+        // the other seven fixtures and suffixless Italian still need aliases.
+        try std.testing.expectEqual(@as(usize, if (reviewed) F.fixtures.len else 3), stats.language_blobs);
+        try std.testing.expectEqual(@as(usize, if (reviewed) 0 else F.fixtures.len - 1), stats.fallback_pages);
         for (F.fixtures) |fixture| {
             const title = try std.fmt.allocPrint(a, "fixture-{s}", .{fixture.code});
             const body = try std.fmt.allocPrint(a, "retained-{s}", .{fixture.code});
-            const heading = if (reviewed) registry.resolve(fixture.code).?.heading else "Unclassified";
-            try F.assertRecord(a, root, heading, title, if (reviewed) fixture.code else "", body);
+            const corroborated = std.mem.eql(u8, fixture.code, "ms") or std.mem.eql(u8, fixture.code, "mul");
+            const retained_owner = reviewed or corroborated;
+            const heading = if (retained_owner) registry.resolve(fixture.code).?.heading else "Unclassified";
+            try F.assertRecord(a, root, heading, title, if (retained_owner) fixture.code else "", body);
         }
         try F.assertRecord(a, root, if (reviewed) registry.resolve("it").?.heading else "Unclassified", "ordinary-suffixless-it", if (reviewed) "it" else "", "ordinary-it");
         try std.testing.expectEqualStrings("mbp", registry.resolve("Malayo").?.code);
