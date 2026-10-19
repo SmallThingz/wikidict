@@ -378,8 +378,10 @@ def exercise_abbreviations(reader: ReaderPty) -> None:
                 "common gender", "masculine gender", "neuter gender")
     reader.wait(lambda: reader.page_is("search", 1, 2), "native abbreviation fixture startup")
     reader.search("Acupuncture", 1, title)
-    reader.action(ENTER, lambda: reader.entry_focused() and "der. ? lbor. f c m n" in reader.text(),
-                  "native DPR3 compact labels in focused reading")
+    reader.action(ENTER, lambda: reader.entry_focused() and "> Abbreviations  [+]" in reader.text(),
+                  "native DPR3 authored section opens in focused reading")
+    reader.action("e", lambda: "der. ? lbor. f c m n" in reader.text(),
+                  "ordinary section unfold exposes native DPR3 compact labels")
     require(all(value not in reader.text() for value in meanings), "Compact view unexpectedly expands explanations")
     reader.snapshot("native-abbreviations-compact")
     reader.action("d", lambda: "Abbreviations" in reader.text()
@@ -388,7 +390,10 @@ def exercise_abbreviations(reader: ReaderPty) -> None:
     require("der. ? lbor. f c m n" in reader.text(), "Details replaced compact authored labels")
     reader.snapshot("native-abbreviations-details")
     reader.action("d", lambda: all(value not in reader.text() for value in meanings)
-                  and "der. ? lbor. f c m n" in reader.text(), "d restores compact reading")
+                  and "> Abbreviations  [+]" in reader.text(), "d restores compact section folding")
+    reader.action("e", lambda: "der. ? lbor. f c m n" in reader.text()
+                  and all(value not in reader.text() for value in meanings),
+                  "ordinary unfold restores compact labels without explanations")
     reader.action(ESCAPE, lambda: reader.page_is("search", 1, 1)
                   and not reader.entry_focused(), "Escape returns from abbreviation reading")
     reader.search("Legacy", 1, legacy)
@@ -420,7 +425,9 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=5.0,
                         help="Per-state/CLI timeout in seconds (default: 5)")
     parser.add_argument("--abbreviation-root", type=Path, help="Explicitly marked owned copy of genuine native abbreviation-interop output")
+    parser.add_argument("--abbreviation-only", action="store_true", help="Run only the three native abbreviation cases; historical132 are not rerun")
     args = parser.parse_args()
+    require(not args.abbreviation_only or args.abbreviation_root is not None, "--abbreviation-only requires --abbreviation-root")
     require(0.2 <= args.timeout <= 15, "Timeout must be between 0.2 and 15 seconds")
     binary, source = args.binary.resolve(strict=True), args.fixture_root.resolve(strict=True)
     require(binary.is_file() and os.access(binary, os.X_OK), "--binary is not executable")
@@ -439,9 +446,10 @@ def main() -> int:
     report_dir = Path(tempfile.mkdtemp(prefix="reader-ux-", dir=parent))
     report = {"binary": str(binary), "fixture": str(source),
               "report_dir": str(report_dir), "status": "passed", "cases": []}
+    report["historical_cases_executed"] = not args.abbreviation_only
     started = time.monotonic()
     budget_end = started + 110
-    for width in (40, 80, 120):
+    for width in (() if args.abbreviation_only else (40, 80, 120)):
         case = {"width": width, "status": "passed", "checks": [], "snapshots": []}
         reader = None
         case_started = time.monotonic()

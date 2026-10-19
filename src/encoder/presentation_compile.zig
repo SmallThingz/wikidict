@@ -10,6 +10,59 @@ const diagnostics = @import("build_diagnostics");
 const hieroglyphs = @import("hieroglyph_unicode.zig");
 const A = std.mem.Allocator;
 
+// Ordinary HTML wrappers cannot cut a physical wiki table at an inner HTML
+// closer. Keep the original pair unless a real table close and later explicit
+// wrapper close prove the wider scope; genuinely unclosed tables stay unchanged.
+fn blockWrapperPair(input: []const u8, opening: syntax.Tag) ?syntax.Pair {
+    const original = syntax.matchingTag(input, opening) orelse return null;
+    if (!opening.is("div") or std.mem.indexOf(u8, input[opening.end..original.inner_end], "{|") == null) return original;
+    var scan: syntax.OpaqueScan = .{};
+    var no_more_nowiki_close = false;
+    var depth: usize = 1;
+    var tables: usize = 0;
+    var crossed = false;
+    var at = opening.end;
+    while (at < input.len) {
+        if (at == 0 or input[at - 1] == '\n') {
+            const end = std.mem.indexOfScalarPos(u8, input, at, '\n') orelse input.len;
+            const line = trim(input[at..end]);
+            // Share the renderer's opener grammar; closers accept whitespace
+            // trimming only, never a colon-prefixed literal such as :|}.
+            if (Renderer.wikiTableIndent(line) != null) {
+                if (tables >= max_depth) return original;
+                tables += 1;
+            } else if (starts(line, "|}") and tables != 0) tables -= 1;
+        }
+        if (scan.protectedEnd(input, at, &no_more_nowiki_close)) |end| {
+            at = end;
+            continue;
+        }
+        if (starts(input[at..], "{{") or starts(input[at..], "[[")) {
+            if (syntax.balancedWithOpaqueScan(input, at, &scan)) |pair| {
+                at = pair.end;
+                continue;
+            }
+        }
+        if (scan.tagAt(input, at, &no_more_nowiki_close)) |tag| {
+            if (tag.is("div")) {
+                if (tag.closing) {
+                    if (depth == 1 and tables != 0) {
+                        crossed = true;
+                    } else {
+                        depth -= 1;
+                        if (depth == 0) return if (crossed) .{ .inner_end = at, .end = tag.end } else original;
+                    }
+                } else if (!tag.self_closing) {
+                    if (depth >= max_depth) return original;
+                    depth += 1;
+                }
+            }
+            at = tag.end;
+        } else at += 1;
+    }
+    return original;
+}
+
 fn optionalTableEnd(input: []const u8, opening: syntax.Tag) syntax.Pair {
     return optionalTableEndFrom(input, opening.name, opening.end, false);
 }
@@ -6031,7 +6084,7 @@ pub const Renderer = struct {
             const table_indent: ?[]const u8 = if (anchored_inline) null else wikiTableIndent(clean);
             const html_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) or htmlHeadingLevel(tag) != null) and
-                syntax.matchingTag(clean, tag) != null) tag else null) else null;
+                blockWrapperPair(clean, tag) != null) tag else null) else null;
             const protected_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
             // Horizontal rules precede behavior-control removal and require an
@@ -6206,7 +6259,7 @@ pub const Renderer = struct {
                 previous_list_path = previous_list_path[0..retained];
             }
             if (html_tag) |tag| {
-                const pair = syntax.matchingTag(clean, tag).?;
+                const pair = blockWrapperPair(clean, tag).?;
                 if (tag.is("table")) {
                     if (std.mem.eql(u8, (try self.semanticAttribute(tag, "class")) orelse "", "translations") and
                         !hasAuthoredTableGroup(clean[tag.end..pair.inner_end]))
@@ -21050,4 +21103,66 @@ test "wiki header rows accept both separators while preserving protected delimit
     try std.testing.expectEqual(@as(usize, 2), shielded.rows[1].cells.len);
     try std.testing.expect(!shielded.rows[1].cells[0].header);
     try std.testing.expectEqualStrings("alpha !! beta", std.mem.trim(u8, try flattened(a, shielded.rows[1].cells[0].spans), " \t\r\n"));
+}
+
+test "DIV scope retains complete wiki tables across inner closing tags" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact retained included template body. Category-count calls are deliberately
+    // not evaluated here; the fixture checks table syntax and existing actions.
+    const captured = "<DIV STYLE=\"font-size: 80%\">\n{| width=\"100%\" style=\"border: 1px solid #dfdfdf;\"\n|-\n| align=\"right\" | '''مساهمات:'''\n| <center>[[خاص:صفحات جديدة|صفحات جديدة]] – [[خاص:ملفات جديدة|ملفات جديدة]] – [[خاص:RecentChanges/hideliu|مساهمات غير المسجلين]].</center>\n|-\n| align=\"right\" | '''صفحــات:'''\n| <center>[[ويكاموس:الميدان|الميدان]] – [[ويكاموس:بوابة المجتمع|بوابة المجتمع]] – [https://lists.wikimedia.org/postorius/lists/wikiar-l.lists.wikimedia.org/ القائمة البريدية] – [[ويكاموس:أسئلة متكررة|أسئلة متكررة]] – [[ويكاموس:صيغة الكتابة|صيغة الكتابة]] – [[خاص:صفحات مطلوبة|وصلات حمراء]] – [[ويكاموس:إداريون|الإداريون]] – [[ويكاموس:استطلاع رأي|استطلاع الآراء]] – [[ويكاموس:مفردة تعاون الأسبوع|مفردة تعاون الأسبوع]].</center>\n|- \n| align=\"right\" | '''متابعـــــة:'''\n| <center>[[خاص:صفحات قصيرة|صفحات قصيرة]] – [[خاص:صفحات يتيمة|صفحات يتيمة]] – [[خاص:صفحات غير مصنفة|صفحات غير مصنفة]] – [[ويكاموس:طلبات الصلاحيات|طلبات الصلاحيات]] – [[ويكاموس:إخطار الإداريين|إخطار الإداريين]] – [[:تصنيف:صفحات للحذف السريع|للحذف السريع]] <small>({{PAGESINCATEGORY:صفحات للحذف السريع}})</small> – [[:تصنيف:صفحات للحذف السريع يطلب التمهل في حذفها|نقاش الحذف]] <small>({{PAGESINCATEGORY:صفحات للحذف السريع يطلب التمهل في حذفها}})</small>.</center>\n|-\n| align=\"right\" | '''مشاريــــع:'''\n| <center>[[w:خاص:أحدث التغييرات|ويكيبيديا]] – [[b:خاص:أحدث التغييرات|ويكي الكتب]] – [[q:خاص:أحدث التغييرات|ويكي الاقتباس]] – [[s:خاص:أحدث التغييرات|ويكي مصدر]] – [[n:خاص:أحدث التغييرات|ويكي الأخبار]] – [[v:خاص:أحدث التغييرات|ويكي الجامعة]] – [[commons:Special:RecentChanges|كومنز]] – [[d:Special:RecentChanges|ويكي بيانات]] – [[m:Special:RecentChanges|ميتا]] – [[wikispecies:Special:RecentChanges|ويكي أنواع]].</center>\n</div>\n|}</div>";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(try std.fmt.allocPrint(a, "{s}\n[[after]]", .{captured}));
+    var tables: usize = 0;
+    var after = false;
+    var community = false;
+    var wikimedia = false;
+    for (blocks) |block| {
+        try std.testing.expect(std.mem.indexOf(u8, try flattened(a, block.spans), "|}") == null);
+        for (block.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "after")) {
+            after = true;
+        };
+        if (block.table) |table| {
+            tables += 1;
+            try std.testing.expectEqual(@as(usize, 4), table.rows.len);
+            for (table.rows) |row| {
+                try std.testing.expectEqual(@as(usize, 2), row.cells.len);
+                for (row.cells) |cell| {
+                    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, cell.spans), "|}") == null);
+                    for (cell.spans) |span| {
+                        if (span.kind == .link and std.mem.eql(u8, span.target, "ويكاموس:بوابة المجتمع")) community = true;
+                        if (span.kind == .external_link and std.mem.indexOf(u8, span.target, "commons.wikimedia.org") != null) wikimedia = true;
+                    }
+                }
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    try std.testing.expect(after and community and wikimedia);
+    try std.testing.expect(!renderer.fallbacks.malformed_table);
+    const controls = [_][]const u8{
+        "<div>\n{|\n| <div>[[nested]]</div>\n</div>\n|}</div>\n[[tail]]",
+        "<div><nowiki>\n{|\n</div>\n|}</nowiki>[[inside]]</div>[[tail]]",
+        "<div>\n{|\n| [[cell]]\n</div>\n<div>[[sibling]]</div>",
+        "<div>\n{|\n| [[cell]]\n</div>\n:|}</div>\n[[tail]]",
+        "<div>\n: : {|\n| [[cell]]\n</div>\n|}</div>\n[[tail]]",
+    };
+    for (controls, 0..) |input, index| {
+        const tag = syntax.tagAt(input, 0).?;
+        const pair = blockWrapperPair(input, tag).?;
+        if (index == 0) {
+            try std.testing.expectEqual(std.mem.lastIndexOf(u8, input, "</div>").?, pair.inner_end);
+        } else {
+            const ordinary = syntax.matchingTag(input, tag).?;
+            try std.testing.expectEqual(ordinary, pair);
+        }
+        var control: Renderer = .{ .a = a, .context = .{} };
+        const rendered = try control.renderBody(input);
+        var found_tail = false;
+        for (rendered) |block| for (block.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, if (index == 2) "sibling" else "tail")) found_tail = true;
+        };
+        try std.testing.expect(found_tail);
+    }
 }
