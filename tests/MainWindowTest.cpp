@@ -1593,7 +1593,7 @@ private slots:
         QCOMPARE(edition.write(editionBytes), qint64(editionBytes.size()));
         edition.close();
         QSettings().setValue(QStringLiteral("reader/language"), QStringLiteral("Greek"));
-        MainWindow window(root, word); window.show();
+        MainWindow window(root, word); window.show(); window.activateWindow();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         QTRY_COMPARE(title(window), word);
         QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
@@ -1612,10 +1612,14 @@ private slots:
             window.renderResponse(QJsonDocument(response).toJson(), false);
             return clickAnchor(window.reading_, QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target)));
         };
+        QTRY_VERIFY(window.search_->hasFocus()); // Ordinary dataset opening keeps search ready.
+        window.reading_->setFocus();
+        QTRY_VERIFY(window.reading_->hasFocus());
         QVERIFY(follow(word + QStringLiteral("#Ancient_Greek")));
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Ancient Greek"), 30000);
         QTRY_COMPARE(title(window), word);
         QCOMPARE(window.currentEntry_.value(QStringLiteral("language")).toString(), QStringLiteral("Ancient Greek"));
+        QTRY_VERIFY(window.reading_->hasFocus()); // The link destination retains reader focus.
         QCOMPARE(window.language_->currentText(), QStringLiteral("Ancient Greek"));
         QCOMPARE(window.originRoot_, originalRoot);
         QCOMPARE(window.originEdition_, originalEdition);
@@ -1640,6 +1644,7 @@ private slots:
         const int row = window.sections_->findText(QStringLiteral("Etymology"));
         QVERIFY(row >= 0);
         QVERIFY(!window.collapsedSections_.contains(window.sections_->itemData(row).toInt()));
+        QTRY_VERIFY(window.reading_->hasFocus()); // Same-owner section links follow the same contract.
         QVERIFY(follow(word + QStringLiteral("#Missing_owner")));
         QCOMPARE(window.loadSerial_, serial);
         QCOMPARE(window.api_->language(), QStringLiteral("Ancient Greek"));
@@ -1652,6 +1657,7 @@ private slots:
         QVERIFY(window.currentEntry_.isEmpty());
         QVERIFY(window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
         QCOMPARE(window.search_->text(), modernOnly);
+        QTRY_VERIFY(window.search_->hasFocus()); // Missing destinations keep search recovery available.
         QCOMPARE(window.learning_.history().size(), historyCount);
     }
 

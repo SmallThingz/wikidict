@@ -330,7 +330,8 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     }
                 } catch (const std::exception &error) { resultStatus_->setText(QString::fromUtf8(error.what())); }
             } else if (!word.isEmpty()) openWord(word, fragment);
-            search_->setFocus();
+            if (fragment && !currentEntry_.isEmpty()) reading_->setFocus();
+            else search_->setFocus();
             statusBar()->showMessage(QStringLiteral("Opened %1").arg(QDir::toNativeSeparators(root)), 4000);
         };
         // A modal Library worker can change files before its GUI notification.
