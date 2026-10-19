@@ -1065,6 +1065,36 @@ fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?Res
     return found;
 }
 
+// Complete page-wide hatnotes retain their meaning despite a later heading warning.
+// Arbitrary prefix prose and incomplete wrappers keep the existing owner policy.
+fn pageWideHatnotePrefix(prefix: []const u8) bool {
+    const syntax = blobs.wikitext_syntax;
+    var cursor: usize = 0;
+    var found = false;
+    while (cursor < prefix.len) {
+        if (std.ascii.isWhitespace(prefix[cursor])) {
+            cursor += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, prefix[cursor..], "<!--")) {
+            const end = std.mem.indexOfPos(u8, prefix, cursor + 4, "-->") orelse return false;
+            cursor = end + 3;
+            continue;
+        }
+        const tag = syntax.tagAt(prefix, cursor) orelse return false;
+        if (!tag.is("div") or tag.closing or tag.self_closing) return false;
+        const classes = tag.attr("class") orelse return false;
+        var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
+        const class = tokens.next() orelse return false;
+        if ((!std.mem.eql(u8, class, "disambig-see-also") and
+            !std.mem.eql(u8, class, "disambig-see-also-2")) or tokens.next() != null) return false;
+        const pair = syntax.matchingTag(prefix, tag) orelse return false;
+        cursor = pair.end;
+        found = true;
+    }
+    return found;
+}
+
 // Only a purely decorative image prefix may be shared between language entries.
 // Retain exact source and let each normal renderer own captions, refs and dedup.
 fn sharedImagePrefix(a: std.mem.Allocator, codes: LanguageCodes, prefix: []const u8) std.mem.Allocator.Error!?[]const u8 {
@@ -2176,7 +2206,7 @@ fn processMain(
     // sections and pending unresolved regions must not gain attribution.
     const preserve_prefix = shared_prefix == null and page_prefix.len != 0 and
         groups.items.len == 1 and groups.items[0].language.code.len != 0 and
-        !fallbacks.unresolved_language_heading;
+        (!fallbacks.unresolved_language_heading or pageWideHatnotePrefix(page_prefix));
     const pre_observation: presentation_document.PreObservation = if (may_cross_link)
         early_observation
     else if (may_cross_pre and groups.items.len > 1)
@@ -4479,6 +4509,16 @@ test "single resolved language preserves structured prefix without ambiguous att
         .{ "pending-unknown", "unscoped prefix\n==Unknown topic==\n# unknown\n==English==\n# english\n" },
         .{ "only-unknown", "unscoped prefix\n==[[Unknown language]]==\n# unknown\n" },
     }) |row| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row[0], row[1], row[1], null);
+    // Retained Template:also module-derived output for authored {{أيضا|مِنْجَار}}.
+    const hatnote = "<div class=\"disambig-see-also\">''انظر أيضًا:'' '''[[مِنْجَار]]'''</div>\n";
+    const later_unknown = "==عربية==\n# known body\n==Unknown topic==\n# unknown body\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "hatnote-warning", hatnote ++ later_unknown, "{{أيضا|مِنْجَار}}\n" ++ later_unknown, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "hatnote-multilingual", hatnote ++ "==English==\n# english\n==French==\n# french\n", hatnote ++ "==English==\n# english\n==French==\n# french\n", null);
+    inline for (.{
+        .{ "hatnote-prose", hatnote ++ "unscoped prefix\n" },
+        .{ "hatnote-partial", "<div class=\"disambig-see-also\">''انظر أيضًا:'' '''[[مِنْجَار]]'''\n" },
+        .{ "hatnote-unrelated", "<div class=\"disambig-see-also-other\">[[مِنْجَار]]</div>\n" },
+    }) |row| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row[0], row[1] ++ later_unknown, row[1] ++ later_unknown, null);
     _ = try writer.finish(codes);
     std.debug.print("QATAR_STAGE actual prefix\n", .{});
     const qatar_entry = try Local.entry(a, root_path, "العربية", "قِطَار");
@@ -4508,6 +4548,32 @@ test "single resolved language preserves structured prefix without ambiguous att
         const entry_value = try Local.entry(a, root_path, row[0], row[1]);
         try std.testing.expect(std.mem.indexOf(u8, try Local.text(a, entry_value), "unscoped prefix") == null);
     }
+    const hatnote_entry = try Local.entry(a, root_path, "العربية", "hatnote-warning");
+    var hatnote_target = false;
+    for (hatnote_entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "مِنْجَار") and span.bold) hatnote_target = true;
+    };
+    try std.testing.expect(hatnote_target);
+    const hatnote_text = try Local.text(a, hatnote_entry);
+    try std.testing.expect(std.mem.indexOf(u8, hatnote_text, "known body") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hatnote_text, "unknown body") != null);
+    inline for (.{ "hatnote-prose", "hatnote-partial", "hatnote-unrelated" }) |title| {
+        const entry_value = try Local.entry(a, root_path, "العربية", title);
+        try std.testing.expect(std.mem.indexOf(u8, try Local.text(a, entry_value), "مِنْجَار") == null);
+    }
+    inline for (.{ "English", "French" }) |owner| {
+        const entry_value = try Local.entry(a, root_path, owner, "hatnote-multilingual");
+        try std.testing.expect(std.mem.indexOf(u8, try Local.text(a, entry_value), "مِنْجَار") == null);
+    }
+    const prefix_report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root_path, "fallback-pages.jsonl" }), a, .unlimited);
+    var report_lines = std.mem.splitScalar(u8, prefix_report, '\n');
+    var hatnote_warning = false;
+    while (report_lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "hatnote-warning") != null) {
+            hatnote_warning = std.mem.indexOf(u8, line, "unresolved_language_heading") != null;
+        }
+    }
+    try std.testing.expect(hatnote_warning);
     // A page without any resolved boundary retains its whole source as Unclassified.
     std.debug.print("QATAR_STAGE whole-source unknown preservation\n", .{});
     const unknown_entry = try Local.entry(a, root_path, "Unclassified", "only-unknown");
