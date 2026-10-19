@@ -392,7 +392,7 @@ test "window reader crosses metadata title varuint and payload boundaries and re
         const last = try reader.readPayloadAlloc(a, third);
         defer a.free(last);
         try std.testing.expectEqualStrings("last", last);
-        try std.testing.expect(reader.window.mapped.len <= window_bytes + std.heap.pageSize() - 1);
+        try std.testing.expect(reader.window.raw.mapped.len <= window_bytes + std.heap.pageSize() - 1);
         try std.testing.expect((try reader.next()) == null);
         try std.testing.expect((try reader.next()) == null);
         try reader.validate();
