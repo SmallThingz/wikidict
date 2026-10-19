@@ -979,8 +979,12 @@ test "title URL methods require captured site configuration and preserve URL con
     const made = try callField(&runtime, .{ .table = title_lib }, "new", &.{.{ .string = "A B#Frag" }});
     defer rt.freeResults(made);
     const title = made[0];
+    // The native-call ABI returns an envelope; its diagnostic retains the
+    // exact missing-site or protocol failure observed by Lua callers.
     inline for (.{ "fullUrl", "canonicalUrl", "localUrl" }) |method| {
-        try std.testing.expectError(error.SiteInfoSnapshotMissing, callField(&runtime, title, method, &.{title}));
+        try std.testing.expectError(error.AotCallFailed, callField(&runtime, title, method, &.{title}));
+        try std.testing.expectEqualStrings("SiteInfoSnapshotMissing", runtime.aotErrorName().?);
+        runtime.clearAotErrorName();
     }
     host.site_server = "//ar.wiktionary.org";
     host.site_script = "/w/index.php";
@@ -1006,7 +1010,9 @@ test "title URL methods require captured site configuration and preserve URL con
     const local_query = try callField(&runtime, title, "localUrl", &.{ title, .{ .string = "action=edit&section=0" } });
     defer rt.freeResults(local_query);
     try std.testing.expectEqualStrings("/w/index.php?title=A_B&action=edit&section=0", local_query[0].string);
-    try std.testing.expectError(error.InvalidTitleUrlProtocol, callField(&runtime, title, "fullUrl", &.{ title, .nil, .{ .string = "ftp" } }));
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, title, "fullUrl", &.{ title, .nil, .{ .string = "ftp" } }));
+    try std.testing.expectEqualStrings("InvalidTitleUrlProtocol", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
     host.site_server = "https://captured.example:8443";
     host.site_script = "/custom/run.php";
     host.site_article_path = "/view/$1/end?lang=x";
@@ -1017,9 +1023,13 @@ test "title URL methods require captured site configuration and preserve URL con
     defer rt.freeResults(custom_query);
     try std.testing.expectEqualStrings("https://captured.example:8443/custom/run.php?title=A_B&a=1&z=2#Frag", custom_query[0].string);
     host.site_article_path = null;
-    try std.testing.expectError(error.SiteInfoSnapshotMissing, callField(&runtime, title, "fullUrl", &.{title}));
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, title, "fullUrl", &.{title}));
+    try std.testing.expectEqualStrings("SiteInfoSnapshotMissing", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
     host_api.set(&runtime, null);
-    try std.testing.expectError(error.SiteInfoSnapshotMissing, callField(&runtime, title, "canonicalUrl", &.{title}));
+    try std.testing.expectError(error.AotCallFailed, callField(&runtime, title, "canonicalUrl", &.{title}));
+    try std.testing.expectEqualStrings("SiteInfoSnapshotMissing", runtime.aotErrorName().?);
+    runtime.clearAotErrorName();
     try std.testing.expect(!effect);
 }
 
