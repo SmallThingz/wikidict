@@ -16,6 +16,7 @@ import os
 import re
 import resource
 from pathlib import Path
+import stat
 import shutil
 import subprocess
 import sys
@@ -1530,7 +1531,61 @@ def timed_run(command, edition, date, phase, **fields):
         run_checked(command)
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None):
+def shard_blob_paths(shard):
+    paths = []
+    language_root = shard/'languages'
+    if language_root.exists():
+        if language_root.is_symlink() or not language_root.is_dir():
+            raise ValueError('Unsafe shard language directory')
+        paths.extend(language_root.iterdir())
+    paths.extend(path for path in shard.iterdir() if path.name.endswith(('.wikblb','.wikblb.xz','.wikblb.xz.part')))
+    for path in sorted(paths):
+        if not stat.S_ISREG(path.lstat().st_mode): raise ValueError(f'Unsafe shard blob: {path}')
+        if not path.name.endswith(('.wikblb','.wikblb.xz','.wikblb.xz.part')):
+            raise ValueError(f'Unexpected shard blob: {path}')
+        yield path
+
+
+def cleanup_shard_compression_parts(shard):
+    for part in list(shard_blob_paths(shard)):
+        if not part.name.endswith('.xz.part'): continue
+        raw = Path(str(part)[:-8]);target = Path(str(part)[:-5])
+        # Never remove a possible sole recovery copy.
+        recovery = [p for p in (raw,target) if p.exists()]
+        if not recovery or any(not stat.S_ISREG(p.lstat().st_mode) for p in recovery):
+            raise ValueError(f'Unresolved shard compression partial: {part}')
+        unlink_artifact(part)
+
+
+def sync_shard_directory(path):
+    fd = os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+
+
+def compress_verified_shard(shard):
+    """Native verification precedes this; all compressed recovery copies survive merge."""
+    cleanup_shard_compression_parts(shard)
+    for raw in list(shard_blob_paths(shard)):
+        if not raw.name.endswith('.wikblb'): continue
+        target = Path(str(raw)+'.xz')
+        if target.exists():
+            if not stat.S_ISREG(target.lstat().st_mode): raise ValueError(f'Unsafe compressed shard: {target}')
+            verify_round_trip(raw,target)
+        else:
+            compress(raw,1024*1024,workers=1)
+        # Both target contents and its directory entry precede recovery deletion.
+        fd = os.open(target,os.O_RDONLY|os.O_NOFOLLOW)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+        sync_shard_directory(target.parent)
+        # A raw-unlink failure preserves both copies; resume rechecks equivalence.
+        unlink_artifact(raw)
+        sync_shard_directory(target.parent)
+
+
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False):
+    if type(compress_shards) is not bool: raise ValueError('Invalid compressed shard mode')
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     if raw_shards_path is not None:
         raw_shards_path=external_raw_shards(workspace,raw_shards_path,create=True)
@@ -1581,7 +1636,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     # cannot replace an existing shard directory.
     shard_starts=list(range(0,indexed_pages,SHARD_PAGES))
     prefix=[]
-    for start in shard_starts:
+    for start in ([] if compress_shards else shard_starts):
         shard=shards_root/f'{start:08d}'
         if not shard.exists(): break
         limit=min(SHARD_PAGES,indexed_pages-start)
@@ -1605,7 +1660,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     continuous_handled=not missing_starts
     # A noncontiguous set of completed shards can arise from older builds.
     # Preserve those outputs and use the existing single-shard fallback.
-    if missing_starts and all(not (shards_root/f'{start:08d}').exists() for start in missing_starts):
+    if not compress_shards and missing_starts and all(not (shards_root/f'{start:08d}').exists() for start in missing_starts):
         first=missing_starts[0]
         require_index_identity(index_path,index)
         timed_run([zig,'build','-j1','-Doptimize=fast','build-blobs','--',str(dump),str(shards_root),
@@ -1645,6 +1700,9 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                               edition,date,'resume_shard_verify',start_page=start,pages=limit)
                     require_index_identity(index_path,index)
                     if not marker.is_file(): marker.write_text('verified\n')
+                    if compress_shards:
+                        with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
+                            compress_verified_shard(shard)
                     shard_paths.append(shard);continue
             last_error=None
             for attempt in range(1,SHARD_RETRIES+1):
@@ -1672,6 +1730,9 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                           edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
                 require_index_identity(index_path,index)
                 marker.write_text('verified\n')
+                if compress_shards:
+                    with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
+                        compress_verified_shard(shard)
                 last_error=None
                 break
             if last_error is not None: raise last_error
@@ -1689,7 +1750,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if build_identity is not None:metadata_texts.append(json.dumps(build_identity,sort_keys=True)+'\n')
     if staging.exists(): remove_artifact_tree(staging)
     admission=require_merge_disk_space(shard_paths,staging,BUILD_DISK_RESERVE_BYTES,
-        metadata_paths=(expander_build/'compile-plan.tsv',),metadata_texts=metadata_texts)
+        metadata_paths=(expander_build/'compile-plan.tsv',),metadata_texts=metadata_texts,
+        **({'allow_compressed':True} if compress_shards else {}))
     phase_event(edition,date,'merge_disk_admission','admitted',**admission)
     timed_run([zig,'build','-j1','-Doptimize=fast','merge-blobs','--',str(staging),*[str(path) for path in shard_paths]],
               edition,date,'merge',shards=len(shard_paths))
@@ -1721,7 +1783,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     cleanup_shard_workspace(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None):
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False):
     artifact_path(output)
     if raw_shard_root is not None: artifact_path(raw_shard_root)
     validate_now_unix(now_unix)
@@ -1743,7 +1805,7 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
             # Legitimate producers share this edition lock; success still overrides.
             if (parent / date / 'complete.json').exists():
                 result['execution_mode']='existing_output'
-            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}))
+            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}))
             result['execution_mode']=mode
             return mode
 
@@ -2060,7 +2122,7 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot,site_info_snapshot)
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None):
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False):
     validate_now_unix(now_unix)
     for item in items:validate_item(item)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
@@ -2182,7 +2244,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     # Reuse the verified repack for either path, retaining it after failures.
     if source_pages>SHARD_PAGES:
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}))
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}))
     else:
         timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
@@ -2217,7 +2279,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     cleanup_shard_workspace(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False):
     from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
@@ -2253,6 +2315,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 if expansion_timeout_ms is not None: options['expansion_timeout_ms']=expansion_timeout_ms
                 if now_unix is not None: options['now_unix']=now_unix
                 if raw_shard_root is not None: options['raw_shard_root']=raw_shard_root
+                if compress_shards: options['compress_shards']=True
                 if interwiki_snapshot is not None: options['interwiki_snapshot']=interwiki_snapshot
                 if auxiliary_snapshots: options['auxiliary_snapshots']=auxiliary_snapshots
                 if edition_options is not None:
@@ -2302,6 +2365,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
     p.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries',metavar='DIR')
+    p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard before building the next; merged output remains raw until verified')
     p.add_argument('--raw-shard-root',type=Path,metavar='DIR',help='Optional raw shard volume; input/native caches and merged publication remain under --output')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
     p.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup',
@@ -2398,6 +2462,7 @@ def main():
     if a.expansion_timeout_ms is not None: options['expansion_timeout_ms']=a.expansion_timeout_ms
     if a.now_unix is not None: options['now_unix']=a.now_unix
     if a.raw_shard_root is not None: options['raw_shard_root']=a.raw_shard_root.absolute()
+    if a.compress_shards: options['compress_shards']=True
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
     try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary)
     except (ValueError,OSError) as error:p.error(str(error))

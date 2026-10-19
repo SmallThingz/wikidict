@@ -1,5 +1,6 @@
 import hashlib
 import json
+import lzma
 import os
 from pathlib import Path
 import tempfile
@@ -68,6 +69,36 @@ class MergeDiskAdmissionTests(unittest.TestCase):
             self.admit([one, two], required - 1, metadata_paths=[plan], metadata_texts=texts)
         self.assertFalse(self.destination.exists())
         self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_compressed_and_mixed_shards_reserve_logical_output_not_transport(self):
+        one, raw_one = self.shard('one')
+        two, raw_two = self.shard('two',heading='French')
+        payload = raw_one.read_bytes() + b'x' * 65536
+        raw_one.write_bytes(payload)
+        target = Path(str(raw_one)+'.xz')
+        target.write_bytes(lzma.compress(payload));raw_one.unlink()
+        receipt = self.admit([one,two],allow_compressed=True)
+        self.assertEqual(receipt['raw_shard_bytes'],len(payload)+raw_two.stat().st_size)
+        self.assertEqual(receipt['stored_shard_blob_bytes'],target.stat().st_size+raw_two.stat().st_size)
+        self.assertEqual(receipt['compressed_shard_blob_bytes'],target.stat().st_size)
+        required=receipt['required_free_bytes']
+        with self.assertRaisesRegex(ValueError,'Insufficient merge disk space'):
+            self.admit([one,two],required-1,allow_compressed=True)
+        self.assertTrue(target.is_file());self.assertFalse(self.destination.exists())
+        with self.assertRaises(ValueError): self.admit([one,two])
+
+    def test_compressed_shard_rejects_duplicate_transport_wrong_kind_and_truncation(self):
+        shard, raw = self.shard()
+        payload=raw.read_bytes();target=Path(str(raw)+'.xz')
+        target.write_bytes(lzma.compress(payload))
+        with self.assertRaises(ValueError):self.admit([shard],allow_compressed=True)
+        raw.unlink()
+        target.write_bytes(lzma.compress(b'WIKBLB08\x02wrong kind'))
+        with self.assertRaisesRegex(ValueError,'Expected compressed WIKBLB08'):
+            self.admit([shard],allow_compressed=True)
+        target.write_bytes(lzma.compress(payload)[:-8])
+        with self.assertRaises((ValueError,EOFError,lzma.LZMAError,d.subprocess.CalledProcessError)):
+            self.admit([shard],allow_compressed=True)
 
     def test_alias_only_shard_counts_raw_bytes_and_retains_header_check(self):
         shard, ordinary = self.shard()

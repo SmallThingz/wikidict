@@ -77,10 +77,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
+    const blob_xz_mod = b.createModule(.{ .root_source_file = b.path("src/native/xz.zig"), .target = target, .optimize = optimize });
     const storage_mod = b.createModule(.{ .root_source_file = b.path("src/native/storage.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     const lzma = b.addTranslateC(.{ .root_source_file = b.path("src/native/lzma.h"), .target = target, .optimize = optimize });
     lzma.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
     storage_mod.addImport("lzma", lzma.createModule());
+    blob_xz_mod.addImport("lzma", lzma.createModule());
     const storage_test = b.createModule(.{ .root_source_file = b.path("src/native/storage.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
     storage_test.addImport("lzma", lzma.createModule());
     const encoder_mod = b.addModule("encoder", .{
@@ -165,11 +167,14 @@ pub fn build(b: *std.Build) void {
     const blob_merge_exe = addCliExecutable(b, "dict-blob-merge", b.path("tools/blob_merge.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
     });
+    blob_merge_exe.root_module.addImport("xz", blob_xz_mod);
     blob_merge_exe.root_module.link_libc = true;
     addPublicRunStep(b, "merge-blobs", "Merge non-overlapping compiled blob shards", addRunArtifactCommand(b, blob_merge_exe, &.{}), &.{});
     const blob_verify_exe = addCliExecutable(b, "dict-blob-verify", b.path("tools/blob_verify.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = encoder_mod },
     });
+    blob_verify_exe.root_module.addImport("xz", blob_xz_mod);
+    blob_verify_exe.root_module.link_libc = true;
 
     const llvm_obj = b.addObject(.{
         .name = "dict-llvm-build-core",
@@ -328,6 +333,11 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    const blob_xz_test_mod = b.createModule(.{ .root_source_file = b.path("src/native/xz.zig"), .target = b.graph.host, .optimize = test_optimize });
+    const blob_xz_test_lzma = b.addTranslateC(.{ .root_source_file = b.path("src/native/lzma.h"), .target = b.graph.host, .optimize = test_optimize });
+    blob_xz_test_lzma.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+    blob_xz_test_mod.addImport("lzma", blob_xz_test_lzma.createModule());
+    blob_file_tools_tests.root_module.addImport("xz", blob_xz_test_mod);
     const run_blob_file_tools_tests = b.addRunArtifact(blob_file_tools_tests);
 
     const encoder_tests = b.addTest(.{

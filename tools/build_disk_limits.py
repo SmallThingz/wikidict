@@ -1,6 +1,8 @@
-"""Point-in-time admission for a verified raw-shard merge; no space is reserved."""
+"""Point-in-time admission for a verified shard merge; no space is reserved."""
 import hashlib
 import json
+import lzma
+import subprocess
 import os
 from pathlib import Path
 import stat
@@ -60,19 +62,60 @@ def _coverage_bound(data):
     return total
 
 
+def compressed_blob_size(path, kind):
+    """Measure logical XZ bytes, not an integrity replacement for native verify."""
+    path = Path(path)
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f'Unsupported compressed shard: {path}')
+    # Decode only the framing prefix, with a bounded decoder dictionary.
+    decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=128 * 1024**2)
+    header = bytearray()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as source:
+        if _identity(os.fstat(source.fileno())) != _identity(before):
+            raise ValueError(f'Compressed shard changed: {path}')
+        while len(header) < 9:
+            block = source.read(65536) if decoder.needs_input else b''
+            if not block and decoder.needs_input:
+                raise ValueError(f'Truncated compressed shard: {path}')
+            header.extend(decoder.decompress(block, max_length=9-len(header)))
+            if decoder.eof and len(header) < 9:
+                raise ValueError(f'Truncated compressed shard: {path}')
+    if header != b'WIKBLB08' + bytes([kind]):
+        raise ValueError(f'Expected compressed WIKBLB08 shard: {path}')
+    result = subprocess.run(['xz', '--robot', '--list', '--', str(path)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            check=True, timeout=60)
+    if len(result.stdout) > 65536:
+        raise ValueError('XZ listing exceeds metadata bound')
+    rows = [row.split(b'\t') for row in result.stdout.splitlines() if row.startswith(b'file\t')]
+    if len(rows) != 1 or len(rows[0]) < 5 or not rows[0][4].isdigit():
+        raise ValueError('Invalid XZ logical size listing')
+    logical = _bytes(int(rows[0][4]))
+    if logical < 9 or _identity(path.lstat()) != _identity(before):
+        raise ValueError(f'Compressed shard changed: {path}')
+    return logical
+
+
 def require_merge_disk_space(shard_paths, destination, reserve_bytes,
-                             *, metadata_paths=(), metadata_texts=()):
+                             *, metadata_paths=(), metadata_texts=(), allow_compressed=False):
     """Require room for one additional raw output, sidecars, and a policy reserve.
 
     Call immediately before merge while owning the edition lock. Shards must
     already have passed the native verifier. Raw merge bytes are at most the
-    measured raw shard sum: record bytes are preserved, repeated headers removed.
+    measured logical shard sum: record bytes are preserved, repeated headers removed.
+    Optional compressed shards contribute their XZ logical size, never compressed
+    transport size, to the merged-output reservation. Stored transport bytes are
+    reported separately and already consume space. XZ listing/header checks do
+    not replace the ordinary native verifier.
     Existing shards already consume space; do not require their bytes twice.
     The watchdog handles later capacity loss. Compressed input size is unused.
     Optional metadata paths are subsequent copies (absent paths are skipped);
     texts are the actual pending serializations. Reserve covers filesystem
     allocation/metadata and concurrent writes, not unmeasured output growth.
     """
+    if type(allow_compressed) is not bool: raise ValueError('Invalid compressed shard mode')
     reserve_bytes = _bytes(reserve_bytes)
     if reserve_bytes == 0:
         raise ValueError('Disk reserve must be positive')
@@ -120,13 +163,14 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
     if not shards or len(set(shards)) != len(shards):
         raise ValueError('Merge requires distinct verified shard roots')
     raw = fallback = manifests = coverage = metadata = 0
+    stored = compressed = 0
     blob_count = 0
     sidecars = {'languages.tsv', 'namespace-coverage.json', 'fallback-pages.jsonl',
                 'page-coverage.json', '.verified'}
     for root in shards:
         remember(root, directory=True)
         entries = {path.name: path for path in root.iterdir()}
-        if not sidecars.issubset(entries) or set(entries) - sidecars - set(_FEATURES) - {'languages'}:
+        if not sidecars.issubset(entries) or set(entries) - sidecars - set(_FEATURES) - ({name+'.xz' for name in _FEATURES} if allow_compressed else set()) - {'languages'}:
             raise ValueError(f'Unsupported or incomplete raw shard layout: {root}')
         if read_small(root / '.verified', 64) != b'verified\n':
             raise ValueError(f'Unverified shard: {root}')
@@ -146,15 +190,23 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
         if os.path.lexists(language_root):
             remember(language_root, directory=True)
             language_files = {path.name: path for path in language_root.iterdir()}
-        if set(language_files) != expected:
+        logical_names = {name[:-3] if allow_compressed and name.endswith('.xz') else name for name in language_files}
+        if logical_names != expected or len(language_files) != len(logical_names):
             raise ValueError(f'Language manifest/raw file mismatch: {root}')
-        for path in language_files.values():
-            raw = _add(raw, raw_size(path, 1))
-            blob_count += 1
+        blobs = [(path, 1) for path in language_files.values()]
         for name, kind in _FEATURES.items():
-            if name in entries:
-                raw = _add(raw, raw_size(entries[name], kind))
-                blob_count += 1
+            present = [entries[key] for key in (name, name+'.xz') if key in entries]
+            if len(present) > 1: raise ValueError(f'Duplicate raw/XZ shard: {root/name}')
+            if present: blobs.append((present[0], kind))
+        for path, kind in blobs:
+            info = remember(path)
+            if allow_compressed and path.name.endswith('.xz'):
+                raw = _add(raw, compressed_blob_size(path, kind))
+                compressed = _add(compressed, info.st_size)
+            else:
+                raw = _add(raw, raw_size(path, kind))
+            stored = _add(stored, info.st_size)
+            blob_count += 1
         coverage = _add(coverage, _coverage_bound(
             read_small(root / 'namespace-coverage.json', 8 * 1024**2)))
     for path in metadata_paths:
@@ -176,6 +228,7 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
         raise ValueError('Invalid destination filesystem block size')
     available = _bytes(_bytes(space.f_bavail) * space.f_frsize)
     receipt = dict(raw_shard_bytes=raw, raw_blob_count=blob_count,
+                   stored_shard_blob_bytes=stored, compressed_shard_blob_bytes=compressed,
                    fallback_bytes=fallback, language_manifest_bound_bytes=manifests,
                    namespace_coverage_bound_bytes=coverage, metadata_bytes=metadata,
                    reserve_bytes=reserve_bytes, required_free_bytes=required,

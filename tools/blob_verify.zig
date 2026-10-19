@@ -328,26 +328,52 @@ test "window verification preserves framing kind metadata and presentation error
     defer tmp.cleanup();
     const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/input", .{tmp.sub_path});
     defer a.free(path);
-    var stats: Stats = .{};
-    // Later malformed framing must win over an earlier undecodable payload.
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x07a\x00\x00b\x00\x80" });
-    try std.testing.expectError(error.InvalidBlob, verifyBlob(io, a, path, .supplemental, null, &stats));
-    // Even a wrong-kind source is fully framing-validated first.
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x02a\x00\x80" });
-    try std.testing.expectError(error.InvalidBlob, verifyBlob(io, a, path, .supplemental, null, &stats));
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x02a\x00\x00" });
-    try std.testing.expectError(error.UnexpectedBlobKind, verifyBlob(io, a, path, .supplemental, null, &stats));
-    // Correct framing and kind now reaches presentation validation.
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x07a\x00\x00" });
-    try std.testing.expectError(error.InvalidPresentation, verifyBlob(io, a, path, .supplemental, null, &stats));
-    // Unclassified is the sole accepted empty-code language heading.
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x01\x00English\x00" });
-    try std.testing.expectError(error.UnverifiedLanguage, verifyBlob(io, a, path, .language, "English", &stats));
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x01en\x00English\x00" });
-    try std.testing.expectError(error.UnexpectedLanguageBlob, verifyBlob(io, a, path, .language, "French", &stats));
-    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
-    try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
-    try std.testing.expect(stats.last_reader_envelope == null);
+    for ([_]bool{ false, true }) |compressed| {
+        var stats: Stats = .{};
+        // Later malformed framing must win over an earlier undecodable payload.
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x07a\x00\x00b\x00\x80" });
+        if (compressed) {
+            try file_reader.writeTestXz(io, a, path);
+            try std.Io.Dir.cwd().deleteFile(io, path);
+        }
+        try std.testing.expectError(error.InvalidBlob, verifyBlob(io, a, path, .supplemental, null, &stats));
+        // Even a wrong-kind source is fully framing-validated first.
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x02a\x00\x80" });
+        if (compressed) {
+            try file_reader.writeTestXz(io, a, path);
+            try std.Io.Dir.cwd().deleteFile(io, path);
+        }
+        try std.testing.expectError(error.InvalidBlob, verifyBlob(io, a, path, .supplemental, null, &stats));
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x02a\x00\x00" });
+        if (compressed) {
+            try file_reader.writeTestXz(io, a, path);
+            try std.Io.Dir.cwd().deleteFile(io, path);
+        }
+        try std.testing.expectError(error.UnexpectedBlobKind, verifyBlob(io, a, path, .supplemental, null, &stats));
+        // Correct framing and kind now reaches presentation validation.
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x07a\x00\x00" });
+        if (compressed) {
+            try file_reader.writeTestXz(io, a, path);
+            try std.Io.Dir.cwd().deleteFile(io, path);
+        }
+        try std.testing.expectError(error.InvalidPresentation, verifyBlob(io, a, path, .supplemental, null, &stats));
+        // Unclassified is the sole accepted empty-code language heading.
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x01\x00English\x00" });
+        if (compressed) {
+            try file_reader.writeTestXz(io, a, path);
+            try std.Io.Dir.cwd().deleteFile(io, path);
+        }
+        try std.testing.expectError(error.UnverifiedLanguage, verifyBlob(io, a, path, .language, "English", &stats));
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x01en\x00English\x00" });
+        if (compressed) {
+            try file_reader.writeTestXz(io, a, path);
+            try std.Io.Dir.cwd().deleteFile(io, path);
+        }
+        try std.testing.expectError(error.UnexpectedLanguageBlob, verifyBlob(io, a, path, .language, "French", &stats));
+        try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+        try std.testing.expect(stats.last_reader_envelope == null);
+    }
 }
 
 test "window verification streams manifest lines and retains empty-line rules" {

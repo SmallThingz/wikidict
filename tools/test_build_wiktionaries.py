@@ -750,6 +750,68 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(len(started),2)
         self.assertIn(4,[call.args[0] for call in budget.call_args_list])
 
+    def test_compressed_shard_recovery_preserves_only_verified_copy_on_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);raw=root/'aliases.wikblb';payload=b'WIKBLB08\x08ordinary alias'
+            raw.write_bytes(payload);target=Path(str(raw)+'.xz')
+            target.write_bytes(lzma.compress(payload));part=Path(str(target)+'.part');part.write_bytes(b'interrupted')
+            with patch.object(b,'compress') as encode:
+                b.compress_verified_shard(root)
+            encode.assert_not_called();self.assertFalse(raw.exists());self.assertFalse(part.exists())
+            self.assertEqual(lzma.decompress(target.read_bytes()),payload)
+            # XZ-only recovery is kept, never recompressed or removed.
+            b.compress_verified_shard(root);self.assertTrue(target.exists())
+            raw.write_bytes(payload);target.write_bytes(lzma.compress(payload+b'changed'))
+            with self.assertRaises(ValueError):b.compress_verified_shard(root)
+            self.assertEqual(raw.read_bytes(),payload);self.assertTrue(target.exists())
+            target.unlink()
+            with patch.object(b,'compress',side_effect=RuntimeError('codec interrupted')):
+                with self.assertRaisesRegex(RuntimeError,'codec interrupted'):b.compress_verified_shard(root)
+            self.assertEqual(raw.read_bytes(),payload)
+            raw.unlink();part.write_bytes(b'only possible recovery')
+            with self.assertRaisesRegex(ValueError,'Unresolved shard compression partial'):
+                b.cleanup_shard_compression_parts(root)
+            self.assertTrue(part.exists())
+
+    def test_compressed_shard_target_is_durable_before_raw_retirement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);raw=root/'aliases.wikblb';payload=b'WIKBLB08\x08alias'
+            raw.write_bytes(payload);target=Path(str(raw)+'.xz');target.write_bytes(lzma.compress(payload))
+            events=[];real_unlink=b.unlink_artifact
+            def sync(path):events.append(('sync',path));self.assertTrue(target.exists())
+            def unlink(path):events.append(('unlink',path));self.assertEqual(events[-2],('sync',root));real_unlink(path)
+            with patch.object(b,'sync_shard_directory',side_effect=sync),patch.object(b,'unlink_artifact',side_effect=unlink):
+                b.compress_verified_shard(root)
+            self.assertEqual([x[0] for x in events],['sync','unlink','sync'])
+            self.assertEqual(lzma.decompress(target.read_bytes()),payload)
+
+    def test_compressed_mode_retires_each_raw_shard_before_next_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander';exp.mkdir(parents=True)
+            (workspace/'expander/.incomplete').write_text('expander ready')
+            (exp/'page-index.tsv').write_text('p0\np1\n')
+            (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+            cache=workspace/'input';cache.mkdir();(cache/'.complete.json').write_text(json.dumps({'source_pages':2}))
+            events=[]
+            def run(command):
+                if 'build-blobs' in command:
+                    self.assertNotIn('--shard-pages',command)
+                    dest=Path(command[command.index('--')+2]);start=int(command[command.index('--start-page')+1])
+                    if start: self.assertFalse((dest.parent/'00000000/aliases.wikblb').exists());self.assertTrue((dest.parent/'00000000/aliases.wikblb.xz').exists())
+                    dest.mkdir();write_coverage(dest,command);(dest/'aliases.wikblb').write_bytes(b'WIKBLB08\x08alias')
+                    events.append(('build',start))
+                elif 'verify-blobs' in command:events.append(('verify',Path(command[-1]).name))
+            def encode(path,block_size,workers):
+                self.assertEqual((block_size,workers),(1024*1024,1));self.assertEqual(events[-1][0],'verify')
+                Path(str(path)+'.xz').write_bytes(lzma.compress(path.read_bytes()));events.append(('compress',path.parent.name))
+            with patch.object(b,'SHARD_PAGES',1),patch.object(b,'run_checked',side_effect=run),patch.object(b,'compress',side_effect=encode),patch.object(b,'require_merge_disk_space',side_effect=ValueError('stop before merge')) as admit:
+                with self.assertRaisesRegex(ValueError,'stop before merge'):
+                    b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',1,[{'wiki':'test','date':'20260901'}],123,compress_shards=True)
+            self.assertTrue(admit.call_args.kwargs['allow_compressed'])
+            self.assertEqual([x[0]for x in events],['build','verify','compress','build','verify','compress'])
+            self.assertTrue((workspace/'shards/00000000/aliases.wikblb.xz').exists())
+            self.assertTrue((workspace/'shards/00000001/aliases.wikblb.xz').exists())
+
     def test_merge_disk_rejection_preserves_verified_shards_before_native_merge(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander'
@@ -2776,7 +2838,7 @@ class ExternalRawShardTests(unittest.TestCase):
     def test_cli_routes_optional_root_to_build_and_disk_watchdog(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);raw=root/'other';output=root/'output'
-            argv=['build_wiktionaries.py','--resource-mode=watchdog','--output',str(output),'--raw-shard-root',str(raw)]
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--output',str(output),'--raw-shard-root',str(raw),'--compress-shards']
             with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
                  patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
                 with self.assertRaises(SystemExit) as done:b.cli()
@@ -2788,9 +2850,11 @@ class ExternalRawShardTests(unittest.TestCase):
                  patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'build_groups',return_value=[]) as groups:
                 b.main()
             self.assertEqual(groups.call_args.kwargs['raw_shard_root'],raw)
+            self.assertTrue(groups.call_args.kwargs['compress_shards'])
             with patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'build',return_value='built') as build:
-                b.build_groups({('testwiktionary','20261001'):['item']},root,output,'zig',1,1,raw_shard_root=raw)
+                b.build_groups({('testwiktionary','20261001'):['item']},root,output,'zig',1,1,raw_shard_root=raw,compress_shards=True)
             self.assertEqual(build.call_args.kwargs['raw_shard_root'],raw)
+            self.assertTrue(build.call_args.kwargs['compress_shards'])
 
 
 

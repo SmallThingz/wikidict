@@ -1,4 +1,5 @@
 const std = @import("std");
+const Xz = @import("xz").Source;
 const format = @import("encoder").blob_format;
 
 // A map covers at most window_bytes plus the prefix needed for page alignment.
@@ -97,6 +98,126 @@ pub const Window = struct {
     }
 };
 
+// Blob-only transport: manifests and TSV users retain the raw Window above.
+// XZ maps compressed bytes, indexes blocks, and keeps bounded decoded windows.
+// No storage.File directory index or decompressed disk cache is constructed.
+const BlobWindow = struct {
+    raw: Window,
+    allocator: std.mem.Allocator,
+    owned_path: ?[]u8 = null,
+    compressed: ?Xz = null,
+    compressed_map: []align(std.heap.page_size_min) const u8 = &.{},
+    decoded: []u8 = &.{},
+    decoded_offset: usize = 0,
+    decoded_len: usize = 0,
+    size: usize,
+    window_bytes: usize = 256 * 1024,
+
+    fn init(io: std.Io, a: std.mem.Allocator, path: []const u8) !BlobWindow {
+        const raw = Window.init(io, path) catch |err| switch (err) {
+            error.FileNotFound => return initCompressed(io, a, path),
+            else => return err,
+        };
+        return .{ .raw = raw, .allocator = a, .size = raw.size };
+    }
+
+    fn initCompressed(io: std.Io, a: std.mem.Allocator, path: []const u8) !BlobWindow {
+        const alternate = try std.fmt.allocPrint(a, "{s}.xz", .{path});
+        errdefer a.free(alternate);
+        var raw = try Window.init(io, alternate);
+        errdefer raw.deinit();
+        if (raw.initial.kind != .file or raw.size < 6) return error.InvalidBlob;
+        var file = try raw.openUnchanged();
+        defer file.close(io);
+        const mapped = try std.posix.mmap(null, raw.size, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0);
+        errdefer std.posix.munmap(mapped);
+        if (!std.mem.startsWith(u8, mapped, "\xfd7zXZ\x00")) return error.InvalidBlob;
+        var source = try Xz.open(mapped);
+        errdefer source.deinit(a);
+        try raw.checkIdentity();
+        return .{ .raw = raw, .allocator = a, .owned_path = alternate, .compressed = source, .compressed_map = mapped, .size = std.math.cast(usize, source.size) orelse return error.FileTooBig };
+    }
+
+    fn clearWindow(self: *BlobWindow) void {
+        self.raw.deinit();
+        self.decoded_len = 0;
+    }
+
+    fn deinit(self: *BlobWindow) void {
+        self.raw.deinit();
+        if (self.compressed) |*source| source.deinit(self.allocator);
+        if (self.compressed_map.len != 0) std.posix.munmap(self.compressed_map);
+        self.allocator.free(self.decoded);
+        if (self.owned_path) |path| self.allocator.free(path);
+    }
+
+    fn checkIdentity(self: *const BlobWindow) !void {
+        try self.raw.checkIdentity();
+    }
+
+    fn slice(self: *BlobWindow, offset: usize) ![]const u8 {
+        if (self.compressed) |*source| {
+            if (offset >= self.size) return error.InvalidBlob;
+            if (offset >= self.decoded_offset and offset - self.decoded_offset < self.decoded_len)
+                return self.decoded[offset - self.decoded_offset .. self.decoded_len];
+            // Match raw Window: cached slices do not reopen the file per field.
+            try self.raw.checkIdentity();
+            const length = @min(@max(self.window_bytes, 1), self.size - offset);
+            if (self.decoded.len < length) {
+                const next = try self.allocator.alloc(u8, length);
+                self.allocator.free(self.decoded);
+                self.decoded = next;
+            }
+            self.decoded_len = 0;
+            try source.read(self.allocator, offset, self.decoded[0..length]);
+            try self.raw.checkIdentity();
+            self.decoded_offset = offset;
+            self.decoded_len = length;
+            return self.decoded[0..length];
+        }
+        self.raw.window_bytes = self.window_bytes;
+        return self.raw.slice(offset);
+    }
+    pub fn readInto(self: *BlobWindow, offset: usize, out: []u8) !void {
+        if (offset > self.size or out.len > self.size - offset) return error.InvalidBlob;
+        var done: usize = 0;
+        while (done < out.len) {
+            const bytes = try self.slice(offset + done);
+            const count = @min(bytes.len, out.len - done);
+            @memcpy(out[done .. done + count], bytes[0..count]);
+            done += count;
+        }
+    }
+
+    pub fn copyRange(self: *BlobWindow, offset: usize, length: usize, writer: *std.Io.Writer) !void {
+        if (offset > self.size or length > self.size - offset) return error.InvalidBlob;
+        var done: usize = 0;
+        while (done < length) {
+            const bytes = try self.slice(offset + done);
+            const count = @min(bytes.len, length - done);
+            try writer.writeAll(bytes[0..count]);
+            done += count;
+        }
+    }
+
+    // Appends one field, excluding its delimiter. NUL fields require their
+    // delimiter; manifest lines may end at EOF exactly as catalog.Iterator does.
+    pub fn readDelimited(self: *BlobWindow, a: std.mem.Allocator, cursor: *usize, delimiter: u8, out: *std.ArrayList(u8), allow_eof: bool) !void {
+        if (cursor.* > self.size) return error.InvalidBlob;
+        while (cursor.* < self.size) {
+            const bytes = try self.slice(cursor.*);
+            const end = std.mem.indexOfScalar(u8, bytes, delimiter) orelse bytes.len;
+            try out.appendSlice(a, bytes[0..end]);
+            cursor.* += end;
+            if (end < bytes.len) {
+                cursor.* += 1;
+                return;
+            }
+        }
+        if (!allow_eof) return error.InvalidBlob;
+    }
+};
+
 pub const Record = struct {
     title: []const u8,
     payload_offset: usize,
@@ -106,7 +227,7 @@ pub const Record = struct {
 // Owns metadata and two reusable title buffers. Returned title views are valid
 // only until the next next()/reset()/deinit(); payloads remain file ranges.
 pub const Reader = struct {
-    window: Window,
+    window: BlobWindow,
     allocator: std.mem.Allocator,
     kind: format.BlobKind = .citations,
     metadata: std.ArrayList(u8) = .empty,
@@ -121,7 +242,7 @@ pub const Reader = struct {
     }
 
     fn initWindowed(io: std.Io, a: std.mem.Allocator, path: []const u8, window_bytes: usize) !Reader {
-        var self: Reader = .{ .window = try Window.init(io, path), .allocator = a };
+        var self: Reader = .{ .window = try BlobWindow.init(io, a, path), .allocator = a };
         self.window.window_bytes = @max(window_bytes, 1);
         errdefer self.deinit();
         var header: [format.header_len]u8 = undefined;
@@ -212,7 +333,7 @@ fn expectValidReaderFixture(path: []const u8, window_bytes: usize) !void {
     var reader = try Reader.initWindowed(std.testing.io, std.testing.allocator, path, window_bytes);
     defer reader.deinit();
     reader.window.window_bytes = window_bytes;
-    reader.window.deinit();
+    reader.window.clearWindow();
     try reader.validate();
 }
 
@@ -238,7 +359,7 @@ test "window reader crosses metadata title varuint and payload boundaries and re
         var reader = try Reader.initWindowed(io, a, path, window_bytes);
         defer reader.deinit();
         reader.window.window_bytes = window_bytes;
-        reader.window.deinit();
+        reader.window.clearWindow();
         // Repeated validation must not consume the subsequent caller iteration.
         try reader.validate();
         try reader.validate();
@@ -376,8 +497,91 @@ test "window reader rejects same-inode truncation before a new mapping" {
     var reader = try Reader.init(io, a, path);
     defer reader.deinit();
     try reader.validate();
-    reader.window.deinit();
+    reader.window.clearWindow();
     // Drop the old mapping first so this test never accesses truncated pages.
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x07" });
+    try std.testing.expectError(error.InvalidBlob, reader.next());
+}
+
+// Uses the same external XZ transport as the existing storage integration test.
+pub fn writeTestXz(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
+    const result = try std.process.run(a, io, .{ .argv = &.{ "xz", "-0", "-c", "--threads=1", "--check=sha256", "--block-size=1MiB", path }, .stdout_limit = .limited(8 * 1024 * 1024), .stderr_limit = .limited(1024 * 1024) });
+    defer a.free(result.stdout);
+    defer a.free(result.stderr);
+    if (result.term != .exited or result.term.exited != 0) return error.CompressionFailed;
+    const alternate = try std.fmt.allocPrint(a, "{s}.xz", .{path});
+    defer a.free(alternate);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = alternate, .data = result.stdout });
+}
+
+test "XZ blob fallback crosses owned block boundaries and preserves raw precedence" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/crossing", .{tmp.sub_path});
+    defer a.free(path);
+    const payload = try a.alloc(u8, 1024 * 1024 + 257);
+    defer a.free(payload);
+    for (payload, 0..) |*byte, i| byte.* = @truncate(i *% 17);
+    const bytes = try format.buildAlloc(a, .language, "en\x00English\x00", &.{
+        .{ .title = "a", .payload = payload }, .{ .title = "b", .payload = "tail" },
+    });
+    defer a.free(bytes);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    try writeTestXz(io, a, path);
+    // An invalid present raw file must not silently fall back to valid XZ.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "bad" });
+    try std.testing.expectError(error.InvalidBlob, Reader.init(io, a, path));
+    try std.Io.Dir.cwd().deleteFile(io, path);
+    var reader = try Reader.initWindowed(io, a, path, 7);
+    defer reader.deinit();
+    try reader.validate();
+    try reader.validate();
+    try std.testing.expectEqual(bytes.len, reader.window.size);
+    try std.testing.expectEqualStrings("en\x00English\x00", reader.metadata.items);
+    // Framing used tiny windows; exercise bulk copy at the production bound.
+    reader.window.window_bytes = 256 * 1024;
+    reader.window.clearWindow();
+    const record = (try reader.next()).?;
+    try std.testing.expectEqualStrings("a", record.title);
+    var copied: std.Io.Writer.Allocating = .init(a);
+    defer copied.deinit();
+    try reader.copyPayload(record, &copied.writer);
+    try std.testing.expectEqualSlices(u8, payload, copied.written());
+    const allocated = try reader.readPayloadAlloc(a, record);
+    defer a.free(allocated);
+    try std.testing.expectEqualSlices(u8, payload, allocated);
+    try std.testing.expectEqualStrings("b", (try reader.next()).?.title);
+    try std.testing.expect((try reader.next()) == null);
+}
+
+test "XZ fallback rejects decoded framing corruption and replacement at EOF" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/source", .{tmp.sub_path});
+    defer a.free(path);
+    const alternate = try std.fmt.allocPrint(a, "{s}.xz", .{path});
+    defer a.free(alternate);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "WIKBLB08\x07a\x00\x05x" });
+    try writeTestXz(io, a, path);
+    try std.Io.Dir.cwd().deleteFile(io, path);
+    var invalid = try Reader.init(io, a, path);
+    defer invalid.deinit();
+    try std.testing.expectError(error.InvalidBlob, invalid.validate());
+    const bytes = try format.buildAlloc(a, .supplemental, "", &.{.{ .title = "a", .payload = "x" }});
+    defer a.free(bytes);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    try writeTestXz(io, a, path);
+    try std.Io.Dir.cwd().deleteFile(io, path);
+    var reader = try Reader.init(io, a, path);
+    defer reader.deinit();
+    _ = (try reader.next()).?;
+    const replacement = try std.fmt.allocPrint(a, "{s}.replacement", .{path});
+    defer a.free(replacement);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = replacement, .data = "not an XZ" });
+    try std.Io.Dir.cwd().rename(replacement, std.Io.Dir.cwd(), alternate, io);
     try std.testing.expectError(error.InvalidBlob, reader.next());
 }

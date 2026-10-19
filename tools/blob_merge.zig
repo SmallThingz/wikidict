@@ -342,6 +342,20 @@ test "streamed merge keeps cross-source payload association and global title lif
     defer a.free(bytes);
     try std.testing.expectEqualSlices(u8, "WIKBLB08\x07a\x00\x01Ab\x00\x01Bc\x00\x01Cd\x00\x01De\x00\x00f\x00\x01Fg\x00\x01G", bytes);
     _ = try format.inspect(bytes);
+    // The same merge contract applies to mixed and fully compressed shards.
+    try file_reader.writeTestXz(io, a, left);
+    try std.Io.Dir.cwd().deleteFile(io, left);
+    for (0..2) |mode| {
+        if (mode == 1) {
+            try file_reader.writeTestXz(io, a, right);
+            try std.Io.Dir.cwd().deleteFile(io, right);
+        }
+        try std.Io.Dir.cwd().deleteFile(io, out);
+        try std.testing.expectEqual(@as(usize, 7), try mergeOne(io, a, out, .supplemental, &.{ left, right }));
+        const compressed_result = try std.Io.Dir.cwd().readFileAlloc(io, out, a, .limited(4096));
+        defer a.free(compressed_result);
+        try std.testing.expectEqualSlices(u8, bytes, compressed_result);
+    }
 }
 
 test "streamed merge keeps source-order and cross-source-duplicate errors distinct" {
