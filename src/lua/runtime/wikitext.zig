@@ -7020,6 +7020,13 @@ const UsageRecoveryTest = struct {
         if (std.mem.eql(u8, title, "Template:اقتباس 2")) return "{| style=\"margin:auto; border-collapse:collapse; border-style:none; background-color:{{{bgcolor|transparent}}}; {{\n#if: {{{bgcolor|}}}\n  | border: 1px solid #AAAAAA;\n}}\" class=\"cquote\"\n| width=\"20\" valign=\"top\" style=\"color:#B2B7F2;font-size:{{#switch:{{{size|{{{2|{{{quotewidth|{{{width|20px}}}}}}}}}}}}\n|10px=20px\n|30px=60px\n|40px=80px\n|50px=100px\n|60px=120px\n|#default=35px}};font-family:'Times New Roman',serif;font-weight:bold;text-align:left;padding:10px 10px;\" | ”\n| class=\"citationTemplate\" valign=\"top\" style=\"padding:4px 10px;font-size:115%\" | {{خط/عربي|{{{1|اكتب النص هنا بدون علامات الاقتباس.}}}}}\n| width=\"20\" valign=\"bottom\" style=\"color:#B2B7F2;font-size:{{#switch:{{{size|{{{2|{{{quotewidth|{{{width|20px}}}}}}}}}}}}\n|10px=20px\n|30px=60px\n|40px=80px\n|50px=100px\n|60px=120px\n|#default=36px}};font-family:'Times New Roman',serif;font-weight:bold;text-align:right;padding:10px 10px;\" | “\n|-\n{{#if:{{{4|}}}{{{5|}}}|\n{{!}} colspan=\"3\" style=\"padding-right: 4%\" {{!}} {{#if:{{{4|<noinclude>Origin</noinclude>}}}|<p style=\"font-size:smaller;text-align: right\"><cite style=\"font-style:normal;\">—{{{4}}}{{#if:{{{5|<noinclude>Source</noinclude>}}}|, {{{5}}}}}</cite></p>}}\n}}\n|}<noinclude>\n[[تصنيف:قوالب]]\n</noinclude>";
         return null;
     }
+    fn exists(_: ?*anyopaque, title: []const u8) !bool {
+        // Existence must not fetch content or increment the Counter fixture.
+        inline for (.{ "Template:ux", "Template:usex", "Template:Other", "Template:Counter", "Template:خط/عربي", "Template:اقتباس 2" }) |known| {
+            if (std.mem.eql(u8, title, known)) return true;
+        }
+        return false;
+    }
     fn setup(runtime: *rt.Context, reads: *usize) !Expander {
         const functions = struct {
             const entries = [_]rt.FunctionFn{rt.stabilize(root)};
@@ -7028,7 +7035,7 @@ const UsageRecoveryTest = struct {
         runtime.configureModules(null, lookup, name);
         try rt.bindGlobalTable(runtime, null, 0);
         try stdlib.install(runtime);
-        return .{ .runtime = runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = reads, .get = get }, .install_scribunto = installTestInvoke };
+        return .{ .runtime = runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = reads, .get = get, .exists = exists }, .install_scribunto = installTestInvoke };
     }
 };
 
