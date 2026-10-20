@@ -1336,6 +1336,27 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
     if (kind == QStringLiteral("blank")) return {};
     if (kind == QStringLiteral("rule")) return QStringLiteral("<hr>");
     const QJsonValue table = block.value(QStringLiteral("table"));
+    const QJsonObject feature = block.value(QStringLiteral("feature")).toObject();
+    const QString color = feature.value(QStringLiteral("data")).toString();
+    bool canonicalColor = color.size() == 7 && color.startsWith(QChar('#'));
+    for (const QChar digit : color.mid(1))
+        canonicalColor = canonicalColor && ((digit >= QChar('0') && digit <= QChar('9'))
+            || (digit >= QChar('a') && digit <= QChar('f')));
+    const auto defaultField = [&](const QString &key, const QString &expected) {
+        const QJsonValue value = feature.value(key);
+        return value.isUndefined() || (value.isString() && value.toString() == expected);
+    };
+    if (kind == QStringLiteral("table") && table.isObject()
+        && feature.value(QStringLiteral("kind")).toString() == QStringLiteral("color_swatch") && canonicalColor
+        && defaultField(QStringLiteral("language"), QString())
+        && defaultField(QStringLiteral("tail_kind"), QStringLiteral("none"))
+        && defaultField(QStringLiteral("tail"), QString())) {
+        const int depth = block.value(QStringLiteral("depth")).toInt();
+        const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
+        // The empty sample is decorative; the adjacent readable text is its sole accessible label.
+        return QStringLiteral("<table cellspacing='0' cellpadding='5' style='margin:8px 0;margin-left:%1px'>"
+            "<tr><td width='40' bgcolor='%2'>&#160;</td><td>Color sample %2</td></tr></table>").arg(indent).arg(color);
+    }
     if (table.isObject()) return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt());
     const QJsonArray spans = block.value(QStringLiteral("spans")).toArray();
     const bool poem = hasPoemSpans(spans);

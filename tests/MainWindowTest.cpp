@@ -3300,6 +3300,77 @@ private slots:
         }
     }
 
+    void typedColorSwatchRendersWithAccessibleTextAndKeepsFallback() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const QJsonArray fallbackSpans{QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")},
+            {QStringLiteral("text"), QStringLiteral("Fallback link")}, {QStringLiteral("target"), QStringLiteral("yellow")}}};
+        const QJsonObject cell{{QStringLiteral("spans"), fallbackSpans}};
+        const QJsonObject row{{QStringLiteral("cells"), QJsonArray{cell}}};
+        const QJsonObject table{{QStringLiteral("rows"), QJsonArray{row}}};
+        const QJsonObject ordinary{{QStringLiteral("kind"), QStringLiteral("table")}, {QStringLiteral("depth"), 2},
+            {QStringLiteral("table"), table}};
+        const QString fallback = window.blockHtml(ordinary);
+        const auto featured = [&](const QString &kind, const QJsonValue &data) {
+            QJsonObject block = ordinary;
+            block.insert(QStringLiteral("feature"), QJsonObject{{QStringLiteral("kind"), kind}, {QStringLiteral("data"), data}});
+            return block;
+        };
+        for (const QJsonValue &invalid : {QJsonValue(QStringLiteral("#FFFF00")), QJsonValue(QStringLiteral("#ff0")),
+                QJsonValue(QStringLiteral("#ffff00;")), QJsonValue(QStringLiteral("#gggggg")), QJsonValue(123), QJsonValue()})
+            QCOMPARE(window.blockHtml(featured(QStringLiteral("color_swatch"), invalid)), fallback);
+        QCOMPARE(window.blockHtml(featured(QStringLiteral("unknown"), QStringLiteral("#ffff00"))), fallback);
+        for (const auto &extra : {qMakePair(QStringLiteral("language"), QStringLiteral("en")),
+                qMakePair(QStringLiteral("tail_kind"), QStringLiteral("text")),
+                qMakePair(QStringLiteral("tail"), QStringLiteral("retained semantic tail"))}) {
+            QJsonObject block = featured(QStringLiteral("color_swatch"), QStringLiteral("#ffff00"));
+            QJsonObject feature = block.value(QStringLiteral("feature")).toObject();
+            feature.insert(extra.first, extra.second);
+            block.insert(QStringLiteral("feature"), feature);
+            QCOMPARE(window.blockHtml(block), fallback);
+        }
+        for (const QString &color : {QStringLiteral("#ffff00"), QStringLiteral("#000000"), QStringLiteral("#ffffff")}) {
+            window.reading_->setHtml(window.blockHtml(featured(QStringLiteral("color_swatch"), color)));
+            const QString label = QStringLiteral("Color sample ") + color;
+            QCOMPARE(window.reading_->toPlainText().count(label), 1);
+            QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("Fallback link")));
+            QTextTable *sample = nullptr;
+            for (QTextFrame *frame : window.reading_->document()->rootFrame()->childFrames())
+                if (auto *candidate = qobject_cast<QTextTable *>(frame)) { sample = candidate; break; }
+            QVERIFY(sample);
+            QCOMPARE(sample->cellAt(0, 0).format().background().color(), QColor(color));
+            QCOMPARE(sample->format().leftMargin(), qreal(46));
+            for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it)
+                    QVERIFY(!it.fragment().charFormat().isAnchor());
+        }
+        window.resize(580, 480);
+        window.show();
+        window.reading_->setHtml(window.blockHtml(featured(QStringLiteral("color_swatch"), QStringLiteral("#ffff00"))));
+        window.reading_->setFocus();
+        QTRY_VERIFY(window.reading_->hasFocus());
+        QTRY_VERIFY(textIsVisible(window.reading_, QStringLiteral("Color sample #ffff00")));
+        const QImage rendered = window.reading_->viewport()->grab().toImage();
+        int yellowPixels = 0;
+        for (int y = 0; y < rendered.height(); ++y)
+            for (int x = 0; x < rendered.width(); ++x)
+                if (rendered.pixelColor(x, y) == QColor(QStringLiteral("#ffff00"))) ++yellowPixels;
+        QVERIFY(yellowPixels >= 100);
+        auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+        QVERIFY(accessible);
+        auto *accessibleText = accessible->textInterface();
+        QVERIFY(accessibleText);
+        QCOMPARE(accessibleText->text(0, accessibleText->characterCount()).count(QStringLiteral("Color sample #ffff00")), 1);
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-color-swatch.png")));
+        QTest::keyClick(window.reading_, Qt::Key_A, Qt::ControlModifier);
+        QVERIFY(window.reading_->textCursor().selectedText().contains(QStringLiteral("Color sample #ffff00")));
+        QTest::keyClick(window.reading_, Qt::Key_Tab);
+        QTRY_VERIFY(QApplication::focusWidget() != nullptr && QApplication::focusWidget() != window.reading_);
+    }
+
     void nestedTablesKeepTheirCompiledDepth() {
         MainWindow window{QString()};
         const auto block = [](int depth, const QString &caption) {
