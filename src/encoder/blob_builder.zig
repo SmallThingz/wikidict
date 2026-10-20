@@ -7610,7 +7610,7 @@ test "pure swatch page context is shared without lending lexical owner bodies" {
             var features: usize = 0;
             var own_actions: usize = 0;
             var prose = false;
-            const own = if (std.mem.eql(u8, owner, "English")) "EN_ACTION" else if (std.mem.eql(u8, owner, "French")) "FR_ACTION" else "UNKNOWN_ACTION";
+            const own = if (std.mem.eql(u8, owner, "English")) "EN ACTION" else if (std.mem.eql(u8, owner, "French")) "FR ACTION" else "UNKNOWN ACTION";
             for (decoded.entry.sections) |section| for (section.blocks) |block| {
                 if (block.feature) |feature| {
                     features += 1;

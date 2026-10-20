@@ -4384,11 +4384,40 @@ pub const Renderer = struct {
         return result;
     }
 
+    // Boolean HTML attributes are present even without '=' or a value.
+    // Keep valued-attribute semantics elsewhere unchanged; swatch recognition
+    // must refuse hidden containers rather than infer their visible color.
+    fn swatchHasAttribute(self: *Renderer, original: syntax.Tag, key: []const u8) Error!bool {
+        const tag = try self.normalizedTag(original);
+        var i: usize = 0;
+        while (i < tag.attrs.len) {
+            while (i < tag.attrs.len and (std.ascii.isWhitespace(tag.attrs[i]) or tag.attrs[i] == '/')) : (i += 1) {}
+            const start = i;
+            while (i < tag.attrs.len and !std.ascii.isWhitespace(tag.attrs[i]) and tag.attrs[i] != '=' and tag.attrs[i] != '/') : (i += 1) {}
+            if (i == start) {
+                i += 1;
+                continue;
+            }
+            if (std.ascii.eqlIgnoreCase(tag.attrs[start..i], key)) return true;
+            while (i < tag.attrs.len and std.ascii.isWhitespace(tag.attrs[i])) : (i += 1) {}
+            if (i == tag.attrs.len or tag.attrs[i] != '=') continue;
+            i += 1;
+            while (i < tag.attrs.len and std.ascii.isWhitespace(tag.attrs[i])) : (i += 1) {}
+            if (i == tag.attrs.len) break;
+            const quote = tag.attrs[i];
+            const quoted = quote == '\'' or quote == '"';
+            if (quoted) i += 1;
+            while (i < tag.attrs.len and (if (quoted) tag.attrs[i] != quote else !std.ascii.isWhitespace(tag.attrs[i]))) : (i += 1) {}
+            if (quoted and i < tag.attrs.len) i += 1;
+        }
+        return false;
+    }
+
     // Only the explicit literal-hex declarations needed to identify a swatch.
     // Complex CSS, shorthand backgrounds and duplicate relevant declarations
     // are not evidence. Attribute/entity handling stays in the ordinary parser.
     fn swatchCssHex(self: *Renderer, tag: syntax.Tag, property: []const u8) Error!?[]const u8 {
-        if ((try self.semanticAttribute(tag, "bgcolor")) != null or (try self.semanticAttribute(tag, "class")) != null or (try self.semanticAttribute(tag, "hidden")) != null) return null;
+        if ((try self.semanticAttribute(tag, "bgcolor")) != null or (try self.semanticAttribute(tag, "class")) != null or (try self.swatchHasAttribute(tag, "hidden"))) return null;
         const css = (try self.semanticAttribute(tag, "style")) orelse return null;
         if (std.mem.indexOfAny(u8, css, "'\"(){}[]\\!") != null or
             std.mem.indexOf(u8, css, "/*") != null or std.mem.indexOf(u8, css, "*/") != null) return null;
@@ -4425,7 +4454,7 @@ pub const Renderer = struct {
         var cursor: usize = 0;
         while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |open| {
             const tag = try self.semanticTagAt(input, open) orelse return false;
-            if (!tag.is("span") or (try self.semanticAttribute(tag, "class")) != null or (try self.semanticAttribute(tag, "hidden")) != null) return false;
+            if (!tag.is("span") or (try self.semanticAttribute(tag, "class")) != null or (try self.swatchHasAttribute(tag, "hidden"))) return false;
             if (try self.semanticAttribute(tag, "style")) |css| {
                 // Inline color/background declarations would override the
                 // explicit cell color; do not evaluate their cascade.
@@ -4470,7 +4499,7 @@ pub const Renderer = struct {
                 pos = open + 1;
                 continue;
             };
-            if (!row_tag.closing and ((try self.semanticAttribute(row_tag, "style")) != null or (try self.semanticAttribute(row_tag, "bgcolor")) != null or (try self.semanticAttribute(row_tag, "class")) != null or (try self.semanticAttribute(row_tag, "hidden")) != null)) return null;
+            if (!row_tag.closing and ((try self.semanticAttribute(row_tag, "style")) != null or (try self.semanticAttribute(row_tag, "bgcolor")) != null or (try self.semanticAttribute(row_tag, "class")) != null or (try self.swatchHasAttribute(row_tag, "hidden")))) return null;
             pos = row_tag.end;
         }
         return self.swatchFeature(table, background, try self.swatchCssHex(cell.tag, "color"));
@@ -21912,12 +21941,22 @@ test "ordinary unsupported or conflicting color tables retain their existing fal
         "<table style='background-color:#ffff00'><colgroup style='visibility:hidden'><col></colgroup><tr><td style='color:#ffff00'>#ffff00</td></tr></table>",
         "<table style='background-color:#ffff00'><col style='background-color:black'><tr><td style='color:#ffff00'>#ffff00</td></tr></table>",
         "<table hidden style='background-color:#ffff00'><td style='color:#ffff00'>#ffff00</td></table>",
+        "<table style='background-color:#ffff00'><td hidden style='color:#ffff00'>#ffff00</td></table>",
+        "<table style='background-color:#ffff00'><td style='color:#ffff00'><span hidden>#ffff00</span></td></table>",
+        "<table style='background-color:#ffff00'><tbody hidden><tr><td style='color:#ffff00'>#ffff00</td></tr></tbody></table>",
+        "<table style='background-color:#ffff00'><col hidden><tr><td style='color:#ffff00'>#ffff00</td></tr></table>",
+        "<table HIDDEN style='background-color:#ffff00'><td style='color:#ffff00'>#ffff00</td></table>",
+        "<table hidden='' style='background-color:#ffff00'><td style='color:#ffff00'>#ffff00</td></table>",
+        "<table hidden=false style='background-color:#ffff00'><td style='color:#ffff00'>#ffff00</td></table>",
     };
-    for (cases) |source| {
+    for (cases, 0..) |source, case_index| {
         var renderer: Renderer = .{ .a = a, .context = .{} };
         const blocks = try renderer.renderBody(source);
         try std.testing.expect(blocks.len != 0);
-        for (blocks) |block| try std.testing.expect(block.feature == null);
+        for (blocks) |block| {
+            if (block.feature != null) std.debug.print("SWATCH_REFUSAL case={d} source={s}\n", .{ case_index, source });
+            try std.testing.expect(block.feature == null);
+        }
     }
 }
 
@@ -21952,4 +21991,16 @@ test "poem swatch projection keeps one textual fallback and its geometry limitat
     const text = try plainText(a, spans);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "#ffff00"));
     try std.testing.expect(renderer.fallbacks.unsupported_element);
+}
+
+test "swatch boolean attribute presence distinguishes names from quoted values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var renderer: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    inline for (.{ "<table hidden>", "<td HIDDEN>", "<span hidden=''>", "<tr hidden=false>", "<tbody hidden style='x:y'>" }) |source| {
+        try std.testing.expect(try renderer.swatchHasAttribute(syntax.tagAt(source, 0).?, "hidden"));
+    }
+    inline for (.{ "<table title='hidden'>", "<td data-hidden=yes>", "<span title='x hidden y'>", "<tr title=hidden>", "<tbody title='hidden=hidden'>" }) |source| {
+        try std.testing.expect(!try renderer.swatchHasAttribute(syntax.tagAt(source, 0).?, "hidden"));
+    }
 }
