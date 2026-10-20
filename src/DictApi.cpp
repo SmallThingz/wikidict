@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <string_view>
 
 namespace {
 std::string errorText(dict_handle *handle, dict_status status, const char *operation) {
@@ -22,7 +23,7 @@ DictApi::DictApi(const QString &root) : root_(root) {
     if (dict_abi_version() != DICT_ABI_VERSION) throw DictApiError("incompatible Dict C ABI");
     const QByteArray bytes = root.toUtf8();
     dict_status status = dict_open(bytes.constData(), static_cast<size_t>(bytes.size()), &handle_);
-    if (status != DICT_OK) throw DictApiError(errorText(handle_, status, "open"));
+    if (status != DICT_OK) throw DictApiError(errorText(handle_, status, "open"), status);
 }
 
 DictApi::~DictApi() {
@@ -30,7 +31,7 @@ DictApi::~DictApi() {
 }
 void DictApi::check(dict_status status, const char *operation, bool allowNotFound) {
     if (status == DICT_OK || (allowNotFound && status == DICT_NOT_FOUND)) return;
-    throw DictApiError(errorText(handle_, status, operation));
+    throw DictApiError(errorText(handle_, status, operation), status);
 }
 
 QByteArray DictApi::take(dict_buffer &buffer) {
@@ -43,6 +44,21 @@ QByteArray DictApi::take(dict_buffer &buffer) {
     // are valid JSON objects; escaping this code point preserves exact keys.
     result.replace(QByteArray::fromHex("efbbbf"), QByteArrayLiteral("\\ufeff"));
     return result;
+}
+
+void DictApi::validateRecord(const QByteArray &header, const QByteArray &title, const QByteArray &payload) {
+    const auto status = static_cast<dict_status>(dict_validate_record(
+        handle_, reinterpret_cast<const uint8_t *>(header.constData()), static_cast<size_t>(header.size()),
+        title.constData(), static_cast<size_t>(title.size()),
+        reinterpret_cast<const uint8_t *>(payload.constData()), static_cast<size_t>(payload.size())));
+    if (status == DICT_OK) return;
+    size_t length = 0;
+    const char *detail = dict_last_error(handle_, &length);
+    // ABI2 shares an internal-error status across several causes. Only this
+    // exact validator diagnostic identifies malformed compiled presentation.
+    const bool invalidEntryData = status == DICT_INTERNAL_ERROR && detail != nullptr
+        && std::string_view(detail, length) == "validate record: InvalidPresentation";
+    throw DictApiError(errorText(handle_, status, "validate compiled entry"), status, invalidEntryData);
 }
 
 void DictApi::select(const QString &language, const QString &kind) {

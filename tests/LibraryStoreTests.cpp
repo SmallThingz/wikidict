@@ -29,12 +29,16 @@ void rejects(const std::function<void()> &action, const char *message) {
     try { action(); } catch (const std::exception &) { return; }
     throw std::runtime_error(message);
 }
-QByteArray blob(const QByteArray &heading, const QList<QByteArray> &titles, unsigned char kind = 1) {
+void appendLength(QByteArray &bytes, quint64 value);
+// Seven empty u32 lists: display, sections, preamble, two layout lists, references, media.
+QByteArray emptyPresentation() { return QByteArrayLiteral("DPR2") + QByteArray(28, '\0'); }
+QByteArray blob(const QByteArray &heading, const QList<QByteArray> &titles, unsigned char kind = 1,
+                const QByteArray &presentation = emptyPresentation()) {
     QByteArray bytes("WIKBLB08", 8);
     bytes.append(char(kind));
     if (kind == 1) { bytes.append("en", 2); bytes.append(char(0)); bytes.append(heading); bytes.append(char(0)); }
     for (const auto &title : titles) {
-        bytes.append(title); bytes.append(char(0)); bytes.append(char(4)); bytes.append("DPR2", 4);
+        bytes.append(title); bytes.append(char(0)); appendLength(bytes, quint64(presentation.size())); bytes.append(presentation);
     }
     return bytes;
 }
@@ -126,29 +130,43 @@ int main(int argc, char **argv) {
                 require(read(state.stagedFile) == newBytes, "unpublished new payload restored to staging");
             }
         }
-        // These exercise both Qt importer header gates, not native DPR3 decoding.
-        // Empty presentation arrays have no version-specific per-span fields.
+        // Both ordinary and embedded alias payloads now pass the full native decoder.
         for (const QByteArray &magic : {QByteArray("DPR2"), QByteArray("DPR3"), QByteArray("DPR4")}) {
             const QByteArray presentation = magic + QByteArray(28, '\0');
-            QByteArray ordinary = blob("English", {"annotation"});
-            ordinary.chop(5); // existing one-byte length plus DPR2 marker
-            appendLength(ordinary, quint64(presentation.size())); ordinary.append(presentation);
+            const QByteArray ordinary = blob("English", {"annotation"}, 1, presentation);
             const QString gateRoot = temporary.filePath(QStringLiteral("gate-") + QString::fromLatin1(magic));
             write(source, ordinary);
             if (magic == "DPR4")
                 rejects([&] { LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress); }, "reject unsupported ordinary presentation version");
             else {
                 auto accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
-                require(accepted->dictionary.words == 1, "accept ordinary DPR2 and DPR3 header gates");
+                require(accepted->dictionary.words == 1, "accept complete ordinary DPR2 and DPR3 documents");
             }
             write(source, aliasBlob(aliasRecord("Cats", "cat", presentation)));
             if (magic == "DPR4")
                 rejects([&] { LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress); }, "reject unsupported DAL1 presentation version");
             else {
                 auto accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
-                require(accepted->dictionary.kind == QStringLiteral("alias"), "accept DPR2 and DPR3 DAL1 embedded header gates");
+                require(accepted->dictionary.kind == QStringLiteral("alias"), "accept complete DPR2 and DPR3 DAL1 embedded documents");
             }
         }
+        // Preserve compact legacy spans and explained DPR3 fields, not just their magic.
+        for (const QByteArray &presentation : {
+                QByteArray::fromHex("4450523208000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+                QByteArray::fromHex("445052330100000000000001000000610000000000000000000000000000000000000000040000006e6f7465000000000000000000000000000000000000000000000000")}) {
+            write(source, blob("English", {"annotation"}, 1, presentation));
+            auto accepted = LibraryStorage::prepareImport(temporary.filePath(QStringLiteral("legacy-valid")), source, {}, -1, cancelled, progress);
+            require(accepted->dictionary.words == 1, "full decoder accepts legacy and explained spans");
+        }
+        // Empty nonlanguage documents and empty alias presentation remain legitimate.
+        for (unsigned char kind = 2; kind <= 7; ++kind) {
+            write(source, blob({}, {"entry"}, kind));
+            auto accepted = LibraryStorage::prepareImport(temporary.filePath(QStringLiteral("empty-document")), source, {}, -1, cancelled, progress);
+            require(accepted->dictionary.words == 1, "empty feature document is valid");
+        }
+        write(source, aliasBlob(aliasRecord("Cats", "not-installed", emptyPresentation())));
+        auto emptyAlias = LibraryStorage::prepareImport(temporary.filePath(QStringLiteral("empty-alias")), source, {}, -1, cancelled, progress);
+        require(emptyAlias->dictionary.words == 1, "empty alias document needs no target resolution");
         const QByteArray original = blob("English", {"apple", "banana"});
         write(source, original);
         auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled, progress);
@@ -163,6 +181,23 @@ int main(int argc, char **argv) {
         require(installed.size() == 1 && installed[0].words == 2, "installed metadata");
         require(installed[0].sha256 == QCryptographicHash::hash(original, QCryptographicHash::Sha256).toHex(), "installed hash");
         require(events > 0, "progress");
+        const QByteArray manifestBefore = read(QDir(root).filePath(QStringLiteral("languages.tsv")));
+        // Well-framed later records with incomplete/trailing semantic bodies must fail
+        // during prepare, before commitImport is ever called on the candidate.
+        for (const QByteArray &invalid : {QByteArray("DPR2"), emptyPresentation().chopped(1), emptyPresentation() + 'x'}) {
+            QByteArray later = blob("English", {"apple"});
+            later.append("banana", 6); later.append('\0'); appendLength(later, quint64(invalid.size())); later.append(invalid);
+            for (const QByteArray &candidate : {later, aliasBlob(aliasRecord("Cats", "cat", invalid))}) {
+                write(source, candidate);
+                const auto stagingBefore = QDir(root).entryList({QStringLiteral(".import-*")}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot);
+                rejects([&] { LibraryStorage::prepareImport(root, source, {}, -1, cancelled, progress); }, "reject complete framing with invalid semantic body before publication");
+                require(read(installedPath) == original, "semantic refusal preserves exact installed payload");
+                require(read(QDir(root).filePath(QStringLiteral("languages.tsv"))) == manifestBefore, "semantic refusal preserves manifest");
+                require(LibraryStorage::installed(root).size() == 1, "semantic refusal preserves registration");
+                require(QDir(root).entryList({QStringLiteral(".import-*")}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot) == stagingBefore, "semantic refusal removes only owned staging");
+            }
+        }
+
         write(source, blob("English", {"banana", "apple"}));
         rejects([&] { LibraryStorage::prepareImport(root, source, {}, -1, cancelled, progress); }, "reject unsorted titles");
         require(read(installedPath) == original, "bad import preserves installed dictionary");

@@ -1677,24 +1677,94 @@ private slots:
         QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Annexe:école")));
     }
 
-    void malformedAliasPresentationFailsSafelyOnRead() {
-        QTemporaryDir directory(QStringLiteral(".tmp/ui-invalid-alias-XXXXXX"));
+    void invalidCompiledImportPreservesReaderAndHistory() {
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-invalid-compiled-XXXXXX"));
         QVERIFY(directory.isValid());
+        const QString root = QDir(directory.filePath(QStringLiteral("library"))).absolutePath();
+        std::atomic_bool cancelled = false;
+        auto prepared = LibraryStorage::prepareImport(root,
+            fixture_ + QStringLiteral("/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"),
+            {}, -1, cancelled, [](const QString &, qint64, qint64) {});
+        LibraryStorage::commitImport(root, *prepared);
+        QFile original(prepared->dictionary.path); QVERIFY(original.open(QIODevice::ReadOnly));
+        const QByteArray originalBytes = original.readAll(); original.close();
+        QFile manifest(root + QStringLiteral("/languages.tsv")); QVERIFY(manifest.open(QIODevice::ReadOnly));
+        const QByteArray manifestBytes = manifest.readAll(); manifest.close();
         QFile fixture(fixture_ + QStringLiteral("/alias-cases/aliases.wikblb"));
         QVERIFY(fixture.open(QIODevice::ReadOnly));
-        QByteArray bytes = fixture.readAll();
-        const qsizetype presentation = bytes.indexOf("DPR2");
-        QVERIFY(presentation >= 0 && presentation + 8 <= bytes.size());
-        for (qsizetype i = 4; i < 8; ++i) bytes[presentation + i] = char(255);
-        const QString source = directory.filePath(QStringLiteral("bad.wikblb"));
-        QFile malformed(source); QVERIFY(malformed.open(QIODevice::WriteOnly));
-        QCOMPARE(malformed.write(bytes), bytes.size()); malformed.close();
-        const QString root = directory.filePath(QStringLiteral("library"));
-        std::atomic_bool cancelled = false;
-        auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled, [](const QString &, qint64, qint64) {});
-        LibraryStorage::commitImport(root, *prepared);
-        DictApi api(root); api.select(QString(), QStringLiteral("language"));
-        QVERIFY_EXCEPTION_THROWN(api.lookup(QStringLiteral("Cats")), DictApiError);
+        QByteArray aliasBytes = fixture.readAll();
+        const qsizetype presentation = aliasBytes.indexOf("DPR2");
+        QVERIFY(presentation >= 0 && presentation + 8 <= aliasBytes.size());
+        for (qsizetype i = 4; i < 8; ++i) aliasBytes[presentation + i] = char(255);
+        // A valid first record, then a framed but incomplete second presentation.
+        QByteArray ordinary = QByteArrayLiteral("WIKBLB08") + char(1) + QByteArray("en\0English\0apple\0", 17);
+        ordinary.append(char(32)); ordinary.append("DPR2", 4); ordinary.append(QByteArray(28, '\0'));
+        ordinary.append("banana", 6); ordinary.append('\0'); ordinary.append(char(4)); ordinary.append("DPR2", 4);
+        const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        auto restoreSources = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), sources); });
+        MainWindow window(root, QStringLiteral("cat")); window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QVERIFY(window.openWord(QStringLiteral("dog")));
+        QTRY_COMPARE(title(window), QStringLiteral("dog"));
+        window.saveVisit();
+        const QByteArray json = window.currentJson_;
+        const QString reading = window.reading_->toPlainText();
+        const auto visits = window.visits_;
+        const int visitIndex = window.visitIndex_;
+        for (const bool alias : {false, true}) {
+            const QString source = directory.filePath(alias ? QStringLiteral("bad-alias.wikblb") : QStringLiteral("bad-later-record.wikblb"));
+            QFile candidate(source); QVERIFY(candidate.open(QIODevice::WriteOnly));
+            const QByteArray bytes = alias ? aliasBytes : ordinary;
+            QCOMPARE(candidate.write(bytes), bytes.size()); candidate.close();
+            bool completed = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = static_cast<LibraryDialog *>(QApplication::activeModalWidget());
+                QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
+                auto close = qScopeGuard([dialog] { dialog->done(QDialog::Rejected); });
+                auto *status = dialog->findChild<QLabel *>(QStringLiteral("libraryStatus"));
+                auto *progress = dialog->findChild<QProgressBar *>(QStringLiteral("libraryProgress"));
+                auto *importButton = dialog->findChild<QPushButton *>(QStringLiteral("importDictionary"));
+                QVERIFY(status && progress && importButton);
+                dialog->startImport(source); // Real import worker and native semantic decoder, no injected refusal.
+                const QString invalidMessage = QStringLiteral("Could not import this dictionary. The file contains invalid entry data.");
+                QTRY_VERIFY2_WITH_TIMEOUT(status->text() == invalidMessage && !progress->isVisible(), qPrintable(status->text()), 30000);
+                QVERIFY(status->property("validationDiagnostic").toString().contains(QStringLiteral("InvalidPresentation")));
+                QVERIFY(!status->text().contains(QStringLiteral("InvalidPresentation")));
+                auto *guidance = dialog->findChild<QLabel *>(QStringLiteral("availableDictionariesSummary"));
+                auto *addSource = dialog->findChild<QPushButton *>(QStringLiteral("addCatalogueSource"));
+                auto *refresh = dialog->findChild<QPushButton *>(QStringLiteral("refreshCatalogues"));
+                QVERIFY(guidance && addSource && refresh);
+                QCOMPARE(guidance->text(), QStringLiteral("Add a source to browse available dictionaries."));
+                QVERIFY(addSource->isEnabled() && !refresh->isEnabled());
+                QVERIFY(importButton->isEnabled());
+                QVERIFY(!dialog->libraryChanged() && !dialog->originalRootChanged());
+                QVERIFY(dialog->grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-semantic-import-%1-plain-error.png").arg(alias ? QStringLiteral("alias") : QStringLiteral("later-record"))));
+                completed = true;
+            });
+            window.chooseRoot();
+            QVERIFY(completed);
+            QVERIFY(!window.loading_ && window.api_ && window.search_->isEnabled());
+            QCOMPARE(window.api_->root(), root);
+            QCOMPARE(window.currentJson_, json);
+            QCOMPARE(window.reading_->toPlainText(), reading);
+            QCOMPARE(window.visitIndex_, visitIndex);
+            QCOMPARE(window.visits_.size(), visits.size());
+            for (qsizetype i = 0; i < visits.size(); ++i) {
+                QCOMPARE(window.visits_[i].title, visits[i].title);
+                QCOMPARE(window.visits_[i].language, visits[i].language);
+                QCOMPARE(window.visits_[i].kind, visits[i].kind);
+                QCOMPARE(window.visits_[i].scroll, visits[i].scroll);
+                QCOMPARE(window.visits_[i].collapsed, visits[i].collapsed);
+            }
+            QVERIFY(original.open(QIODevice::ReadOnly)); QCOMPARE(original.readAll(), originalBytes); original.close();
+            QVERIFY(manifest.open(QIODevice::ReadOnly)); QCOMPARE(manifest.readAll(), manifestBytes); manifest.close();
+            QCOMPARE(LibraryStorage::installed(root).size(), qsizetype(1));
+            QVERIFY(!QFileInfo::exists(root + QStringLiteral("/aliases.wikblb")));
+        }
+        window.navigate(-1);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
     }
 
     void initialBomSurvivesLanguageAndTitleJsonBoundaries() {

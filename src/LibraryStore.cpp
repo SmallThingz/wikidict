@@ -1,4 +1,5 @@
 #include "LibraryStore.hpp"
+#include "DictApi.hpp"
 #include "LibraryStoreRecovery_p.hpp"
 
 #include <QBuffer>
@@ -217,6 +218,12 @@ Dictionary validate(const QString &path, const std::atomic_bool &cancel, const P
         result.heading.replace(QLatin1Char('_'), QLatin1Char(' '));
         result.heading[0] = result.heading[0].toUpper();
     }
+    // This handle and its error buffer live entirely in the import worker.
+    const qint64 headerEnd = file.pos();
+    if (!file.seek(0)) fail(file.errorString());
+    const QByteArray header = file.read(headerEnd);
+    if (header.size() != headerEnd) fail(file.errorString());
+    DictApi validator(QFileInfo(path).absolutePath());
     QByteArray previous;
     result.words = 0;
     qint64 lastProgress = 0;
@@ -229,14 +236,11 @@ Dictionary validate(const QString &path, const std::atomic_bool &cancel, const P
         const quint64 length = varuint(file);
         if (length < 4 || length > 64 * 1024 * 1024 || length > quint64(file.size() - file.pos()))
             fail(QStringLiteral("The dictionary contains an invalid or truncated record."));
-        const qint64 end = file.pos() + qint64(length);
-        if (result.kind == QStringLiteral("alias")) validateAlias(file.read(qint64(length)), title);
-        else {
-            const QByteArray presentationMagic = file.read(4);
-            if (presentationMagic != QByteArrayLiteral("DPR2") && presentationMagic != QByteArrayLiteral("DPR3"))
-                fail(QStringLiteral("The dictionary contains entries that are not compiled presentation data."));
-        }
-        if (!file.seek(end)) fail(file.errorString());
+        const QByteArray payload = file.read(qint64(length));
+        if (quint64(payload.size()) != length) fail(QStringLiteral("The dictionary contains an invalid or truncated record."));
+        if (result.kind == QStringLiteral("alias")) validateAlias(payload, title);
+        validator.validateRecord(header, title, payload);
+        checkCancel(cancel);
         ++result.words;
         if (file.pos() - lastProgress > 1024 * 1024) {
             lastProgress = file.pos();

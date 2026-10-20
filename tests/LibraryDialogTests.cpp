@@ -148,13 +148,13 @@ int main(int argc, char **argv) {
         });
         const QString source = argc > 1 ? QFileInfo(QString::fromLocal8Bit(argv[1])).absoluteFilePath() : temp.filePath(QStringLiteral("English.wikblb"));
         if (argc == 1) {
-            // The UI test exercises library framing; pass a real dictionary for a corpus smoke.
+            // Complete empty compiled document; normal import now validates the full body.
             QByteArray bytes("WIKBLB08", 8);
             bytes.append(char(1));
             bytes.append("en", 2); bytes.append(char(0));
             bytes.append("English", 7); bytes.append(char(0));
             bytes.append("apple", 5); bytes.append(char(0));
-            bytes.append(char(4)); bytes.append("DPR2", 4);
+            bytes.append(char(32)); bytes.append("DPR2", 4); bytes.append(QByteArray(28, '\0'));
             QFile file(source);
             require(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size(), "write framed UI fixture");
         }
@@ -171,6 +171,8 @@ int main(int argc, char **argv) {
         auto *import = control<QPushButton>(dialog, "importDictionary");
         auto *remove = control<QPushButton>(dialog, "removeDictionary");
         require(installed->topLevelItemCount() == 0 && import->isEnabled() && !remove->isEnabled(), "actionable empty library");
+        require(control<QLabel>(dialog, "availableDictionariesSummary")->text() == QStringLiteral("Add a source to browse available dictionaries."), "empty source list offers an available action");
+        require(control<QPushButton>(dialog, "addCatalogueSource")->isEnabled() && !control<QPushButton>(dialog, "refreshCatalogues")->isEnabled(), "source-free guidance matches enabled controls");
         diagnosticStage = "import English";
         answerFile(source);
         QTest::mouseClick(import, Qt::LeftButton);
@@ -190,7 +192,7 @@ int main(int argc, char **argv) {
         secondBytes.append("fr", 2); secondBytes.append(char(0));
         secondBytes.append("French", 6); secondBytes.append(char(0));
         secondBytes.append("chat", 4); secondBytes.append(char(0));
-        secondBytes.append(char(4)); secondBytes.append("DPR2", 4);
+        secondBytes.append(char(32)); secondBytes.append("DPR2", 4); secondBytes.append(QByteArray(28, '\0'));
         QFile secondFile(secondSource);
         require(secondFile.open(QIODevice::WriteOnly) && secondFile.write(secondBytes) == secondBytes.size(), "write second distinct dictionary fixture");
         secondFile.close();
@@ -268,6 +270,7 @@ int main(int argc, char **argv) {
         diagnosticStage = "construct connection refusal dialog";
         diagnosticNetwork = unavailableNetwork;
         LibraryDialog unavailable(nullptr, temp.filePath(QStringLiteral("unavailable")), std::move(unavailableManager));
+        require(control<QLabel>(unavailable, "availableDictionariesSummary")->text() == QStringLiteral("Refresh the catalogue to browse available dictionaries."), "configured source retains refresh guidance before its request starts");
         unavailable.show();
         auto *failure = control<QLabel>(unavailable, "libraryStatus");
         diagnosticStatus = failure;

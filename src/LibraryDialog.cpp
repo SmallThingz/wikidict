@@ -1,4 +1,5 @@
 #include "LibraryDialog.hpp"
+#include "DictApi.hpp"
 
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -119,6 +120,7 @@ LibraryDialog::LibraryDialog(QWidget *parent, const QString &root,
     available_->setAccessibleName(QStringLiteral("Available dictionaries"));
     layout->addWidget(available_, 1);
     availableSummary_ = new QLabel(QStringLiteral("Refresh the catalogue to browse available dictionaries."), this);
+    availableSummary_->setObjectName(QStringLiteral("availableDictionariesSummary"));
     availableSummary_->setWordWrap(true);
     layout->addWidget(availableSummary_);
 
@@ -133,8 +135,10 @@ LibraryDialog::LibraryDialog(QWidget *parent, const QString &root,
         QStringList{LibraryStorage::defaultSource()}).toStringList();
     for (const auto &source : saved) if (LibraryStorage::isHttpsUrl(QUrl(source))) sources_->addItem(source);
     addSourceButton_ = new QPushButton(QStringLiteral("Add source..."), this);
+    addSourceButton_->setObjectName(QStringLiteral("addCatalogueSource"));
     removeSourceButton_ = new QPushButton(QStringLiteral("Remove source"), this);
     refreshButton_ = new QPushButton(QStringLiteral("Refresh"), this);
+    refreshButton_->setObjectName(QStringLiteral("refreshCatalogues"));
     sourcesRow->addWidget(sources_, 1);
     sourcesRow->addWidget(addSourceButton_);
     sourcesRow->addWidget(removeSourceButton_);
@@ -210,6 +214,8 @@ void LibraryDialog::setBusy(bool busy, const QString &label) {
     cancelButton_->setVisible(busy);
     cancelButton_->setEnabled(busy);
     if (busy) {
+        nativeValidationFailure_ = false;
+        status_->setProperty("validationDiagnostic", QString());
         cancelled_.store(false);
         status_->setText(label);
         progress_->setRange(0, 0);
@@ -218,7 +224,10 @@ void LibraryDialog::setBusy(bool busy, const QString &label) {
 void LibraryDialog::finishOperation(const QString &message, bool error) {
     setBusy(false);
     download_.reset();
-    status_->setText(error ? QStringLiteral("Could not finish: %1").arg(message) : message);
+    const bool nativeValidation = nativeValidationFailure_;
+    nativeValidationFailure_ = false;
+    if (!nativeValidation) status_->setProperty("validationDiagnostic", QString());
+    status_->setText(error && !nativeValidation ? QStringLiteral("Could not finish: %1").arg(message) : message);
     if (closeWhenDone_) QDialog::reject();
 }
 LibraryStorage::Progress LibraryDialog::progressCallback() {
@@ -238,19 +247,27 @@ LibraryStorage::Progress LibraryDialog::progressCallback() {
 }
 void LibraryDialog::runWorker(std::function<void()> task, std::function<void(const QString &)> finished) {
     auto error = std::make_shared<QString>();
+    auto validationDiagnostic = std::make_shared<QString>();
     auto unrestored = std::make_shared<bool>(false);
     const QString root = root_;
-    auto *worker = QThread::create([task = std::move(task), error, unrestored] {
+    auto *worker = QThread::create([task = std::move(task), error, validationDiagnostic, unrestored] {
         try { task(); }
         catch (const LibraryStorage::UnrestoredMutation &e) {
             *unrestored = true;
             *error = exceptionText(e);
         }
+        catch (const DictApiError &e) {
+            *validationDiagnostic = exceptionText(e);
+            qWarning("Dictionary validation failed (status %d): %s", int(e.status()), e.what());
+            *error = e.isInvalidEntryData()
+                ? QStringLiteral("Could not import this dictionary. The file contains invalid entry data.")
+                : QStringLiteral("Could not validate this dictionary.");
+        }
         catch (const std::exception &e) { *error = exceptionText(e); }
         catch (...) { *error = QStringLiteral("An unexpected dictionary error occurred."); }
     });
     worker_ = worker;
-    connect(worker, &QThread::finished, this, [this, worker, finished = std::move(finished), error, unrestored, root] {
+    connect(worker, &QThread::finished, this, [this, worker, finished = std::move(finished), error, validationDiagnostic, unrestored, root] {
         worker_ = nullptr;
         worker->deleteLater();
         // Publish the changed-root fact even when the normal completion reports an error.
@@ -259,6 +276,8 @@ void LibraryDialog::runWorker(std::function<void()> task, std::function<void(con
             changed_ = true;
             refreshInstalled();
         }
+        nativeValidationFailure_ = !validationDiagnostic->isEmpty();
+        status_->setProperty("validationDiagnostic", *validationDiagnostic);
         finished(*error);
     });
     worker->start();
@@ -316,6 +335,9 @@ void LibraryDialog::refreshCatalogView() {
         if (entry.url.toString() == selectedUrl) available_->setCurrentItem(item);
     }
     if (!catalog_.isEmpty()) availableSummary_->setText(QStringLiteral("%1 of %2 dictionaries shown").arg(available_->topLevelItemCount()).arg(catalog_.size()));
+    else availableSummary_->setText(sources_->count() == 0
+        ? QStringLiteral("Add a source to browse available dictionaries.")
+        : QStringLiteral("Refresh the catalogue to browse available dictionaries."));
 }
 void LibraryDialog::noteRootChange(const QString &root) {
     const QString canonical = QFileInfo(root).canonicalFilePath();
@@ -409,7 +431,7 @@ void LibraryDialog::refreshCatalogs() {
     catalog_.clear();
     catalogErrors_.clear();
     refreshCatalogView();
-    if (pendingSources_.isEmpty()) { availableSummary_->setText(QStringLiteral("Add an HTTPS catalogue source to find downloads.")); return; }
+    if (pendingSources_.isEmpty()) { availableSummary_->setText(QStringLiteral("Add a source to browse available dictionaries.")); return; }
     setBusy(true, QStringLiteral("Reading catalogues"));
     fetchNextCatalog();
 }

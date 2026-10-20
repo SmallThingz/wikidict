@@ -55,6 +55,7 @@ private:
     bool originalRootChanged_ = false;
     bool changed_ = false;
     bool busy_ = false;
+    bool nativeValidationFailure_ = false;
     bool closeWhenDone_ = false;
     std::atomic_bool cancelled_ = false;
     QThread *worker_ = nullptr;
