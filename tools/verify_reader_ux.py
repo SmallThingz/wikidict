@@ -50,7 +50,7 @@ def normalized(text: str) -> str:
 
 class ReaderPty:
     def __init__(self, binary: Path, root: Path, width: int, rows: int,
-                 output: Path, timeout: float, budget_end: float, pyte_module):
+                 output: Path, timeout: float, budget_end: float, pyte_module, *, force_color: bool = False):
         self.output = output
         self.output.mkdir()
         self.timeout = timeout
@@ -85,9 +85,12 @@ class ReaderPty:
             os.setsid()
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
-        # No command arguments: DICT_ROOT must be sufficient to start the reader.
+        # Historical startup remains argument-free; swatch validation selects color explicitly.
+        argv = [str(binary), "tui", "--color", "always"] if force_color else [str(binary)]
+        self.launch = {"argv": argv, "color_mode": "always" if force_color else "auto",
+                       "NO_COLOR_present": "NO_COLOR" in self.env, "TERM": self.env.get("TERM")}
         self.process = subprocess.Popen(
-            [str(binary)], stdin=self.slave, stdout=self.slave, stderr=self.slave,
+            argv, stdin=self.slave, stdout=self.slave, stderr=self.slave,
             cwd=root, env=self.env, preexec_fn=child_terminal, close_fds=True)
         os.set_blocking(self.master, False)
 
@@ -503,7 +506,9 @@ def main() -> int:
                 require(time.monotonic() < budget_end, "110-second test budget exhausted")
                 copy_fixture(source, root)
                 reader = ReaderPty(binary, root, width, 32, report_dir / f"width-{width}",
-                                   args.timeout, budget_end, pyte)
+                                   args.timeout, budget_end, pyte, force_color=args.swatch_only)
+                if args.swatch_only:
+                    case["launch"] = reader.launch
                 (exercise_swatch if args.swatch_only else exercise)(reader, width)
             except Exception as error:
                 case.update(status="failed", error=f"{type(error).__name__}: {error}")
