@@ -5,6 +5,9 @@
 #include <QApplication>
 #include <QItemSelectionModel>
 #include <QDialog>
+#include <QDialogButtonBox>
+#include <QScopeGuard>
+#include <algorithm>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -71,6 +74,114 @@ private:
     int &destructions_;
     bool connectionFailure_;
 };
+// Queued partial payload stays pending until the real UI cancellation calls abort.
+class CancelDownloadReply final : public QNetworkReply {
+public:
+    CancelDownloadReply(QNetworkAccessManager::Operation operation, const QNetworkRequest &request,
+                        QObject *parent, int &aborts, int &downloadFinishes, int &downloadBytesRead)
+        : QNetworkReply(parent), aborts_(aborts), downloadFinishes_(downloadFinishes), downloadBytesRead_(downloadBytesRead),
+          download_(request.url().path().endsWith(QStringLiteral(".wikblb"))),
+          bytes_(download_ ? QByteArray(32, 'x') : QByteArrayLiteral(
+              "https://download.example/French.wikblb\tFrench\t1024\n")) {
+        setOperation(operation); setRequest(request); setUrl(request.url());
+        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
+        QTimer::singleShot(0, this, [this] {
+            available_ = true;
+            emit readyRead();
+            if (!download_) { setFinished(true); emit finished(); }
+        });
+    }
+    qint64 bytesAvailable() const override {
+        return (available_ ? bytes_.size() - offset_ : 0) + QNetworkReply::bytesAvailable();
+    }
+    void abort() override {
+        if (isFinished() || abortQueued_) return;
+        abortQueued_ = true; ++aborts_;
+        QTimer::singleShot(0, this, [this] {
+            setError(QNetworkReply::OperationCanceledError, QStringLiteral("Synthetic cancelled transfer"));
+            setFinished(true); ++downloadFinishes_; emit finished();
+        });
+    }
+protected:
+    qint64 readData(char *data, qint64 maximum) override {
+        if (!available_ || offset_ == bytes_.size()) return -1;
+        const qint64 count = qMin(maximum, qint64(bytes_.size() - offset_));
+        std::copy_n(bytes_.constData() + offset_, count, data); offset_ += count;
+        if (download_) downloadBytesRead_ += int(count);
+        return count;
+    }
+private:
+    int &aborts_, &downloadFinishes_, &downloadBytesRead_;
+    bool download_, available_ = false, abortQueued_ = false;
+    QByteArray bytes_;
+    qint64 offset_ = 0;
+};
+class CancelDownloadNetwork final : public QNetworkAccessManager {
+public:
+    int aborts = 0, downloadFinishes = 0, downloadBytesRead = 0;
+protected:
+    QNetworkReply *createRequest(Operation operation, const QNetworkRequest &request, QIODevice *) override {
+        return new CancelDownloadReply(operation, request, this, aborts, downloadFinishes, downloadBytesRead);
+    }
+};
+void checkDownloadCancellationFocus(const QString &source, const QString &root) {
+    std::atomic_bool cancelled = false;
+    auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled,
+        [](const QString &, qint64, qint64) {});
+    LibraryStorage::commitImport(root, *prepared);
+    auto read = [](const QString &path) {
+        QFile file(path); require(file.open(QIODevice::ReadOnly), "read isolated installed state");
+        return file.readAll();
+    };
+    const auto installed = LibraryStorage::installed(root);
+    require(installed.size() == 1, "download cancellation starts with one installed dictionary");
+    const QByteArray payload = read(installed.first().path);
+    const QByteArray manifest = read(QDir(root).filePath(QStringLiteral(".desktop-library.json")));
+    const QByteArray languages = read(QDir(root).filePath(QStringLiteral("languages.tsv")));
+    const QVariant oldSources = QSettings().value(QStringLiteral("library/catalogSources"));
+    auto restore = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), oldSources); });
+    QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{QStringLiteral("https://catalogue.example/list")});
+    auto network = std::make_unique<CancelDownloadNetwork>();
+    auto *observed = network.get();
+    LibraryDialog dialog(nullptr, root, std::move(network));
+    dialog.resize(580, 480); dialog.show(); dialog.activateWindow();
+    auto *available = control<QTreeWidget>(dialog, "availableDictionaries");
+    auto *progress = control<QProgressBar>(dialog, "libraryProgress");
+    auto *status = control<QLabel>(dialog, "libraryStatus");
+    auto *cancel = control<QPushButton>(dialog, "cancelLibraryOperation");
+    auto *download = control<QPushButton>(dialog, "downloadDictionary");
+    auto *buttons = dialog.findChild<QDialogButtonBox *>();
+    require(buttons != nullptr, "library close controls");
+    auto *close = buttons->button(QDialogButtonBox::Close);
+    require(close != nullptr, "library Close button");
+    require(QTest::qWaitFor([&] { return !progress->isVisible() && available->topLevelItemCount() == 1; }, 5000), "queued catalogue is ready");
+    available->setCurrentItem(available->topLevelItem(0));
+    require(download->isEnabled(), "partial download is selectable");
+    QTest::mouseClick(download, Qt::LeftButton);
+    require(QTest::qWaitFor([&] {
+        return progress->isVisible() && observed->downloadBytesRead == 32 &&
+            observed->aborts == 0 && observed->downloadFinishes == 0;
+    }, 5000), "real readyRead callback reaches a pending partial download");
+    cancel->setFocus();
+    require(QTest::qWaitFor([&] { return cancel->hasFocus(); }, 5000), "Cancel owns keyboard focus");
+    require(dialog.rect().contains(QRect(cancel->mapTo(&dialog, QPoint()), cancel->size())) &&
+        dialog.rect().contains(QRect(close->mapTo(&dialog, QPoint()), close->size())), "Cancel and Close remain within small dialog");
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Space);
+    require(QTest::qWaitFor([&] { return !progress->isVisible(); }, 5000), "queued abort finished callback completes");
+    require(observed->aborts == 1 && observed->downloadFinishes == 1 && status->text() == QStringLiteral("Cancelled"), "one cancellation has plain completed status");
+    require(!cancel->isVisible() && download->isEnabled() && control<QPushButton>(dialog, "importDictionary")->isEnabled(), "cancellation restores ordinary controls");
+    require(QDir(root).entryList({QStringLiteral(".download-*")}, QDir::Files | QDir::Hidden).isEmpty(), "partial owned download is retired");
+    require(read(installed.first().path) == payload && read(QDir(root).filePath(QStringLiteral(".desktop-library.json"))) == manifest &&
+        read(QDir(root).filePath(QStringLiteral("languages.tsv"))) == languages && LibraryStorage::installed(root).size() == 1,
+        "cancelled download preserves installed payload and manifests");
+    auto focusUsable = [&] { auto *focus = QApplication::focusWidget(); return focus && dialog.isAncestorOf(focus) && focus->isVisible() && focus->isEnabled(); };
+    require(QTest::qWaitFor(focusUsable, 5000), "hidden Cancel does not strand keyboard focus");
+    for (int step = 0; step < 40 && QApplication::focusWidget() != close; ++step)
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Tab);
+    require(QApplication::focusWidget() == close, "Close remains reachable through the restored focus chain");
+    QTest::keyClick(close, Qt::Key_Space);
+    require(!dialog.isVisible(), "keyboard Close exits the idle library normally");
+}
 void answerFile(const QString &path) {
     QTimer::singleShot(300, [path] {
         for (auto *widget : QApplication::topLevelWidgets()) {
@@ -158,6 +269,12 @@ int main(int argc, char **argv) {
             bytes.append(char(32)); bytes.append("DPR2", 4); bytes.append(QByteArray(28, '\0'));
             QFile file(source);
             require(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size(), "write framed UI fixture");
+        }
+        diagnosticStage = "download cancellation keyboard focus";
+        checkDownloadCancellationFocus(source, temp.filePath(QStringLiteral("cancel-download")));
+        if (argc > 2 && QString::fromLocal8Bit(argv[2]) == QStringLiteral("--download-cancel-focus")) {
+            std::cout << "Library UI: queued download cancellation, small-window focus and installed-state preservation passed\n";
+            return EXIT_SUCCESS;
         }
         QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
         // The real pending-recovery path must return to the event loop before
