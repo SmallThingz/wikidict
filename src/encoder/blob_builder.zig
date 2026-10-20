@@ -2237,6 +2237,42 @@ fn processMain(
     const preserve_prefix = shared_prefix == null and page_prefix.len != 0 and
         groups.items.len == 1 and groups.items[0].language.code.len != 0 and
         !fallbacks.unresolved_language_heading;
+    // A prefix cannot disappear merely because a later language boundary is
+    // uncertain. Keep meaningful unowned context exactly once, never lending it
+    // to a resolved language. Invisible categories/comments/controls add no row.
+    if (!preserve_prefix and shared_prefix == null and std.mem.trim(u8, page_prefix, " \t\r\n").len != 0) {
+        var probe_arena = std.heap.ArenaAllocator.init(page_allocator);
+        defer probe_arena.deinit();
+        const probe_allocator = probe_arena.allocator();
+        var prefix_fallbacks = fallbacks.*;
+        const prefix_payload = try presentation_document.compileReportedWithReferencesAndPoemAlloc(
+            probe_allocator,
+            title,
+            .language,
+            "Unclassified",
+            "",
+            page_prefix,
+            null,
+            codes.link_trail,
+            codes.namespace_catalog,
+            codes.behavior_switches,
+            codes.image_options,
+            reference_context,
+            &prefix_fallbacks,
+            poem_phase,
+        );
+        const prefix_entry = try blobs.presentation_codec.decodeAlloc(probe_allocator, prefix_payload, title, .language, .{ .code = "", .heading = "Unclassified" });
+        if (entryHasBodyContent(prefix_entry.entry)) {
+            const unowned: ResolvedLanguage = .{ .code = "", .heading = "Unclassified" };
+            const index = groupIndex(groups.items, unowned) orelse blk: {
+                try groups.append(page_allocator, .{ .language = unowned });
+                break :blk groups.items.len - 1;
+            };
+            try groups.items[index].source.insertSlice(page_allocator, 0, page_prefix);
+            try groups.items[index].fragments.insert(page_allocator, 0, .{ .source = page_prefix, .original_start = 0 });
+            fallbacks.missing_language_heading = true;
+        }
+    }
     const pre_observation: presentation_document.PreObservation = if (may_cross_link)
         early_observation
     else if (may_cross_pre and groups.items.len > 1)
@@ -2298,6 +2334,29 @@ fn processMain(
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
         stats.language_records += 1;
     }
+}
+
+// Decide content presence from the ordinary typed renderer, never raw markup.
+fn entryHasBodyContent(entry: blobs.presentation_types.Entry) bool {
+    const Has = struct {
+        fn spans(values: []const blobs.presentation_types.Span) bool {
+            for (values) |span| if (std.mem.trim(u8, span.text, " \t\r\n").len != 0 or span.target.len != 0) return true;
+            return false;
+        }
+    };
+    if (entry.media.len != 0 or Has.spans(entry.preamble_spans)) return true;
+    for (entry.references) |reference| if (Has.spans(reference.spans)) return true;
+    for (entry.sections) |section| {
+        if (section.level != 0 and std.mem.trim(u8, section.title, " \t\r\n").len != 0) return true;
+        for (section.blocks) |block| {
+            if (Has.spans(block.spans) or block.feature != null or block.kind == .rule) return true;
+            if (block.table) |table| {
+                if (Has.spans(table.caption)) return true;
+                for (table.rows) |row| for (row.cells) |cell| if (Has.spans(cell.spans)) return true;
+            }
+        }
+    }
+    return false;
 }
 
 fn processNamespace(
@@ -4577,6 +4636,13 @@ test "ANG explicit English noun continuation does not steal genuine Nama" {
     try std.testing.expect(std.mem.indexOf(u8, (try english_index.find("other-edition")).?.payload, "NAMA_BODY") == null);
 }
 
+test "typed unowned prefix emptiness ignores invisible-only render results" {
+    try std.testing.expect(!entryHasBodyContent(.{ .title = "empty", .kind = .language }));
+    try std.testing.expect(!entryHasBodyContent(.{ .title = "empty", .kind = .language, .sections = &.{.{ .level = 0, .title = "", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = " \n" }} }} }} }));
+    try std.testing.expect(!entryHasBodyContent(.{ .title = "empty", .kind = .language, .sections = &.{.{ .level = 0, .title = "Unclassified" }} }));
+    try std.testing.expect(entryHasBodyContent(.{ .title = "link", .kind = .language, .preamble_spans = &.{.{ .kind = .link, .target = "شمس", .text = "شمس" }} }));
+}
+
 test "single resolved language preserves structured prefix without ambiguous attribution" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -4640,6 +4706,12 @@ test "single resolved language preserves structured prefix without ambiguous att
         .{ "pending-unknown", "unscoped prefix\n==Unknown topic==\n# unknown\n==English==\n# english\n" },
         .{ "only-unknown", "unscoped prefix\n==[[Unknown language]]==\n# unknown\n" },
     }) |row| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row[0], row[1], row[1], null);
+    // saule p158979/r1068128: category-only first wrapper plus unresolved
+    // declaration leaves two authored sun definitions before the French L2.
+    const saule_prefix = "[[تصنيف:لاتفية]]\n=== اسم ===\n* كوكب ال[[شمس]]\n=== اسم ===\n* كوكب ال[[شمس]]\n==French==\n# [[صفصاف]]\n==Unknown topic==\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "saule-prefix", saule_prefix, saule_prefix, null);
+    const invisible_prefix = "<!-- no content -->\n[[تصنيف:لاتفية]]\n__NOEDITSECTION__\n==French==\n# kept\n==Unknown topic==\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "invisible-prefix", invisible_prefix, invisible_prefix, null);
     // Retained Template:also module-derived output for authored {{أيضا|مِنْجَار}}.
     const hatnote = "<div class=\"disambig-see-also\">''انظر أيضًا:'' '''[[مِنْجَار]]'''</div>\n";
     const later_unknown = "==عربية==\n# known body\n==Unknown topic==\n# unknown body\n";
@@ -4709,11 +4781,39 @@ test "single resolved language preserves structured prefix without ambiguous att
     };
     std.debug.print("QATAR_STRUCTURE paragraph={any} bold={any} list={any}\n", .{ paragraph_prefix, bold_prefix, list_prefix });
     try std.testing.expect(paragraph_prefix and bold_prefix and list_prefix);
-    inline for (.{ .{ "English", "multilingual" }, .{ "French", "multilingual" }, .{ "English", "unknown-group" }, .{ "Unclassified", "unknown-group" }, .{ "English", "inherited-unknown" }, .{ "English", "pending-unknown" } }) |row| {
+    inline for (.{ .{ "English", "multilingual" }, .{ "French", "multilingual" }, .{ "English", "unknown-group" }, .{ "English", "inherited-unknown" }, .{ "English", "pending-unknown" } }) |row| {
         std.debug.print("QATAR_NEGATIVE owner={s} title={s}\n", .{ row[0], row[1] });
         const entry_value = try Local.entry(a, root_path, row[0], row[1]);
         try std.testing.expect(std.mem.indexOf(u8, try Local.text(a, entry_value), "unscoped prefix") == null);
     }
+    inline for (.{ "multilingual", "unknown-group", "inherited-unknown", "pending-unknown" }) |title| {
+        const unowned = try Local.entry(a, root_path, "Unclassified", title);
+        const text = try Local.text(a, unowned);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "unscoped prefix"));
+        try std.testing.expect(std.mem.indexOf(u8, text, "english") == null);
+        try std.testing.expect(std.mem.indexOf(u8, text, "french") == null);
+    }
+    const saule_unowned = try Local.entry(a, root_path, "Unclassified", "saule-prefix");
+    var sun_actions: usize = 0;
+    for (saule_unowned.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "شمس")) {
+            try std.testing.expectEqualStrings("*", block.list_path);
+            sun_actions += 1;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 2), sun_actions);
+    const saule_french = try Local.entry(a, root_path, "French", "saule-prefix");
+    const french_text = try Local.text(a, saule_french);
+    try std.testing.expect(std.mem.indexOf(u8, french_text, "صفصاف") != null);
+    try std.testing.expect(std.mem.indexOf(u8, french_text, "شمس") == null);
+    const empty_entry = try Local.entry(a, root_path, "French", "invisible-prefix");
+    try std.testing.expect(std.mem.indexOf(u8, try Local.text(a, empty_entry), "kept") != null);
+    var unowned_map = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root_path, "Unclassified"));
+    defer unowned_map.deinit();
+    const unowned_blob = try blob_format.inspect(unowned_map.bytes);
+    var unowned_index = try unowned_blob.buildTrustedIndexAlloc(a);
+    defer unowned_index.deinit(a);
+    try std.testing.expect((try unowned_index.find("invisible-prefix")) == null);
     const hatnote_entry = try Local.entry(a, root_path, "العربية", "hatnote-warning");
     var hatnote_target = false;
     for (hatnote_entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
