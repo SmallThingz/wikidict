@@ -32,6 +32,16 @@ dict_status dict_open(
     dict_handle **out_handle);
 void dict_close(dict_handle *handle);
 
+/* Additive ABI 2 operation: full semantic validation, no target resolution or I/O.
+ * header is the exact blob header, not a complete blob. Binary input is borrowed
+ * for this call only (header <= 2 MiB + 11, title <= 1 MiB, payload <= 64 MiB).
+ * A validation worker must own its own handle, including its last-error storage. */
+dict_status dict_validate_record(
+    dict_handle *handle,
+    const uint8_t *header, size_t header_len,
+    const char *title, size_t title_len,
+    const uint8_t *payload, size_t payload_len);
+
 dict_status dict_select(
     dict_handle *handle,
     const char *language, size_t language_len,

@@ -25,8 +25,8 @@ INVENTORY = 'file-metadata.inventory.txt'
 TSV = 'file-metadata.tsv'
 MAX_MANIFEST = v2.MAX_MANIFEST
 MAX_INDEX = 1024 * 1024
-# Complete dated EN inventory plus all prior observations: 1,203,769 + 3,533.
-MAX_ROWS = 1_207_302
+# Complete dated EN inventory, prior observations, and 152 exact negative file probes.
+MAX_ROWS = 1_207_454
 MAX_TSV = 256 * 1024 * 1024
 MAX_INVENTORY = 64 * 1024 * 1024
 MAX_CAPTURES = 128

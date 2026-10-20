@@ -3435,7 +3435,6 @@ pub const Expander = struct {
             (value[0] == '\'' and value[value.len - 1] == '\'')))
             value = std.mem.trim(u8, value[1 .. value.len - 1], " \t\r\n");
         if (value.len == 0) return null;
-        for (value) |byte| if (!(std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-' or byte == ' ')) return null;
         return value;
     }
 
@@ -3493,7 +3492,7 @@ pub const Expander = struct {
         var out: std.ArrayList(u8) = .empty;
         try out.appendSlice(a, "<div class=\"");
         if (class_name) |name| {
-            try out.appendSlice(a, name);
+            try appendAttrEscaped(&out, a, name);
             try out.append(a, ' ');
         }
         try out.appendSlice(a, "CategoryTreeTag\" data-ct-options=\"{&quot;mode&quot;:&quot;");
@@ -3603,7 +3602,7 @@ pub const Expander = struct {
             return self.missingCategoryTree(display, mode, mode_arg != null or type_arg != null, hideprefix, showcount, namespace_ids, class_name);
 
         if (std.mem.eql(u8, depth, "0")) {
-            if (namespace_ids.len != 0 and !main_only) return error.UnsupportedCategoryTreeOptions;
+            // Collapsed-root counts are independent of child namespace filters.
             const stats_get = self.provider.category_stats orelse return error.NotImplemented;
             const stats = (try stats_get(self.provider.ctx, category)) orelse
                 Provider.CategoryStats{ .all = 0, .subcats = 0, .files = 0 };
@@ -3612,7 +3611,7 @@ pub const Expander = struct {
             var out: std.ArrayList(u8) = .empty;
             try out.appendSlice(a, "<div class=\"");
             if (class_name) |name| {
-                try out.appendSlice(a, name);
+                try appendAttrEscaped(&out, a, name);
                 try out.append(a, ' ');
             }
             try out.appendSlice(a, "CategoryTreeTag\"><div class=\"CategoryTreeSection\"><div class=\"CategoryTreeItem\"><span class=\"");
@@ -3675,7 +3674,7 @@ pub const Expander = struct {
         const a = self.runtime.allocator;
         try out.appendSlice(a, "<div class=\"");
         if (class_name) |name| {
-            try out.appendSlice(a, name);
+            try appendAttrEscaped(&out, a, name);
             try out.append(a, ' ');
         }
         try out.appendSlice(a, "CategoryTreeTag\"");
@@ -7334,4 +7333,34 @@ test "category count parser uses captured aliases counts title scope and exact f
     try std.testing.expectError(error.TestCategoryReadFailure, expander.expandFragment("Notice", "{{PAGESINCATEGORY:صفحات للحذف السريع|R}}", 1_670_803_200));
     expander.provider.category_stats = null;
     try std.testing.expectError(error.CategoryStatisticsSnapshotMissing, expander.expandFragment("Notice", "{{PAGESINCATEGORY:Missing|R}}", 1_670_803_200));
+}
+
+test "CategoryTree collapsed roots retain Appendix filters and authored class text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const registry_text = CategoryTreeNamespaceFixture.registry_text ++
+        "100\tAppendix\tAppendix\tcase-sensitive\t1\t0\t0\t\tsupplemental\tverified_edition_feature\n";
+    var registry = try rt.namespace_registry.Registry.init(a, registry_text);
+    defer registry.deinit();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &registry;
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: CategoryTreeNamespaceFixture = .{ .count = 3 };
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{
+        .ctx = &source,
+        .get = TestProvider.get,
+        .exists = CategoryTreeNamespaceFixture.exists,
+        .category_tree = CategoryTreeNamespaceFixture.tree,
+        .category_stats = CategoryTreeNamespaceFixture.stats,
+    } };
+    const filtered = try expander.expandFragment("Appendix:Hebrew patterns/test", "{{#categorytree:Probe|depth=0|namespaces=\"Appendix -\"|class=\"derivedterms\"|showcount=on}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "CategoryTreeCount\">(3)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "display:none") != null);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "[[main]]") == null);
+    const authored_class = try expander.expandFragment("Appendix:Hebrew patterns/test", "{{#categorytree:Probe|depth=0|namespaces=\"Appendix -\"|class=\"derivedterms<nowiki/> Hebr\"}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, authored_class, "derivedterms&lt;nowiki/&gt; Hebr CategoryTreeTag") != null);
+    try std.testing.expect(std.mem.indexOf(u8, authored_class, "[[:Category:Probe|Probe]]") != null);
 }

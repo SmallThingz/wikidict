@@ -26,11 +26,40 @@ static int lookup(dict_handle *handle, const char *word, const char *required) {
     return ok;
 }
 
+static int validate_records(void) {
+    dict_handle *worker = NULL;
+    // Opening a validation handle does not need an existing readable dataset.
+    const char *unopened = ".tmp/not-a-readable-dictionary";
+    if (!require(dict_open(unopened, strlen(unopened), &worker) == DICT_OK, "open independent validation worker")) return 0;
+    uint8_t header[] = {'W','I','K','B','L','B','0','8', 3};
+    uint8_t empty[32] = {'D','P','R','2'};
+    int ok = 1;
+    for (uint8_t kind = 2; kind <= 7; ++kind) {
+        header[8] = kind;
+        ok &= require(dict_validate_record(worker, header, sizeof header, "entry", 5, empty, sizeof empty) == DICT_OK, "empty feature full semantic validation");
+    }
+    const uint8_t language[] = "WIKBLB08\x01" "en\0English\0";
+    ok &= require(dict_validate_record(worker, language, sizeof language - 1, "entry", 5, empty, sizeof empty) == DICT_OK, "language header supplies actual semantic context");
+    ok &= require(dict_validate_record(worker, header, sizeof header, "entry", 5, empty, 4) != DICT_OK, "bare DPR2 refused");
+    size_t length = 0;
+    const char *error = dict_last_error(worker, &length);
+    ok &= require(error != NULL && length != 0, "worker owns validation diagnostic");
+    ok &= require(dict_validate_record(worker, NULL, 9, "entry", 5, empty, sizeof empty) == DICT_INVALID_ARGUMENT, "null binary header refused");
+    ok &= require(dict_validate_record(worker, header, sizeof header, "entry", 5, NULL, 32) == DICT_INVALID_ARGUMENT, "null binary payload refused");
+    ok &= require(dict_validate_record(worker, header, sizeof header, "bad\0title", 9, empty, sizeof empty) == DICT_INVALID_ARGUMENT, "NUL title refused");
+    ok &= require(dict_validate_record(worker, header, sizeof header, "entry", 5, empty, sizeof empty) == DICT_OK, "validation recovers after failure");
+    dict_last_error(worker, &length);
+    ok &= require(length == 0, "successful validation clears worker error");
+    dict_close(worker);
+    return ok;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2 || argc > 4 || (argc == 4 && strcmp(argv[3], "--neutral") != 0)) {
         fprintf(stderr, "usage: ffi-integration ROOT [WORD [--neutral]]\n");
         return 2;
     }
+    if (!validate_records()) return 1;
     const int neutral = argc == 4;
     const char *word = argc >= 3 ? argv[2] : "mouse";
     dict_handle *handle = NULL;

@@ -118,6 +118,39 @@ export fn dict_close(handle: ?*Handle) callconv(.c) void {
     h.threaded.deinit();
     allocator.destroy(h);
 }
+// Validate one complete compiled record without selecting a dictionary or following aliases.
+// The header contains only WIKBLB08/kind and, for language, its two NUL fields.
+// Inputs are borrowed only for this call; error storage belongs to this handle.
+// Use a separate handle per worker, as with the other mutable-handle operations.
+export fn dict_validate_record(
+    handle: ?*Handle,
+    header_ptr: ?[*]const u8,
+    header_len: usize,
+    title_ptr: ?[*]const u8,
+    title_len: usize,
+    payload_ptr: ?[*]const u8,
+    payload_len: usize,
+) callconv(.c) c_int {
+    const h = handle orelse return @backingInt(Status.invalid_argument);
+    const header = binaryInput(header_ptr, header_len, 2 * 1024 * 1024 + 11) catch |err| return @backingInt(h.fail("validate record header", err));
+    const title = input(title_ptr, title_len, 1024 * 1024) catch |err| return @backingInt(h.fail("validate record title", err));
+    if (title.len == 0 or std.mem.indexOfScalar(u8, title, 0) != null)
+        return @backingInt(h.fail("validate record title", error.InvalidArgument));
+    const payload_bytes = binaryInput(payload_ptr, payload_len, 64 * 1024 * 1024) catch |err| return @backingInt(h.fail("validate record payload", err));
+    const view = @import("blob_decoder").openTrustedBlob(header) catch |err| return @backingInt(h.fail("validate record header", err));
+    if (view.raw.records.len != 0) return @backingInt(h.fail("validate record header", error.InvalidArgument));
+    var decoded = model.fromRecord(allocator, view.wrapRecord(.{ .title = title, .payload = payload_bytes })) catch |err| return @backingInt(h.fail("validate record", err));
+    decoded.deinit();
+    h.clearError();
+    return @backingInt(Status.ok);
+}
+
+fn binaryInput(ptr: ?[*]const u8, len: usize, max: usize) ![]const u8 {
+    if (len > max) return error.InvalidArgument;
+    if (len == 0) return "";
+    return (ptr orelse return error.InvalidArgument)[0..len];
+}
+
 fn selectImpl(h: *Handle, language: []const u8, kind: store.Kind) !void {
     var db = store.Store.open(h.io(), allocator, h.root, kind, language) catch |err| {
         if (kind == .language and language.len == 0 and err == error.FileNotFound) return error.InvalidArgument;

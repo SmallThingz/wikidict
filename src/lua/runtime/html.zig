@@ -222,10 +222,13 @@ fn wikitextCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value)
 fn nodeCall(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     const a = runtime.allocator;
     const node: *Node = @ptrCast(@alignCast(ctx_raw.?));
+    if (node.self_closing) return error.HtmlSelfClosingHasChildren;
     if (args.len < 2 or args[1] == .nil) return returnSelf(node, a);
     switch (args[1]) {
         .string, .number => try appendChild(node, .{ .text = try scalarText(node.html.allocator, args[1]) }),
-        .boolean => |value| try appendChild(node, .{ .text = if (value) "true" else "false" }),
+        .boolean => |value| {
+            if (value) try appendChild(node, .{ .text = "true" });
+        },
         .table => |table| {
             const child = node.html.nodes.get(table) orelse return error.HtmlNodeExpected;
             try appendChild(node, .{ .node = child });
@@ -605,4 +608,34 @@ test "html builder matches MediaWiki self-closing tag semantics" {
     out.items.len = 0;
     try renderNode(forced, &out);
     try std.testing.expectEqualStrings("<div />", out.items);
+}
+
+test "html node ignores false and nil while preserving truthy children" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 0);
+    defer runtime.deinit();
+    const html = try a.create(Html);
+    html.* = .{ .allocator = a };
+    const root = try newNode(html, &runtime, null, "div");
+    try installNodeMethods(root, &runtime);
+    const self = Value{ .table = root.table };
+    for ([_]Value{ .nil, .{ .boolean = false }, .{ .boolean = true }, .{ .number = 0 }, .{ .string = "false" } }) |value| {
+        const result = try nodeCall(root, &runtime, &.{ self, value });
+        defer rt.freeResults(result);
+        try std.testing.expect(result[0].table == root.table);
+    }
+    const child = try newNode(html, &runtime, null, "span");
+    try appendChild(child, .{ .text = "child" });
+    const appended = try nodeCall(root, &runtime, &.{ self, .{ .table = child.table } });
+    defer rt.freeResults(appended);
+    try std.testing.expect(appended[0].table == root.table);
+    var out: std.ArrayList(u8) = .empty;
+    try renderNode(root, &out);
+    try std.testing.expectEqualStrings("<div>true0false<span>child</span></div>", out.items);
+    const br = try newNode(html, &runtime, null, "br");
+    try std.testing.expectError(error.HtmlSelfClosingHasChildren, nodeCall(br, &runtime, &.{ .{ .table = br.table }, .{ .boolean = false } }));
+    try std.testing.expectError(error.HtmlSelfClosingHasChildren, nodeCall(br, &runtime, &.{ .{ .table = br.table }, .nil }));
+    try std.testing.expectError(error.HtmlSelfClosingHasChildren, nodeCall(br, &runtime, &.{.{ .table = br.table }}));
 }
