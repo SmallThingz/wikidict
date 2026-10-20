@@ -563,7 +563,7 @@ void MainWindow::setupUi() {
     title_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     title_->setWordWrap(true);
     title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    meta_ = new QLabel(QStringLiteral("Local Wiktionary · native Qt"), content);
+    meta_ = new QLabel(QStringLiteral("Local Wiktionary"), content);
     meta_->setTextFormat(Qt::PlainText);
     meta_->setWordWrap(true);
     meta_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
