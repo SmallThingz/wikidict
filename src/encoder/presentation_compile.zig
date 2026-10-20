@@ -3451,8 +3451,7 @@ pub const Renderer = struct {
             const caption = selected_label.text;
             var media_style = style;
             media_style.classes = try self.mediaCaptionClasses("", style.classes);
-            media_style.kind = .link;
-            media_style.target = try std.fmt.allocPrint(self.a, "File:{s}", .{file});
+            media_style = try self.mediaActionStyle(media_style, file, selected_label.link_target);
             const visible_label = if (caption.len == 0) file else caption;
             const caption_style: ?MediaCaptionCapture = if (std.mem.eql(u8, caption, visible_label)) .{ .style = mediaCaptionStyle(media_style, false, selected_label.authored_caption) } else null;
             const parsed = try self.mediaFileKindWithSpans(file, caption, null, caption_style);
@@ -4195,12 +4194,13 @@ pub const Renderer = struct {
         }
         return cursor == input.len;
     }
-    const MediaLabelChoice = struct { text: []const u8, authored_caption: bool };
+    const MediaLabelChoice = struct { text: []const u8, authored_caption: bool, link_target: ?[]const u8 = null };
     fn mediaCaption(self: *Renderer, raw: []const u8, fallback: []const u8, mode: @import("namespace_registry").image_options.Mode) []const u8 {
         return self.mediaCaptionChoice(raw, fallback, mode).text;
     }
     fn mediaCaptionChoice(self: *Renderer, raw: []const u8, fallback: []const u8, mode: @import("namespace_registry").image_options.Mode) MediaLabelChoice {
         var candidate: []const u8 = "";
+        var link_target: ?[]const u8 = null;
         // Timed media has no visible caption without a thumbnail or frame.
         // Unknown words such as noicon remain captions when that frame exists.
         var caption_visible = mode != .timed;
@@ -4211,12 +4211,51 @@ pub const Renderer = struct {
             const part = trim(raw[pos..end]);
             if (self.mediaOption(part, mode, &seen_format)) |matched| {
                 if (oneOf(matched.id, &.{ "img_thumbnail", "img_framed", "img_manualthumb" })) caption_visible = true;
+                if (std.mem.eql(u8, matched.id, "img_link")) link_target = matched.value orelse "";
             } else candidate = part;
             if (end == raw.len) break;
             pos = end + 1;
         }
         if (!caption_visible) candidate = "";
-        return .{ .text = if (candidate.len == 0) fallback else candidate, .authored_caption = candidate.len != 0 };
+        return .{ .text = if (candidate.len == 0) fallback else candidate, .authored_caption = candidate.len != 0, .link_target = link_target };
+    }
+    // Media identity/caption metadata stays attached to the source file. Only
+    // the occurrence's semantic click action follows the recognized link option.
+    fn mediaActionStyle(self: *Renderer, original: Style, file: []const u8, override: ?[]const u8) Error!Style {
+        var style = original;
+        style.kind = .link;
+        style.target = try std.fmt.allocPrint(self.a, "File:{s}", .{file});
+        const raw = override orelse return style;
+        const value = trim(raw);
+        if (value.len == 0) {
+            style.kind = .text;
+            style.target = "";
+            return style;
+        }
+        var target = trim(try self.entityText(value));
+        if (ir.hasExternalProtocol(target)) {
+            // Reuse the ordinary URL entity/escaping rules exactly once.
+            target = try self.externalUrlTarget(value);
+            if (safeUrl(target) and !unresolvedActionTarget(target)) {
+                style.kind = .external_link;
+                style.target = target;
+            }
+            // Invalid nonempty overrides keep the pre-existing File action.
+            return style;
+        }
+        if (std.mem.indexOfScalar(u8, target, '_') != null) {
+            const normalized = try self.a.dupe(u8, target);
+            std.mem.replaceScalar(u8, normalized, '_', ' ');
+            target = normalized;
+        }
+        if (starts(target, ":")) target = target[1..];
+        target = self.currentWikiTarget(target);
+        if (target.len != 0 and safeInternalTarget(target)) {
+            const destination = try self.interwikiDestination(target, 0);
+            style.kind = if (destination.target.len == 0) .text else if (destination.external) .external_link else .link;
+            style.target = destination.target;
+        }
+        return style;
     }
     fn mediaHeadingCaption(self: *Renderer, raw: []const u8, file: []const u8) MediaLabelChoice {
         var caption: []const u8 = "";
@@ -5182,14 +5221,14 @@ pub const Renderer = struct {
                         selected_label.authored_caption = token.link_has_pipe and selected_label.authored_caption;
                         label_value = selected_label.text;
                         const metadata_caption = label_value;
+                        const link_target = selected_label.link_target;
                         if (s.heading) {
                             selected_label = self.mediaHeadingCaption(if (token.link_has_pipe) token.text else "", file_name);
                             label_value = selected_label.text;
                         }
                         var media_style = s;
                         media_style.classes = try self.mediaCaptionClasses("", s.classes);
-                        media_style.kind = .link;
-                        media_style.target = try std.fmt.allocPrint(self.a, "File:{s}", .{file_name});
+                        media_style = try self.mediaActionStyle(media_style, file_name, link_target);
                         const caption_style: ?MediaCaptionCapture = if (std.mem.eql(u8, metadata_caption, label_value)) .{ .style = mediaCaptionStyle(media_style, s.heading, selected_label.authored_caption) } else null;
                         // Keep SVG heading decoration out of entry media as before.
                         const parsed = if (!s.heading or media_types.kind(file_name) != null)

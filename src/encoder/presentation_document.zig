@@ -1013,6 +1013,82 @@ test "localized image options reach serialized media captions without swallowing
     }
 }
 
+test "image link options retain independent click action and media identity through DPR" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, kind: types.InlineKind, target: []const u8 }{
+        .{ .source = "[[File:Example.png|''caption'']]", .kind = .link, .target = "File:Example.png" },
+        .{ .source = "[[File:Example.png|link=|''caption'']]", .kind = .text, .target = "" },
+        .{ .source = "[[File:Example.png|link=Target_page|''caption'']]", .kind = .link, .target = "Target page" },
+        .{ .source = "[[File:Example.png|link=https://example.test/p?a=1&amp;b=2|''caption'']]", .kind = .external_link, .target = "https://example.test/p?a=1&b=2" },
+        .{ .source = "[[File:Example.png|link=#Section|''caption'']]", .kind = .link, .target = "#Section" },
+        .{ .source = "[[File:Example.png|link=[[Target]]|''caption'']]", .kind = .link, .target = "File:Example.png" },
+        .{ .source = "<gallery>\nFile:Example.png|link=Target|''caption''\n</gallery>", .kind = .link, .target = "Target" },
+        .{ .source = "==[[File:Example.png|link=Target|''caption'']]==", .kind = .link, .target = "Target" },
+    };
+    for (cases) |case| {
+        const encoded = try compileAlloc(a, "entry", .language, "English", "en", case.source, null);
+        const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
+        try std.testing.expectEqualStrings("Example.png", decoded.entry.media[0].file);
+        try std.testing.expectEqualStrings("caption", decoded.entry.media[0].caption);
+        var found: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.text, "caption")) {
+                try std.testing.expectEqual(case.kind, span.kind);
+                try std.testing.expectEqualStrings(case.target, span.target);
+                try std.testing.expect(span.italic);
+                try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-media-file-") != null);
+                found += 1;
+            }
+        };
+        try std.testing.expect(found != 0);
+    }
+    // Caption-owned links remain their own actions even when the image is not linked.
+    const nested = try compileAlloc(a, "entry", .language, "English", "en", "[[File:Example.png|link=|''caption'' and [[Other|nested]]]]", null);
+    const decoded = try codec.decodeAlloc(a, nested, "entry", .language, .{ .code = "en", .heading = "English" });
+    var caption = false;
+    var own_link = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.text, "caption")) caption = span.kind == .text and span.target.len == 0 and span.italic;
+        if (std.mem.eql(u8, span.text, "nested")) own_link = span.kind == .link and std.mem.eql(u8, span.target, "Other");
+    };
+    try std.testing.expect(caption and own_link);
+    try std.testing.expectEqualStrings("Example.png", decoded.entry.media[0].file);
+    try std.testing.expectEqualStrings("caption and nested", decoded.entry.media[0].caption);
+}
+
+test "image link option aliases and exact equals spelling use captured matcher" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const images = @import("namespace_registry").image_options;
+    const raw = images.header ++ "\n# wiki\tdewiktionary\n# dump-date\t20261001\n# content-language\tde\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n# behavior-switches-sha256\t1111111111111111111111111111111111111111111111111111111111111111\nimg_link\t1\t\"verknüpfung=$1\"\nimg_link\t1\t\"link=$1\"\n";
+    var registry = try images.Registry.init(a, raw, "dewiktionary", "20261001", "de", @splat(0), @splat(0x11));
+    defer registry.deinit();
+    const cases = [_]struct { source: []const u8, text: []const u8, target: []const u8 }{
+        .{ .source = "[[File:Example.png|verknüpfung=Target|caption]]", .text = "caption", .target = "Target" },
+        .{ .source = "[[File:Example.png|verknüpfung=|caption]]", .text = "caption", .target = "" },
+        .{ .source = "[[File:Example.png|link =Target]]", .text = "link =Target", .target = "File:Example.png" },
+    };
+    for (cases) |case| {
+        const encoded = try compileReportedWithOptionsAlloc(a, "entry", .language, "English", "en", case.source, null, .{}, null, null, &registry, null);
+        const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+        var found = false;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.text, case.text)) {
+                try std.testing.expectEqualStrings(case.target, span.target);
+                try std.testing.expectEqual(if (case.target.len == 0) types.InlineKind.text else types.InlineKind.link, span.kind);
+                found = true;
+            }
+        };
+        try std.testing.expect(found);
+        try std.testing.expectEqualStrings("Example.png", decoded.entry.media[0].file);
+        try std.testing.expectEqualStrings(case.text, decoded.entry.media[0].caption);
+    }
+}
+
 test "raw tag termination preserves semantic heading and protected literal" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
