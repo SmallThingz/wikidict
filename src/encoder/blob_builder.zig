@@ -4647,8 +4647,7 @@ test "typed unowned prefix emptiness ignores invisible-only render results" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var namespaces = try @import("namespace_registry").englishTestRegistry(a);
-    defer namespaces.deinit();
+    const namespaces = try @import("namespace_registry").englishTestRegistry();
     // The renderer's generated language section is level2, not level0.
     // Only authored heading spans count when its blocks contain no content.
     const cases = .{
@@ -4670,7 +4669,7 @@ test "typed unowned prefix emptiness ignores invisible-only render results" {
             "Unclassified",
             case[0],
             .{},
-            &namespaces,
+            namespaces,
             null,
             null,
             .{},
