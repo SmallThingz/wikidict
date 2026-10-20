@@ -7339,8 +7339,12 @@ test "CategoryTree collapsed roots retain Appendix filters and authored class te
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const registry_text = CategoryTreeNamespaceFixture.registry_text ++
-        "100\tAppendix\tAppendix\tcase-sensitive\t1\t0\t0\t\tsupplemental\tverified_edition_feature\n";
+    const insertion = std.mem.indexOf(u8, CategoryTreeNamespaceFixture.registry_text, "118\tRekonstruktion\t").?;
+    const registry_text = try std.mem.concat(a, u8, &.{
+        CategoryTreeNamespaceFixture.registry_text[0..insertion],
+        "100\tAppendix\tAppendix\tcase-sensitive\t1\t0\t0\t\tsupplemental\tverified_edition_feature\n",
+        CategoryTreeNamespaceFixture.registry_text[insertion..],
+    });
     var registry = try rt.namespace_registry.Registry.init(a, registry_text);
     defer registry.deinit();
     var runtime = try rt.Context.init(a, 24);
