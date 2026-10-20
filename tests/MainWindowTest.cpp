@@ -937,6 +937,7 @@ private slots:
             auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
             QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
             auto close = qScopeGuard([&] { dialog->done(QDialog::Rejected); });
+            QTRY_VERIFY_WITH_TIMEOUT(!dialog->findChild<QProgressBar *>(QStringLiteral("libraryProgress"))->isVisible(), 30000);
             auto *installed = dialog->findChild<QTreeWidget *>(QStringLiteral("installedDictionaries"));
             auto *remove = dialog->findChild<QPushButton *>(QStringLiteral("removeDictionary"));
             auto *status = dialog->findChild<QLabel *>(QStringLiteral("libraryStatus"));
@@ -1043,6 +1044,7 @@ private slots:
             auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
             QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
             auto close = qScopeGuard([&] { dialog->done(QDialog::Rejected); });
+            QTRY_VERIFY_WITH_TIMEOUT(!dialog->findChild<QProgressBar *>(QStringLiteral("libraryProgress"))->isVisible(), 30000);
             auto *installed = dialog->findChild<QTreeWidget *>(QStringLiteral("installedDictionaries"));
             auto *remove = dialog->findChild<QPushButton *>(QStringLiteral("removeDictionary"));
             auto *status = dialog->findChild<QLabel *>(QStringLiteral("libraryStatus"));
@@ -1131,6 +1133,7 @@ private slots:
             auto *library = qobject_cast<QDialog *>(QApplication::activeModalWidget());
             QVERIFY(library && library->objectName() == QStringLiteral("libraryDialog"));
             auto close = qScopeGuard([&] { library->done(QDialog::Rejected); });
+            QTRY_VERIFY_WITH_TIMEOUT(!library->findChild<QProgressBar *>(QStringLiteral("libraryProgress"))->isVisible(), 30000);
             auto *choose = library->findChild<QPushButton *>(QStringLiteral("chooseDictionaryFolder"));
             QVERIFY(choose);
             // A failed assertion in the callback must not strand the nested chooser.
@@ -1204,6 +1207,7 @@ private slots:
                 auto *library = qobject_cast<QDialog *>(QApplication::activeModalWidget());
                 QVERIFY(library && library->objectName() == QStringLiteral("libraryDialog"));
                 auto close = qScopeGuard([&] { library->done(QDialog::Rejected); });
+                QTRY_VERIFY_WITH_TIMEOUT(!library->findChild<QProgressBar *>(QStringLiteral("libraryProgress"))->isVisible(), 30000);
                 auto *choose = library->findChild<QPushButton *>(QStringLiteral("chooseDictionaryFolder"));
                 QVERIFY(choose);
                 QTimer deadline;
@@ -1284,6 +1288,7 @@ private slots:
                 auto *dialog = static_cast<LibraryDialog *>(QApplication::activeModalWidget());
                 QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
                 auto closeOnSetupFailure = qScopeGuard([dialog] { dialog->done(QDialog::Rejected); });
+                QTRY_VERIFY_WITH_TIMEOUT(!dialog->findChild<QProgressBar *>(QStringLiteral("libraryProgress"))->isVisible(), 30000);
                 dialog->setBusy(true, QStringLiteral("Testing recovery status"));
                 dialog->runWorker([dictionary, backup, mode] {
                     const char *message = "The dictionary could not be restored.";
@@ -1413,6 +1418,7 @@ private slots:
             auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
             QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
             auto close = qScopeGuard([&] { dialog->done(QDialog::Rejected); });
+            QTRY_VERIFY_WITH_TIMEOUT(!dialog->findChild<QProgressBar *>(QStringLiteral("libraryProgress"))->isVisible(), 30000);
             if (queued) {
                 QVERIFY(pending); pending->blockSignals(false);
                 QVERIFY(QMetaObject::invokeMethod(pending.data(), "finished", Qt::DirectConnection));
@@ -1723,6 +1729,7 @@ private slots:
                 auto *dialog = static_cast<LibraryDialog *>(QApplication::activeModalWidget());
                 QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
                 auto close = qScopeGuard([dialog] { dialog->done(QDialog::Rejected); });
+                QTRY_VERIFY_WITH_TIMEOUT(!dialog->findChild<QProgressBar *>(QStringLiteral("libraryProgress"))->isVisible(), 30000);
                 auto *status = dialog->findChild<QLabel *>(QStringLiteral("libraryStatus"));
                 auto *progress = dialog->findChild<QProgressBar *>(QStringLiteral("libraryProgress"));
                 auto *importButton = dialog->findChild<QPushButton *>(QStringLiteral("importDictionary"));

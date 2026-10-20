@@ -5,6 +5,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QStandardPaths>
@@ -88,47 +90,111 @@ int main(int argc, char **argv) {
         std::atomic_bool cancelled = false;
         qint64 events = 0;
         const auto progress = [&](const QString &, qint64, qint64) { ++events; };
-        // Exercise the same recovery routine called by commitImport's catch path.
-        for (const bool blocked : {false, true}) {
-            QTemporaryDir transaction(temporary.filePath(QStringLiteral("rollback-XXXXXX")));
-            require(transaction.isValid(), "rollback transaction root");
-            LibraryStorage::PreparedImport state;
-            state.directory = std::make_unique<QTemporaryDir>(transaction.filePath(QStringLiteral("recovery-XXXXXX")));
-            require(state.directory->isValid(), "rollback recovery directory");
-            state.dictionary.path = transaction.filePath(QStringLiteral("dictionary.wikblb"));
-            state.stagedFile = transaction.filePath(QStringLiteral("staged.wikblb"));
-            const QString other = state.dictionary.path + QStringLiteral(".xz");
-            const QString oldRaw = state.directory->filePath(QStringLiteral("previous-0"));
-            const QString oldCompressed = state.directory->filePath(QStringLiteral("previous-1"));
-            const QString marker = transaction.filePath(QStringLiteral(".desktop-edition"));
-            const QByteArray newBytes = QByteArrayLiteral("new published payload");
-            const QByteArray rawBytes = QByteArrayLiteral("previous raw payload");
-            const QByteArray compressedBytes = QByteArrayLiteral("previous compressed payload");
-            const QByteArray occupiedBytes = QByteArrayLiteral("do not overwrite this destination");
-            write(state.dictionary.path, newBytes);
-            write(oldRaw, rawBytes);
-            write(oldCompressed, compressedBytes);
-            write(marker, QByteArrayLiteral("new edition marker"));
-            if (blocked) write(state.stagedFile, occupiedBytes);
+        // A blocked first restore must not prevent independent payload/metadata
+        // recovery. The remaining journal is retried after the obstruction clears.
+        {
+            QTemporaryDir restart(temporary.filePath(QStringLiteral("blocked-recovery-XXXXXX")));
+            const QString raw = restart.filePath(QStringLiteral("dictionary.wikblb"));
+            const QString packed = raw + QStringLiteral(".xz");
+            const QString list = restart.filePath(QStringLiteral("languages.tsv"));
+            const QString marker = restart.filePath(QStringLiteral(".desktop-edition"));
+            write(raw, QByteArrayLiteral("prior raw")); write(packed, QByteArrayLiteral("prior xz"));
+            write(list, QByteArrayLiteral("prior list"));
+            QTemporaryDir staging(restart.filePath(QStringLiteral(".import-XXXXXX")));
+            LibraryStorage::detail::beginMutation(restart.path(), staging, {raw, packed});
+            require(QFile::rename(raw, staging.filePath(QStringLiteral("previous-0"))), "blocked first backup");
+            require(QFile::rename(packed, staging.filePath(QStringLiteral("previous-1"))), "blocked second backup");
+            require(QDir().mkdir(raw), "ordinary occupied restore destination");
+            write(list, QByteArrayLiteral("new list")); write(marker, QByteArrayLiteral("new edition"));
             bool unrestored = false;
-            try {
-                LibraryStorage::detail::rollbackImport(state,
-                    {{state.dictionary.path, oldRaw}, {other, oldCompressed}}, marker, true, true);
-            } catch (const LibraryStorage::UnrestoredMutation &) { unrestored = true; }
-            require(unrestored == blocked, "typed failure only when recovery remains incomplete");
-            require(!QFileInfo::exists(marker), "marker rollback still attempted after unpublish failure");
-            require(read(other) == compressedBytes && !QFileInfo::exists(oldCompressed), "later independent backup restored after first obstruction");
-            if (blocked) {
-                require(!state.directory->autoRemove(), "unrestored recovery directory retained");
-                require(read(state.dictionary.path) == newBytes, "occupied installed destination not overwritten");
-                require(read(state.stagedFile) == occupiedBytes, "occupied staged destination not overwritten");
-                require(read(oldRaw) == rawBytes, "blocked prior payload retained exactly");
-                state.directory->setAutoRemove(true); // Test-owned fixture only, after preservation assertions.
-            } else {
-                require(state.directory->autoRemove(), "fully restored recovery needs no retained directory");
-                require(read(state.dictionary.path) == rawBytes && !QFileInfo::exists(oldRaw), "prior raw payload restored exactly");
-                require(read(state.stagedFile) == newBytes, "unpublished new payload restored to staging");
+            try { LibraryStorage::recoverPendingMutation(restart.path()); }
+            catch (const LibraryStorage::UnrestoredMutation &) { unrestored = true; }
+            require(unrestored && !staging.autoRemove(), "incomplete recovery typed and staging retained");
+            require(read(staging.filePath(QStringLiteral("previous-0"))) == QByteArrayLiteral("prior raw"), "blocked prior payload retained exactly");
+            require(read(packed) == QByteArrayLiteral("prior xz") && read(list) == QByteArrayLiteral("prior list") && !QFileInfo::exists(marker), "independent second payload and metadata still restored");
+            require(QFileInfo::exists(restart.filePath(QStringLiteral(".desktop-mutation.json"))), "incomplete journal retained");
+            require(QDir().rmdir(raw), "remove only synthetic obstruction");
+            LibraryStorage::recoverPendingMutation(restart.path());
+            require(read(raw) == QByteArrayLiteral("prior raw") && read(packed) == QByteArrayLiteral("prior xz"), "retry completes exact restoration");
+        }
+        // Simulate ordinary process termination at actual mutation boundaries.
+        // No user root, subprocess kill, or fault-injection production hook.
+        for (const bool removal : {false, true}) {
+            for (int boundary = 0; boundary <= 4; ++boundary) {
+                QTemporaryDir restart(temporary.filePath(QStringLiteral("restart-XXXXXX")));
+                const QString folder = restart.path();
+                require(QDir(folder).mkpath(QStringLiteral("languages")), "restart payload directory");
+                const QString raw = QDir(folder).filePath(QStringLiteral("languages/entry.wikblb"));
+                const QString packed = raw + QStringLiteral(".xz");
+                const QString list = QDir(folder).filePath(QStringLiteral("languages.tsv"));
+                const QString marker = QDir(folder).filePath(QStringLiteral(".desktop-edition"));
+                const QByteArray previous = QByteArrayLiteral("prior installed payload");
+                const QByteArray compressed = QByteArrayLiteral("prior compressed payload");
+                const QByteArray manifest = QByteArrayLiteral("heading\nEnglish\n");
+                write(raw, previous); write(packed, compressed); write(list, manifest);
+                // No prior edition marker: an interrupted initial binding must disappear.
+                QTemporaryDir staging(QDir(folder).filePath(removal ? QStringLiteral(".remove-XXXXXX") : QStringLiteral(".import-XXXXXX")));
+                require(staging.isValid(), "restart staging");
+                LibraryStorage::detail::beginMutation(folder, staging, {raw, packed});
+                require(!staging.autoRemove(), "journal protects staging until commit");
+                if (boundary >= 1) require(QFile::rename(raw, staging.filePath(QStringLiteral("previous-0"))), "first payload move");
+                if (boundary >= 2) require(QFile::rename(packed, staging.filePath(QStringLiteral("previous-1"))), "second payload move");
+                if (boundary >= 3) {
+                    if (!removal) write(packed, QByteArrayLiteral("new published payload"));
+                    write(marker, QByteArrayLiteral("new edition"));
+                }
+                if (boundary >= 4) write(list, QByteArrayLiteral("heading\nNew heading\n"));
+                LibraryStorage::recoverPendingMutation(folder);
+                require(read(raw) == previous && read(packed) == compressed, "restart restores both exact prior payloads");
+                require(read(list) == manifest && !QFileInfo::exists(marker), "restart restores manifest and prior unbound edition");
+                require(!QFileInfo::exists(staging.path()), "only completed recovery staging retired");
+                LibraryStorage::recoverPendingMutation(folder);
+                require(read(raw) == previous && read(list) == manifest, "repeated restart recovery is idempotent");
             }
+        }
+        // A recovery interrupted after one payload was restored resumes safely;
+        // committed transactions finish cleanup instead of rolling back.
+        {
+            QTemporaryDir restart(temporary.filePath(QStringLiteral("repeat-recovery-XXXXXX")));
+            const QString raw = restart.filePath(QStringLiteral("dictionary.wikblb"));
+            const QString packed = raw + QStringLiteral(".xz");
+            const QString list = restart.filePath(QStringLiteral("languages.tsv"));
+            const QString marker = restart.filePath(QStringLiteral(".desktop-edition"));
+            write(raw, QByteArrayLiteral("old raw")); write(packed, QByteArrayLiteral("old xz"));
+            write(list, QByteArrayLiteral("old list")); write(marker, QByteArrayLiteral("old edition"));
+            QTemporaryDir staging(restart.filePath(QStringLiteral(".import-XXXXXX")));
+            LibraryStorage::detail::beginMutation(restart.path(), staging, {raw, packed});
+            require(QFile::rename(raw, staging.filePath(QStringLiteral("previous-0"))), "recovery first backup");
+            require(QFile::rename(packed, staging.filePath(QStringLiteral("previous-1"))), "recovery second backup");
+            require(QFile::rename(staging.filePath(QStringLiteral("previous-0")), raw), "simulate first completed recovery move");
+            write(list, QByteArrayLiteral("new list")); write(marker, QByteArrayLiteral("new edition"));
+            LibraryStorage::recoverPendingMutation(restart.path());
+            require(read(raw) == QByteArrayLiteral("old raw") && read(packed) == QByteArrayLiteral("old xz"), "partial recovery resumes");
+            require(read(list) == QByteArrayLiteral("old list") && read(marker) == QByteArrayLiteral("old edition"), "existing metadata restored exactly");
+            QTemporaryDir completed(restart.filePath(QStringLiteral(".import-XXXXXX")));
+            LibraryStorage::detail::beginMutation(restart.path(), completed, {raw, packed});
+            require(QFile::rename(raw, completed.filePath(QStringLiteral("previous-0"))), "completed old payload backup");
+            write(raw, QByteArrayLiteral("completed new payload"));
+            const QString journalPath = restart.filePath(QStringLiteral(".desktop-mutation.json"));
+            auto committedJournal = QJsonDocument::fromJson(read(journalPath)).object();
+            committedJournal.insert(QStringLiteral("state"), QStringLiteral("committed"));
+            write(journalPath, QJsonDocument(committedJournal).toJson()); // termination after committed state, before staging cleanup
+            LibraryStorage::recoverPendingMutation(restart.path());
+            require(read(raw) == QByteArrayLiteral("completed new payload"), "completed import is not rolled back on restart");
+            require(!QFileInfo::exists(completed.path()) && !QFileInfo::exists(journalPath), "committed restart retires old staging and journal");
+            LibraryStorage::recoverPendingMutation(restart.path());
+            require(read(raw) == QByteArrayLiteral("completed new payload"), "completed cleanup remains idempotent");
+            completed.setAutoRemove(true);
+        }
+        {
+            QTemporaryDir first(temporary.filePath(QStringLiteral("first-recovery-XXXXXX")));
+            const QString destination = first.filePath(QStringLiteral("supplemental.wikblb"));
+            QTemporaryDir staging(first.filePath(QStringLiteral(".import-XXXXXX")));
+            LibraryStorage::detail::beginMutation(first.path(), staging, {destination, destination + QStringLiteral(".xz")});
+            write(destination, QByteArrayLiteral("not yet committed first import"));
+            write(first.filePath(QStringLiteral("languages.tsv")), QByteArrayLiteral("new manifest"));
+            LibraryStorage::recoverPendingMutation(first.path());
+            require(!QFileInfo::exists(destination) && !QFileInfo::exists(first.filePath(QStringLiteral("languages.tsv"))), "interrupted first import restores genuinely empty root");
         }
         // Both ordinary and embedded alias payloads now pass the full native decoder.
         for (const QByteArray &magic : {QByteArray("DPR2"), QByteArray("DPR3"), QByteArray("DPR4")}) {

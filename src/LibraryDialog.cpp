@@ -179,9 +179,11 @@ LibraryDialog::LibraryDialog(QWidget *parent, const QString &root,
         const auto *item = selectedDictionary(available_);
         downloadButton_->setEnabled(!busy_ && item && !item->data(0, Qt::UserRole + 1).toBool());
     });
-    setBusy(false);
-    refreshInstalled();
-    QTimer::singleShot(0, this, &LibraryDialog::refreshCatalogs);
+    refreshInstalled([this](const QString &error) {
+        finishOperation(error, !error.isEmpty());
+        if (error.isEmpty() && !closeWhenDone_)
+            QTimer::singleShot(0, this, &LibraryDialog::refreshCatalogs);
+    });
 }
 LibraryDialog::~LibraryDialog() {
     cancelled_.store(true);
@@ -245,7 +247,7 @@ LibraryStorage::Progress LibraryDialog::progressCallback() {
         }, Qt::QueuedConnection);
     };
 }
-void LibraryDialog::runWorker(std::function<void()> task, std::function<void(const QString &)> finished) {
+void LibraryDialog::runWorker(std::function<void()> task, std::function<void(const QString &)> finished, bool reconcileInstalled) {
     auto error = std::make_shared<QString>();
     auto validationDiagnostic = std::make_shared<QString>();
     auto unrestored = std::make_shared<bool>(false);
@@ -267,14 +269,20 @@ void LibraryDialog::runWorker(std::function<void()> task, std::function<void(con
         catch (...) { *error = QStringLiteral("An unexpected dictionary error occurred."); }
     });
     worker_ = worker;
-    connect(worker, &QThread::finished, this, [this, worker, finished = std::move(finished), error, validationDiagnostic, unrestored, root] {
+    connect(worker, &QThread::finished, this, [this, worker, finished = std::move(finished), error, validationDiagnostic, unrestored, root, reconcileInstalled] {
         worker_ = nullptr;
         worker->deleteLater();
         // Publish the changed-root fact even when the normal completion reports an error.
         if (*unrestored) {
             noteRootChange(root);
             changed_ = true;
-            refreshInstalled();
+            if (reconcileInstalled) {
+                // The failed mutation may have changed disk state. Reconcile once
+                // off-thread, then deliver the original error; never recurse on
+                // another recovery failure or finish the outer operation early.
+                refreshInstalled([finished = std::move(finished), error](const QString &) { finished(*error); });
+                return;
+            }
         }
         nativeValidationFailure_ = !validationDiagnostic->isEmpty();
         status_->setProperty("validationDiagnostic", *validationDiagnostic);
@@ -282,30 +290,42 @@ void LibraryDialog::runWorker(std::function<void()> task, std::function<void(con
     });
     worker->start();
 }
-void LibraryDialog::refreshInstalled() {
-    installed_->clear();
-    try {
-        dictionaries_ = LibraryStorage::installed(root_);
-        qint64 total = 0;
-        for (int i = 0; i < dictionaries_.size(); ++i) {
-            const auto &dictionary = dictionaries_[i];
-            auto *item = new QTreeWidgetItem(installed_, {dictionary.heading,
-                dictionary.words < 0 ? QStringLiteral("-") : QLocale().toString(dictionary.words),
-                LibraryStorage::formatBytes(dictionary.bytes)});
-            item->setData(0, Qt::UserRole, i);
-            item->setToolTip(0, dictionary.path);
-            total += dictionary.bytes;
+void LibraryDialog::refreshInstalled(std::function<void(const QString &)> finished) {
+    setBusy(true, QStringLiteral("Opening dictionary library"));
+    // Recovery is indivisible; close waits for its existing worker to finish.
+    cancelButton_->setEnabled(false);
+    const QString root = root_;
+    auto listed = std::make_shared<QList<LibraryStorage::Dictionary>>();
+    auto recovered = std::make_shared<bool>(false);
+    runWorker([root, listed, recovered] {
+        *recovered = QFileInfo::exists(QDir(root).filePath(QStringLiteral(".desktop-mutation.json")));
+        *listed = LibraryStorage::installed(root);
+    }, [this, listed, recovered, root, finished = std::move(finished)](const QString &error) {
+        installed_->clear();
+        dictionaries_ = error.isEmpty() ? *listed : QList<LibraryStorage::Dictionary>{};
+        if (*recovered) { noteRootChange(root); changed_ = true; }
+        if (error.isEmpty()) {
+            qint64 total = 0;
+            for (int i = 0; i < dictionaries_.size(); ++i) {
+                const auto &dictionary = dictionaries_[i];
+                auto *item = new QTreeWidgetItem(installed_, {dictionary.heading,
+                        dictionary.words < 0 ? QStringLiteral("-") : QLocale().toString(dictionary.words),
+                        LibraryStorage::formatBytes(dictionary.bytes)});
+                item->setData(0, Qt::UserRole, i);
+                item->setToolTip(0, dictionary.path);
+                total += dictionary.bytes;
+            }
+            installedSummary_->setText(dictionaries_.isEmpty()
+                ? QStringLiteral("No dictionaries yet. Import a file or download one below.")
+                : QStringLiteral("%1 %2, %3").arg(dictionaries_.size())
+                        .arg(dictionaries_.size() == 1 ? QStringLiteral("dictionary") : QStringLiteral("dictionaries"), LibraryStorage::formatBytes(total)));
+        } else {
+            installedSummary_->setText(QStringLiteral("Cannot read this dictionary folder."));
         }
-        installedSummary_->setText(dictionaries_.isEmpty()
-            ? QStringLiteral("No dictionaries yet. Import a file or download one below.")
-            : QStringLiteral("%1 %2, %3").arg(dictionaries_.size())
-                .arg(dictionaries_.size() == 1 ? QStringLiteral("dictionary") : QStringLiteral("dictionaries"), LibraryStorage::formatBytes(total)));
-    } catch (const std::exception &e) {
-        dictionaries_.clear();
-        installedSummary_->setText(QStringLiteral("Cannot read this dictionary folder."));
-        status_->setText(exceptionText(e));
-    }
-    refreshCatalogView();
+        refreshCatalogView();
+        if (finished) finished(error);
+        else finishOperation(error, !error.isEmpty());
+    }, false);
 }
 void LibraryDialog::refreshCatalogView() {
     const auto *selected = selectedDictionary(available_);
@@ -385,10 +405,12 @@ void LibraryDialog::startImport(const QString &file, const QByteArray &hash, qin
                 if (!commitError.isEmpty()) { finishOperation(commitError, true); return; }
                 noteRootChange(root);
                 changed_ = true;
-                refreshInstalled();
                 const auto &dictionary = (*prepared)->dictionary;
-                finishOperation(QStringLiteral("Installed %1: %2 %3.").arg(dictionary.heading,
-                    QLocale().toString(dictionary.words), dictionary.words == 1 ? QStringLiteral("word") : QStringLiteral("words")));
+                const QString message = QStringLiteral("Installed %1: %2 %3.").arg(dictionary.heading,
+                    QLocale().toString(dictionary.words), dictionary.words == 1 ? QStringLiteral("word") : QStringLiteral("words"));
+                refreshInstalled([this, message](const QString &error) {
+                    finishOperation(error.isEmpty() ? message : error, !error.isEmpty());
+                });
             });
     });
 }
@@ -408,8 +430,10 @@ void LibraryDialog::removeSelected() {
             if (!error.isEmpty()) { finishOperation(error, true); return; }
             noteRootChange(root);
             changed_ = true;
-            refreshInstalled();
-            finishOperation(QStringLiteral("Removed %1.").arg(dictionary.heading));
+            const QString message = QStringLiteral("Removed %1.").arg(dictionary.heading);
+            refreshInstalled([this, message](const QString &error) {
+                finishOperation(error.isEmpty() ? message : error, !error.isEmpty());
+            });
         });
 }
 QNetworkReply *LibraryDialog::get(const QUrl &url) {

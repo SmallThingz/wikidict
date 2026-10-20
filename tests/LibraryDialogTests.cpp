@@ -1,5 +1,6 @@
 #include "LibraryDialog.hpp"
 #include "LibraryStore.hpp"
+#include "LibraryStoreRecovery_p.hpp"
 #include <QAbstractButton>
 #include <QApplication>
 #include <QItemSelectionModel>
@@ -159,9 +160,38 @@ int main(int argc, char **argv) {
             require(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size(), "write framed UI fixture");
         }
         QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        // The real pending-recovery path must return to the event loop before
+        // publishing its recovered listing; no user files or worker test hook.
+        {
+            const QString recoveryRoot = temp.filePath(QStringLiteral("restart-library"));
+            std::atomic_bool cancel = false;
+            auto prepared = LibraryStorage::prepareImport(recoveryRoot, source, {}, -1, cancel,
+                [](const QString &, qint64, qint64) {});
+            LibraryStorage::commitImport(recoveryRoot, *prepared);
+            const auto prior = LibraryStorage::installed(recoveryRoot).first();
+            QFile original(prior.path);
+            require(original.open(QIODevice::ReadOnly), "read recovery fixture");
+            const QByteArray priorBytes = original.readAll(); original.close();
+            QTemporaryDir staging(QDir(recoveryRoot).filePath(QStringLiteral(".import-XXXXXX")));
+            LibraryStorage::detail::beginMutation(recoveryRoot, staging, {prior.path, prior.path + QStringLiteral(".xz")});
+            require(QFile::rename(prior.path, staging.filePath(QStringLiteral("previous-0"))), "stage interrupted replacement");
+            LibraryDialog recovering(nullptr, recoveryRoot);
+            recovering.show();
+            auto *recoveryProgress = control<QProgressBar>(recovering, "libraryProgress");
+            require(recoveryProgress->isVisible() && !control<QPushButton>(recovering, "importDictionary")->isEnabled(), "recovery starts asynchronously with protected loading controls");
+            bool eventLoopServiced = false;
+            QTimer::singleShot(0, &recovering, [&] { eventLoopServiced = true; });
+            require(QTest::qWaitFor([&] { return !recoveryProgress->isVisible(); }, 15000), "pending recovery listing finishes");
+            require(eventLoopServiced && control<QTreeWidget>(recovering, "installedDictionaries")->topLevelItemCount() == 1, "event loop and recovered dictionary listing remain available");
+            QFile restored(prior.path);
+            require(restored.open(QIODevice::ReadOnly) && restored.readAll() == priorBytes, "UI worker restores exact prior bytes");
+            require(recovering.libraryChanged() && recovering.originalRootChanged(), "recovered root reloads existing reader");
+            require(!QFileInfo::exists(staging.path()) && !QFileInfo::exists(QDir(recoveryRoot).filePath(QStringLiteral(".desktop-mutation.json"))), "successful UI recovery retires owned staging and journal");
+            recovering.close();
+        }
         LibraryDialog dialog(nullptr, temp.filePath(QStringLiteral("dictionaries")));
         dialog.show();
-        QTest::qWait(50);
+        require(QTest::qWaitFor([&] { return !control<QProgressBar>(dialog, "libraryProgress")->isVisible(); }, 15000), "initial asynchronous library listing settles");
         auto *installed = control<QTreeWidget>(dialog, "installedDictionaries");
         auto *status = control<QLabel>(dialog, "libraryStatus");
         auto *progress = control<QProgressBar>(dialog, "libraryProgress");

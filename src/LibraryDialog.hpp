@@ -31,7 +31,7 @@ protected:
     void reject() override;
 private:
     friend class MainWindowTest;
-    void refreshInstalled();
+    void refreshInstalled(std::function<void(const QString &)> finished = {});
     void refreshCatalogView();
     void chooseRoot();
     void noteRootChange(const QString &root);
@@ -45,7 +45,7 @@ private:
     void startImport(const QString &file, const QByteArray &hash = {}, qint64 bytes = -1, const QString &sourceName = {});
     void finishOperation(const QString &message, bool error = false);
     void setBusy(bool busy, const QString &label = {});
-    void runWorker(std::function<void()> task, std::function<void(const QString &)> finished);
+    void runWorker(std::function<void()> task, std::function<void(const QString &)> finished, bool reconcileInstalled = true);
     LibraryStorage::Progress progressCallback();
     QNetworkReply *get(const QUrl &url);
     void cancelOperation();

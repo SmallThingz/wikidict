@@ -44,6 +44,8 @@ struct PreparedImport {
 };
 using Progress = std::function<void(const QString &, qint64, qint64)>;
 
+// Restore an interrupted library mutation before opening its installed records.
+void recoverPendingMutation(const QString &root);
 QString defaultSource();
 QString sourceHost(const QString &root);
 QString editionIdentity(const QString &root);

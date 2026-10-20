@@ -345,6 +345,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
         auto loaded = std::make_shared<LoadedDataset>();
         try {
             if (root.isEmpty()) throw DictApiError("Choose the folder containing your compiled dictionaries.");
+            LibraryStorage::recoverPendingMutation(root);
             loaded->originRoot = QFileInfo(root).canonicalFilePath();
             loaded->originEdition = LibraryStorage::editionIdentity(root);
             if (!expectedRoot.isEmpty() && (loaded->originRoot != expectedRoot || loaded->originEdition != expectedEdition))

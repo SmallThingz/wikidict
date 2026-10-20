@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLockFile>
@@ -120,16 +121,6 @@ void saveMetadata(const QString &root, QJsonObject object) {
     if (!file.open(QIODevice::WriteOnly)) return; // This cache is disposable.
     const QByteArray bytes = QJsonDocument(object).toJson(QJsonDocument::Compact);
     if (file.write(bytes) == bytes.size()) file.commit();
-}
-void restoreBackups(const QList<QPair<QString, QString>> &backups, QTemporaryDir &directory) {
-    bool restored = true;
-    for (const auto &backup : backups) {
-        if (!QFile::rename(backup.second, backup.first)) restored = false;
-    }
-    if (!restored) {
-        directory.setAutoRemove(false);
-        throw UnrestoredMutation((QStringLiteral("The operation failed and an existing dictionary could not be restored. Its files are preserved in %1.").arg(directory.path())).toStdString());
-    }
 }
 void clearDerivedIndex(const QString &path) {
     const QDir folder(QFileInfo(path).absolutePath());
@@ -289,18 +280,123 @@ void decompress(const QString &source, const QString &destination, const QString
 }
 }
 
-void detail::rollbackImport(PreparedImport &prepared,
-        const QList<QPair<QString, QString>> &backups, const QString &markerPath,
-        bool published, bool markerCommitted) {
-    const bool publishedRestored = !published || QFile::rename(prepared.dictionary.path, prepared.stagedFile);
-    if (!publishedRestored) prepared.directory->setAutoRemove(false);
-    // An occupied destination must not prevent independent recovery actions.
-    const bool markerRestored = !markerCommitted || QFile::remove(markerPath);
-    restoreBackups(backups, *prepared.directory);
-    if (!publishedRestored)
-        throw UnrestoredMutation(QStringLiteral("The import could not be rolled back. Recovery files remain in %1.").arg(prepared.directory->path()).toStdString());
-    if (!markerRestored)
-        throw UnrestoredMutation(QStringLiteral("The dictionary was restored, but its edition marker could not be rolled back.").toStdString());
+namespace {
+QString mutationJournal(const QString &root) {
+    return QDir(root).filePath(QStringLiteral(".desktop-mutation.json"));
+}
+QByteArray payloadHash(const QString &path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) fail(QStringLiteral("Cannot read the installed dictionary for recovery."));
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (!hash.addData(&file)) fail(QStringLiteral("Cannot read the installed dictionary for recovery."));
+    return hash.result().toHex();
+}
+void atomicBytes(const QString &path, const QByteArray &bytes) {
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
+        fail(QStringLiteral("Cannot save dictionary recovery metadata."));
+}
+// Called only with .library.lock held. Repeating this after another interruption
+// restores the same prior state; a backup is never discarded before restoration.
+void recoverMutationLocked(const QString &root) {
+    try {
+    const QString journalPath = mutationJournal(root);
+    if (!QFileInfo::exists(journalPath)) return;
+    const auto document = QJsonDocument::fromJson(readFile(journalPath, 8 * 1024 * 1024));
+    const auto journal = document.object();
+    const QString directory = journal.value(QStringLiteral("directory")).toString();
+    const QFileInfo folder(directory);
+    if (journal.value(QStringLiteral("version")).toInt() != 1 || folder.absolutePath() != QDir(root).absolutePath()
+        || !(folder.fileName().startsWith(QStringLiteral(".import-")) || folder.fileName().startsWith(QStringLiteral(".remove-"))))
+        fail(QStringLiteral("Dictionary recovery metadata is incomplete. Recovery files have been retained."));
+    const QString state = journal.value(QStringLiteral("state")).toString();
+    if (state != QStringLiteral("pending") && state != QStringLiteral("committed"))
+        fail(QStringLiteral("Dictionary recovery state is incomplete. Recovery files have been retained."));
+    if (state == QStringLiteral("committed")) {
+        if (QDir(directory).exists() && !QDir(directory).removeRecursively())
+            fail(QStringLiteral("Cannot retire completed dictionary staging. Recovery metadata has been retained."));
+        if (!QFile::remove(journalPath)) fail(QStringLiteral("Cannot finish dictionary cleanup."));
+        return;
+    }
+    QString failure;
+    auto attempt = [&](const auto &restore) {
+        try { restore(); }
+        catch (const std::exception &error) {
+            if (failure.isEmpty()) failure = QString::fromUtf8(error.what());
+        }
+    };
+    for (const auto &value : journal.value(QStringLiteral("payloads")).toArray()) {
+        attempt([&] {
+        const auto item = value.toObject();
+        const QString path = QDir(root).filePath(item.value(QStringLiteral("path")).toString());
+        const QString backup = QDir(directory).filePath(item.value(QStringLiteral("backup")).toString());
+        if (QFileInfo::exists(backup)) {
+            if (payloadHash(backup) != item.value(QStringLiteral("sha256")).toString().toLatin1())
+                fail(QStringLiteral("Dictionary recovery copy has changed. Recovery files have been retained."));
+            if ((QFileInfo::exists(path) && !QFile::remove(path)) || !QFile::rename(backup, path))
+                fail(QStringLiteral("Cannot restore the installed dictionary. Recovery files have been retained."));
+        } else if (item.value(QStringLiteral("existed")).toBool()) {
+            if (!QFileInfo::exists(path) || payloadHash(path) != item.value(QStringLiteral("sha256")).toString().toLatin1())
+                fail(QStringLiteral("Dictionary recovery is incomplete. Recovery files have been retained."));
+        } else if (QFileInfo::exists(path) && !QFile::remove(path)) {
+            fail(QStringLiteral("Cannot restore the dictionary folder. Recovery files have been retained."));
+        }
+        });
+    }
+    for (const auto &value : journal.value(QStringLiteral("metadata")).toArray()) {
+        attempt([&] {
+        const auto item = value.toObject();
+        const QString path = QDir(root).filePath(item.value(QStringLiteral("path")).toString());
+        if (item.value(QStringLiteral("existed")).toBool())
+            atomicBytes(path, QByteArray::fromBase64(item.value(QStringLiteral("bytes")).toString().toLatin1()));
+        else if (QFileInfo::exists(path) && !QFile::remove(path))
+            fail(QStringLiteral("Cannot restore dictionary metadata. Recovery files have been retained."));
+        });
+    }
+    if (!failure.isEmpty()) fail(failure);
+    if (QDir(directory).exists() && !QDir(directory).removeRecursively())
+        fail(QStringLiteral("Cannot retire dictionary recovery staging. Recovery metadata has been retained."));
+    if (!QFile::remove(journalPath)) fail(QStringLiteral("Cannot finish dictionary recovery."));
+    } catch (const std::exception &error) {
+        throw UnrestoredMutation(error.what());
+    }
+}
+void finishMutationLocked(const QString &root) {
+    const QString path = mutationJournal(root);
+    auto journal = QJsonDocument::fromJson(readFile(path, 8 * 1024 * 1024)).object();
+    journal.insert(QStringLiteral("state"), QStringLiteral("committed"));
+    atomicBytes(path, QJsonDocument(journal).toJson());
+    recoverMutationLocked(root);
+}
+}
+void detail::beginMutation(const QString &root, QTemporaryDir &directory, const QStringList &paths) {
+    QJsonArray payloads, metadata;
+    for (qsizetype i = 0; i < paths.size(); ++i) {
+        const bool existed = QFileInfo::exists(paths[i]);
+        if (QFileInfo(paths[i]).isSymLink()) fail(QStringLiteral("Cannot change a dictionary that is a symbolic link."));
+        payloads.append(QJsonObject{{QStringLiteral("path"), QDir(root).relativeFilePath(paths[i])},
+            {QStringLiteral("backup"), QStringLiteral("previous-%1").arg(i)},
+            {QStringLiteral("existed"), existed},
+            {QStringLiteral("sha256"), existed ? QString::fromLatin1(payloadHash(paths[i])) : QString()}});
+    }
+    for (const auto &name : {QStringLiteral("languages.tsv"), QStringLiteral(".desktop-edition")}) {
+        const QString path = QDir(root).filePath(name);
+        const bool existed = QFileInfo::exists(path);
+        metadata.append(QJsonObject{{QStringLiteral("path"), name}, {QStringLiteral("existed"), existed},
+            {QStringLiteral("bytes"), existed ? QString::fromLatin1(readFile(path, 2 * 1024 * 1024).toBase64()) : QString()}});
+    }
+    if (QFileInfo::exists(mutationJournal(root))) fail(QStringLiteral("A dictionary operation needs recovery first."));
+    atomicBytes(mutationJournal(root), QJsonDocument(QJsonObject{{QStringLiteral("version"), 1},
+        {QStringLiteral("state"), QStringLiteral("pending")},
+        {QStringLiteral("directory"), directory.path()}, {QStringLiteral("payloads"), payloads},
+        {QStringLiteral("metadata"), metadata}}).toJson());
+    directory.setAutoRemove(false); // Survives caught errors and ordinary process termination.
+}
+void recoverPendingMutation(const QString &root) {
+    if (root.isEmpty() || !QFileInfo::exists(mutationJournal(root))) return;
+    QLockFile lock(QDir(root).filePath(QStringLiteral(".library.lock")));
+    if (!lock.tryLock()) fail(QStringLiteral("Another dictionary operation is using this folder. Try again when it finishes."));
+    recoverMutationLocked(root);
 }
 
 PreparedImport::~PreparedImport() = default;
@@ -382,6 +478,7 @@ QString formatBytes(qint64 bytes) {
     return QStringLiteral("%1 GiB").arg(bytes / (1024.0 * 1024 * 1024), 0, 'f', 2);
 }
 QList<Dictionary> installed(const QString &root) {
+    recoverPendingMutation(root);
     QList<Dictionary> result;
     if (root.isEmpty() || !QDir(root).exists()) return result;
     const auto cache = metadata(root);
@@ -415,6 +512,7 @@ bool containsDictionary(const QString &root, const Dictionary &dictionary) {
 }
 std::shared_ptr<PreparedImport> prepareImport(const QString &root, const QString &source,
         const QByteArray &expectedHash, qint64 expectedBytes, const std::atomic_bool &cancel, const Progress &progress, const QString &sourceName) {
+    recoverPendingMutation(root);
     ensureRoot(root);
     auto prepared = std::make_shared<PreparedImport>();
     prepared->directory = std::make_unique<QTemporaryDir>(QDir(root).filePath(QStringLiteral(".import-XXXXXX")));
@@ -466,9 +564,11 @@ std::shared_ptr<PreparedImport> prepareImport(const QString &root, const QString
     return prepared;
 }
 void commitImport(const QString &root, PreparedImport &prepared) {
+    recoverPendingMutation(root);
     ensureRoot(root);
     QLockFile lock(QDir(root).filePath(QStringLiteral(".library.lock")));
     if (!lock.tryLock()) fail(QStringLiteral("Another dictionary operation is using this folder. Try again when it finishes."));
+    recoverMutationLocked(root);
     checkEditionGroup(root, prepared.editionGroup);
     QStringList languages = headings(root);
     const auto &dictionary = prepared.dictionary;
@@ -485,26 +585,27 @@ void commitImport(const QString &root, PreparedImport &prepared) {
         const QByteArray bytes = prepared.editionGroup.toUtf8() + '\n';
         if (!marker.open(QIODevice::WriteOnly) || marker.write(bytes) != bytes.size()) fail(QStringLiteral("Cannot save the dictionary edition."));
     }
+    detail::beginMutation(root, *prepared.directory, {raw, raw + QStringLiteral(".xz")});
     QList<QPair<QString, QString>> backups;
-    bool published = false;
-    bool markerCommitted = false;
     try {
+        qsizetype position = 0;
         for (const QString &old : {raw, raw + QStringLiteral(".xz")}) {
+            const QString backupName = QStringLiteral("previous-%1").arg(position++);
             if (!QFileInfo::exists(old)) continue;
             if (QFileInfo(old).isSymLink()) fail(QStringLiteral("Cannot replace a dictionary that is a symbolic link."));
-            const QString backup = prepared.directory->filePath(QStringLiteral("previous-%1").arg(backups.size()));
+            const QString backup = prepared.directory->filePath(backupName);
             if (!QFile::rename(old, backup)) fail(QStringLiteral("Cannot replace the existing dictionary. Check folder permissions."));
             backups.append({old, backup});
         }
         if (!QFile::rename(prepared.stagedFile, dictionary.path)) fail(QStringLiteral("Cannot finish installing the dictionary. Check folder permissions."));
-        published = true;
         if (needsMarker) {
             if (!marker.commit()) fail(QStringLiteral("Cannot finish saving the dictionary edition."));
-            markerCommitted = true;
         }
         if (!index.commit()) fail(QStringLiteral("Cannot finish updating the dictionary list: %1").arg(index.errorString()));
+        finishMutationLocked(root);
+        prepared.directory->setAutoRemove(true);
     } catch (...) {
-        detail::rollbackImport(prepared, backups, markerPath, published, markerCommitted);
+        recoverMutationLocked(root);
         throw;
     }
     auto cache = metadata(root);
@@ -521,9 +622,11 @@ void commitImport(const QString &root, PreparedImport &prepared) {
     saveMetadata(root, cache);
 }
 void removeDictionary(const QString &root, const Dictionary &dictionary) {
+    recoverPendingMutation(root);
     ensureRoot(root);
     QLockFile lock(QDir(root).filePath(QStringLiteral(".library.lock")));
     if (!lock.tryLock()) fail(QStringLiteral("Another dictionary operation is using this folder. Try again when it finishes."));
+    recoverMutationLocked(root);
     QStringList languages = headings(root);
     if (dictionary.kind == QStringLiteral("language")) languages.removeAll(dictionary.heading);
     QTemporaryDir removed(QDir(root).filePath(QStringLiteral(".remove-XXXXXX")));
@@ -532,18 +635,23 @@ void removeDictionary(const QString &root, const Dictionary &dictionary) {
     QSaveFile index(QDir(root).filePath(QStringLiteral("languages.tsv")));
     const QByteArray content = manifest(languages);
     if (!index.open(QIODevice::WriteOnly) || index.write(content) != content.size()) fail(QStringLiteral("Cannot update the dictionary list."));
+    detail::beginMutation(root, removed, {raw, raw + QStringLiteral(".xz")});
     QList<QPair<QString, QString>> backups;
     try {
+        qsizetype position = 0;
         for (const QString &old : {raw, raw + QStringLiteral(".xz")}) {
+            const QString backupName = QStringLiteral("previous-%1").arg(position++);
             if (!QFileInfo::exists(old)) continue;
             if (QFileInfo(old).isSymLink()) fail(QStringLiteral("Cannot remove a dictionary that is a symbolic link."));
-            const QString backup = removed.filePath(QStringLiteral("dictionary-%1").arg(backups.size()));
+            const QString backup = removed.filePath(backupName);
             if (!QFile::rename(old, backup)) fail(QStringLiteral("Cannot remove this dictionary. Check folder permissions."));
             backups.append({old, backup});
         }
         if (!index.commit()) fail(QStringLiteral("Cannot finish updating the dictionary list."));
+        finishMutationLocked(root);
+        removed.setAutoRemove(true);
     } catch (...) {
-        restoreBackups(backups, removed);
+        recoverMutationLocked(root);
         throw;
     }
     auto cache = metadata(root);

@@ -2,10 +2,10 @@
 
 #include "LibraryStore.hpp"
 #include <QPair>
+#include <QStringList>
 
 // Internal transaction recovery shared with the focused storage regression.
 namespace LibraryStorage::detail {
-void rollbackImport(PreparedImport &prepared,
-    const QList<QPair<QString, QString>> &backups, const QString &markerPath,
-    bool published, bool markerCommitted);
+void beginMutation(const QString &root, QTemporaryDir &directory, const QStringList &paths);
+
 }
