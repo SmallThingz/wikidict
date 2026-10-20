@@ -577,7 +577,7 @@ fn resolveAmExternalCategoryHeading(codes: LanguageCodes, value: []const u8) ?Re
         if (title.id != 14) return null;
         const name = std.mem.trim(u8, title.text, " \t\r\n");
         const target = codes.resolveStrong(name) orelse codes.resolveTrusted(name) orelse return null;
-        return if (std.mem.eql(u8, target.code, displayed.code)) target else null;
+        return if (std.mem.eql(u8, target.code, displayed.code)) displayed else null;
     }
     return null;
 }
@@ -7716,4 +7716,25 @@ test "Amharic current-edition external category heading keeps its explicit owner
     try std.testing.expectEqualStrings("en", decoded.entry.language_code);
     try std.testing.expect(std.mem.indexOf(u8, record.payload, "ገለፃ/ትርጉም") != null);
     try std.testing.expect(std.mem.indexOf(u8, record.payload, "ክብድ ትዕምርት") != null);
+}
+
+test "Amharic external heading fallback retains the original display label" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var namespaces = try AmharicSupportCategoryFixture.namespaces(arena.allocator());
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap("am\t1\t1\t0\t0\thttps://am.wiktionary.org/wiki/$1\n");
+    const Local = struct {
+        fn get(_: ?*const anyopaque, name: []const u8) ?[]const u8 {
+            return if (std.mem.eql(u8, name, "እንግሊዝኛ")) "en" else null;
+        }
+    };
+    const heading = "[https://am.wiktionary.org/wiki/%E1%88%98%E1%8B%B0%E1%89%A5:%E1%8A%A5%E1%8A%95%E1%8C%8D%E1%88%8A%E1%8B%9D%E1%8A%9B እንግሊዝኛ]";
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .namespace_catalog = &namespaces };
+    const result = resolveAmExternalCategoryHeading(codes, heading).?;
+    const label_start = std.mem.lastIndexOfScalar(u8, heading, ' ').? + 1;
+    const label = heading[label_start .. heading.len - 1];
+    try std.testing.expectEqualStrings("en", result.code);
+    try std.testing.expect(result.heading.ptr == label.ptr);
+    try std.testing.expectEqual(label.len, result.heading.len);
 }
