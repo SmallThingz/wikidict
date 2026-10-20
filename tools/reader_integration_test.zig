@@ -52,7 +52,13 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
         .{ .cells = &.{ .{ .spans = &.{.{ .text = "Singular" }}, .header = true }, .{ .spans = &.{.{ .text = "Plural" }}, .header = true } } },
         .{ .cells = &.{ .{ .spans = &.{.{ .text = "Nominative" }} }, .{ .spans = &.{.{ .text = "cat" }} }, .{ .spans = &.{.{ .text = "cats" }} } } },
     };
+    const swatch_fallback = [_]enc.presentation_types.Row{.{ .cells = &.{.{ .spans = &.{.{ .text = "Valid swatch fallback" }} }} }};
+    const malformed_fallback = [_]enc.presentation_types.Row{.{ .cells = &.{.{ .spans = &.{.{ .text = "Malformed swatch fallback" }} }} }};
+    const unknown_fallback = [_]enc.presentation_types.Row{.{ .cells = &.{.{ .spans = &.{.{ .text = "Unknown swatch fallback" }} }} }};
     const noun_blocks = [_]enc.presentation_types.Block{
+        .{ .kind = .table, .feature = .{ .kind = "color_swatch", .data = "#ffff00" }, .table = .{ .rows = &swatch_fallback } },
+        .{ .kind = .table, .feature = .{ .kind = "color_swatch", .data = "#FFFF00" }, .table = .{ .rows = &malformed_fallback } },
+        .{ .kind = .table, .feature = .{ .kind = "unknown_swatch", .data = "#ffff00" }, .table = .{ .rows = &unknown_fallback } },
         .{ .kind = .definition, .depth = 1, .list_path = "#", .number = "1", .spans = &definition_spans },
         .{ .kind = .example, .depth = 1, .list_path = "#:", .spans = &example_spans },
         .{ .kind = .paragraph, .spans = &styled },
@@ -172,6 +178,7 @@ pub fn main(init: std.process.Init) !void {
 
     var h: Harness = .{ .a = a, .io = init.io };
     const bin = argv[1];
+    const ux_python = init.environ_map.get("WIKIDICT_READER_UX_PYTHON") orelse "python3";
     const ffi_test = argv[2];
     const ffi_output = try h.run(&.{ ffi_test, root, "cat" }, 0);
     try h.require(std.mem.indexOf(u8, ffi_output, "FFI_INTEGRATION_PASS") != null, "data-only C ABI");
@@ -188,6 +195,15 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, details_text, "Historical source") != null, "compiled supporting material renders");
     for ([_][]const u8{ "PREAMBLE", "After line break", "column A  column B", "Inflection table", "Reference content.", "Example image.svg", "Example pronunciation.ogg" }) |expected|
         try h.require(std.mem.indexOf(u8, details_text, expected) != null, expected);
+
+    try h.require(std.mem.count(u8, details_text, "Color sample #ffff00") == 1, "plain actual CLI swatch has one readable label");
+    try h.require(std.mem.indexOfScalar(u8, details_text, 0x1b) == null, "plain actual CLI emits no color escape");
+    try h.require(std.mem.indexOf(u8, details_text, "Valid swatch fallback") == null, "valid typed swatch replaces generic table");
+    for ([_][]const u8{ "Malformed swatch fallback", "Unknown swatch fallback" }) |fallback|
+        try h.require(std.mem.indexOf(u8, details_text, fallback) != null, "malformed and unknown swatches preserve actual table fallback");
+    const swatch_pty = try h.run(&.{ ux_python, "tools/verify_reader_ux.py", "--binary", bin, "--root", root, "--report", dir, "--swatch-only" }, 0);
+    try h.require(std.mem.indexOf(u8, swatch_pty, "CLI_SWATCH_PTY_PASS") != null, "actual pyte swatch sample/reset/narrow/resize/terminal-restoration route");
+    std.debug.print("CLI_SWATCH_PTY_PASS child summary/report: {s}\n", .{swatch_pty});
 
     _ = try h.run(&.{ bin, "save", "cat", "--root", root }, 0);
     _ = try h.run(&.{ bin, "save", "cat", "--root", root }, 0);

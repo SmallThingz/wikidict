@@ -2085,7 +2085,20 @@ fn processMain(
         "";
     // A complete page-wide hatnote is context for every emitted owner, even
     // Unclassified; only its prefix is shared, never another owner's body.
-    const shared_prefix: ?[]const u8 = if (try pageWideHatnotePrefix(page_allocator, codes, page_prefix))
+    const shared_swatch = blk: {
+        var arena = std.heap.ArenaAllocator.init(page_allocator);
+        defer arena.deinit();
+        var probe: @import("presentation_compile.zig").Renderer = .{ .a = arena.allocator(), .context = .{
+            .title = title,
+            .link_trail = codes.link_trail,
+            .namespace_catalog = codes.namespace_catalog,
+            .behavior_switches = codes.behavior_switches,
+            .image_options = codes.image_options,
+            .poem_phase = poem_phase,
+        } };
+        break :blk try probe.isPureColorSwatchPrefix(page_prefix);
+    };
+    const shared_prefix: ?[]const u8 = if (shared_swatch or try pageWideHatnotePrefix(page_allocator, codes, page_prefix))
         page_prefix
     else
         try sharedImagePrefix(page_allocator, codes, page_prefix);
@@ -7560,5 +7573,64 @@ test "linked language headings ignore navigation fragments without borrowing lab
             try std.testing.expect(!std.mem.eql(u8, span.target, row[3]));
         };
         try std.testing.expect(kept);
+    }
+}
+
+test "pure swatch page context is shared without lending lexical owner bodies" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const namespaces = try @import("namespace_registry").englishTestRegistry();
+    const Local = struct {
+        fn boundary(_: ?*const anyopaque, heading: []const u8) bool {
+            return std.mem.eql(u8, heading, "Unknown language");
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = namespaces, .get_fn = TestLanguages.get, .resolve_fn = TestLanguages.resolve, .trusted_fn = TestLanguages.resolve, .boundary_fn = Local.boundary };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const swatch = "{| style='background-color:#ffff00'\n| style='color:#ffff00' | <span style='font-family:monospace'>#ffff00</span>\n|}\n";
+    const owners = "==English==\n# [[EN_ACTION|EN_BODY]]\n==French==\n# [[FR_ACTION|FR_BODY]]\n==Unknown language==\n# [[UNKNOWN_ACTION|UNKNOWN_BODY]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "pure-swatch", "<!--context-->\n__NOEDITSECTION__\n" ++ swatch ++ owners, "<!--context-->\n__NOEDITSECTION__\n" ++ swatch ++ owners, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mixed-swatch", "UNOWNED_PROSE\n" ++ swatch ++ owners, "UNOWNED_PROSE\n" ++ swatch ++ owners, null);
+    _ = try writer.finish(codes);
+    inline for (.{ "English", "French", "Unclassified" }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        inline for (.{ "pure-swatch", "mixed-swatch" }) |title| {
+            const record = (try index.find(title)).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, title, .language, try blob.languageMetadata());
+            var features: usize = 0;
+            var own_actions: usize = 0;
+            var prose = false;
+            const own = if (std.mem.eql(u8, owner, "English")) "EN_ACTION" else if (std.mem.eql(u8, owner, "French")) "FR_ACTION" else "UNKNOWN_ACTION";
+            for (decoded.entry.sections) |section| for (section.blocks) |block| {
+                if (block.feature) |feature| {
+                    features += 1;
+                    try std.testing.expectEqualStrings("color_swatch", feature.kind);
+                    try std.testing.expectEqualStrings("#ffff00", feature.data);
+                    try std.testing.expectEqualStrings("#ffff00", block.table.?.rows[0].cells[0].spans[0].text);
+                }
+                for (block.spans) |span| {
+                    prose = prose or std.mem.indexOf(u8, span.text, "UNOWNED_PROSE") != null;
+                    if (span.kind == .link) {
+                        try std.testing.expectEqualStrings(own, span.target);
+                        own_actions += 1;
+                    }
+                }
+            };
+            try std.testing.expectEqual(@as(usize, 1), own_actions);
+            const expected_features: usize = if (std.mem.eql(u8, title, "pure-swatch") or std.mem.eql(u8, owner, "Unclassified")) 1 else 0;
+            try std.testing.expectEqual(expected_features, features);
+            try std.testing.expectEqual(std.mem.eql(u8, title, "mixed-swatch") and std.mem.eql(u8, owner, "Unclassified"), prose);
+            try std.testing.expectEqualStrings(if (std.mem.eql(u8, owner, "English")) "en" else if (std.mem.eql(u8, owner, "French")) "fr" else "", decoded.entry.language_code);
+        }
     }
 }

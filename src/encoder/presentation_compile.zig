@@ -2143,7 +2143,11 @@ pub const Renderer = struct {
                 self.fallbacks.unsupported_element = true;
             if (block_value.feature) |feature| {
                 self.fallbacks.unsupported_element = true;
-                try self.text(feature.data, style);
+                // Swatch tables already retain the hex text in their cell.
+                // Span-only poem projection cannot show the visual feature,
+                // but must not invent a duplicate copy of its text fallback.
+                if (!(block_value.kind == .table and block_value.table != null and std.mem.eql(u8, feature.kind, "color_swatch")))
+                    try self.text(feature.data, style);
             }
             if (block_value.list_path.len != 0) switch (block_value.list_path[block_value.list_path.len - 1]) {
                 '*' => try self.text("• ", style),
@@ -4371,6 +4375,107 @@ pub const Renderer = struct {
         return weight;
     }
 
+    fn canonicalSwatchHex(self: *Renderer, raw: []const u8) Error!?[]const u8 {
+        const value = trim(raw);
+        if (value.len != 7 or value[0] != '#') return null;
+        for (value[1..]) |byte| if (!std.ascii.isHex(byte)) return null;
+        const result = try self.a.dupe(u8, value);
+        for (result) |*byte| byte.* = std.ascii.toLower(byte.*);
+        return result;
+    }
+
+    // Only the explicit literal-hex declarations needed to identify a swatch.
+    // Complex CSS, shorthand backgrounds and duplicate relevant declarations
+    // are not evidence. Attribute/entity handling stays in the ordinary parser.
+    fn swatchCssHex(self: *Renderer, tag: syntax.Tag, property: []const u8) Error!?[]const u8 {
+        if ((try self.semanticAttribute(tag, "bgcolor")) != null or (try self.semanticAttribute(tag, "class")) != null or (try self.semanticAttribute(tag, "hidden")) != null) return null;
+        const css = (try self.semanticAttribute(tag, "style")) orelse return null;
+        if (std.mem.indexOfAny(u8, css, "'\"(){}[]\\!") != null or
+            std.mem.indexOf(u8, css, "/*") != null or std.mem.indexOf(u8, css, "*/") != null) return null;
+        var color: ?[]const u8 = null;
+        var declarations = std.mem.splitScalar(u8, css, ';');
+        while (declarations.next()) |raw| {
+            const declaration = trim(raw);
+            if (declaration.len == 0) continue;
+            const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse return null;
+            const name = trim(declaration[0..colon]);
+            if (std.ascii.eqlIgnoreCase(name, "background") or std.ascii.eqlIgnoreCase(name, "background-image")) return null;
+            if (std.ascii.eqlIgnoreCase(property, "color") and
+                (std.ascii.eqlIgnoreCase(name, "background-color") or std.ascii.eqlIgnoreCase(name, "background-image"))) return null;
+            if (std.ascii.eqlIgnoreCase(name, property)) {
+                if (color != null) return null;
+                color = (try self.canonicalSwatchHex(declaration[colon + 1 ..])) orelse return null;
+            } else if (std.ascii.eqlIgnoreCase(property, "background-color")) {
+                // Retain the captured swatch's simple decoration and dimensions;
+                // unknown CSS may suppress or transform the visible sample.
+                if (!oneOf(name, &.{ "border", "height", "width", "float" })) return null;
+            } else {
+                const value = trim(declaration[colon + 1 ..]);
+                if (std.ascii.eqlIgnoreCase(name, "font-size")) {
+                    if (!std.ascii.eqlIgnoreCase(value, "x-large")) return null;
+                } else if (std.ascii.eqlIgnoreCase(name, "text-align")) {
+                    if (!std.ascii.eqlIgnoreCase(value, "center")) return null;
+                } else return null;
+            }
+        }
+        return color;
+    }
+
+    fn swatchCellSourceAllowed(self: *Renderer, input: []const u8) Error!bool {
+        var cursor: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, input, cursor, '<')) |open| {
+            const tag = try self.semanticTagAt(input, open) orelse return false;
+            if (!tag.is("span") or (try self.semanticAttribute(tag, "class")) != null or (try self.semanticAttribute(tag, "hidden")) != null) return false;
+            if (try self.semanticAttribute(tag, "style")) |css| {
+                // Inline color/background declarations would override the
+                // explicit cell color; do not evaluate their cascade.
+                var declarations = std.mem.splitScalar(u8, css, ';');
+                while (declarations.next()) |raw| {
+                    if (trim(raw).len == 0) continue;
+                    const colon = std.mem.indexOfScalar(u8, raw, ':') orelse return false;
+                    const name = trim(raw[0..colon]);
+                    const value = trim(raw[colon + 1 ..]);
+                    if (!std.ascii.eqlIgnoreCase(name, "font-family") or
+                        (!std.ascii.eqlIgnoreCase(value, "monospaced") and !std.ascii.eqlIgnoreCase(value, "monospace"))) return false;
+                }
+            }
+            cursor = tag.end;
+        }
+        return true;
+    }
+
+    fn swatchFeature(self: *Renderer, table: Table, background: ?[]const u8, foreground: ?[]const u8) Error!?Feature {
+        const bg = background orelse return null;
+        const fg = foreground orelse return null;
+        if (self.truncated or !std.mem.eql(u8, bg, fg) or table.caption.len != 0 or table.rows.len != 1 or table.rows[0].cells.len != 1) return null;
+        const cell = table.rows[0].cells[0];
+        if (cell.header or cell.colspan != 1 or cell.rowspan != 1) return null;
+        for (cell.spans) |span| if (span.kind != .text or span.target.len != 0) return null;
+        const content = (try self.canonicalSwatchHex(try plainText(self.a, cell.spans))) orelse return null;
+        if (!std.mem.eql(u8, bg, content)) return null;
+        return .{ .kind = "color_swatch", .data = bg };
+    }
+
+    fn htmlSwatchFeature(self: *Renderer, tag: syntax.Tag, input: []const u8, table: Table, fostered: []const Block) Error!?Feature {
+        if (fostered.len != 0) return null;
+        const background = try self.swatchCssHex(tag, "background-color");
+        const cell = nextHtmlTableCell(input, 0) orelse return null;
+        const cell_pair = optionalTableEnd(input, cell.tag);
+        if (!try self.swatchCellSourceAllowed(input[cell.tag.end..cell_pair.inner_end])) return null;
+        // Row/group/column or other pre-cell containers can alter the sample.
+        // Refuse their attributes rather than evaluate CSS inheritance/cascade.
+        var pos: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, input[0..cell.open], pos, '<')) |open| {
+            const row_tag = try self.semanticTagAt(input, open) orelse {
+                pos = open + 1;
+                continue;
+            };
+            if (!row_tag.closing and ((try self.semanticAttribute(row_tag, "style")) != null or (try self.semanticAttribute(row_tag, "bgcolor")) != null or (try self.semanticAttribute(row_tag, "class")) != null or (try self.semanticAttribute(row_tag, "hidden")) != null)) return null;
+            pos = row_tag.end;
+        }
+        return self.swatchFeature(table, background, try self.swatchCssHex(cell.tag, "color"));
+    }
+
     fn htmlInlineStyle(self: *Renderer, tag: syntax.Tag, style: Style) Error!Style {
         var s = style;
         if (oneOf(tag.name, &.{ "b", "strong" })) s.bold = true;
@@ -5570,6 +5675,57 @@ pub const Renderer = struct {
         }
         return false;
     }
+
+    pub fn isPureColorSwatchPrefix(self: *Renderer, source: []const u8) Error!bool {
+        var cursor: usize = 0;
+        var table_source: ?[]const u8 = null;
+        while (cursor < source.len) {
+            if (std.ascii.isWhitespace(source[cursor])) {
+                cursor += 1;
+                continue;
+            }
+            if (starts(source[cursor..], "<!--")) {
+                const end = std.mem.indexOfPos(u8, source, cursor + 4, "-->") orelse return false;
+                cursor = end + 3;
+                continue;
+            }
+            const control = if (self.context.behavior_switches) |registry| try registry.matchAt(self.a, source, cursor) else syntax.behaviorSwitchEnd(source, cursor);
+            if (control) |end| {
+                cursor = end;
+                continue;
+            }
+            if (table_source != null) return false;
+            const begin = cursor;
+            if (starts(source[cursor..], "{|")) {
+                if (cursor != 0 and source[cursor - 1] != '\n') return false;
+                var at = syntax.logicalEnd(source, cursor);
+                var close: ?usize = null;
+                while (at < source.len) {
+                    at += 1;
+                    const end = syntax.logicalEnd(source, at);
+                    if (starts(trim(source[at..end]), "|}")) {
+                        const line = trim(source[at..end]);
+                        close = @intFromPtr(line.ptr) - @intFromPtr(source.ptr) + 2;
+                        break;
+                    }
+                    at = end;
+                }
+                cursor = close orelse return false;
+            } else {
+                const tag = try self.semanticTagAt(source, cursor) orelse return false;
+                if (!tag.is("table") or tag.closing or tag.self_closing) return false;
+                const pair = syntax.matchingTag(source, tag) orelse return false;
+                cursor = pair.end;
+            }
+            table_source = source[begin..cursor];
+        }
+        const table = table_source orelse return false;
+        const blocks = try self.renderBody(table);
+        if (self.fallbacks.any() or self.truncated or self.refs.items.len != 0 or self.media.items.len != 0 or blocks.len != 1 or blocks[0].kind != .table) return false;
+        const feature = blocks[0].feature orelse return false;
+        return std.mem.eql(u8, feature.kind, "color_swatch");
+    }
+
     pub fn renderBody(self: *Renderer, source: []const u8) Error![]const Block {
         const input = try self.prepareNumberedInput(source, .{});
         const numbering_before = self.context.external_links_prepared;
@@ -6525,7 +6681,7 @@ pub const Renderer = struct {
                         var fostered: std.ArrayList(Block) = .empty;
                         if (try self.htmlTable(wrapper_source[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{}))) |table_value| {
                             try blocks.appendSlice(self.a, fostered.items);
-                            try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value });
+                            try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value, .feature = try self.htmlSwatchFeature(tag, wrapper_source[tag.end..pair.inner_end], table_value, fostered.items) });
                         } else try self.block(&blocks, .preformatted, wrapper_source[0..pair.end], "", "", 0);
                     }
                 } else if (htmlHeadingLevel(tag)) |level| {
@@ -6624,7 +6780,9 @@ pub const Renderer = struct {
                         inline_line_end = syntax.logicalEnd(input, pos);
                     continue;
                 }
-                const table = try self.parseTable(input, pos);
+                const table_open = std.mem.indexOf(u8, clean, "{|").?;
+                const table_tag: syntax.Tag = .{ .name = "table", .attrs = clean[table_open + 2 ..], .end = 0, .closing = false, .self_closing = false };
+                const table = try self.parseTable(input, pos, try self.swatchCssHex(table_tag, "background-color"));
                 pos = table.end;
                 // A close-marker suffix remains on its authored physical line;
                 // it cannot introduce a new wiki list, heading or leading-space block.
@@ -6632,7 +6790,7 @@ pub const Renderer = struct {
                     inline_line_end = syntax.logicalEnd(input, pos);
                 if (table.table.rows.len != 0 or table.has_caption) {
                     try blocks.appendSlice(self.a, try self.indentTableBlocks(table.fostered, table_path));
-                    try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table.table, .depth = @intCast(@min(table_path.len, 255)), .list_path = table_path[0..@min(table_path.len, 255)] });
+                    try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table.table, .feature = table.feature, .depth = @intCast(@min(table_path.len, 255)), .list_path = table_path[0..@min(table_path.len, 255)] });
                 } else {
                     self.fallbacks.malformed_table = true;
                     // Rowless layout tables still contain ordinary lists/text.
@@ -7328,7 +7486,7 @@ pub const Renderer = struct {
         if (!defer_zero_rowspans) try self.resolveZeroRowspans(rows.items, 0);
         return .{ .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) };
     }
-    const TableResult = struct { table: Table, end: usize, body_end: usize, fostered: []const Block, has_caption: bool };
+    const TableResult = struct { table: Table, end: usize, body_end: usize, fostered: []const Block, has_caption: bool, feature: ?Feature = null };
     fn flushWikiTableFostered(self: *Renderer, blocks: *std.ArrayList(Block), source: *std.ArrayList(u8)) Error!void {
         if (source.items.len == 0) return;
         // Rendered spans may borrow their input; release the accumulated
@@ -7485,7 +7643,9 @@ pub const Renderer = struct {
         return found and depth == 0;
     }
 
-    fn parseTable(self: *Renderer, input: []const u8, start: usize) Error!TableResult {
+    fn parseTable(self: *Renderer, input: []const u8, start: usize, swatch_background: ?[]const u8) Error!TableResult {
+        var swatch_foreground: ?[]const u8 = null;
+        var swatch_allowed = true;
         var rows: std.ArrayList(Row) = .empty;
         var fostered: std.ArrayList(Block) = .empty;
         var cells: std.ArrayList(Cell) = .empty;
@@ -7508,6 +7668,7 @@ pub const Renderer = struct {
             const line = trim(raw_line);
             pos = if (end < input.len) end + 1 else end;
             if (wikiTableIndent(line) != null) {
+                swatch_allowed = false;
                 // Keep a nested table with its caption or cell. With neither owner,
                 // retain it as fostered source until the enclosing boundary.
                 const nested_source = if (caption_pending) &caption_source else if (current != null) &cell_source else &outside_source;
@@ -7524,6 +7685,7 @@ pub const Renderer = struct {
                 continue;
             }
             if (starts(line, "|}") or starts(line, "|-")) {
+                if (starts(line, "|-") and trim(line[2..]).len != 0) swatch_allowed = false;
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
                 try self.finishCell(&cells, &cell_source, &current);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
@@ -7556,6 +7718,8 @@ pub const Renderer = struct {
                     else
                         syntax.delimiter(line, "||", offset) orelse line.len;
                     const content = try self.cellContent(line[offset..split_at]);
+                    swatch_foreground = content.swatch_color;
+                    if (!try self.swatchCellSourceAllowed(content.text)) swatch_allowed = false;
                     current = .{ .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan };
                     try cell_source.appendSlice(self.a, content.text);
                     if (split_at == line.len) break;
@@ -7563,6 +7727,7 @@ pub const Renderer = struct {
                 }
             } else if (if (syntax.tagAt(line, 0)) |tag| !tag.closing and tag.is("tr") else false) {
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
+                swatch_allowed = false;
                 // A trailing malformed caption must not leave partial effects
                 // from this row fragment or the preceding fostered source.
                 var recover_raw_row = !htmlTableCaptionsComplete(line);
@@ -7595,6 +7760,7 @@ pub const Renderer = struct {
                 if (caption_source.items.len != 0) try caption_source.append(self.a, '\n');
                 try caption_source.appendSlice(self.a, raw_line);
             } else if (current != null) {
+                if (!try self.swatchCellSourceAllowed(raw_line)) swatch_allowed = false;
                 // A marker after an empty cell opener starts a block list;
                 // the same marker on the opener's own line stays inline text.
                 if (cell_source.items.len != 0 or (raw_line.len != 0 and (raw_line[0] == ' ' or std.mem.indexOfScalar(u8, "#*:;", raw_line[0]) != null or self.tableCellHeading(raw_line) != null)))
@@ -7616,7 +7782,9 @@ pub const Renderer = struct {
         if (body_end == input.len) self.fallbacks.malformed_table = true;
         if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
         try self.resolveZeroRowspans(rows.items, 0);
-        return .{ .table = .{ .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) }, .end = pos, .body_end = body_end, .fostered = try fostered.toOwnedSlice(self.a), .has_caption = has_caption };
+        const table_value: Table = .{ .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) };
+        const feature = if (swatch_allowed and fostered.items.len == 0 and body_end != input.len) try self.swatchFeature(table_value, swatch_background, swatch_foreground) else null;
+        return .{ .table = table_value, .feature = feature, .end = pos, .body_end = body_end, .fostered = try fostered.toOwnedSlice(self.a), .has_caption = has_caption };
     }
     fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *std.ArrayList(u8), current: *?Cell) Error!void {
         if (current.*) |value| {
@@ -7746,6 +7914,7 @@ pub const Renderer = struct {
                 .text = trim(raw[pipe + 1 ..]),
                 .colspan = try self.tableSpanAttr(tag, "colspan"),
                 .rowspan = try self.tableSpanAttr(tag, "rowspan"),
+                .swatch_color = try self.swatchCssHex(tag, "color"),
             };
         }
         return .{ .text = trim(raw) };
@@ -7791,7 +7960,7 @@ fn headingLineControlled(line: []const u8, matcher: ?syntax.ControlMatcher) ?Hea
     if (title.len == 0) return null;
     return .{ .level = heading.level, .title = title };
 }
-const CellContent = struct { text: []const u8, colspan: u16 = 1, rowspan: u16 = 1 };
+const CellContent = struct { text: []const u8, colspan: u16 = 1, rowspan: u16 = 1, swatch_color: ?[]const u8 = null };
 
 fn flattened(a: A, spans: []const Span) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
@@ -21668,4 +21837,119 @@ test "image link option text projection isolates renderer effects and propagates
     r.media_action_depth = max_depth;
     try std.testing.expectError(error.RenderLimit, r.mediaActionStyle(.{}, "Example.png", "[[Target]]"));
     try std.testing.expect(r.fallbacks.render_limit);
+}
+
+test "literal hex swatch tables preserve typed visual content and text through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = .{
+        .{ "{| title=\"Kleurmonster\" style=\"background-color: #ffff00; border: 1px solid black; height:50%; width:15%; float:right;\"\n| style=\"color: #ffff00; font-size: x-large; text-align:center;\" | <span style=\"font-family:monospaced;\">#ffff00</span>\n|}", "#ffff00" },
+        .{ "{| style='background-color:#008000'\n| style='color:#008000' | #008000\n|}", "#008000" },
+        .{ "<table style='BACKGROUND-COLOR:#A1B2C3'><tr><td style='COLOR:#a1b2c3'><span style='font-family:monospace'>#A1b2C3</span></td></tr></table>", "#a1b2c3" },
+    };
+    inline for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case[0]);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqual(Kind.table, blocks[0].kind);
+        const feature = blocks[0].feature.?;
+        try std.testing.expectEqualStrings("color_swatch", feature.kind);
+        try std.testing.expectEqualStrings(case[1], feature.data);
+        try std.testing.expectEqualStrings("", feature.language);
+        try std.testing.expectEqualStrings("none", feature.tail_kind);
+        try std.testing.expectEqualStrings("", feature.tail);
+        const table = blocks[0].table.?;
+        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+        const text = try plainText(a, table.rows[0].cells[0].spans);
+        try std.testing.expect(std.ascii.eqlIgnoreCase(trim(text), case[1]));
+        try std.testing.expect(!renderer.fallbacks.any());
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &[_]Section{.{ .blocks = blocks }}, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "swatch", .language, .{ .code = "en", .heading = "English" });
+        const actual = decoded.entry.sections[0].blocks[0];
+        try std.testing.expectEqualStrings("color_swatch", actual.feature.?.kind);
+        try std.testing.expectEqualStrings(case[1], actual.feature.?.data);
+        try std.testing.expectEqualStrings(text, actual.table.?.rows[0].cells[0].spans[0].text);
+    }
+}
+
+test "ordinary unsupported or conflicting color tables retain their existing fallback table" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_][]const u8{
+        "{|\n| #ffff00\n|}",
+        "{| style='background-color:#ffff00'\n| style='color:#000000' | #ffff00\n|}",
+        "{| style='background-color:#ffff00'\n| style='color:#ffff00' | other\n|}",
+        "{| style='background-color:#ffff00'\n| style='color:#ffff00' | [[target|#ffff00]]\n|}",
+        "{| style='background-color:#ffff00'\n| style='color:#ffff00' | #ffff00 || #ffff00\n|}",
+        "{| style='background-color:#ffff00'\n| style='color:#ffff00' | #ffff00\n|-\n| #ffff00\n|}",
+        "{| style='background-color:#ffff00'\n|+ caption\n| style='color:#ffff00' | #ffff00\n|}",
+        "{| style='background-color:#ffff00'\n! style='color:#ffff00' | #ffff00\n|}",
+        "{| style='background-color:#ffff00'\n| style='color:#ffff00' colspan=2 | #ffff00\n|}",
+        "{| style='background-color:#ffff00'\n|- style='background-color:#000000'\n| style='color:#ffff00' | #ffff00\n|}",
+        "<table style='background-color:#ffff00'><tr><td style='color:#ffff00'><span style='color:red'>#ffff00</span></td></tr></table>",
+        "<table style='background-color:#ffff00'><tr bgcolor=black><td style='color:#ffff00'>#ffff00</td></tr></table>",
+        "<table style='background-color:#ffff00'><td bgcolor=black style='color:#ffff00'>#ffff00</td></table>",
+        "<table style='background:yellow;background-color:#ffff00'><td style='color:#ffff00'>#ffff00</td></table>",
+        "<table style='background-color:#ff0'><td style='color:#ff0'>#ff0</td></table>",
+        "<table style='background-color:#ffff00;background-color:#ffff00'><td style='color:#ffff00'>#ffff00</td></table>",
+        "{| style='background-color:#ffff00;display:none'\n| style='color:#ffff00' | #ffff00\n|}",
+        "{| class=hidden style='background-color:#ffff00'\n| style='color:#ffff00' | #ffff00\n|}",
+        "{| style='background-color:#ffff00'\n| class=hidden style='color:#ffff00' | #ffff00\n|}",
+        "<table style='background-color:#ffff00;opacity:0'><td style='color:#ffff00'>#ffff00</td></table>",
+        "<table style='background-color:#ffff00'><td style='color:#ffff00;visibility:hidden'>#ffff00</td></table>",
+        "<table style='background-color:#ffff00'><td style='color:#ffff00'><span style='display:none'>#ffff00</span></td></table>",
+        "<table class=hidden style='background-color:#ffff00'><td style='color:#ffff00'>#ffff00</td></table>",
+        "<table style='background-color:#ffff00'><tr class=hidden><td style='color:#ffff00'>#ffff00</td></tr></table>",
+        "<table style='background-color:#ffff00'><td class=hidden style='color:#ffff00'>#ffff00</td></table>",
+        "<table style='background-color:#ffff00'><td style='color:#ffff00'><span class=hidden>#ffff00</span></td></table>",
+        "<table style='background-color:#ffff00'><tbody style='display:none'><tr><td style='color:#ffff00'>#ffff00</td></tr></tbody></table>",
+        "<table style='background-color:#ffff00'><thead class=hidden><tr><td style='color:#ffff00'>#ffff00</td></tr></thead></table>",
+        "<table style='background-color:#ffff00'><colgroup style='visibility:hidden'><col></colgroup><tr><td style='color:#ffff00'>#ffff00</td></tr></table>",
+        "<table style='background-color:#ffff00'><col style='background-color:black'><tr><td style='color:#ffff00'>#ffff00</td></tr></table>",
+        "<table hidden style='background-color:#ffff00'><td style='color:#ffff00'>#ffff00</td></table>",
+    };
+    for (cases) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expect(blocks.len != 0);
+        for (blocks) |block| try std.testing.expect(block.feature == null);
+    }
+}
+
+test "pure color swatch prefix shares only one recognized table and invisible context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const swatch = "{| style='background-color:#008000'\n| style='color:#008000' | #008000\n|}";
+    const yes = [_][]const u8{ swatch, "<!--context-->\n__NOEDITSECTION__\n" ++ swatch ++ "\n__NOTOC__<!--end-->" };
+    for (yes) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expect(try renderer.isPureColorSwatchPrefix(source));
+    }
+    const no = [_][]const u8{
+        "",                                                  "<!--only--> __NOTOC__",                                    "prose\n" ++ swatch,
+        swatch ++ "\nprose",                                 swatch ++ "\n" ++ swatch,                                   "__NOT_A_SWITCH__\n" ++ swatch,
+        "&lowbar;&lowbar;NOTOC&lowbar;&lowbar;\n" ++ swatch, "<nowiki>__NOTOC__</nowiki>\n" ++ swatch,                   "<nowiki>" ++ swatch ++ "</nowiki>",
+        "[[File:Image.svg]]\n" ++ swatch,                    "<div class='disambig-see-also'>hatnote</div>\n" ++ swatch,
+    };
+    for (no) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expect(!try renderer.isPureColorSwatchPrefix(source));
+    }
+}
+
+test "poem swatch projection keeps one textual fallback and its geometry limitation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("<poem><table style='background-color:#ffff00'><tr><td style='color:#ffff00'>#ffff00</td></tr></table></poem>", .{});
+    const text = try plainText(a, spans);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "#ffff00"));
+    try std.testing.expect(renderer.fallbacks.unsupported_element);
 }

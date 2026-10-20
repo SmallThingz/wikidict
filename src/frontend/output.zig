@@ -301,6 +301,23 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
     try w.writeByte('\n');
 }
 
+fn colorSwatchRgb(block: model.Block) ?[3]u8 {
+    if (block.kind != .table or block.table == null) return null;
+    const feature = block.feature orelse return null;
+    if (!std.mem.eql(u8, feature.kind, "color_swatch") or feature.language.len != 0 or
+        !std.mem.eql(u8, feature.tail_kind, "none") or feature.tail.len != 0) return null;
+    const data = feature.data;
+    if (data.len != 7 or data[0] != '#') return null;
+    for (data[1..]) |byte| {
+        if (!std.ascii.isDigit(byte) and !(byte >= 'a' and byte <= 'f')) return null;
+    }
+    return .{
+        std.fmt.parseInt(u8, data[1..3], 16) catch return null,
+        std.fmt.parseInt(u8, data[3..5], 16) catch return null,
+        std.fmt.parseInt(u8, data[5..7], 16) catch return null,
+    };
+}
+
 fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void {
     return blocksTextProjected(w, blocks, color, null);
 }
@@ -313,7 +330,11 @@ fn blocksTextProjected(w: *std.Io.Writer, blocks: []const model.Block, color: bo
             continue;
         }
         if (block.table) |table| {
-            try tableText(w, table, color, projection);
+            if (colorSwatchRgb(block)) |rgb| {
+                try w.splatByteAll(' ', @as(usize, @min(block.depth, 12)) * 2);
+                if (color) try w.print("[\x1b[48;2;{d};{d};{d}m  \x1b[0m] ", .{ rgb[0], rgb[1], rgb[2] });
+                try w.print("Color sample {s}\n\n", .{block.feature.?.data});
+            } else try tableText(w, table, color, projection);
             continue;
         }
         try w.splatByteAll(' ', @as(usize, @min(block.depth, 12)) * 2);
@@ -1598,4 +1619,75 @@ test "explained heading companions render once with exact title and level guards
     const plain_heading = [_]model.Span{.{ .text = "Noun" }};
     const plain_blocks = [_]model.Block{.{ .kind = .heading, .level = 3, .spans = &plain_heading }};
     try std.testing.expect(sectionHeadingCompanion(.{ .level = 3, .title = "Noun", .blocks = &plain_blocks }) == null);
+}
+
+test "typed color swatches render RGB samples and readable plain labels once" {
+    const types = @import("blob_encoder").presentation_types;
+    const spans = [_]model.Span{.{ .text = "retained table" }};
+    const cells = [_]types.Cell{.{ .spans = &spans }};
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    const table: model.Table = .{ .rows = &rows };
+    const cases = .{
+        .{ "#ffff00", "\x1b[48;2;255;255;0m" },
+        .{ "#008000", "\x1b[48;2;0;128;0m" },
+        .{ "#000000", "\x1b[48;2;0;0;0m" },
+        .{ "#ffffff", "\x1b[48;2;255;255;255m" },
+    };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    inline for (cases) |case| {
+        const block: model.Block = .{ .kind = .table, .depth = 1, .spans = &.{}, .table = table, .feature = .{ .kind = "color_swatch", .data = case[0] } };
+        try blocksText(&out.writer, &.{block}, false);
+        try std.testing.expectEqualStrings("  Color sample " ++ case[0] ++ "\n\n", out.written());
+        out.clearRetainingCapacity();
+        try blocksText(&out.writer, &.{block}, true);
+        try std.testing.expectEqualStrings("  [" ++ case[1] ++ "  \x1b[0m] Color sample " ++ case[0] ++ "\n\n", out.written());
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), case[0]));
+        try std.testing.expectEqual(@as(usize, 27), terminal.cellWidth(std.mem.trimEnd(u8, out.written(), "\n")));
+        try std.testing.expectEqualStrings("retained table", block.table.?.rows[0].cells[0].spans[0].text);
+        out.clearRetainingCapacity();
+    }
+}
+
+test "unsupported color features preserve exact existing table output" {
+    const types = @import("blob_encoder").presentation_types;
+    const spans = [_]model.Span{.{ .kind = .link, .text = "Fallback entry", .target = "fallback", .bold = true }};
+    const cells = [_]types.Cell{.{ .spans = &spans }};
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    var block: model.Block = .{ .kind = .table, .spans = &.{}, .table = .{ .rows = &rows } };
+    const features = [_]?model.Feature{
+        null,
+        .{ .kind = "future_feature", .data = "#ffff00" },
+        .{ .kind = "color_swatch", .data = "#FFFF00" },
+        .{ .kind = "color_swatch", .data = "#ff0" },
+        .{ .kind = "color_swatch", .data = "#ffff000" },
+        .{ .kind = "color_swatch", .data = "#ffff0g" },
+        .{ .kind = "color_swatch", .data = " #ffff00" },
+        .{ .kind = "color_swatch", .data = "#ffff00\x1b[0m" },
+        .{ .kind = "color_swatch", .data = "#ffff00", .language = "en" },
+        .{ .kind = "color_swatch", .data = "#ffff00", .tail_kind = "text" },
+        .{ .kind = "color_swatch", .data = "#ffff00", .tail = "extra" },
+    };
+    var baseline: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer baseline.deinit();
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for ([_]bool{ false, true }) |color| {
+        try tableText(&baseline.writer, block.table.?, color, null);
+        for (features) |feature| {
+            block.feature = feature;
+            try blocksText(&out.writer, &.{block}, color);
+            try std.testing.expectEqualStrings(baseline.written(), out.written());
+            out.clearRetainingCapacity();
+        }
+        block.feature = .{ .kind = "color_swatch", .data = "#ffff00" };
+        block.kind = .paragraph;
+        try blocksText(&out.writer, &.{block}, color);
+        try std.testing.expectEqualStrings(baseline.written(), out.written());
+        out.clearRetainingCapacity();
+        block.kind = .table;
+        baseline.clearRetainingCapacity();
+    }
+    block.table = null;
+    try std.testing.expect(colorSwatchRgb(block) == null);
 }

@@ -370,6 +370,46 @@ def exercise(reader: ReaderPty, initial_width: int) -> None:
                           "history clear confirmation respected"])
 
 
+def exercise_swatch(reader: ReaderPty, initial_width: int) -> None:
+    """One actual typed-fixture PTY route; historical UX workflow is not replayed."""
+    reader.wait(lambda: reader.page_is("search", 1, len(TITLES)), "swatch fixture startup")
+    reader.search("CAT", 2, "catfish")
+    reader.action(DOWN, lambda: reader.screen.cursor.hidden, "focus first swatch fixture result")
+    reader.action(ENTER, lambda: reader.entry_focused(), "read swatch fixture cat")
+    label = "Color sample #ffff00"
+    reader.action("d", lambda: label in reader.text(), "details exposes typed swatch")
+
+    def sample_and_reset() -> bool:
+        label_cells = []
+        sample = False
+        for y, line in enumerate(reader.screen.display):
+            start = line.find(label)
+            if start >= 0:
+                label_cells.extend(reader.screen.buffer[y][x] for x in range(start, start + len(label)))
+                if start >= 5:
+                    cells = reader.screen.buffer[y]
+                    sample = (cells[start - 5].data == "[" and cells[start - 2].data == "]"
+                              and cells[start - 4].data == cells[start - 3].data == " "
+                              and cells[start - 4].bg == cells[start - 3].bg == "ffff00")
+        return (sample and len(label_cells) == len(label)
+                and all(cell.bg != "ffff00" for cell in label_cells)
+                and reader.text().count(label) == 1
+                and "Valid swatch fallback" not in reader.text()
+                and "Malformed swatch fallback" in reader.text()
+                and "Unknown swatch fallback" in reader.text())
+
+    reader.wait(sample_and_reset, "actual pyte yellow sample and reset readable label/fallbacks")
+    reader.snapshot("swatch-yellow-reset")
+    for width in (40, 120, initial_width):
+        if width == reader.width:
+            continue
+        before = reader.resize(width)
+        reader.wait(lambda: reader.entry_focused() and sample_and_reset(),
+                    f"swatch sample, label and fallback survive resize to {width}", after=before)
+        reader.snapshot(f"swatch-resize-{width}")
+    reader.finish(b"q")
+
+
 def exercise_abbreviations(reader: ReaderPty) -> None:
     """Additional real native-fixture checks; never included in the historical 132."""
     title = "Acupuncture abbreviation sample"
@@ -426,7 +466,9 @@ def main() -> int:
                         help="Per-state/CLI timeout in seconds (default: 5)")
     parser.add_argument("--abbreviation-root", type=Path, help="Explicitly marked owned copy of genuine native abbreviation-interop output")
     parser.add_argument("--abbreviation-only", action="store_true", help="Run only the three native abbreviation cases; historical132 are not rerun")
+    parser.add_argument("--swatch-only", action="store_true", help="Run only the synthetic typed swatch actual CLI/PTY screen checks and terminal restoration")
     args = parser.parse_args()
+    require(not args.swatch_only or (not args.abbreviation_only and args.abbreviation_root is None), "--swatch-only cannot combine with abbreviation selection")
     require(not args.abbreviation_only or args.abbreviation_root is not None, "--abbreviation-only requires --abbreviation-root")
     require(0.2 <= args.timeout <= 15, "Timeout must be between 0.2 and 15 seconds")
     binary, source = args.binary.resolve(strict=True), args.fixture_root.resolve(strict=True)
@@ -446,10 +488,11 @@ def main() -> int:
     report_dir = Path(tempfile.mkdtemp(prefix="reader-ux-", dir=parent))
     report = {"binary": str(binary), "fixture": str(source),
               "report_dir": str(report_dir), "status": "passed", "cases": []}
-    report["historical_cases_executed"] = not args.abbreviation_only
+    report["historical_cases_executed"] = not (args.abbreviation_only or args.swatch_only)
+    report["swatch_only"] = args.swatch_only
     started = time.monotonic()
     budget_end = started + 110
-    for width in (() if args.abbreviation_only else (40, 80, 120)):
+    for width in (() if args.abbreviation_only else (80,) if args.swatch_only else (40, 80, 120)):
         case = {"width": width, "status": "passed", "checks": [], "snapshots": []}
         reader = None
         case_started = time.monotonic()
@@ -461,7 +504,7 @@ def main() -> int:
                 copy_fixture(source, root)
                 reader = ReaderPty(binary, root, width, 32, report_dir / f"width-{width}",
                                    args.timeout, budget_end, pyte)
-                exercise(reader, width)
+                (exercise_swatch if args.swatch_only else exercise)(reader, width)
             except Exception as error:
                 case.update(status="failed", error=f"{type(error).__name__}: {error}")
                 report["status"] = "failed"
@@ -513,6 +556,8 @@ def main() -> int:
                                   **({"error": case["error"]} if "error" in case else {})}
                                  for case in report["cases"]],
                       "elapsed_seconds": report["elapsed_seconds"]}, ensure_ascii=False))
+    if args.swatch_only and report["status"] == "passed":
+        print("CLI_SWATCH_PTY_PASS", flush=True)
     return 0 if report["status"] == "passed" else 1
 
 
