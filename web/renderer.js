@@ -59,6 +59,20 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
 function blockView(block, onLink, explanations) {
   const margin = `${Math.min(Math.max(block.depth || 0,0),8)*.45}rem`;
   if (block.table) {
+    const feature = block.feature;
+    if (block.kind === 'table' && feature?.kind === 'color_swatch' &&
+        typeof feature.data === 'string' && feature.data.length === 7 && /^#[0-9a-f]{6}$/.test(feature.data) &&
+        (feature.language === undefined ? '' : feature.language) === '' && (feature.tail_kind === undefined ? 'none' : feature.tail_kind) === 'none' && (feature.tail === undefined ? '' : feature.tail) === '') {
+      const sample = node('div', null, 'color-swatch');
+      sample.style.marginInlineStart = margin;
+      sample.style.display = 'flex'; sample.style.alignItems = 'center'; sample.style.gap = '.6rem';
+      const chip = node('span'); chip.setAttribute('aria-hidden', 'true');
+      chip.style.display = 'inline-block'; chip.style.width = '40px'; chip.style.height = '40px';
+      chip.style.flexShrink = '0'; chip.style.border = '1px solid currentColor';
+      chip.style.backgroundColor = feature.data;
+      sample.append(chip, node('span', 'Color sample ' + feature.data));
+      return sample;
+    }
     const wrap = node('div', null, 'table-scroll'), table = node('table'); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
     if (block.table.caption?.length) { const caption = node('caption'); caption.append(spans(block.table.caption,onLink,false,explanations)); table.append(caption); }
     for (const row of block.table.rows) { const tr = node('tr'); for (const cell of row.cells) { const td = node(cell.header?'th':'td'); td.colSpan = cell.colspan || 1; td.rowSpan = cell.rowspan || 1; td.append(spans(cell.spans,onLink,false,explanations)); tr.append(td); } table.append(tr); }

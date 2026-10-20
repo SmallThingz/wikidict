@@ -5,7 +5,8 @@
   "scripts": {
     "build": "node build.mjs",
     "test": "node --test blob.test.mjs alias.test.mjs validate.test.mjs preview.test.mjs",
-    "test:browser": "node browser.test.mjs"
+    "test:browser": "node browser.test.mjs",
+    "test:swatch": "node color-swatch.browser.test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",

@@ -15,3 +15,23 @@ Validation: raw and multiblock XZ produce identical decoded entries for the 30-e
 The ordinary test commands read the shared genuine `../tests/fixtures/abbreviation-interop` directory produced by the core's normal `zig build test-bundle` probe: the English blob, `annotated.export.json` and `legacy.export.json`. Set `WIKBLB_ABBREVIATION_ROOT` only to use a different fresh fixture directory. Node checks compare decoded spans with normal CLI JSON; the browser checks visible compact labels and all seven explanations, with reader/disclosure screenshots at 360 and 1440 pixels. Synthetic protocol controls remain separate from native interoperability.
 
 The native fifth span string is `classes`; the web decoder and preview filtering use that canonical field. Rich explained/linked heading companions render once in their section summary, while mismatched/plain headings retain their ordinary body rendering. Explanations on visible trails remain outside link actions.
+
+### Color sample regression
+
+Compiled `color_swatch` table features display a decorative sample and one readable
+hex label. Unknown or malformed features retain their original table and links;
+no CSS or source markup is parsed by the reader.
+
+Run the focused browser check with a fresh, absolute report path:
+
+```sh
+mkdir -p ../artifacts
+WIKIDICT_SWATCH_REPORT="$PWD/../artifacts/color-swatch-run01" pnpm test:swatch
+```
+
+Choose a new report directory name for each run; the test refuses an existing
+path. It uses the same Playwright/Brave and esbuild dependencies as `test:browser`,
+checks strict feature fallback, keyboard traversal, accessible labels and layout
+at 360 and 768 pixels, and saves screenshots. The input is a synthetic compiled
+entry; this does not qualify corpus imports, public downloads or the full browser
+application. Set `CHROMIUM` only when intentionally qualifying another browser.
