@@ -7,6 +7,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QDataStream>
 #include <QFile>
 #include <QFileInfo>
 #include <QGroupBox>
@@ -15,6 +16,9 @@
 #include <QJsonDocument>
 #include <QLabel>
 #include <QMediaDevices>
+#include <QMediaPlayer>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QProgressBar>
@@ -488,6 +492,279 @@ private slots:
         QVERIFY(text.contains(QStringLiteral("does not identify a language")));
         QCOMPARE(panel.findChild<QPushButton *>(QStringLiteral("mediaListen"))->text(), QStringLiteral("Listen offline"));
         QCOMPARE(network.urls.size(), 0);
+    }
+
+    void privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames() {
+        if (qEnvironmentVariable("WIKIDICT_PRIVATE_MEDIA_BACKEND") != QStringLiteral("1"))
+            QSKIP("Opt-in private null-output backend check; never use a user's audio session.");
+        QCOMPARE(qApp->arguments().value(1), QStringLiteral("privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames"));
+        const QString ownedTmp = qEnvironmentVariable("WIKIDICT_OWNED_MEDIA_TMP");
+        QVERIFY(!ownedTmp.isEmpty());
+        QCOMPARE(QDir::cleanPath(QDir::tempPath()), QDir::cleanPath(ownedTmp));
+        QVERIFY(QFileInfo(ownedTmp).isDir() && !QFileInfo(ownedTmp).isSymLink());
+        QTemporaryDir runtime(ownedTmp + QStringLiteral("/pw-XXXXXX"));
+        QVERIFY(runtime.isValid());
+        const QString socket = runtime.path() + QStringLiteral("/pulse/native");
+        QVERIFY(socket.toUtf8().size() < 104);
+        QVERIFY(QDir().mkpath(runtime.path() + QStringLiteral("/pulse")));
+        const QString evidence = qEnvironmentVariable("WIKIDICT_MEDIA_EVIDENCE_ROOT");
+        QVERIFY(!evidence.isEmpty() && !QFileInfo::exists(evidence));
+        QVERIFY(QDir().mkpath(evidence));
+        QString configuration = QString::fromUtf8(R"PWCONF(context.properties = { core.daemon = true core.name = wikidict-private-test }
+context.spa-libs = {
+    audio.convert.* = audioconvert/libspa-audioconvert
+    audio.adapt = audioconvert/libspa-audioconvert
+    support.* = support/libspa-support
+}
+context.modules = [
+    { name = libpipewire-module-protocol-native }
+    { name = libpipewire-module-metadata }
+    { name = libpipewire-module-spa-node-factory }
+    { name = libpipewire-module-client-node }
+    { name = libpipewire-module-access args = { access.force = unrestricted } }
+    { name = libpipewire-module-adapter }
+    { name = libpipewire-module-link-factory }
+    { name = libpipewire-module-protocol-pulse }
+]
+context.objects = [
+    { factory = spa-node-factory args = {
+        factory.name = support.node.driver node.name = Dummy-Driver
+        node.group = pipewire.dummy priority.driver = 20000
+    } }
+    { factory = adapter args = {
+        factory.name = support.null-audio-sink
+        node.name = wikidict_null node.description = WikidictPrivateNull
+        media.class = Audio/Sink audio.channels = 1 audio.position = [ MONO ]
+        adapter.auto-port-config = { mode = dsp monitor = false control = false position = preserve }
+    } }
+]
+pulse.properties = { server.address = [ "unix:/owned/runtime/pulse/native" ] }
+pulse.cmd = []
+stream.properties = { adapter.auto-port-config = { mode = dsp } }
+context.exec = []
+)PWCONF");
+        configuration.replace(QStringLiteral("/owned/runtime/pulse/native"), socket);
+        const QString configName = QStringLiteral("wikidict-private-test.conf");
+        QFile config(runtime.path() + QChar('/') + configName);
+        QVERIFY(config.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        QCOMPARE(config.write(configuration.toUtf8()), configuration.toUtf8().size()); config.close();
+        QFile client(runtime.path() + QStringLiteral("/client.conf"));
+        QVERIFY(client.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        const QByteArray clientConfig = "autospawn = no\ndefault-server = unix:" + socket.toUtf8() + '\n';
+        QCOMPARE(client.write(clientConfig), clientConfig.size()); client.close();
+        const QString clientName = QStringLiteral("wikidict-private-client.conf");
+        QFile pipewireClient(runtime.path() + QChar('/') + clientName);
+        QVERIFY(pipewireClient.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        const QByteArray pipewireClientConfig = R"PWCLIENT(context.properties = { core.daemon = false }
+context.spa-libs = {
+    audio.convert.* = audioconvert/libspa-audioconvert
+    support.* = support/libspa-support
+}
+context.modules = [
+    { name = libpipewire-module-protocol-native }
+    { name = libpipewire-module-client-node }
+    { name = libpipewire-module-adapter }
+    { name = libpipewire-module-metadata }
+]
+context.objects = []
+context.exec = []
+stream.properties = { adapter.auto-port-config = { mode = dsp monitor = false control = false position = preserve } }
+)PWCLIENT";
+        QCOMPARE(pipewireClient.write(pipewireClientConfig), pipewireClientConfig.size()); pipewireClient.close();
+        const QMap<QByteArray, QByteArray> privateEnvironment{
+            {"PULSE_SERVER", "unix:" + socket.toUtf8()},
+            {"PULSE_CLIENTCONFIG", client.fileName().toUtf8()},
+            {"PULSE_RUNTIME_PATH", (runtime.path() + QStringLiteral("/pulse")).toUtf8()},
+            {"PULSE_SINK", "wikidict_null"},
+            {"PIPEWIRE_REMOTE", "wikidict-private-test"},
+            {"PIPEWIRE_RUNTIME_DIR", runtime.path().toUtf8()},
+            {"PIPEWIRE_CONFIG_DIR", runtime.path().toUtf8()},
+            {"PIPEWIRE_CONFIG_PREFIX", ""},
+            {"PIPEWIRE_CONFIG_NAME", clientName.toUtf8()},
+            {"DBUS_SESSION_BUS_ADDRESS", (QStringLiteral("unix:path=") + runtime.path() + QStringLiteral("/no-dbus")).toUtf8()}
+        };
+        QMap<QByteArray, QByteArray> previous;
+        QSet<QByteArray> absent;
+        for (auto i = privateEnvironment.cbegin(); i != privateEnvironment.cend(); ++i) {
+            if (qEnvironmentVariableIsSet(i.key().constData())) previous.insert(i.key(), qgetenv(i.key().constData()));
+            else absent.insert(i.key());
+            qputenv(i.key().constData(), i.value());
+        }
+        const auto restore = qScopeGuard([&] {
+            for (auto i = previous.cbegin(); i != previous.cend(); ++i) qputenv(i.key().constData(), i.value());
+            for (const auto &key : absent) qunsetenv(key.constData());
+        });
+        const QString pipewire = QStandardPaths::findExecutable(QStringLiteral("pipewire"));
+        QVERIFY(!pipewire.isEmpty());
+        QProcess backend;
+        auto environment = QProcessEnvironment::systemEnvironment();
+        environment.insert(QStringLiteral("XDG_RUNTIME_DIR"), runtime.path());
+        // Only the owned server loads the daemon configuration; Qt uses the private client configuration.
+        environment.insert(QStringLiteral("PIPEWIRE_CONFIG_NAME"), configName);
+        for (const QString &leaf : {QStringLiteral("config"), QStringLiteral("cache"), QStringLiteral("data"), QStringLiteral("state")}) {
+            QVERIFY(QDir().mkpath(runtime.path() + QChar('/') + leaf));
+            environment.insert(QStringLiteral("XDG_") + leaf.toUpper() + QStringLiteral("_HOME"), runtime.path() + QChar('/') + leaf);
+        }
+        environment.remove(QStringLiteral("DISPLAY")); environment.remove(QStringLiteral("WAYLAND_DISPLAY"));
+        backend.setProcessEnvironment(environment);
+        backend.setStandardOutputFile(evidence + QStringLiteral("/backend.stdout"));
+        backend.setStandardErrorFile(evidence + QStringLiteral("/backend.stderr"));
+        const auto stopBackend = qScopeGuard([&] {
+            if (backend.state() != QProcess::NotRunning) {
+                backend.terminate();
+                if (!backend.waitForFinished(2000)) { backend.kill(); backend.waitForFinished(2000); }
+            }
+        });
+        backend.start(pipewire, {QStringLiteral("-c"), configName});
+        QVERIFY(backend.waitForStarted(3000));
+        qInfo() << "Owned private PipeWire PID" << backend.processId() << "socket" << socket;
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(socket), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(QMediaDevices::audioOutputs().size(), 1, 5000);
+        QCOMPARE(QMediaDevices::defaultAudioOutput().description(), QStringLiteral("WikidictPrivateNull"));
+        // Valid three-second PCM silence: decoder/state evidence, never audible hardware evidence.
+        QByteArray recording;
+        QDataStream wave(&recording, QIODevice::WriteOnly); wave.setByteOrder(QDataStream::LittleEndian);
+        wave.writeRawData("RIFF", 4); wave << quint32(36 + 48000); wave.writeRawData("WAVEfmt ", 8);
+        wave << quint32(16) << quint16(1) << quint16(1) << quint32(8000) << quint32(16000) << quint16(2) << quint16(16);
+        wave.writeRawData("data", 4); wave << quint32(48000); recording.append(QByteArray(48000, '\0'));
+        Network network; network.responses = {{metadata(QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/c/owned.wav"))}, {recording}};
+        MediaPanel panel(nullptr, &network);
+        QJsonObject word = entry();
+        word[QStringLiteral("media")] = QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("audio")},
+            {QStringLiteral("file"), QStringLiteral("File:owned.wav")}, {QStringLiteral("caption"), QStringLiteral("Owned recording")}}};
+        panel.setEntry(word); panel.show();
+        auto *player = panel.findChild<QMediaPlayer *>(); QVERIFY(player);
+        auto *action = QAccessible::queryAccessibleInterface(loadButton(panel)); QVERIFY(action);
+        QTest::mouseClick(panel.findChild<QCheckBox *>(QStringLiteral("mediaAllowAudio")), Qt::LeftButton);
+        QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        bool graphCaptured = false;
+        const auto captureOwnedGraph = [&] {
+            if (graphCaptured) return;
+            graphCaptured = true;
+            qInfo() << "Owned audio final duration" << player->duration() << "position" << player->position()
+                    << "playbackState" << player->playbackState() << "mediaStatus" << player->mediaStatus()
+                    << "error" << player->error() << "errorString" << player->errorString();
+            auto graphEnvironment = environment;
+            graphEnvironment.insert(QStringLiteral("PIPEWIRE_CONFIG_NAME"), clientName);
+            QProcess graph; graph.setProcessEnvironment(graphEnvironment);
+            graph.setStandardOutputFile(evidence + QStringLiteral("/owned-graph.json"));
+            graph.setStandardErrorFile(evidence + QStringLiteral("/owned-graph.stderr"));
+            const QString dump = QStandardPaths::findExecutable(QStringLiteral("pw-dump"));
+            bool started = false, finished = false;
+            if (!dump.isEmpty() && backend.state() != QProcess::NotRunning) {
+                graph.start(dump, {QStringLiteral("--remote"), QStringLiteral("wikidict-private-test"), QStringLiteral("--no-colors")});
+                started = graph.waitForStarted(2000);
+                if (started) finished = graph.waitForFinished(3000);
+                if (graph.state() != QProcess::NotRunning) { graph.kill(); graph.waitForFinished(2000); }
+            }
+            QFile result(evidence + QStringLiteral("/owned-graph-result.json"));
+            if (result.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+                const QJsonObject observation{{QStringLiteral("program"), dump}, {QStringLiteral("remote"), QStringLiteral("wikidict-private-test")},
+                    {QStringLiteral("runtime"), runtime.path()}, {QStringLiteral("started"), started}, {QStringLiteral("finished"), finished},
+                    {QStringLiteral("exitCode"), graph.exitCode()}, {QStringLiteral("reaped"), graph.state() == QProcess::NotRunning}};
+                result.write(QJsonDocument(observation).toJson());
+            }
+        };
+        const auto graphBeforeCleanup = qScopeGuard(captureOwnedGraph);
+        QTRY_COMPARE_WITH_TIMEOUT(player->playbackState(), QMediaPlayer::PlayingState, 5000);
+        // No session policy runs in this fixture: configure mono ports above, then link only our exact graph objects.
+        const QString dumpProgram = QStandardPaths::findExecutable(QStringLiteral("pw-dump"));
+        const QString linkProgram = QStandardPaths::findExecutable(QStringLiteral("pw-link"));
+        QVERIFY(!dumpProgram.isEmpty() && !linkProgram.isEmpty());
+        auto routingEnvironment = environment;
+        routingEnvironment.insert(QStringLiteral("PIPEWIRE_CONFIG_NAME"), clientName);
+        int graphSequence = 0;
+        const auto readOwnedGraph = [&]() -> QJsonArray {
+            QProcess dump; dump.setProcessEnvironment(routingEnvironment);
+            dump.start(dumpProgram, {QStringLiteral("--remote"), QStringLiteral("wikidict-private-test"), QStringLiteral("--no-colors")});
+            const bool started = dump.waitForStarted(2000);
+            const bool finished = started && dump.waitForFinished(3000);
+            if (dump.state() != QProcess::NotRunning) { dump.kill(); dump.waitForFinished(2000); }
+            const QByteArray bytes = dump.readAllStandardOutput();
+            QFile saved(evidence + QStringLiteral("/route-graph-%1.json").arg(++graphSequence));
+            if (saved.open(QIODevice::WriteOnly | QIODevice::NewOnly)) saved.write(bytes);
+            if (!finished || dump.exitStatus() != QProcess::NormalExit || dump.exitCode() != 0) return {};
+            const QJsonDocument document = QJsonDocument::fromJson(bytes);
+            return document.isArray() ? document.array() : QJsonArray{};
+        };
+        int outputPort = -1, inputPort = -1;
+        QJsonArray routeGraph;
+        for (int attempt = 0; attempt < 20 && (outputPort < 0 || inputPort < 0); ++attempt) {
+            routeGraph = readOwnedGraph();
+            QSet<int> ownedClients;
+            bool ownedCore = false;
+            for (const auto &value : routeGraph) {
+                const auto object = value.toObject(); const auto info = object.value(QStringLiteral("info")).toObject();
+                const auto props = info.value(QStringLiteral("props")).toObject();
+                const auto type = object.value(QStringLiteral("type")).toString();
+                if (type == QStringLiteral("PipeWire:Interface:Core"))
+                    ownedCore = info.value(QStringLiteral("name")).toString() == QStringLiteral("wikidict-private-test")
+                        && props.value(QStringLiteral("application.process.id")).toVariant().toLongLong() == backend.processId();
+                if (type == QStringLiteral("PipeWire:Interface:Client")
+                    && props.value(QStringLiteral("application.process.id")).toVariant().toLongLong() == QCoreApplication::applicationPid())
+                    ownedClients.insert(object.value(QStringLiteral("id")).toInt(-1));
+            }
+            QVERIFY(ownedCore);
+            QList<int> sinks, streams;
+            for (const auto &value : routeGraph) {
+                const auto object = value.toObject(); if (object.value(QStringLiteral("type")).toString() != QStringLiteral("PipeWire:Interface:Node")) continue;
+                const auto props = object.value(QStringLiteral("info")).toObject().value(QStringLiteral("props")).toObject();
+                if (props.value(QStringLiteral("node.name")).toString() == QStringLiteral("wikidict_null")
+                    && props.value(QStringLiteral("media.class")).toString() == QStringLiteral("Audio/Sink")) sinks.append(object.value(QStringLiteral("id")).toInt());
+                if (props.value(QStringLiteral("node.name")).toString() == QStringLiteral("MediaPanel")
+                    && props.value(QStringLiteral("media.class")).toString() == QStringLiteral("Stream/Output/Audio")
+                    && ownedClients.contains(props.value(QStringLiteral("client.id")).toInt(-1))) streams.append(object.value(QStringLiteral("id")).toInt());
+            }
+            QCOMPARE(sinks.size(), 1); QVERIFY(streams.size() <= 1);
+            if (streams.isEmpty()) { QTest::qWait(50); continue; }
+            QList<int> inputs, outputs;
+            for (const auto &value : routeGraph) {
+                const auto object = value.toObject(); if (object.value(QStringLiteral("type")).toString() != QStringLiteral("PipeWire:Interface:Port")) continue;
+                const auto info = object.value(QStringLiteral("info")).toObject(); const auto props = info.value(QStringLiteral("props")).toObject();
+                const int node = props.value(QStringLiteral("node.id")).toInt(-1);
+                if (node == streams.first() && info.value(QStringLiteral("direction")).toString() == QStringLiteral("output")) outputs.append(object.value(QStringLiteral("id")).toInt());
+                if (node == sinks.first() && info.value(QStringLiteral("direction")).toString() == QStringLiteral("input")) inputs.append(object.value(QStringLiteral("id")).toInt());
+            }
+            QVERIFY(inputs.size() <= 1 && outputs.size() <= 1);
+            if (inputs.size() == 1 && outputs.size() == 1) { inputPort = inputs.first(); outputPort = outputs.first(); }
+            else QTest::qWait(50);
+        }
+        QVERIFY(outputPort >= 0 && inputPort >= 0);
+        QProcess link; link.setProcessEnvironment(routingEnvironment);
+        link.setStandardOutputFile(evidence + QStringLiteral("/owned-link.stdout"));
+        link.setStandardErrorFile(evidence + QStringLiteral("/owned-link.stderr"));
+        link.start(linkProgram, {QStringLiteral("--remote"), QStringLiteral("wikidict-private-test"), QStringLiteral("--linger"),
+            QString::number(outputPort), QString::number(inputPort)});
+        const bool linkStarted = link.waitForStarted(2000);
+        const bool linkFinished = linkStarted && link.waitForFinished(3000);
+        if (link.state() != QProcess::NotRunning) { link.kill(); link.waitForFinished(2000); }
+        QVERIFY(linkStarted && linkFinished); QCOMPARE(link.exitStatus(), QProcess::NormalExit); QCOMPARE(link.exitCode(), 0);
+        bool exactLink = false;
+        for (const auto &value : readOwnedGraph()) {
+            const auto object = value.toObject(); if (object.value(QStringLiteral("type")).toString() != QStringLiteral("PipeWire:Interface:Link")) continue;
+            const auto info = object.value(QStringLiteral("info")).toObject();
+            if (info.value(QStringLiteral("output-port-id")).toInt(-1) == outputPort && info.value(QStringLiteral("input-port-id")).toInt(-1) == inputPort) exactLink = true;
+        }
+        QVERIFY(exactLink);
+        qInfo() << "Owned explicit mono link" << outputPort << inputPort;
+        QTRY_VERIFY_WITH_TIMEOUT(player->duration() > 0 && player->position() > 0, 5000);
+        QCOMPARE(player->error(), QMediaPlayer::NoError);
+        QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Pause: Owned recording"));
+        QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTRY_COMPARE(player->playbackState(), QMediaPlayer::PausedState);
+        QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Play: Owned recording"));
+        QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTRY_COMPARE(player->playbackState(), QMediaPlayer::PlayingState);
+        QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Pause: Owned recording"));
+        QTRY_COMPARE_WITH_TIMEOUT(player->mediaStatus(), QMediaPlayer::EndOfMedia, 5000);
+        QCOMPARE(player->error(), QMediaPlayer::NoError);
+        QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Play: Owned recording"));
+        QCOMPARE(network.urls.size(), 2);
+        panel.stopPlayback();
+        captureOwnedGraph();
+        backend.terminate(); QVERIFY(backend.waitForFinished(2000));
+        QCOMPARE(backend.state(), QProcess::NotRunning);
+        qInfo() << "Owned private PipeWire reaped; decoder/Play-Pause names passed, audible hardware/TTS untested";
     }
 
     void missingAudioOutputShowsRecovery() {
