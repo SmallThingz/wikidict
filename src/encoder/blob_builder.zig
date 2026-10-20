@@ -2269,30 +2269,23 @@ fn processMain(
         var probe_arena = std.heap.ArenaAllocator.init(page_allocator);
         defer probe_arena.deinit();
         const probe_allocator = probe_arena.allocator();
-        var prefix_fallbacks = fallbacks.*;
         const prefix_fragments = if (pre_observation.scopes.len != 0)
             try ownerSourceFragmentsAlloc(probe_allocator, source, &.{.{ .source = page_prefix, .original_start = 0 }}, "", pre_observation.scopes, quote_cuts)
         else
             &.{};
-        const prefix_payload = try presentation_document.compileReportedWithReferencesAndPoemFragmentsAlloc(
+        if (try presentation_document.hasBodyContentWithReferencesAndPoemFragmentsAlloc(
             probe_allocator,
             title,
-            .language,
             "Unclassified",
-            "",
             page_prefix,
-            null,
             codes.link_trail,
             codes.namespace_catalog,
             codes.behavior_switches,
             codes.image_options,
             reference_context,
-            &prefix_fallbacks,
             poem_phase,
             prefix_fragments,
-        );
-        const prefix_entry = try blobs.presentation_codec.decodeAlloc(probe_allocator, prefix_payload, title, .language, .{ .code = "", .heading = "Unclassified" });
-        if (entryHasBodyContent(prefix_entry.entry)) {
+        )) {
             const unowned: ResolvedLanguage = .{ .code = "", .heading = "Unclassified" };
             const index = groupIndex(groups.items, unowned) orelse blk: {
                 try groups.append(page_allocator, .{ .language = unowned });
@@ -2343,29 +2336,6 @@ fn processMain(
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
         stats.language_records += 1;
     }
-}
-
-// Decide content presence from the ordinary typed renderer, never raw markup.
-fn entryHasBodyContent(entry: blobs.presentation_types.Entry) bool {
-    const Has = struct {
-        fn spans(values: []const blobs.presentation_types.Span) bool {
-            for (values) |span| if (std.mem.trim(u8, span.text, " \t\r\n").len != 0 or span.target.len != 0) return true;
-            return false;
-        }
-    };
-    if (entry.media.len != 0 or Has.spans(entry.preamble_spans)) return true;
-    for (entry.references) |reference| if (Has.spans(reference.spans)) return true;
-    for (entry.sections) |section| {
-        if (section.level != 0 and std.mem.trim(u8, section.title, " \t\r\n").len != 0) return true;
-        for (section.blocks) |block| {
-            if (Has.spans(block.spans) or block.feature != null or block.kind == .rule) return true;
-            if (block.table) |table| {
-                if (Has.spans(table.caption)) return true;
-                for (table.rows) |row| for (row.cells) |cell| if (Has.spans(cell.spans)) return true;
-            }
-        }
-    }
-    return false;
 }
 
 fn processNamespace(
@@ -4674,10 +4644,40 @@ test "ANG explicit English noun continuation does not steal genuine Nama" {
 }
 
 test "typed unowned prefix emptiness ignores invisible-only render results" {
-    try std.testing.expect(!entryHasBodyContent(.{ .title = "empty", .kind = .language }));
-    try std.testing.expect(!entryHasBodyContent(.{ .title = "empty", .kind = .language, .sections = &.{.{ .level = 0, .title = "", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = " \n" }} }} }} }));
-    try std.testing.expect(!entryHasBodyContent(.{ .title = "empty", .kind = .language, .sections = &.{.{ .level = 0, .title = "Unclassified" }} }));
-    try std.testing.expect(entryHasBodyContent(.{ .title = "link", .kind = .language, .preamble_spans = &.{.{ .kind = .link, .target = "شمس", .text = "شمس" }} }));
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").englishTestRegistry(a);
+    defer namespaces.deinit();
+    // The renderer's generated language section is level2, not level0.
+    // Only authored heading spans count when its blocks contain no content.
+    const cases = .{
+        .{ "", false },
+        .{ " \n", false },
+        .{ "<!-- hidden -->\n[[Category:Hidden]]\n__NOEDITSECTION__\n", false },
+        .{ "==Unclassified==\n", true },
+        .{ "===Authored heading===\n", true },
+        .{ "[[sun]]", true },
+        .{ "<nowiki>__NOEDITSECTION__</nowiki>", true },
+        .{ "----\n", true },
+        .{ "{|\n| [[sun]]\n|}\n", true },
+    };
+    inline for (cases) |case| {
+        errdefer std.debug.print("PREFIX_CONTENT_CASE source={s}\n", .{case[0]});
+        try std.testing.expectEqual(case[1], try presentation_document.hasBodyContentWithReferencesAndPoemFragmentsAlloc(
+            a,
+            "probe",
+            "Unclassified",
+            case[0],
+            .{},
+            &namespaces,
+            null,
+            null,
+            .{},
+            null,
+            &.{},
+        ));
+    }
 }
 
 test "single resolved language preserves structured prefix without ambiguous attribution" {

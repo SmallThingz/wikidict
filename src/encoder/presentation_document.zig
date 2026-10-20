@@ -553,6 +553,47 @@ pub fn compileReportedWithReferencesAndPoemAlloc(
 ) ![]u8 {
     return compileReportedWithReferencesAndPoemFragmentsAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, fallbacks, poem_phase, &.{});
 }
+// Probe ordinary rendered work while authored heading provenance is available.
+// An authored heading has title_spans; Builder's default language label does
+// not. Serialization retains the title/level but drops that distinction.
+pub fn hasBodyContentWithReferencesAndPoemFragmentsAlloc(
+    a: A,
+    title: []const u8,
+    language: []const u8,
+    source: []const u8,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    reference_context: compiler.ReferenceDefinitions,
+    poem_phase: ?*const PoemPhase,
+    fragments: []const SourceFragment,
+) !bool {
+    const work = try workAllocWithPoemFragments(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments);
+    // A capped probe cannot prove absence. Retain its source so the ordinary
+    // final compile preserves and reports the existing render-limit diagnostic.
+    if (work.fallbacks.render_limit) return true;
+    const Has = struct {
+        fn spans(values: []const compiler.Span) bool {
+            for (values) |span| if (std.mem.trim(u8, span.text, " \t\r\n").len != 0 or span.target.len != 0) return true;
+            return false;
+        }
+    };
+    if (work.media.len != 0) return true;
+    for (work.references) |reference| if (Has.spans(reference.spans)) return true;
+    for (work.sections) |section| {
+        if (Has.spans(section.title_spans)) return true;
+        for (section.blocks) |block| {
+            if (Has.spans(block.spans) or block.feature != null or block.kind == .rule) return true;
+            if (block.table) |table| {
+                if (Has.spans(table.caption)) return true;
+                for (table.rows) |row| for (row.cells) |cell| if (Has.spans(cell.spans)) return true;
+            }
+        }
+    }
+    return false;
+}
+
 pub fn compileReportedWithReferencesAndPoemFragmentsAlloc(
     a: A,
     title: []const u8,
