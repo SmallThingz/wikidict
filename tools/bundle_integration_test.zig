@@ -2183,7 +2183,31 @@ pub fn main(init: std.process.Init) !void {
     _ = try h.run(&.{ verifier, root }, 0);
     const language_manifest_path = try std.fs.path.join(a, &.{ root, "languages.tsv" });
     const language_manifest = try std.Io.Dir.cwd().readFileAlloc(init.io, language_manifest_path, a, .limited(4096));
-    try h.require(std.mem.indexOf(u8, language_manifest, "Unclassified") == null, "content-language fallback never publishes Unclassified");
+    try h.require(std.mem.indexOf(u8, language_manifest, "\nEnglish\n") != null and std.mem.indexOf(u8, language_manifest, "\nUnclassified\n") != null, "declared English and headingless main content retain separate owner buckets");
+    const shared_export = try h.run(&.{ bin, "export", "Shared", "--root", root, "--language", "Unclassified", "--case-sensitive" }, 0);
+    var shared_json = try std.json.parseFromSlice(std.json.Value, a, shared_export, .{});
+    defer shared_json.deinit();
+    const shared_entries = shared_json.value.object.get("entries") orelse return error.InvalidExport;
+    try h.require(shared_json.value.object.get("total_matches").?.integer == 1 and shared_entries == .array and shared_entries.array.items.len == 1, "headingless Shared is exported exactly once under Unclassified");
+    const shared_entry_json = try std.json.Stringify.valueAlloc(a, shared_entries.array.items[0], .{});
+    var shared_entry = try std.json.parseFromSlice(encoder.presentation_types.Entry, a, shared_entry_json, .{});
+    defer shared_entry.deinit();
+    try h.require(std.mem.eql(u8, shared_entry.value.title, "Shared") and shared_entry.value.language != null and std.mem.eql(u8, shared_entry.value.language.?, "Unclassified") and shared_entry.value.language_code.len == 0, "a headingless main page never inherits the edition's English owner");
+    var shared_body: std.Io.Writer.Allocating = .init(a);
+    defer shared_body.deinit();
+    for (shared_entry.value.sections) |section| {
+        for (section.blocks) |block| {
+            for (block.spans) |span| {
+                try shared_body.writer.writeAll(span.text);
+                try shared_body.writer.writeAll(span.trail);
+            }
+        }
+    }
+    try h.require(std.mem.eql(u8, shared_body.written(), "shared main transclusion"), "the complete authored headingless Shared body survives Unclassified publication");
+    const shared_english = try h.run(&.{ bin, "export", "Shared", "--root", root, "--language", "English", "--case-sensitive" }, 1);
+    var shared_english_json = try std.json.parseFromSlice(std.json.Value, a, shared_english, .{});
+    defer shared_english_json.deinit();
+    try h.require(shared_english_json.value.object.get("total_matches").?.integer == 0 and shared_english_json.value.object.get("entries").?.array.items.len == 0, "headingless Shared has no false English record");
 
     const forbidden = [_][]const u8{
         ".bundle-expander", "runtime",          "dict-bundle-expander",
@@ -2234,7 +2258,7 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, text, "Documentation") == null, "noinclude does not leak");
     try h.require(std.mem.indexOf(u8, text, "#invoke") == null, "no executable invoke syntax survives");
 
-    const exported = try h.run(&.{ bin, "export", "mouse", "--root", root }, 0);
+    const exported = try h.run(&.{ bin, "export", "mouse", "--root", root, "--language", "English" }, 0);
     var exported_json = try std.json.parseFromSlice(std.json.Value, a, exported, .{});
     defer exported_json.deinit();
     const exported_entries = exported_json.value.object.get("entries") orelse return error.InvalidExport;
