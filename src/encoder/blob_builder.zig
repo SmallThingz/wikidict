@@ -870,6 +870,19 @@ fn resolveArabicNorwegianDeclaration(codes: LanguageCodes, value: []const u8) ?R
     return canonical;
 }
 
+// Only the combining marks already accepted inside Arabic declaration tokens
+// may trail a complete link. Preserve the original heading for presentation.
+fn afterArabicDeclarationLink(value: []const u8) []const u8 {
+    var rest = value;
+    while (rest.len >= 2 and rest[0] == 0xd9) {
+        var scratch: [2]u8 = undefined;
+        const token = arabicDeclarationToken(rest[0..2], &scratch) orelse break;
+        if (token.len != 0) break;
+        rest = rest[2..];
+    }
+    return std.mem.trimStart(u8, rest, " \t");
+}
+
 fn resolveLinkedDeclaration(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
     const namespaces = codes.namespace_catalog orelse return null;
     if (!std.mem.eql(u8, namespaces.content_language, "ar")) return null;
@@ -883,12 +896,12 @@ fn resolveLinkedDeclaration(codes: LanguageCodes, value: []const u8) ?ResolvedLa
         const token = arabicDeclarationToken(body[0..pipe], &token_buffer) orelse return null;
         if (!std.mem.eql(u8, token, target)) return null;
         if (std.mem.indexOfAny(u8, body, "[]{}<>") != null or (pipe < body.len and std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null)) return null;
-        rest = std.mem.trimStart(u8, rest[close + 2 ..], " \t");
+        rest = afterArabicDeclarationLink(rest[close + 2 ..]);
     }
-    if (!std.mem.endsWith(u8, rest, ":")) return null;
-    const final_link = std.mem.trimEnd(u8, rest[0 .. rest.len - 1], " \t");
-    if (!std.mem.startsWith(u8, final_link, "[[") or !std.mem.endsWith(u8, final_link, "]]")) return null;
-    const body = final_link[2 .. final_link.len - 2];
+    if (!std.mem.startsWith(u8, rest, "[[")) return null;
+    const close = std.mem.indexOf(u8, rest, "]]") orelse return null;
+    if (!std.mem.eql(u8, afterArabicDeclarationLink(rest[close + 2 ..]), ":")) return null;
+    const body = rest[2..close];
     if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null) return null;
     const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
     if (pipe < body.len and std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null) return null;
@@ -4210,15 +4223,31 @@ test "Arabic whole linked declarations match vocalized language labels without g
     const Local = struct {
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             if (std.mem.eql(u8, value, "الكردية")) return .{ .code = "ku", .heading = "الكردية" };
+            if (std.mem.eql(u8, value, "الرومانية")) return .{ .code = "ro", .heading = "الرومانية" };
             if (std.mem.eql(u8, value, "الإنجليزية")) return .{ .code = "en", .heading = "الإنجليزية" };
             if (std.mem.eql(u8, value, "ألمانية")) return .{ .code = "de", .heading = "الألمانية" };
             if (std.mem.eql(u8, value, "إنجليزية")) return .{ .code = "en", .heading = "الإنجليزية" };
             if (std.mem.eql(u8, value, "عربية")) return .{ .code = "ar", .heading = "العربية" };
             return null;
         }
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |language| language.code else null;
+        }
     };
-    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .trusted_fn = Local.resolve };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve };
     const exact = "[[فِي]] [[لُغَة|ٱللُّغَةِ]] [[كردي|ٱلْكُرْدِيَّةِ]]:";
+    // cald p9815/r1106013, captured template p9663/r988308: case
+    // endings are authored outside the language links, not part of the lemma.
+    const cald_heading = "[[فِي]] [[لُغَة|ٱلْلُغَة]]ِ [[الرُّومَانِيَّة|ٱلرُّومَانِيَّة]]ِ:";
+    try std.testing.expectEqualStrings("ro", resolveLinkedDeclaration(codes, cald_heading).?.code);
+    for ([_][]const u8{
+        "[[فِي]] [[لُغَة|ٱلْلُغَة]]ِ [[الرُّومَانِيَّة|الإنجليزية]]ِ:",
+        "[[فِي]] [[لُغَة|ٱلْلُغَة]]ِ [[مجهولة|مجهولة]]ِ:",
+        "[[فِي]] [[لُغَة|ٱلْلُغَة]]ِ [[الرُّومَانِيَّة|ٱلرُّومَانِيَّة]]ِ: trailing",
+        "[[فِي]] [[لُغَة|ٱلْلُغَة]]x [[الرُّومَانِيَّة|ٱلرُّومَانِيَّة]]ِ:",
+        "[[فِي]] [[لُغَة|ٱلْلُغَة]] ِ[[الرُّومَانِيَّة|ٱلرُّومَانِيَّة]]ِ:",
+        "topic [[الرُّومَانِيَّة]]ِ:",
+    }) |negative| try std.testing.expect(resolveLinkedDeclaration(codes, negative) == null);
     const resolved = resolveLinkedDeclaration(codes, exact).?;
     try std.testing.expectEqualStrings("ku", resolved.code);
     try std.testing.expectEqualStrings("الكردية", resolved.heading);
@@ -4263,6 +4292,44 @@ test "Arabic whole linked declarations match vocalized language labels without g
     try std.testing.expect(resolveSection(codes, .{ .heading = "[[ألمانية|إِنْجِلِيزِيَّة]]", .source = "" }) == null);
     var tiny: [1]u8 = undefined;
     try std.testing.expect(arabicDeclarationToken("الكردية", &tiny) == null);
+    {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(a);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+        const root = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}/cald", .{tmp.sub_path});
+        var writer = try Writer.init(std.testing.io, alloc, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        const expanded = "=" ++ cald_heading ++ "=\n\n[[تصنيف:رومانية]]\n[[تصنيف:لغة رومانية]]\n=== صفة ===\n* [[حار]]\n";
+        try writer.addExpandedPage(alloc, .{ .id = 0, .kind = .language }, "cald", expanded, "{{رومانية}}\n\n=== صفة ===\n* [[حار]]", null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(alloc, root, "الرومانية"));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings("ro", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(alloc);
+        defer index.deinit(alloc);
+        const record = (try index.find("cald")).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(alloc, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings("ro", decoded.entry.language_code);
+        var definitions: usize = 0;
+        var actions: usize = 0;
+        var pos: usize = 0;
+        for (decoded.entry.sections) |section| {
+            if (std.mem.eql(u8, section.title, "صفة")) pos += 1;
+            for (section.blocks) |block| for (block.spans) |span| {
+                if (std.mem.eql(u8, span.text, "حار")) definitions += 1;
+                if (std.mem.eql(u8, span.target, "حار")) actions += 1;
+            };
+        }
+        try std.testing.expectEqual(@as(usize, 1), pos);
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(@as(usize, 1), actions);
+    }
 }
 
 test "unsupported parser reason retains normal raw ownership and alias body" {
