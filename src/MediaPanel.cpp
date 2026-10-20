@@ -175,7 +175,7 @@ public:
         file = media.value(QStringLiteral("file")).toString();
         file.remove(QRegularExpression(QStringLiteral("^(File|Image):"), QRegularExpression::CaseInsensitiveOption));
         const QString caption = media.value(QStringLiteral("caption")).toString();
-        const QString display = caption.isEmpty() ? file : caption;
+        display = caption.isEmpty() ? file : caption;
         auto *layout = new QVBoxLayout(this);
         auto *name = new QLabel(display, this);
         name->setTextFormat(Qt::PlainText);
@@ -222,7 +222,11 @@ public:
         source->setAccessibleName(QStringLiteral("Open media source and licence in browser"));
         layout->addWidget(source, 0, Qt::AlignLeft);
     }
-    QString kind, file, key, sourceHost;
+    void setAction(const QString &action) {
+        button->setText(action);
+        button->setAccessibleName(action + QStringLiteral(": ") + display);
+    }
+    QString kind, file, key, sourceHost, display;
     QByteArray data;
     QJsonObject metadata;
     ImagePreview *image;
@@ -383,12 +387,12 @@ struct MediaPanel::Impl {
 
     void updateButton(MediaCard *card) {
         card->button->setEnabled(!card->busy && allowed(card));
-        if (card->busy) card->button->setText(QStringLiteral("Loading..."));
+        if (card->busy) card->setAction(QStringLiteral("Loading..."));
         else if (!card->data.isEmpty()) {
-            if (card->kind == QStringLiteral("image")) card->button->setText(QStringLiteral("Reload image"));
-            else card->button->setText(playing == card && player->playbackState() == QMediaPlayer::PlayingState
+            if (card->kind == QStringLiteral("image")) card->setAction(QStringLiteral("Reload image"));
+            else card->setAction(playing == card && player->playbackState() == QMediaPlayer::PlayingState
                 ? QStringLiteral("Pause") : QStringLiteral("Play"));
-        } else card->button->setText(card->kind == QStringLiteral("image") ? QStringLiteral("Load image") : QStringLiteral("Play recording"));
+        } else card->setAction(card->kind == QStringLiteral("image") ? QStringLiteral("Load image") : QStringLiteral("Play recording"));
     }
 
     void permissionChanged(const QString &kind, bool enabled) {
@@ -505,8 +509,13 @@ struct MediaPanel::Impl {
 
     void updateSpeechButtons() {
         listen->setText(speech ? QStringLiteral("Stop") : QStringLiteral("Listen offline"));
-        for (const auto &pronunciation : pronunciations)
-            pronunciation.second->setText(speech && activeSpeechKey == pronunciation.first ? QStringLiteral("Stop") : QStringLiteral("Listen"));
+        for (const auto &pronunciation : pronunciations) {
+            const bool active = speech && activeSpeechKey == pronunciation.first;
+            pronunciation.second->setText(active ? QStringLiteral("Stop") : QStringLiteral("Listen"));
+            pronunciation.second->setAccessibleName((active
+                ? QStringLiteral("Stop reading the transcription %1 offline")
+                : QStringLiteral("Listen to the transcription %1 offline")).arg(pronunciation.first));
+        }
     }
 
     void addPronunciations(const QJsonObject &entry) {
@@ -553,7 +562,7 @@ struct MediaPanel::Impl {
         card->progress->hide();
         card->status->setText(message + QStringLiteral(" Try again."));
         updateButton(card);
-        card->button->setText(QStringLiteral("Retry"));
+        card->setAction(QStringLiteral("Retry"));
     }
 
     QString cachedPath(const MediaCard *card, const QString &extension) const {

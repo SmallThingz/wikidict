@@ -1,6 +1,7 @@
 #include "MediaPanel.hpp"
 
 #include <QApplication>
+#include <QAccessible>
 #include <QAudioDevice>
 #include <QBuffer>
 #include <QCheckBox>
@@ -168,12 +169,17 @@ private slots:
         QTest::qWait(10);
         QCOMPARE(network.urls.size(), 0);
         QVERIFY(!loadButton(panel)->isEnabled());
+        auto *action = QAccessible::queryAccessibleInterface(loadButton(panel));
+        QVERIFY(action);
+        QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Load image: A cat"));
         enableImages(panel);
         QVERIFY(loadButton(panel)->isEnabled());
         QCOMPARE(network.urls.size(), 0);
         QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Loading...: A cat"));
         QTRY_COMPARE(network.urls.size(), 2);
         QTRY_COMPARE(status(panel)->text(), QStringLiteral("Ready."));
+        QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Reload image: A cat"));
         QVERIFY(panel.findChild<QProgressBar *>()->isHidden());
         QVERIFY(panel.findChild<QPushButton *>(QStringLiteral("mediaClearCache"))->isEnabled());
         bool attribution = false;
@@ -328,6 +334,9 @@ private slots:
         QCOMPARE(network.urls[0].host(), QStringLiteral("commons.wikimedia.org"));
         QCOMPARE(network.urls[1].host(), QStringLiteral("ar.wiktionary.org"));
         QCOMPARE(loadButton(panel)->text(), QStringLiteral("Retry"));
+        auto *retryAction = QAccessible::queryAccessibleInterface(loadButton(panel));
+        QVERIFY(retryAction);
+        QCOMPARE(retryAction->text(QAccessible::Name), QStringLiteral("Retry: A cat"));
         QVERIFY(loadButton(panel)->isEnabled());
     }
 
@@ -442,8 +451,20 @@ private slots:
         panel.setEntry(ipaEntry);
         const auto phonemes = panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation"));
         QCOMPARE(phonemes.size(), 1);
+        auto *pronunciationAction = QAccessible::queryAccessibleInterface(phonemes.first());
+        QVERIFY(pronunciationAction);
+        const QString initialName = QStringLiteral("Listen to the transcription /k\u00e6t/ offline");
+        QCOMPARE(pronunciationAction->text(QAccessible::Name), initialName);
+        QTest::mouseClick(phonemes.first(), Qt::LeftButton);
+        // The real voice-query QProcess is active synchronously; the button now cancels it.
+        QCOMPARE(phonemes.first()->text(), QStringLiteral("Stop"));
+        QCOMPARE(pronunciationAction->text(QAccessible::Name), QStringLiteral("Stop reading the transcription /k\u00e6t/ offline"));
+        QTest::mouseClick(phonemes.first(), Qt::LeftButton);
+        QCOMPARE(phonemes.first()->text(), QStringLiteral("Listen"));
+        QCOMPARE(pronunciationAction->text(QAccessible::Name), initialName);
         QTest::mouseClick(phonemes.first(), Qt::LeftButton);
         QTRY_COMPARE_WITH_TIMEOUT(panel.findChild<QLabel *>(QStringLiteral("mediaSpeechStatus"))->text(), QStringLiteral("Finished."), 15000);
+        QCOMPARE(pronunciationAction->text(QAccessible::Name), initialName);
         QVERIFY(result.open(QIODevice::ReadOnly));
         QCOMPARE(result.readAll(), QByteArrayLiteral("en-gb\n<speak><phoneme alphabet=\"espeak\" ph=\"kat\"/></speak>\n"));
         result.close();
