@@ -1902,6 +1902,7 @@ pub const Renderer = struct {
     media_caption_spans: std.ArrayList([]const Span) = .empty,
     media: std.ArrayList(media_types.Media) = .empty,
     media_depth: usize = 0,
+    media_action_depth: usize = 0,
     spans: std.ArrayList(Span) = .empty,
     in_reference: bool = false,
     semantic_capture: ?*SemanticHints = null,
@@ -4219,6 +4220,26 @@ pub const Renderer = struct {
         if (!caption_visible) candidate = "";
         return .{ .text = if (candidate.len == 0) fallback else candidate, .authored_caption = candidate.len != 0, .link_target = link_target };
     }
+    // Parser::stripAltText replaces parsed link holders by DISPLAY text and
+    // strips formatting before interpreting link=. Reuse normal inline parsing
+    // in an isolated arena: nowiki remains literal, entities decode once, and
+    // references/media/numbering from an option cannot become page content.
+    fn mediaLinkText(self: *Renderer, raw: []const u8) Error![]const u8 {
+        if (self.media_action_depth >= max_depth) {
+            self.fallbacks.render_limit = true;
+            return error.RenderLimit;
+        }
+        var arena = std.heap.ArenaAllocator.init(self.a);
+        defer arena.deinit();
+        var probe: Renderer = .{ .a = arena.allocator(), .context = self.context, .media_depth = self.media_depth, .media_action_depth = self.media_action_depth + 1, .nodes = self.nodes };
+        defer self.nodes = probe.nodes;
+        const spans = try probe.parseSpans(raw, .{});
+        if (probe.truncated or probe.fallbacks.render_limit) {
+            self.fallbacks.render_limit = true;
+            return error.RenderLimit;
+        }
+        return self.a.dupe(u8, try plainText(arena.allocator(), spans));
+    }
     // Media identity/caption metadata stays attached to the source file. Only
     // the occurrence's semantic click action follows the recognized link option.
     fn mediaActionStyle(self: *Renderer, original: Style, file: []const u8, override: ?[]const u8) Error!Style {
@@ -4232,10 +4253,17 @@ pub const Renderer = struct {
             style.target = "";
             return style;
         }
-        var target = trim(try self.entityText(value));
+        const formatted = std.mem.indexOfAny(u8, value, "<[") != null or std.mem.indexOf(u8, value, "''") != null;
+        var target = trim(if (formatted) try self.mediaLinkText(value) else try self.entityText(value));
+        if (target.len == 0) {
+            style.kind = .text;
+            style.target = "";
+            return style;
+        }
         if (ir.hasExternalProtocol(target)) {
-            // Reuse the ordinary URL entity/escaping rules exactly once.
-            target = try self.externalUrlTarget(value);
+            // Plain authored URLs retain the established escaping path. Parsed
+            // display text is already entity-decoded: never decode it again.
+            if (!formatted) target = try self.externalUrlTarget(value);
             if (safeUrl(target) and !unresolvedActionTarget(target)) {
                 style.kind = .external_link;
                 style.target = target;
@@ -4243,6 +4271,11 @@ pub const Renderer = struct {
             // Invalid nonempty overrides keep the pre-existing File action.
             return style;
         }
+        // Only the title branch percent-decodes (Parser::parseLinkParameter).
+        // URL percent escapes above remain unchanged.
+        if (std.mem.indexOfScalar(u8, target, '%') != null)
+            target = std.Uri.percentDecodeInPlace(try self.a.dupe(u8, target));
+        if (std.mem.indexOfAny(u8, target, "<>") != null) return style;
         if (std.mem.indexOfScalar(u8, target, '_') != null) {
             const normalized = try self.a.dupe(u8, target);
             std.mem.replaceScalar(u8, normalized, '_', ' ');
@@ -21623,4 +21656,16 @@ test "compiled bidi scopes close within paragraph Poem pre and table cell domain
         try expectBalancedCompiledBidi(block_value.spans);
         if (block_value.table) |table| for (table.rows) |row| for (row.cells) |cell| try expectBalancedCompiledBidi(cell.spans);
     }
+}
+
+test "image link option text projection isolates renderer effects and propagates limits" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    _ = try r.mediaActionStyle(.{}, "Example.png", "<ref>Only option reference</ref>[[Target|Label]]");
+    try std.testing.expectEqual(@as(usize, 0), r.refs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), r.media.items.len);
+    r.media_action_depth = max_depth;
+    try std.testing.expectError(error.RenderLimit, r.mediaActionStyle(.{}, "Example.png", "[[Target]]"));
+    try std.testing.expect(r.fallbacks.render_limit);
 }
