@@ -1923,7 +1923,7 @@ test "Aal exact Arabic noun subtrees preserve exclusive English German bodies an
         .{ .heading = "الإنجليزية", .code = "en", .title = "scopes", .required = &.{"EN_SENTINEL"}, .excluded = &.{ "UNDECLARED_SENTINEL", "UNKNOWN_SENTINEL", "CONFLICT_FIRST", "CONFLICT_SECOND" } },
         .{ .heading = "Unclassified", .code = "", .title = "scopes", .required = &.{ "UNDECLARED_SENTINEL", "UNKNOWN_SENTINEL", "CONFLICT_FIRST", "CONFLICT_SECOND" }, .excluded = &.{"EN_SENTINEL"} },
         .{ .heading = "Unclassified", .code = "", .title = "role", .required = &.{"ROLE_ONLY_SENTINEL"}, .excluded = &.{} },
-        .{ .heading = "العربية", .code = "ar", .title = "native", .required = &.{"NATIVE_UNSECTIONED_SENTINEL"}, .excluded = &.{} },
+        .{ .heading = "Unclassified", .code = "", .title = "native", .required = &.{"NATIVE_UNSECTIONED_SENTINEL"}, .excluded = &.{} },
         .{ .heading = "الإنجليزية", .code = "en", .title = "Beeb", .required = &.{"هيئة الإذاعة البريطانية"}, .excluded = &.{ "DE_PREFIX_OWNER_SENTINEL", "die Aale", "UNKNOWN_SENTINEL" } },
         .{ .heading = "الألمانية", .code = "de", .title = "aalen-prefix-conflict", .required = &.{"DE_PREFIX_OWNER_SENTINEL"}, .excluded = &.{ "هيئة الإذاعة البريطانية", "شجيرة", "UNKNOWN_SENTINEL" } },
         .{ .heading = "الألمانية", .code = "de", .title = "prefix-reset", .required = &.{"KNOWN_PREFIX_SENTINEL"}, .excluded = &.{"UNKNOWN_PREFIX_RESET_SENTINEL"} },
@@ -1958,17 +1958,21 @@ test "Aal exact Arabic noun subtrees preserve exclusive English German bodies an
         }
     }
     // Every decoded positive is exclusive: no fallback or second owner can duplicate it.
-    inline for (.{ "الإنجليزية", "الألمانية", "العربية", "Unclassified" }) |heading| {
+    inline for (.{ "الإنجليزية", "الألمانية", "Unclassified" }) |heading| {
         var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
         var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename(heading, &filename) }));
         defer mapped.deinit();
         const blob = try encoder.blob_format.inspect(mapped.bytes);
         var index = try blob.buildTrustedIndexAlloc(a);
         defer index.deinit(a);
+        if (!std.mem.eql(u8, heading, "Unclassified")) try std.testing.expect((try index.find("native")) == null);
         if (!std.mem.eql(u8, heading, "الإنجليزية")) try std.testing.expect((try index.find("Beeb")) == null);
         if (!std.mem.eql(u8, heading, "الألمانية")) try std.testing.expect((try index.find("aalen-prefix-conflict")) == null);
         if (std.mem.eql(u8, heading, "الإنجليزية") or std.mem.eql(u8, heading, "العربية")) try std.testing.expect((try index.find("prefix-reset")) == null);
     }
+    // No heading or corroborated declaration proves an Arabic-owned record.
+    const manifest = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, encoder.blob_catalog.manifest_filename }), a, .unlimited);
+    try std.testing.expect(std.mem.indexOf(u8, manifest, "العربية") == null);
 }
 
 test "captured main page identity and SQL-bound aliases are metadata not lexical pages" {
