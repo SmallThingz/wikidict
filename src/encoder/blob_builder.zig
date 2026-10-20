@@ -4608,12 +4608,12 @@ test "single resolved language preserves structured prefix without ambiguous att
         var foreign_actions: usize = 0;
         var known_actions: usize = 0;
         for (unknown.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
-            if (std.mem.eql(u8, span.target, "FOREIGN_ACTION")) foreign_actions += 1;
-            try std.testing.expect(!std.mem.eql(u8, span.target, "KNOWN_ACTION"));
+            if (std.mem.eql(u8, span.target, "FOREIGN ACTION")) foreign_actions += 1;
+            try std.testing.expect(!std.mem.eql(u8, span.target, "KNOWN ACTION"));
         };
         for (known.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
-            if (std.mem.eql(u8, span.target, "KNOWN_ACTION")) known_actions += 1;
-            try std.testing.expect(!std.mem.eql(u8, span.target, "FOREIGN_ACTION"));
+            if (std.mem.eql(u8, span.target, "KNOWN ACTION")) known_actions += 1;
+            try std.testing.expect(!std.mem.eql(u8, span.target, "FOREIGN ACTION"));
         };
         try std.testing.expectEqual(@as(usize, 1), foreign_actions);
         try std.testing.expectEqual(@as(usize, 1), known_actions);
