@@ -1090,7 +1090,7 @@ fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?Res
 
 // Complete page-wide hatnotes retain their meaning despite a later heading warning.
 // Arbitrary prefix prose and incomplete wrappers keep the existing owner policy.
-fn pageWideHatnotePrefix(prefix: []const u8) bool {
+fn pageWideHatnotePrefix(a: std.mem.Allocator, codes: LanguageCodes, prefix: []const u8) std.mem.Allocator.Error!bool {
     const syntax = blobs.wikitext_syntax;
     var cursor: usize = 0;
     var found = false;
@@ -1102,6 +1102,14 @@ fn pageWideHatnotePrefix(prefix: []const u8) bool {
         if (std.mem.startsWith(u8, prefix[cursor..], "<!--")) {
             const end = std.mem.indexOfPos(u8, prefix, cursor + 4, "-->") orelse return false;
             cursor = end + 3;
+            continue;
+        }
+        const control_end = if (codes.behavior_switches) |registry|
+            try registry.matchAt(a, prefix, cursor)
+        else
+            syntax.behaviorSwitchEnd(prefix, cursor);
+        if (control_end) |end| {
+            cursor = end;
             continue;
         }
         const tag = syntax.tagAt(prefix, cursor) orelse return false;
@@ -2077,7 +2085,7 @@ fn processMain(
         "";
     // A complete page-wide hatnote is context for every emitted owner, even
     // Unclassified; only its prefix is shared, never another owner's body.
-    const shared_prefix: ?[]const u8 = if (pageWideHatnotePrefix(page_prefix))
+    const shared_prefix: ?[]const u8 = if (try pageWideHatnotePrefix(page_allocator, codes, page_prefix))
         page_prefix
     else
         try sharedImagePrefix(page_allocator, codes, page_prefix);
@@ -4679,6 +4687,16 @@ test "typed unowned prefix emptiness ignores invisible-only render results" {
     }
 }
 
+test "complete page hatnote prefix ignores only active selected behavior controls" {
+    const a = std.testing.allocator;
+    const codes = TestLanguages.codes();
+    const note = "<div class=\"disambig-see-also-2\">''Sien ook'' '''[[M]]'''</div>";
+    inline for (.{ note, "__NOEDITSECTION__" ++ note, note ++ "\n__NOEDITSECTION__", "<!-- hidden -->__NOTOC__\n" ++ note ++ "__NOEDITSECTION__" }) |prefix|
+        try std.testing.expect(try pageWideHatnotePrefix(a, codes, prefix));
+    inline for (.{ "__NOEDITSECTION__", "__NOEDITSECTIONX__" ++ note, "&#95;&#95;NOEDITSECTION&#95;&#95;" ++ note, "<nowiki>__NOEDITSECTION__</nowiki>" ++ note, "<pre>__NOEDITSECTION__</pre>" ++ note, "<code>__NOEDITSECTION__</code>" ++ note, "visible prose" ++ note, "<div class=\"disambig-see-also-2\">[[M]]", "<div class=\"disambig-see-also-other\">[[M]]</div>" }) |prefix|
+        try std.testing.expect(!try pageWideHatnotePrefix(a, codes, prefix));
+}
+
 test "single resolved language preserves structured prefix without ambiguous attribution" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -4757,6 +4775,10 @@ test "single resolved language preserves structured prefix without ambiguous att
     const multilingual_hatnote = "<div class=\"disambig-see-also\">''انظر أيضًا:'' '''[[M]]'''</div>\n";
     const hatnote_owners = "==English==\n# EN_FIRST\n==French==\n# FR_ONLY\n==English==\n# EN_REPEATED\n==لغة مجهولة==\n# UNKNOWN_ONLY\n";
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "hatnote-multilingual", multilingual_hatnote ++ hatnote_owners, "{{أيضا|M}}\n" ++ hatnote_owners, null);
+    // Exact active control emitted before L2 by captured =internasionaal=.
+    const controlled_hatnote = "<div class=\"disambig-see-also-2\">''Sien ook'' '''[[M]]'''<ref>'''PREFIX_REF''' [[Reference target]]</ref></div>\n__NOEDITSECTION__\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "hatnote-controlled", controlled_hatnote ++ hatnote_owners, "{{ook|M}}\n__NOEDITSECTION__\n" ++ hatnote_owners, null);
+
     inline for (.{
         .{ "hatnote-prose", hatnote ++ "unscoped prefix\n" },
         .{ "hatnote-partial", "<div class=\"disambig-see-also\">''انظر أيضًا:'' '''[[مِنْجَار]]'''\n" },
@@ -4867,27 +4889,49 @@ test "single resolved language preserves structured prefix without ambiguous att
         const entry_value = try Local.entry(a, root_path, "العربية", title);
         try std.testing.expect(std.mem.indexOf(u8, try Local.text(a, entry_value), "مِنْجَار") == null);
     }
-    inline for (.{ "English", "French", "Unclassified" }) |owner| {
-        const entry_value = try Local.entry(a, root_path, owner, "hatnote-multilingual");
-        var global_actions: usize = 0;
-        for (entry_value.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
-            if (span.kind == .link and std.mem.eql(u8, span.target, "M")) {
-                try std.testing.expect(span.bold);
-                global_actions += 1;
+    inline for (.{ "hatnote-multilingual", "hatnote-controlled" }) |hatnote_title| {
+        inline for (.{ "English", "French", "Unclassified" }) |owner| {
+            const entry_value = try Local.entry(a, root_path, owner, hatnote_title);
+            var global_actions: usize = 0;
+            for (entry_value.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, "M")) {
+                    try std.testing.expect(span.bold);
+                    global_actions += 1;
+                }
+            };
+            try std.testing.expectEqual(@as(usize, 1), global_actions);
+            const owner_text = try Local.text(a, entry_value);
+            inline for (.{ "EN_FIRST", "EN_REPEATED", "FR_ONLY", "UNKNOWN_ONLY" }) |body| {
+                const belongs = if (std.mem.eql(u8, owner, "English"))
+                    std.mem.startsWith(u8, body, "EN_")
+                else if (std.mem.eql(u8, owner, "French"))
+                    std.mem.eql(u8, body, "FR_ONLY")
+                else
+                    std.mem.eql(u8, body, "UNKNOWN_ONLY");
+                try std.testing.expectEqual(belongs, std.mem.indexOf(u8, owner_text, body) != null);
             }
-        };
-        try std.testing.expectEqual(@as(usize, 1), global_actions);
-        const owner_text = try Local.text(a, entry_value);
-        inline for (.{ "EN_FIRST", "EN_REPEATED", "FR_ONLY", "UNKNOWN_ONLY" }) |body| {
-            const belongs = if (std.mem.eql(u8, owner, "English"))
-                std.mem.startsWith(u8, body, "EN_")
-            else if (std.mem.eql(u8, owner, "French"))
-                std.mem.eql(u8, body, "FR_ONLY")
-            else
-                std.mem.eql(u8, body, "UNKNOWN_ONLY");
-            try std.testing.expectEqual(belongs, std.mem.indexOf(u8, owner_text, body) != null);
+            try std.testing.expectEqualStrings(if (std.mem.eql(u8, owner, "Unclassified")) "" else if (std.mem.eql(u8, owner, "English")) "en" else "fr", entry_value.language_code);
         }
-        try std.testing.expectEqualStrings(if (std.mem.eql(u8, owner, "Unclassified")) "" else if (std.mem.eql(u8, owner, "English")) "en" else "fr", entry_value.language_code);
+    }
+    inline for (.{ "English", "French", "Unclassified" }) |owner| {
+        const entry_value = try Local.entry(a, root_path, owner, "hatnote-controlled");
+        var italic_label = false;
+        var reference_markers: usize = 0;
+        for (entry_value.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.text, "Sien ook")) italic_label = span.italic;
+            if (std.mem.eql(u8, span.target, "#reference-1")) reference_markers += 1;
+        };
+        try std.testing.expect(italic_label);
+        try std.testing.expectEqual(@as(usize, 1), reference_markers);
+        try std.testing.expectEqual(@as(usize, 1), entry_value.references.len);
+        var reference_action = false;
+        var reference_bold = false;
+        for (entry_value.references[0].spans) |span| {
+            reference_action = reference_action or std.mem.eql(u8, span.target, "Reference target");
+            reference_bold = reference_bold or (span.bold and std.mem.eql(u8, span.text, "PREFIX_REF"));
+        }
+        try std.testing.expect(reference_action and reference_bold);
+        try std.testing.expect(std.mem.indexOf(u8, try Local.text(a, entry_value), "__NOEDITSECTION__") == null);
     }
     const prefix_report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root_path, "fallback-pages.jsonl" }), a, .unlimited);
     var report_lines = std.mem.splitScalar(u8, prefix_report, '\n');
@@ -4994,6 +5038,11 @@ test "classification control projection follows the selected edition and protect
     }
     inline for (.{ "__index__English", "__NOTOC__English", "__UNKNOWN__English", "<nowiki>__GEENNUWEAFDELING__</nowiki>English", "<pre>__GEENNUWEAFDELING__</pre>English", "<span title=\"__GEENNUWEAFDELING__\">English</span>", "&#95;&#95;GEENNUWEAFDELING&#95;&#95;English" }) |value|
         try std.testing.expect(try classificationControlHeadingAlloc(a, codes, value) == null);
+    const note = "<div class=\"disambig-see-also-2\">''Sien ook'' '''[[M]]'''</div>";
+    inline for (.{ "__GEENNUWEAFDELING__" ++ note, note ++ "__geennuweafdeling__", "__INDEX__" ++ note }) |prefix|
+        try std.testing.expect(try pageWideHatnotePrefix(a, codes, prefix));
+    inline for (.{ "__index__" ++ note, "__NOEDITSECTION__" ++ note, "<nowiki>__GEENNUWEAFDELING__</nowiki>" ++ note, "&#95;&#95;GEENNUWEAFDELING&#95;&#95;" ++ note }) |prefix|
+        try std.testing.expect(!try pageWideHatnotePrefix(a, codes, prefix));
     codes.behavior_switches = null;
     try std.testing.expect(try classificationControlHeadingAlloc(a, codes, "__GEENNUWEAFDELING__English") == null);
     const builtin = (try classificationControlHeadingAlloc(a, codes, "En__NOGALLERY__glish")).?;
