@@ -25,6 +25,7 @@ pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
     ambiguous: std.StringHashMapUnmanaged(void) = .empty,
+    language_boundaries: std.StringHashMapUnmanaged(void) = .empty,
     codes: std.StringHashMapUnmanaged(void) = .empty,
     trusted_names: std.StringHashMapUnmanaged(void) = .empty,
     strong_names: std.StringHashMapUnmanaged(void) = .empty,
@@ -46,6 +47,7 @@ pub const Registry = struct {
 
     pub fn deinit(self: *Registry) void {
         self.ambiguous.deinit(self.arena.allocator());
+        self.language_boundaries.deinit(self.arena.allocator());
         self.codes.deinit(self.arena.allocator());
         self.trusted_names.deinit(self.arena.allocator());
         self.strong_names.deinit(self.arena.allocator());
@@ -54,6 +56,15 @@ pub const Registry = struct {
         self.local_aliases.deinit(self.arena.allocator());
         self.arena.deinit();
         self.* = undefined;
+    }
+
+    pub fn isAmbiguous(self: *const Registry, heading: []const u8) bool {
+        return self.ambiguous.contains(heading);
+    }
+
+    /// Positive boundary evidence does not resolve, trust or create an owner.
+    pub fn isLanguageBoundary(self: *const Registry, heading: []const u8) bool {
+        return self.isAmbiguous(heading) or self.language_boundaries.contains(heading);
     }
 
     pub fn code(self: *const Registry, heading: []const u8) ?[]const u8 {
@@ -425,6 +436,15 @@ pub const Registry = struct {
             }
             if (line.len == 0) continue;
             if (line[0] == '#') {
+                const boundary_marker = "# local-language-boundary\t";
+                if (std.mem.eql(u8, line, "# local-language-boundary")) return error.InvalidLanguageRegistry;
+                if (std.mem.startsWith(u8, line, boundary_marker)) {
+                    const label = line[boundary_marker.len..];
+                    if (!validLocalHeading(label)) return error.InvalidLanguageRegistry;
+                    const owned = self.arena.allocator();
+                    try self.language_boundaries.put(owned, try owned.dupe(u8, label), {});
+                    continue;
+                }
                 const heading_marker = "# local-heading\t";
                 if (std.mem.eql(u8, line, "# local-heading")) return error.InvalidLanguageRegistry;
                 if (std.mem.startsWith(u8, line, heading_marker)) {
@@ -1126,6 +1146,9 @@ test "dump local literal names preserve aliases and ambiguous language labels" {
     try std.testing.expectEqualStrings("Englisc", r.resolveStrong("Ænglisc").?.heading);
     try std.testing.expectEqualStrings("en", r.resolveStrong("Nīwenglisc").?.code);
     try std.testing.expectEqualStrings("Nīwenglisc", r.resolve("English").?.heading);
+    try std.testing.expect(r.isAmbiguous("Frencisc"));
+    try std.testing.expect(!r.isAmbiguous("Unknown topic"));
+    try std.testing.expect(!r.isAmbiguous("Nīwenglisc"));
     try std.testing.expect(r.resolve("Frencisc") == null);
     try std.testing.expect(r.resolveStrong("Frencisc") == null);
     try std.testing.expectEqualStrings("Frencisc (fr)", r.resolve("fr").?.heading);
@@ -1134,6 +1157,24 @@ test "dump local literal names preserve aliases and ambiguous language labels" {
     try std.testing.expect(r.resolve("gem-pro") == null);
     try std.testing.expect(r.resolve("Ealdoric Germanisc") == null);
     try std.testing.expect(r.resolve("Englisce") == null);
+    const code_count = r.codes.count();
+    try r.addTsv("# local-language-boundary\tMiddelhēahþēodisc\n# local-language-boundary\tMiddelhēahþēodisc\n# local-language-boundary\tNīwenglisc\n");
+    try std.testing.expect(r.isLanguageBoundary("Middelhēahþēodisc"));
+    try std.testing.expect(!r.isAmbiguous("Middelhēahþēodisc"));
+    try std.testing.expect(r.resolve("Middelhēahþēodisc") == null);
+    try std.testing.expect(!r.names.contains("Middelhēahþēodisc"));
+    try std.testing.expectEqual(code_count, r.codes.count());
+    try std.testing.expectEqualStrings("en", r.resolveStrong("Nīwenglisc").?.code);
+    for ([_][]const u8{
+        "# local-language-boundary",            "# local-language-boundary\t",
+        "# local-language-boundary\t Label",    "# local-language-boundary\tLabel\textra",
+        "# local-language-boundary\tBad|label", "# local-language-boundary\tBad\x00label",
+        "# local-language-boundary\t\xff",
+    }) |bad| {
+        var invalid = Registry.empty(std.testing.allocator);
+        defer invalid.deinit();
+        try std.testing.expectError(error.InvalidLanguageRegistry, invalid.addTsv(bad));
+    }
 }
 
 test "dump local names reject computed and conflicting table input" {

@@ -286,6 +286,12 @@ fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*cons
                 return .{ .code = resolved.code, .heading = resolved.heading };
             }
         }.strong,
+        .boundary_fn = struct {
+            fn boundary(raw: ?*const anyopaque, heading: []const u8) bool {
+                const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return false));
+                return value.isLanguageBoundary(heading);
+            }
+        }.boundary,
         .content_fn = struct {
             fn content(raw: ?*const anyopaque) ?encoder.blob_builder.ResolvedLanguage {
                 const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
@@ -2494,4 +2500,20 @@ test "selected interwiki metadata survives real Registry Writer and DPR2 alongsi
     try std.testing.expectEqual(@as(usize, 1), local_n);
     try std.testing.expectEqual(@as(usize, 1), superscript_two);
     try std.testing.expect(std.mem.indexOf(u8, visible.items, "\u{2066}1\u{2009}N=1\u{2009}kg·m/s2\u{2069}") != null);
+}
+
+test "language code bridge preserves positive ambiguous labels without inventing owners" {
+    var registry = language_registry.Registry.empty(std.testing.allocator);
+    defer registry.deinit();
+    try registry.addTsv("en\tEnglish\ten\nfr\tFrench\tfr\nfrk\tFrankish\tfrk\n");
+    try registry.addLocalNamesLua("local names = { en = \"Nīwenglisc\", fr = \"Frencisc\", frk = \"Frencisc\" } local aliases = {}");
+    try registry.addTsv("# local-language-boundary\tMiddelhēahþēodisc\n# local-language-boundary\tNīwenglisc\n");
+    const codes = languageCodes(&registry, null);
+    try std.testing.expect(codes.isLanguageBoundary("Frencisc"));
+    try std.testing.expect(codes.resolve("Frencisc") == null);
+    try std.testing.expect(!codes.isLanguageBoundary("Unknown topic"));
+    try std.testing.expect(codes.isLanguageBoundary("Nīwenglisc"));
+    try std.testing.expect(codes.isLanguageBoundary("Middelhēahþēodisc"));
+    try std.testing.expect(codes.resolve("Middelhēahþēodisc") == null);
+    try std.testing.expectEqualStrings("en", codes.resolve("Nīwenglisc").?.code);
 }

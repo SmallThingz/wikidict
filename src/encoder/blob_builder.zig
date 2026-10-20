@@ -44,6 +44,7 @@ pub const LanguageCodes = struct {
     trusted_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
     strong_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
     content_fn: ?*const fn (?*const anyopaque) ?ResolvedLanguage = null,
+    boundary_fn: ?*const fn (?*const anyopaque, []const u8) bool = null,
     link_trail: blobs.document_ir.LinkTrail = .{},
 
     pub fn code(self: LanguageCodes, heading: []const u8) ?[]const u8 {
@@ -64,6 +65,11 @@ pub const LanguageCodes = struct {
     pub fn resolveStrong(self: LanguageCodes, value: []const u8) ?ResolvedLanguage {
         if (self.strong_fn) |strong_fn| return strong_fn(self.ctx, value);
         return null;
+    }
+
+    pub fn isLanguageBoundary(self: LanguageCodes, heading: []const u8) bool {
+        const boundary_fn = self.boundary_fn orelse return false;
+        return boundary_fn(self.ctx, heading);
     }
 
     pub fn content(self: LanguageCodes) ?ResolvedLanguage {
@@ -2104,7 +2110,11 @@ fn processMain(
         };
         if (resolved == null) resolved = resolveSection(codes, section);
 
-        if (resolved == null and (isolate_mixed or hasExplicitLanguageDeclaration(codes, section) or
+        // A collision or explicit boundary-only label is a boundary without
+        // an owner. Ordinary unknown support/POS headings keep their policy.
+        const known_boundary = codes.isLanguageBoundary(std.mem.trim(u8, section.heading, " \t\r\n")) or
+            (raw_aligned and codes.isLanguageBoundary(std.mem.trim(u8, raw_sections.items[index].heading, " \t\r\n")));
+        if (resolved == null and (known_boundary or isolate_mixed or hasExplicitLanguageDeclaration(codes, section) or
             (raw_aligned and hasExplicitLanguageDeclaration(codes, raw_sections.items[index]))))
         {
             fallbacks.unresolved_language_heading = true;
@@ -2161,7 +2171,9 @@ fn processMain(
         // corroborated native convention, never an arbitrary AY boundary.
         const native_default: ?ResolvedLanguage = native: {
             const language = codes.content() orelse break :native null;
-            if (page_sections.items.len == 0) break :native language;
+            // The edition language alone cannot identify an unsectioned entry.
+            // Existing explicit/support rules above and the corroborated AY
+            // convention below remain the only attribution in this branch.
             if (!std.mem.eql(u8, language.code, "ay") or raw_sections.items.len == 0 or
                 !raw_sections.items[0].hyphen_marker or
                 !std.mem.eql(u8, raw_sections.items[0].heading, "ay")) break :native null;
@@ -3324,6 +3336,12 @@ test "unresolved plain language headings preserve bodies without claiming editio
         fn af(_: ?*const anyopaque) ?ResolvedLanguage {
             return .{ .code = "af", .heading = "Afrikaans" };
         }
+        fn ar(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "ar", .heading = "Arabic" };
+        }
+        fn ab(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "ab", .heading = "Abkhaz" };
+        }
     };
     var codes = TestLanguages.codes();
     codes.content_fn = Local.am;
@@ -3348,10 +3366,26 @@ test "unresolved plain language headings preserve bodies without claiming editio
     writer.language_codes.content_fn = Local.af;
     const beginde = "''Byvoeglike voltooide deelwoord'' van [[begin]].\n::wat mens begin het\n";
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "beginde", beginde, beginde, null);
+    // Current AR source forms have no authoritative language boundary. The
+    // category text in Able follows malformed link syntax; arti mixes language
+    // material despite one category. Neither may inherit the edition language.
+    writer.language_codes.content_fn = Local.ar;
+    const able_raw = "{{أيضا|able}}\nمعناها بالعربي (قادر )\n[[ru:Able}}\n[[تصنيف:إنجليزية]]\n";
+    const able = "انظر أيضا: [[able]]\nمعناها بالعربي (قادر )\n[[ru:Able}}\n[[تصنيف:إنجليزية]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Able", able, able_raw, null);
+    const segments = "قالب:Segment\n=== اسم ===\n# plural of [[segment]]\n=== اسم ===\n# third-person singular of [[segment]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "segments", segments, segments, null);
+    const arti = "=== Etymology ===\nCompare Italian [[arte]]\n=== اسم ===\n# [[meaning]]\n=== Etymology 2 ===\nFrom Sanskrit\n==== فعل ====\n# to [[plough]]\n[[تصنيف:إنجليزية]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "arti", arti, arti, null);
+    // A nonlexical unsectioned notice is conserved without a guessed owner;
+    // the separate controller notice policy still reviews its exact source.
+    writer.language_codes.content_fn = Local.ab;
+    const notice = "Welcome to this dictionary.\n* [[help|Read the help]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "notice", notice, notice, null);
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 5), stats.language_records);
-    try std.testing.expectEqual(@as(usize, 3), stats.language_blobs);
-    try std.testing.expectEqual(@as(usize, 4), stats.fallback_pages);
+    try std.testing.expectEqual(@as(usize, 9), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 8), stats.fallback_pages);
 
     const Expected = struct {
         title: []const u8,
@@ -3366,7 +3400,11 @@ test "unresolved plain language headings preserve bodies without claiming editio
         .{ .title = "Максим", .heading = "Unclassified", .code = "", .body = "የሩሲያ ወንድ ስም" },
         .{ .title = "support-only", .heading = "Unclassified", .code = "", .body = "Unresolved support-only body", .link = "lemma" },
         .{ .title = "network", .heading = "English", .code = "en", .body = "የሰዎች ማኅበራዊ ቅጥጥሎሽ", .later_body = "አውታር", .link = "አውታር" },
-        .{ .title = "beginde", .heading = "Afrikaans", .code = "af", .body = "wat mens begin het", .link = "begin" },
+        .{ .title = "beginde", .heading = "Unclassified", .code = "", .body = "wat mens begin het", .link = "begin" },
+        .{ .title = "Able", .heading = "Unclassified", .code = "", .body = "معناها بالعربي (قادر )", .link = "able" },
+        .{ .title = "segments", .heading = "Unclassified", .code = "", .body = "plural of", .later_body = "third-person singular of", .link = "segment" },
+        .{ .title = "arti", .heading = "Unclassified", .code = "", .body = "Compare Italian", .later_body = "From Sanskrit", .link = "plough" },
+        .{ .title = "notice", .heading = "Unclassified", .code = "", .body = "Welcome to this dictionary.", .later_body = "Read the help", .link = "help" },
     };
     for (expected) |item| {
         var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, item.heading));
@@ -3397,18 +3435,18 @@ test "unresolved plain language headings preserve bodies without claiming editio
             try std.testing.expect(found);
         }
         if (!std.mem.eql(u8, item.heading, "Unclassified")) {
-            inline for (.{ "aggi", "Максим", "support-only" }) |title|
+            inline for (.{ "aggi", "Максим", "support-only", "beginde", "Able", "segments", "arti", "notice" }) |title|
                 try std.testing.expect((try index.find(title)) == null);
         } else {
             try std.testing.expect((try index.find("network")) == null);
-            try std.testing.expect((try index.find("beginde")) == null);
         }
     }
     const manifest = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, blob_catalog.manifest_filename }), a, .unlimited);
-    try std.testing.expect(std.mem.indexOf(u8, manifest, "አማርኛ") == null);
+    inline for (.{ "አማርኛ", "Afrikaans", "Arabic", "Abkhaz" }) |unproven|
+        try std.testing.expect(std.mem.indexOf(u8, manifest, unproven) == null);
 }
 
-test "language resolution rejects fake top-level headings and uses real fallback language" {
+test "language resolution rejects fake headings without guessing edition ownership" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -3468,12 +3506,11 @@ test "language resolution rejects fake top-level headings and uses real fallback
     );
 
     const stats = try writer.finish(codes);
-    try std.testing.expectEqual(@as(usize, 7), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 6), stats.language_blobs);
 
     inline for (.{
         .{ "Nederlands", "nl" },
         .{ "Hrvatski", "hr" },
-        .{ "Magyar", "hu" },
         .{ "Middle English", "enm" },
         .{ "Aari", "aiw" },
         .{ "Latyn", "la" },
@@ -3486,10 +3523,27 @@ test "language resolution rejects fake top-level headings and uses real fallback
         try std.testing.expectEqualStrings(expected[1], (try blob.languageMetadata()).code);
     }
 
+    // A POS template name alone does not establish the edition as owner.
+    var unknown_map = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Unclassified"));
+    defer unknown_map.deinit();
+    const unknown_blob = try blob_format.inspect(unknown_map.bytes);
+    const unknown_metadata = try unknown_blob.languageMetadata();
+    var unknown_index = try unknown_blob.buildTrustedIndexAlloc(a);
+    defer unknown_index.deinit(a);
+    const unsectioned = (try unknown_index.find("ház")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, unsectioned.payload, unsectioned.title, .language, unknown_metadata);
+    try std.testing.expectEqualStrings("", decoded.entry.language_code);
+    var kept_house = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+        kept_house = kept_house or std.mem.indexOf(u8, span.text, "house") != null;
+    };
+    try std.testing.expect(kept_house);
+
     const manifest_path = try std.fs.path.join(a, &.{ root, blob_catalog.manifest_filename });
     const manifest = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, manifest_path, a, .unlimited);
     try std.testing.expect(std.mem.indexOf(u8, manifest, "Nederlandse vervoeging") == null);
     try std.testing.expect(std.mem.indexOf(u8, manifest, "Unclassified") != null);
+    try std.testing.expect(std.mem.indexOf(u8, manifest, "Magyar") == null);
     try std.testing.expect(std.mem.indexOf(u8, manifest, "\nAk\n") == null);
 }
 
@@ -4469,6 +4523,11 @@ test "single resolved language preserves structured prefix without ambiguous att
         "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
     defer namespaces.deinit();
     const Local = struct {
+        fn ambiguous(_: ?*const anyopaque, heading: []const u8) bool {
+            return std.mem.eql(u8, heading, "Frencisc") or
+                std.mem.eql(u8, heading, "Middelhēahþēodisc") or
+                std.mem.eql(u8, heading, "English");
+        }
         fn resolve(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             if (std.mem.eql(u8, value, "عربية") or std.mem.eql(u8, value, "عَرَبِيَّة") or std.mem.eql(u8, value, "العربية")) return .{ .code = "ar", .heading = "العربية" };
             return TestLanguages.resolve(ctx, value);
@@ -4497,7 +4556,7 @@ test "single resolved language preserves structured prefix without ambiguous att
             return result.items;
         }
     };
-    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve, .boundary_fn = Local.ambiguous };
     const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
     var writer = try Writer.init(std.testing.io, a, root_path);
     defer writer.deinit();
@@ -4528,7 +4587,38 @@ test "single resolved language preserves structured prefix without ambiguous att
         .{ "hatnote-partial", "<div class=\"disambig-see-also\">''انظر أيضًا:'' '''[[مِنْجَار]]'''\n" },
         .{ "hatnote-unrelated", "<div class=\"disambig-see-also-other\">[[مِنْجَار]]</div>\n" },
     }) |row| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row[0], row[1] ++ later_unknown, row[1] ++ later_unknown, null);
+    inline for (.{
+        .{ "boundary-leading", "==Middelhēahþēodisc==\n# [[FOREIGN_ACTION|FOREIGN_BODY]]\n==English==\n# [[KNOWN_ACTION|KNOWN_BODY]]\n" },
+        .{ "boundary-trailing", "==English==\n# [[KNOWN_ACTION|KNOWN_BODY]]\n==Middelhēahþēodisc==\n# [[FOREIGN_ACTION|FOREIGN_BODY]]\n" },
+        .{ "ambiguous-leading", "==Frencisc==\n# [[FOREIGN_ACTION|FOREIGN_BODY]]\n==English==\n# [[KNOWN_ACTION|KNOWN_BODY]]\n" },
+        .{ "ambiguous-trailing", "==English==\n# [[KNOWN_ACTION|KNOWN_BODY]]\n==Frencisc==\n# [[FOREIGN_ACTION|FOREIGN_BODY]]\n" },
+    }) |row| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row[0], row[1], row[1], null);
     _ = try writer.finish(codes);
+    inline for (.{ "ambiguous-leading", "ambiguous-trailing", "boundary-leading", "boundary-trailing" }) |title| {
+        const unknown = try Local.entry(a, root_path, "Unclassified", title);
+        const known = try Local.entry(a, root_path, "English", title);
+        try std.testing.expectEqualStrings("", unknown.language_code);
+        try std.testing.expectEqualStrings("en", known.language_code);
+        const unknown_text = try Local.text(a, unknown);
+        const known_text = try Local.text(a, known);
+        try std.testing.expect(std.mem.indexOf(u8, unknown_text, "FOREIGN_BODY") != null);
+        try std.testing.expect(std.mem.indexOf(u8, unknown_text, "KNOWN_BODY") == null);
+        try std.testing.expect(std.mem.indexOf(u8, known_text, "KNOWN_BODY") != null);
+        try std.testing.expect(std.mem.indexOf(u8, known_text, "FOREIGN_BODY") == null);
+        var foreign_actions: usize = 0;
+        var known_actions: usize = 0;
+        for (unknown.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, "FOREIGN_ACTION")) foreign_actions += 1;
+            try std.testing.expect(!std.mem.eql(u8, span.target, "KNOWN_ACTION"));
+        };
+        for (known.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, "KNOWN_ACTION")) known_actions += 1;
+            try std.testing.expect(!std.mem.eql(u8, span.target, "FOREIGN_ACTION"));
+        };
+        try std.testing.expectEqual(@as(usize, 1), foreign_actions);
+        try std.testing.expectEqual(@as(usize, 1), known_actions);
+    }
+
     std.debug.print("QATAR_STAGE actual prefix\n", .{});
     const qatar_entry = try Local.entry(a, root_path, "العربية", "قِطَار");
     try std.testing.expectEqualStrings("ar", qatar_entry.language_code);
@@ -4596,7 +4686,16 @@ test "single resolved language preserves structured prefix without ambiguous att
     var report_lines = std.mem.splitScalar(u8, prefix_report, '\n');
     var hatnote_warning = false;
     var multilingual_warning = false;
+    var boundary_warnings: usize = 0;
     while (report_lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "ambiguous-leading") != null or
+            std.mem.indexOf(u8, line, "ambiguous-trailing") != null or
+            std.mem.indexOf(u8, line, "boundary-leading") != null or
+            std.mem.indexOf(u8, line, "boundary-trailing") != null)
+        {
+            try std.testing.expect(std.mem.indexOf(u8, line, "unresolved_language_heading") != null);
+            boundary_warnings += 1;
+        }
         if (std.mem.indexOf(u8, line, "hatnote-warning") != null) {
             hatnote_warning = std.mem.indexOf(u8, line, "unresolved_language_heading") != null;
         }
@@ -4606,6 +4705,7 @@ test "single resolved language preserves structured prefix without ambiguous att
     }
     try std.testing.expect(hatnote_warning);
     try std.testing.expect(multilingual_warning);
+    try std.testing.expectEqual(@as(usize, 4), boundary_warnings);
     // A page without any resolved boundary retains its whole source as Unclassified.
     std.debug.print("QATAR_STAGE whole-source unknown preservation\n", .{});
     const unknown_entry = try Local.entry(a, root_path, "Unclassified", "only-unknown");
