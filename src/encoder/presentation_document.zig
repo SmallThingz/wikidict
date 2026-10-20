@@ -2079,3 +2079,31 @@ test "nonleading example scopes preserve wiki sense continuation and next sense 
         try std.testing.expect(!controlled_report.unclosed_formatting and !controlled_report.malformed_table and !controlled_report.literal_markup);
     }
 }
+
+test "closing br preserves adjacent styles and actions through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoded = try compileAlloc(a, "entry", .language, "English", "en", "'''before'''</br>[[Target|after]]", null);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    var text: std.ArrayList(u8) = .empty;
+    var breaks: usize = 0;
+    var bold: usize = 0;
+    var links: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.kind == .line_break) {
+            breaks += 1;
+            try text.append(a, '\n');
+        } else try text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "before") and span.bold) bold += 1;
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("after", span.text);
+            try std.testing.expectEqualStrings("Target", span.target);
+            links += 1;
+        }
+    };
+    try std.testing.expectEqualStrings("before\nafter", text.items);
+    try std.testing.expectEqual(@as(usize, 1), breaks);
+    try std.testing.expectEqual(@as(usize, 1), bold);
+    try std.testing.expectEqual(@as(usize, 1), links);
+}

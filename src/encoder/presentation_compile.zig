@@ -4918,7 +4918,7 @@ pub const Renderer = struct {
             }
         }
         if (tag.is("br")) {
-            if (!tag.closing) try self.lineBreak(style);
+            try self.lineBreak(style);
             return tag.end;
         }
         if (tag.is("wbr")) return tag.end;
@@ -9710,7 +9710,7 @@ test "stray and unclosed dangerous HTML cannot swallow following dictionary text
 
     const breaks = try r.parseSpans("a<br>b</br>c<hr>d</hr>e", .{});
     const break_text = try flattened(a, breaks);
-    try std.testing.expectEqualStrings("a\nbc\n────────\nde", break_text);
+    try std.testing.expectEqualStrings("a\nb\nc\n────────\nde", break_text);
 }
 
 test "raw HTML anchors stay literal while attribute URLs retain MediaWiki free-link semantics" {
@@ -22002,5 +22002,24 @@ test "swatch boolean attribute presence distinguishes names from quoted values" 
     }
     inline for (.{ "<table title='hidden'>", "<td data-hidden=yes>", "<span title='x hidden y'>", "<tr title=hidden>", "<tbody title='hidden=hidden'>" }) |source| {
         try std.testing.expect(!try renderer.swatchHasAttribute(syntax.tagAt(source, 0).?, "hidden"));
+    }
+}
+
+test "closing br is a line break while protected and encoded tags stay literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("a</br>b</BR>c<br>d<br/>e", .{});
+    try std.testing.expectEqualStrings("a\nb\nc\nd\ne", try flattened(a, spans));
+    var breaks: usize = 0;
+    for (spans) |span| if (span.kind == .line_break) {
+        breaks += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 4), breaks);
+    for ([_][]const u8{ "<nowiki>a</br>b</nowiki>", "a&lt;/br&gt;b" }) |source| {
+        const literal = try r.parseSpans(source, .{});
+        try std.testing.expectEqualStrings("a</br>b", try flattened(a, literal));
+        for (literal) |span| try std.testing.expect(span.kind != .line_break);
     }
 }

@@ -545,7 +545,45 @@ fn sourceConfirmsLanguage(codes: LanguageCodes, source: []const u8, wanted: []co
     return false;
 }
 
+// AM entries also write their explicit category-language heading as an
+// external link to this edition. Require its captured current-wiki URL and
+// agreement between the category title and the complete visible language name.
+fn resolveAmExternalCategoryHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "am") or value.len > 4096) return null;
+    const heading = std.mem.trim(u8, value, " \t\r\n");
+    if (!std.mem.startsWith(u8, heading, "[") or std.mem.startsWith(u8, heading, "[[") or
+        !std.mem.endsWith(u8, heading, "]")) return null;
+    const body = heading[1 .. heading.len - 1];
+    if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null) return null;
+    const separator = std.mem.indexOfAny(u8, body, " \t") orelse return null;
+    const url = body[0..separator];
+    const label = std.mem.trim(u8, body[separator + 1 ..], " \t");
+    const displayed = codes.resolveStrong(label) orelse codes.resolveTrusted(label) orelse return null;
+    for (namespaces.interwiki_rows) |row| {
+        if (!row.is_current_wiki) continue;
+        const marker = std.mem.indexOf(u8, row.url, "$1") orelse continue;
+        const prefix = row.url[0..marker];
+        const suffix = row.url[marker + 2 ..];
+        if (std.mem.indexOf(u8, suffix, "$1") != null or
+            url.len < prefix.len + suffix.len or
+            !std.mem.startsWith(u8, url, prefix) or !std.mem.endsWith(u8, url, suffix)) continue;
+        const encoded = url[prefix.len .. url.len - suffix.len];
+        if (encoded.len == 0 or std.mem.indexOfAny(u8, encoded, "?#") != null) return null;
+        var buffer: [4096]u8 = undefined;
+        @memcpy(buffer[0..encoded.len], encoded);
+        const decoded = std.Uri.percentDecodeInPlace(buffer[0..encoded.len]);
+        const title = namespaces.ofTitle(decoded);
+        if (title.id != 14) return null;
+        const name = std.mem.trim(u8, title.text, " \t\r\n");
+        const target = codes.resolveStrong(name) orelse codes.resolveTrusted(name) orelse return null;
+        return if (std.mem.eql(u8, target.code, displayed.code)) target else null;
+    }
+    return null;
+}
+
 fn resolveLinkedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    if (resolveAmExternalCategoryHeading(codes, value)) |resolved| return resolved;
     const heading = std.mem.trim(u8, value, " \t\r\n");
     if (!std.mem.startsWith(u8, heading, "[[") or !std.mem.endsWith(u8, heading, "]]")) return null;
     const body = heading[2 .. heading.len - 2];
@@ -7633,4 +7671,49 @@ test "pure swatch page context is shared without lending lexical owner bodies" {
             try std.testing.expectEqualStrings(if (std.mem.eql(u8, owner, "English")) "en" else if (std.mem.eql(u8, owner, "French")) "fr" else "", decoded.entry.language_code);
         }
     }
+}
+
+// Archived AM page2000/revision21140, raw1643B SHA256
+// a805a5e4bd156bf46a9dcb88192e012832e9480aebb24eb6d74153066cd0dd51.
+test "Amharic current-edition external category heading keeps its explicit owner" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try AmharicSupportCategoryFixture.namespaces(a);
+    defer namespaces.deinit();
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &namespaces;
+    const heading = "[https://am.wiktionary.org/wiki/%E1%88%98%E1%8B%B0%E1%89%A5:%E1%8A%A5%E1%8A%95%E1%8C%8D%E1%88%8A%E1%8B%9D%E1%8A%9B እንግሊዝኛ]";
+    try std.testing.expect(resolveLinkedHeading(codes, heading) == null);
+    try namespaces.attachInterwikiMap("am\t1\t1\t0\t0\thttps://am.wiktionary.org/wiki/$1\nfr\t1\t0\t0\t0\thttps://fr.wiktionary.org/wiki/$1\n");
+    try std.testing.expectEqualStrings("en", resolveLinkedHeading(codes, heading).?.code);
+    try std.testing.expectEqualStrings("en", boundaryLanguage(codes, .{ .heading = heading, .source = "" }).?.code);
+    for ([_][]const u8{
+        "[https://am.wiktionary.org/wiki/መደብ:እንግሊዝኛ ፈረንሳይኛ]",
+        "[https://fr.wiktionary.org/wiki/መደብ:እንግሊዝኛ እንግሊዝኛ]",
+        "[https://am.wiktionary.org/wiki/እንግሊዝኛ እንግሊዝኛ]",
+        "[https://am.wiktionary.org/wiki/መደብ:እንግሊዝኛ]",
+        "[https://am.wiktionary.org/wiki/መደብ:እንግሊዝኛ እንግሊዝኛ] extra",
+    }) |other| try std.testing.expect(resolveLinkedHeading(codes, other) == null);
+    const source = "<!-- በቅድሚያ ለላ የተሰራ ቃልን በማየት አሰራሩን ይማሩ፡፡ ይህ ቀለል ያለ የቃላት ገለፃና ትርጉም ምስጫ ቅጽ ነው፡፡ በቅጹ ውስጥ በ\"<\"ና  በ\">\" መሃከል ያሉ መመሪያዎች ሊሰርዙት ይችላሉ፡፡ -->\n==[https://am.wiktionary.org/wiki/%E1%88%98%E1%8B%B0%E1%89%A5:%E1%8A%A5%E1%8A%95%E1%8C%8D%E1%88%8A%E1%8B%9D%E1%8A%9B እንግሊዝኛ]==\n=== ቋንቋ ===\n* እንግሊዝኛ<!-- የቋንቋውን ስም እዚህ ይምረጡ ከሌለ ይጻፉት፣ ኦሮምኛ፣ ፍረሳይኛ፣ ጣሊያንኛ፣ ወላይትኛ፣ ትግርኛ፣ ሩሲያኛ፣ ቻይንኛ... ወዘተ -->\n=== አባባል\\አጠራር\\አነጋገር ===\n<!-- በእንግሊዝኛው pronounciation እንደሚባለው ማለት ነው፡፡ በአማርኛ ፊደላትና ፎነቲክ ከቻሉ አባባሉን ያስቀምጡት-->\n\n=== የንግግር ክፍል ===\n==== ስም<!--  የንግግር ክፍሉን ከዚህ ይምረጡ ከሌለ ያስገቡት፣  ስም፣ ተውላጠስም፣ ግስ፣ተውሳከግስ፣ ቅጽል፣ ወዘተ --> ====\n* ገለፃ/ትርጉም\n# [[ክብድ ትዕምርት<!--ገለፃ ወይም ትርጉም እዚህ ያስገቡ-->]]\n#: <!-- ምሳሌ-->\n\n=== ተጠቃሽ መረጃዎች ===\n# [[ en:accent grave<!--የምንጭ ቋንቋ ዊክሽነሪ ተጠቃሽ ገጽን እዚህ ያስገቡ፣ ምሳሌ  -->]]\n# [[ ተጨማሪ መረጃ<!--ተጨማሪ ተጠቃሽ መረጃን እዚህ ያስገቡ -->]]\n\n[[መደብ:እንግሊዝኛ]]\n[[መደብ:አስሊ]]\n[[መደብ:ስም]]";
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "accent grave", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "English"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("accent grave")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    try std.testing.expectEqualStrings("en", decoded.entry.language_code);
+    try std.testing.expect(std.mem.indexOf(u8, record.payload, "ገለፃ/ትርጉም") != null);
+    try std.testing.expect(std.mem.indexOf(u8, record.payload, "ክብድ ትዕምርት") != null);
 }

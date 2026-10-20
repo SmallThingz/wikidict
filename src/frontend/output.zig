@@ -173,7 +173,33 @@ const SpanCursor = struct {
     }
 };
 
-fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool) !void {
+// Human ordinary-block display only. Stored spans and JSON retain source bytes.
+// A single state crosses style, link-label and trail boundaries; code/Poem are
+// explicit literal boundaries, and existing line breaks reset the state.
+const OrdinaryDisplayWhitespace = struct {
+    space: bool = false,
+    fn write(self: *OrdinaryDisplayWhitespace, w: *std.Io.Writer, bytes: []const u8, preserve: bool) !void {
+        if (preserve) {
+            self.space = false;
+            return terminalText(w, bytes);
+        }
+        var at: usize = 0;
+        while (at < bytes.len) {
+            if (bytes[at] == ' ' or bytes[at] == '\t') {
+                if (!self.space) try w.writeByte(' ');
+                self.space = true;
+                at += 1;
+            } else {
+                const start = at;
+                while (at < bytes.len and bytes[at] != ' ' and bytes[at] != '\t') : (at += 1) {}
+                try terminalText(w, bytes[start..at]);
+                self.space = false;
+            }
+        }
+    }
+};
+
+fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace) !void {
     const span = piece.span;
     if (piece.bytes.len == 0) return;
     if (color and span.bold) try w.writeAll("\x1b[1m");
@@ -184,7 +210,7 @@ fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool) !void {
     if (color and (span.kind == .link or span.kind == .external_link)) try w.writeAll("\x1b[36m");
     if (piece.initial and span.superscript and span.role != .reference) try w.writeByte('^');
     if (piece.initial and span.subscript) try w.writeByte('_');
-    try terminalText(w, piece.bytes);
+    if (whitespace) |state| try state.write(w, piece.bytes, span.code or piece.info.marked) else try terminalText(w, piece.bytes);
     if (color) try w.writeAll("\x1b[0m");
 }
 
@@ -192,6 +218,17 @@ pub fn spansText(w: *std.Io.Writer, spans: []const model.Span, color: bool) !voi
     return spansTextProjected(w, spans, color, null);
 }
 fn spansTextProjected(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection) !void {
+    return spansTextDisplayProjected(w, spans, color, projection, false);
+}
+fn spansTextDisplayProjected(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool) !void {
+    var collapse = ordinary;
+    if (collapse) for (spans) |span| {
+        if (PoemInfo.parse(span.classes).marked) {
+            collapse = false;
+            break;
+        }
+    };
+    var whitespace: OrdinaryDisplayWhitespace = .{};
     var cursor: SpanCursor = .{ .spans = spans };
     while (true) {
         var scan = cursor;
@@ -207,9 +244,12 @@ fn spansTextProjected(w: *std.Io.Writer, spans: []const model.Span, color: bool,
             newline = piece.ends_line;
         }
         if (projection) |p| try p.record(info) else if (info.marked and !info.rtl) try w.splatByteAll(' ', info.depth);
-        for (0..count) |_| try spanPieceText(w, cursor.next().?, color);
+        for (0..count) |_| try spanPieceText(w, cursor.next().?, color, if (collapse) &whitespace else null);
         if (projection == null and info.marked and info.rtl) try w.splatByteAll(' ', info.depth);
-        if (newline) try w.writeByte('\n');
+        if (newline) {
+            try w.writeByte('\n');
+            whitespace.space = false;
+        }
     }
 }
 
@@ -354,7 +394,7 @@ fn blocksTextProjected(w: *std.Io.Writer, blocks: []const model.Block, color: bo
             .preformatted => try w.writeAll("    "),
             else => {},
         }
-        try spansTextProjected(w, block.spans, color, projection);
+        try spansTextDisplayProjected(w, block.spans, color, projection, block.kind == .paragraph or block.kind == .definition);
         if (block.feature) |f| if (f.language.len != 0) {
             try w.writeAll("  [");
             try terminalText(w, f.language);
@@ -1690,4 +1730,82 @@ test "unsupported color features preserve exact existing table output" {
     }
     block.table = null;
     try std.testing.expect(colorSwatchRgb(block) == null);
+}
+
+test "ordinary block display collapses ASCII runs across styles links and trails without editing spans" {
+    const values = [_]model.Span{
+        .{ .text = "ste  " },
+        .{ .kind = .link, .text = " street", .target = "Street target", .trail = "  ", .bold = true },
+        .{ .text = "save\t\tword", .italic = true },
+    };
+    var plain: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer plain.deinit();
+    try spansTextDisplayProjected(&plain.writer, &values, false, null, true);
+    try std.testing.expectEqualStrings("ste street save word", plain.written());
+    var styled: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer styled.deinit();
+    try spansTextDisplayProjected(&styled.writer, &values, true, null, true);
+    try std.testing.expect(std.mem.indexOf(u8, styled.written(), "\x1b[1m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, styled.written(), "\x1b[3m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, styled.written(), "\x1b[36mstreet") != null);
+    try std.testing.expect(std.mem.indexOf(u8, styled.written(), "  ") == null);
+    try std.testing.expectEqualStrings("ste  ", values[0].text);
+    try std.testing.expectEqualStrings(" street", values[1].text);
+    try std.testing.expectEqualStrings("Street target", values[1].target);
+    try std.testing.expectEqualStrings("  ", values[1].trail);
+}
+
+test "ordinary display keeps code Poem NBSP explicit breaks and existing raw span output" {
+    const values = [_]model.Span{
+        .{ .text = "a\u{a0}\u{a0}b  " },
+        .{ .kind = .line_break },
+        .{ .text = "  c\t d", .code = true },
+        .{ .kind = .line_break },
+        .{ .text = "  e\t\t f" },
+    };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try spansTextDisplayProjected(&out.writer, &values, false, null, true);
+    try std.testing.expectEqualStrings("a\u{a0}\u{a0}b \n  c\t d\n e f", out.written());
+    out.clearRetainingCapacity();
+    try spansText(&out.writer, &values, false);
+    try std.testing.expectEqualStrings("a\u{a0}\u{a0}b  \n  c\t d\n  e\t\t f", out.written());
+    const poem = [_]model.Span{
+        .{ .text = "p  q" },
+        .{ .text = " r  s", .classes = "wikidict-poem" },
+    };
+    out.clearRetainingCapacity();
+    try spansTextDisplayProjected(&out.writer, &poem, false, null, true);
+    try std.testing.expectEqualStrings("p  q r  s", out.written());
+}
+
+test "human block whitespace projection preserves preformatted table and JSON data" {
+    const values = [_]model.Span{.{ .text = "ste  street" }};
+    const blocks = [_]model.Block{
+        .{ .kind = .paragraph, .spans = &values },
+        .{ .kind = .preformatted, .spans = &values },
+    };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try blocksText(&out.writer, &blocks, false);
+    try std.testing.expectEqualStrings("ste street\n\n    ste  street\n", out.written());
+    out.clearRetainingCapacity();
+    var lines: std.ArrayList(terminal.PoemLine) = .empty;
+    defer lines.deinit(std.testing.allocator);
+    var projection: PoemProjection = .{ .frame = &out, .allocator = std.testing.allocator, .lines = &lines };
+    try blocksTextProjected(&out.writer, &blocks, false, &projection);
+    try std.testing.expectEqualStrings("ste street\n\n    ste  street\n", out.written());
+    try std.testing.expectEqual(@as(usize, 0), lines.items.len);
+    const types = @import("blob_encoder").presentation_types;
+    const cells = [_]types.Cell{.{ .spans = &values }};
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    out.clearRetainingCapacity();
+    try tableText(&out.writer, .{ .rows = &rows }, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "ste  street") != null);
+    const sections = [_]model.Section{.{ .level = 2, .title = "ordinary", .blocks = &blocks }};
+    const entries = [_]model.Entry{.{ .title = "entry", .kind = .language, .sections = &sections }};
+    out.clearRetainingCapacity();
+    try json(&out.writer, .{ .operation = .lookup, .query = "entry", .kind = .language, .language = null, .record_count = 1, .total_matches = 1, .entries = &entries });
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "ste  street") != null);
+    try std.testing.expectEqualStrings("ste  street", entries[0].sections[0].blocks[0].spans[0].text);
 }
