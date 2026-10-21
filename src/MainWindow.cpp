@@ -3,6 +3,11 @@
 #include "MediaPanel.hpp"
 
 #include <QApplication>
+#include <QAccessible>
+#include <QAccessibleWidget>
+#include <QAbstractTextDocumentLayout>
+#include <QTextCursor>
+#include <QTextLayout>
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
@@ -60,6 +65,225 @@
 #include <algorithm>
 #include <array>
 namespace {
+class ReadingBrowser final : public QTextBrowser {
+public:
+    using QTextBrowser::QTextBrowser;
+};
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0)
+using ReadingAccessibleBase = QAccessibleWidgetV2;
+#else
+using ReadingAccessibleBase = QAccessibleWidget;
+#endif
+
+// Restrict the workaround to our reader. Other Qt text widgets retain their own adapters.
+class AccessibleReadingBrowser final : public ReadingAccessibleBase,
+                                       public QAccessibleTextInterface,
+                                       public QAccessibleEditableTextInterface {
+public:
+    explicit AccessibleReadingBrowser(ReadingBrowser *browser)
+        : ReadingAccessibleBase(browser, QAccessible::StaticText), browser_(browser) {}
+
+    void *interface_cast(QAccessible::InterfaceType type) override {
+        if (type == QAccessible::TextInterface) return static_cast<QAccessibleTextInterface *>(this);
+        if (type == QAccessible::EditableTextInterface) return static_cast<QAccessibleEditableTextInterface *>(this);
+        return ReadingAccessibleBase::interface_cast(type);
+    }
+    QAccessible::State state() const override {
+        auto result = ReadingAccessibleBase::state();
+        result.multiLine = true; result.selectableText = true;
+        result.readOnly = browser_->isReadOnly(); result.editable = !result.readOnly;
+        return result;
+    }
+    QString text(QAccessible::Text type) const override {
+        if (type == QAccessible::Value) return browser_->toPlainText();
+        return ReadingAccessibleBase::text(type);
+    }
+    int characterCount() const override { return qMax(0, browser_->document()->characterCount() - 1); }
+    QString text(int start, int end) const override {
+        if (end == -1) end = characterCount();
+        if (!validRange(start, end)) return {};
+        QTextCursor cursor(browser_->document()); cursor.setPosition(start);
+        cursor.setPosition(end, QTextCursor::KeepAnchor);
+        return cursor.selectedText().replace(QChar(QChar::ParagraphSeparator), QChar('\n'));
+    }
+    QString textAtOffset(int offset, QAccessible::TextBoundaryType boundary, int *start, int *end) const override {
+        if (boundary == QAccessible::LineBoundary) return visualLine(offset, 0, start, end);
+        if (boundary == QAccessible::ParagraphBoundary) return paragraphText(offset, 0, start, end);
+        return QAccessibleTextInterface::textAtOffset(offset == -2 ? cursorPosition() : offset, boundary, start, end);
+    }
+    QString textBeforeOffset(int offset, QAccessible::TextBoundaryType boundary, int *start, int *end) const override {
+        if (boundary == QAccessible::LineBoundary) return visualLine(offset, -1, start, end);
+        if (boundary == QAccessible::ParagraphBoundary) return paragraphText(offset, -1, start, end);
+        return QAccessibleTextInterface::textBeforeOffset(offset == -2 ? cursorPosition() : offset, boundary, start, end);
+    }
+    QString textAfterOffset(int offset, QAccessible::TextBoundaryType boundary, int *start, int *end) const override {
+        if (boundary == QAccessible::LineBoundary) return visualLine(offset, 1, start, end);
+        if (boundary == QAccessible::ParagraphBoundary) return paragraphText(offset, 1, start, end);
+        return QAccessibleTextInterface::textAfterOffset(offset == -2 ? cursorPosition() : offset, boundary, start, end);
+    }
+    int cursorPosition() const override { return browser_->textCursor().position(); }
+    void setCursorPosition(int offset) override {
+        if (!validRange(offset, offset)) return;
+        QTextCursor cursor(browser_->document()); cursor.setPosition(offset); browser_->setTextCursor(cursor);
+    }
+    int selectionCount() const override { return browser_->textCursor().hasSelection() ? 1 : 0; }
+    void selection(int index, int *start, int *end) const override {
+        *start = *end = -1;
+        if (index != 0 || !selectionCount()) return;
+        const auto cursor = browser_->textCursor(); *start = cursor.selectionStart(); *end = cursor.selectionEnd();
+    }
+    void setSelection(int index, int start, int end) override {
+        if (index != 0 || !validRange(start, end)) return;
+        QTextCursor cursor(browser_->document()); cursor.setPosition(start);
+        cursor.setPosition(end, QTextCursor::KeepAnchor); browser_->setTextCursor(cursor);
+    }
+    void addSelection(int start, int end) override { setSelection(0, start, end); }
+    void removeSelection(int index) override {
+        if (index != 0) return;
+        auto cursor = browser_->textCursor(); cursor.clearSelection(); browser_->setTextCursor(cursor);
+    }
+    QRect characterRect(int offset) const override {
+        if (offset < 0 || offset >= characterCount()) return {};
+        const QTextBlock block = browser_->document()->findBlock(offset);
+        const QString blockText = block.text();
+        int start = offset - block.position();
+        if (start < blockText.size()) {
+            QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, blockText);
+            finder.setPosition(start);
+            if (!finder.isAtBoundary()) start = finder.toPreviousBoundary();
+        }
+        const QRectF blockRect = browser_->document()->documentLayout()->blockBoundingRect(block);
+        const auto line = block.layout()->lineForTextPosition(start);
+        if (!line.isValid()) return {};
+        const qreal leading = line.cursorToX(start, QTextLine::Leading);
+        const qreal trailing = line.cursorToX(start, QTextLine::Trailing);
+        // Both edges belong to this character on this visual line. Adjacent cursor
+        // positions may instead jump to another line or the far side of a bidi run.
+        QRectF result(blockRect.left() + qMin(leading, trailing), blockRect.top() + line.y(),
+                      qMax(qreal(1), qAbs(trailing - leading)), line.height());
+        result.translate(browser_->viewport()->mapToGlobal(QPoint())
+                         - QPoint(browser_->horizontalScrollBar()->value(), browser_->verticalScrollBar()->value()));
+        return result.toAlignedRect();
+    }
+    int offsetAtPoint(const QPoint &screenPoint) const override {
+        const QPoint local = browser_->viewport()->mapFromGlobal(screenPoint);
+        const QPoint document = local + QPoint(browser_->horizontalScrollBar()->value(), browser_->verticalScrollBar()->value());
+        return browser_->document()->documentLayout()->hitTest(document, Qt::ExactHit);
+    }
+    void scrollToSubstring(int start, int end) override {
+        if (!validRange(start, end)) return;
+        QTextCursor first(browser_->document()); first.setPosition(start);
+        QTextCursor last(browser_->document()); last.setPosition(end);
+        const QRect wanted = browser_->cursorRect(first).united(browser_->cursorRect(last));
+        const QRect viewport = browser_->viewport()->rect();
+        const int dy = wanted.height() > viewport.height() || wanted.top() < 0 ? wanted.top()
+            : qMax(0, wanted.bottom() - viewport.bottom());
+        const int dx = wanted.width() > viewport.width() || wanted.left() < 0 ? wanted.left()
+            : qMax(0, wanted.right() - viewport.right());
+        browser_->verticalScrollBar()->setValue(browser_->verticalScrollBar()->value() + dy);
+        browser_->horizontalScrollBar()->setValue(browser_->horizontalScrollBar()->value() + dx);
+    }
+    QString attributes(int offset, int *start, int *end) const override {
+        *start = *end = -1;
+        if (offset == -2) offset = cursorPosition();
+        const int count = characterCount();
+        if (offset == -1 || offset == count) offset = count - 1;
+        if (offset < 0 || offset >= count) return {};
+        QTextCursor cursor(browser_->document()); cursor.setPosition(offset);
+        const auto block = cursor.block(); auto format = block.charFormat();
+        *start = block.position(); *end = qMin(count, block.position() + block.length());
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (fragment.contains(offset)) {
+                format = fragment.charFormat();
+                *start = qMax(fragment.position(), block.position());
+                *end = qMin(fragment.position() + fragment.length(), block.position() + block.length());
+                break;
+            }
+            // A paragraph separator uses the block format and excludes prior styled runs.
+            *start = fragment.position() + fragment.length();
+        }
+        const QFont font = format.font().resolve(browser_->document()->defaultFont());
+        QString family = font.family();
+        family.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
+        family.replace(QStringLiteral(":"), QStringLiteral("\\:"));
+        family.replace(QStringLiteral(";"), QStringLiteral("\\;"));
+        QString result = QStringLiteral("font-family:%1;font-size:%2pt;font-weight:%3;font-style:%4;")
+            .arg(family).arg(font.pointSizeF()).arg(int(font.weight()))
+            .arg(font.italic() ? QStringLiteral("italic") : QStringLiteral("normal"));
+        if (font.underline()) result += QStringLiteral("text-underline-type:single;");
+        if (font.strikeOut()) result += QStringLiteral("text-line-through-type:single;");
+        if (format.verticalAlignment() == QTextCharFormat::AlignSuperScript) result += QStringLiteral("text-position:super;");
+        else if (format.verticalAlignment() == QTextCharFormat::AlignSubScript) result += QStringLiteral("text-position:sub;");
+        result += QStringLiteral("direction:%1;").arg(block.textDirection() == Qt::RightToLeft ? QStringLiteral("rtl") : QStringLiteral("ltr"));
+        const QColor foreground = format.foreground().style() == Qt::NoBrush ? browser_->palette().color(QPalette::Text) : format.foreground().color();
+        const QColor background = format.background().style() == Qt::NoBrush ? browser_->palette().color(QPalette::Base) : format.background().color();
+        result += QStringLiteral("color:rgb(%1,%2,%3);background-color:rgb(%4,%5,%6);")
+            .arg(foreground.red()).arg(foreground.green()).arg(foreground.blue())
+            .arg(background.red()).arg(background.green()).arg(background.blue());
+        return result;
+    }
+    void deleteText(int start, int end) override { replaceText(start, end, {}); }
+    void insertText(int offset, const QString &value) override { replaceText(offset, offset, value); }
+    void replaceText(int start, int end, const QString &value) override {
+        if (browser_->isReadOnly() || !validRange(start, end)) return;
+        QTextCursor cursor(browser_->document()); cursor.setPosition(start);
+        cursor.setPosition(end, QTextCursor::KeepAnchor); cursor.insertText(value);
+    }
+private:
+    QString paragraphText(int offset, int step, int *start, int *end) const {
+        *start = *end = -1;
+        if (offset == -2) offset = cursorPosition();
+        if (offset == -1) offset = characterCount();
+        if (offset < 0 || offset > characterCount()) return {};
+        auto block = browser_->document()->findBlock(offset);
+        if (step < 0) block = block.previous();
+        else if (step > 0) block = block.next();
+        if (!block.isValid()) return {};
+        *start = block.position(); *end = qMin(characterCount(), *start + block.length() - 1);
+        return text(*start, *end);
+    }
+    QString visualLine(int offset, int step, int *start, int *end) const {
+        *start = *end = -1;
+        if (offset == -2) offset = cursorPosition();
+        if (offset == -1) offset = characterCount();
+        if (offset < 0 || offset > characterCount()) return {};
+        auto block = browser_->document()->findBlock(offset);
+        if (!block.isValid()) return {};
+        browser_->document()->documentLayout()->blockBoundingRect(block);
+        auto *layout = block.layout();
+        auto line = layout->lineForTextPosition(offset - block.position());
+        if (!line.isValid()) return {};
+        int index = line.lineNumber() + step;
+        if (index < 0 || index >= layout->lineCount()) {
+            block = index < 0 ? block.previous() : block.next();
+            if (!block.isValid()) return {};
+            browser_->document()->documentLayout()->blockBoundingRect(block);
+            layout = block.layout(); index = step < 0 ? layout->lineCount() - 1 : 0;
+        }
+        if (index < 0 || index >= layout->lineCount()) return {};
+        line = layout->lineAt(index);
+        *start = block.position() + line.textStart();
+        *end = qMin(characterCount(), *start + line.textLength());
+        return text(*start, *end);
+    }
+    bool validRange(int start, int end) const { return 0 <= start && start <= end && end <= characterCount(); }
+    ReadingBrowser *browser_;
+};
+
+QTextBrowser *createReadingBrowser(QWidget *parent) {
+    static const bool registered = [] {
+        QAccessible::installFactory([](const QString &, QObject *object) -> QAccessibleInterface * {
+            if (auto *browser = dynamic_cast<ReadingBrowser *>(object)) return new AccessibleReadingBrowser(browser);
+            return nullptr;
+        });
+        return true;
+    }();
+    Q_UNUSED(registered);
+    return new ReadingBrowser(parent);
+}
+
 bool compiledBookSourcesTarget(const QString &target) {
     const QString prefix = QStringLiteral("Special:BookSources/");
     if (!target.startsWith(prefix)) return false;
@@ -588,7 +812,7 @@ void MainWindow::setupUi() {
     header->addWidget(bookmark_, 0, 2);
     right->addLayout(header);
     entryTabs_ = new QTabWidget(content);
-    reading_ = new QTextBrowser(entryTabs_);
+    reading_ = createReadingBrowser(entryTabs_);
     // Preserve whole cell words; wide tables should scroll rather than split glyphs.
     reading_->setWordWrapMode(QTextOption::WordWrap);
     reading_->setOpenLinks(false);

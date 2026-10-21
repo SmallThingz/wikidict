@@ -4007,6 +4007,289 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("dog"));
     }
 
+    void tableTextAccessibilityGeometryMatchesVisibleCursor() {
+        MainWindow window(fixture_, QStringLiteral("cat")); window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        auto *browser = window.reading_;
+        browser->setHtml(QStringLiteral(
+            "<p>RootProbe</p><p>Before line 0</p><p>Before line 1</p><p>Before line 2</p><p>Before line 3</p><p>Before line 4</p><p>Before line 5</p><p>Before line 6</p><p>Before line 7</p><p>Before line 8</p><p>Before line 9</p><p>Before line 10</p><p>Before line 11</p>"
+            "<table border='1' cellpadding='18'><tr><td>Left cell</td><td>"
+            "<p>Cell preface</p><table border='1' cellpadding='12'><tr><td>NestedProbe</td></tr></table>"
+            "</td></tr></table><p>AfterProbe</p><p>After one</p><p>After two</p>"));
+        QApplication::processEvents();
+        auto *accessible = QAccessible::queryAccessibleInterface(browser);
+        QVERIFY(accessible); auto *text = accessible->textInterface(); QVERIFY(text);
+        QJsonArray observations;
+        QList<bool> matches;
+        const auto rectJson = [](const QRectF &rect) {
+            return QJsonArray{rect.x(), rect.y(), rect.width(), rect.height()};
+        };
+        const auto observe = [&](const QString &label, bool scrollToTarget) {
+            QTextCursor found = browser->document()->find(label);
+            if (found.isNull()) return false;
+            const int offset = found.selectionStart() + label.size() / 2;
+            QTextCursor cursor(browser->document()); cursor.setPosition(offset);
+            browser->setTextCursor(cursor);
+            if (scrollToTarget) browser->ensureCursorVisible();
+            else browser->verticalScrollBar()->setValue(0);
+            QApplication::processEvents();
+            const QRect local = browser->cursorRect(cursor);
+            const QRect screen(browser->viewport()->mapToGlobal(local.topLeft()), local.size());
+            const QRect reported = text->characterRect(offset);
+            const bool sameText = text->text(offset, offset + 1) == QString(browser->document()->characterAt(offset));
+            const bool intersects = reported.intersects(screen);
+            const bool geometryRequired = scrollToTarget || label == QStringLiteral("RootProbe");
+            const bool cursorVisible = browser->viewport()->rect().contains(local.center());
+            const QTextBlock block = cursor.block();
+            observations.append(QJsonObject{{QStringLiteral("label"), label},
+                {QStringLiteral("scroll_to_target"), scrollToTarget}, {QStringLiteral("offset"), offset},
+                {QStringLiteral("same_character_text"), sameText},
+                {QStringLiteral("reported_screen_rect"), rectJson(reported)},
+                {QStringLiteral("cursor_screen_rect"), rectJson(screen)},
+                {QStringLiteral("block_local_layout_rect"), rectJson(block.layout()->boundingRect().translated(block.layout()->position()))},
+                {QStringLiteral("block_document_rect"), rectJson(browser->document()->documentLayout()->blockBoundingRect(block))},
+                {QStringLiteral("vertical_scroll"), browser->verticalScrollBar()->value()},
+                {QStringLiteral("horizontal_scroll"), browser->horizontalScrollBar()->value()},
+                {QStringLiteral("geometry_required"), geometryRequired},
+                {QStringLiteral("cursor_intersects_viewport"), cursorVisible},
+                {QStringLiteral("reported_intersects_cursor"), intersects}});
+            matches.append(sameText && (!geometryRequired || intersects) && (!scrollToTarget || cursorVisible));
+            return true;
+        };
+        QVERIFY(observe(QStringLiteral("RootProbe"), false));
+        QVERIFY(observe(QStringLiteral("NestedProbe"), false));
+        QVERIFY(observe(QStringLiteral("NestedProbe"), true));
+        QVERIFY(observe(QStringLiteral("AfterProbe"), true));
+        const QString reportPath = qEnvironmentVariable("DICT_QT_ACCESSIBILITY_GEOMETRY_REPORT");
+        if (!reportPath.isEmpty()) {
+            QFile report(reportPath); QVERIFY(report.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+            const QJsonObject result{{QStringLiteral("scope"), QStringLiteral("Installed Qt/current MainWindow reader synthetic geometry; no corpus or pointer activation acceptance")},
+                {QStringLiteral("qt_version"), QString::fromLatin1(qVersion())},
+                {QStringLiteral("observations"), observations}};
+            QVERIFY(report.write(QJsonDocument(result).toJson()) > 0);
+        }
+        QCOMPARE(matches.size(), 4);
+        QCOMPARE(observations[1].toObject().value(QStringLiteral("vertical_scroll")).toInt(), 0);
+        QVERIFY(observations[2].toObject().value(QStringLiteral("vertical_scroll")).toInt() > 0);
+        QVERIFY(observations[2].toObject().value(QStringLiteral("vertical_scroll")) != observations[1].toObject().value(QStringLiteral("vertical_scroll")));
+        QVERIFY(observations[2].toObject().value(QStringLiteral("cursor_intersects_viewport")).toBool());
+        QVERIFY(observations[3].toObject().value(QStringLiteral("cursor_intersects_viewport")).toBool());
+        for (qsizetype i = 0; i < matches.size(); ++i)
+            QVERIFY2(matches[i], qPrintable(QString::fromUtf8(QJsonDocument(observations[i].toObject()).toJson(QJsonDocument::Compact))));
+    }
+
+    void readerAccessibilityPreservesTextStylesSelectionAndGraphemeCoordinates() {
+        MainWindow window(fixture_, QStringLiteral("cat")); window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        auto *browser = window.reading_;
+        browser->setHtml(QString::fromUtf8(
+            "<p><b><i>BoldWord</i></b> PlainWord e\xcc\x81 \xf0\x9f\x98\x80</p>"
+            "<p>תשרק plain</p>"
+            "<p>A wrapped accessible line with several additional words that must continue beyond one visual row.</p>"
+            "<table border='1' width='1400'><tr><td width='1100' dir='rtl'>אבגדה</td>"
+            "<td>WideProbe</td></tr></table><p>TailProbe</p>"));
+        QApplication::processEvents();
+        auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible);
+        QCOMPARE(accessible->role(), QAccessible::StaticText);
+        QCOMPARE(accessible->text(QAccessible::Name), QStringLiteral("Dictionary entry"));
+        QVERIFY(accessible->state().readOnly); QVERIFY(accessible->state().multiLine);
+        QVERIFY(accessible->state().selectableText); QVERIFY(!accessible->state().editable);
+        QVERIFY(accessible->actionInterface());
+        QVERIFY(accessible->actionInterface()->actionNames().contains(QAccessibleActionInterface::setFocusAction()));
+        auto *text = accessible->textInterface(); QVERIFY(text);
+        auto *editable = accessible->editableTextInterface(); QVERIFY(editable);
+        QCOMPARE(text->characterCount(), browser->document()->characterCount() - 1);
+        QTextCursor all(browser->document()); all.select(QTextCursor::Document);
+        const QString original = all.selectedText().replace(QChar(QChar::ParagraphSeparator), QChar('\n'));
+        QCOMPARE(text->text(0, -1), original);
+        const auto bold = browser->document()->find(QStringLiteral("BoldWord")); QVERIFY(!bold.isNull());
+        int start = -1, end = -1;
+        const QString attrs = text->attributes(bold.selectionStart(), &start, &end);
+        QVERIFY(attrs.contains(QStringLiteral("font-weight:700;")));
+        QVERIFY(attrs.contains(QStringLiteral("font-style:italic;")));
+        QVERIFY(start <= bold.selectionStart() && end >= bold.selectionEnd());
+        text->setSelection(0, bold.selectionStart(), bold.selectionEnd());
+        QCOMPARE(text->selectionCount(), 1); text->selection(0, &start, &end);
+        QCOMPARE(start, bold.selectionStart()); QCOMPARE(end, bold.selectionEnd());
+        QCOMPARE(text->text(start, end), QStringLiteral("BoldWord"));
+        text->removeSelection(0); QCOMPARE(text->selectionCount(), 0);
+        text->setCursorPosition(bold.selectionStart() + 2);
+        QCOMPARE(text->cursorPosition(), bold.selectionStart() + 2);
+        const QString word = text->textAtOffset(-2, QAccessible::WordBoundary, &start, &end);
+        QCOMPARE(word, QStringLiteral("BoldWord"));
+        editable->insertText(0, QStringLiteral("MUST NOT EDIT READONLY"));
+        editable->deleteText(0, 1); editable->replaceText(0, 1, QStringLiteral("X"));
+        QCOMPARE(text->text(0, -1), original);
+        const auto wrapped = browser->document()->find(QStringLiteral("A wrapped accessible line")); QVERIFY(!wrapped.isNull());
+        const auto wrappedBlock = wrapped.block();
+        browser->document()->documentLayout()->blockBoundingRect(wrappedBlock);
+        QVERIFY(wrappedBlock.layout()->lineCount() > 1);
+        const auto secondLine = wrappedBlock.layout()->lineAt(1);
+        const int lineStart = wrappedBlock.position() + secondLine.textStart();
+        QCOMPARE(text->textAtOffset(lineStart + 1, QAccessible::LineBoundary, &start, &end),
+                 text->text(lineStart, lineStart + secondLine.textLength()));
+        QCOMPARE(start, lineStart); QCOMPARE(end, lineStart + secondLine.textLength());
+        const auto emoji = browser->document()->find(QString::fromUtf8("\xf0\x9f\x98\x80")); QVERIFY(!emoji.isNull());
+        text->scrollToSubstring(emoji.selectionStart(), emoji.selectionEnd());
+        QVERIFY(text->characterRect(emoji.selectionStart()).width() > 1);
+        QCOMPARE(text->characterRect(emoji.selectionStart()), text->characterRect(emoji.selectionStart() + 1));
+        const auto combining = browser->document()->find(QString::fromUtf8("e\xcc\x81")); QVERIFY(!combining.isNull());
+        QVERIFY(text->characterRect(combining.selectionStart()).width() > 1);
+        QCOMPARE(text->characterRect(combining.selectionStart()), text->characterRect(combining.selectionStart() + 1));
+        auto autoRtl = browser->document()->find(QString::fromUtf8("תשרק")); QVERIFY(!autoRtl.isNull());
+        auto autoFormat = autoRtl.blockFormat(); autoFormat.setLayoutDirection(Qt::LayoutDirectionAuto);
+        autoRtl.setBlockFormat(autoFormat);
+        QCOMPARE(autoRtl.block().blockFormat().layoutDirection(), Qt::LayoutDirectionAuto);
+        QCOMPARE(autoRtl.block().textDirection(), Qt::RightToLeft);
+        QVERIFY(text->attributes(autoRtl.selectionStart(), &start, &end).contains(QStringLiteral("direction:rtl;")));
+        const auto rtl = browser->document()->find(QString::fromUtf8("אבגדה")); QVERIFY(!rtl.isNull());
+        const int rtlOffset = rtl.selectionStart() + 2;
+        QCOMPARE(text->textAtOffset(rtlOffset, QAccessible::ParagraphBoundary, &start, &end), QString::fromUtf8("אבגדה"));
+        QCOMPARE(start, rtl.block().position()); QCOMPARE(end, rtl.block().position() + rtl.block().length() - 1);
+        text->setSelection(0, bold.selectionStart(), bold.selectionEnd());
+        const auto savedSelection = browser->textCursor();
+        text->scrollToSubstring(rtlOffset, rtlOffset + 1);
+        QCOMPARE(browser->textCursor().selectionStart(), savedSelection.selectionStart());
+        QCOMPARE(browser->textCursor().selectionEnd(), savedSelection.selectionEnd());
+        QTextCursor rtlCursor(browser->document()); rtlCursor.setPosition(rtlOffset);
+        const QRect caret = browser->cursorRect(rtlCursor);
+        const QRect reported = text->characterRect(rtlOffset);
+        QTextCursor rtlNext(browser->document()); rtlNext.setPosition(rtlOffset + 1);
+        const QRect nextCaret = browser->cursorRect(rtlNext);
+        const QPoint glyphCenter = browser->viewport()->mapToGlobal(
+            QPoint((caret.x() + nextCaret.x()) / 2, caret.center().y()));
+        QVERIFY(reported.contains(glyphCenter));
+        QVERIFY(browser->viewport()->rect().contains(caret.center()));
+        const int hit = text->offsetAtPoint(glyphCenter);
+        QVERIFY(hit >= rtlOffset && hit <= rtlOffset + 1);
+        const auto wide = browser->document()->find(QStringLiteral("WideProbe")); QVERIFY(!wide.isNull());
+        QVERIFY(browser->horizontalScrollBar()->maximum() > 0);
+        text->scrollToSubstring(wide.selectionStart(), wide.selectionEnd());
+        QVERIFY(browser->horizontalScrollBar()->value() > 0);
+        QTextCursor wideCursor(browser->document()); wideCursor.setPosition(wide.selectionStart());
+        const QRect wideCaret = browser->cursorRect(wideCursor);
+        const QRect wideScreen(browser->viewport()->mapToGlobal(wideCaret.topLeft()), wideCaret.size());
+        QVERIFY(text->characterRect(wide.selectionStart()).intersects(wideScreen));
+        QVERIFY(browser->viewport()->rect().contains(wideCaret.center()));
+        QCOMPARE(text->text(0, -1), original);
+    }
+
+    void readerAccessibilityPreservesLegacyAttributeOffsetsAndSeparatorRuns() {
+        MainWindow window(fixture_, QStringLiteral("cat")); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        auto *browser = window.reading_;
+        QTextBrowser legacy;
+        const QString html = QStringLiteral("<p><b>BoldWord</b> <i>ItalicTail</i></p><p>Next</p>");
+        browser->setHtml(html); legacy.setHtml(html);
+        auto *currentAccessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(currentAccessible);
+        auto *legacyAccessible = QAccessible::queryAccessibleInterface(&legacy); QVERIFY(legacyAccessible);
+        auto *current = currentAccessible->textInterface(); QVERIFY(current);
+        auto *original = legacyAccessible->textInterface(); QVERIFY(original);
+        QCOMPARE(current->characterCount(), original->characterCount());
+        const auto observe = [](QAccessibleTextInterface *text, int offset) {
+            int start = 123456, end = 123456;
+            const QString value = text->attributes(offset, &start, &end);
+            return QJsonObject{{QStringLiteral("value"), value}, {QStringLiteral("start"), start}, {QStringLiteral("end"), end}};
+        };
+        const QString originalText = current->text(0, -1);
+        auto selection = browser->document()->find(QStringLiteral("BoldWord")); QVERIFY(!selection.isNull());
+        selection.setPosition(selection.selectionStart() + 1);
+        selection.setPosition(selection.position() + 2, QTextCursor::KeepAnchor);
+        browser->setTextCursor(selection);
+        const int selectedPosition = selection.position(), selectedAnchor = selection.anchor();
+        const auto positive = observe(current, selectedPosition);
+        QVERIFY(positive.value(QStringLiteral("value")).toString().contains(QStringLiteral("font-weight:700;")));
+        QCOMPARE(observe(current, -2), positive);
+        QCOMPARE(browser->textCursor().position(), selectedPosition);
+        QCOMPARE(browser->textCursor().anchor(), selectedAnchor);
+        auto legacySelection = legacy.textCursor(); legacySelection.setPosition(selectedAnchor);
+        legacySelection.setPosition(selectedPosition, QTextCursor::KeepAnchor); legacy.setTextCursor(legacySelection);
+        QCOMPARE(observe(original, -2), observe(original, selectedPosition));
+        // Real installed Qt establishes the separator range/format contract independently.
+        const auto block = browser->document()->begin();
+        const int separator = block.position() + block.length() - 1;
+        const auto expectedSeparator = observe(original, separator);
+        const auto actualSeparator = observe(current, separator);
+        QCOMPARE(expectedSeparator.value(QStringLiteral("start")).toInt(), separator);
+        QCOMPARE(expectedSeparator.value(QStringLiteral("end")).toInt(), separator + 1);
+        QCOMPARE(actualSeparator.value(QStringLiteral("start")), expectedSeparator.value(QStringLiteral("start")));
+        QCOMPARE(actualSeparator.value(QStringLiteral("end")), expectedSeparator.value(QStringLiteral("end")));
+        const bool legacyItalic = expectedSeparator.value(QStringLiteral("value")).toString().contains(QStringLiteral("font-style:italic;"));
+        QCOMPARE(actualSeparator.value(QStringLiteral("value")).toString().contains(QStringLiteral("font-style:italic;")), legacyItalic);
+        QVERIFY(!legacyItalic);
+        QCOMPARE(browser->textCursor().position(), selectedPosition);
+        QCOMPARE(browser->textCursor().anchor(), selectedAnchor);
+        const int count = current->characterCount(); QVERIFY(count > 0);
+        current->setCursorPosition(count); original->setCursorPosition(count);
+        const auto last = observe(current, count - 1);
+        for (const int offset : {-1, count, -2}) {
+            QCOMPARE(observe(current, offset), last);
+            QCOMPARE(observe(original, offset), observe(original, count - 1));
+        }
+        QCOMPARE(current->cursorPosition(), count); QCOMPARE(current->selectionCount(), 0);
+        for (const int offset : {-3, count + 1}) {
+            const auto invalid = observe(current, offset);
+            QVERIFY(invalid.value(QStringLiteral("value")).toString().isEmpty());
+            QCOMPARE(invalid.value(QStringLiteral("start")).toInt(), -1);
+            QCOMPARE(invalid.value(QStringLiteral("end")).toInt(), -1);
+        }
+        QCOMPARE(current->text(0, -1), originalText); QCOMPARE(current->cursorPosition(), count);
+        browser->clear(); legacy.clear(); QCOMPARE(current->characterCount(), 0);
+        for (const int offset : {-3, -2, -1, 0, 1}) {
+            const auto empty = observe(current, offset);
+            QVERIFY(empty.value(QStringLiteral("value")).toString().isEmpty());
+            QCOMPARE(empty.value(QStringLiteral("start")).toInt(), -1);
+            QCOMPARE(empty.value(QStringLiteral("end")).toInt(), -1);
+            QCOMPARE(empty, observe(original, offset));
+        }
+        QCOMPARE(current->cursorPosition(), 0); QCOMPARE(current->selectionCount(), 0);
+    }
+
+    void readerAccessibilityUsesCharacterEdgesAtWrapAndBidiBoundaries() {
+        MainWindow window(fixture_, QStringLiteral("cat")); window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        auto *browser = window.reading_;
+        browser->setWordWrapMode(QTextOption::WrapAnywhere);
+        browser->setPlainText(QString(150, QChar('W')) + QString::fromUtf8("\nLeft אבגדה Right"));
+        QApplication::processEvents();
+        auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible);
+        auto *text = accessible->textInterface(); QVERIFY(text);
+        const auto expectedRect = [&](int offset) {
+            const auto block = browser->document()->findBlock(offset);
+            const QRectF absolute = browser->document()->documentLayout()->blockBoundingRect(block);
+            const auto line = block.layout()->lineForTextPosition(offset - block.position());
+            const qreal a = line.cursorToX(offset - block.position(), QTextLine::Leading);
+            const qreal b = line.cursorToX(offset - block.position(), QTextLine::Trailing);
+            QRectF rect(absolute.left() + qMin(a, b), absolute.top() + line.y(), qAbs(b - a), line.height());
+            rect.translate(browser->viewport()->mapToGlobal(QPoint())
+                - QPoint(browser->horizontalScrollBar()->value(), browser->verticalScrollBar()->value()));
+            return rect.toAlignedRect();
+        };
+        auto block = browser->document()->begin();
+        browser->document()->documentLayout()->blockBoundingRect(block);
+        QVERIFY(block.layout()->lineCount() > 1);
+        const auto firstLine = block.layout()->lineAt(0);
+        const int finalOffset = block.position() + firstLine.textStart() + firstLine.textLength() - 1;
+        QTextCursor first(browser->document()); first.setPosition(finalOffset);
+        QTextCursor next(browser->document()); next.setPosition(finalOffset + 1);
+        QVERIFY(browser->cursorRect(first).y() != browser->cursorRect(next).y());
+        text->scrollToSubstring(finalOffset, finalOffset + 1);
+        QVERIFY(expectedRect(finalOffset).width() > 1);
+        QCOMPARE(text->characterRect(finalOffset), expectedRect(finalOffset));
+        const auto rtl = browser->document()->find(QString::fromUtf8("אבגדה")); QVERIFY(!rtl.isNull());
+        const int bidiOffset = rtl.selectionEnd() - 1;
+        text->scrollToSubstring(bidiOffset, bidiOffset + 1);
+        first.setPosition(bidiOffset); next.setPosition(bidiOffset + 1);
+        const int unrelatedCaretDistance = qAbs(browser->cursorRect(next).x() - browser->cursorRect(first).x());
+        QVERIFY(unrelatedCaretDistance > expectedRect(bidiOffset).width() * 2);
+        QCOMPARE(text->characterRect(bidiOffset), expectedRect(bidiOffset));
+        QVERIFY(text->characterRect(bidiOffset).width() < unrelatedCaretDistance);
+    }
+
     void settledReaderLayoutMatchesContentWidthAcrossBothResizeDirections() {
         MainWindow window(fixture_, QStringLiteral("cat")); window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
