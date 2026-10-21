@@ -7,7 +7,8 @@
     "test": "node --test blob.test.mjs alias.test.mjs validate.test.mjs preview.test.mjs",
     "test:browser": "node browser.test.mjs",
     "test:swatch": "node color-swatch.browser.test.mjs",
-    "test:poem": "node poem.browser.test.mjs"
+    "test:poem": "node poem.browser.test.mjs",
+    "test:errors": "node action-errors.browser.test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",

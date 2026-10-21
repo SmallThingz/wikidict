@@ -9,15 +9,17 @@ const defaults={darkMode:'system',historyLimit:100,mediaCacheMb:100,quizLength:1
 const defaultSource='https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list';
 let state={history:[],saved:[],scores:{},settings:{...defaults},sources:[defaultSource]},page='search',current=null,currentHit=null,libraries=[],searchVersion=0,renderVersion=0;
 const node=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
-const button=(text,label,action,cls)=>{const b=node('button',text,cls);b.type='button';b.setAttribute('aria-label',label||text);b.onclick=()=>Promise.resolve(action()).catch(error=>status(error.message,true));return b;};
+const button=(text,label,action,cls)=>{const b=node('button',text,cls);b.type='button';b.setAttribute('aria-label',label||text);b.onclick=()=>performAction(action);return b;};
 const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
+// Invoke the action before awaiting so Import keeps direct user-gesture timing.
+async function performAction(action){try{return await action();}catch(error){status(error.message,true);}}
 let saveTimer;function flushSave(){clearTimeout(saveTimer);saveTimer=null;return call('saveState',state);}
 function save(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>flushSave().catch(e=>status(e.message,true)),80);}
 function theme(){document.documentElement.dataset.theme=state.settings.darkMode==='system'?(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'):state.settings.darkMode;}
 function title(text){panel.append(node('h1',text));}
-function navigate(next){page=next;renderVersion++;panel.replaceChildren();entryView.replaceChildren();status('');$('dock').classList.remove('away');document.querySelectorAll('[data-page]').forEach(b=>{const active=b.dataset.page===next||(next==='reading'&&b.dataset.page==='search')||(next==='dictionaries'&&b.dataset.page==='settings');b.setAttribute('aria-current',active?'page':'false');});window.scrollTo(0,0);speechSynthesis.cancel();
- if(next==='search')search();else if(next==='history'||next==='saved')wordList(next);else if(next==='learn')learn();else if(next==='settings')settings();else if(next==='dictionaries')dictionaries();else if(next==='reading')renderWord();
-}
+function navigate(next){return performAction(()=>{page=next;renderVersion++;panel.replaceChildren();entryView.replaceChildren();status('');$('dock').classList.remove('away');document.querySelectorAll('[data-page]').forEach(b=>{const active=b.dataset.page===next||(next==='reading'&&b.dataset.page==='search')||(next==='dictionaries'&&b.dataset.page==='settings');b.setAttribute('aria-current',active?'page':'false');});window.scrollTo(0,0);speechSynthesis.cancel();
+ if(next==='search')return search();else if(next==='history'||next==='saved')return wordList(next);else if(next==='learn')return learn();else if(next==='settings')return settings();else if(next==='dictionaries')return dictionaries();else if(next==='reading')return renderWord();
+});}
 async function open(hit){if(!hit)return;const version=++renderVersion;status('Opening…');const value=await call('read',hit);if(version!==renderVersion)return;current=value;currentHit=hit;
  const preview=clue(value),saved=refreshSavedClue(state.saved,hit,preview),savedChanged=saved!==state.saved;state.saved=saved;
  if(state.settings.historyLimit>0){const item={...hit,clue:preview,at:Date.now()};state.history=[item,...state.history.filter(x=>key(x)!==key(hit))].slice(0,state.settings.historyLimit);save();}
@@ -40,10 +42,10 @@ function renderWord(){
  });
  bookmark.setAttribute('aria-pressed',String(saved));
  actions.append(button('◖','Pronounce word offline',speak),bookmark);
- entryView.append(actions,renderEntry(current,openLink,state.settings,m=>mediaView(m,state.settings,current.source_edition)));
+ entryView.append(actions,renderEntry(current,target=>performAction(()=>openLink(target)),state.settings,m=>mediaView(m,state.settings,current.source_edition)));
 }
 function search(){title('Find a word');const input=node('input');input.id='query';input.type='search';input.placeholder='Search your dictionaries';input.setAttribute('aria-label','Find a word');const matches=node('div',undefined,'word-list');matches.id='matches';panel.append(input,matches);input.focus();
- const update=async()=>{const version=++searchVersion;const hits=await call('search',{query:input.value.trim()});if(page!=='search'||version!==searchVersion)return;matches.replaceChildren(...hits.map(h=>wordButton(h)));status(hits.length?'':libraries.length?'No matches.':'Add a dictionary in Settings.');};input.oninput=()=>update().catch(e=>status(e.message,true));update();
+ const update=async()=>{const version=++searchVersion;const hits=await call('search',{query:input.value.trim()});if(page!=='search'||version!==searchVersion)return;matches.replaceChildren(...hits.map(h=>wordButton(h)));status(hits.length?'':libraries.length?'No matches.':'Add a dictionary in Settings.');};input.oninput=()=>performAction(update);return update();
 }
 function sourceLabel(item){const edition=item.source_edition||libraries.find(d=>d.id===(item.context||item.dictionary))?.source_edition;return edition?' · '+edition.slice(0,-10).replaceAll('_','-')+'.wiktionary.org':'';}
 function wordButton(hit){const b=button(hit.title,'Open '+hit.title,()=>open(hit),'word');b.append(node('small',(hit.language||hit.kind)+sourceLabel(hit)));if(hit.clue)b.append(node('p',hit.clue));return b;}

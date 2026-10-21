@@ -51,3 +51,18 @@ Use a new absolute report directory each time. This focused Playwright check use
 synthetic typed spans, exercises styled links, keyboard navigation, accessible
 text, RTL indentation and 360/768-pixel layouts, and retains screenshots. It does
 not rerun the full browser suite or qualify public downloads/corpus content.
+
+### Action error recovery regression
+
+```sh
+mkdir -p ../artifacts
+WIKIDICT_ERROR_REPORT="$PWD/../artifacts/action-errors-run01" pnpm test:errors
+```
+
+Use a fresh absolute report directory. This runs the normal production build and
+focused real-browser checks for invalid catalogue input, preserved input/recovery,
+direct file-picker activation, isolated fixture import/search/read, keyboard access
+and controlled asynchronous worker failures. It does not contact a public catalogue
+or rerun the full browser suite. Optional `WIKIDICT_ERROR_BASELINE` names an immutable
+absolute pre-fix `app.js` to reproduce the former uncaught URL error in a separate
+isolated context; it is not needed for the normal regression check.
