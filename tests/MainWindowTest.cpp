@@ -209,7 +209,8 @@ private slots:
         QCOMPARE(window.title_->text(), QStringLiteral("Open your dictionaries"));
         QCOMPARE(window.resultStatus_->text(), QStringLiteral("No dictionary open"));
         const QString guidance = window.reading_->toPlainText();
-        QVERIFY(guidance.contains(QStringLiteral("Could not open this dictionary.")));
+        QVERIFY(guidance.contains(QStringLiteral("No dictionaries are installed yet.")));
+        QVERIFY(!guidance.contains(QStringLiteral("Could not open")));
         QVERIFY(!guidance.contains(QStringLiteral("select:")));
         QVERIFY(!guidance.contains(QStringLiteral("FileNotFound")));
         QVERIFY(!window.search_->isEnabled());
@@ -218,6 +219,25 @@ private slots:
         QVERIFY(!window.language_->isEnabled());
         auto *library = window.findChild<QPushButton *>(QStringLiteral("openDictionaries"));
         QVERIFY(library && library->isEnabled());
+        // A missing or malformed nonempty root is still an opening error.
+        for (const bool missing : {true, false}) {
+            QTemporaryDir rejected(QDir::currentPath() + QStringLiteral("/.tmp/rejected-initial-root-XXXXXX"));
+            QVERIFY(rejected.isValid());
+            QString path = rejected.path();
+            if (missing) path += QStringLiteral("/missing");
+            else {
+                QFile manifest(path + QStringLiteral("/languages.tsv"));
+                QVERIFY(manifest.open(QIODevice::WriteOnly));
+                QCOMPARE(manifest.write("invalid manifest\n"), qint64(17));
+                manifest.close();
+            }
+            MainWindow failed(path);
+            failed.show();
+            QTRY_VERIFY_WITH_TIMEOUT(!failed.loading_, 30000);
+            QVERIFY(!failed.api_);
+            QVERIFY(failed.reading_->toPlainText().contains(QStringLiteral("Could not open this dictionary.")));
+            QVERIFY(!failed.reading_->toPlainText().contains(QStringLiteral("No dictionaries are installed yet.")));
+        }
         // Synthetic empty-library state, captured before ordinary recovery.
         window.resize(780, 480);
         QCoreApplication::processEvents();
@@ -2093,6 +2113,19 @@ private slots:
         QCoreApplication::processEvents();
         QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
         QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-synthetic-no-exact-match.png")));
+        // The narrow sidebar may scroll, but the complete wrapped feedback must remain reachable.
+        window.resize(580, 480);
+        QCoreApplication::processEvents();
+        auto *sidebar = window.findChild<QScrollArea *>(QStringLiteral("readerSidebarScroll"));
+        QVERIFY(sidebar);
+        QVERIFY(window.resultStatus_->wordWrap());
+        QVERIFY(window.resultStatus_->heightForWidth(window.resultStatus_->width()) > 0);
+        QVERIFY(window.resultStatus_->height() >= window.resultStatus_->heightForWidth(window.resultStatus_->width()));
+        sidebar->ensureWidgetVisible(window.resultStatus_);
+        QCoreApplication::processEvents();
+        QVERIFY(sidebar->viewport()->rect().contains(QRect(window.resultStatus_->mapTo(sidebar->viewport(), QPoint()), window.resultStatus_->size())));
+        QCOMPARE(sidebar->horizontalScrollBar()->maximum(), 0);
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-synthetic-no-exact-match-narrow.png")));
         window.resultStatus_->setFixedSize(440, 120);
         QLabel plain(window.resultStatus_->parentWidget());
         QLabel rich(window.resultStatus_->parentWidget());

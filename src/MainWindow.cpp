@@ -409,6 +409,7 @@ struct LoadedDataset {
     QString originRoot;
     QString originEdition;
     QString error;
+    bool emptyLibrary = false;
 };
 
 bool titleLess(const QString &left, const QString &right) {
@@ -493,8 +494,9 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
         if (serial != loadSerial_ || cancelled->load()) return;
         auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit, fragment] {
             if (serial != loadSerial_ || cancelled->load()) return;
-            if (!loaded->error.isEmpty()) {
-                qWarning().noquote() << "Dictionary opening failed:" << root << loaded->error;
+            if (loaded->emptyLibrary || !loaded->error.isEmpty()) {
+                if (!loaded->error.isEmpty())
+                    qWarning().noquote() << "Dictionary opening failed:" << root << loaded->error;
                 setLoading(false);
                 if (api_) {
                     QSignalBlocker kindBlocker(kind_);
@@ -511,7 +513,9 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     bookmark_->setEnabled(false);
                     title_->setText(QStringLiteral("Open your dictionaries"));
                     meta_->setText(QStringLiteral("Your words stay on this computer."));
-                    reading_->setHtml(QStringLiteral("<p>Could not open this dictionary.</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>"));
+                    reading_->setHtml(loaded->emptyLibrary
+                        ? QStringLiteral("<p>No dictionaries are installed yet.</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>")
+                        : QStringLiteral("<p>Could not open this dictionary.</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>"));
                     resultStatus_->setText(QStringLiteral("No dictionary open"));
                 }
                 return;
@@ -575,8 +579,17 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
     watcher->setFuture(QtConcurrent::run([root, language, kind, resetVisits, cancelled, expectedRoot, expectedEdition] {
         auto loaded = std::make_shared<LoadedDataset>();
         try {
-            if (root.isEmpty()) throw DictApiError("Choose the folder containing your compiled dictionaries.");
+            if (root.isEmpty()) {
+                loaded->emptyLibrary = true;
+                return loaded;
+            }
             LibraryStorage::recoverPendingMutation(root);
+            const QDir directory(root);
+            if (directory.exists() && directory.isReadable()
+                && directory.entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).isEmpty()) {
+                loaded->emptyLibrary = true;
+                return loaded;
+            }
             loaded->originRoot = QFileInfo(root).canonicalFilePath();
             loaded->originEdition = LibraryStorage::editionIdentity(root);
             if (!expectedRoot.isEmpty() && (loaded->originRoot != expectedRoot || loaded->originEdition != expectedEdition))
