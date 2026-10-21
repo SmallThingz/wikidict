@@ -75,6 +75,7 @@ const State = struct {
     rows: []term.RenderRow = &.{},
     poem_lines: std.ArrayList(term.PoemLine) = .empty,
     wrap_width: usize = 0,
+    format_width: usize = 0,
     screen: term.Size = .{},
 
     fn deinit(self: *State) void {
@@ -643,12 +644,14 @@ const State = struct {
             self.section = 0;
             self.fold_word = index;
         }
-        if (index == null or index != self.loaded or self.text.len == 0) {
+        if (index == null or index != self.loaded or self.text.len == 0 or self.format_width != width) {
+            const preserve_scroll = index != null and index == self.loaded and self.text.len != 0;
+            const previous_scroll = self.scroll;
             var formatted: std.Io.Writer.Allocating = .init(self.a);
             defer formatted.deinit();
             var poem_lines: std.ArrayList(term.PoemLine) = .empty;
             defer poem_lines.deinit(self.a);
-            var projection: output.PoemProjection = .{ .frame = &formatted, .allocator = self.a, .lines = &poem_lines };
+            var projection: output.PoemProjection = .{ .frame = &formatted, .allocator = self.a, .lines = &poem_lines, .table_columns = width };
             if (index) |i| {
                 var source_record = try self.db.recordAlloc(self.a, i);
                 defer source_record.deinit();
@@ -695,7 +698,7 @@ const State = struct {
                     self.section_count = self.section_indices.items.len;
                     self.section = @min(self.section, self.section_count -| 1);
                     if (self.nav == .learn and self.answered) try formatted.writer.writeAll("Space: next word\n\n");
-                    if (self.focus == .entry) if (self.reading) |r| {
+                    if (!preserve_scroll and self.focus == .entry) if (self.reading) |r| {
                         const selected_title = try self.db.titleAt(i);
                         if (r.data.history.len == 0 or !std.mem.eql(u8, r.data.history[0], selected_title)) {
                             try r.remember(selected_title);
@@ -727,16 +730,17 @@ const State = struct {
             self.poem_lines = poem_lines;
             poem_lines = .empty;
             self.loaded = index;
+            self.format_width = width;
             self.wrap_width = 0;
-            self.scroll = 0;
+            self.scroll = if (preserve_scroll) previous_scroll else 0;
         }
         if (self.wrap_width != width) {
             const rows = try term.wrapStyledProjected(self.a, self.text, width, self.poem_lines.items);
             self.a.free(self.rows);
             self.rows = rows;
             self.wrap_width = width;
-            self.scroll = @min(self.scroll, self.rows.len -| self.bodyHeight());
         }
+        self.scroll = @min(self.scroll, self.rows.len -| self.bodyHeight());
         if (self.jump_section) {
             for (self.rows, 0..) |row, i| {
                 const offset = @intFromPtr(row.bytes.ptr) - @intFromPtr(self.text.ptr);
@@ -1333,4 +1337,95 @@ test "terminal redirected reading preserves selected identity in history saved a
         try std.testing.expect((try feature_db.find(feature_restored.data.last_title)) != null);
         try std.testing.expectEqual(@as(usize, 1), feature_restored.data.history.len);
     }
+}
+
+test "terminal table resize preserves folds scroll and disabled history state" {
+    const a = std.testing.allocator;
+    const types = enc.presentation_types;
+    const title = "እንኳን ወደ ዊኪ መዝገበ ቃላት በደህና መጡ";
+    const header = [_]types.Cell{.{ .header = true, .spans = &.{.{ .text = "translation" }} }};
+    const french = [_]types.Cell{.{ .spans = &.{ .{ .text = "French : " }, .{ .kind = .link, .text = "Bienvenue sur le Wiktionnaire", .target = "Bienvenue sur le Wiktionnaire" } } }};
+    const greek = [_]types.Cell{.{ .spans = &.{ .{ .text = "greek : " }, .{ .kind = .link, .text = "καλωσορίσατε στο Βικιλεξικό", .target = "καλωσορίσατε στο Βικιλεξικό" }, .{ .text = "!" } } }};
+    const rows = [_]types.Row{ .{ .cells = &header }, .{ .cells = &french }, .{ .cells = &greek } };
+    const sections = [_]model.Section{
+        .{ .level = 3, .title = "Pronunciation", .blocks = &.{.{ .kind = .list_item, .depth = 1, .list_path = "*", .spans = &.{ .{ .text = "IPA" }, .{ .text = "(", .superscript = true }, .{ .kind = .external_link, .text = "am", .target = "https://en.wikipedia.org/wiki/Amharic#Phonology", .superscript = true }, .{ .text = ")", .superscript = true } } }} },
+        .{ .level = 3, .title = "ትርጉም", .blocks = &.{.{ .kind = .table, .table = .{ .rows = &rows } }} },
+    };
+    const payload = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = title, .kind = .language, .language = "አማርኛ", .language_code = "am", .sections = &sections } });
+    defer a.free(payload);
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "am", "አማርኛ");
+    defer a.free(metadata);
+    const bytes = try enc.blob_format.buildAlloc(a, .language, metadata, &.{.{ .title = title, .payload = payload }});
+    defer a.free(bytes);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const path = try std.fmt.allocPrint(a, "{s}/sample", .{root});
+    defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a };
+    defer db.file.deinit();
+    var reading = ReadingState.init(a);
+    defer reading.deinit();
+    try reading.load(std.testing.io, root, "አማርኛ");
+    reading.data.history_limit = 0;
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading, .label = "አማርኛ", .theme = .terminal, .color = true, .details = true, .focus = .entry, .screen = .{ .cols = 40, .rows = 10 } };
+    defer state.deinit();
+    try state.changed();
+    try state.prepare(36);
+    try std.testing.expectEqual(@as(usize, 0), reading.data.history.len);
+    try std.testing.expectEqualStrings(title, reading.data.last_title);
+    // Fold one section before the resize baseline; keep the table expanded.
+    try state.expanded.append(a, 0);
+    state.section = 1;
+    state.loaded = null;
+    try state.prepare(36);
+    const initial = try a.dupe(u8, state.text);
+    defer a.free(initial);
+    const saved_path_address = @intFromPtr(reading.path.ptr);
+    const persisted = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, reading.path, a, .limited(1024 * 1024));
+    defer a.free(persisted);
+    state.scroll = 3;
+    for ([_]usize{ 50, 80, 36 }) |width| {
+        const old_scroll = state.scroll;
+        try state.prepare(width);
+        try std.testing.expectEqual(width, state.format_width);
+        try std.testing.expectEqual(@min(old_scroll, state.rows.len -| state.bodyHeight()), state.scroll);
+        try std.testing.expect(state.scroll != 0);
+        try std.testing.expectEqual(@as(usize, 1), state.section);
+        try std.testing.expectEqualSlices(usize, &.{0}, state.expanded.items);
+        try std.testing.expectEqual(@as(usize, 0), state.selected);
+        try std.testing.expectEqual(saved_path_address, @intFromPtr(reading.path.ptr));
+        try std.testing.expectEqual(@as(usize, 0), reading.data.history.len);
+        try std.testing.expectEqualStrings(title, reading.data.last_title);
+        if (width >= 44) try std.testing.expect(std.mem.indexOf(u8, state.text, "Bienvenue sur le Wiktionnaire") != null);
+    }
+    try std.testing.expectEqualStrings(initial, state.text);
+    // A taller terminal changes the scroll limit even when width and cached
+    // formatted rows are unchanged. Reuse this entry and preserve its state.
+    const text_address = @intFromPtr(state.text.ptr);
+    const rows_address = @intFromPtr(state.rows.ptr);
+    const previous_height = state.screen.rows;
+    state.scroll = state.rows.len -| state.bodyHeight();
+    try std.testing.expect(state.scroll > 0);
+    state.screen.rows = @max(12, state.rows.len + 8);
+    try state.prepare(36);
+    try std.testing.expectEqual(@as(usize, 0), state.scroll);
+    try std.testing.expectEqual(text_address, @intFromPtr(state.text.ptr));
+    try std.testing.expectEqual(rows_address, @intFromPtr(state.rows.ptr));
+    try std.testing.expectEqual(@as(usize, 36), state.format_width);
+    try std.testing.expectEqual(@as(usize, 1), state.section);
+    try std.testing.expectEqualSlices(usize, &.{0}, state.expanded.items);
+    try std.testing.expectEqual(@as(usize, 0), state.selected);
+    try std.testing.expectEqual(saved_path_address, @intFromPtr(reading.path.ptr));
+    try std.testing.expectEqual(@as(usize, 0), reading.data.history.len);
+    try std.testing.expectEqualStrings(title, reading.data.last_title);
+    state.screen.rows = previous_height;
+    try state.prepare(36);
+    try std.testing.expectEqual(@as(usize, 0), state.scroll);
+    try std.testing.expectEqualStrings(initial, state.text);
+    const after = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, reading.path, a, .limited(1024 * 1024));
+    defer a.free(after);
+    try std.testing.expectEqualStrings(persisted, after);
 }

@@ -92,6 +92,8 @@ pub const PoemProjection = struct {
     frame: *std.Io.Writer.Allocating,
     allocator: std.mem.Allocator,
     lines: *std.ArrayList(terminal.PoemLine),
+    // Optional TUI body width; absent for the existing unbounded CLI.
+    table_columns: ?usize = null,
     scanned: usize = 0,
     line_start: usize = 0,
     fn record(self: *PoemProjection, info: PoemInfo) !void {
@@ -270,12 +272,28 @@ fn spansTextDisplayProjected(w: *std.Io.Writer, spans: []const model.Span, color
     }
 }
 
+// Cell-local line metadata preserves literal spaces at wrap boundaries. It is
+// never appended to PoemProjection.lines or serialized presentation data.
+fn tableCellRows(a: std.mem.Allocator, text: []const u8, columns: usize) ![]terminal.RenderRow {
+    var lines: std.ArrayList(terminal.PoemLine) = .empty;
+    defer lines.deinit(a);
+    try lines.append(a, .{ .offset = 0 });
+    for (text, 0..) |byte, i| if (byte == '\n') try lines.append(a, .{ .offset = i + 1 });
+    return terminal.wrapStyledProjected(a, text, columns, lines.items);
+}
+fn tableWrappedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, color: bool) !void {
+    if (color) try line.carry.write(w);
+    try w.writeAll(line.bytes);
+    if (color) try w.writeAll("\x1b[0m");
+    try w.splatByteAll(' ', width -| terminal.cellWidth(line.bytes));
+}
+
 fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const a = arena.allocator();
     terminal.initLocale();
-    const Placed = struct { row: usize, column: usize, colspan: usize, rowspan: usize, lines: []const []const u8 };
+    const Placed = struct { row: usize, column: usize, colspan: usize, rowspan: usize, text: []const u8, lines: []const []const u8, wrapped: ?[]terminal.RenderRow = null };
     var cells: std.ArrayList(Placed) = .empty;
     var occupied: std.ArrayList(usize) = .empty;
     var widths: std.ArrayList(usize) = .empty;
@@ -314,7 +332,7 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
             var available: usize = 3 * (colspan - 1);
             for (widths.items[column..][0..colspan]) |width| available += width;
             if (needed > available) widths.items[column + colspan - 1] += needed - available;
-            try cells.append(a, .{ .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .lines = lines.items });
+            try cells.append(a, .{ .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items });
             column += colspan;
         }
     }
@@ -322,6 +340,51 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
         try spansTextProjected(w, table.caption, color, projection);
         try w.writeByte('\n');
     }
+    // The terminal body is at least 36 cells at its supported 40-column size.
+    // Keep the natural grid byte-for-byte when it fits, and the CLI unbounded.
+    if (projection) |display| if (display.table_columns) |requested| {
+        const columns = @max(requested, 8);
+        var natural: usize = 3 * widths.items.len + 3;
+        for (widths.items) |width| natural += width;
+        if (natural > columns and widths.items.len != 0) {
+            const budget = columns -| (3 * widths.items.len + 3);
+            if (budget < 2 * widths.items.len) {
+                // A grid cannot give every column one full wide glyph. Stack
+                // owned cells with explicit row/column/span identity instead.
+                const width = columns - 6;
+                for (cells.items) |cell| {
+                    try w.print("  Row {d}, column {d}", .{ cell.row + 1, cell.column + 1 });
+                    if (cell.colspan != 1 or cell.rowspan != 1) try w.print(" (span {d} x {d})", .{ cell.colspan, cell.rowspan });
+                    try w.writeByte('\n');
+                    const wrapped = try tableCellRows(a, cell.text, width);
+                    for (wrapped) |line| {
+                        try w.writeAll("  │ ");
+                        try tableWrappedLine(w, line, width, color);
+                        try w.writeAll(" │\n");
+                    }
+                }
+                try w.writeByte('\n');
+                return;
+            }
+            const natural_widths = try a.dupe(usize, widths.items);
+            const share = budget / widths.items.len;
+            var left = budget;
+            for (widths.items) |*width| {
+                width.* = @min(width.*, share);
+                left -= width.*;
+            }
+            for (widths.items, natural_widths) |*width, original| {
+                const extra = @min(left, original - width.*);
+                width.* += extra;
+                left -= extra;
+            }
+            for (cells.items) |*cell| {
+                var width: usize = 3 * (cell.colspan - 1);
+                for (widths.items[cell.column..][0..cell.colspan]) |part| width += part;
+                cell.wrapped = try tableCellRows(a, cell.text, width);
+            }
+        }
+    };
     const active = try a.alloc(?usize, widths.items.len);
     @memset(active, null);
     var cursor: usize = 0;
@@ -333,7 +396,7 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
         while (cursor < cells.items.len and cells.items[cursor].row == r) : (cursor += 1) {
             const cell = cells.items[cursor];
             @memset(active[cell.column..][0..cell.colspan], cursor);
-            height = @max(height, cell.lines.len);
+            height = @max(height, if (cell.wrapped) |wrapped| wrapped.len else cell.lines.len);
         }
         for (0..height) |line_index| {
             try w.writeAll("  │ ");
@@ -341,15 +404,22 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
             while (column < widths.items.len) {
                 var span: usize = 1;
                 var line: []const u8 = "";
+                var wrapped_line: ?terminal.RenderRow = null;
                 if (active[column]) |index| {
                     const cell = cells.items[index];
                     span = cell.colspan;
-                    if (cell.row == r and line_index < cell.lines.len) line = cell.lines[line_index];
+                    if (cell.row == r) {
+                        if (cell.wrapped) |wrapped| {
+                            if (line_index < wrapped.len) wrapped_line = wrapped[line_index];
+                        } else if (line_index < cell.lines.len) line = cell.lines[line_index];
+                    }
                 }
                 var width: usize = 3 * (span - 1);
                 for (widths.items[column..][0..span]) |part| width += part;
-                try w.writeAll(line);
-                try w.splatByteAll(' ', width -| terminal.cellWidth(line));
+                if (wrapped_line) |value| try tableWrappedLine(w, value, width, color) else {
+                    try w.writeAll(line);
+                    try w.splatByteAll(' ', width -| terminal.cellWidth(line));
+                }
                 column += span;
                 try w.writeAll(if (column == widths.items.len) " │\n" else " │ ");
             }
@@ -1982,4 +2052,129 @@ test "script display table widths ignore semantic span fragmentation" {
     try tableText(&a.writer, .{ .rows = &split_rows }, true, null);
     try std.testing.expectEqual(width, terminal.cellWidth(a.written()));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, a.written(), "^"));
+}
+
+const NarrowTableTest = struct {
+    fn plain(a: std.mem.Allocator, text: []const u8) ![]u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        var i: usize = 0;
+        while (i < text.len) {
+            if (terminal.sgrLength(text[i..])) |n| i += n else {
+                try out.append(a, text[i]);
+                i += 1;
+            }
+        }
+        return out.toOwnedSlice(a);
+    }
+    fn framed(text: []const u8, columns: usize) !usize {
+        var count: usize = 0;
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0 or std.mem.startsWith(u8, line, "  Row ")) continue;
+            try std.testing.expect(terminal.cellWidth(line) <= columns);
+            try std.testing.expect(std.mem.startsWith(u8, line, "  │ "));
+            try std.testing.expect(std.mem.endsWith(u8, line, " │"));
+            count += 1;
+        }
+        return count;
+    }
+};
+
+test "typed tables fit welcome body widths without changing unbounded display" {
+    const types = @import("blob_encoder").presentation_types;
+    const heading = [_]model.Span{.{ .text = "translation" }};
+    const french = [_]model.Span{ .{ .text = "French : " }, .{ .kind = .link, .text = "Bienvenue sur le Wiktionnaire", .target = "Bienvenue sur le Wiktionnaire" } };
+    const greek = [_]model.Span{ .{ .text = "greek : " }, .{ .kind = .link, .text = "καλωσορίσατε στο Βικιλεξικό", .target = "καλωσορίσατε στο Βικιλεξικό" }, .{ .text = "!" } };
+    const h = [_]types.Cell{.{ .header = true, .spans = &heading }};
+    const f = [_]types.Cell{.{ .spans = &french }};
+    const g = [_]types.Cell{.{ .spans = &greek }};
+    const rows = [_]types.Row{ .{ .cells = &h }, .{ .cells = &f }, .{ .cells = &g } };
+    const table: model.Table = .{ .rows = &rows };
+    const a = std.testing.allocator;
+    terminal.initLocale();
+    for ([_]bool{ false, true }) |color| {
+        var baseline: std.Io.Writer.Allocating = .init(a);
+        defer baseline.deinit();
+        try tableText(&baseline.writer, table, color, null);
+        try std.testing.expectEqual(@as(usize, 3), try NarrowTableTest.framed(baseline.written(), 44));
+        for ([_]usize{ 40, 80, 120 }) |screen| {
+            const column = if (screen < 80) 3 else @min(36, screen / 3) + 3;
+            const width = screen - column - 1;
+            var text: std.Io.Writer.Allocating = .init(a);
+            defer text.deinit();
+            var metadata: std.ArrayList(terminal.PoemLine) = .empty;
+            defer metadata.deinit(a);
+            var projection: PoemProjection = .{ .frame = &text, .allocator = a, .lines = &metadata, .table_columns = width };
+            try tableText(&text.writer, table, color, &projection);
+            const framed = try NarrowTableTest.framed(text.written(), width);
+            try std.testing.expectEqual(@as(usize, 0), metadata.items.len);
+            if (screen == 40) try std.testing.expect(framed > 3) else try std.testing.expectEqualStrings(baseline.written(), text.written());
+            const visible = try NarrowTableTest.plain(a, text.written());
+            defer a.free(visible);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible, "translation"));
+            const wrapped = try terminal.wrapStyledProjected(a, text.written(), width, metadata.items);
+            defer a.free(wrapped);
+            var physical: usize = 0;
+            for (wrapped) |line| if (line.bytes.len != 0) {
+                try std.testing.expect(std.mem.startsWith(u8, line.bytes, "  │ ") and std.mem.endsWith(u8, line.bytes, " │"));
+                physical += 1;
+            };
+            try std.testing.expectEqual(framed, physical);
+        }
+    }
+    try std.testing.expectEqualStrings("Bienvenue sur le Wiktionnaire", french[1].target);
+    try std.testing.expectEqualStrings("καλωσορίσατε στο Βικιλεξικό", greek[1].text);
+}
+
+test "narrow typed table cells preserve Unicode styles spans and literal whitespace" {
+    const types = @import("blob_encoder").presentation_types;
+    const a = std.testing.allocator;
+    terminal.initLocale();
+    const literal = "  猫é猫éABCDEFGHIJKLMNO   tail  ";
+    const values = [_]model.Span{.{ .kind = .link, .text = literal, .target = "same target", .bold = true, .italic = true, .code = true }};
+    var styled: std.Io.Writer.Allocating = .init(a);
+    defer styled.deinit();
+    try spansText(&styled.writer, &values, true);
+    const cell_lines = try tableCellRows(a, styled.written(), 8);
+    defer a.free(cell_lines);
+    var joined: std.ArrayList(u8) = .empty;
+    defer joined.deinit(a);
+    var carried = false;
+    for (cell_lines, 0..) |line, i| {
+        try std.testing.expect(terminal.cellWidth(line.bytes) <= 8);
+        const visible = try NarrowTableTest.plain(a, line.bytes);
+        defer a.free(visible);
+        try std.testing.expect(std.unicode.utf8ValidateSlice(visible));
+        try joined.appendSlice(a, visible);
+        if (i != 0 and line.carry.link and line.carry.bold and line.carry.italic) carried = true;
+    }
+    try std.testing.expect(carried);
+    try std.testing.expectEqualStrings(literal, joined.items);
+    const head = [_]model.Span{.{ .text = "wide header with a colspan" }};
+    const first = [_]types.Cell{ .{ .spans = &head, .header = true, .colspan = 2 }, .{ .spans = &.{.{ .text = "third" }} } };
+    const second = [_]types.Cell{ .{ .spans = &values, .rowspan = 2 }, .{ .spans = &.{.{ .text = "other long unbreakable ABCDEFGHIJKLMNOP" }}, .colspan = 2 } };
+    const third = [_]types.Cell{ .{ .spans = &.{.{ .text = "next" }} }, .{ .spans = &.{.{ .text = "last" }} } };
+    const rows = [_]types.Row{ .{ .cells = &first }, .{ .cells = &second }, .{ .cells = &third } };
+    var text: std.Io.Writer.Allocating = .init(a);
+    defer text.deinit();
+    var metadata: std.ArrayList(terminal.PoemLine) = .empty;
+    defer metadata.deinit(a);
+    var projection: PoemProjection = .{ .frame = &text, .allocator = a, .lines = &metadata, .table_columns = 36 };
+    try tableText(&text.writer, .{ .rows = &rows }, true, &projection);
+    try std.testing.expect(try NarrowTableTest.framed(text.written(), 36) > 3);
+    try std.testing.expectEqual(@as(u16, 2), first[0].colspan);
+    try std.testing.expectEqual(@as(u16, 2), second[0].rowspan);
+    try std.testing.expectEqualStrings("same target", values[0].target);
+    // Seven columns cannot each retain a two-cell glyph and separators in36.
+    const many = [_]types.Cell{
+        .{ .spans = &head, .header = true }, .{ .spans = &values }, .{ .spans = &head },
+        .{ .spans = &head },                 .{ .spans = &head },   .{ .spans = &head },
+        .{ .spans = &head },
+    };
+    const crowded = [_]types.Row{.{ .cells = &many }};
+    text.clearRetainingCapacity();
+    try tableText(&text.writer, .{ .rows = &crowded }, true, &projection);
+    try std.testing.expectEqual(@as(usize, 7), std.mem.count(u8, text.written(), "  Row 1, column "));
+    try std.testing.expect(try NarrowTableTest.framed(text.written(), 36) >= 7);
 }
