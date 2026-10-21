@@ -84,3 +84,9 @@ Reader-link intent ordering (fresh isolated report directory, controlled respons
 ```sh
 WIKIDICT_LINK_ORDER_REPORT="$PWD/../artifacts/link-order-run01" pnpm test:link-order
 ```
+
+Search placeholder contrast (fresh isolated report directory, actual light/dark views):
+
+```sh
+WIKIDICT_PLACEHOLDER_REPORT="$PWD/../artifacts/placeholder-contrast-run01" pnpm test:placeholder-contrast
+```
