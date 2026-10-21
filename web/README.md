@@ -66,3 +66,9 @@ and controlled asynchronous worker failures. It does not contact a public catalo
 or rerun the full browser suite. Optional `WIKIDICT_ERROR_BASELINE` names an immutable
 absolute pre-fix `app.js` to reproduce the former uncaught URL error in a separate
 isolated context; it is not needed for the normal regression check.
+
+Error text contrast (fresh isolated report directory, actual light/dark UI):
+
+```sh
+WIKIDICT_CONTRAST_REPORT="$PWD/../artifacts/error-contrast-run01" pnpm test:error-contrast
+```
