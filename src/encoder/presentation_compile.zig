@@ -8015,7 +8015,7 @@ pub const Renderer = struct {
         while (pos < input.len) {
             if (self.truncated) break;
             const line_start = pos;
-            const end = syntax.logicalEnd(input, pos);
+            const end = wikiTableLineEnd(input, pos);
             const raw_line = std.mem.trimEnd(u8, input[pos..end], "\r");
             const line = trim(raw_line);
             pos = if (end < input.len) end + 1 else end;
@@ -8262,6 +8262,43 @@ pub const Renderer = struct {
     // Wiki table cells are split before internal links. Link/template token
     // balancing therefore cannot hide raw table separators. Earlier strip
     // regions stay opaque; allowed HTML attributes are armored by Sanitizer.
+    // Earlier strip regions and Sanitizer-armored attributes can contain raw
+    // LF in this compiler input. Ordinary link/template/container balancing
+    // cannot hide a physical wiki-table marker before the internal-link pass.
+    fn wikiTableLineEnd(input: []const u8, start: usize) usize {
+        var no_more_nowiki_close = false;
+        var opaque_scan: syntax.OpaqueScan = .{};
+        var at = start;
+        while (at < input.len) {
+            const relative = std.mem.indexOfAny(u8, input[at..], "\n<") orelse return input.len;
+            at += relative;
+            if (input[at] == '\n') return at;
+            if (opaque_scan.protectedEnd(input, at, &no_more_nowiki_close)) |end| {
+                at = end;
+                continue;
+            }
+            if (opaque_scan.tagAt(input, at, &no_more_nowiki_close)) |tag| {
+                if (wikiTableArmoredTag(tag)) {
+                    at = tag.end;
+                    continue;
+                }
+            }
+            at += 1;
+        }
+        return input.len;
+    }
+    fn wikiTableArmoredTag(tag: syntax.Tag) bool {
+        return oneOf(tag.name, &.{
+            "b",      "bdi",  "del",  "i",    "ins",    "u",          "font", "big",  "small", "sub",   "sup",
+            "h1",     "h2",   "h3",   "h4",   "h5",     "h6",         "cite", "code", "em",    "s",     "strike",
+            "strong", "tt",   "var",  "div",  "center", "blockquote", "ol",   "ul",   "dl",    "table", "caption",
+            "pre",    "ruby", "rb",   "rp",   "rt",     "rtc",        "p",    "span", "abbr",  "dfn",   "kbd",
+            "samp",   "data", "time", "mark", "br",     "wbr",        "hr",   "li",   "dt",    "dd",    "tr",
+            "td",     "th",   "q",    "bdo",
+        }) or (tag.is("meta") and tag.attr("itemprop") != null and tag.attr("content") != null) or
+            (tag.is("link") and tag.attr("itemprop") != null and tag.attr("href") != null);
+    }
+
     fn wikiCellDelimiter(line: []const u8, needle: []const u8, start: usize) ?usize {
         var no_more_nowiki_close = false;
         var opaque_scan: syntax.OpaqueScan = .{};
@@ -8274,16 +8311,7 @@ pub const Renderer = struct {
                     continue;
                 }
                 if (opaque_scan.tagAt(line, i, &no_more_nowiki_close)) |tag| {
-                    const allowed = oneOf(tag.name, &.{
-                        "b",      "bdi",  "del",  "i",    "ins",    "u",          "font", "big",  "small", "sub",   "sup",
-                        "h1",     "h2",   "h3",   "h4",   "h5",     "h6",         "cite", "code", "em",    "s",     "strike",
-                        "strong", "tt",   "var",  "div",  "center", "blockquote", "ol",   "ul",   "dl",    "table", "caption",
-                        "pre",    "ruby", "rb",   "rp",   "rt",     "rtc",        "p",    "span", "abbr",  "dfn",   "kbd",
-                        "samp",   "data", "time", "mark", "br",     "wbr",        "hr",   "li",   "dt",    "dd",    "tr",
-                        "td",     "th",   "q",    "bdo",
-                    }) or (tag.is("meta") and tag.attr("itemprop") != null and tag.attr("content") != null) or
-                        (tag.is("link") and tag.attr("itemprop") != null and tag.attr("href") != null);
-                    if (allowed) {
+                    if (wikiTableArmoredTag(tag)) {
                         i = tag.end;
                         continue;
                     }
@@ -23859,4 +23887,115 @@ test "wiki table separators retain strip regions attribute armor and nested tabl
     const nested = try flattened(a, rows[0].cells[0].spans);
     try std.testing.expect(std.mem.indexOf(u8, nested, "nested one · nested two") != null);
     try std.testing.expectEqualStrings("after", try flattened(a, rows[0].cells[1].spans));
+}
+
+test "wiki tables keep physical cell row caption and nested markers before links" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n| [[A\n| B]]\n|}");
+    const rows = blocks[0].table.?.rows;
+    try std.testing.expectEqual(@as(usize, 1), rows.len);
+    try std.testing.expectEqual(@as(usize, 2), rows[0].cells.len);
+    const labels = [_][]const u8{ "[[A", "B]]" };
+    for (rows[0].cells, labels) |cell, label| {
+        try std.testing.expectEqualStrings(label, std.mem.trim(u8, try flattened(a, cell.spans), " \t\r\n"));
+        for (cell.spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    }
+    const Section = struct { level: u8 = 2, title: []const u8 = "Unclassified", blocks: []const Block };
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &[_]Section{.{ .blocks = blocks }}, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "table-boundary", .language, .{ .code = "", .heading = "Unclassified" });
+    const saved = decoded.entry.sections[0].blocks[0].table.?.rows;
+    try std.testing.expectEqual(@as(usize, 2), saved[0].cells.len);
+    for (saved[0].cells, labels) |cell, label| {
+        var text: std.ArrayList(u8) = .empty;
+        for (cell.spans) |span| {
+            try text.appendSlice(a, span.text);
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+        }
+        try std.testing.expectEqualStrings(label, std.mem.trim(u8, text.items, " \t\r\n"));
+    }
+    var row_renderer: Renderer = .{ .a = a, .context = .{} };
+    const row_blocks = try row_renderer.renderBody("{|\n| [[A\n|-\n| B]]\n|}");
+    const row_rows = row_blocks[0].table.?.rows;
+    try std.testing.expectEqual(@as(usize, 2), row_rows.len);
+    for (row_rows, labels) |row, label| {
+        try std.testing.expectEqual(@as(usize, 1), row.cells.len);
+        try std.testing.expectEqualStrings(label, std.mem.trim(u8, try flattened(a, row.cells[0].spans), " \t\r\n"));
+        for (row.cells[0].spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    }
+    var header_renderer: Renderer = .{ .a = a, .context = .{} };
+    const header_blocks = try header_renderer.renderBody("{|\n! [[A\n! B]]\n|}");
+    const header_cells = header_blocks[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 2), header_cells.len);
+    for (header_cells, labels) |cell, label| {
+        try std.testing.expect(cell.header);
+        try std.testing.expectEqualStrings(label, std.mem.trim(u8, try flattened(a, cell.spans), " \t\r\n"));
+    }
+    var caption_renderer: Renderer = .{ .a = a, .context = .{} };
+    const caption_blocks = try caption_renderer.renderBody("{|\n|+ [[A\n| B]]\n|}");
+    const caption_table = caption_blocks[0].table.?;
+    try std.testing.expectEqualStrings("[[A", std.mem.trim(u8, try flattened(a, caption_table.caption), " \t\r\n"));
+    try std.testing.expectEqualStrings("B]]", std.mem.trim(u8, try flattened(a, caption_table.rows[0].cells[0].spans), " \t\r\n"));
+    var nested_renderer: Renderer = .{ .a = a, .context = .{} };
+    const nested_blocks = try nested_renderer.renderBody("{|\n| [[A\n{|\n| inner||second\n|}\n| B]]\n|}");
+    const nested_cells = nested_blocks[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 2), nested_cells.len);
+    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, nested_cells[0].spans), "inner · second") != null);
+    try std.testing.expectEqualStrings("B]]", std.mem.trim(u8, try flattened(a, nested_cells[1].spans), " \t\r\n"));
+    for (nested_cells) |cell| for (cell.spans) |span| try std.testing.expect(!std.mem.eql(u8, span.target, "A"));
+    var tail_renderer: Renderer = .{ .a = a, .context = .{} };
+    const tail_blocks = try tail_renderer.renderBody("{|\n| [[A\n|} tail\n]]");
+    try std.testing.expectEqualStrings("[[A", std.mem.trim(u8, try flattened(a, tail_blocks[0].table.?.rows[0].cells[0].spans), " \t\r\n"));
+    var tail: std.ArrayList(u8) = .empty;
+    for (tail_blocks[1..]) |block_value| try tail.appendSlice(a, try flattened(a, block_value.spans));
+    try std.testing.expect(std.mem.indexOf(u8, tail.items, "tail") != null and std.mem.indexOf(u8, tail.items, "]]") != null);
+}
+
+test "wiki table physical lines preserve strip regions attributes and ordinary continuations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{ "<nowiki>first\n| literal</nowiki>", "<ref>first\n| literal</ref>", "<math>first\n| literal</math>", "<!--first\n| literal-->" }) |protected_source| {
+        const input = "{|\n| " ++ protected_source ++ "\n| tail\n|}";
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(input);
+        const cells = blocks[0].table.?.rows[0].cells;
+        try std.testing.expectEqual(@as(usize, 2), cells.len);
+        try std.testing.expectEqualStrings("tail", std.mem.trim(u8, try flattened(a, cells[1].spans), " \t\r\n"));
+        try std.testing.expectEqual(@as(usize, if (std.mem.startsWith(u8, protected_source, "<ref>")) 1 else 0), r.refs.items.len);
+    }
+    const attribute_line = "| <b title='first\n| not-a-cell||!!last'>inside</b>\n| tail";
+    try std.testing.expectEqual(std.mem.lastIndexOfScalar(u8, attribute_line, '\n').?, Renderer.wikiTableLineEnd(attribute_line, 0));
+    var attr_renderer: Renderer = .{ .a = a, .context = .{} };
+    const attr_blocks = try attr_renderer.renderBody("{|\n" ++ attribute_line ++ "\n|}");
+    const attr_cells = attr_blocks[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 2), attr_cells.len);
+    try std.testing.expectEqualStrings("inside", std.mem.trim(u8, try flattened(a, attr_cells[0].spans), " \t\r\n"));
+    for (attr_cells[0].spans) |span| if (std.mem.indexOf(u8, span.text, "inside") != null) try std.testing.expect(span.flags.bold);
+    const unknown_line = "| <unknown title='first\n| second'>x";
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, unknown_line, '\n').?, Renderer.wikiTableLineEnd(unknown_line, 0));
+    const container_line = "| <div>first\n| second</div>";
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, container_line, '\n').?, Renderer.wikiTableLineEnd(container_line, 0));
+    const external_line = "| [https://example.test/\n| label]";
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, external_line, '\n').?, Renderer.wikiTableLineEnd(external_line, 0));
+    var continuation_renderer: Renderer = .{ .a = a, .context = .{} };
+    const continuation_blocks = try continuation_renderer.renderBody("{|\n| alpha\nplain [[Target|label]]\n| omega\n|}");
+    const continuation_cells = continuation_blocks[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 2), continuation_cells.len);
+    const first = try flattened(a, continuation_cells[0].spans);
+    try std.testing.expect(std.mem.indexOf(u8, first, "alpha") != null and std.mem.indexOf(u8, first, "plain label") != null);
+    var target_count: usize = 0;
+    for (continuation_cells[0].spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Target") and std.mem.eql(u8, span.text, "label")) target_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), target_count);
+    try std.testing.expectEqualStrings("omega", try flattened(a, continuation_cells[1].spans));
+    var mixed_renderer: Renderer = .{ .a = a, .context = .{} };
+    const mixed_blocks = try mixed_renderer.renderBody("{|\n<tr>outside<td>inside</td></tr>\n|}\n");
+    try std.testing.expectEqual(@as(usize, 2), mixed_blocks.len);
+    try std.testing.expectEqualStrings("outside", try flattened(a, mixed_blocks[0].spans));
+    try std.testing.expectEqualStrings("inside", try flattened(a, mixed_blocks[1].table.?.rows[0].cells[0].spans));
 }
