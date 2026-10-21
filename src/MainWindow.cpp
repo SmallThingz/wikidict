@@ -73,6 +73,8 @@ bool compiledBookSourcesTarget(const QString &target) {
 
 
 
+QStringList poemClassTokens(const QJsonObject &span);
+
 QJsonArray sectionHeadingSpans(const QJsonObject &section) {
     const QString title = section.value(QStringLiteral("title")).toString();
     const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
@@ -95,6 +97,11 @@ QJsonArray sectionHeadingSpans(const QJsonObject &section) {
         } else label += text + trail;
         if ((kind == QStringLiteral("link") || kind == QStringLiteral("external_link")) &&
             !span.value(QStringLiteral("target")).toString().isEmpty() && (!text.isEmpty() || !trail.isEmpty()))
+            rich = true;
+        const QStringList classes = poemClassTokens(span);
+        if (kind == QStringLiteral("text") && !text.isEmpty() &&
+            span.value(QStringLiteral("target")).toString().isEmpty() &&
+            classes.contains(QStringLiteral("mw-selflink")) && classes.contains(QStringLiteral("selflink")))
             rich = true;
         if (!span.value(QStringLiteral("explanation")).toString().isEmpty() && (!text.isEmpty() || !trail.isEmpty()))
             rich = true;

@@ -90,3 +90,11 @@ Search placeholder contrast (fresh isolated report directory, actual light/dark 
 ```sh
 WIKIDICT_PLACEHOLDER_REPORT="$PWD/../artifacts/placeholder-contrast-run01" pnpm test:placeholder-contrast
 ```
+
+Focused typed self-heading regression (client-only fixtures):
+
+```sh
+WIKIDICT_SELF_HEADING_REPORT=/absolute/fresh/report npm run test:self-heading
+```
+
+The report directory must not exist. `CHROMIUM` may select the installed Chromium-compatible executable; qualification pins its exact executable separately. This test covers matching self-only heading consumption, styles, nonactionable self text, adjacent-link activation, folding, keyboard focus and 360/768px layouts; it does not import a corpus publication.

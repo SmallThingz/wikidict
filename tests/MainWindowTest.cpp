@@ -35,6 +35,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScopeGuard>
+#include <QSignalSpy>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSet>
@@ -3300,6 +3301,104 @@ private slots:
         }
     }
 
+    void typedSelfLinksStayBoldAndNonactionableAcrossCaptionAndCell() {
+        // Client-only DPR-shaped fixture. This does not claim a corpus caption.
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const auto self = [](const QString &label) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), label}, {QStringLiteral("target"), QString()},
+                {QStringLiteral("classes"), QStringLiteral("mw-selflink selflink")},
+                {QStringLiteral("bold"), true}};
+        };
+        const auto text = [](const QString &value) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), value}};
+        };
+        const auto linked = [](const QString &label, const QString &target) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")},
+                {QStringLiteral("text"), label}, {QStringLiteral("target"), target}};
+        };
+        const auto html = [&](bool adjacent) {
+            QJsonArray paragraph{text(QStringLiteral("CLIENT-ONLY SELF-LINK FIXTURE: "))};
+            QJsonArray caption;
+            if (adjacent) {
+                const QJsonObject file = linked(QStringLiteral("Fixture file"), QStringLiteral("File:caption.png"));
+                paragraph.append(file); paragraph.append(text(QStringLiteral(" ")));
+                caption.append(file); caption.append(text(QStringLiteral(" ")));
+            }
+            paragraph.append(self(QStringLiteral("Paragraph self")));
+            caption.append(self(QStringLiteral("Caption self")));
+            if (adjacent) {
+                caption.append(text(QStringLiteral(" ")));
+                caption.append(linked(QStringLiteral("Next dog"), QStringLiteral("dog")));
+            }
+            const QJsonObject cell{{QStringLiteral("spans"), QJsonArray{self(QStringLiteral("Cell self"))}}};
+            const QJsonObject row{{QStringLiteral("cells"), QJsonArray{cell}}};
+            const QJsonObject table{{QStringLiteral("caption"), caption}, {QStringLiteral("rows"), QJsonArray{row}}};
+            return window.blockHtml(QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                       {QStringLiteral("spans"), paragraph}})
+                + window.blockHtml(QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")},
+                       {QStringLiteral("table"), table}});
+        };
+        const QStringList labels{QStringLiteral("Paragraph self"), QStringLiteral("Caption self"), QStringLiteral("Cell self")};
+        QSignalSpy activated(window.reading_, &QTextBrowser::anchorClicked);
+        for (const int width : {580, 780}) {
+            window.resize(width, 480);
+            window.reading_->setHtml(html(false));
+            window.reading_->setFocus();
+            QTRY_VERIFY(window.reading_->hasFocus());
+            QCOMPARE(window.size(), QSize(width, 480));
+            for (const QString &label : labels) {
+                const QTextCursor found = window.reading_->document()->find(label);
+                QVERIFY(!found.isNull());
+                QCOMPARE(window.reading_->toPlainText().count(label), 1);
+                for (int at = found.selectionStart(); at < found.selectionEnd(); ++at) {
+                    QTextCursor character(window.reading_->document());
+                    character.setPosition(at);
+                    character.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+                    QVERIFY(!character.charFormat().isAnchor());
+                    QVERIFY(character.charFormat().anchorHref().isEmpty());
+                    QVERIFY(character.charFormat().fontWeight() >= QFont::Bold);
+                }
+            }
+            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+            QVERIFY(accessible && accessible->textInterface());
+            const QString accessibleText = accessible->textInterface()->text(0, accessible->textInterface()->characterCount());
+            for (const QString &label : labels) QCOMPARE(accessibleText.count(label), 1);
+            QTextCursor selfCursor = window.reading_->document()->find(QStringLiteral("Caption self"));
+            selfCursor.setPosition(selfCursor.selectionStart() + 3);
+            window.reading_->setTextCursor(selfCursor);
+            window.reading_->ensureCursorVisible();
+            const QPoint point = window.reading_->cursorRect(selfCursor).center();
+            QVERIFY(window.reading_->viewport()->rect().contains(point));
+            QVERIFY(window.reading_->anchorAt(point).isEmpty());
+            QTest::mouseClick(window.reading_->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+            QTest::keyClick(window.reading_, Qt::Key_Return);
+            QCOMPARE(activated.count(), 0);
+            QCOMPARE(title(window), QStringLiteral("cat"));
+            QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+            QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-client-selflink-caption-%1.png").arg(width)));
+            // With no anchors in this fixture, Tab must leave the reader.
+            window.reading_->setFocus();
+            QTest::keyClick(window.reading_, Qt::Key_Tab);
+            QTRY_VERIFY(QApplication::focusWidget() && QApplication::focusWidget() != window.reading_);
+        }
+        window.reading_->setHtml(html(true));
+        for (const QString &label : labels) {
+            const QTextCursor found = window.reading_->document()->find(label);
+            QVERIFY(!found.isNull());
+            QVERIFY(!found.charFormat().isAnchor());
+            QVERIFY(found.charFormat().anchorHref().isEmpty());
+        }
+        // Preceding file action cannot leak into ordinary caption text; the
+        // adjacent real dictionary action still opens the existing dog fixture.
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:dog")));
+        QTRY_COMPARE_WITH_TIMEOUT(title(window), QStringLiteral("dog"), 30000);
+        QVERIFY(activated.count() >= 1);
+    }
+
     void typedColorSwatchRendersWithAccessibleTextAndKeepsFallback() {
         MainWindow window(fixture_, QStringLiteral("cat"));
         window.show();
@@ -3906,6 +4005,113 @@ private slots:
         QVERIFY(!window.collapsedSections_.contains(2));
         QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:dog")));
         QTRY_COMPARE(title(window), QStringLiteral("dog"));
+    }
+
+    void settledReaderLayoutMatchesContentWidthAcrossBothResizeDirections() {
+        MainWindow window(fixture_, QStringLiteral("cat")); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QJsonArray observations;
+        int step = 0;
+        for (const int width : {580, 780, 1100, 780, 580}) {
+            window.resize(width, 480);
+            QTest::qWait(100); // Process the real child resize/layout events; never call updateReaderLayout directly.
+            QTRY_COMPARE(window.compactReader_, window.readerContent_->width() < 580);
+            const bool compact = window.readerContent_->width() < 580;
+            int row = -1, column = -1, rowSpan = -1, columnSpan = -1;
+            window.navigationLayout_->getItemPosition(window.navigationLayout_->indexOf(window.sections_), &row, &column, &rowSpan, &columnSpan);
+            QCOMPARE(row, compact ? 1 : 0); QCOMPARE(column, compact ? 0 : 2);
+            QCOMPARE(columnSpan, compact ? 2 : 1);
+            const QRect contentGeometry = window.readerContent_->geometry();
+            const QRect jumpGeometry = window.sections_->geometry();
+            QTest::qWait(100);
+            QCOMPARE(window.readerContent_->geometry(), contentGeometry);
+            QCOMPARE(window.sections_->geometry(), jumpGeometry);
+            QCOMPARE(window.compactReader_, compact);
+            window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("cat"), Qt::CaseInsensitive));
+            for (QWidget *control : std::array<QWidget *, 5>{window.back_, window.forward_, window.sections_, window.smaller_, window.larger_}) {
+                QVERIFY(control->isVisible()); QVERIFY(window.readerContent_->rect().contains(control->geometry()));
+            }
+            observations.append(QJsonObject{{QStringLiteral("step"), step}, {QStringLiteral("window_width"), window.width()},
+                {QStringLiteral("content_width"), window.readerContent_->width()}, {QStringLiteral("compact"), compact},
+                {QStringLiteral("jump_row"), row}, {QStringLiteral("jump_column"), column},
+                {QStringLiteral("jump_colspan"), columnSpan}, {QStringLiteral("reading_focus"), window.reading_->hasFocus()}});
+            QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+            QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-settled-layout-%1-%2.png").arg(step++).arg(width)));
+        }
+        bool sawCompact = false, sawWide = false;
+        int transitions = 0;
+        for (qsizetype i = 0; i < observations.size(); ++i) {
+            const bool compact = observations[i].toObject().value(QStringLiteral("compact")).toBool();
+            sawCompact |= compact; sawWide |= !compact;
+            if (i > 0 && compact != observations[i - 1].toObject().value(QStringLiteral("compact")).toBool()) ++transitions;
+        }
+        QVERIFY(sawCompact && sawWide); QVERIFY(transitions >= 2);
+        QFile report(QStringLiteral(".tmp/ui-screenshots/desktop-settled-layout.json"));
+        QVERIFY(report.open(QIODevice::WriteOnly));
+        QVERIFY(report.write(QJsonDocument(observations).toJson()) > 0);
+    }
+
+    void selfOnlyHeadingCompanionRetainsStylesWithoutDuplicateOrAction() {
+        MainWindow window(fixture_, QStringLiteral("cat")); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const QJsonObject decoded = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object()
+            .value(QStringLiteral("entries")).toArray().first().toObject();
+        const QJsonObject self{{QStringLiteral("kind"), QStringLiteral("text")},
+            {QStringLiteral("text"), QStringLiteral("Self heading")}, {QStringLiteral("target"), QString()},
+            {QStringLiteral("classes"), QStringLiteral("mw-selflink selflink")},
+            {QStringLiteral("bold"), true}, {QStringLiteral("italic"), true}};
+        const auto render = [&](const QJsonObject &span, int level = 3, const QString &title = QStringLiteral("Self heading")) {
+            QJsonObject entry = decoded;
+            entry.insert(QStringLiteral("preamble_spans"), QJsonArray{}); entry.insert(QStringLiteral("references"), QJsonArray{});
+            const QJsonObject heading{{QStringLiteral("kind"), QStringLiteral("heading")},
+                {QStringLiteral("level"), level}, {QStringLiteral("spans"), QJsonArray{span}}};
+            const QJsonObject bodySpan{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), QStringLiteral("Visible body")}};
+            const QJsonObject body{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                {QStringLiteral("spans"), QJsonArray{bodySpan}}};
+            const QJsonArray blocks{heading, body};
+            const QJsonObject section{{QStringLiteral("title"), title}, {QStringLiteral("level"), 3},
+                {QStringLiteral("blocks"), blocks}};
+            entry.insert(QStringLiteral("sections"), QJsonArray{section});
+            return window.entryHtml(entry);
+        };
+        for (bool bold : {true, false}) {
+            QJsonObject span = self; span.insert(QStringLiteral("bold"), bold);
+            span.insert(QStringLiteral("classes"), QStringLiteral("note\tmw-selflink\nselflink extra"));
+            QTextDocument doc; doc.setHtml(render(span));
+            QCOMPARE(doc.toPlainText().count(QStringLiteral("Self heading")), 1);
+            const QTextCursor found = doc.find(QStringLiteral("Self heading")); QVERIFY(!found.isNull());
+            QVERIFY(found.charFormat().fontItalic());
+            QVERIFY(!found.charFormat().isAnchor()); QVERIFY(found.charFormat().anchorHref().isEmpty());
+            if (bold) QVERIFY(found.charFormat().fontWeight() >= QFont::Bold);
+            QVERIFY(doc.toPlainText().contains(QStringLiteral("Visible body")));
+            if (bold) {
+                // Explicit client-only heading render; no imported corpus entry.
+                for (const int width : {580, 780}) {
+                    window.resize(width, 480); window.reading_->setHtml(render(span));
+                    window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+                    QCOMPARE(window.size(), QSize(width, 480));
+                    QCOMPARE(window.reading_->toPlainText().count(QStringLiteral("Self heading")), 1);
+                    const QTextCursor heading = window.reading_->document()->find(QStringLiteral("Self heading"));
+                    QVERIFY(!heading.isNull() && !heading.charFormat().isAnchor());
+                    QVERIFY(heading.charFormat().fontItalic());
+                    QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+                    QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-client-selfheading-%1.png").arg(width)));
+                }
+            }
+        }
+        for (const QString &classes : {QString(), QStringLiteral("mw-selflink"), QStringLiteral("selflink"),
+             QStringLiteral("not-mw-selflink selflink"), QStringLiteral("mw-selflink selflink-suffix")}) {
+            QJsonObject span = self; span.insert(QStringLiteral("classes"), classes);
+            QTextDocument doc; doc.setHtml(render(span));
+            QCOMPARE(doc.toPlainText().count(QStringLiteral("Self heading")), 2);
+        }
+        QJsonObject targeted = self; targeted.insert(QStringLiteral("target"), QStringLiteral("other"));
+        QTextDocument invalid; invalid.setHtml(render(targeted)); QCOMPARE(invalid.toPlainText().count(QStringLiteral("Self heading")), 2);
+        invalid.setHtml(render(self, 2)); QCOMPARE(invalid.toPlainText().count(QStringLiteral("Self heading")), 2);
+        invalid.setHtml(render(self, 3, QStringLiteral("Different"))); QCOMPARE(invalid.toPlainText().count(QStringLiteral("Self heading")), 1);
     }
 
     void richHeadingCompanionMatchesOnlyExactFirstCanonicalLabel() {

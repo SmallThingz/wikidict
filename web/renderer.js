@@ -155,15 +155,17 @@ function blockView(block, onLink, explanations) {
 function sectionHeadingCompanion(section){
   const first=section.blocks?.[0];
   if(!section.title||!first||first.kind!=='heading'||first.level!==section.level)return null;
-  let navigable=false,explained=false,label='';
+  let navigable=false,explained=false,selfStyled=false,label='';
   for(const span of first.spans||[]){
     if(span.kind==='line_break'&&span.trail)return null;
     explained=explained||!!span.explanation;
     navigable=navigable||(['link','external_link'].includes(span.kind)&&!!span.target&&!!(span.text||span.trail));
+    const tokens=poemTokens(span);
+    selfStyled=selfStyled||(span.kind==='text'&&!!span.text&&!span.target&&tokens.includes('mw-selflink')&&tokens.includes('selflink'));
     label+=span.kind==='line_break'?'\n':(span.text||'')+(span.trail||'');
   }
   const trimmed=label.replace(/^[ \t\r\n\u00a0]+|[ \t\r\n\u00a0]+$/g,'');
-  return (navigable||explained)&&trimmed===section.title?first:null;
+  return (navigable||explained||selfStyled)&&trimmed===section.title?first:null;
 }
 export function renderEntry(entry, onLink, settings = {}, mediaView = () => null) {
   const root = document.createDocumentFragment(), references = new Map();
@@ -188,7 +190,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   if(entry.alias&&entry.redirect?.followed){const a=entry.alias;root.append(node('p','Redirect to '+a.target_title+(a.fragment?'#'+a.fragment:''),'entry-alias'));}
   function fold(title, open=false, rich=null) {
     const el=node('details'),summary=node('summary',rich?null:title);el.open=open;
-    if(rich)summary.append(spans(rich,followLink,false,explanations,true));
+    if(rich){const label=node('span',null,'heading-label');label.append(spans(rich,followLink,false,explanations,true));summary.append(label);}
     el.append(summary);return el;
   }
   if (entry.preamble_spans?.length) { const preamble=fold('About this entry',entry.kind==='alias'||!settings.collapseOtherSections);preamble.append(spans(entry.preamble_spans,followLink,false,explanations));root.append(preamble); }
