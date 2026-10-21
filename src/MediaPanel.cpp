@@ -261,21 +261,31 @@ struct MediaPanel::Impl {
         network = manager ? manager : new QNetworkAccessManager(q);
         cacheRoot = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/media-v1");
         QDir().mkpath(cacheRoot);
-        auto *layout = new QVBoxLayout(q);
+        auto *outer = new QVBoxLayout(q);
+        outer->setContentsMargins(0, 0, 0, 0);
+        auto *scroll = new QScrollArea(q);
+        scroll->setObjectName(QStringLiteral("mediaContentScroll"));
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        auto *body = new QWidget(scroll);
+        auto *layout = new QVBoxLayout(body);
         layout->setContentsMargins(14, 14, 14, 14);
+        layout->setSizeConstraint(QLayout::SetMinimumSize);
+        scroll->setWidget(body);
+        outer->addWidget(scroll);
         auto *speechRow = new QHBoxLayout;
-        listen = new QPushButton(QStringLiteral("Listen offline"), q);
+        listen = new QPushButton(QStringLiteral("Listen offline"), body);
         listen->setObjectName(QStringLiteral("mediaListen"));
         listen->setEnabled(false);
         speechRow->addWidget(listen);
-        speechStatus = new QLabel(QStringLiteral("Open a word to hear its pronunciation."), q);
+        speechStatus = new QLabel(QStringLiteral("Open a word to hear its pronunciation."), body);
         speechStatus->setObjectName(QStringLiteral("mediaSpeechStatus"));
         speechStatus->setTextFormat(Qt::PlainText);
         speechStatus->setWordWrap(true);
         speechRow->addWidget(speechStatus, 1);
         layout->addLayout(speechRow);
 
-        auto *preferences = new QGroupBox(QStringLiteral("Online media"), q);
+        auto *preferences = new QGroupBox(QStringLiteral("Online media"), body);
         auto *preferencesLayout = new QVBoxLayout(preferences);
         auto *permissions = new QHBoxLayout;
         images = new QCheckBox(QStringLiteral("Allow images"), preferences);
@@ -306,23 +316,19 @@ struct MediaPanel::Impl {
         cacheRow->addWidget(limit);
         auto *clear = new QPushButton(QStringLiteral("Clear cache"), preferences);
         clear->setObjectName(QStringLiteral("mediaClearCache"));
-        cacheRow->addWidget(clear);
         cacheRow->addStretch();
         preferencesLayout->addLayout(cacheRow);
+        preferencesLayout->addWidget(clear, 0, Qt::AlignLeft);
         cacheStatus = new QLabel(preferences);
         cacheStatus->setObjectName(QStringLiteral("mediaCacheStatus"));
         preferencesLayout->addWidget(cacheStatus);
         layout->addWidget(preferences);
 
-        auto *scroll = new QScrollArea(q);
-        scroll->setWidgetResizable(true);
-        scroll->setFrameShape(QFrame::NoFrame);
-        cardsBody = new QWidget(scroll);
+        cardsBody = new QWidget(body);
         cardsLayout = new QVBoxLayout(cardsBody);
         cardsLayout->setContentsMargins(0, 0, 0, 0);
         cardsLayout->setAlignment(Qt::AlignTop);
-        scroll->setWidget(cardsBody);
-        layout->addWidget(scroll, 1);
+        layout->addWidget(cardsBody, 1);
 
         player = new QMediaPlayer(q);
         output = new QAudioOutput(q);
@@ -372,6 +378,7 @@ struct MediaPanel::Impl {
             trimCache(0);
         });
         trimCache(cacheLimit());
+        setEntry(QJsonObject{}, QString{});
     }
 
     ~Impl() {

@@ -23,6 +23,8 @@
 #include <QNetworkReply>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -161,6 +163,104 @@ private slots:
     void init() {
         QSettings().clear();
         QDir(cacheRoot()).removeRecursively();
+    }
+
+    void initialEmptyMediaRemainsReachableInShortPane() {
+        Network network;
+        MediaPanel panel(nullptr, &network);
+        panel.resize(300, 140);
+        panel.show();
+        QTest::qWait(10);
+        auto *scroll = panel.findChild<QScrollArea *>(QStringLiteral("mediaContentScroll"));
+        auto *images = panel.findChild<QCheckBox *>(QStringLiteral("mediaAllowImages"));
+        auto *audio = panel.findChild<QCheckBox *>(QStringLiteral("mediaAllowAudio"));
+        auto *listen = panel.findChild<QPushButton *>(QStringLiteral("mediaListen"));
+        QVERIFY(scroll && images && audio && listen);
+        QCOMPARE(panel.size(), QSize(300, 140));
+        QVERIFY(scroll->viewport()->height() > 0);
+        QVERIFY(scroll->viewport()->height() <= 140);
+        QVERIFY(scroll->widget()->height() > scroll->viewport()->height());
+        QVERIFY(scroll->verticalScrollBar()->maximum() > 0);
+        QVERIFY(!images->isChecked());
+        QVERIFY(!audio->isChecked());
+        QVERIFY(!listen->isEnabled());
+        QLabel *empty = nullptr;
+        for (auto *label : panel.findChildren<QLabel *>())
+            if (label->text() == QStringLiteral("Media will appear here when you open a word.")) empty = label;
+        QVERIFY(empty);
+        // Logical visibility alone did not catch the collapsed preferences in
+        // the main window's short Media tab. Each control must be reachable in
+        // the real scroll viewport with its own painted rectangle intact.
+        for (auto *target : {static_cast<QWidget *>(images), static_cast<QWidget *>(audio), static_cast<QWidget *>(empty)}) {
+            scroll->ensureWidgetVisible(target, 0, 0);
+            QTest::qWait(10);
+            QCOMPARE(panel.size(), QSize(300, 140));
+            const QRect rect(target->mapTo(scroll->viewport(), QPoint()), target->size());
+            QVERIFY(scroll->viewport()->rect().intersects(rect));
+            QVERIFY(scroll->viewport()->rect().contains(rect.center()));
+            QVERIFY(target->parentWidget()->rect().contains(QRect(target->pos(), target->size())));
+        }
+        QCOMPARE(network.urls.size(), 0);
+        panel.setEntry(entry());
+        QVERIFY(loadButton(panel));
+        panel.setEntry(QJsonObject{});
+        QVERIFY(!loadButton(panel));
+        QVERIFY(!listen->isEnabled());
+        QCOMPARE(panel.size(), QSize(300, 140));
+        QCOMPARE(network.urls.size(), 0);
+    }
+
+    void emptyMediaFitsActualNarrowViewportWithoutHorizontalScrolling() {
+        Network network;
+        MediaPanel panel(nullptr, &network);
+        panel.resize(262, 135);
+        panel.show();
+        QTest::qWait(10);
+        auto *scroll = panel.findChild<QScrollArea *>(QStringLiteral("mediaContentScroll"));
+        auto *images = panel.findChild<QCheckBox *>(QStringLiteral("mediaAllowImages"));
+        auto *audio = panel.findChild<QCheckBox *>(QStringLiteral("mediaAllowAudio"));
+        auto *limit = panel.findChild<QComboBox *>(QStringLiteral("mediaCacheLimit"));
+        auto *clear = panel.findChild<QPushButton *>(QStringLiteral("mediaClearCache"));
+        QVERIFY(scroll && images && audio && limit && clear);
+        QLabel *empty = nullptr;
+        for (auto *label : panel.findChildren<QLabel *>())
+            if (label->text() == QStringLiteral("Media will appear here when you open a word.")) empty = label;
+        QVERIFY(empty);
+        // Actual main-window Media pane: the previous cache row forced a
+        // 288-pixel body into a 248-pixel viewport and clipped these controls.
+        QCOMPARE(panel.size(), QSize(262, 135));
+        QVERIFY(scroll->viewport()->width() > 0);
+        QVERIFY(scroll->viewport()->height() > 0);
+        QVERIFY(scroll->viewport()->height() <= 135);
+        QVERIFY(scroll->widget()->height() > scroll->viewport()->height());
+        QVERIFY(scroll->verticalScrollBar()->maximum() > 0);
+        QCOMPARE(scroll->horizontalScrollBar()->maximum(), 0);
+        QVERIFY(scroll->widget()->width() <= scroll->viewport()->width());
+        QVERIFY(!images->isChecked());
+        QVERIFY(!audio->isChecked());
+        for (auto *target : {static_cast<QWidget *>(images), static_cast<QWidget *>(audio),
+                            static_cast<QWidget *>(limit), static_cast<QWidget *>(clear),
+                            static_cast<QWidget *>(empty)}) {
+            scroll->ensureWidgetVisible(target, 0, 0);
+            QTest::qWait(10);
+            QCOMPARE(panel.size(), QSize(262, 135));
+            QCOMPARE(scroll->horizontalScrollBar()->maximum(), 0);
+            const QRect rect(target->mapTo(scroll->viewport(), QPoint()), target->size());
+            QVERIFY(rect.left() >= 0);
+            QVERIFY(rect.right() < scroll->viewport()->width());
+            QVERIFY(scroll->viewport()->rect().contains(rect.center()));
+            QVERIFY(target->parentWidget()->rect().contains(QRect(target->pos(), target->size())));
+        }
+        QCOMPARE(network.urls.size(), 0);
+        panel.setEntry(entry());
+        panel.setEntry(QJsonObject{});
+        QTest::qWait(10);
+        QCOMPARE(panel.size(), QSize(262, 135));
+        QCOMPARE(scroll->horizontalScrollBar()->maximum(), 0);
+        QVERIFY(scroll->widget()->width() <= scroll->viewport()->width());
+        QVERIFY(!images->isChecked());
+        QVERIFY(!audio->isChecked());
+        QCOMPARE(network.urls.size(), 0);
     }
 
     void requiresExplicitPermissionAndRequest() {
