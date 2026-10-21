@@ -1662,6 +1662,7 @@ test "AN source declared bilingual headings keep four lexical languages separate
         var language_sections: usize = 0;
         var numbered_bodies: usize = 0;
         var lexical_links: usize = 0;
+        var lexical_self_links: usize = 0;
         var visible: std.ArrayList(u8) = .empty;
         for (decoded.entry.sections) |section| {
             if (section.level == 1) {
@@ -1674,12 +1675,17 @@ test "AN source declared bilingual headings keep four lexical languages separate
                 for (block.spans) |span| {
                     try visible.appendSlice(a, span.text);
                     if (std.mem.eql(u8, span.target, "aragonés")) lexical_links += 1;
+                    if (std.mem.eql(u8, span.text, "aragonés") and std.mem.eql(u8, span.classes, "mw-selflink selflink")) {
+                        try std.testing.expect(span.kind == .text and span.target.len == 0 and span.bold);
+                        lexical_self_links += 1;
+                    }
                 }
             }
         }
         try std.testing.expectEqual(@as(usize, 1), language_sections);
         try std.testing.expectEqual(@as(usize, if (which == 0) 5 else 2), numbered_bodies);
-        try std.testing.expectEqual(@as(usize, if (which == 0) 0 else 2), lexical_links);
+        try std.testing.expectEqual(@as(usize, 0), lexical_links);
+        try std.testing.expectEqual(@as(usize, if (which == 0) 0 else 2), lexical_self_links);
         for ([_][]const u8{ "Que ye u fa referenzia", "Persona naxita d'Aragón", "Persona natural de belún", "Luenga romanica", "Bariedat d'o español" }) |body|
             try std.testing.expect((std.mem.indexOf(u8, visible.items, body) != null) == (which == 0));
     }

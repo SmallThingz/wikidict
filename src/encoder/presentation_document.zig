@@ -400,7 +400,8 @@ fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, li
         }
         return error.UncompiledTemplate;
     }
-    for (spans) |span| if (span.kind != .text) {
+    // Suppressed self navigation is still an authored link, not title formatting.
+    for (spans) |span| if (span.kind != .text or span.self_link) {
         if (fallbacks) |report| report.display_title_rejected = true;
         return &.{};
     };
@@ -638,20 +639,23 @@ pub fn compileReportedWithReferencesAndPoemFragmentsAlloc(
         @constCast(work.media)[index].caption = try compiler.plainText(a, caption_spans);
     }
     // DPR2 section titles remain stable plain labels for TOC/folding. A linked
-    // title also retains its final validated spans in the first ordinary heading
+    // title includes self links whose styling survives without a navigation target.
+    // It also retains its final validated spans in the first ordinary heading
     // block. Readers may use this exact companion for their existing header and
     // consume it only when they actually render those spans there.
     for (@constCast(work.sections)) |*section| {
         if (section.title.len == 0) continue;
         var navigable = false;
         var explained = false;
+        var styled_self = false;
         for (section.title_spans) |span| {
             explained = explained or span.explanation.len != 0;
+            styled_self = styled_self or (span.self_link and span.text.len != 0);
             if ((span.kind == .link or span.kind == .external_link) and span.target.len != 0 and span.text.len != 0) {
                 navigable = true;
             }
         }
-        if (navigable or explained) {
+        if (navigable or explained or styled_self) {
             const blocks = try a.alloc(compiler.Block, section.blocks.len + 1);
             blocks[0] = .{ .kind = .heading, .spans = section.title_spans, .level = section.level };
             @memcpy(blocks[1..], section.blocks);
@@ -855,12 +859,14 @@ test "display titles compile to semantic spans after page-title validation" {
     const ignored_parsed = try codec.decodeAlloc(a, ignored, "cat", .language, .{ .code = "en", .heading = "English" });
     try std.testing.expectEqual(@as(usize, 0), ignored_parsed.entry.display_title.len);
 
-    const linked = try compileAlloc(a, "cat", .language, "English", "en", source, .{
-        .source = "[[cat]]",
-        .page_title = "cat",
-    });
-    const linked_parsed = try codec.decodeAlloc(a, linked, "cat", .language, .{ .code = "en", .heading = "English" });
-    try std.testing.expectEqual(@as(usize, 0), linked_parsed.entry.display_title.len);
+    for ([_][]const u8{ "[[cat]]", "[[cat|<span style=\"font-weight:normal\">cat</span>]]" }) |display_source| {
+        const linked = try compileAlloc(a, "cat", .language, "English", "en", source, .{
+            .source = display_source,
+            .page_title = "cat",
+        });
+        const linked_parsed = try codec.decodeAlloc(a, linked, "cat", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 0), linked_parsed.entry.display_title.len);
+    }
 }
 
 test "reported display title rejection falls back to canonical title" {
@@ -884,14 +890,16 @@ test "reported display title rejection falls back to canonical title" {
     const parsed = try codec.decodeAlloc(a, bytes, "cat", .language, .{ .code = "en", .heading = "English" });
     try std.testing.expectEqual(@as(usize, 0), parsed.entry.display_title.len);
 
-    var linked_report: Fallbacks = .{};
-    const linked = try compileReportedAlloc(a, "cat", .language, "English", "en", source, .{
-        .source = "[[cat]]",
-        .page_title = "cat",
-    }, &linked_report);
-    try std.testing.expect(linked_report.display_title_rejected);
-    const linked_parsed = try codec.decodeAlloc(a, linked, "cat", .language, .{ .code = "en", .heading = "English" });
-    try std.testing.expectEqual(@as(usize, 0), linked_parsed.entry.display_title.len);
+    for ([_][]const u8{ "[[cat]]", "[[cat|<span style=\"font-weight:normal\">cat</span>]]" }) |display_source| {
+        var linked_report: Fallbacks = .{};
+        const linked = try compileReportedAlloc(a, "cat", .language, "English", "en", source, .{
+            .source = display_source,
+            .page_title = "cat",
+        }, &linked_report);
+        try std.testing.expect(linked_report.display_title_rejected);
+        const linked_parsed = try codec.decodeAlloc(a, linked, "cat", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 0), linked_parsed.entry.display_title.len);
+    }
 }
 
 test "unknown templates are rejected at bundle time" {
@@ -1496,6 +1504,44 @@ test "linked section heading companions retain labels and final organization ind
         try std.testing.expectEqualStrings(if (i == 0) "first definition" else "second definition", section.blocks[1].spans[0].text);
         try std.testing.expectEqualStrings(if (i == 0) "first example" else "second example", section.blocks[2].spans[0].text);
     }
+}
+
+test "self link heading companions preserve styling and final layout without navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "=== [[Page|<span class=label>''Noun''</span>]] ===\n# first definition\n#: first example\n=== [[Other|Noun]] ===\n# second definition\n#: second example\n";
+    const encoded = try compileAlloc(a, "Page", .language, "English", "en", source, null);
+    const decoded = try codec.decodeAlloc(a, encoded, "Page", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.organization.lexemes.len);
+    for (decoded.entry.sections, decoded.entry.organization.lexemes, 0..) |section, lexeme, index| {
+        try std.testing.expectEqualStrings("Noun", section.title);
+        try std.testing.expectEqual(@as(usize, 3), section.blocks.len);
+        const heading = section.blocks[0];
+        try std.testing.expect(heading.kind == .heading);
+        try std.testing.expectEqual(section.level, heading.level);
+        try std.testing.expectEqual(@as(usize, 1), heading.spans.len);
+        const span = heading.spans[0];
+        try std.testing.expectEqualStrings("Noun", span.text);
+        if (index == 0) {
+            try std.testing.expect(span.kind == .text and span.target.len == 0 and span.bold and span.italic);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "mw-selflink selflink") != null);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "label") != null);
+        } else {
+            try std.testing.expect(span.kind == .link);
+            try std.testing.expectEqualStrings("Other", span.target);
+        }
+        try std.testing.expectEqual(index, lexeme.section);
+        try std.testing.expectEqualSlices(usize, &.{0}, lexeme.introduction);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+        try std.testing.expectEqualSlices(usize, &.{2}, lexeme.definitions[0].examples);
+    }
+    const plain_bytes = try compileAlloc(a, "Page", .language, "English", "en", "==Plain==\nbody", null);
+    const plain = try codec.decodeAlloc(a, plain_bytes, "Page", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 1), plain.entry.sections[0].blocks.len);
+    try std.testing.expect(plain.entry.sections[0].blocks[0].kind == .paragraph);
 }
 
 test "linked owner and edge-spaced heading companions preserve exact limited-trim labels through DPR2" {

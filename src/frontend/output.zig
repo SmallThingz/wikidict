@@ -433,19 +433,32 @@ const HeadingBytes = struct {
         return null;
     }
 };
+fn selfLinkHeadingSpan(span: model.Span) bool {
+    if (span.kind != .text or span.text.len == 0 or span.target.len != 0) return false;
+    var marked = false;
+    var selflink = false;
+    var tokens = std.mem.tokenizeAny(u8, span.classes, " \t\r\n\x0b\x0c");
+    while (tokens.next()) |token| {
+        marked = marked or std.mem.eql(u8, token, "mw-selflink");
+        selflink = selflink or std.mem.eql(u8, token, "selflink");
+    }
+    return marked and selflink;
+}
 fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
     if (section.title.len == 0 or section.blocks.len == 0) return null;
     const first = section.blocks[0];
     if (first.kind != .heading or first.level != section.level) return null;
     var navigable = false;
     var explained = false;
+    var styled_self = false;
     for (first.spans) |span| {
         explained = explained or span.explanation.len != 0;
+        styled_self = styled_self or selfLinkHeadingSpan(span);
         if (span.kind == .line_break and span.trail.len != 0) return null;
         if ((span.kind == .link or span.kind == .external_link) and
             span.target.len != 0 and (span.text.len != 0 or span.trail.len != 0)) navigable = true;
     }
-    if (!navigable and !explained) return null;
+    if (!navigable and !explained and !styled_self) return null;
     var cursor: HeadingBytes = .{ .spans = first.spans };
     var offset: usize = 0;
     var begin: ?usize = null;
@@ -1247,6 +1260,78 @@ test "detailed and folded rich headings render once without losing owner links o
     out.clearRetainingCapacity();
     try entryTextWithDetails(&out.writer, entry, false, false);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "English\n1. Retained definition") != null);
+}
+
+test "self link heading companions require exact semantic markers and labels" {
+    var spans = [_]model.Span{.{ .text = "Nouns", .bold = true, .italic = true, .classes = "label\tmw-selflink\nselflink" }};
+    var blocks = [_]model.Block{.{ .kind = .heading, .level = 3, .spans = &spans }};
+    var section: model.Section = .{ .level = 3, .title = "Nouns", .blocks = &blocks };
+    try std.testing.expect(sectionHeadingCompanion(section) != null);
+    // Explicit font-weight:normal can override the self link's default bold.
+    spans[0].bold = false;
+    spans[0].italic = false;
+    try std.testing.expect(sectionHeadingCompanion(section) != null);
+    for ([_][]const u8{ "", "mw-selflink", "selflink", "xmw-selflink selflink", "mw-selflink selflink-x" }) |classes| {
+        spans[0].classes = classes;
+        try std.testing.expect(sectionHeadingCompanion(section) == null);
+    }
+    spans[0].classes = "selflink mw-selflink";
+    spans[0].target = "Page";
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+    spans[0].target = "";
+    spans[0].kind = .line_break;
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+    spans[0].kind = .text;
+    section.title = "Noun";
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+    section.title = "Nouns";
+    blocks[0].level = 2;
+    try std.testing.expect(sectionHeadingCompanion(section) == null);
+}
+
+test "self link headings render once in plain styled detailed and folded output" {
+    var heading = [_]model.Span{.{ .text = "Nouns", .bold = true, .italic = true, .classes = "mw-selflink selflink" }};
+    const definition = [_]model.Span{ .{ .text = "Retained definition " }, .{ .kind = .link, .text = "Related", .target = "Other" } };
+    const blocks = [_]model.Block{ .{ .kind = .heading, .level = 3, .spans = &heading }, .{ .kind = .definition, .spans = &definition } };
+    const sections = [_]model.Section{.{ .level = 3, .title = "Nouns", .blocks = &blocks }};
+    const senses = [_]model.Sense{.{ .block = 1 }};
+    const lexemes = [_]model.Lexeme{.{ .language = "English", .kind = "Nouns", .section = 0, .introduction = &.{0}, .definitions = &senses }};
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for ([_]bool{ false, true }) |organized| {
+        const entry: model.Entry = .{ .title = "Page", .kind = .language, .language = "English", .sections = &sections, .organization = .{ .lexemes = if (organized) &lexemes else &.{} } };
+        for ([_]bool{ false, true }) |color| {
+            for (0..4) |mode| {
+                out.clearRetainingCapacity();
+                switch (mode) {
+                    0 => try entryText(&out.writer, entry, color),
+                    1 => try entryTextWithDetails(&out.writer, entry, color, false),
+                    2, 3 => {
+                        const toggles: []const usize = if (mode == 3) &.{0} else &.{};
+                        _ = try entryTextFolded(&out, entry, color, .{ .details = true }, toggles, 0);
+                    },
+                    else => unreachable,
+                }
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Nouns"));
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Retained definition"));
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Related"));
+                if (color) {
+                    // The existing short display uses a plain lexical label.
+                    try std.testing.expectEqual(@as(usize, if (mode == 1) 0 else 1), std.mem.count(u8, out.written(), "\x1b[1m\x1b[3mNouns"));
+                    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "\x1b[36mRelated"));
+                    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "\x1b[36m"));
+                }
+            }
+        }
+        heading[0].bold = false;
+        heading[0].italic = false;
+        out.clearRetainingCapacity();
+        try entryText(&out.writer, entry, true);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Nouns"));
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[3mNouns") == null);
+        heading[0].bold = true;
+        heading[0].italic = true;
+    }
 }
 
 test "organized rich homonyms preserve each target heading and shifted sense indices" {

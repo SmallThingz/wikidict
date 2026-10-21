@@ -495,6 +495,9 @@ pub const Style = struct {
     // Poem recursively parses its body before an enclosing internal holder.
     // Navigation remains inherited; a newly created holder clears this phase.
     poem_independent_parse: bool = false,
+    // Keep the internal label parser while emitting an anchor without an action.
+    // This build-only marker is never stored in a presentation span.
+    self_link_target: ?[]const u8 = null,
 };
 fn inheritExplanation(style: *Style, parent: Style) void {
     if (!style.explanation_set and style.explanation.len == 0) {
@@ -516,6 +519,9 @@ pub const SpanFlags = packed struct(u8) {
 pub const Span = struct {
     // Build-only validation origin. Never serialized into DPR2.
     provenance: Provenance = .parsed,
+    // An explicit no-action anchor must survive authored media-caption flattening.
+    // Readers receive ordinary text; this build-only marker is not serialized.
+    self_link: bool = false,
     // Build-only DOM eligibility for a containing auto-direction scope.
     bidi_auto_excluded: bool = false,
     kind: ir.InlineKind = .text,
@@ -2209,6 +2215,52 @@ pub const Renderer = struct {
     }
 
     const LinkDestination = struct { target: []const u8, external: bool = false };
+    fn isSelfLink(self: *Renderer, target: []const u8) Error!bool {
+        const hash = std.mem.indexOfScalar(u8, target, '#');
+        // Linker::makeSelfLinkObj treats both "" and "0" as a false PHP hash.
+        if (hash) |at| if (at + 1 != target.len and !std.mem.eql(u8, target[at + 1 ..], "0")) return false;
+        const page = if (hash) |at| target[0..at] else target;
+        if (page.len == 0 or self.context.title.len == 0) return false;
+        if (self.context.namespace_catalog) |registry| {
+            // Interwiki pages are not local title identities, even when their
+            // literal spelling happens to equal this page's title.
+            if (self.namespaceOfTarget(page) == null) {
+                if (std.mem.indexOfScalar(u8, page, ':')) |colon| {
+                    for (registry.interwiki_rows) |row| {
+                        if (!row.is_current_wiki and std.ascii.eqlIgnoreCase(row.prefix, std.mem.trim(u8, page[0..colon], " \t"))) return false;
+                    }
+                }
+            }
+            const normalized = registry.normalizeTitle(self.a, page, 0, .any) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return false,
+            };
+            defer self.a.free(normalized);
+            if (registry.ofTitle(normalized).id == -1) return false;
+            const current = registry.normalizeTitle(self.a, self.context.title, 0, .any) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return false,
+            };
+            defer self.a.free(current);
+            return std.mem.eql(u8, normalized, current);
+        }
+        if (std.mem.indexOfScalar(u8, page, ':')) |colon|
+            if (std.ascii.eqlIgnoreCase(page[0..colon], "Special")) return false;
+        // Without edition metadata, only exact title identity is established.
+        return std.mem.eql(u8, page, self.context.title);
+    }
+    fn wikiLinkStyle(self: *Renderer, original: Style, destination: LinkDestination) Error!Style {
+        var style = original;
+        style.kind = if (destination.target.len == 0) .text else if (destination.external) .external_link else .link;
+        style.target = destination.target;
+        style.self_link_target = null;
+        if (!destination.external and destination.target.len != 0 and try self.isSelfLink(destination.target)) {
+            style.self_link_target = destination.target;
+            style.bold = true;
+            style.classes = if (style.classes.len == 0) "mw-selflink selflink" else try std.fmt.allocPrint(self.a, "{s} mw-selflink selflink", .{style.classes});
+        }
+        return style;
+    }
     fn currentWikiTarget(self: *const Renderer, original: []const u8) []const u8 {
         const registry = self.context.namespace_catalog orelse return original;
         var title = original;
@@ -2534,6 +2586,11 @@ pub const Renderer = struct {
     }
     fn textRaw(self: *Renderer, value: []const u8, original: Style) Error!void {
         var s = original;
+        const self_link = if (s.self_link_target) |target| std.mem.eql(u8, s.target, target) else false;
+        if (self_link) {
+            if (s.kind == .link) s.kind = .text;
+            s.target = "";
+        }
         if (self.poem_items.items.len != 0) {
             const target = try self.poemCleanField(s.target);
             if (target.ptr != s.target.ptr) {
@@ -2554,7 +2611,7 @@ pub const Renderer = struct {
         }
         const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
         const inherited_flags: SpanFlags = @bitCast(@as(u8, @bitCast(flags)) | @as(u8, @bitCast(self.block_formatting)));
-        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .flags = inherited_flags, .role = s.role });
+        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .flags = inherited_flags, .role = s.role });
     }
     pub fn lineBreak(self: *Renderer, s: Style) Error!void {
         var style = s;
@@ -4055,6 +4112,11 @@ pub const Renderer = struct {
                 label_style.explanation_set = span.explanation_set;
                 label_style.classes = try self.mediaCaptionClasses(style.classes, span.classes);
                 label_style.role = span.role;
+                if (span.self_link) {
+                    label_style.kind = .text;
+                    label_style.target = "";
+                    label_style.self_link_target = "";
+                }
             }
             if (span.kind == .line_break) {
                 try self.lineBreak(label_style);
@@ -5421,17 +5483,10 @@ pub const Renderer = struct {
                                 }
                             }
                             const destination = try self.interwikiDestination(target, 0);
-                            var action_style = s;
-                            if (destination.target.len == 0) {
-                                action_style.kind = .text;
-                                action_style.target = "";
-                            }
+                            const action_style = try self.wikiLinkStyle(s, destination);
                             if (!token.link_has_pipe or generated_label) {
                                 // Decoded default and generated labels are title text, not another wikitext input.
-                                var link_style = action_style;
-                                link_style.kind = if (destination.target.len == 0) .text else if (destination.external) .external_link else .link;
-                                link_style.target = destination.target;
-                                try self.text(label_value, link_style);
+                                try self.text(label_value, action_style);
                             } else if (destination.external) {
                                 // Captured map URLs are already semantic data, not
                                 // authored URL wikitext for entity decoding again.
@@ -5443,10 +5498,7 @@ pub const Renderer = struct {
                                 try self.link(label_value, destination.target, action_style, depth + 1, false);
                             }
                             if (trail.len != 0) {
-                                var trail_style = action_style;
-                                trail_style.kind = if (destination.target.len == 0) .text else if (destination.external) .external_link else .link;
-                                trail_style.target = destination.target;
-                                try self.text(trail, trail_style);
+                                try self.text(trail, action_style);
                             }
                         } else {
                             try self.inlineText(label_value, s, depth + 1);
@@ -5558,8 +5610,7 @@ pub const Renderer = struct {
         defer self.spans = parent;
         var inherited = style;
         if (self.body_link_target.len != 0 and inherited.kind == .text) {
-            inherited.kind = .link;
-            inherited.target = self.body_link_target;
+            inherited = try self.wikiLinkStyle(inherited, .{ .target = self.body_link_target });
             inherited.poem_independent_parse = false;
         }
         if (self.parsed_pre) {
@@ -5572,6 +5623,7 @@ pub const Renderer = struct {
             if (inherited.kind == .text and (outer.kind == .link or outer.kind == .external_link)) {
                 inherited.kind = outer.kind;
                 inherited.target = outer.target;
+                inherited.self_link_target = outer.self_link_target;
                 inherited.poem_independent_parse = outer.poem_independent_parse;
             }
             if (inherited.role == .normal) inherited.role = outer.role;
@@ -6122,7 +6174,7 @@ pub const Renderer = struct {
 
     fn appendLinkContinuation(self: *Renderer, blocks: *std.ArrayList(Block), raw: []const u8, target: []const u8) Error!void {
         if (raw.len == 0) return;
-        const spans = try self.parseBodySpans(raw, if (target.len != 0) .{ .kind = .link, .target = target } else .{});
+        const spans = try self.parseBodySpans(raw, if (target.len != 0) try self.wikiLinkStyle(.{}, .{ .target = target }) else .{});
         if (spans.len == 0) return;
         if (blocks.items.len != 0 and blocks.items[blocks.items.len - 1].kind == .paragraph) {
             try self.appendParagraphSpans(blocks, blocks.items.len - 1, spans, false);
@@ -9746,6 +9798,263 @@ test "internal link targets decode entities and normalize underscores" {
     }
     try std.testing.expect(first);
     try std.testing.expect(second);
+}
+
+test "self links emit bold text while preserving label formatting and trails" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{ .title = "Page" } };
+    const spans = try r.parseSpans("[[Page|''label'' <span style=\"font-weight:normal\">normal</span>]]s tail", .{ .classes = "outer", .language = "fr", .explanation = "hint" });
+    try std.testing.expectEqualStrings("label normals tail", try flattened(a, spans));
+    var label = false;
+    var normal = false;
+    var trail = false;
+    var tail = false;
+    for (spans) |span| {
+        try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+        try std.testing.expectEqualStrings("", span.target);
+        try std.testing.expectEqualStrings("fr", span.language);
+        try std.testing.expectEqualStrings("hint", span.explanation);
+        if (std.mem.eql(u8, span.text, "label")) {
+            try std.testing.expect(span.flags.bold and span.flags.italic);
+            label = true;
+        }
+        if (std.mem.eql(u8, span.text, "normal")) {
+            try std.testing.expect(!span.flags.bold and !span.flags.italic);
+            normal = true;
+        }
+        if (std.mem.eql(u8, span.text, "s")) {
+            try std.testing.expect(span.flags.bold and !span.flags.italic);
+            trail = true;
+        }
+        if (std.mem.indexOf(u8, span.text, "tail") != null) {
+            try std.testing.expect(!span.flags.bold);
+            try std.testing.expectEqualStrings("outer", span.classes);
+            tail = true;
+        } else try std.testing.expectEqualStrings("outer mw-selflink selflink", span.classes);
+    }
+    try std.testing.expect(label and normal and trail and tail);
+    const han = try (struct {
+        fn render(allocator: A) Error![]const Span {
+            var renderer: Renderer = .{ .a = allocator, .context = .{ .title = "拜一" } };
+            return renderer.parseSpans("[[拜一]]", .{});
+        }
+    }).render(a);
+    try std.testing.expectEqual(@as(usize, 1), han.len);
+    try std.testing.expectEqualDeep(Span{ .text = "拜一", .self_link = true, .classes = "mw-selflink selflink", .flags = .{ .bold = true } }, han[0]);
+}
+
+test "self links use captured namespace case and Unicode title identities" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").french_test_fixture);
+    defer registry.deinit();
+    const cases = [_]struct { title: []const u8, source: []const u8, is_self: bool }{
+        .{ .title = "Page", .source = "[[Page|x]]", .is_self = true },
+        .{ .title = "Page", .source = "[[page|x]]", .is_self = false },
+        .{ .title = "A&B C", .source = "[[A&amp;B_C|x]]", .is_self = true },
+        .{ .title = "café", .source = "[[cafe\u{301}|x]]", .is_self = true },
+        .{ .title = "Utilisateur:École", .source = "[[User:école|x]]", .is_self = true },
+        .{ .title = "Utilisateur:École", .source = "[[User:éCOLE|x]]", .is_self = false },
+        .{ .title = "Catégorie:Test", .source = "[[:Category:Test|x]]", .is_self = true },
+        .{ .title = "Spécial:Test", .source = "[[Special:Test|x]]", .is_self = false },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{ .title = case.title, .namespace_catalog = &registry } };
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expectEqual(@as(usize, 1), spans.len);
+        try std.testing.expectEqualStrings("x", spans[0].text);
+        try std.testing.expectEqual(case.is_self, spans[0].flags.bold);
+        try std.testing.expectEqual(case.is_self, spans[0].target.len == 0);
+        try std.testing.expectEqual(if (case.is_self) ir.InlineKind.text else ir.InlineKind.link, spans[0].kind);
+    }
+}
+
+test "self links keep fragments interwiki media and category precedence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap("self\t1\t1\t0\t0\thttps://unused.example/$1\nw\t1\t0\t0\t0\thttps://en.wikipedia.org/wiki/$1\n");
+    const cases = [_]struct { source: []const u8, target: []const u8, kind: ir.InlineKind, bold: bool = false }{
+        .{ .source = "[[Page|x]]", .target = "", .kind = .text, .bold = true },
+        .{ .source = "[[Page#|x]]", .target = "", .kind = .text, .bold = true },
+        .{ .source = "[[Page#0|x]]", .target = "", .kind = .text, .bold = true },
+        .{ .source = "[[self:Page|x]]", .target = "", .kind = .text, .bold = true },
+        .{ .source = "[[Page#Section|x]]", .target = "Page#Section", .kind = .link },
+        .{ .source = "[[#Section|x]]", .target = "#Section", .kind = .link },
+        .{ .source = "[[Other|x]]", .target = "Other", .kind = .link },
+        .{ .source = "[[Other#0|x]]", .target = "Other#0", .kind = .link },
+        .{ .source = "[[w:Page|x]]", .target = "https://en.wikipedia.org/wiki/Page", .kind = .external_link },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{ .title = "Page", .namespace_catalog = &registry } };
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expectEqual(@as(usize, 1), spans.len);
+        try std.testing.expectEqualStrings("x", spans[0].text);
+        try std.testing.expectEqualStrings(case.target, spans[0].target);
+        try std.testing.expectEqual(case.kind, spans[0].kind);
+        try std.testing.expectEqual(case.bold, spans[0].flags.bold);
+    }
+    var category: Renderer = .{ .a = a, .context = .{ .title = "Category:Test", .namespace_catalog = &registry } };
+    try std.testing.expectEqual(@as(usize, 0), (try category.parseSpans("[[Category:Test]]", .{})).len);
+    var file: Renderer = .{ .a = a, .context = .{ .title = "File:Cat.jpg", .namespace_catalog = &registry } };
+    _ = try file.parseSpans("[[File:Cat.jpg|thumb|caption]]", .{});
+    try std.testing.expectEqual(@as(usize, 1), file.media.items.len);
+    const explicit_file = try file.parseSpans("[[:File:Cat.jpg|x]]", .{});
+    try std.testing.expect(explicit_file[0].kind == .text and explicit_file[0].flags.bold and explicit_file[0].target.len == 0);
+}
+
+test "self link labels retain internal holder parsing and protected literals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{ .title = "Page" } };
+    const spans = try r.parseSpans("[[Page|[https://example.test label]]]", .{});
+    try std.testing.expectEqualStrings("[https://example.test label]", try flattened(a, spans));
+    for (spans) |span| {
+        try std.testing.expect(span.kind == .text and span.flags.bold and span.target.len == 0);
+    }
+    const protected = try r.parseSpans("<nowiki>[[Page]]</nowiki>", .{});
+    try std.testing.expectEqualStrings("[[Page]]", try flattened(a, protected));
+    for (protected) |span| try std.testing.expect(span.kind == .text and !span.flags.bold and span.target.len == 0);
+}
+
+test "self link block labels and fragment continuations retain scope without navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{ .title = "Page" } };
+    try std.testing.expectEqualStrings("Page", (try r.bodyLinkAdmission("[[Page|one\nbody]]")).target.?);
+    const blocks = try r.renderBody("prefix [[Page|one\n==French==\nbody]]s tail\nOutside");
+    var heading = false;
+    var trail = false;
+    var outside = false;
+    for (blocks) |block_value| for (block_value.spans) |span| {
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+        if (std.mem.eql(u8, span.text, "French")) {
+            try std.testing.expect(block_value.kind == .heading and span.flags.bold);
+            heading = true;
+        }
+        if (std.mem.eql(u8, span.text, "s")) {
+            try std.testing.expect(span.flags.bold);
+            trail = true;
+        }
+        if (std.mem.indexOf(u8, span.text, "Outside") != null) {
+            try std.testing.expect(!span.flags.bold);
+            outside = true;
+        }
+    };
+    try std.testing.expect(heading and trail and outside);
+    const source = "body]]s tail";
+    const close = std.mem.indexOf(u8, source, "]]").?;
+    const initial = [_]FragmentPreContext.Initial{.{ .body_end = close, .resume_at = close + 3, .kind = .link, .target = "Page" }};
+    var fragment: Renderer = .{ .a = a, .context = .{ .title = "Page" } };
+    const parts = try fragment.renderBodyWithFragmentPre(source, .{ .initial = &initial });
+    var body = false;
+    for (parts) |part| for (part.spans) |span| {
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+        if (std.mem.eql(u8, span.text, "body")) {
+            try std.testing.expect(span.flags.bold);
+            body = true;
+        }
+    };
+    try std.testing.expect(body);
+}
+
+test "self link poem labels preserve breaks and independent reference navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{ .title = "Page" } };
+    const spans = try r.parseSpans("[[Page|<poem>one<br>two</poem><ref>note</ref>]]", .{});
+    var one = false;
+    var two = false;
+    var line_break = false;
+    var reference_link = false;
+    for (spans) |span| {
+        try std.testing.expect(!std.mem.eql(u8, span.target, "Page"));
+        if (std.mem.eql(u8, span.text, "one")) {
+            try std.testing.expect(span.kind == .text and span.flags.bold and span.target.len == 0);
+            one = true;
+        }
+        if (std.mem.eql(u8, span.text, "two")) {
+            try std.testing.expect(span.kind == .text and span.flags.bold and span.target.len == 0);
+            two = true;
+        }
+        if (span.kind == .line_break) {
+            try std.testing.expectEqualStrings("", span.target);
+            line_break = true;
+        }
+        if (span.role == .reference and span.kind == .link) {
+            try std.testing.expect(span.target.len != 0);
+            reference_link = true;
+        }
+    }
+    const refs = try r.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), refs.len);
+    try std.testing.expectEqualStrings("note", try flattened(a, refs[0].spans));
+    try std.testing.expect(one and two and line_break and reference_link);
+}
+
+test "self links in authored file captions do not regain the image action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{ .title = "Page" } };
+    const spans = try r.parseSpans("[[File:Cat.jpg|thumb|[[Page|''self'']] [[Other|other]] caption]]", .{});
+    var self_found = false;
+    var other_found = false;
+    var caption_found = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "self")) {
+            try std.testing.expect(span.kind == .text and span.target.len == 0 and span.flags.bold and span.flags.italic);
+            try std.testing.expect(span.self_link);
+            self_found = true;
+        }
+        if (std.mem.eql(u8, span.text, "other")) {
+            try std.testing.expect(span.kind == .link and !span.self_link);
+            try std.testing.expectEqualStrings("Other", span.target);
+            other_found = true;
+        }
+        if (std.mem.indexOf(u8, span.text, "caption") != null) {
+            try std.testing.expect(span.kind == .link and !span.self_link);
+            try std.testing.expectEqualStrings("File:Cat.jpg", span.target);
+            caption_found = true;
+        }
+    }
+    try std.testing.expect(self_found and other_found and caption_found);
+}
+
+test "self link semantic data round trips without an executable or navigation fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{ .title = "拜一" } };
+    const blocks = try r.renderBody("[[拜一]] [[拜二]]");
+    const Section = struct { level: u8 = 2, title: []const u8 = "Min Nan", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "拜一", .language, .{ .code = "nan", .heading = "Min Nan" });
+    var self_found = false;
+    var next_found = false;
+    for (decoded.entry.sections[0].blocks[0].spans) |span| {
+        if (std.mem.eql(u8, span.text, "拜一")) {
+            try std.testing.expect(span.kind == .text and span.bold and span.target.len == 0);
+            try std.testing.expectEqualStrings("mw-selflink selflink", span.classes);
+            self_found = true;
+        }
+        if (std.mem.eql(u8, span.text, "拜二")) {
+            try std.testing.expect(span.kind == .link and !span.bold);
+            try std.testing.expectEqualStrings("拜二", span.target);
+            next_found = true;
+        }
+    }
+    try std.testing.expect(self_found and next_found);
 }
 
 test "list-defined references populate named citations without emitting fake markers" {

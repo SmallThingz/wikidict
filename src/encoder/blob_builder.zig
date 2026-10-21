@@ -7153,11 +7153,18 @@ test "captured AN hyphen banners keep canonical owners despite local alias gaps"
         try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, row.title, "☉")) 2 else 1), definitions);
         if (std.mem.eql(u8, row.title, "au")) {
             var own_targets: usize = 0;
+            var self_links: usize = 0;
             for (decoded.entry.sections) |section| {
                 if (!std.mem.eql(u8, row.code, "haw")) try std.testing.expect(std.mem.indexOf(u8, section.title, "Hawayán") == null);
                 if (!std.mem.eql(u8, row.code, "rap")) try std.testing.expect(std.mem.indexOf(u8, section.title, "Rapa nui") == null);
                 if (!std.mem.eql(u8, row.code, "sw")) try std.testing.expect(std.mem.indexOf(u8, section.title, "Swahili") == null);
                 for (section.blocks) |block| for (block.spans) |span| {
+                    if (std.mem.eql(u8, row.code, "ca") and block.kind == .definition and std.mem.eql(u8, span.text, "au")) {
+                        try std.testing.expect(span.kind == .text and span.bold);
+                        try std.testing.expectEqualStrings("", span.target);
+                        try std.testing.expectEqualStrings("mw-selflink selflink", span.classes);
+                        self_links += 1;
+                    }
                     if (span.kind != .link) continue;
                     if ((std.mem.eql(u8, row.code, "haw") or std.mem.eql(u8, row.code, "rap")) and std.mem.eql(u8, span.target, "yo")) own_targets += 1;
                     if (std.mem.eql(u8, row.code, "sw") and (std.mem.eql(u8, span.target, "ó") or std.mem.eql(u8, span.target, "u"))) own_targets += 1;
@@ -7165,8 +7172,13 @@ test "captured AN hyphen banners keep canonical owners despite local alias gaps"
             }
             if (std.mem.eql(u8, row.code, "haw") or std.mem.eql(u8, row.code, "rap")) try std.testing.expectEqual(@as(usize, 1), own_targets);
             if (std.mem.eql(u8, row.code, "sw")) try std.testing.expectEqual(@as(usize, 2), own_targets);
+            if (std.mem.eql(u8, row.code, "ca")) {
+                try std.testing.expectEqual(@as(usize, 1), self_links);
+                try std.testing.expectEqual(@as(usize, 0), actions);
+            }
         }
-        if (!std.mem.eql(u8, row.title, "diya")) try std.testing.expect(actions > 0);
+        const self_only = std.mem.eql(u8, row.title, "au") and std.mem.eql(u8, row.code, "ca");
+        if (!std.mem.eql(u8, row.title, "diya") and !self_only) try std.testing.expect(actions > 0);
     }
 }
 
