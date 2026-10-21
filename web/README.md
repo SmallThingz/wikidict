@@ -72,3 +72,9 @@ Error text contrast (fresh isolated report directory, actual light/dark UI):
 ```sh
 WIKIDICT_CONTRAST_REPORT="$PWD/../artifacts/error-contrast-run01" pnpm test:error-contrast
 ```
+
+Read-only error ownership (fresh isolated report directory; controlled delayed worker responses):
+
+```sh
+WIKIDICT_STALE_REPORT="$PWD/../artifacts/stale-errors-run01" pnpm test:stale-errors
+```

@@ -9,7 +9,8 @@
     "test:swatch": "node color-swatch.browser.test.mjs",
     "test:poem": "node poem.browser.test.mjs",
     "test:errors": "node action-errors.browser.test.mjs",
-    "test:error-contrast": "node error-contrast.browser.test.mjs"
+    "test:error-contrast": "node error-contrast.browser.test.mjs",
+    "test:stale-errors": "node stale-errors.browser.test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
