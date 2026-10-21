@@ -1880,6 +1880,9 @@ pub const Renderer = struct {
     span_limit_marker: bool = false,
     block_limit_reached: bool = false,
     body_depth: usize = 0,
+    // Build-only reading boundaries for one inline HTML table. Nested tables
+    // restore their parent's state; cells/captions are independent domains.
+    inline_table_boundaries: ?*InlineTableBoundaries = null,
     parsed_pre: bool = false,
     pre_block: bool = false,
     // An HTML li/dd suppresses implicit paragraphs and leading-space pre.
@@ -1926,6 +1929,8 @@ pub const Renderer = struct {
     poem_line_indent: u8 = 0,
     poem_boundary_pending: bool = false,
     poem_authored_token: bool = false,
+
+    const InlineTableBoundaries = struct { row_seen: bool = false, cell_seen: bool = false, caption_seen: bool = false };
 
     const poem_prefix = "\x7fWDPOEM:";
     const PoemItem = struct {
@@ -4437,6 +4442,23 @@ pub const Renderer = struct {
         return weight;
     }
 
+    // Only the same simple declaration subset as htmlFontWeight is understood.
+    // null means unsupported CSS, not an interpreted display override.
+    fn htmlTableInlineDisplay(self: *Renderer, tag: syntax.Tag) Error!?bool {
+        const css = (try self.semanticAttribute(tag, "style")) orelse return false;
+        if (std.mem.indexOfAny(u8, css, "'\"(){}[]\\!") != null or
+            std.mem.indexOf(u8, css, "/*") != null or std.mem.indexOf(u8, css, "*/") != null) return null;
+        var inline_display = false;
+        var declarations = std.mem.splitScalar(u8, css, ';');
+        while (declarations.next()) |raw| {
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+            if (!std.ascii.eqlIgnoreCase(trim(raw[0..colon]), "display")) continue;
+            const value = trim(raw[colon + 1 ..]);
+            if (oneOf(value, &.{ "inline", "inline-block", "inline-table" })) inline_display = true else if (oneOf(value, &.{ "block", "table" })) inline_display = false else return null;
+        }
+        return inline_display;
+    }
+
     fn canonicalSwatchHex(self: *Renderer, raw: []const u8) Error!?[]const u8 {
         const value = trim(raw);
         if (value.len != 7 or value[0] != '#') return null;
@@ -5004,7 +5026,44 @@ pub const Renderer = struct {
         if (oneOf(tag.name, &.{ "tr", "td", "th", "caption" })) {
             if (tag.closing or tag.self_closing) return tag.end;
             const pair = syntax.matchingTag(input, tag) orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
-            try self.inlineText(input[tag.end..pair.inner_end], style, depth + 1);
+            const parent_table = self.inline_table_boundaries;
+            if (parent_table) |table| {
+                if (tag.is("tr")) {
+                    if (table.row_seen or table.cell_seen or table.caption_seen) try self.lineBreak(style);
+                    table.row_seen = true;
+                    table.cell_seen = false;
+                    table.caption_seen = false;
+                } else if (tag.is("caption")) {
+                    if (table.row_seen or table.cell_seen or table.caption_seen) try self.lineBreak(style);
+                    table.caption_seen = true;
+                    table.cell_seen = false;
+                } else {
+                    if (table.caption_seen) {
+                        try self.lineBreak(style);
+                        table.caption_seen = false;
+                    }
+                    if (table.cell_seen) try self.text(" · ", style);
+                    table.cell_seen = true;
+                }
+                // A child cell/caption cannot consume its parent's separators.
+                // A nested table establishes a fresh scope in the ordinary arm.
+                if (!tag.is("tr")) self.inline_table_boundaries = null;
+            }
+            defer self.inline_table_boundaries = parent_table;
+            var cell_style = style;
+            const parent_flags = self.block_formatting;
+            defer self.block_formatting = parent_flags;
+            if (parent_table != null) {
+                // Flattened header cells retain their semantic emphasis. Use
+                // only the already-supported explicit weight override, without
+                // introducing cell class/language/direction or CSS behavior.
+                if (tag.is("th")) cell_style.bold = true;
+                if (try self.htmlFontWeight(tag)) |bold| {
+                    cell_style.bold = bold;
+                    self.block_formatting.bold = bold;
+                }
+            }
+            try self.inlineText(input[tag.end..pair.inner_end], cell_style, depth + 1);
             return pair.end;
         }
         if (tag.is("ref") and !tag.closing) {
@@ -5105,6 +5164,10 @@ pub const Renderer = struct {
         if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
         defer self.block_formatting = inherited_formatting;
         const content = input[tag.end..pair.inner_end];
+        var table_boundaries: InlineTableBoundaries = .{};
+        const parent_table = self.inline_table_boundaries;
+        if (tag.is("table")) self.inline_table_boundaries = &table_boundaries;
+        defer self.inline_table_boundaries = parent_table;
         const bidi_scope = if (matched != null) try self.compiledBidiScope(tag) else null;
         const parent_bidi_depth = self.bidi_scope_depth;
         const parent_body_direction = self.body_language_direction;
@@ -5153,7 +5216,7 @@ pub const Renderer = struct {
             try self.lineBreak(s);
             return pair.end;
         }
-        const block_boundary = oneOf(tag.name, &.{ "p", "div", "blockquote", "center", "li", "dt", "dd", "tr", "h1", "h2", "h3", "h4", "h5", "h6" });
+        const block_boundary = oneOf(tag.name, &.{ "p", "div", "blockquote", "center", "li", "dt", "dd", "tr", "h1", "h2", "h3", "h4", "h5", "h6" }) or (tag.is("table") and !(try self.htmlTableInlineDisplay(tag) orelse false));
         // An inline block opener separates preceding lexical text from its body.
         // Keep empty bodies and adjacent block boundaries on the existing path.
         if (block_boundary and trim(content).len != 0 and self.spans.items.len != 0 and
@@ -22331,4 +22394,295 @@ test "closing br is a line break while protected and encoded tags stay literal" 
         try std.testing.expectEqualStrings("a</br>b", try flattened(a, literal));
         for (literal) |span| try std.testing.expect(span.kind != .line_break);
     }
+}
+
+test "inline HTML table observation preserves adjacent cells in body and list contexts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Observation = struct {
+        fn append(a_: A, out: *std.ArrayList(u8), spans: []const Span) !void {
+            for (spans) |value| {
+                try out.appendSlice(a_, value.text);
+                std.debug.print("TABLE_OBSERVATION span kind={s} text={s} target={s} classes={s} language={s} bold={any} italic={any}\n", .{ @tagName(value.kind), value.text, value.target, value.classes, value.language, value.flags.bold, value.flags.italic });
+            }
+        }
+        fn visible(a_: A, blocks: []const Block) ![]const u8 {
+            var out: std.ArrayList(u8) = .empty;
+            for (blocks, 0..) |b, bi| {
+                std.debug.print("TABLE_OBSERVATION block index={d} kind={s} depth={d} path={s} number={s}\n", .{ bi, @tagName(b.kind), b.depth, b.list_path, b.number });
+                if (bi != 0) try out.append(a_, ' ');
+                try append(a_, &out, b.spans);
+                if (b.table) |table| {
+                    try append(a_, &out, table.caption);
+                    for (table.rows, 0..) |row, ri| {
+                        if (ri != 0) try out.append(a_, '\n');
+                        std.debug.print("TABLE_OBSERVATION row={d} cells={d}\n", .{ ri, row.cells.len });
+                        for (row.cells, 0..) |cell, ci| {
+                            if (ci != 0) try out.appendSlice(a_, " · ");
+                            try append(a_, &out, cell.spans);
+                        }
+                    }
+                }
+            }
+            return out.toOwnedSlice(a_);
+        }
+        fn checkSpans(spans: []const Span, first: *usize, second: *usize) !void {
+            for (spans) |value| {
+                if (std.mem.eql(u8, value.text, "one")) {
+                    try std.testing.expect(value.flags.bold);
+                    first.* += 1;
+                }
+                if (std.mem.eql(u8, value.text, "two")) {
+                    try std.testing.expect(value.kind == .link and std.mem.eql(u8, value.target, "Target"));
+                    try std.testing.expect(value.flags.italic and std.mem.eql(u8, value.language, "fr"));
+                    second.* += 1;
+                }
+            }
+        }
+    };
+    const table = "<table><tr><td><b>one</b></td><td><span lang='fr'><i>[[Target|two]]</i></span></td></tr></table>";
+    const sources = [_][]const u8{
+        "lead<ref>note</ref> " ++ table ++ " tail",
+        ":lead<ref>note</ref> " ++ table ++ " tail",
+        "::lead<ref>note</ref> " ++ table ++ " tail",
+        "# parent\n## lead<ref>note</ref> " ++ table ++ " tail\n## next",
+    };
+    const paths = [_][]const u8{ "", ":", "::", "##" };
+    var all_separated = true;
+    for (sources, 0..) |source, which| {
+        var r: Renderer = .{ .a = a, .context = .{ .title = "Entry" } };
+        const blocks = try r.renderBody(source);
+        std.debug.print("TABLE_OBSERVATION case={d} source={s}\n", .{ which, source });
+        const visible = try Observation.visible(a, blocks);
+        std.debug.print("TABLE_OBSERVATION case={d} visible={s} refs={d}\n", .{ which, visible, r.refs.items.len });
+        var first: usize = 0;
+        var second: usize = 0;
+        var numbered: usize = 0;
+        var following: usize = 0;
+        for (blocks) |b| {
+            try Observation.checkSpans(b.spans, &first, &second);
+            if (std.mem.eql(u8, b.number, "1.1")) numbered += 1;
+            if (std.mem.eql(u8, b.number, "1.2")) following += 1;
+            if (b.table) |grid| {
+                try std.testing.expectEqualStrings(paths[which], b.list_path);
+                try std.testing.expectEqual(@as(usize, 1), grid.rows.len);
+                try std.testing.expectEqual(@as(usize, 2), grid.rows[0].cells.len);
+                for (grid.rows[0].cells) |cell| try Observation.checkSpans(cell.spans, &first, &second);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), first);
+        try std.testing.expectEqual(@as(usize, 1), second);
+        try std.testing.expectEqual(@as(usize, 1), r.refs.items.len);
+        if (which == 3) {
+            try std.testing.expectEqual(@as(usize, 1), numbered);
+            try std.testing.expectEqual(@as(usize, 1), following);
+        }
+        try std.testing.expect(std.mem.indexOf(u8, visible, "lead") != null and std.mem.indexOf(u8, visible, "tail") != null);
+        try std.testing.expect(std.mem.indexOf(u8, visible, "<tr") == null and std.mem.indexOf(u8, visible, "<td") == null);
+        // Either a real typed grid or a separated inline projection is lawful;
+        // two distinct source cells may not silently become the word "onetwo".
+        all_separated = all_separated and std.mem.indexOf(u8, visible, "onetwo") == null;
+    }
+    try std.testing.expect(all_separated);
+}
+
+test "inline HTML table observation captures exact ja audio media and file actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact retained AF namespace-6 names; reduced fixture has no inferred aliases.
+    var registry = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tafwiktionary\n# dump-date\t20261001\n# content-language\taf\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "6\tLêer\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tBeeld\tImage\n" ++
+        "10\tSjabloon\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer registry.deinit();
+    // Source-instantiated woordklank26621/r234719 + oudio25014/r145936.
+    // Empty IPA produces the initial empty colon domain. No native expansion.
+    const source = "::\n\n:&nbsp;&nbsp;[[Lêer:Nuvola_apps_amarok.png|25x25px]]&nbsp;" ++
+        "<table class=\"audiotable\" style=\"vertical-align: top; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;\">" ++
+        "<tr><td class=\"audiofile\">[[Image:LL-Q14196 (afr)-Oesjaar-ja.wav|noicon|175px]]</td>" ++
+        "<td class=\"audiometa\" style=\"font-size: 80%;\">([[:Image:LL-Q14196 (afr)-Oesjaar-ja.wav|lêer]])</td></tr></table>";
+    var r: Renderer = .{ .a = a, .context = .{ .title = "ja", .namespace_catalog = &registry } };
+    const blocks = try r.renderBody(source);
+    var actions: usize = 0;
+    var visible: std.ArrayList(u8) = .empty;
+    for (blocks, 0..) |b, bi| {
+        std.debug.print("JA_AUDIO_OBSERVATION block={d} kind={s} path={s} depth={d} number={s}\n", .{ bi, @tagName(b.kind), b.list_path, b.depth, b.number });
+        var domains: std.ArrayList([]const Span) = .empty;
+        try domains.append(a, b.spans);
+        if (b.table) |grid| {
+            std.debug.print("JA_AUDIO_OBSERVATION typed_table rows={d}\n", .{grid.rows.len});
+            for (grid.rows, 0..) |row, ri| {
+                std.debug.print("JA_AUDIO_OBSERVATION row={d} cells={d}\n", .{ ri, row.cells.len });
+                for (row.cells) |cell| try domains.append(a, cell.spans);
+            }
+        }
+        for (domains.items) |spans| for (spans) |value| {
+            try visible.appendSlice(a, value.text);
+            std.debug.print("JA_AUDIO_OBSERVATION span kind={s} text={s} target={s} classes={s} language={s} bold={any} small={any}\n", .{ @tagName(value.kind), value.text, value.target, value.classes, value.language, value.flags.bold, value.flags.small });
+            if (std.mem.eql(u8, value.text, "lêer")) {
+                try std.testing.expect(value.kind == .link);
+                try std.testing.expectEqualStrings("Image:LL-Q14196 (afr)-Oesjaar-ja.wav", value.target);
+                actions += 1;
+            }
+        };
+    }
+    std.debug.print("JA_AUDIO_OBSERVATION visible={s} media={d}\n", .{ visible.items, r.media.items.len });
+    for (r.media.items) |item| std.debug.print("JA_AUDIO_OBSERVATION media file={s} kind={s} caption={s}\n", .{ item.file, @tagName(item.kind), item.caption });
+    try std.testing.expectEqual(@as(usize, 2), r.media.items.len);
+    try std.testing.expectEqualStrings("Nuvola apps amarok.png", r.media.items[0].file);
+    try std.testing.expectEqual(media_types.Kind.image, r.media.items[0].kind);
+    try std.testing.expectEqualStrings("LL-Q14196 (afr)-Oesjaar-ja.wav", r.media.items[1].file);
+    try std.testing.expectEqual(media_types.Kind.audio, r.media.items[1].kind);
+    try std.testing.expectEqualStrings("LL-Q14196 (afr)-Oesjaar-ja.wav", r.media.items[1].caption);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "<tr") == null and std.mem.indexOf(u8, visible.items, "<td") == null);
+}
+
+test "inline HTML table boundaries retain rows captions empty cells and nested scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("before <table style='display:inline-block'><caption>cap</caption><tr><td>A <table style='display:inline-block'><tr><td>x</td><td>y</td></tr></table> B</td><td></td><th>C</th></tr><tr><td>D</td><td>E</td></tr></table> after", .{});
+    try std.testing.expectEqualStrings("before cap\nA x · y B ·  · C\nD · E after", try flattened(a, spans));
+    var breaks: usize = 0;
+    for (spans) |span| if (span.kind == .line_break) {
+        breaks += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), breaks);
+    try std.testing.expect(r.inline_table_boundaries == null);
+    // A caption after a row starts a fresh cell run, including implied rows.
+    // Empty authored rows remain explicit breaks rather than joining words.
+    var transitions: Renderer = .{ .a = a, .context = .{} };
+    const transition_spans = try transitions.parseSpans("<table style='display:inline-block'><tr><td>A</td></tr><caption>cap</caption><td>B</td><td>C</td><tr></tr><tr><td>D</td></tr></table>", .{});
+    try std.testing.expectEqualStrings("A\ncap\nB · C\n\nD", try flattened(a, transition_spans));
+}
+
+test "inline HTML table boundaries preserve inherited styles independent actions and protected text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{ .title = "Page" } };
+    const spans = try r.parseSpans("<b><span class='outer' lang='fr'><table><tr><td><i>[[Other|one]]</i></td><td>[[Page|self]]</td><td><nowiki><td>literal</td></nowiki><code>code</code></td></tr></table></span></b>", .{});
+    var one: usize = 0;
+    var own: usize = 0;
+    var code: usize = 0;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "one")) {
+            one += 1;
+            try std.testing.expect(span.kind == .link and span.flags.bold and span.flags.italic);
+            try std.testing.expectEqualStrings("Other", span.target);
+            try std.testing.expectEqualStrings("fr", span.language);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "outer") != null);
+        }
+        if (std.mem.eql(u8, span.text, "self")) {
+            own += 1;
+            try std.testing.expect(span.kind == .text and span.target.len == 0 and span.self_link);
+            try std.testing.expect(span.flags.bold);
+        }
+        if (std.mem.eql(u8, span.text, "code")) {
+            code += 1;
+            try std.testing.expect(span.flags.code and span.flags.bold);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), one);
+    try std.testing.expectEqual(@as(usize, 1), own);
+    try std.testing.expectEqual(@as(usize, 1), code);
+    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, spans), "<td>literal</td>") != null);
+    var orphan: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("ab", try flattened(a, try orphan.parseSpans("<td>a</td><td>b</td>", .{})));
+}
+
+test "default inline HTML table edges separate words and preserve inline display overrides" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, text: []const u8 }{
+        .{ .source = "lead<table><tr><td>one</td></tr></table>tail", .text = "lead\none\ntail" },
+        .{ .source = "L<table><tr><td>A<table><tr><td>x</td></tr></table>B</td></tr></table>R", .text = "L\nA\nx\nB\nR" },
+        .{ .source = "lead<table style='display:inline-block'><tr><td>one</td></tr></table>tail", .text = "leadonetail" },
+        .{ .source = "lead<TABLE STYLE='DISPLAY: INLINE-TABLE'><TR><TD>one</TD></TR></TABLE>tail", .text = "leadonetail" },
+        .{ .source = "lead<table style='display:inline-block;display:table'><tr><td>one</td></tr></table>tail", .text = "lead\none\ntail" },
+        .{ .source = "lead<table style='display:table;display:inline-block'><tr><td>one</td></tr></table>tail", .text = "leadonetail" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectEqualStrings(case.text, try flattened(a, try renderer.parseSpans(case.source, .{})));
+    }
+    var unsupported: Renderer = .{ .a = a, .context = .{} };
+    const complex = syntax.tagAt("<table style='display:var(--mode)'>", 0).?;
+    try std.testing.expect((try unsupported.htmlTableInlineDisplay(complex)) == null);
+}
+
+test "default inline HTML table edges keep nested list counters styles actions and effects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("# parent\n## lead<ref>note</ref><table><tr><td><b><span lang='fr'>[[Target|one]]</span></b></td></tr></table>tail\n## next");
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    try std.testing.expectEqualStrings("1", blocks[0].number);
+    try std.testing.expectEqualStrings("1.1", blocks[1].number);
+    try std.testing.expectEqualStrings("1.2", blocks[2].number);
+    try std.testing.expectEqualStrings("##", blocks[1].list_path);
+    try std.testing.expectEqualStrings("lead[1]\none\ntail", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqual(@as(usize, 1), r.refs.items.len);
+    var found: usize = 0;
+    for (blocks[1].spans) |span| if (std.mem.eql(u8, span.text, "one")) {
+        found += 1;
+        try std.testing.expect(span.kind == .link and span.flags.bold);
+        try std.testing.expectEqualStrings("Target", span.target);
+        try std.testing.expectEqualStrings("fr", span.language);
+    };
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "inline table header emphasis respects explicit weights and scoped inherited formatting" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("<span class='outer' lang='fr'><i><table style='display:inline-block'><caption style='font-weight:bold'>Cap</caption><tr style='font-weight:bold'><th>Head</th><th style='font-weight:normal'>Normal [[Other|link]] <b>forced</b></th><td style='font-weight:normal'>plain</td><td style='font-weight:bold'>strong<nowiki><th>literal</th></nowiki></td></tr><tr><th>Default</th><td>reset</td><td><table style='display:inline-block'><tr><th style='font-weight:normal'>nested</th></tr></table></td></tr></table>after</i></span>", .{});
+    const expected = [_]struct { text: []const u8, bold: bool }{
+        .{ .text = "Cap", .bold = true },      .{ .text = "Head", .bold = true },
+        .{ .text = "Normal ", .bold = false }, .{ .text = "link", .bold = false },
+        .{ .text = "forced", .bold = true },   .{ .text = "plain", .bold = false },
+        .{ .text = "strong", .bold = true },   .{ .text = "Default", .bold = true },
+        .{ .text = "reset", .bold = false },   .{ .text = "nested", .bold = false },
+        .{ .text = "after", .bold = false },
+    };
+    for (expected) |wanted| {
+        var count: usize = 0;
+        for (spans) |span| if (std.mem.eql(u8, span.text, wanted.text)) {
+            count += 1;
+            try std.testing.expectEqual(wanted.bold, span.flags.bold);
+            try std.testing.expect(span.flags.italic);
+            try std.testing.expectEqualStrings("outer", span.classes);
+            try std.testing.expectEqualStrings("fr", span.language);
+            if (std.mem.eql(u8, wanted.text, "link")) {
+                try std.testing.expect(span.kind == .link);
+                try std.testing.expectEqualStrings("Other", span.target);
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), count);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, spans), "<th>literal</th>") != null);
+    try std.testing.expect(r.inline_table_boundaries == null and !r.block_formatting.bold);
+    var outer: Renderer = .{ .a = a, .context = .{} };
+    const overrides = try outer.parseSpans("<span style='font-weight:bold'><table style='display:inline-block'><tr><th style='font-weight:normal'>normal</th><td style='font-weight:normal'>plain</td><td>inherited</td></tr></table>outside</span>", .{});
+    for ([_][]const u8{ "normal", "plain", "inherited", "outside" }, 0..) |text, index| {
+        var count: usize = 0;
+        for (overrides) |span| if (std.mem.eql(u8, span.text, text)) {
+            count += 1;
+            try std.testing.expectEqual(index >= 2, span.flags.bold);
+        };
+        try std.testing.expectEqual(@as(usize, 1), count);
+    }
+    var orphan: Renderer = .{ .a = a, .context = .{} };
+    const unchanged = try orphan.parseSpans("<th style='font-weight:bold'>orphan</th>", .{});
+    try std.testing.expectEqual(@as(usize, 1), unchanged.len);
+    try std.testing.expect(!unchanged[0].flags.bold);
 }
