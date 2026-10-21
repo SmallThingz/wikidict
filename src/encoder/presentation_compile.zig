@@ -1279,6 +1279,13 @@ pub fn unresolvedActionTarget(target: []const u8) bool {
     return std.mem.indexOf(u8, target, "{{") != null or std.mem.indexOf(u8, target, "}}") != null;
 }
 
+// Closing braces alone are literal URL characters in MediaWiki. Opening
+// template markers remain forbidden, and non-URL action targets stay strict.
+pub fn unresolvedExternalActionTarget(target: []const u8) bool {
+    return std.mem.indexOf(u8, target, "{{") != null or
+        (std.mem.indexOf(u8, target, "}}") != null and !safeUrl(target));
+}
+
 pub fn safeUrl(url: []const u8) bool {
     if (!ir.validExternalUrl(url)) return false;
     for (url) |ch| if (ch <= 32 or ch == 127) return false;
@@ -1836,7 +1843,7 @@ const PageExternalNumbering = struct {
                 if (target_at == 0 or target_at > input.len or input[target_at - 1] != '[' or it.cursor == 0 or input[it.cursor - 1] != ']') continue;
                 const target = try self.renderer.externalUrlTarget(token.target);
                 // Never manufacture a clean label for an uncompiled destination.
-                if (unresolvedActionTarget(target)) return error.UncompiledTemplate;
+                if (unresolvedExternalActionTarget(target)) return error.UncompiledTemplate;
                 if (!safeUrl(target)) continue;
                 const closing = self.address(input, it.cursor - 1);
                 var prepared_here = false;
@@ -2372,7 +2379,7 @@ pub const Renderer = struct {
             }
             const result = try url.toOwnedSlice(self.a);
             // Reuse the existing external-action admissibility contract.
-            if (!safeUrl(result) or unresolvedActionTarget(result)) {
+            if (!safeUrl(result) or unresolvedExternalActionTarget(result)) {
                 self.fallbacks.rejected_external_target = true;
                 return .{ .target = "" };
             }
@@ -3316,10 +3323,25 @@ pub const Renderer = struct {
         try out.appendSlice(self.a, value[start..]);
         return out.toOwnedSlice(self.a);
     }
+    fn externalUrlLabel(self: *Renderer, value: []const u8, style: Style) Error!void {
+        // Only the proven closing-brace runs are literal. Keep all surrounding
+        // visible text parsed, with the same validated action and style.
+        var start: usize = 0;
+        while (std.mem.indexOfPos(u8, value, start, "}}")) |at| {
+            try self.text(value[start..at], style);
+            var end = at + 2;
+            while (end < value.len and value[end] == '}') : (end += 1) {}
+            var literal_style = style;
+            literal_style.provenance = .protected_literal;
+            try self.text(value[at..end], literal_style);
+            start = end;
+        }
+        try self.text(value[start..], style);
+    }
     pub fn link(self: *Renderer, label: []const u8, target: []const u8, style: Style, depth: usize, external: bool) Error!void {
         var s = style;
         const resolved_target = if (external) try self.externalUrlTarget(target) else target;
-        if (external and unresolvedActionTarget(resolved_target)) {
+        if (external and unresolvedExternalActionTarget(resolved_target)) {
             self.fallbacks.rejected_external_target = true;
             // Retain an authored label and all its formatting, but never inherit
             // an outer action or fabricate a replacement destination.
@@ -3360,7 +3382,12 @@ pub const Renderer = struct {
             // destination spelling, never raw navigation control characters.
             const escaped_label = std.mem.indexOfAny(u8, decoded_label, " \t\n\r\"") != null or
                 std.mem.indexOf(u8, decoded_label, "\xc2\xa0") != null;
-            try self.text(if (escaped_label) resolved_target else decoded_label, s);
+            const visible = if (escaped_label) resolved_target else decoded_label;
+            if (s.kind == .external_link and safeUrl(resolved_target) and
+                !unresolvedExternalActionTarget(resolved_target))
+                try self.externalUrlLabel(visible, s)
+            else
+                try self.text(visible, s);
             return;
         }
         try self.inlineText(label, s, depth + 1);
@@ -4391,7 +4418,7 @@ pub const Renderer = struct {
             // Plain authored URLs retain the established escaping path. Parsed
             // display text is already entity-decoded: never decode it again.
             if (!formatted) target = try self.externalUrlTarget(value);
-            if (safeUrl(target) and !unresolvedActionTarget(target)) {
+            if (safeUrl(target) and !unresolvedExternalActionTarget(target)) {
                 style.kind = .external_link;
                 style.target = target;
             }
@@ -4658,6 +4685,114 @@ pub const Renderer = struct {
             pos = row_tag.end;
         }
         return self.swatchFeature(table, background, try self.swatchCssHex(cell.tag, "color"));
+    }
+
+    const ChemicalStackCss = enum { outer, upper, lower };
+
+    // Exact captured Su layout only. This is not a general CSS layout engine:
+    // every declaration, its order, and the absence of other attributes matter.
+    fn chemicalStackCss(self: *Renderer, tag: syntax.Tag, kind: ChemicalStackCss) Error!bool {
+        if (!tag.is("span") or tag.closing or tag.self_closing) return false;
+        const attrs = trim(tag.attrs);
+        const eq = std.mem.indexOfScalar(u8, attrs, '=') orelse return false;
+        if (!std.ascii.eqlIgnoreCase(trim(attrs[0..eq]), "style")) return false;
+        const quoted = trim(attrs[eq + 1 ..]);
+        if (quoted.len < 2 or (quoted[0] != '"' and quoted[0] != '\'') or quoted[quoted.len - 1] != quoted[0]) return false;
+        if (std.mem.indexOfScalar(u8, quoted[1 .. quoted.len - 1], quoted[0]) != null) return false;
+        const css = (try self.semanticAttribute(tag, "style")) orelse return false;
+        const expected: []const []const u8 = switch (kind) {
+            .outer => &.{ "font-size:80%", "display:-moz-inline-box", "-moz-box-orient:vertical", "display:inline-block", "vertical-align:bottom", "margin-bottom:-0.4em", "min-height:1em", "line-height:1em" },
+            .upper => &.{ "display:block", "min-height:1em", "margin-top:-1.4em" },
+            .lower => &.{ "display:block", "min-height:1em" },
+        };
+        var index: usize = 0;
+        var alignment = false;
+        var declarations = std.mem.splitScalar(u8, css, ';');
+        while (declarations.next()) |raw| {
+            var declaration = trim(raw);
+            while (starts(declaration, "/*")) {
+                const close = std.mem.indexOf(u8, declaration[2..], "*/") orelse return false;
+                declaration = trim(declaration[close + 4 ..]);
+            }
+            if (declaration.len == 0) continue;
+            const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse return false;
+            const name = trim(declaration[0..colon]);
+            const value = trim(declaration[colon + 1 ..]);
+            if (index == expected.len) {
+                if (kind != .outer or alignment or !std.ascii.eqlIgnoreCase(name, "text-align") or
+                    (!std.ascii.eqlIgnoreCase(value, "right") and !std.ascii.eqlIgnoreCase(value, "center"))) return false;
+                alignment = true;
+                continue;
+            }
+            const wanted = expected[index];
+            const separator = std.mem.indexOfScalar(u8, wanted, ':').?;
+            if (!std.ascii.eqlIgnoreCase(name, wanted[0..separator]) or !std.ascii.eqlIgnoreCase(value, wanted[separator + 1 ..])) return false;
+            index += 1;
+        }
+        return index == expected.len;
+    }
+
+    fn chemicalScriptDigits(value: []const u8) bool {
+        if (value.len == 0 or value.len > 64) return false;
+        for (value) |ch| if (!std.ascii.isDigit(ch)) return false;
+        return true;
+    }
+
+    fn chemicalScriptCharge(value: []const u8) bool {
+        const sign_len: usize = if (std.mem.endsWith(u8, value, "−")) "−".len else if (std.mem.endsWith(u8, value, "+") or std.mem.endsWith(u8, value, "-")) 1 else return false;
+        const magnitude = value[0 .. value.len - sign_len];
+        return magnitude.len == 0 or chemicalScriptDigits(magnitude);
+    }
+
+    // Captured Module:chemical formula/styles.css defines this exact paired
+    // class as a two-line inline stack. Do not interpret arbitrary CSS classes.
+    fn chemicalStackClass(self: *Renderer, tag: syntax.Tag) Error!bool {
+        if (!tag.is("span") or tag.closing or tag.self_closing) return false;
+        const attrs = trim(tag.attrs);
+        const eq = std.mem.indexOfScalar(u8, attrs, '=') orelse return false;
+        if (!std.ascii.eqlIgnoreCase(trim(attrs[0..eq]), "class")) return false;
+        const quoted = trim(attrs[eq + 1 ..]);
+        if (quoted.len < 2 or (quoted[0] != '"' and quoted[0] != '\'') or quoted[quoted.len - 1] != quoted[0]) return false;
+        if (std.mem.indexOfScalar(u8, quoted[1 .. quoted.len - 1], quoted[0]) != null) return false;
+        return std.mem.eql(u8, (try self.semanticAttribute(tag, "class")) orelse return false, "template-chem2-su");
+    }
+
+    fn chemicalScriptStack(self: *Renderer, content: []const u8, tag: syntax.Tag, style: Style) Error!bool {
+        // The chemical wrapper establishes the count/charge interpretation.
+        // Do not reorder actions, arbitrary stacks, or already-scripted scopes.
+        if (style.kind != .text or style.target.len != 0 or style.superscript or style.subscript or
+            self.block_formatting.superscript or self.block_formatting.subscript) return false;
+        var chemical = false;
+        var classes = std.mem.tokenizeAny(u8, style.classes, " \t\r\n");
+        while (classes.next()) |class| chemical = chemical or std.mem.eql(u8, class, "chemf");
+        if (!chemical) return false;
+        const class_stack = try self.chemicalStackClass(tag);
+        if (!class_stack and !try self.chemicalStackCss(tag, .outer)) return false;
+        const children = trim(content);
+        const upper = try self.semanticTagAt(children, 0) orelse return false;
+        if (class_stack) {
+            if (!upper.is("span") or upper.closing or upper.self_closing or trim(upper.attrs).len != 0) return false;
+        } else if (!try self.chemicalStackCss(upper, .upper)) return false;
+        const upper_pair = syntax.matchingTag(children, upper) orelse return false;
+        const rest = trim(children[upper_pair.end..]);
+        const lower = try self.semanticTagAt(rest, 0) orelse return false;
+        if (class_stack) {
+            if (!lower.is("span") or lower.closing or lower.self_closing or trim(lower.attrs).len != 0) return false;
+        } else if (!try self.chemicalStackCss(lower, .lower)) return false;
+        const lower_pair = syntax.matchingTag(rest, lower) orelse return false;
+        if (trim(rest[lower_pair.end..]).len != 0) return false;
+        const charge = try self.entityText(children[upper.end..upper_pair.inner_end]);
+        const count = try self.entityText(rest[lower.end..lower_pair.inner_end]);
+        if (!chemicalScriptCharge(charge) or !chemicalScriptDigits(count)) return false;
+        // Conventional chemical linear order is count below, charge above.
+        // Existing readers expose these roles; no same-x pixel stack is claimed.
+        var count_style = style;
+        count_style.subscript = true;
+        var charge_style = style;
+        charge_style.superscript = true;
+        try self.text(count, count_style);
+        try self.text(charge, charge_style);
+        return true;
     }
 
     fn htmlInlineStyle(self: *Renderer, tag: syntax.Tag, style: Style) Error!Style {
@@ -5259,6 +5394,7 @@ pub const Renderer = struct {
         }
         defer self.block_formatting = inherited_formatting;
         const content = input[tag.end..pair.inner_end];
+        if (matched != null and try self.chemicalScriptStack(content, tag, s)) return pair.end;
         var table_boundaries: InlineTableBoundaries = .{};
         const parent_table = self.inline_table_boundaries;
         if (tag.is("table")) self.inline_table_boundaries = &table_boundaries;
@@ -24141,4 +24277,316 @@ test "wiki row font scope preserves nested overrides and excludes fostered capti
     try std.testing.expect(fostered and caption and after);
     for (seen) |found| try std.testing.expect(found);
     try std.testing.expect(!r.block_formatting.bold and !r.block_formatting.italic);
+}
+
+const ChemicalScriptStackTest = struct {
+    const outer = "font-size:80%; display:-moz-inline-box; -moz-box-orient:vertical; display:inline-block; vertical-align: bottom; /*Horizontal positioning, affects IE&FF*/margin-bottom:-0.4em; min-height:1em; line-height:1em; ";
+    const upper = "display:block; min-height:1em; /*Horizontal positioning, affects IE only*/margin-top:-1.4em;";
+    const lower = "display:block; min-height:1em;";
+
+    fn source(a: A, charge: []const u8, count: []const u8) ![]const u8 {
+        return std.fmt.allocPrint(a, "<SPAN style=\"{s}\"><SPAN style=\"{s}\">{s}</SPAN><SPAN style=\"{s}\">{s}</SPAN></SPAN>", .{ outer, upper, charge, lower, count });
+    }
+
+    fn scripts(spans: anytype, count: []const u8, charge: []const u8, inherited: Style) !void {
+        var counts: usize = 0;
+        var charges: usize = 0;
+        for (spans) |item| {
+            const sub = if (@hasField(@TypeOf(item), "flags")) item.flags.subscript else item.subscript;
+            const super = if (@hasField(@TypeOf(item), "flags")) item.flags.superscript else item.superscript;
+            if (!sub and !super) continue;
+            try std.testing.expect(sub != super);
+            if (sub) {
+                try std.testing.expectEqual(@as(usize, 0), charges);
+                try std.testing.expectEqualStrings(count, item.text);
+                counts += 1;
+            } else {
+                try std.testing.expectEqual(@as(usize, 1), counts);
+                try std.testing.expectEqualStrings(charge, item.text);
+                charges += 1;
+            }
+            try std.testing.expectEqualStrings("text", @tagName(item.kind));
+            try std.testing.expectEqualStrings("", item.target);
+            try std.testing.expectEqualStrings(inherited.language, item.language);
+            try std.testing.expectEqualStrings(inherited.direction, item.direction);
+            try std.testing.expectEqualStrings(inherited.classes, item.classes);
+            try std.testing.expectEqualStrings(inherited.explanation, item.explanation);
+            try std.testing.expectEqualStrings(@tagName(inherited.role), @tagName(item.role));
+            try std.testing.expectEqual(inherited.bold, if (@hasField(@TypeOf(item), "flags")) item.flags.bold else item.bold);
+            try std.testing.expectEqual(inherited.italic, if (@hasField(@TypeOf(item), "flags")) item.flags.italic else item.italic);
+            try std.testing.expectEqual(inherited.small, if (@hasField(@TypeOf(item), "flags")) item.flags.small else item.small);
+            try std.testing.expectEqual(inherited.code, if (@hasField(@TypeOf(item), "flags")) item.flags.code else item.code);
+            try std.testing.expectEqual(inherited.underline, if (@hasField(@TypeOf(item), "flags")) item.flags.underline else item.underline);
+            try std.testing.expectEqual(inherited.strike, if (@hasField(@TypeOf(item), "flags")) item.flags.strike else item.strike);
+        }
+        try std.testing.expectEqual(@as(usize, 1), counts);
+        try std.testing.expectEqual(@as(usize, 1), charges);
+    }
+
+    fn unscripted(spans: anytype) !void {
+        for (spans) |item| {
+            try std.testing.expect(!(if (@hasField(@TypeOf(item), "flags")) item.flags.subscript else item.subscript));
+            try std.testing.expect(!(if (@hasField(@TypeOf(item), "flags")) item.flags.superscript else item.superscript));
+        }
+    }
+};
+
+test "captured chemical Su count and charge retain canonical scripts through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { count: []const u8, charge: []const u8 }{
+        .{ .count = "4", .charge = "4−" },
+        .{ .count = "12", .charge = "3+" },
+        .{ .count = "2", .charge = "−" },
+        .{ .count = "10", .charge = "2-" },
+    };
+    for (cases) |case| {
+        // Exact retained Su both-arguments branch: w=70% still emits 80%.
+        // Source top-before-bottom CSS geometry becomes conventional chemical
+        // count-below then charge-above linear order, not a pixel stack claim.
+        const stack = try ChemicalScriptStackTest.source(a, case.charge, case.count);
+        const source = try std.fmt.allocPrint(a, "<b><i><span class=\"chemf\" lang=\"af\">SiO{s}</span></i></b> tail [[Target|next]]", .{stack});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        const visible = try std.fmt.allocPrint(a, "SiO{s}{s} tail next", .{ case.count, case.charge });
+        try FormattingScopeTest.shapes(a, blocks, &.{"paragraph"}, &.{visible});
+        const inherited: Style = .{ .bold = true, .italic = true, .classes = "chemf", .language = "af" };
+        try ChemicalScriptStackTest.scripts(blocks[0].spans, case.count, case.charge, inherited);
+        try FormattingScopeTest.word(a, blocks, "SiO", inherited);
+        try FormattingScopeTest.word(a, blocks, "tail", .{});
+        try FormattingScopeTest.word(a, blocks, "next", .{ .kind = .link, .target = "Target" });
+        const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+        try FormattingScopeTest.shapes(a, stored.entry.sections[0].blocks, &.{"paragraph"}, &.{visible});
+        try ChemicalScriptStackTest.scripts(stored.entry.sections[0].blocks[0].spans, case.count, case.charge, inherited);
+        try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "tail", .{});
+        try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "next", .{ .kind = .link, .target = "Target" });
+        try std.testing.expect(!renderer.fallbacks.any());
+    }
+    // Exercise inherited direction/role/explanation and every non-script flag
+    // on the actual inline API, independently of explicit HTML bidi isolation.
+    const stack = try ChemicalScriptStackTest.source(a, "4−", "4");
+    const source = try std.fmt.allocPrint(a, "SiO{s}", .{stack});
+    const inherited: Style = .{ .bold = true, .italic = true, .small = true, .code = true, .underline = true, .strike = true, .classes = "chemf inherited", .language = "af", .direction = "rtl", .role = .label, .explanation = "chemical count and charge", .explanation_set = true };
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, inherited);
+    try std.testing.expectEqualStrings("SiO44−", try FormattingScopeTest.text(a, spans));
+    try ChemicalScriptStackTest.scripts(spans, "4", "4−", inherited);
+    const blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+    const stored = try FormattingScopeTest.encode(a, &renderer, &blocks);
+    try ChemicalScriptStackTest.scripts(stored.entry.sections[0].blocks[0].spans, "4", "4−", inherited);
+    const after = try renderer.parseSpans("outside", .{});
+    try ChemicalScriptStackTest.unscripted(after);
+    try std.testing.expectEqualStrings("", after[0].classes);
+    try std.testing.expectEqualStrings("", after[0].language);
+    try std.testing.expectEqualStrings("", after[0].direction);
+}
+
+test "chemical Su conversion refuses actions arbitrary layouts and nested script bodies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const exact = try ChemicalScriptStackTest.source(a, "4−", "4");
+    const altered_at = std.mem.indexOf(u8, exact, "margin-top:-1.4em").?;
+    const altered = try std.fmt.allocPrint(a, "{s}margin-top:-1.2em{s}", .{ exact[0..altered_at], exact[altered_at + "margin-top:-1.4em".len ..] });
+    const cases = [_]struct { stack: []const u8, chemical: bool = true, visible: []const u8 }{
+        .{ .stack = exact, .chemical = false, .visible = "SiO4−4" },
+        .{ .stack = altered, .visible = "SiO4−4" },
+        .{ .stack = try ChemicalScriptStackTest.source(a, "[[Charge|4−]]", "4"), .visible = "SiO4−4" },
+        .{ .stack = try ChemicalScriptStackTest.source(a, "<span>4−</span>", "4"), .visible = "SiO4−4" },
+        .{ .stack = try ChemicalScriptStackTest.source(a, "<nowiki>4−</nowiki>", "4"), .visible = "SiO4−4" },
+        .{ .stack = try ChemicalScriptStackTest.source(a, "4−", "four"), .visible = "SiO4−four" },
+        .{ .stack = try ChemicalScriptStackTest.source(a, "4", "4"), .visible = "SiO44" },
+        .{ .stack = try ChemicalScriptStackTest.source(a, "", "4"), .visible = "SiO4" },
+        .{ .stack = try ChemicalScriptStackTest.source(a, "4−", " 4"), .visible = "SiO4− 4" },
+    };
+    for (cases) |case| {
+        const source = if (case.chemical) try std.fmt.allocPrint(a, "<span class=\"chemf\">SiO{s}</span>", .{case.stack}) else try std.fmt.allocPrint(a, "SiO{s}", .{case.stack});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqualStrings(case.visible, try FormattingScopeTest.text(a, spans));
+        try ChemicalScriptStackTest.unscripted(spans);
+    }
+    // The action is not flattened, moved to a different target, or discarded.
+    const linked = try ChemicalScriptStackTest.source(a, "[[Charge|4−]]", "4");
+    var actions: Renderer = .{ .a = a, .context = .{} };
+    const action_spans = try actions.parseSpans(try std.fmt.allocPrint(a, "<span class=\"chemf\">SiO{s}</span>", .{linked}), .{});
+    var action_seen = false;
+    for (action_spans) |item| if (item.kind == .link) {
+        try std.testing.expectEqualStrings("Charge", item.target);
+        try std.testing.expectEqualStrings("4−", item.text);
+        action_seen = true;
+    };
+    try std.testing.expect(action_seen);
+    const media = try ChemicalScriptStackTest.source(a, "[[File:Charge.png|4−]]", "4");
+    var images: Renderer = .{ .a = a, .context = .{} };
+    const image_spans = try images.parseSpans(try std.fmt.allocPrint(a, "<span class=\"chemf\">SiO{s}</span>", .{media}), .{});
+    try ChemicalScriptStackTest.unscripted(image_spans);
+    try std.testing.expectEqual(@as(usize, 1), images.media.items.len);
+    try std.testing.expectEqualStrings("Charge.png", images.media.items[0].file);
+    // Existing action/script scopes decline rather than changing their meaning.
+    for ([_]Style{
+        .{ .classes = "chemf", .kind = .link, .target = "Holder" },
+        .{ .classes = "chemf", .superscript = true },
+        .{ .classes = "chemf", .subscript = true },
+    }) |inherited| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(try std.fmt.allocPrint(a, "SiO{s}", .{exact}), inherited);
+        try std.testing.expectEqualStrings("SiO4−4", try FormattingScopeTest.text(a, spans));
+        for (spans) |item| {
+            try std.testing.expectEqual(inherited.kind, item.kind);
+            try std.testing.expectEqualStrings(inherited.target, item.target);
+            try std.testing.expectEqual(inherited.superscript, item.flags.superscript);
+            try std.testing.expectEqual(inherited.subscript, item.flags.subscript);
+        }
+    }
+    var unclosed: Renderer = .{ .a = a, .context = .{} };
+    const open_source = try std.fmt.allocPrint(a, "SiO{s}", .{exact[0 .. exact.len - "</SPAN>".len]});
+    const open_spans = try unclosed.parseSpans(open_source, .{ .classes = "chemf" });
+    try std.testing.expectEqualStrings("SiO4−4", try FormattingScopeTest.text(a, open_spans));
+    try ChemicalScriptStackTest.unscripted(open_spans);
+    try std.testing.expect(unclosed.fallbacks.unclosed_formatting);
+}
+
+test "captured chem2 paired class preserves canonical count charge and scope through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { charge: []const u8, count: []const u8, decoded_charge: []const u8 }{
+        .{ .charge = "−", .count = "2", .decoded_charge = "−" },
+        .{ .charge = "3+", .count = "12", .decoded_charge = "3+" },
+        .{ .charge = "4&#8722;", .count = "4", .decoded_charge = "4−" },
+    };
+    for (cases) |case| {
+        // Exact paired emitter: upper charge first, lower count second.
+        const source = try std.fmt.allocPrint(a, "<span class=\"template-chem2-su\"><span>{s}</span><span>{s}</span></span>", .{ case.charge, case.count });
+        const inherited: Style = .{ .bold = true, .italic = true, .small = true, .code = true, .underline = true, .strike = true, .classes = "chemf nowrap", .language = "en", .direction = "rtl", .role = .label, .explanation = "chemical count and charge", .explanation_set = true };
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, inherited);
+        var expected = inherited;
+        expected.classes = "chemf nowrap template-chem2-su";
+        try ChemicalScriptStackTest.scripts(spans, case.count, case.decoded_charge, expected);
+        const visible = try std.fmt.allocPrint(a, "{s}{s}", .{ case.count, case.decoded_charge });
+        try std.testing.expectEqualStrings(visible, try FormattingScopeTest.text(a, spans));
+        const blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+        const stored = try FormattingScopeTest.encode(a, &renderer, &blocks);
+        try ChemicalScriptStackTest.scripts(stored.entry.sections[0].blocks[0].spans, case.count, case.decoded_charge, expected);
+        const after = try renderer.parseSpans("outside [[Target|next]]", .{});
+        try ChemicalScriptStackTest.unscripted(after);
+        var action = false;
+        for (after) |span| if (span.kind == .link) {
+            try std.testing.expectEqualStrings("Target", span.target);
+            try std.testing.expectEqualStrings("next", span.text);
+            try std.testing.expectEqualStrings("", span.classes);
+            action = true;
+        };
+        try std.testing.expect(action);
+        try std.testing.expect(!renderer.fallbacks.any());
+    }
+    const exact = "<span class=\"template-chem2-su\"><span>−</span><span>2</span></span>";
+    const declined = [_][]const u8{
+        "<span class=\"template-chem2-su extra\"><span>−</span><span>2</span></span>",
+        "<span class=\"template-chem2-su\" style=\"color:red\"><span>−</span><span>2</span></span>",
+        "<span class=\"template-chem2-su\"><span title=\"charge\">−</span><span>2</span></span>",
+        "<span class=\"template-chem2-su\"><span><span>−</span></span><span>2</span></span>",
+        "<span class=\"template-chem2-su\"><span>−</span><span>2</span><span>x</span></span>",
+        "<span class=\"template-chem2-su\"><span>4</span><span>2</span></span>",
+        "<span class=\"template-chem2-su\"><span>−</span><span>two</span></span>",
+    };
+    for (declined) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try ChemicalScriptStackTest.unscripted(try renderer.parseSpans(source, .{ .classes = "chemf" }));
+    }
+    var plain: Renderer = .{ .a = a, .context = .{} };
+    const plain_spans = try plain.parseSpans(exact, .{});
+    try std.testing.expectEqualStrings("−2", try FormattingScopeTest.text(a, plain_spans));
+    try ChemicalScriptStackTest.unscripted(plain_spans);
+    for ([_]Style{
+        .{ .classes = "chemf", .kind = .link, .target = "Holder" },
+        .{ .classes = "chemf", .superscript = true },
+        .{ .classes = "chemf", .subscript = true },
+    }) |inherited| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(exact, inherited);
+        try std.testing.expectEqualStrings("−2", try FormattingScopeTest.text(a, spans));
+        for (spans) |span| {
+            try std.testing.expectEqual(inherited.kind, span.kind);
+            try std.testing.expectEqualStrings(inherited.target, span.target);
+            try std.testing.expectEqual(inherited.superscript, span.flags.superscript);
+            try std.testing.expectEqual(inherited.subscript, span.flags.subscript);
+        }
+    }
+    var actions: Renderer = .{ .a = a, .context = .{} };
+    const linked = try actions.parseSpans("<span class=\"template-chem2-su\"><span>[[Charge|−]]</span><span>2</span></span>", .{ .classes = "chemf" });
+    try ChemicalScriptStackTest.unscripted(linked);
+    var seen = false;
+    for (linked) |span| if (span.kind == .link) {
+        try std.testing.expectEqualStrings("Charge", span.target);
+        try std.testing.expectEqualStrings("−", span.text);
+        seen = true;
+    };
+    try std.testing.expect(seen);
+    var images: Renderer = .{ .a = a, .context = .{} };
+    const media = try images.parseSpans("<span class=\"template-chem2-su\"><span>[[File:Charge.png|−]]</span><span>2</span></span>", .{ .classes = "chemf" });
+    try ChemicalScriptStackTest.unscripted(media);
+    try std.testing.expectEqual(@as(usize, 1), images.media.items.len);
+    try std.testing.expectEqualStrings("Charge.png", images.media.items[0].file);
+    var unclosed: Renderer = .{ .a = a, .context = .{} };
+    const open = try unclosed.parseSpans(exact[0 .. exact.len - "</span>".len], .{ .classes = "chemf" });
+    try std.testing.expectEqualStrings("−2", try FormattingScopeTest.text(a, open));
+    try ChemicalScriptStackTest.unscripted(open);
+    try std.testing.expect(unclosed.fallbacks.unclosed_formatting);
+    // The existing one-sided HTML scripts retain their authored order and roles.
+    var single: Renderer = .{ .a = a, .context = .{} };
+    const one_sided = try single.renderBody("<span class=\"chemf\">H<sub class=\"template-chem2-sub\">2</sub><sup class=\"template-chem2-sup\">−</sup></span>");
+    try FormattingScopeTest.word(a, one_sided, "2", .{ .classes = "chemf template-chem2-sub", .subscript = true });
+    try FormattingScopeTest.word(a, one_sided, "−", .{ .classes = "chemf template-chem2-sup", .superscript = true });
+}
+
+test "closing-only external URL braces retain actions and isolate literal runs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { raw: []const u8, target: []const u8, visible: []const u8, literal: bool }{
+        .{ .raw = "https://example.test/a}}tail", .target = "https://example.test/a}}tail", .visible = "https://example.test/a}}tail", .literal = true },
+        .{ .raw = "https://example.test/a&#125;&#125;tail", .target = "https://example.test/a}}tail", .visible = "https://example.test/a}}tail", .literal = true },
+        .{ .raw = "https://example.test/a%7D%7Dtail", .target = "https://example.test/a%7D%7Dtail", .visible = "https://example.test/a%7D%7Dtail", .literal = false },
+    };
+    for (cases) |item| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        try r.link(item.raw, item.raw, .{ .bold = true, .italic = true, .language = "okm", .direction = "rtl", .classes = "source-url", .role = .example }, 0, true);
+        try std.testing.expectEqualStrings(item.visible, try plainText(a, r.spans.items));
+        var literal_count: usize = 0;
+        var parsed_count: usize = 0;
+        for (r.spans.items) |span| {
+            try std.testing.expect(span.kind == .external_link and span.flags.bold and span.flags.italic);
+            try std.testing.expectEqualStrings(item.target, span.target);
+            try std.testing.expectEqualStrings("okm", span.language);
+            try std.testing.expectEqualStrings("rtl", span.direction);
+            try std.testing.expectEqualStrings("source-url", span.classes);
+            try std.testing.expect(span.role == .example);
+            if (span.provenance == .protected_literal) {
+                literal_count += 1;
+                try std.testing.expectEqualStrings("}}", span.text);
+            } else {
+                parsed_count += 1;
+                try std.testing.expect(span.provenance == .parsed);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, if (item.literal) 1 else 0), literal_count);
+        try std.testing.expect(parsed_count != 0);
+        try std.testing.expect(!r.fallbacks.rejected_external_target);
+    }
+    var labeled: Renderer = .{ .a = a, .context = .{} };
+    try labeled.link("<b>clean</b> <i>label</i>", "https://example.test/a}}", .{}, 0, true);
+    for (labeled.spans.items) |span| {
+        try std.testing.expect(span.provenance == .parsed and span.kind == .external_link);
+        if (std.mem.eql(u8, span.text, "clean")) try std.testing.expect(span.flags.bold);
+        if (std.mem.eql(u8, span.text, "label")) try std.testing.expect(span.flags.italic);
+    }
+    try std.testing.expect(unresolvedActionTarget("https://example.test/a}}"));
+    try std.testing.expect(unresolvedExternalActionTarget("not-a-url}}"));
+    try std.testing.expect(unresolvedExternalActionTarget("https://example.test/{{missing}}"));
+    var refused: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledTemplate, refused.link("https://example.test/{{missing}}", "https://example.test/{{missing}}", .{}, 0, true));
 }

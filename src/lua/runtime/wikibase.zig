@@ -53,6 +53,15 @@ fn entityId(runtime: *rt.Context, args: []const Value) ![]const u8 {
     return (try canonicalEntityId(runtime, args[0].string)) orelse error.InvalidEntityId;
 }
 
+// EntityAccessor trims entity IDs before getEntity/getEntityStatements parsing.
+// Property IDs and other APIs retain their separate validation contracts.
+fn retrievalEntityId(runtime: *rt.Context, args: []const Value) ![]const u8 {
+    if (args.len == 0 or args[0] == .nil) return error.NotImplemented;
+    if (args[0] != .string) return error.StringExpected;
+    const raw = std.mem.trim(u8, args[0].string, " \t\n\r\x0b\x00");
+    return (try canonicalEntityId(runtime, raw)) orelse error.InvalidEntityId;
+}
+
 fn pageLinkFailure(runtime: *rt.Context, title: []const u8) !void {
     const prefix = "Wikibase page-link snapshot missing title=";
     const title_limit = 128 - 15 - prefix.len - 1 - 3;
@@ -554,16 +563,20 @@ pub fn getEntityCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) 
     const id = if (args.len == 0 or args[0] == .nil)
         (try currentEntityId(runtime)) orelse return one(.nil)
     else
-        try entityId(runtime, args);
+        try retrievalEntityId(runtime, args);
     const entity = (try readEntity(runtime, id)) orelse return one(.nil);
     const kind = (try stringField(entity, "type")) orelse return error.InvalidWikibaseEntitySnapshot;
     try overlayEntityTerms(runtime, id, entity, kind);
-    try installEntityMethods(runtime, entity, kind);
+    // Upstream fetch trims the ID, but getEntityModuleName parses the original
+    // string. Padding therefore selects generic entity methods, even for lexemes.
+    const padded = args.len != 0 and args[0] == .string and
+        std.mem.trim(u8, args[0].string, " \t\n\r\x0b\x00").len != args[0].string.len;
+    try installEntityMethods(runtime, entity, if (padded) "" else kind);
     return one(.{ .table = entity });
 }
 
 pub fn getAllStatementsCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
-    const id = try entityId(runtime, args);
+    const id = try retrievalEntityId(runtime, args);
     if (args.len < 2 or args[1] != .string) return error.StringExpected;
     const property = (try canonicalEntityId(runtime, args[1].string)) orelse return error.InvalidPropertyId;
     if (property[0] != 'P') return error.InvalidPropertyId;
@@ -1676,4 +1689,77 @@ test "Wikibase single string formatter refuses unproven ranks snaks lists and es
     host.wikibase_entity_terms = null;
     try std.testing.expectError(error.LuaRaised, formatPropertyValuesMethodCall(null, &runtime, &.{ object[0], .{ .string = "P373" } }));
     try std.testing.expectEqualStrings("Wikibase entity-term snapshot missing entity=P373", runtime.last_error.string);
+}
+
+test "Wikibase getEntity trims PHP boundary whitespace before captured entity retrieval" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    var host = host_api.Host{ .wikibase_entity = Probe.entity, .wikibase_entity_terms = Probe.terms };
+    host_api.set(&runtime, &host);
+    for ([_][]const u8{ "L1 ", " \t\n\r\x0b\x00L1\x00\x0b\r\n\t " }) |raw| {
+        const loaded = try getEntityCall(null, &runtime, &.{.{ .string = raw }});
+        defer rt.freeResults(loaded);
+        try std.testing.expectEqualStrings("L1", (try stringField(loaded[0].table, "id")).?);
+        // Fetch preserves lexeme fields; the original padded ID selects the
+        // upstream generic wrapper, which does not expose lexeme-only methods.
+        const lemmas = (try tableField(loaded[0].table, "lemmas")).?;
+        try std.testing.expectEqualStrings("كتب", (try stringField((try tableField(lemmas, "ar")).?, "value")).?);
+        const forms = (try tableField(loaded[0].table, "forms")).?;
+        try std.testing.expectEqualStrings("L1-F1", (try stringField(forms.rawGet(.{ .number = 1 }).?.table, "id")).?);
+        try std.testing.expect((try runtime.getIndex(loaded[0], .{ .string = "getLemmas" })) == .nil);
+        try std.testing.expect((try runtime.getIndex(loaded[0], .{ .string = "getForms" })) == .nil);
+        const id_method = try runtime.getIndex(loaded[0], .{ .string = "getId" });
+        const returned_id = try runtime.callValue(id_method, &.{loaded[0]});
+        defer rt.freeResults(returned_id);
+        try std.testing.expectEqualStrings("L1", returned_id[0].string);
+    }
+    const unpadded = try getEntityCall(null, &runtime, &.{.{ .string = "L1" }});
+    defer rt.freeResults(unpadded);
+    const lemmas_method = try runtime.getIndex(unpadded[0], .{ .string = "getLemmas" });
+    const unpadded_lemmas = try runtime.callValue(lemmas_method, &.{unpadded[0]});
+    defer rt.freeResults(unpadded_lemmas);
+    try std.testing.expectEqualStrings("كتب", unpadded_lemmas[0].table.rawGet(.{ .number = 1 }).?.table.rawGet(.{ .number = 1 }).?.string);
+    const all = try getAllStatementsCall(null, &runtime, &.{ .{ .string = " \tL1\r " }, .{ .string = "P1" } });
+    defer rt.freeResults(all);
+    try std.testing.expectEqual(@as(usize, 3), all[0].table.rawLen());
+    for ([_][]const u8{ "preferred", "normal", "deprecated" }, 1..) |rank, index| {
+        const statement = all[0].table.rawGet(.{ .number = @floatFromInt(index) }).?.table;
+        try std.testing.expectEqualStrings(rank, (try stringField(statement, "rank")).?);
+    }
+    const best = try getBestStatementsCall(null, &runtime, &.{ .{ .string = " L1 " }, .{ .string = "P1" } });
+    defer rt.freeResults(best);
+    try std.testing.expectEqual(@as(usize, 1), best[0].table.rawLen());
+    try std.testing.expectEqualStrings("preferred", (try stringField(best[0].table.rawGet(.{ .number = 1 }).?.table, "rank")).?);
+    const item = try getEntityCall(null, &runtime, &.{.{ .string = " q1\t" }});
+    defer rt.freeResults(item);
+    try std.testing.expectEqualStrings("Q1", (try stringField(item[0].table, "id")).?);
+    const absent = try getEntityCall(null, &runtime, &.{.{ .string = " Q9 " }});
+    defer rt.freeResults(absent);
+    try std.testing.expect(absent[0] == .nil);
+    try std.testing.expectError(error.AccessDenied, getEntityCall(null, &runtime, &.{.{ .string = " Q7 " }}));
+    try std.testing.expectError(error.InvalidWikibaseEntitySnapshot, getEntityCall(null, &runtime, &.{.{ .string = " Q8 " }}));
+    try std.testing.expectError(error.LuaRaised, getEntityCall(null, &runtime, &.{.{ .string = " Q10 " }}));
+    try std.testing.expectEqualStrings("Wikibase entity snapshot missing entity=Q10", runtime.last_error.string);
+}
+
+test "Wikibase getEntity trim preserves invalid IDs and other API validation boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    // Invalid IDs fail before any host lookup; PHP trim is not Unicode trim.
+    for ([_][]const u8{ "", " \t\n\r\x0b\x00", " Q0 ", " L1-S0 ", "L 1", "L1\x00x", "\x0cL1", "L1\x0c", "\xc2\xa0L1", "L1\xc2\xa0" }) |raw| {
+        try std.testing.expectError(error.InvalidEntityId, getEntityCall(null, &runtime, &.{.{ .string = raw }}));
+        try std.testing.expectError(error.InvalidEntityId, getAllStatementsCall(null, &runtime, &.{ .{ .string = raw }, .{ .string = "P1" } }));
+        try std.testing.expectError(error.InvalidEntityId, getBestStatementsCall(null, &runtime, &.{ .{ .string = raw }, .{ .string = "P1" } }));
+    }
+    try std.testing.expectError(error.StringExpected, getEntityCall(null, &runtime, &.{.{ .number = 1 }}));
+    try std.testing.expectError(error.MissingScribuntoHost, getEntityCall(null, &runtime, &.{}));
+    try std.testing.expectError(error.MissingScribuntoHost, getEntityCall(null, &runtime, &.{.nil}));
+    try std.testing.expectError(error.InvalidPropertyId, getAllStatementsCall(null, &runtime, &.{ .{ .string = " L1 " }, .{ .string = " P1 " } }));
+    try std.testing.expect((try canonicalEntityId(&runtime, " L1 ")) == null);
+    try std.testing.expectError(error.InvalidEntityId, getLabelCall(null, &runtime, &.{.{ .string = " Q1 " }}));
 }

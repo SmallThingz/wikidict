@@ -243,7 +243,9 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
     // Check after template presentation conversion as well as ordinary actions.
     // Action targets have no protected-literal exemption; code=true is not provenance.
     for (spans) |span| {
-        if ((span.kind == .external_link or span.kind == .link) and compiler.unresolvedActionTarget(span.target))
+        if (span.kind == .external_link and compiler.unresolvedExternalActionTarget(span.target))
+            return error.UncompiledTemplate;
+        if (span.kind == .link and compiler.unresolvedActionTarget(span.target))
             return error.UncompiledTemplate;
     }
     var parsed: std.ArrayList(u8) = .empty;
@@ -2152,4 +2154,47 @@ test "closing br preserves adjacent styles and actions through DPR2" {
     try std.testing.expectEqual(@as(usize, 1), breaks);
     try std.testing.expectEqual(@as(usize, 1), bold);
     try std.testing.expectEqual(@as(usize, 1), links);
+}
+
+test "literal closing URL braces compile strictly and preserve exact DPR2 targets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, target: []const u8, visible: []const u8, superscript: bool = false }{
+        // Source-derived URL shape from ko-attest/data; volume is illustrative,
+        // not an assertion about the unsaved failing page's runtime pairs order.
+        .{ .source = "<sup>[https://find.됬.xyz/source?name=석보상절03}}]</sup>", .target = "https://find.됬.xyz/source?name=석보상절03}}", .visible = "[1]", .superscript = true },
+        .{ .source = "https://example.test/a}}tail", .target = "https://example.test/a}}tail", .visible = "https://example.test/a}}tail" },
+        .{ .source = "[https://example.test/a}} <b>label</b>]", .target = "https://example.test/a}}", .visible = "label" },
+        .{ .source = "[https://example.test/a&#125;&#125;]", .target = "https://example.test/a}}", .visible = "[1]" },
+        .{ .source = "https://example.test/a&#125;&#125;tail", .target = "https://example.test/a}}tail", .visible = "https://example.test/a}}tail" },
+        .{ .source = "https://example.test/a%7D%7Dtail", .target = "https://example.test/a%7D%7Dtail", .visible = "https://example.test/a%7D%7Dtail" },
+    };
+    for (cases) |item| {
+        const encoded = try compileAlloc(a, "closing braces", .language, "Middle Korean", "okm", item.source, null);
+        const decoded = try codec.decodeAlloc(a, encoded, "closing braces", .language, .{ .code = "okm", .heading = "Middle Korean" });
+        var visible: std.ArrayList(u8) = .empty;
+        var actions: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            if (span.kind == .external_link) {
+                actions += 1;
+                try std.testing.expectEqualStrings(item.target, span.target);
+                try std.testing.expectEqual(item.superscript, span.superscript);
+            }
+        };
+        try std.testing.expect(actions != 0);
+        try std.testing.expectEqualStrings(item.visible, visible.items);
+    }
+    for ([_][]const u8{
+        "https://example.test/{{missing}}",
+        "[https://example.test/{{missing}}]",
+        "[https://example.test/&#123;&#123;missing&#125;&#125;]",
+    }) |source| try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "uncompiled", .language, "English", "en", source, null));
+    // A URL-shaped internal action still does not acquire the URL exception.
+    const internal = [_]compiler.Span{.{ .kind = .link, .text = "label", .target = "https://example.test/a}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &internal, null));
+    // Nor does the literal URL run exempt ordinary visible markup elsewhere.
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "uncompiled label", .language, "English", "en", "https://example.test/a}} {{missing}}", null));
 }
