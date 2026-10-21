@@ -199,7 +199,23 @@ const OrdinaryDisplayWhitespace = struct {
     }
 };
 
-fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace) !void {
+// Human text uses one marker per visible script run. Style/link segmentation
+// and a link trail do not start a new run; each physical line is independent.
+// Existing initial-piece marker eligibility is preserved on raw LF/trail pieces.
+// Reference superscripts already carry their own bracket label and stay exempt.
+const ScriptDisplayRuns = struct {
+    superscript: bool = false,
+    subscript: bool = false,
+    fn prefix(self: *ScriptDisplayRuns, w: *std.Io.Writer, span: model.Span, initial: bool) !void {
+        const superscript = span.superscript and span.role != .reference;
+        if (initial and superscript and !self.superscript) try w.writeByte('^');
+        if (initial and span.subscript and !self.subscript) try w.writeByte('_');
+        self.superscript = superscript;
+        self.subscript = span.subscript;
+    }
+};
+
+fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace, scripts: *ScriptDisplayRuns) !void {
     const span = piece.span;
     if (piece.bytes.len == 0) return;
     if (color and span.bold) try w.writeAll("\x1b[1m");
@@ -208,8 +224,7 @@ fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?
     if (color and span.strike) try w.writeAll("\x1b[9m");
     if (color and (span.small or span.role == .label or span.role == .citation)) try w.writeAll("\x1b[2m");
     if (color and (span.kind == .link or span.kind == .external_link)) try w.writeAll("\x1b[36m");
-    if (piece.initial and span.superscript and span.role != .reference) try w.writeByte('^');
-    if (piece.initial and span.subscript) try w.writeByte('_');
+    try scripts.prefix(w, span, piece.initial);
     if (whitespace) |state| try state.write(w, piece.bytes, span.code or piece.info.marked) else try terminalText(w, piece.bytes);
     if (color) try w.writeAll("\x1b[0m");
 }
@@ -229,6 +244,7 @@ fn spansTextDisplayProjected(w: *std.Io.Writer, spans: []const model.Span, color
         }
     };
     var whitespace: OrdinaryDisplayWhitespace = .{};
+    var scripts: ScriptDisplayRuns = .{};
     var cursor: SpanCursor = .{ .spans = spans };
     while (true) {
         var scan = cursor;
@@ -244,11 +260,12 @@ fn spansTextDisplayProjected(w: *std.Io.Writer, spans: []const model.Span, color
             newline = piece.ends_line;
         }
         if (projection) |p| try p.record(info) else if (info.marked and !info.rtl) try w.splatByteAll(' ', info.depth);
-        for (0..count) |_| try spanPieceText(w, cursor.next().?, color, if (collapse) &whitespace else null);
+        for (0..count) |_| try spanPieceText(w, cursor.next().?, color, if (collapse) &whitespace else null, &scripts);
         if (projection == null and info.marked and info.rtl) try w.splatByteAll(' ', info.depth);
         if (newline) {
             try w.writeByte('\n');
             whitespace.space = false;
+            scripts = .{};
         }
     }
 }
@@ -1893,4 +1910,76 @@ test "human block whitespace projection preserves preformatted table and JSON da
     try json(&out.writer, .{ .operation = .lookup, .query = "entry", .kind = .language, .language = null, .record_count = 1, .total_matches = 1, .entries = &entries });
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "ste  street") != null);
     try std.testing.expectEqualStrings("ste  street", entries[0].sections[0].blocks[0].spans[0].text);
+}
+
+test "script display keeps one marker across source welcome parentheses and external link" {
+    const spans = [_]model.Span{
+        .{ .kind = .link, .text = "IPA", .target = "IPA" },
+        .{ .text = "(", .superscript = true },
+        .{ .kind = .external_link, .text = "am", .target = "https://en.wikipedia.org/wiki/Amharic#Phonology", .superscript = true },
+        .{ .text = ")", .superscript = true },
+    };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for ([_]bool{ false, true }) |color| {
+        out.clearRetainingCapacity();
+        try spansText(&out.writer, &spans, color);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "^"));
+        try std.testing.expectEqual(@as(usize, 8), terminal.cellWidth(out.written()));
+        if (!color) try std.testing.expectEqualStrings("IPA^(am)", out.written());
+        if (color) try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[36mam") != null);
+    }
+    try std.testing.expectEqualStrings("am", spans[2].text);
+    try std.testing.expectEqualStrings("https://en.wikipedia.org/wiki/Amharic#Phonology", spans[2].target);
+}
+
+test "script display preserves trails references style boundaries and physical lines" {
+    const spans = [_]model.Span{
+        .{ .kind = .link, .text = "ab", .trail = "cd", .target = "target", .superscript = true },
+        .{ .text = "", .italic = true },
+        .{ .text = "E", .bold = true, .superscript = true },
+        .{ .text = " / " },
+        .{ .text = "x", .subscript = true },
+        .{ .text = "y", .italic = true, .subscript = true },
+        .{ .text = "[1]", .role = .reference, .superscript = true },
+        .{ .text = "Z", .superscript = true },
+        .{ .kind = .line_break },
+        .{ .text = "Q\nR", .superscript = true },
+    };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try spansText(&out.writer, &spans, false);
+    try std.testing.expectEqualStrings("^abcdE / _xy[1]^Z\n^Q\nR", out.written());
+    try std.testing.expectEqualStrings("cd", spans[0].trail);
+    out.clearRetainingCapacity();
+    try spansText(&out.writer, spans[2..3], false);
+    try std.testing.expectEqualStrings("^E", out.written());
+}
+
+test "script display table widths ignore semantic span fragmentation" {
+    terminal.initLocale();
+    const types = @import("blob_encoder").presentation_types;
+    const parts = [_]model.Span{
+        .{ .text = "(", .superscript = true },
+        .{ .kind = .external_link, .text = "am", .target = "https://en.wikipedia.org/wiki/Amharic#Phonology", .superscript = true },
+        .{ .text = ")", .superscript = true },
+    };
+    const whole = [_]model.Span{.{ .text = "(am)", .superscript = true }};
+    const plain = [_]model.Span{.{ .text = "next" }};
+    const split_cells = [_]types.Cell{ .{ .spans = &parts }, .{ .spans = &plain } };
+    const whole_cells = [_]types.Cell{ .{ .spans = &whole }, .{ .spans = &plain } };
+    const split_rows = [_]types.Row{.{ .cells = &split_cells }};
+    const whole_rows = [_]types.Row{.{ .cells = &whole_cells }};
+    var a: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer a.deinit();
+    var b: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer b.deinit();
+    try tableText(&a.writer, .{ .rows = &split_rows }, false, null);
+    try tableText(&b.writer, .{ .rows = &whole_rows }, false, null);
+    try std.testing.expectEqualStrings(b.written(), a.written());
+    const width = terminal.cellWidth(a.written());
+    a.clearRetainingCapacity();
+    try tableText(&a.writer, .{ .rows = &split_rows }, true, null);
+    try std.testing.expectEqual(width, terminal.cellWidth(a.written()));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, a.written(), "^"));
 }

@@ -8005,6 +8005,9 @@ pub const Renderer = struct {
         var outside_source: std.ArrayList(u8) = .empty;
         defer outside_source.deinit(self.a);
         var current: ?Cell = null;
+        const inherited_formatting = self.block_formatting;
+        var row_formatting = inherited_formatting;
+        var cell_formatting = inherited_formatting;
         var caption: std.ArrayList(Span) = .empty;
         var caption_source: std.ArrayList(u8) = .empty;
         var caption_pending = false;
@@ -8039,7 +8042,7 @@ pub const Renderer = struct {
             if (starts(line, "|}") or starts(line, "|-")) {
                 if (starts(line, "|-") and trim(line[2..]).len != 0) swatch_allowed = false;
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
-                try self.finishCell(&cells, &cell_source, &current);
+                try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
                 if (starts(line, "|}")) {
                     body_end = line_start;
@@ -8049,9 +8052,10 @@ pub const Renderer = struct {
                         pos = @intFromPtr(line.ptr) - @intFromPtr(input.ptr) + 2;
                     break;
                 }
+                row_formatting = try self.wikiTableFontFormatting(line[2..], inherited_formatting);
             } else if (starts(line, "|+")) {
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
-                try self.finishCell(&cells, &cell_source, &current);
+                try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                 // Preceding outside text registers references before the caption.
                 try self.flushWikiTableFostered(&fostered, &outside_source);
                 try caption_source.appendSlice(self.a, (try self.cellContent(line[2..])).text);
@@ -8063,13 +8067,18 @@ pub const Renderer = struct {
                 const header = line[0] == '!';
                 var offset: usize = 1;
                 while (offset <= line.len) {
-                    try self.finishCell(&cells, &cell_source, &current);
+                    try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                     // MediaWiki accepts both separators on a header line; both keep header cells.
                     const split_at = if (header)
                         @min(wikiCellDelimiter(line, "!!", offset) orelse line.len, wikiCellDelimiter(line, "||", offset) orelse line.len)
                     else
                         wikiCellDelimiter(line, "||", offset) orelse line.len;
-                    const content = try self.cellContent(line[offset..split_at]);
+                    const raw_cell = line[offset..split_at];
+                    const content = try self.cellContent(raw_cell);
+                    cell_formatting = if (cellAttributePipe(raw_cell)) |pipe|
+                        try self.wikiTableFontFormatting(raw_cell[0..pipe], row_formatting)
+                    else
+                        row_formatting;
                     swatch_foreground = content.swatch_color;
                     if (!try self.swatchCellSourceAllowed(content.text)) swatch_allowed = false;
                     current = .{ .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan };
@@ -8093,13 +8102,13 @@ pub const Renderer = struct {
                     // No cells commit this row. Keep its source for the
                     // same later fostering or full-body rowless recovery,
                     // without registering references before recovery.
-                    try self.finishCell(&cells, &cell_source, &current);
+                    try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                     if (outside_source.items.len != 0) try outside_source.append(self.a, '\n');
                     try outside_source.appendSlice(self.a, raw_line);
                     continue;
                 }
                 try self.flushWikiTableFostered(&fostered, &outside_source);
-                try self.finishCell(&cells, &cell_source, &current);
+                try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
                 if (try self.htmlTable(line, &fostered, true, self.body_language_direction orelse .{})) |table| {
                     // Reuse the already-rendered caption, including its effects
@@ -8126,7 +8135,7 @@ pub const Renderer = struct {
             }
         }
         try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
-        try self.finishCell(&cells, &cell_source, &current);
+        try self.finishCell(&cells, &cell_source, &current, cell_formatting);
         // Rowless recovery already renders the full body; avoid rendering its
         // outside text twice (including reference-registration side effects).
         if (has_caption or rows.items.len != 0 or cells.items.len != 0)
@@ -8138,7 +8147,17 @@ pub const Renderer = struct {
         const feature = if (swatch_allowed and fostered.items.len == 0 and body_end != input.len) try self.swatchFeature(table_value, swatch_background, swatch_foreground) else null;
         return .{ .table = table_value, .feature = feature, .end = pos, .body_end = body_end, .fostered = try fostered.toOwnedSlice(self.a), .has_caption = has_caption };
     }
-    fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *std.ArrayList(u8), current: *?Cell) Error!void {
+    // Wiki row/cell attributes share the existing small font declaration
+    // contract. Apply before rendering so nested normal overrides remain exact.
+    fn wikiTableFontFormatting(self: *Renderer, attrs: []const u8, inherited: SpanFlags) Error!SpanFlags {
+        const tag: syntax.Tag = .{ .name = "td", .attrs = attrs, .end = 0, .closing = false, .self_closing = false };
+        var result = inherited;
+        if (try self.htmlFontWeight(tag)) |bold| result.bold = bold;
+        if (try self.htmlFontStyle(tag)) |italic| result.italic = italic;
+        return result;
+    }
+
+    fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *std.ArrayList(u8), current: *?Cell, formatting: SpanFlags) Error!void {
         if (current.*) |value| {
             if (!self.spend()) {
                 source.* = .empty;
@@ -8146,7 +8165,15 @@ pub const Renderer = struct {
                 return;
             }
             var cell = value;
-            cell.spans = try self.cellSpans(source.items);
+            cell.spans = scoped: {
+                const inherited_formatting = self.block_formatting;
+                const inherited_poem_italic = self.poem_base_style.italic;
+                defer self.block_formatting = inherited_formatting;
+                defer self.poem_base_style.italic = inherited_poem_italic;
+                self.block_formatting = formatting;
+                if (self.poem_depth != 0) self.poem_base_style.italic = formatting.italic;
+                break :scoped try self.cellSpans(source.items);
+            };
             try cells.append(self.a, cell);
             source.* = .empty;
             current.* = null;
@@ -23998,4 +24025,120 @@ test "wiki table physical lines preserve strip regions attributes and ordinary c
     try std.testing.expectEqual(@as(usize, 2), mixed_blocks.len);
     try std.testing.expectEqualStrings("outside", try flattened(a, mixed_blocks[0].spans));
     try std.testing.expectEqualStrings("inside", try flattened(a, mixed_blocks[1].table.?.rows[0].cells[0].spans));
+}
+
+test "wiki row font styles reach owned cells and respect local normal overrides" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n|+ [[Caption]]\n|- style='font-weight:bold; font-style:italic'\n| [[N|Nominatief]]\n| form<div>roman</div>\n| style='font-weight:normal; font-style:normal' | [[Reset]] <b>Strong</b>\n| <span style='font-weight:normal; font-style:normal'>[[Child]]</span> [[Restored]]\n|-\n| [[Following]]\n|}\n[[Outside]]");
+    const cases = [_]struct { text: []const u8, bold: bool, italic: bool, target: []const u8 = "" }{
+        .{ .text = "Nominatief", .bold = true, .italic = true, .target = "N" },
+        .{ .text = "form", .bold = true, .italic = true },
+        .{ .text = "roman", .bold = true, .italic = true },
+        .{ .text = "Reset", .bold = false, .italic = false, .target = "Reset" },
+        .{ .text = "Strong", .bold = true, .italic = false },
+        .{ .text = "Child", .bold = false, .italic = false, .target = "Child" },
+        .{ .text = "Restored", .bold = true, .italic = true, .target = "Restored" },
+        .{ .text = "Following", .bold = false, .italic = false, .target = "Following" },
+    };
+    var seen: [cases.len]bool = @splat(false);
+    var table_found = false;
+    var outside_found = false;
+    for (blocks) |b| {
+        if (b.table) |table| {
+            table_found = true;
+            try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+            try std.testing.expectEqual(@as(usize, 4), table.rows[0].cells.len);
+            try std.testing.expectEqual(@as(usize, 1), table.rows[1].cells.len);
+            var caption_found = false;
+            for (table.caption) |value| if (std.mem.eql(u8, value.target, "Caption")) {
+                caption_found = true;
+                try std.testing.expect(!value.flags.bold and !value.flags.italic);
+            };
+            try std.testing.expect(caption_found);
+            for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |value| {
+                for (cases, 0..) |case, i| if (std.mem.eql(u8, trim(value.text), case.text)) {
+                    seen[i] = true;
+                    try std.testing.expectEqual(case.bold, value.flags.bold);
+                    try std.testing.expectEqual(case.italic, value.flags.italic);
+                    try std.testing.expectEqualStrings(case.target, value.target);
+                };
+            };
+        }
+        for (b.spans) |value| if (std.mem.eql(u8, value.target, "Outside")) {
+            outside_found = true;
+            try std.testing.expect(!value.flags.bold and !value.flags.italic);
+        };
+    }
+    try std.testing.expect(table_found and outside_found);
+    for (seen) |found| try std.testing.expect(found);
+    // The stored DPR2 path must retain the same new row inheritance and
+    // explicit normal overrides; this is not only an in-memory renderer check.
+    const stored = try FormattingScopeTest.encode(a, &r, blocks);
+    const decoded = stored.entry.sections[0].blocks;
+    var decoded_seen: [cases.len]bool = @splat(false);
+    var decoded_table_found = false;
+    for (decoded) |b| if (b.table) |table| {
+        decoded_table_found = true;
+        try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 4), table.rows[0].cells.len);
+        try std.testing.expectEqual(@as(usize, 1), table.rows[1].cells.len);
+        for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |value| {
+            for (cases, 0..) |case, i| if (std.mem.eql(u8, trim(value.text), case.text)) {
+                decoded_seen[i] = true;
+                try std.testing.expectEqual(case.bold, value.bold);
+                try std.testing.expectEqual(case.italic, value.italic);
+                try std.testing.expectEqualStrings(case.target, value.target);
+            };
+        };
+    };
+    try std.testing.expect(decoded_table_found);
+    for (decoded_seen) |found| try std.testing.expect(found);
+    try std.testing.expect(!r.block_formatting.bold and !r.block_formatting.italic);
+}
+
+test "wiki row font scope preserves nested overrides and excludes fostered caption and sibling text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n[[Fostered]]\n|+ [[Caption]]\n|- style='font-weight:bold; font-style:italic'\n| [[Outer]]\n{|\n|- style='font-weight:normal; font-style:normal'\n| [[NestedReset]] <b>NestedStrong</b>\n|-\n| [[NestedInherited]]\n|}\n[[OuterRestored]]\n|- style='font-weight:normal; font-style:normal'\n| [[Sibling]]\n|}\n[[After]]");
+    const cases = [_]struct { text: []const u8, bold: bool, italic: bool }{
+        .{ .text = "Outer", .bold = true, .italic = true },
+        .{ .text = "NestedReset", .bold = false, .italic = false },
+        .{ .text = "NestedStrong", .bold = true, .italic = false },
+        .{ .text = "NestedInherited", .bold = true, .italic = true },
+        .{ .text = "OuterRestored", .bold = true, .italic = true },
+        .{ .text = "Sibling", .bold = false, .italic = false },
+    };
+    var seen: [cases.len]bool = @splat(false);
+    var fostered = false;
+    var caption = false;
+    var after = false;
+    for (blocks) |b| {
+        for (b.spans) |value| {
+            if (std.mem.eql(u8, value.target, "Fostered")) fostered = true else if (std.mem.eql(u8, value.target, "After")) after = true else continue;
+            try std.testing.expect(!value.flags.bold and !value.flags.italic);
+        }
+        if (b.table) |table| {
+            try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+            for (table.caption) |value| if (std.mem.eql(u8, value.target, "Caption")) {
+                caption = true;
+                try std.testing.expect(!value.flags.bold and !value.flags.italic);
+            };
+            for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |value| {
+                for (cases, 0..) |case, i| if (std.mem.eql(u8, trim(value.text), case.text)) {
+                    seen[i] = true;
+                    try std.testing.expectEqual(case.bold, value.flags.bold);
+                    try std.testing.expectEqual(case.italic, value.flags.italic);
+                    if (!std.mem.eql(u8, case.text, "NestedStrong")) try std.testing.expectEqualStrings(case.text, value.target);
+                };
+            };
+        }
+    }
+    try std.testing.expect(fostered and caption and after);
+    for (seen) |found| try std.testing.expect(found);
+    try std.testing.expect(!r.block_formatting.bold and !r.block_formatting.italic);
 }
