@@ -78,3 +78,9 @@ Read-only error ownership (fresh isolated report directory; controlled delayed w
 ```sh
 WIKIDICT_STALE_REPORT="$PWD/../artifacts/stale-errors-run01" pnpm test:stale-errors
 ```
+
+Reader-link intent ordering (fresh isolated report directory, controlled response order):
+
+```sh
+WIKIDICT_LINK_ORDER_REPORT="$PWD/../artifacts/link-order-run01" pnpm test:link-order
+```
