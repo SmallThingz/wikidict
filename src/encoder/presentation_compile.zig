@@ -8066,9 +8066,9 @@ pub const Renderer = struct {
                     try self.finishCell(&cells, &cell_source, &current);
                     // MediaWiki accepts both separators on a header line; both keep header cells.
                     const split_at = if (header)
-                        @min(syntax.delimiter(line, "!!", offset) orelse line.len, syntax.delimiter(line, "||", offset) orelse line.len)
+                        @min(wikiCellDelimiter(line, "!!", offset) orelse line.len, wikiCellDelimiter(line, "||", offset) orelse line.len)
                     else
-                        syntax.delimiter(line, "||", offset) orelse line.len;
+                        wikiCellDelimiter(line, "||", offset) orelse line.len;
                     const content = try self.cellContent(line[offset..split_at]);
                     swatch_foreground = content.swatch_color;
                     if (!try self.swatchCellSourceAllowed(content.text)) swatch_allowed = false;
@@ -8253,6 +8253,41 @@ pub const Renderer = struct {
                     continue;
                 }
                 return null;
+            }
+            i += 1;
+        }
+        return null;
+    }
+
+    // Wiki table cells are split before internal links. Link/template token
+    // balancing therefore cannot hide raw table separators. Earlier strip
+    // regions stay opaque; allowed HTML attributes are armored by Sanitizer.
+    fn wikiCellDelimiter(line: []const u8, needle: []const u8, start: usize) ?usize {
+        var no_more_nowiki_close = false;
+        var opaque_scan: syntax.OpaqueScan = .{};
+        var i = start;
+        while (i < line.len) {
+            if (starts(line[i..], needle)) return i;
+            if (line[i] == '<') {
+                if (opaque_scan.protectedEnd(line, i, &no_more_nowiki_close)) |end| {
+                    i = end;
+                    continue;
+                }
+                if (opaque_scan.tagAt(line, i, &no_more_nowiki_close)) |tag| {
+                    const allowed = oneOf(tag.name, &.{
+                        "b",      "bdi",  "del",  "i",    "ins",    "u",          "font", "big",  "small", "sub",   "sup",
+                        "h1",     "h2",   "h3",   "h4",   "h5",     "h6",         "cite", "code", "em",    "s",     "strike",
+                        "strong", "tt",   "var",  "div",  "center", "blockquote", "ol",   "ul",   "dl",    "table", "caption",
+                        "pre",    "ruby", "rb",   "rp",   "rt",     "rtc",        "p",    "span", "abbr",  "dfn",   "kbd",
+                        "samp",   "data", "time", "mark", "br",     "wbr",        "hr",   "li",   "dt",    "dd",    "tr",
+                        "td",     "th",   "q",    "bdo",
+                    }) or (tag.is("meta") and tag.attr("itemprop") != null and tag.attr("content") != null) or
+                        (tag.is("link") and tag.attr("itemprop") != null and tag.attr("href") != null);
+                    if (allowed) {
+                        i = tag.end;
+                        continue;
+                    }
+                }
             }
             i += 1;
         }
@@ -22131,12 +22166,18 @@ test "wiki header rows accept both separators while preserving protected delimit
         if (span.kind == .link and std.mem.eql(u8, span.target, "sterven") and std.mem.eql(u8, span.text, "sterf")) found_action = true;
     }
     try std.testing.expect(found_action);
-    const protected = try r.renderBody("{|\n! [[Target|A||B!!C]] || {{unknown|a||b!!c}} !! <nowiki>D||E!!F</nowiki>\n|-\n| alpha !! beta || omega\n|}\n");
+    const protected = try r.renderBody("{|\n! [[Target|A||B!!C]] || <nowiki>{{unknown|a||b!!c}}</nowiki> !! <nowiki>D||E!!F</nowiki>\n|-\n| alpha !! beta || omega\n|}\n");
     const shielded = protected[0].table.?;
-    try std.testing.expectEqual(@as(usize, 3), shielded.rows[0].cells.len);
-    for (shielded.rows[0].cells) |cell| try std.testing.expect(cell.header);
-    try std.testing.expectEqualStrings("A||B!!C", std.mem.trim(u8, try flattened(a, shielded.rows[0].cells[0].spans), " \t\r\n"));
-    try std.testing.expectEqualStrings("D||E!!F", std.mem.trim(u8, try flattened(a, shielded.rows[0].cells[2].spans), " \t\r\n"));
+    // handleTables follows variable expansion and precedes internal links:
+    // raw link punctuation is not protection. An intentionally unexpanded
+    // template is protected explicitly by nowiki at this Renderer boundary.
+    const protected_labels = [_][]const u8{ "[[Target|A", "B", "C]]", "{{unknown|a||b!!c}}", "D||E!!F" };
+    try std.testing.expectEqual(protected_labels.len, shielded.rows[0].cells.len);
+    for (shielded.rows[0].cells, protected_labels) |cell, label| {
+        try std.testing.expect(cell.header and cell.colspan == 1 and cell.rowspan == 1);
+        try std.testing.expectEqualStrings(label, std.mem.trim(u8, try flattened(a, cell.spans), " \t\r\n"));
+        for (cell.spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    }
     try std.testing.expectEqual(@as(usize, 2), shielded.rows[1].cells.len);
     try std.testing.expect(!shielded.rows[1].cells[0].header);
     try std.testing.expectEqualStrings("alpha !! beta", std.mem.trim(u8, try flattened(a, shielded.rows[1].cells[0].spans), " \t\r\n"));
@@ -23756,4 +23797,66 @@ test "external label metadata traversal preserves disabled escaped protected and
         const prepared = try preparePageExternalLinksAlloc(a, source, .{ .title = "Host", .namespace_catalog = &registry });
         try std.testing.expectEqualStrings(source, prepared.source);
     }
+}
+
+test "wiki table separators precede balanced and malformed internal links" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    // Exact retained Getoelies row, followed by its real next-row link.
+    const blocks = try r.renderBody("{|\n!one!!two!!three!!four\n|-\n|style=\"font-size:200%\" align=center|فِرْتَالِڠْ ||[[vertaling||ng||'''ڠْ ng''' 'n ayn met drie puntjies, hier met soekoen aan die einde\n|-\n|تْرَمَ كَسِي||[[tramma kassie]]||ie||'''سِي sie''' -ie aan die einde met kasra en ya met twee puntjies\n|}");
+    const rows = blocks[0].table.?.rows;
+    try std.testing.expectEqual(@as(usize, 3), rows.len);
+    for (rows) |row| try std.testing.expectEqual(@as(usize, 4), row.cells.len);
+    try std.testing.expectEqualStrings("فِرْتَالِڠْ", try flattened(a, rows[1].cells[0].spans));
+    try std.testing.expectEqualStrings("[[vertaling", try flattened(a, rows[1].cells[1].spans));
+    try std.testing.expectEqualStrings("ng", try flattened(a, rows[1].cells[2].spans));
+    try std.testing.expect(rows[1].cells[3].spans[0].flags.bold);
+    try std.testing.expectEqualStrings("ڠْ ng", rows[1].cells[3].spans[0].text);
+    for (rows[1].cells[1].spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    try std.testing.expectEqualStrings("tramma kassie", rows[2].cells[1].spans[0].target);
+    const Section = struct { level: u8 = 2, title: []const u8 = "Unclassified", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "Wktionary:Getoelies", .language, .{ .code = "", .heading = "Unclassified" });
+    const saved = decoded.entry.sections[0].blocks[0].table.?.rows;
+    for (saved) |row| try std.testing.expectEqual(@as(usize, 4), row.cells.len);
+    var literal: std.ArrayList(u8) = .empty;
+    for (saved[1].cells[1].spans) |span| {
+        try literal.appendSlice(a, span.text);
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+    }
+    try std.testing.expectEqualStrings("[[vertaling", literal.items);
+    try std.testing.expect(saved[1].cells[3].spans[0].bold);
+    try std.testing.expectEqualStrings("tramma kassie", saved[2].cells[1].spans[0].target);
+    try std.testing.expectEqual(@as(usize, 9), Renderer.wikiCellDelimiter("|[[target||label]]||tail", "||", 1).?);
+    try std.testing.expectEqual(@as(usize, 9), Renderer.wikiCellDelimiter("![[target!!label]]!!tail", "!!", 1).?);
+}
+
+test "wiki table separators retain strip regions attribute armor and nested tables" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{ "<nowiki>a||b</nowiki>", "<ref>a||b</ref>", "<math>a||b</math>", "<!--a||b-->" }) |protected_source| {
+        const line = "|" ++ protected_source ++ "||tail";
+        try std.testing.expectEqual(@as(usize, 1 + protected_source.len), Renderer.wikiCellDelimiter(line, "||", 1).?);
+    }
+    const allowed = "|<span title='a||b'>text</span>||tail";
+    try std.testing.expectEqual(std.mem.lastIndexOf(u8, allowed, "||").?, Renderer.wikiCellDelimiter(allowed, "||", 1).?);
+    const unknown = "|<unknown title='a||b'>text</unknown>||tail";
+    try std.testing.expectEqual(std.mem.indexOf(u8, unknown, "||").?, Renderer.wikiCellDelimiter(unknown, "||", 1).?);
+    const attr = "|title='a||b'|text||tail";
+    try std.testing.expectEqual(std.mem.indexOf(u8, attr, "||").?, Renderer.wikiCellDelimiter(attr, "||", 1).?);
+    const piped = "|[[target|label]]||tail";
+    try std.testing.expectEqual(std.mem.indexOf(u8, piped, "||").?, Renderer.wikiCellDelimiter(piped, "||", 1).?);
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("{|\n| before\n{|\n| nested one||nested two\n|}\n| after\n|}");
+    const rows = blocks[0].table.?.rows;
+    try std.testing.expectEqual(@as(usize, 1), rows.len);
+    try std.testing.expectEqual(@as(usize, 2), rows[0].cells.len);
+    const nested = try flattened(a, rows[0].cells[0].spans);
+    try std.testing.expect(std.mem.indexOf(u8, nested, "nested one · nested two") != null);
+    try std.testing.expectEqualStrings("after", try flattened(a, rows[0].cells[1].spans));
 }
