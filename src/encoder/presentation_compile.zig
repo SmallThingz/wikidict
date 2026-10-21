@@ -537,7 +537,7 @@ pub const Span = struct {
     role: Role = .normal,
 };
 pub const Feature = struct { kind: []const u8, language: []const u8 = "", data: []const u8 = "", tail_kind: []const u8 = "none", tail: []const u8 = "" };
-const SemanticHints = struct { relation_note: bool = false };
+const SemanticHints = struct { relation_note: bool = false, ordinary_paragraph: bool = false };
 pub const Kind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table };
 pub const Cell = struct { spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1 };
 pub const Row = struct { cells: []const Cell };
@@ -1452,6 +1452,24 @@ fn internalTargetHasNowikiRegion(target: []const u8) bool {
     return false;
 }
 
+// The tokenizer normalizes target edges. Recover only authored final ASCII
+// spaces for an unpiped visible label; never change the canonical target or
+// treat tabs/entities/invalid title source as a newly supported label grammar.
+fn unpipedLinkLabelSpaces(input: []const u8, token: ir.InlineSpan, end: usize) []const u8 {
+    if (token.link_has_pipe or end > input.len or end < token.trail.len + 2) return "";
+    const input_at = @intFromPtr(input.ptr);
+    const target_at = @intFromPtr(token.target.ptr);
+    if (target_at < input_at or target_at - input_at > input.len) return "";
+    const offset = target_at - input_at;
+    if (token.target.len > input.len - offset) return "";
+    const first = offset + token.target.len;
+    const last = end - token.trail.len - 2;
+    if (first > last or !std.mem.eql(u8, input[last .. last + 2], "]]")) return "";
+    const suffix = input[first..last];
+    for (suffix) |ch| if (ch != ' ') return "";
+    return suffix;
+}
+
 fn safeInternalTarget(target: []const u8) bool {
     var has_non_ascii = false;
     for (target) |ch| {
@@ -1557,7 +1575,7 @@ pub const PreparedExternalLinks = struct {
     poem_phase: ?*const PoemPhase,
 };
 const PageExternalNumbering = struct {
-    const Phase = enum { extensions, media, ordinary };
+    const Phase = enum { extensions, interlanguage, media, ordinary };
     const Edit = struct { start: usize, end: usize, value: []const u8 };
     a: A,
     renderer: Renderer,
@@ -1649,7 +1667,7 @@ const PageExternalNumbering = struct {
     fn domain(self: *@This(), source: []const u8, in_reference: bool, depth: usize) Error!void {
         if (depth > max_depth) return error.RenderLimit;
         const prepared = try self.renderer.externalSourceControls(source);
-        for ([_]Phase{ .extensions, .media, .ordinary }) |phase|
+        for ([_]Phase{ .extensions, .interlanguage, .media, .ordinary }) |phase|
             try self.walk(prepared, phase, in_reference, true, depth + 1);
         if (prepared.ptr != source.ptr)
             try self.replace(source, 0, source.len, try self.apply(prepared));
@@ -1688,16 +1706,36 @@ const PageExternalNumbering = struct {
             if (choice.authored_caption) try self.domain(choice.text, false, depth + 1);
         }
     }
-    fn internal(self: *@This(), token: ir.InlineSpan, phase: Phase, in_reference: bool, allowed: bool, depth: usize) Error!void {
+    fn deletedEnd(self: *@This(), input: []const u8, at: usize) ?usize {
+        const address_at = self.address(input, at);
+        for (self.edits.items) |edit| if (edit.value.len == 0 and edit.start <= address_at and address_at < edit.end) {
+            const end = self.address(input, input.len);
+            return @min(edit.end, end) - self.address(input, 0);
+        };
+        return null;
+    }
+    fn internal(self: *@This(), input: []const u8, start: usize, end: usize, token: ir.InlineSpan, phase: Phase, in_reference: bool, allowed: bool, depth: usize) Error!void {
         const target = try self.renderer.entityText(try self.renderer.withoutBehaviorControls(token.target));
         const explicit = starts(target, ":");
+        if (phase == .interlanguage and allowed and self.renderer.isInterlanguageMetadata(target)) {
+            const opening = start + (std.mem.indexOf(u8, input[start..end], "[[") orelse return error.InvalidPreContext);
+            var first = opening;
+            while (first != 0 and std.ascii.isWhitespace(input[first - 1])) first -= 1;
+            // Match Parser's newline-plus-whitespace removal, not inline spaces.
+            if (std.mem.indexOfScalar(u8, input[first..opening], '\n') == null) first = opening;
+            try self.replace(input, first, end - token.trail.len, "");
+            return;
+        }
         if (!explicit and self.renderer.namespaceOfTarget(target) == 6) {
-            if (!token.link_has_pipe or (phase != .extensions and phase != .media)) return;
+            if (!token.link_has_pipe or (phase != .extensions and phase != .interlanguage and phase != .media)) return;
             const colon = std.mem.indexOfScalar(u8, target, ':') orelse return;
             const file = target[colon + 1 ..];
             const choice = self.renderer.mediaCaptionChoice(token.text, file, Renderer.mediaOptionMode(file, false));
             if (choice.authored_caption) {
-                if (phase == .extensions) try self.walk(choice.text, phase, in_reference, false, depth + 1) else try self.domain(choice.text, false, depth + 1);
+                if (phase == .extensions or phase == .interlanguage)
+                    try self.walk(choice.text, phase, in_reference, phase == .interlanguage, depth + 1)
+                else
+                    try self.domain(choice.text, false, depth + 1);
             }
         } else if (phase == .extensions and token.link_has_pipe) {
             // Strip-phase extensions precede ordinary internal-link holders.
@@ -1713,6 +1751,10 @@ const PageExternalNumbering = struct {
         var opaque_scan: syntax.OpaqueScan = .{};
         while (it.cursor < input.len) {
             const at = it.cursor;
+            if (phase != .extensions) if (self.deletedEnd(input, at)) |end| {
+                it.cursor = end;
+                continue;
+            };
             if (self.phase != null) if (self.renderer.poemItemAt(input[at..])) |item| {
                 it.cursor += item.token.len;
                 const index = nativePoemIndex(input[at..]) orelse return error.InvalidPreContext;
@@ -1780,13 +1822,13 @@ const PageExternalNumbering = struct {
             it.input = input;
             if (it.cursor == before) return error.InvalidPreContext;
             if (token.kind == .link) {
-                try self.internal(token, phase, in_reference, allowed, depth + 1);
-            } else if (phase == .extensions and token.kind == .external_link and
+                try self.internal(input, before, it.cursor, token, phase, in_reference, allowed, depth + 1);
+            } else if ((phase == .extensions or phase == .interlanguage) and token.kind == .external_link and
                 (token.text.ptr != token.target.ptr or token.text.len != token.target.len))
             {
-                // Valid external labels also contain strip-phase extension bodies.
-                // Ordinary links in these labels remain owned by the outer action.
-                try self.walk(token.text, phase, in_reference, false, depth + 1);
+                // Internal language metadata is removed before external labels
+                // become holders. Keep ordinary numbering owned by the outer action.
+                try self.walk(token.text, phase, in_reference, phase == .interlanguage, depth + 1);
             } else if (phase == .ordinary and allowed and token.kind == .external_link and
                 token.external_label_prefix.len == 0 and token.text.ptr == token.target.ptr and token.text.len == token.target.len)
             {
@@ -2265,6 +2307,20 @@ pub const Renderer = struct {
             style.classes = if (style.classes.len == 0) "mw-selflink selflink" else try std.fmt.allocPrint(self.a, "{s} mw-selflink selflink", .{style.classes});
         }
         return style;
+    }
+    fn isInterlanguageMetadata(self: *const Renderer, target: []const u8) bool {
+        const registry = self.context.namespace_catalog orelse return false;
+        if (registry.interwiki_magic != true or target.len == 0 or starts(target, ":") or
+            !safeInternalTarget(target) or std.mem.indexOfAny(u8, target, "\r\n") != null or
+            self.namespaceOfTarget(target) != null) return false;
+        const host_namespace = registry.ofTitle(self.context.title).id;
+        if (host_namespace > 0 and @mod(host_namespace, 2) == 1) return false;
+        const colon = std.mem.indexOfScalar(u8, target, ':') orelse return false;
+        if (std.mem.trim(u8, target[colon + 1 ..], " \t").len == 0) return false;
+        const prefix = std.mem.trim(u8, target[0..colon], " \t");
+        for (registry.interwiki_rows) |row| if (std.ascii.eqlIgnoreCase(row.prefix, prefix))
+            return row.is_interlanguage and !row.is_current_wiki;
+        return false;
     }
     fn currentWikiTarget(self: *const Renderer, original: []const u8) []const u8 {
         const registry = self.context.namespace_catalog orelse return original;
@@ -4442,6 +4498,21 @@ pub const Renderer = struct {
         return weight;
     }
 
+    fn htmlFontStyle(self: *Renderer, tag: syntax.Tag) Error!?bool {
+        const css = (try self.semanticAttribute(tag, "style")) orelse return null;
+        if (std.mem.indexOfAny(u8, css, "'\"(){}[]\\!") != null or
+            std.mem.indexOf(u8, css, "/*") != null or std.mem.indexOf(u8, css, "*/") != null) return null;
+        var italic: ?bool = null;
+        var declarations = std.mem.splitScalar(u8, css, ';');
+        while (declarations.next()) |raw| {
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+            if (!std.ascii.eqlIgnoreCase(trim(raw[0..colon]), "font-style")) continue;
+            const value = trim(raw[colon + 1 ..]);
+            if (std.ascii.eqlIgnoreCase(value, "italic") or std.ascii.eqlIgnoreCase(value, "oblique")) italic = true else if (std.ascii.eqlIgnoreCase(value, "normal")) italic = false else return null;
+        }
+        return italic;
+    }
+
     // Only the same simple declaration subset as htmlFontWeight is understood.
     // null means unsupported CSS, not an interpreted display override.
     fn htmlTableInlineDisplay(self: *Renderer, tag: syntax.Tag) Error!?bool {
@@ -4600,6 +4671,7 @@ pub const Renderer = struct {
         if (tag.is("small")) s.small = true;
         if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) s.code = true;
         if (try self.htmlFontWeight(tag)) |bold| s.bold = bold;
+        if (try self.htmlFontStyle(tag)) |italic| s.italic = italic;
         if ((try self.semanticAttribute(tag, "class"))) |classes| {
             const decoded_classes = classes;
             var safe_classes: std.ArrayList(u8) = .empty;
@@ -4857,8 +4929,18 @@ pub const Renderer = struct {
             const previous_capture = self.semantic_capture;
             self.semantic_capture = &hints;
             defer self.semantic_capture = previous_capture;
+            const parent_italic = self.block_formatting.italic;
+            const parent_poem_italic = self.poem_base_style.italic;
+            defer self.block_formatting.italic = parent_italic;
+            defer self.poem_base_style.italic = parent_poem_italic;
             var node_style = self.bodyFormattingStyle(self.body_language_direction orelse .{});
-            for (node_value.scopes) |scope_tag| node_style = try self.htmlInlineStyle(scope_tag, node_style);
+            for (node_value.scopes) |scope_tag| {
+                node_style = try self.htmlInlineStyle(scope_tag, node_style);
+                if (try self.htmlFontStyle(scope_tag)) |italic| {
+                    self.block_formatting.italic = italic;
+                    if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+                }
+            }
             node_value.style = node_style;
             node_value.spans = try self.etymologyTreeSpans(node_value.*);
             node_value.relation_note = hints.relation_note;
@@ -5052,15 +5134,22 @@ pub const Renderer = struct {
             defer self.inline_table_boundaries = parent_table;
             var cell_style = style;
             const parent_flags = self.block_formatting;
+            const parent_poem_italic = self.poem_base_style.italic;
             defer self.block_formatting = parent_flags;
+            defer self.poem_base_style.italic = parent_poem_italic;
             if (parent_table != null) {
                 // Flattened header cells retain their semantic emphasis. Use
-                // only the already-supported explicit weight override, without
-                // introducing cell class/language/direction or CSS behavior.
+                // only the supported weight/style overrides, without adding
+                // cell classes, language, direction or other CSS behavior.
                 if (tag.is("th")) cell_style.bold = true;
                 if (try self.htmlFontWeight(tag)) |bold| {
                     cell_style.bold = bold;
                     self.block_formatting.bold = bold;
+                }
+                if (try self.htmlFontStyle(tag)) |italic| {
+                    cell_style.italic = italic;
+                    self.block_formatting.italic = italic;
+                    if (self.poem_depth != 0) self.poem_base_style.italic = italic;
                 }
             }
             try self.inlineText(input[tag.end..pair.inner_end], cell_style, depth + 1);
@@ -5161,7 +5250,13 @@ pub const Renderer = struct {
         const pair = matched orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
         var s = try self.htmlInlineStyle(tag, style);
         const inherited_formatting = self.block_formatting;
+        const inherited_poem_italic = self.poem_base_style.italic;
+        defer self.poem_base_style.italic = inherited_poem_italic;
         if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
+        if (try self.htmlFontStyle(tag)) |italic| {
+            self.block_formatting.italic = italic;
+            if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+        }
         defer self.block_formatting = inherited_formatting;
         const content = input[tag.end..pair.inner_end];
         var table_boundaries: InlineTableBoundaries = .{};
@@ -5368,6 +5463,7 @@ pub const Renderer = struct {
                     var target = token.target;
                     var label_value = if (token.link_empty_label) "" else token.text;
                     const trail = token.trail;
+                    const label_spaces = unpipedLinkLabelSpaces(input, token, it.cursor);
                     // A source nowiki marker invalidates the outer title even when
                     // its visible body would form a valid title after unstripping.
                     // Keep outer syntax literal and let the existing renderer
@@ -5504,6 +5600,20 @@ pub const Renderer = struct {
                     if (!explicit and self.namespaceOfTarget(target) == 14) {
                         if (probing_root) return;
                         try self.text(trail, s);
+                        // A category-only leading line is metadata, not the
+                        // first visible line of an ordinary paragraph. Its LF
+                        // must not become a leading soft-space or a blank block.
+                        // Stay in this proved top-level paragraph domain; inline
+                        // callers, protected text, Poem and category trails keep
+                        // their existing whitespace behavior.
+                        if (depth == 0 and self.poem_depth == 0 and self.spans.items.len == 0 and
+                            s.kind == .text and !s.code and !s.preserve_whitespace and
+                            (if (self.semantic_capture) |hints| hints.ordinary_paragraph else false))
+                        {
+                            var after = it.cursor;
+                            while (after < input.len and std.mem.indexOfScalar(u8, " \t\r\n", input[after]) != null) : (after += 1) {}
+                            if (std.mem.indexOfScalar(u8, input[it.cursor..after], '\n') != null) it.cursor = after;
+                        }
                         continue;
                     }
                     if (!explicit and self.namespaceOfTarget(target) == 6) {
@@ -5530,6 +5640,8 @@ pub const Renderer = struct {
                         media_style.classes = try self.mediaCaptionClasses(try self.mediaClasses(file_name), s.classes);
                         try self.mediaLabel(label_value, media_style, s.heading, selected_label.authored_caption, parsed);
                     } else {
+                        if (!token.link_has_pipe and label_spaces.len != 0)
+                            label_value = try std.fmt.allocPrint(self.a, "{s}{s}", .{ label_value, label_spaces });
                         const generated_label = label_value.len == 0;
                         if (generated_label) label_value = pipeTrickLabel(target);
                         if (safeInternalTarget(target)) {
@@ -5723,7 +5835,10 @@ pub const Renderer = struct {
         try self.appendBlockBudgeted(list, .{ .kind = .preformatted, .spans = try self.spans.toOwnedSlice(self.a) });
     }
     fn block(self: *Renderer, list: *std.ArrayList(Block), kind: Kind, raw: []const u8, path: []const u8, number: []const u8, level: u8) Error!void {
-        var hints: SemanticHints = .{ .relation_note = self.body_formatting_attributes.relation_note };
+        var hints: SemanticHints = .{
+            .relation_note = self.body_formatting_attributes.relation_note,
+            .ordinary_paragraph = kind == .paragraph and !self.parsed_pre,
+        };
         const parent_capture = self.semantic_capture;
         self.semantic_capture = &hints;
         defer self.semantic_capture = parent_capture;
@@ -5734,7 +5849,13 @@ pub const Renderer = struct {
             try self.literal(raw, self.bodyFormattingStyle(.{ .code = true }));
             break :blk try self.spans.toOwnedSlice(self.a);
         } else try self.parseBodySpans(raw, .{ .heading = kind == .heading });
-        if (spans.len == 0 and kind != .heading and kind != .blank and kind != .rule) return;
+        // MediaWiki opens list furniture from the authored marker even when
+        // comments leave the item body empty. Keep its existing path/number.
+        const list_furniture = path.len != 0 and switch (kind) {
+            .list_item, .definition, .example, .quotation, .term, .list_detail, .indent => true,
+            else => false,
+        };
+        if (spans.len == 0 and kind != .heading and kind != .blank and kind != .rule and !list_furniture) return;
         try self.appendBlockBudgeted(list, .{ .kind = kind, .text = raw, .spans = spans, .depth = @intCast(@min(path.len, 255)), .list_path = path[0..@min(path.len, 255)], .number = number, .level = level, .relation_note = hints.relation_note });
     }
     fn paragraphWithQuoteSeed(self: *Renderer, list: *std.ArrayList(Block), text_value: []const u8, seed: ?QuoteSeed) Error!void {
@@ -6219,6 +6340,43 @@ pub const Renderer = struct {
         const seed = (try self.rawBodyQuoteSeed(source, parsed, quotes)) orelse fallback;
         try self.bodyParagraph(blocks, raw, seed, pending_join);
     }
+    // Primary BlockLevelPass trims prefixed physical-list-line edges, not
+    // protected payloads or a logical scope spanning ordinary source lines.
+    // Keep the existing leading-space policy; only an outside ASCII suffix
+    // can be removed. NBSP and every interior byte remain authored content.
+    fn wikiListLineBody(raw: []const u8) []const u8 {
+        const body = std.mem.trimStart(u8, raw, " \t");
+        const trimmed = std.mem.trimEnd(u8, body, " \t");
+        if (trimmed.len == body.len) return body;
+        var scan: syntax.OpaqueScan = .{};
+        var no_more_nowiki_close = false;
+        var at: usize = 0;
+        while (at < trimmed.len) {
+            if (body[at] == '\n' or body[at] == '\r') return body;
+            if (body[at] == '<') if (scan.tagAt(body, at, &no_more_nowiki_close)) |tag| {
+                if (!tag.closing and !tag.self_closing and (tag.isOpaque() or tag.html_pre)) {
+                    const pair = syntax.matchingTagWithOpaqueScan(body, tag, &scan) orelse return body;
+                    if (pair.end > trimmed.len) return body;
+                    at = pair.end;
+                } else at = tag.end;
+                continue;
+            };
+            if (scan.protectedEnd(body, at, &no_more_nowiki_close)) |end| {
+                if (end > trimmed.len) return body;
+                at = end;
+                continue;
+            }
+            if (starts(body[at..], "[[") or starts(body[at..], "{{")) {
+                const pair = syntax.balancedWithOpaqueScan(body, at, &scan) orelse return body;
+                if (pair.end > trimmed.len) return body;
+                at = pair.end;
+                continue;
+            }
+            at += 1;
+        }
+        return trimmed;
+    }
+
     fn bodyRawBlock(self: *Renderer, blocks: *std.ArrayList(Block), source: []const u8, raw: []const u8, quotes: *?QuoteBoundaryScan, kind: Kind, path: []const u8, number: []const u8, level: u8) Error!void {
         const previous = self.next_quote_seed;
         self.next_quote_seed = try self.rawBodyQuoteSeed(source, raw, quotes);
@@ -6514,9 +6672,15 @@ pub const Renderer = struct {
                                 self.body_language_direction = parent_language_direction;
                             }
                             const parent_formatting = self.block_formatting;
+                            const parent_poem_italic = self.poem_base_style.italic;
+                            defer self.poem_base_style.italic = parent_poem_italic;
                             self.block_formatting = @bitCast(@as(u8, @bitCast(parent_formatting)) | @as(u8, @bitCast(flags)));
                             defer self.block_formatting = parent_formatting;
                             if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
+                            if (try self.htmlFontStyle(tag)) |italic| {
+                                self.block_formatting.italic = italic;
+                                if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+                            }
                             if (self.pre_scope_observer) |observer|
                                 try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, .formatting, self.block_formatting, "", self.formattingAttributes());
                             // Removing an inline opener must not move its same-line
@@ -6795,6 +6959,14 @@ pub const Renderer = struct {
                 const wrapper_source = if (tag.is("div")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean;
                 const pair = blockWrapperPair(wrapper_source, tag).?;
                 if (tag.is("table")) {
+                    const inherited_formatting = self.block_formatting;
+                    const inherited_poem_italic = self.poem_base_style.italic;
+                    defer self.poem_base_style.italic = inherited_poem_italic;
+                    if (try self.htmlFontStyle(tag)) |italic| {
+                        self.block_formatting.italic = italic;
+                        if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+                    }
+                    defer self.block_formatting = inherited_formatting;
                     if (std.mem.eql(u8, (try self.semanticAttribute(tag, "class")) orelse "", "translations") and
                         !hasAuthoredTableGroup(wrapper_source[tag.end..pair.inner_end]))
                     {
@@ -6846,7 +7018,13 @@ pub const Renderer = struct {
                     // The accepted tree already emitted its data-only nested list.
                 } else {
                     const parent_formatting = self.block_formatting;
+                    const parent_poem_italic = self.poem_base_style.italic;
+                    defer self.poem_base_style.italic = parent_poem_italic;
                     if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
+                    if (try self.htmlFontStyle(tag)) |italic| {
+                        self.block_formatting.italic = italic;
+                        if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+                    }
                     defer self.block_formatting = parent_formatting;
                     const parent_language_direction = self.body_language_direction;
                     const scoped_style = try self.htmlLanguageDirection(tag, parent_language_direction orelse .{});
@@ -7000,7 +7178,7 @@ pub const Renderer = struct {
                 const path = list_prefix.path;
                 resetChangedListCounters(&counts, previous_list_path, path);
                 previous_list_path = path;
-                const body = std.mem.trimStart(u8, list_line[list_prefix.body_start..], " \t");
+                const body = wikiListLineBody(list_line[list_prefix.body_start..]);
                 if (path[path.len - 1] == ';') {
                     const seed = try self.rawBodyQuoteSeed(input, body, &body_quotes);
                     const normalized_body = try normalizeWikiQuotesSeededWithContext(self.a, body, 0, false, self.context, seed);
@@ -7358,6 +7536,8 @@ pub const Renderer = struct {
         const previous_attributes = self.body_formatting_attributes;
         const previous_language_direction = self.body_language_direction;
         const previous_formatting = self.block_formatting;
+        const previous_poem_italic = self.poem_base_style.italic;
+        defer self.poem_base_style.italic = previous_poem_italic;
         const previous_flow = self.html_list_item_flow;
         self.restoreFormattingAttributes(.{ .classes = item_style.classes, .role = item_style.role, .relation_note = hints.relation_note, .language = item_style.language, .direction = item_style.direction, .explanation = item_style.explanation, .explanation_set = item_style.explanation_set });
         const flags: SpanFlags = .{ .bold = item_style.bold, .italic = item_style.italic, .code = item_style.code, .small = item_style.small, .superscript = item_style.superscript, .subscript = item_style.subscript, .strike = item_style.strike, .underline = item_style.underline };
@@ -7370,6 +7550,10 @@ pub const Renderer = struct {
             self.html_list_item_flow = previous_flow;
         }
         if (try self.htmlFontWeight(item)) |bold| self.block_formatting.bold = bold;
+        if (try self.htmlFontStyle(item)) |italic| {
+            self.block_formatting.italic = italic;
+            if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+        }
         const children = try self.renderBodySlice(input, true, true, null, null);
         const detail_path = if (path[path.len - 1] == '*' or path[path.len - 1] == '#')
             try std.fmt.allocPrint(self.a, "{s}:", .{path})
@@ -7595,6 +7779,14 @@ pub const Renderer = struct {
             pos = pair.end;
             if (tag.is("caption")) {
                 try self.htmlTableFostered(fostered, input[processed..open], &foster_joinable, &foster_formatting);
+                const inherited_formatting = self.block_formatting;
+                const inherited_poem_italic = self.poem_base_style.italic;
+                defer self.poem_base_style.italic = inherited_poem_italic;
+                if (try self.htmlFontStyle(tag)) |italic| {
+                    self.block_formatting.italic = italic;
+                    if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+                }
+                defer self.block_formatting = inherited_formatting;
                 try self.appendTableCaption(&caption, try self.parseSpansWithLanguageDirection(input[tag.end..pair.inner_end], try self.htmlLanguageDirection(tag, style)));
                 processed = pair.end;
                 continue;
@@ -7617,7 +7809,23 @@ pub const Renderer = struct {
                 processed = cell_pair.end;
                 if (!self.spend()) continue;
                 try cells.append(self.a, .{
-                    .spans = try self.cellSpansWithLanguageDirection(input[cell_tag.end..cell_pair.inner_end], try self.htmlLanguageDirection(cell_tag, row_style)),
+                    .spans = scoped: {
+                        const inherited_formatting = self.block_formatting;
+                        const inherited_poem_italic = self.poem_base_style.italic;
+                        defer self.block_formatting = inherited_formatting;
+                        defer self.poem_base_style.italic = inherited_poem_italic;
+                        if (!implicit_row) {
+                            if (try self.htmlFontStyle(tag)) |italic| {
+                                self.block_formatting.italic = italic;
+                                if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+                            }
+                        }
+                        if (try self.htmlFontStyle(cell_tag)) |italic| {
+                            self.block_formatting.italic = italic;
+                            if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+                        }
+                        break :scoped try self.cellSpansWithLanguageDirection(input[cell_tag.end..cell_pair.inner_end], try self.htmlLanguageDirection(cell_tag, row_style));
+                    },
                     .header = cell_tag.is("th"),
                     .colspan = try self.tableSpanAttr(cell_tag, "colspan"),
                     .rowspan = try self.tableSpanAttr(cell_tag, "rowspan"),
@@ -13219,13 +13427,17 @@ test "empty definition boundary fixture keeps lexical content in term and detail
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
     const blocks = try r.renderBody("; term :\n; : definition\n; plain term");
-    try std.testing.expectEqual(@as(usize, 3), blocks.len);
-    const kinds = [_]Kind{ .term, .list_detail, .term };
-    const texts = [_][]const u8{ "term", "definition", "plain term" };
-    for (blocks, kinds, texts) |block_value, kind, text| {
+    try std.testing.expectEqual(@as(usize, 5), blocks.len);
+    const kinds = [_]Kind{ .term, .list_detail, .term, .list_detail, .term };
+    const texts = [_][]const u8{ "term", "", "", "definition", "plain term" };
+    const paths = [_][]const u8{ ";", ":", ";", ":", ";" };
+    for (blocks, kinds, texts, paths) |block_value, kind, text, path| {
         try std.testing.expectEqual(kind, block_value.kind);
+        try std.testing.expectEqualStrings(path, block_value.list_path);
         try std.testing.expectEqualStrings(text, try flattened(a, block_value.spans));
     }
+    try std.testing.expectEqual(@as(usize, 0), blocks[1].spans.len);
+    try std.testing.expectEqual(@as(usize, 0), blocks[2].spans.len);
 }
 
 test "empty definition boundary fixture retains parent paths protected and link colons" {
@@ -13234,21 +13446,19 @@ test "empty definition boundary fixture retains parent paths protected and link 
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
     const blocks = try r.renderBody("#; term :\n#; : definition\n; [[A|term: label]] : detail\n; <nowiki>literal : marker</nowiki>");
-    try std.testing.expectEqual(@as(usize, 5), blocks.len);
-    for (blocks[0..2], [_][]const u8{ "#;", "#:" }, [_]Kind{ .term, .list_detail }) |block_value, path, kind| {
-        try std.testing.expectEqualStrings(path, block_value.list_path);
+    try std.testing.expectEqual(@as(usize, 7), blocks.len);
+    const kinds = [_]Kind{ .term, .list_detail, .term, .list_detail, .term, .list_detail, .term };
+    const paths = [_][]const u8{ "#;", "#:", "#;", "#:", ";", ":", ";" };
+    const texts = [_][]const u8{ "term", "", "", "definition", "term: label", "detail", "literal : marker" };
+    for (blocks, kinds, paths, texts) |block_value, kind, path, text| {
         try std.testing.expectEqual(kind, block_value.kind);
+        try std.testing.expectEqualStrings(path, block_value.list_path);
+        try std.testing.expectEqualStrings(text, try flattened(a, block_value.spans));
     }
-    try std.testing.expectEqualStrings("term", try flattened(a, blocks[0].spans));
-    try std.testing.expectEqualStrings("definition", try flattened(a, blocks[1].spans));
-    try std.testing.expectEqual(Kind.term, blocks[2].kind);
-    try std.testing.expectEqualStrings("term: label", try flattened(a, blocks[2].spans));
-    try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[2].spans, .link, "A"));
-    try std.testing.expectEqual(Kind.list_detail, blocks[3].kind);
-    try std.testing.expectEqualStrings("detail", try flattened(a, blocks[3].spans));
-    try std.testing.expectEqual(Kind.term, blocks[4].kind);
-    try std.testing.expectEqualStrings("literal : marker", try flattened(a, blocks[4].spans));
-    for (blocks[4].spans) |span| try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+    try std.testing.expectEqual(@as(usize, 0), blocks[1].spans.len);
+    try std.testing.expectEqual(@as(usize, 0), blocks[2].spans.len);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[4].spans, .link, "A"));
+    for (blocks[6].spans) |span| try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
 }
 
 test "inline block opening fixture separates linked lexical text for div paragraph and heading" {
@@ -22685,4 +22895,865 @@ test "inline table header emphasis respects explicit weights and scoped inherite
     const unchanged = try orphan.parseSpans("<th style='font-weight:bold'>orphan</th>", .{});
     try std.testing.expectEqual(@as(usize, 1), unchanged.len);
     try std.testing.expect(!unchanged[0].flags.bold);
+}
+
+test "captured AF grammatical font style preserves italic link labels and plain punctuation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{ .title = "ja" } };
+    // Exact visible oorg -> gramm -> gramm.styl branch; category furniture excluded.
+    const spans = try r.parseSpans("[[Wiktionary:Oorganklik en onoorganklik|<span style=\"background-color: #f8f9fa;border-radius: 2px;border: 1px solid #c8ccd1;padding: 0 0.2em 0 0.1em;font-style: italic\">Oorganklik</span>]].", .{});
+    try std.testing.expectEqualStrings("Oorganklik.", try flattened(a, spans));
+    var label = false;
+    var punctuation = false;
+    for (spans) |value| {
+        if (std.mem.eql(u8, value.text, "Oorganklik")) {
+            try std.testing.expectEqual(@as(@TypeOf(value.kind), .link), value.kind);
+            try std.testing.expectEqualStrings("Wiktionary:Oorganklik en onoorganklik", value.target);
+            try std.testing.expect(value.flags.italic and !value.flags.bold);
+            label = true;
+        }
+        if (std.mem.eql(u8, value.text, ".")) {
+            try std.testing.expectEqual(@as(@TypeOf(value.kind), .text), value.kind);
+            try std.testing.expectEqualStrings("", value.target);
+            try std.testing.expect(!value.flags.italic);
+            punctuation = true;
+        }
+    }
+    try std.testing.expect(label and punctuation);
+}
+
+test "simple font style respects normal nested overrides and inherited block restoration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var inline_r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try inline_r.parseSpans("<i>outer <span style='font-style: normal'>plain [[N]] <i>slanted</i></span> outer</i> end", .{ .bold = true });
+    var plain = false;
+    var slanted = false;
+    var end = false;
+    for (spans) |value| {
+        try std.testing.expect(value.flags.bold);
+        if (value.kind == .link) {
+            try std.testing.expectEqualStrings("N", value.target);
+            try std.testing.expect(!value.flags.italic);
+            plain = true;
+        }
+        if (std.mem.eql(u8, value.text, "slanted")) {
+            try std.testing.expect(value.flags.italic);
+            slanted = true;
+        }
+        if (std.mem.indexOf(u8, value.text, "end") != null) {
+            try std.testing.expect(!value.flags.italic);
+            end = true;
+        }
+    }
+    try std.testing.expect(plain and slanted and end);
+    var body_r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try body_r.renderBody("<div style='FONT-STYLE: normal; color:red; font-style: OBLIQUE; font-weight:bold'>\n* [[A]]\n<div style='font-style: italic; font-style: normal'>[[B]]</div>\n[[C]]\n</div>\n[[D]]");
+    var seen: [4]bool = @splat(false);
+    for (blocks) |block_value| for (block_value.spans) |value| {
+        if (value.kind != .link) continue;
+        const i: usize = if (std.mem.eql(u8, value.target, "A")) 0 else if (std.mem.eql(u8, value.target, "B")) 1 else if (std.mem.eql(u8, value.target, "C")) 2 else if (std.mem.eql(u8, value.target, "D")) 3 else continue;
+        try std.testing.expectEqual(i == 0 or i == 2, value.flags.italic);
+        try std.testing.expectEqual(i != 3, value.flags.bold);
+        seen[i] = true;
+    };
+    for (seen) |found| try std.testing.expect(found);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(body_r.block_formatting)));
+    var table_r: Renderer = .{ .a = a, .context = .{} };
+    const table_spans = try table_r.parseSpans("<span style='font-style:italic'><table style='display:inline-block'><tr><td style='font-style:normal'>[[Plain]]</td><td>[[Inherited]]</td></tr></table></span> [[Outside]]", .{});
+    var table_seen: [3]bool = @splat(false);
+    for (table_spans) |value| {
+        if (value.kind != .link) continue;
+        const i: usize = if (std.mem.eql(u8, value.target, "Plain")) 0 else if (std.mem.eql(u8, value.target, "Inherited")) 1 else if (std.mem.eql(u8, value.target, "Outside")) 2 else continue;
+        try std.testing.expectEqual(i == 1, value.flags.italic);
+        table_seen[i] = true;
+    }
+    for (table_seen) |found| try std.testing.expect(found);
+}
+
+test "unsupported font style keeps inherited flags and protected literals unchanged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const attributes = [_][]const u8{
+        "font-style: oblique 10deg",    "font-style: normal!important", "/* font-style:normal */",
+        "color: 'x;font-style:normal'", "font-style: inherit",          "font-style: italic; x: func(a)",
+        "not-font-style:normal",        "font-style normal",            "font-style: italic; font-style: unknown",
+    };
+    for (attributes) |css| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "<span style=\"{s}\">[[A]]</span> [[B]]", .{css});
+        const values = try r.parseSpans(source, .{ .italic = true });
+        try std.testing.expect(unclosedExternalRecoveryHasLink(values, .link, "A"));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(values, .link, "B"));
+        for (values) |value| try std.testing.expect(value.flags.italic);
+    }
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const values = try protected.parseSpans("<nowiki><span style='font-style:italic'>literal</span></nowiki> [[B]]", .{});
+    try std.testing.expectEqualStrings("<span style='font-style:italic'>literal</span> B", try flattened(a, values));
+    for (values) |value| try std.testing.expect(!value.flags.italic);
+}
+
+test "typed HTML table font style overrides are cell local and preserve header semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<div style='font-style:italic'>\n<table><caption style='font-style:normal'>[[Caption]]</caption><tr style='font-style:normal'><th>[[Header]]</th><td>[[Plain]] <i>Em</i></td><td style='font-style:italic'>[[Explicit]]</td></tr><tr><td>[[Inherited]]<ref name='n'>note</ref></td><td style='font-style:normal'>[[Reset]]</td></tr></table>\n[[After]]\n</div>\n[[Outside]]");
+    var seen: [8]bool = @splat(false);
+    var found_table = false;
+    var inner_emphasis = false;
+    for (blocks) |block_value| {
+        if (block_value.table) |table| {
+            try std.testing.expect(!found_table);
+            found_table = true;
+            try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+            try std.testing.expectEqual(@as(usize, 3), table.rows[0].cells.len);
+            try std.testing.expectEqual(@as(usize, 2), table.rows[1].cells.len);
+            try std.testing.expect(table.rows[0].cells[0].header);
+            for (table.caption) |value| {
+                if (value.kind == .link and std.mem.eql(u8, value.target, "Caption")) {
+                    try std.testing.expect(!value.flags.italic);
+                    seen[0] = true;
+                }
+            }
+            for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |value| {
+                if (std.mem.eql(u8, value.text, "Em")) {
+                    try std.testing.expect(value.flags.italic);
+                    inner_emphasis = true;
+                }
+                if (value.kind != .link) continue;
+                const i: usize = if (std.mem.eql(u8, value.target, "Header")) 1 else if (std.mem.eql(u8, value.target, "Plain")) 2 else if (std.mem.eql(u8, value.target, "Explicit")) 3 else if (std.mem.eql(u8, value.target, "Inherited")) 4 else if (std.mem.eql(u8, value.target, "Reset")) 5 else continue;
+                try std.testing.expectEqual(i == 3 or i == 4, value.flags.italic);
+                seen[i] = true;
+            };
+        }
+        for (block_value.spans) |value| {
+            if (value.kind != .link) continue;
+            const i: usize = if (std.mem.eql(u8, value.target, "After")) 6 else if (std.mem.eql(u8, value.target, "Outside")) 7 else continue;
+            try std.testing.expectEqual(i == 6, value.flags.italic);
+            seen[i] = true;
+        }
+    }
+    try std.testing.expect(found_table and inner_emphasis);
+    for (seen) |found| try std.testing.expect(found);
+    try std.testing.expectEqual(@as(usize, 1), r.refs.items.len);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(r.block_formatting)));
+}
+
+test "HTML table container font style inherits through typed and layout branches" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<table style='font-style:italic'><caption>[[Caption]]</caption><tr><td style='font-style:normal'>[[Plain]]</td><td>[[Inherited]]</td></tr></table>\n[[Outside]]");
+    var seen: [4]bool = @splat(false);
+    var tables: usize = 0;
+    for (blocks) |block_value| {
+        if (block_value.table) |table| {
+            tables += 1;
+            for (table.caption) |value| if (value.kind == .link and std.mem.eql(u8, value.target, "Caption")) {
+                try std.testing.expect(value.flags.italic);
+                seen[0] = true;
+            };
+            for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |value| {
+                if (value.kind != .link) continue;
+                if (std.mem.eql(u8, value.target, "Plain")) {
+                    try std.testing.expect(!value.flags.italic);
+                    seen[1] = true;
+                } else if (std.mem.eql(u8, value.target, "Inherited")) {
+                    try std.testing.expect(value.flags.italic);
+                    seen[2] = true;
+                }
+            };
+        }
+        for (block_value.spans) |value| if (value.kind == .link and std.mem.eql(u8, value.target, "Outside")) {
+            try std.testing.expect(!value.flags.italic);
+            seen[3] = true;
+        };
+    }
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    for (seen) |found| try std.testing.expect(found);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(r.block_formatting)));
+    var layout: Renderer = .{ .a = a, .context = .{} };
+    const layout_blocks = try layout.renderBody("<table class='translations' style='font-style:italic'><tr><td>\n* [[Layout]]\n</td></tr></table>\n[[LayoutOutside]]");
+    var inside = false;
+    var outside = false;
+    for (layout_blocks) |block_value| {
+        try std.testing.expect(block_value.table == null);
+        for (block_value.spans) |value| {
+            if (value.kind != .link) continue;
+            if (std.mem.eql(u8, value.target, "Layout")) {
+                try std.testing.expect(value.flags.italic);
+                inside = true;
+            } else if (std.mem.eql(u8, value.target, "LayoutOutside")) {
+                try std.testing.expect(!value.flags.italic);
+                outside = true;
+            }
+        }
+    }
+    try std.testing.expect(inside and outside);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(layout.block_formatting)));
+    var normal: Renderer = .{ .a = a, .context = .{} };
+    const normal_blocks = try normal.renderBody("<div style='font-style:italic'>\n<table style='font-style:normal'><tr><td>[[Normal]]</td><td style='font-style:italic'>[[Slanted]]</td></tr></table>\n[[After]]\n</div>\n[[End]]");
+    var normal_seen: [4]bool = @splat(false);
+    for (normal_blocks) |block_value| {
+        if (block_value.table) |table| for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |value| {
+            if (value.kind != .link) continue;
+            if (std.mem.eql(u8, value.target, "Normal")) {
+                try std.testing.expect(!value.flags.italic);
+                normal_seen[0] = true;
+            } else if (std.mem.eql(u8, value.target, "Slanted")) {
+                try std.testing.expect(value.flags.italic);
+                normal_seen[1] = true;
+            }
+        };
+        for (block_value.spans) |value| {
+            if (value.kind != .link) continue;
+            if (std.mem.eql(u8, value.target, "After")) {
+                try std.testing.expect(value.flags.italic);
+                normal_seen[2] = true;
+            } else if (std.mem.eql(u8, value.target, "End")) {
+                try std.testing.expect(!value.flags.italic);
+                normal_seen[3] = true;
+            }
+        }
+    }
+    for (normal_seen) |found| try std.testing.expect(found);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(normal.block_formatting)));
+}
+
+test "explicit font style normal overrides inherited Poem italic and restores nested scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const br_token = try poemPhaseTestToken(a, 0);
+    const inner_scope = try poemPhaseTestToken(a, 1);
+    const inner_body = try std.fmt.allocPrint(a, "{s}<poem>[[NestedNormal]] <span style='font-style:italic'>[[NestedItalic]]</span></poem>", .{inner_scope});
+    const inner = try poemPhaseTestLiteralToken(a, 2, inner_body);
+    const outer_scope = try poemPhaseTestToken(a, 3);
+    const outer_body = try std.fmt.allocPrint(a, "{s}<poem><span style='font-style:normal'>[[Plain]] <i>Em</i> {s} <ref name='once'>note</ref>{s}\n[[AfterBreak]]</span> [[Inherited]]</poem>", .{ outer_scope, inner, br_token });
+    const outer = try poemPhaseTestLiteralToken(a, 4, outer_body);
+    const output = try std.fmt.allocPrint(a, "<i>{s}</i> [[Outside]]", .{outer});
+    const items = [_]PoemPhaseItem{
+        .{ .token = br_token, .kind = .br },
+        .{ .token = inner_scope, .kind = .scope },
+        .{ .token = inner, .kind = .literal, .tag = "poem", .body = inner_body },
+        .{ .token = outer_scope, .kind = .scope },
+        .{ .token = outer, .kind = .literal, .tag = "poem", .body = outer_body },
+    };
+    const phase = (try parsePoemPhaseAlloc(a, output, null, try poemPhaseTestRecord(a, output, "", &items))).?;
+    var r: Renderer = .{ .a = a, .context = .{ .poem_phase = phase } };
+    const spans = try r.parseSpans(output, .{});
+    var seen: [6]bool = @splat(false);
+    var breaks: usize = 0;
+    var em = false;
+    for (spans) |value| {
+        if (value.kind == .line_break) breaks += 1;
+        if (std.mem.eql(u8, value.text, "Em")) {
+            try std.testing.expect(value.flags.italic);
+            em = true;
+        }
+        if (value.kind != .link) continue;
+        const i: usize = if (std.mem.eql(u8, value.target, "Plain")) 0 else if (std.mem.eql(u8, value.target, "NestedNormal")) 1 else if (std.mem.eql(u8, value.target, "NestedItalic")) 2 else if (std.mem.eql(u8, value.target, "AfterBreak")) 3 else if (std.mem.eql(u8, value.target, "Inherited")) 4 else if (std.mem.eql(u8, value.target, "Outside")) 5 else continue;
+        try std.testing.expect(!seen[i]);
+        seen[i] = true;
+        try std.testing.expectEqual(i == 2 or i == 4, value.flags.italic);
+    }
+    for (seen) |found| try std.testing.expect(found);
+    try std.testing.expect(em and breaks > 0);
+    try std.testing.expectEqual(@as(usize, 1), r.refs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), r.poem_depth);
+    try std.testing.expect(!r.poem_base_style.italic);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(r.block_formatting)));
+}
+
+test "etymology tree explicit font style scopes override inherited block and Poem italic" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const tree = "<div class='etytree-body'><div class='etytree-block' style='font-style:normal'><span class='etytree-term'>[[Plain]]</span> <span style='font-style:italic'>[[Slanted]]</span><ref name='once'>note</ref></div></div>\n[[After]]";
+    for (0..2) |mode| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        var collected: std.ArrayList(Span) = .empty;
+        if (mode == 0) {
+            const source = try std.fmt.allocPrint(a, "<div style='font-style:italic; font-weight:bold'>\n{s}\n</div>\n[[Outside]]", .{tree});
+            const blocks = try r.renderBody(source);
+            var roots: usize = 0;
+            for (blocks) |value| {
+                if (value.kind == .list_item and std.mem.eql(u8, value.list_path, "*")) roots += 1;
+                try collected.appendSlice(a, value.spans);
+            }
+            try std.testing.expectEqual(@as(usize, 1), roots);
+        } else {
+            const scope = try poemPhaseTestToken(a, 0);
+            const body = try std.fmt.allocPrint(a, "{s}<poem>{s}</poem>", .{ scope, tree });
+            const token = try poemPhaseTestLiteralToken(a, 1, body);
+            const output = try std.fmt.allocPrint(a, "<b><i>{s}</i></b> [[Outside]]", .{token});
+            const items = [_]PoemPhaseItem{
+                .{ .token = scope, .kind = .scope },
+                .{ .token = token, .kind = .literal, .tag = "poem", .body = body },
+            };
+            r.context.poem_phase = (try parsePoemPhaseAlloc(a, output, null, try poemPhaseTestRecord(a, output, "", &items))).?;
+            try collected.appendSlice(a, try r.parseSpans(output, .{}));
+        }
+        var seen: [4]bool = @splat(false);
+        for (collected.items) |value| {
+            if (value.kind != .link) continue;
+            const i: usize = if (std.mem.eql(u8, value.target, "Plain")) 0 else if (std.mem.eql(u8, value.target, "Slanted")) 1 else if (std.mem.eql(u8, value.target, "After")) 2 else if (std.mem.eql(u8, value.target, "Outside")) 3 else continue;
+            try std.testing.expect(!seen[i]);
+            seen[i] = true;
+            try std.testing.expectEqual(i == 1 or i == 2, value.flags.italic);
+            try std.testing.expectEqual(i != 3, value.flags.bold);
+        }
+        for (seen) |found| try std.testing.expect(found);
+        try std.testing.expectEqual(@as(usize, 1), r.refs.items.len);
+        try std.testing.expectEqual(@as(usize, 0), r.poem_depth);
+        try std.testing.expect(!r.poem_base_style.italic);
+        try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(r.block_formatting)));
+    }
+}
+
+test "category-only paragraph lines do not emit ja heading gaps or a Gothic arrow prefix" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tafwiktionary\n# dump-date\t20261001\n# content-language\taf\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tSjabloon\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer registry.deinit();
+    // Source-instantiated membership lines from =en= and the Gothic caller.
+    // The category names are metadata; the word table and arrow remain visible.
+    var english: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const word = try english.renderBody("== [[Engels|Engels (en)]] ==\n[[Kategorie:Woorde in Engels van lengte 2]]\n[[Kategorie:Woorde in Engels]]\n\n{|\n! Woord\n|-\n| ja\n|}");
+    try std.testing.expectEqual(@as(usize, 2), word.len);
+    try std.testing.expectEqual(Kind.heading, word[0].kind);
+    try std.testing.expectEqual(Kind.table, word[1].kind);
+    var gothic: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    const arrow = try gothic.renderBody("== [[Goties|Goties (got)]] ==\n[[Kategorie:Woorde in Goties]]\n☞ [[𐌾𐌰]]");
+    try std.testing.expectEqual(@as(usize, 2), arrow.len);
+    try std.testing.expectEqualStrings("☞ 𐌾𐌰", try flattened(a, arrow[1].spans));
+    var linked = false;
+    for (arrow[1].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "𐌾𐌰")) {
+        linked = true;
+    };
+    try std.testing.expect(linked);
+}
+
+test "leading category line cleanup preserves visible trails NBSP literal and interior spaces" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, text: []const u8 }{
+        .{ .source = "[[Category:A]]tail\nword", .text = "tail word" },
+        .{ .source = "[[:Category:A|shown]]\nword", .text = "shown word" },
+        .{ .source = "<nowiki>[[Category:A]]</nowiki>\nword", .text = "[[Category:A]] word" },
+        .{ .source = "[[Category:A]]\n&nbsp;word", .text = "\u{a0}word" },
+        .{ .source = "[[Category:A]]\n<nowiki> </nowiki>word", .text = " word" },
+        .{ .source = "[[Category:A]]\nleft  [[target|right]]", .text = "left  right" },
+        .{ .source = "[[Category:A]] [[target|right]]", .text = " right" },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqualStrings(case.text, try flattened(a, blocks[0].spans));
+    }
+    var standalone: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings(" word", try flattened(a, try standalone.parseSpans("[[Category:A]]\nword", .{})));
+    var pre: Renderer = .{ .a = a, .context = .{} };
+    const protected = try pre.renderBody("<pre>[[Category:A]]\nword</pre>");
+    try std.testing.expectEqual(Kind.preformatted, protected[0].kind);
+    try std.testing.expectEqualStrings("[[Category:A]]\nword", try flattened(a, protected[0].spans));
+}
+
+test "prefixed physical list line edges preserve protected and multiline source scopes" {
+    try std.testing.expectEqualStrings("one  two", Renderer.wikiListLineBody(" \tone  two \t"));
+    try std.testing.expectEqualStrings("one \xc2\xa0", Renderer.wikiListLineBody("one \xc2\xa0 \t"));
+    try std.testing.expectEqualStrings("<nowiki>keep  \t</nowiki>", Renderer.wikiListLineBody(" <nowiki>keep  \t</nowiki> \t"));
+    try std.testing.expectEqualStrings("<nowiki>keep  \t", Renderer.wikiListLineBody(" <nowiki>keep  \t"));
+    try std.testing.expectEqualStrings("<ref>keep  \t", Renderer.wikiListLineBody("<ref>keep  \t"));
+    try std.testing.expectEqualStrings("<math>keep  \t", Renderer.wikiListLineBody("<math>keep  \t"));
+    try std.testing.expectEqualStrings("<pre>keep\n  end \t</pre>", Renderer.wikiListLineBody("<pre>keep\n  end \t</pre> \t"));
+    try std.testing.expectEqualStrings("<span>first\n second </span> \t", Renderer.wikiListLineBody("<span>first\n second </span> \t"));
+    try std.testing.expectEqualStrings("one<!--\n-->", Renderer.wikiListLineBody("one<!--\n--> \t"));
+    try std.testing.expectEqualStrings("one<!--keep \t", Renderer.wikiListLineBody("one<!--keep \t"));
+    try std.testing.expectEqualStrings("[[Target|first\n second ]]", Renderer.wikiListLineBody("[[Target|first\n second ]] \t"));
+}
+
+test "prefixed list edge whitespace keeps ordinals internal spacing NBSP and literal payloads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("# one  two \t\n# [[Target|three  four]] \t\n: <nowiki>keep  </nowiki> \t\n: end\xc2\xa0 \t");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqualStrings("one  two", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("1", blocks[0].number);
+    try std.testing.expectEqualStrings("three  four", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqualStrings("2", blocks[1].number);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(blocks[1].spans, .link, "Target"));
+    try std.testing.expectEqualStrings("keep  ", try flattened(a, blocks[2].spans));
+    try std.testing.expectEqualStrings("end\xc2\xa0", try flattened(a, blocks[3].spans));
+    try std.testing.expectEqual(@as(usize, 0), r.refs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), r.media.items.len);
+    var pre: Renderer = .{ .a = a, .context = .{} };
+    const pre_blocks = try pre.renderBody(" literal  \t");
+    try std.testing.expectEqual(@as(usize, 1), pre_blocks.len);
+    try std.testing.expectEqual(@as(Kind, .preformatted), pre_blocks[0].kind);
+    try std.testing.expectEqualStrings("literal  \t", try flattened(a, pre_blocks[0].spans));
+}
+
+test "captured ja audio prefixed list caller trailing ASCII is not visible" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact retained AF namespace-6 names; reduced fixture has no inferred aliases.
+    var registry = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tafwiktionary\n# dump-date\t20261001\n# content-language\taf\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "6\tLêer\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tBeeld\tImage\n" ++
+        "10\tSjabloon\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer registry.deinit();
+    // Exact selected woordklank/oudio visible branch plus raw ja caller's
+    // authored final ASCII. Hidden category membership is a separate fixture.
+    const source = "::\n\n:&nbsp;&nbsp;[[Lêer:Nuvola_apps_amarok.png|25x25px]]&nbsp;" ++
+        "<table class=\"audiotable\" style=\"vertical-align: top; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;\">" ++
+        "<tr><td class=\"audiofile\">[[Image:LL-Q14196 (afr)-Oesjaar-ja.wav|noicon|175px]]</td>" ++
+        "<td class=\"audiometa\" style=\"font-size: 80%;\">([[:Image:LL-Q14196 (afr)-Oesjaar-ja.wav|lêer]])</td></tr></table>" ++ " ";
+    var r: Renderer = .{ .a = a, .context = .{ .title = "ja", .namespace_catalog = &registry } };
+    const blocks = try r.renderBody(source);
+    var visible: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    for (blocks) |b| {
+        for (b.spans) |value| {
+            try visible.appendSlice(a, value.text);
+            if (std.mem.eql(u8, value.text, "lêer")) {
+                try std.testing.expectEqualStrings("Image:LL-Q14196 (afr)-Oesjaar-ja.wav", value.target);
+                try std.testing.expect(value.kind == .link);
+                actions += 1;
+            }
+        }
+    }
+    try std.testing.expect(visible.items.len != 0 and visible.items[visible.items.len - 1] == ')');
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, " · ") != null);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    try std.testing.expectEqual(@as(usize, 2), r.media.items.len);
+    try std.testing.expectEqualStrings("Nuvola apps amarok.png", r.media.items[0].file);
+    try std.testing.expectEqualStrings("LL-Q14196 (afr)-Oesjaar-ja.wav", r.media.items[1].file);
+    try std.testing.expectEqual(@as(usize, 0), r.refs.items.len);
+}
+
+test "authored empty wiki list markers retain furniture and ordered counters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("*\n*<!-- empty -->\n#\n# one\n##<!-- nested -->\n## two");
+    try std.testing.expectEqual(@as(usize, 6), blocks.len);
+    const paths = [_][]const u8{ "*", "*", "#", "#", "##", "##" };
+    const numbers = [_][]const u8{ "", "", "1", "2", "2.1", "2.2" };
+    for (blocks, paths, numbers, 0..) |block_value, path, number, index| {
+        try std.testing.expectEqualStrings(path, block_value.list_path);
+        try std.testing.expectEqualStrings(number, block_value.number);
+        try std.testing.expectEqual(@as(u8, @intCast(path.len)), block_value.depth);
+        try std.testing.expectEqual(if (index < 2) Kind.list_item else Kind.definition, block_value.kind);
+        if (index == 0 or index == 1 or index == 2 or index == 4)
+            try std.testing.expectEqual(@as(usize, 0), block_value.spans.len);
+    }
+    try std.testing.expectEqualStrings("one", try flattened(a, blocks[3].spans));
+    try std.testing.expectEqualStrings("two", try flattened(a, blocks[5].spans));
+    try std.testing.expectEqual(@as(usize, 0), r.refs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), r.media.items.len);
+}
+
+test "empty list examples and terms preserve paths without inventing text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("# word\n#:<!-- example -->\n;<!-- term -->\n:<!-- detail -->");
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    try std.testing.expectEqual(Kind.definition, blocks[0].kind);
+    try std.testing.expectEqual(Kind.example, blocks[1].kind);
+    try std.testing.expectEqual(Kind.term, blocks[2].kind);
+    try std.testing.expectEqual(Kind.indent, blocks[3].kind);
+    for (blocks[1..], [_][]const u8{ "#:", ";", ":" }) |block_value, path| {
+        try std.testing.expectEqualStrings(path, block_value.list_path);
+        try std.testing.expectEqual(@as(usize, 0), block_value.spans.len);
+    }
+}
+
+test "comment only and protected list glyphs do not create list furniture" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var empty: Renderer = .{ .a = a, .context = .{} };
+    const none = try empty.renderBody("<!-- * # -->\n\n<!-- blank -->");
+    try std.testing.expectEqual(@as(usize, 0), none.len);
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try protected.renderBody("<nowiki>* literal</nowiki>\n\n # literal");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
+    try std.testing.expectEqual(Kind.preformatted, blocks[1].kind);
+    try std.testing.expectEqualStrings("* literal", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("# literal", try flattened(a, blocks[1].spans));
+    for (blocks) |block_value| try std.testing.expectEqualStrings("", block_value.list_path);
+    for (blocks[1].spans) |span| try std.testing.expect(span.flags.code);
+}
+
+test "language heading boundaries retain empty list items without losing headings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("== English ==\n*<!-- empty -->\n=== Noun ===\n#<!-- empty -->\n# word");
+    try std.testing.expectEqual(@as(usize, 5), blocks.len);
+    try std.testing.expectEqual(Kind.heading, blocks[0].kind);
+    try std.testing.expectEqualStrings("English", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqual(@as(u8, 2), blocks[0].level);
+    try std.testing.expectEqual(Kind.list_item, blocks[1].kind);
+    try std.testing.expectEqual(@as(usize, 0), blocks[1].spans.len);
+    try std.testing.expectEqual(Kind.heading, blocks[2].kind);
+    try std.testing.expectEqualStrings("Noun", try flattened(a, blocks[2].spans));
+    try std.testing.expectEqual(@as(u8, 3), blocks[2].level);
+    try std.testing.expectEqual(Kind.definition, blocks[3].kind);
+    try std.testing.expectEqual(@as(usize, 0), blocks[3].spans.len);
+    try std.testing.expectEqualStrings("1", blocks[3].number);
+    try std.testing.expectEqualStrings("2", blocks[4].number);
+}
+
+test "empty authored list furniture round trips DPR2 without source fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("*<!-- never-serialize-empty-list-comment -->\n#<!-- never-serialize-number-comment -->\n# shown");
+    const Section = struct { level: u8 = 2, title: []const u8 = "Fixture", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "fixture", .language, .{ .code = "en", .heading = "English" });
+    const actual = decoded.entry.sections[0].blocks;
+    try std.testing.expectEqual(@as(usize, 3), actual.len);
+    try std.testing.expect(actual[0].kind == .list_item);
+    try std.testing.expectEqualStrings("*", actual[0].list_path);
+    try std.testing.expectEqual(@as(u8, 1), actual[0].depth);
+    try std.testing.expectEqual(@as(usize, 0), actual[0].spans.len);
+    try std.testing.expect(actual[1].kind == .definition);
+    try std.testing.expectEqualStrings("#", actual[1].list_path);
+    try std.testing.expectEqualStrings("1", actual[1].number);
+    try std.testing.expectEqual(@as(usize, 0), actual[1].spans.len);
+    try std.testing.expectEqualStrings("2", actual[2].number);
+    try std.testing.expectEqual(@as(usize, 1), actual[2].spans.len);
+    try std.testing.expectEqualStrings("shown", actual[2].spans[0].text);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "never-serialize-") == null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "<!--") == null);
+}
+
+const interlanguage_test_map = "# interwiki-magic\t1\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1\nw\t1\t0\t0\t0\thttps://en.wikipedia.org/wiki/$1\t0\nself\t1\t1\t0\t0\thttps://unused.example/$1\t1\n";
+
+test "captured language metadata suppresses only unescaped nonlocal interlanguage links" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap(interlanguage_test_map);
+    const cases = [_]struct { source: []const u8, text: []const u8, actions: usize, quote_tail: bool = false }{
+        .{ .source = "lead [[en:Other]] tail", .text = "lead  tail", .actions = 0 },
+        .{ .source = "[[en:Other|hidden]]s", .text = "s", .actions = 0 },
+        .{ .source = "[[:en:Other|visible]]", .text = "visible", .actions = 1 },
+        .{ .source = "[[w:Other|Wikipedia]]", .text = "Wikipedia", .actions = 1 },
+        .{ .source = "[[unknown:Other|unknown]]", .text = "unknown", .actions = 1 },
+        .{ .source = "[[self:en:Other|local chain]]", .text = "local chain", .actions = 1 },
+        .{ .source = "<nowiki>[[en:Other]]</nowiki>", .text = "[[en:Other]]", .actions = 0 },
+        .{ .source = "''[[en:Other]]''tail", .text = "'tail", .actions = 0, .quote_tail = true },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{ .title = "Host", .namespace_catalog = &registry } };
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.text, try flattened(a, spans));
+        var actions: usize = 0;
+        for (spans) |span| if (span.target.len != 0) {
+            actions += 1;
+        };
+        try std.testing.expectEqual(case.actions, actions);
+        if (case.quote_tail) {
+            var at: usize = 0;
+            for (spans) |span| {
+                if (span.text.len == 0) continue;
+                // Primary quote processing emits the leading apostrophe before
+                // opening bold; the remaining four lexical bytes are bold.
+                if (at == 0) try std.testing.expect(!span.flags.bold);
+                if (at + span.text.len > 1) try std.testing.expect(span.flags.bold);
+                at += span.text.len;
+            }
+            try std.testing.expectEqual(@as(usize, 5), at);
+        }
+    }
+}
+
+test "interlanguage page preparation preserves numbered continuity and authored empty furniture" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap(interlanguage_test_map);
+    const context: Context = .{ .title = "Host", .namespace_catalog = &registry };
+    const prepared = try preparePageExternalLinksAlloc(a, "# one\n[[en:Other]]\n# two\n#[[en:Hidden]]\n# three", context);
+    try std.testing.expectEqualStrings("# one\n# two\n#\n# three", prepared.source);
+    var r: Renderer = .{ .a = a, .context = context };
+    const blocks = try r.renderBody(prepared.source);
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    for (blocks, 0..) |block, index| {
+        try std.testing.expectEqual(Kind.definition, block.kind);
+        try std.testing.expectEqualStrings("#", block.list_path);
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{d}", .{index + 1}), block.number);
+    }
+    try std.testing.expectEqual(@as(usize, 0), blocks[2].spans.len);
+    // The actual AM demo prefix plus comment-stripped unescaped language link.
+    const demo = try preparePageExternalLinksAlloc(a, "#[[ en:ቃሉ በእንግሊዘኛ]]\n#[[ ተጨማሪ መረጃ]]", context);
+    try std.testing.expectEqualStrings("#\n#[[ ተጨማሪ መረጃ]]", demo.source);
+    const whitespace = try preparePageExternalLinksAlloc(a, "A\n \t[[en:Other]]s\nB", context);
+    try std.testing.expectEqualStrings("As\nB", whitespace.source);
+}
+
+test "interlanguage suppression requires captured true magic and nontalk host" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    for ([_][]const u8{
+        "# interwiki-magic\t0\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1\n",
+        "en\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1\n",
+        "# interwiki-magic\t1\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\n",
+    }) |map| {
+        try registry.attachInterwikiMap(map);
+        var r: Renderer = .{ .a = a, .context = .{ .title = "Host", .namespace_catalog = &registry } };
+        const spans = try r.parseSpans("[[en:Other|visible]]", .{});
+        try std.testing.expectEqual(@as(usize, 1), spans.len);
+        try std.testing.expectEqualStrings("https://en.wiktionary.org/wiki/Other", spans[0].target);
+    }
+    // Existing immutable fixture's User talk namespace verifies actual host ID.
+    try registry.attachInterwikiMap(interlanguage_test_map);
+    const talk_title = "User talk:Host";
+    try std.testing.expectEqual(@as(i32, 3), registry.ofTitle(talk_title).id);
+    var talk: Renderer = .{ .a = a, .context = .{ .title = talk_title, .namespace_catalog = &registry } };
+    const talk_spans = try talk.parseSpans("[[en:Other|visible]]", .{});
+    try std.testing.expectEqualStrings("visible", try flattened(a, talk_spans));
+    try std.testing.expectEqualStrings("https://en.wiktionary.org/wiki/Other", talk_spans[0].target);
+}
+
+test "interlanguage preparation reaches captions references and Poem without numbering hidden labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap(interlanguage_test_map);
+    var r: Renderer = .{ .a = a, .context = .{ .title = "Host", .namespace_catalog = &registry } };
+    const blocks = try r.renderBody("[[en:Other|[https://hidden.example]]] [https://visible.example]\n[[File:Example.jpg|thumb|before [[en:Other]] after [[:en:Visible|visible]]]]\n<ref>ref [[en:Other]] [https://reference.example]</ref>\n<poem>poem [[en:Other]]\nnext [[:en:Visible|visible]]</poem>\n<references/>");
+    try std.testing.expect(blocks.len != 0);
+    try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
+    try std.testing.expectEqual(@as(usize, 1), r.refs.items.len);
+    const caption = try flattened(a, r.media_caption_spans.items[0]);
+    try std.testing.expectEqualStrings("before  after visible", caption);
+    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, r.refs.items[0].spans), "en:Other") == null);
+    var first_number = false;
+    for (blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.target, "https://visible.example")) {
+            try std.testing.expectEqualStrings("[2]", span.text);
+            first_number = true;
+        }
+        try std.testing.expect(!std.mem.eql(u8, span.target, "https://en.wiktionary.org/wiki/Other"));
+    };
+    try std.testing.expect(first_number);
+    // Existing strip-phase reference numbering precedes ordinary page actions.
+    try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
+        .{ .target = "https://reference.example", .label = "[1]" },
+        .{ .target = "https://visible.example", .label = "[2]" },
+    });
+}
+
+test "native Poem interlanguage preparation preserves immutable phase originals and shared root" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap(interlanguage_test_map);
+    const scope = try poemPhaseTestToken(a, 0);
+    const original_body = try std.fmt.allocPrint(a, "{s}<poem>first\n[[en:Other]]\nsecond [[:en:Visible|visible]]</poem>", .{scope});
+    const token = try poemPhaseTestLiteralToken(a, 1, original_body);
+    const source = try std.fmt.allocPrint(a, "lead {s} tail [[en:Other]]", .{token});
+    const items = [_]PoemPhaseItem{
+        .{ .token = scope, .kind = .scope },
+        .{ .token = token, .kind = .literal, .tag = "poem", .body = original_body },
+    };
+    const wire = try poemPhaseTestRecord(a, source, "", &items);
+    const phase = (try parsePoemPhaseAlloc(a, source, null, wire)).?;
+    const prepared = try preparePageExternalLinksAlloc(a, source, .{ .title = "Host", .namespace_catalog = &registry, .poem_phase = phase });
+    const overlay = prepared.poem_phase orelse return error.TestUnexpectedResult;
+    try std.testing.expect(overlay != phase);
+    try std.testing.expectEqualStrings(original_body, phase.items[1].body.?);
+    try std.testing.expectEqualStrings(original_body, overlay.items[1].body.?);
+    try std.testing.expectEqualStrings(source, overlay.full_output);
+    try std.testing.expectEqualStrings(wire, try poemPhaseTestRecord(a, source, "", overlay.items));
+    const body = overlay.numbered_bodies[1] orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, body, "first\nsecond") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "[[en:Other]]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "[[:en:Visible|visible]]") != null);
+    const again = try preparePageExternalLinksAlloc(a, prepared.source, .{ .title = "Host", .namespace_catalog = &registry, .poem_phase = overlay });
+    try std.testing.expectEqualStrings(prepared.source, again.source);
+    try std.testing.expect(again.poem_phase == overlay);
+}
+
+test "unpiped default link labels preserve authored final spaces without changing targets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap("# interwiki-magic\t1\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1\nself\t1\t1\t0\t0\thttps://unused.example/$1\t0\n");
+    const cases = [_]struct { source: []const u8, label: []const u8, target: []const u8, kind: ir.InlineKind = .link, bold: bool = false }{
+        .{ .source = "[[Foo ]]", .label = "Foo ", .target = "Foo" },
+        .{ .source = "[[ Foo  ]]s", .label = "Foo  s", .target = "Foo" },
+        .{ .source = "[[Foo_bar ]]", .label = "Foo bar ", .target = "Foo bar" },
+        .{ .source = "[[:Category:Foo ]]", .label = "Category:Foo ", .target = "Category:Foo" },
+        .{ .source = "[[self:Foo ]]", .label = "Foo ", .target = "Foo" },
+        .{ .source = "[[:en:Other ]]", .label = "en:Other ", .target = "https://en.wiktionary.org/wiki/Other", .kind = .external_link },
+        .{ .source = "[[Page ]]", .label = "Page ", .target = "", .kind = .text, .bold = true },
+        .{ .source = "[[Page#Part ]]", .label = "Page#Part ", .target = "Page#Part" },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{ .title = "Page", .namespace_catalog = &registry } };
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.label, try flattened(a, spans));
+        try std.testing.expect(spans.len != 0);
+        for (spans) |span| {
+            try std.testing.expectEqualStrings(case.target, span.target);
+            try std.testing.expectEqual(case.kind, span.kind);
+            try std.testing.expectEqual(case.bold, span.flags.bold);
+        }
+    }
+}
+
+test "default link space repair leaves piped protected media and language metadata controls unchanged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap("# interwiki-magic\t1\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1\n");
+    const cases = [_]struct { source: []const u8, label: []const u8, target: []const u8 }{
+        .{ .source = "[[Foo |label]]", .label = "label", .target = "Foo" },
+        .{ .source = "[[Foo|label ]]", .label = "label ", .target = "Foo" },
+        .{ .source = "[[Foo (bar)|]]", .label = "Foo", .target = "Foo (bar)" },
+        .{ .source = "<nowiki>[[Foo ]]</nowiki>", .label = "[[Foo ]]", .target = "" },
+        .{ .source = "[[en:Other ]]", .label = "", .target = "" },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{ .title = "Page", .namespace_catalog = &registry } };
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.label, try flattened(a, spans));
+        for (spans) |span| try std.testing.expectEqualStrings(case.target, span.target);
+    }
+    var file: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
+    _ = try file.parseSpans("[[File:Example.jpg ]]", .{});
+    try std.testing.expectEqual(@as(usize, 1), file.media.items.len);
+    try std.testing.expectEqualStrings("Example.jpg", file.media.items[0].file);
+}
+
+test "mining source default label space survives list projection and DPR2 round trip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    // Exact source after existing expander's closed-comment strip. Official
+    // oldid17341 primary HTML retains this final ASCII inside its first <a>.
+    const blocks = try r.renderBody("# [[ገላጭ የአማርኛ ቃል ]]\n# [[ምንጭ ቃል]]");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqualStrings("1", blocks[0].number);
+    try std.testing.expectEqualStrings("2", blocks[1].number);
+    try std.testing.expectEqualStrings("ገላጭ የአማርኛ ቃል ", try flattened(a, blocks[0].spans));
+    for (blocks[0].spans) |span| try std.testing.expectEqualStrings("ገላጭ የአማርኛ ቃል", span.target);
+    const stored = try FormattingScopeTest.encode(a, &r, blocks);
+    const decoded = stored.entry.sections[0].blocks;
+    try std.testing.expectEqual(@as(usize, 2), decoded.len);
+    try std.testing.expectEqualStrings("1", decoded[0].number);
+    try std.testing.expectEqualStrings("2", decoded[1].number);
+    try std.testing.expectEqual(@as(usize, 1), decoded[0].spans.len);
+    try std.testing.expectEqualStrings("ገላጭ የአማርኛ ቃል ", decoded[0].spans[0].text);
+    try std.testing.expectEqualStrings("ገላጭ የአማርኛ ቃል", decoded[0].spans[0].target);
+    try std.testing.expect(decoded[0].spans[0].kind == .link);
+}
+
+test "interlanguage metadata inside external labels is removed before outer action rendering" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap(interlanguage_test_map);
+    const source = "[https://example.org before [[en:Other]] after]";
+    const prepared = try preparePageExternalLinksAlloc(a, source, .{ .title = "Host", .namespace_catalog = &registry });
+    try std.testing.expectEqualStrings("[https://example.org before  after]", prepared.source);
+    var r: Renderer = .{ .a = a, .context = .{ .title = "Host", .namespace_catalog = &registry } };
+    const spans = try r.parseSpans(source, .{ .bold = true, .italic = true });
+    try std.testing.expectEqualStrings("before  after", try flattened(a, spans));
+    for (spans) |span| {
+        try std.testing.expectEqual(.external_link, span.kind);
+        try std.testing.expectEqualStrings("https://example.org", span.target);
+        try std.testing.expect(span.flags.bold and span.flags.italic);
+    }
+    const blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = &blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "Host", .language, .{ .code = "en", .heading = "English" });
+    var text: std.ArrayList(u8) = .empty;
+    for (decoded.entry.sections[0].blocks[0].spans) |span| {
+        try text.appendSlice(a, span.text);
+        try std.testing.expect(span.kind == .external_link and span.bold and span.italic);
+        try std.testing.expectEqualStrings("https://example.org", span.target);
+    }
+    try std.testing.expectEqualStrings("before  after", text.items);
+}
+
+test "external label metadata traversal preserves disabled escaped protected and local controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap(interlanguage_test_map);
+    for ([_][]const u8{
+        "[https://example.org [[:en:Other|visible]]]",
+        "[https://example.org <nowiki>[[en:Other]]</nowiki>]",
+        "[https://example.org [[w:Other|visible]]]",
+        "[https://example.org [[self:en:Other|visible]]]",
+    }) |source| {
+        const prepared = try preparePageExternalLinksAlloc(a, source, .{ .title = "Host", .namespace_catalog = &registry });
+        try std.testing.expectEqualStrings(source, prepared.source);
+    }
+    const source = "[https://example.org before [[en:Other]] after]";
+    const talk = try preparePageExternalLinksAlloc(a, source, .{ .title = "User talk:Host", .namespace_catalog = &registry });
+    try std.testing.expectEqualStrings(source, talk.source);
+    for ([_][]const u8{
+        "# interwiki-magic\t0\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1\n",
+        "en\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1\n",
+        "# interwiki-magic\t1\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\n",
+    }) |map| {
+        try registry.attachInterwikiMap(map);
+        const prepared = try preparePageExternalLinksAlloc(a, source, .{ .title = "Host", .namespace_catalog = &registry });
+        try std.testing.expectEqualStrings(source, prepared.source);
+    }
 }

@@ -103,6 +103,16 @@ def render_interwiki_map(data):
         return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
 
     lines = []
+    query = data["query"]
+    if "general" in query:
+        general = query["general"]
+        if not isinstance(general, dict):
+            raise ValueError("Invalid interwiki general metadata")
+        if "interwikimagic" in general:
+            magic = general["interwikimagic"]
+            if type(magic) is not bool:
+                raise ValueError("Invalid interwiki magic flag")
+            lines.append("# interwiki-magic\t" + ("1" if magic else "0"))
     prefixes = set()
     for row in rows:
         if not isinstance(row, dict):
@@ -113,9 +123,15 @@ def render_interwiki_map(data):
         if prefix.casefold() in prefixes:
             raise ValueError(f"Duplicate interwiki prefix: {prefix}")
         prefixes.add(prefix.casefold())
-        for flag in ("local", "localinterwiki", "protorel", "trans"):
+        for flag in ("local", "localinterwiki", "protorel", "trans", "extralanglink"):
             if flag in row and type(row[flag]) is not bool:
                 raise ValueError(f"Invalid interwiki flag: {flag}")
+        language = row.get("language", "")
+        if not isinstance(language, str):
+            raise ValueError("Invalid interwiki language")
+        # A language name or explicit extra-language marker is captured identity,
+        # not a prefix spelling heuristic. Keep the first six columns unchanged.
+        is_interlanguage = bool(language) or row.get("extralanglink", False)
         # siteinfo exposes localinterwiki for prefixes targeting this wiki.
         # Its current response does not expose transcludability; absent flags
         # remain false rather than inventing external transclusion behavior.
@@ -124,7 +140,8 @@ def render_interwiki_map(data):
                                  "1" if row.get("localinterwiki", False) else "0",
                                  "1" if row.get("protorel", False) else "0",
                                  "1" if row.get("trans", False) else "0",
-                                 field(target))))
+                                 field(target),
+                                 "1" if is_interlanguage else "0")))
     return ("\n".join(lines) + "\n").encode("utf-8"), len(rows)
 
 def interwiki_map_snapshot(wiki, output):
@@ -132,7 +149,7 @@ def interwiki_map_snapshot(wiki, output):
 
     This API response is current at retrieval time, not part of a dated dump.
     """
-    query = {"action": "query", "meta": "siteinfo", "siprop": "interwikimap",
+    query = {"action": "query", "meta": "siteinfo", "siprop": "general|interwikimap",
              "format": "json", "formatversion": "2"}
     url = wiktionary_api(wiki) + "?" + urllib.parse.urlencode(query)
     root = output / wiki

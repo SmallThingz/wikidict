@@ -728,7 +728,13 @@ pub const Provider = struct {
             const protocol_raw = fields.next() orelse continue;
             const transcludable_raw = fields.next() orelse continue;
             const url_raw = fields.next() orelse continue;
+            // Presentation metadata may append one interlanguage identity bit.
+            // Lua's public InterwikiRow fields remain the original six-column API.
+            const interlanguage_raw = fields.next();
             if (fields.next() != null) return error.InvalidInterwikiSnapshot;
+            if (interlanguage_raw) |value| {
+                if (!std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "1")) return error.InvalidInterwikiSnapshot;
+            }
             const prefix = try unescapeFieldAlloc(self.a, prefix_raw);
             errdefer self.a.free(prefix);
             const url = try unescapeFieldAlloc(self.a, url_raw);
@@ -2499,4 +2505,48 @@ test "provider category formatting binds loaded counts and preserves owned strin
     // Same wiki/site identity but changed loaded counts must reject the old map.
     try tmp.dir.writeFile(io, .{ .sub_path = "category-stats.tsv", .data = "One\t13\t2\t1\n" });
     try std.testing.expectError(error.CategoryStatisticsFormatIdentityMismatch, Provider.init(io, a, root, catalog, "unused-dump.xml"));
+}
+
+test "provider accepts legacy and language aware interwiki metadata without changing Lua rows" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const snapshots = [_][]const u8{
+        "en\t1\t0\t0\t1\thttps://en.wiktionary.org/wiki/$1\n",
+        "# interwiki-magic\t1\nen\t1\t0\t0\t1\thttps://en.wiktionary.org/wiki/$1\t1\n",
+        "# interwiki-magic\t0\nen\t1\t0\t0\t1\thttps://en.wiktionary.org/wiki/$1\t0\n",
+        "en\t1\t0\t0\t1\thttps://en.wiktionary.org/wiki/$1\t1\n",
+    };
+    for (snapshots) |bytes| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "interwiki-map.tsv", .data = bytes });
+        var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml");
+        defer provider.deinit();
+        const get = provider.api().interwiki_map orelse return error.TestExpectedEqual;
+        const rows = try get(&provider);
+        try std.testing.expectEqual(@as(usize, 1), rows.len);
+        try std.testing.expectEqualStrings("en", rows[0].prefix);
+        try std.testing.expectEqualStrings("https://en.wiktionary.org/wiki/$1", rows[0].url);
+        try std.testing.expect(rows[0].is_local);
+        try std.testing.expect(!rows[0].is_current_wiki);
+        try std.testing.expect(!rows[0].is_protocol_relative);
+        try std.testing.expect(rows[0].is_transcludable);
+    }
+}
+
+test "provider rejects malformed optional interlanguage columns" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    for ([_][]const u8{ "", "yes", "2", "1\textra" }) |suffix| {
+        const bytes = try std.fmt.allocPrint(a, "en\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t{s}\n", .{suffix});
+        defer a.free(bytes);
+        try tmp.dir.writeFile(io, .{ .sub_path = "interwiki-map.tsv", .data = bytes });
+        try std.testing.expectError(error.InvalidInterwikiSnapshot, Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml"));
+    }
 }

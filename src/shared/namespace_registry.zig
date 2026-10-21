@@ -20,7 +20,7 @@ pub const Spec = struct {
     aliases: []const []const u8,
 };
 const Alias = struct { key: []const u8, index: usize };
-pub const InterwikiRow = struct { prefix: []const u8, url: []const u8, is_current_wiki: bool };
+pub const InterwikiRow = struct { prefix: []const u8, url: []const u8, is_current_wiki: bool, is_interlanguage: bool = false };
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     source_sha256: [32]u8,
@@ -32,6 +32,7 @@ pub const Registry = struct {
     names: []const Alias,
     // Optional immutable site metadata, owned by this registry arena.
     interwiki_rows: []const InterwikiRow = &.{},
+    interwiki_magic: ?bool = null,
 
     pub fn load(io: std.Io, a: std.mem.Allocator, root: []const u8) !Registry {
         const path = try std.fs.path.join(a, &.{ root, "namespace-registry.tsv" });
@@ -109,14 +110,22 @@ pub const Registry = struct {
         for ([_]i32{ 0, 10, 14 }) |id| if (result.byId(id) == null) return error.InvalidNamespaceRegistry;
         return result;
     }
-    /// Attach only the selected edition's existing captured six-column map.
+    /// Attach the selected edition's captured map; legacy six-column rows
+    /// retain unknown magic and no inferred language-prefix metadata.
     /// Ordinary namespace callers remain unchanged until this is explicitly called.
     pub fn attachInterwikiMap(self: *Registry, raw: []const u8) !void {
         if (raw.len > 4 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(raw)) return error.InvalidInterwikiSnapshot;
         const a = self.arena.allocator();
         var rows: std.ArrayList(InterwikiRow) = .empty;
+        var magic: ?bool = null;
         var lines = std.mem.splitScalar(u8, raw, '\n');
         while (lines.next()) |line| {
+            if (std.mem.startsWith(u8, line, "# interwiki-magic")) {
+                if (!std.mem.startsWith(u8, line, "# interwiki-magic\t")) return error.InvalidInterwikiSnapshot;
+                if (magic != null) return error.InvalidInterwikiSnapshot;
+                magic = try interwikiBoolean(line["# interwiki-magic\t".len..]);
+                continue;
+            }
             if (line.len == 0 or line[0] == '#') continue;
             var fields = std.mem.splitScalar(u8, line, '\t');
             const prefix = try interwikiField(a, fields.next() orelse return error.InvalidInterwikiSnapshot);
@@ -125,11 +134,13 @@ pub const Registry = struct {
             _ = try interwikiBoolean(fields.next() orelse return error.InvalidInterwikiSnapshot);
             _ = try interwikiBoolean(fields.next() orelse return error.InvalidInterwikiSnapshot);
             const url = try interwikiField(a, fields.next() orelse return error.InvalidInterwikiSnapshot);
+            const language = if (fields.next()) |value| try interwikiBoolean(value) else false;
             if (fields.next() != null or prefix.len == 0 or std.mem.indexOfAny(u8, prefix, ": \t\r\n") != null) return error.InvalidInterwikiSnapshot;
             for (rows.items) |row| if (std.ascii.eqlIgnoreCase(row.prefix, prefix)) return error.InvalidInterwikiSnapshot;
-            try rows.append(a, .{ .prefix = prefix, .url = url, .is_current_wiki = current });
+            try rows.append(a, .{ .prefix = prefix, .url = url, .is_current_wiki = current, .is_interlanguage = language });
         }
         self.interwiki_rows = try rows.toOwnedSlice(a);
+        self.interwiki_magic = magic;
     }
     pub fn deinit(self: *Registry) void {
         self.mapper.deinit();
@@ -443,4 +454,27 @@ test "captured interwiki attachment owns rows and refuses ambiguous or malformed
     try std.testing.expectError(error.InvalidInterwikiSnapshot, registry.attachInterwikiMap("w\t1\tbad\t0\t0\thttps://one/$1\n"));
     try std.testing.expectError(error.InvalidInterwikiSnapshot, registry.attachInterwikiMap("w\t1\t0\t0\thttps://one/$1\n"));
     try std.testing.expectEqual(@as(usize, 2), registry.interwiki_rows.len);
+}
+
+test "captured interlanguage fields preserve legacy unknown and validate atomic replacement" {
+    const a = std.testing.allocator;
+    var registry = try Registry.init(a, english_test_fixture);
+    defer registry.deinit();
+    try registry.attachInterwikiMap("# interwiki-magic\t1\nen\t1\t0\t0\t0\thttps://en.example/$1\t1\nw\t1\t0\t0\t0\thttps://w.example/$1\t0\n");
+    try std.testing.expectEqual(@as(?bool, true), registry.interwiki_magic);
+    try std.testing.expect(registry.interwiki_rows[0].is_interlanguage);
+    try std.testing.expect(!registry.interwiki_rows[1].is_interlanguage);
+    for ([_][]const u8{
+        "# interwiki-magic\ttrue\n",
+        "# interwiki-magic\t0\n# interwiki-magic\t1\n",
+        "# interwiki-magic\t1\nen\t1\t0\t0\t0\thttps://e/$1\t2\n",
+        "# interwiki-magic\t1\nen\t1\t0\t0\t0\thttps://e/$1\t1\t0\n",
+    }) |bad| try std.testing.expectError(error.InvalidInterwikiSnapshot, registry.attachInterwikiMap(bad));
+    try std.testing.expectEqual(@as(?bool, true), registry.interwiki_magic);
+    try std.testing.expectEqual(@as(usize, 2), registry.interwiki_rows.len);
+    try registry.attachInterwikiMap("# interwiki-magic\t0\nen\t1\t0\t0\t0\thttps://en.example/$1\t1\n");
+    try std.testing.expectEqual(@as(?bool, false), registry.interwiki_magic);
+    try registry.attachInterwikiMap("en\t1\t0\t0\t0\thttps://en.example/$1\n");
+    try std.testing.expectEqual(@as(?bool, null), registry.interwiki_magic);
+    try std.testing.expect(!registry.interwiki_rows[0].is_interlanguage);
 }

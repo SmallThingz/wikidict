@@ -1651,8 +1651,8 @@ test "AM glossary term headings retain bodies and actions without invented count
     }
     try std.testing.expectEqualStrings("ይቆጠር", decoded.entry.sections[1].blocks[0].spans[0].text);
     try std.testing.expectEqualStrings("መቁጠር ወይንም ቁጥር", decoded.entry.sections[1].blocks[1].spans[0].text);
-    try std.testing.expectEqualStrings("ቆጣሪ \t", decoded.entry.sections[2].blocks[0].spans[0].text);
-    try std.testing.expectEqualStrings("የአገር ኮድ \t", decoded.entry.sections[3].blocks[0].spans[0].text);
+    try std.testing.expectEqualStrings("ቆጣሪ", decoded.entry.sections[2].blocks[0].spans[0].text);
+    try std.testing.expectEqualStrings("የአገር ኮድ", decoded.entry.sections[3].blocks[0].spans[0].text);
     var actions: usize = 0;
     for (decoded.entry.sections[0].blocks[0].spans) |span| {
         if (span.kind != .link) continue;

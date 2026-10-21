@@ -10,8 +10,8 @@ import download_wiktionaries as d
 
 class DownloaderTest(unittest.TestCase):
     def test_current_interwiki_capture_preserves_raw_response_and_flags(self):
-        response={'query':{'interwikimap':[
-            {'prefix':'en','local':True,'localinterwiki':True,'url':'https://en.wiktionary.org/wiki/$1','protorel':False},
+        response={'query':{'general':{'interwikimagic':True},'interwikimap':[
+            {'prefix':'en','local':True,'localinterwiki':True,'url':'https://en.wiktionary.org/wiki/$1','protorel':False,'language':'English'},
             {'prefix':'w','url':'//en.wikipedia.org/wiki/$1','protorel':True},
         ]}}
         raw=json.dumps(response,separators=(',',':')).encode()
@@ -20,9 +20,11 @@ class DownloaderTest(unittest.TestCase):
             with patch.object(d.urllib.request,'urlopen',return_value=io.BytesIO(raw)) as fetch:
                 path,provenance=d.interwiki_map_snapshot('enwiktionary',root)
             self.assertEqual(fetch.call_args.kwargs['timeout'],30)
+            self.assertEqual(d.urllib.parse.parse_qs(d.urllib.parse.urlparse(fetch.call_args.args[0].full_url).query)['siprop'],['general|interwikimap'])
             self.assertEqual(path.read_text().splitlines(),[
-                'en\t1\t1\t0\t0\thttps://en.wiktionary.org/wiki/$1',
-                'w\t0\t0\t1\t0\t//en.wikipedia.org/wiki/$1',
+                '# interwiki-magic\t1',
+                'en\t1\t1\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1',
+                'w\t0\t0\t1\t0\t//en.wikipedia.org/wiki/$1\t0',
             ])
             self.assertEqual((path.parent/'interwiki-map.raw.json').read_bytes(),raw)
             self.assertEqual(provenance['raw_sha256'],hashlib.sha256(raw).hexdigest())
@@ -41,6 +43,49 @@ class DownloaderTest(unittest.TestCase):
                 with patch.object(d.urllib.request,'urlopen',return_value=io.BytesIO(raw)):
                     with self.assertRaises(ValueError): d.interwiki_map_snapshot('enwiktionary',root)
                 self.assertFalse((root/'enwiktionary').exists())
+    def test_interwiki_metadata_preserves_true_false_missing_and_extra_language_identity(self):
+        rows=[{'prefix':'en','url':'https://en.example/$1','language':'English'},
+              {'prefix':'extra','url':'https://extra.example/$1','extralanglink':True},
+              {'prefix':'empty','url':'https://empty.example/$1','language':''},
+              {'prefix':'local','url':'https://local.example/$1','local':True,'localinterwiki':True},
+              {'prefix':'w','url':'//w.example/$1','protorel':True,'trans':True}]
+        for magic in (True,False,None):
+            query={'interwikimap':rows}
+            if magic is not None:query['general']={'interwikimagic':magic}
+            raw,count=d.render_interwiki_map({'query':query})
+            lines=raw.decode().splitlines()
+            if magic is None:self.assertFalse(any(line.startswith('# interwiki-magic')for line in lines))
+            else:self.assertEqual(lines.pop(0),'# interwiki-magic\t'+str(int(magic)))
+            self.assertEqual(count,5)
+            self.assertEqual([line.split('\t')[-1]for line in lines],['1','1','0','0','0'])
+            self.assertEqual(lines[3],'local\t1\t1\t0\t0\thttps://local.example/$1\t0')
+            self.assertEqual(lines[4],'w\t0\t0\t1\t1\t//w.example/$1\t0')
+
+    def test_interwiki_metadata_rejects_malformed_optional_flags_and_language(self):
+        for field,values in [('language',[None,True,1,[],{}]),('extralanglink',[None,'1',1,[],{}])]:
+            for value in values:
+                with self.subTest(field=field,value=value),self.assertRaises(ValueError):
+                    d.render_interwiki_map({'query':{'interwikimap':[dict(prefix='en',url='https://e/$1',**{field:value})]}})
+        for value in (None,1,'true',[],{}):
+            with self.subTest(magic=value),self.assertRaises(ValueError):
+                d.render_interwiki_map({'query':{'general':{'interwikimagic':value},'interwikimap':[{'prefix':'en','url':'x'}]}})
+        with self.assertRaises(ValueError):d.render_interwiki_map({'query':{'general':True,'interwikimap':[{'prefix':'en','url':'x'}]}})
+
+    def test_retained_auxiliary_interwiki_writer_uses_same_metadata_contract(self):
+        import prepare_auxiliary_snapshots as auxiliary
+        data={'query':{'general':{'wikiid':'amwiktionary','interwikimagic':True},
+                       'interwikimap':[{'prefix':'en','local':True,'language':'English','url':'https://en.wiktionary.org/wiki/$1'}]}}
+        raw=json.dumps(data,separators=(',',':')).encode()
+        record=dict(wiki='amwiktionary',retrieved_utc='2026-10-01T00:00:00Z',siteinfo_source_url='https://am.wiktionary.org/w/api.php',artifacts={'namespace-siteinfo.raw.json':hashlib.sha256(raw).hexdigest()})
+        with tempfile.TemporaryDirectory() as tmp:
+            capture=Path(tmp);(capture/'namespace-siteinfo.raw.json').write_bytes(raw)
+            self.assertEqual(auxiliary.interwiki(capture,record),1)
+            self.assertEqual((capture/'interwiki-map.raw.json').read_bytes(),raw)
+            self.assertEqual((capture/'interwiki-map.tsv').read_text(),'# interwiki-magic\t1\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1\n')
+            proof=json.loads((capture/'interwiki-map.provenance.json').read_text())
+            self.assertEqual(proof['raw_sha256'],hashlib.sha256(raw).hexdigest())
+            self.assertEqual(proof['tsv_sha256'],hashlib.sha256((capture/'interwiki-map.tsv').read_bytes()).hexdigest())
+
     def item(self):
         return dict(wiki='testwiktionary',date='20260901',name='test.bz2',url='https://dumps.wikimedia.org/testwiktionary/20260901/test.bz2',size=4,sha1=hashlib.sha1(b'data').hexdigest())
     def test_output_exists_before_snapshot_discovery(self):
