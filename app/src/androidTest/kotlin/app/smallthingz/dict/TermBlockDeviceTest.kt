@@ -5,7 +5,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLayoutResult
@@ -19,7 +18,7 @@ import org.junit.Test
 /** Existing compiler fixture, copied byte-for-byte from test/resources (SHA-256 8e0d146b...). */
 @OptIn(ExperimentalTextApi::class)
 class TermBlockDeviceTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val compose = createLegacyPhysicalComposeRule()
     private fun fixtureBlocks(): List<Block> {
         val bytes = InstrumentationRegistry.getInstrumentation().context.assets
             .open("grammar-fixture-v2.dpr2").use { it.readBytes() }
@@ -79,5 +78,42 @@ class TermBlockDeviceTest {
         val description = compose.onNodeWithText("nested descriptor", useUnmergedTree = true)
             .fetchSemanticsNode().config[SemanticsProperties.Text].single()
         assertFalse(description.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
+
+        // Actual EntryView path: zero-span authored rows must survive readingRows and layout.
+        val emptyBlocks = listOf(
+            Block("list_item", 1, emptyList(), listPath = "*"),
+            Block("list_item", 3, emptyList(), listPath = "###", number = "7"),
+            Block("definition", 2, emptyList(), listPath = "##", number = "4"),
+            Block("example", 2, emptyList(), listPath = "#:"),
+            Block("quotation", 2, emptyList(), listPath = "#*"),
+            Block("list_detail", 3, emptyList(), listPath = "*::"),
+            Block("term", 2, emptyList(), listPath = "*;"),
+            Block("indent", 3, emptyList(), listPath = ":::"),
+        )
+        show(emptyBlocks)
+        compose.waitForIdle()
+        compose.onNodeWithText("• ", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("7. ", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("04", useUnmergedTree = true).assertIsDisplayed()
+        compose.onAllNodesWithText("│ ", useUnmergedTree = true).assertCountEquals(2)
+        compose.onNodeWithText("↳ ", useUnmergedTree = true).assertIsDisplayed()
+        val emptyText = compose.onAllNodes(hasTextExactly(""), useUnmergedTree = true)
+            .fetchSemanticsNodes().sortedBy { it.boundsInRoot.top }
+        assertEquals("One empty text leaf per authored row, including prefixless term and indent", 8, emptyText.size)
+        val density = compose.activity.resources.displayMetrics.density
+        val expectedIndent = listOf(0, 14, 7, 7, 7, 14, 7, 14)
+        val contentLeft = emptyText.first().boundsInRoot.left - 28f * density
+        emptyText.forEachIndexed { index, node ->
+            val bounds = node.boundsInRoot
+            assertTrue("Authored empty row $index has positive height", bounds.height > 0f)
+            if (index > 0) assertTrue("Empty rows retain vertical order", bounds.top >= emptyText[index - 1].boundsInRoot.bottom - 1f)
+            val prefixWidth = if (index < 6) 28f * density else 0f
+            assertEquals("Row $index indentation in pixels", contentLeft + expectedIndent[index] * density + prefixWidth, bounds.left, density)
+            assertFalse("Empty labels invent no action", node.config.contains(SemanticsActions.OnClick))
+        }
+        compose.onNodeWithContentDescription("Collapse Grammar terms").performClick()
+        compose.onAllNodes(hasTextExactly(""), useUnmergedTree = true).assertCountEquals(0)
+        compose.onNodeWithContentDescription("Expand Grammar terms").performClick()
+        compose.onAllNodes(hasTextExactly(""), useUnmergedTree = true).assertCountEquals(8)
     }
 }

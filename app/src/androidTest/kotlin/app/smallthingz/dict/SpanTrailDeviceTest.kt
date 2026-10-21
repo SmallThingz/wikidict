@@ -4,7 +4,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.font.FontFamily
@@ -16,7 +15,7 @@ import org.junit.Test
 /** Supported DPR2 field contract; synthetic presentation fixture, not a corpus loss claim. */
 @OptIn(ExperimentalTextApi::class)
 class SpanTrailDeviceTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val compose = createLegacyPhysicalComposeRule()
     private fun show(spans: List<Span>) {
         val entry = Entry("Trail fixture", emptyList(), "language", "English", "en",
             listOf(Section(3, "Noun", listOf(Block("definition", 1, spans)))), emptyList())

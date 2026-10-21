@@ -17,6 +17,39 @@ import java.util.UUID
 private val blobKinds = listOf("language", "thesaurus", "citations", "reconstruction", "rhymes", "sign_gloss", "supplemental", "alias")
 internal fun blobKind(tag: Int): String = blobKinds.getOrNull(tag - 1) ?: error("Invalid blob kind")
 
+// A failed commit may already have removed the process-local preference values.
+// Keep the exact owned record until clearing is durable, even if restoration throws.
+internal class DownloadClearOwner {
+    private var pending: Map<String, Any?>? = null
+    fun id(current: Long): Long {
+        if (current >= 0) {
+            if (pending?.get("downloadId") != current) pending = null
+            return current
+        }
+        return pending?.get("downloadId") as? Long ?: -1L
+    }
+    fun clear(id: Long, lock: Any, current: () -> Long, snapshot: () -> Map<String, Any?>,
+        retain: (Boolean) -> Unit, commit: () -> Boolean, restore: (Map<String, Any?>) -> Boolean) = synchronized(lock) {
+        if (this.id(current()) != id) return@synchronized
+        val saved = pending ?: snapshot()
+        check(saved["downloadId"] == id)
+        pending = saved
+        retain(true)
+        val message = "Could not confirm download removal. Saved state is uncertain; keep the app open and retry cancellation."
+        val failure = try {
+            if (commit()) { pending = null; retain(current() >= 0); return@synchronized }
+            IOException(message)
+        } catch (original: Exception) { IOException(message, original) }
+        if (this.id(current()) == id) {
+            try {
+                if (!restore(saved)) failure.addSuppressed(IOException("Could not persist restored download metadata; saved state is uncertain."))
+            } catch (restoration: Exception) { failure.addSuppressed(restoration) }
+        }
+        retain(this.id(current()) >= 0)
+        throw failure
+    }
+}
+
 // Android's sqlite3_bind_text16 interprets an initial U+FEFF as a byte-order mark.
 // Prefix query parameters and remove only that sentinel on the constant SQL side.
 private fun sqlText(value: String) = "x$value"
@@ -135,6 +168,39 @@ internal inline fun finishDictionaryInstall(
     if (failure == null) throw error
 }
 
+// A release error may follow a committed deletion. Reconcile before changing its
+// payload, and publish confirmed removal even when payload cleanup also fails.
+internal inline fun finishDictionaryRemoval(
+    failure: Throwable?, endTransaction: () -> Unit, registered: () -> Boolean?,
+    removeFile: () -> Unit, refresh: () -> Unit
+) {
+    var primary = failure
+    try { endTransaction() }
+    catch (endFailure: Exception) {
+        if (primary == null) primary = endFailure
+        else if (primary !== endFailure) primary.addSuppressed(endFailure)
+    }
+    if (primary is Error) return
+    val removed = if (primary == null) true else try { registered() == false }
+        catch (queryFailure: Exception) {
+            if (primary !== queryFailure) primary.addSuppressed(queryFailure)
+            false
+        }
+    if (removed) {
+        try { removeFile() }
+        catch (cleanupFailure: Exception) {
+            if (primary == null) primary = cleanupFailure
+            else if (primary !== cleanupFailure) primary.addSuppressed(cleanupFailure)
+        }
+        try { refresh() }
+        catch (refreshFailure: Exception) {
+            if (primary == null) primary = refreshFailure
+            else if (primary !== refreshFailure) primary.addSuppressed(refreshFailure)
+        }
+    }
+    if (failure == null) primary?.let { throw it }
+}
+
 // Queued operations must not replace the job that currently owns the library.
 internal class LibraryOperationOwner(private val mutex: Mutex) {
     @Volatile var active: Job? = null
@@ -171,25 +237,26 @@ class LibraryStore private constructor(private val context: Context) {
     var busy by mutableStateOf<String?>(null); private set
     var progress by mutableFloatStateOf(0f); private set
     var transferDetail by mutableStateOf<String?>(null); private set
-    var error by mutableStateOf<String?>(null); private set
+    private val failures = LibraryFailureState()
+    val initializationError get() = failures.initializationError
+    var error: String?
+        get() = failures.operationError
+        private set(value) { failures.operationError = value }
     var revision by mutableIntStateOf(0); private set
     var catalog by mutableStateOf<List<CatalogItem>>(emptyList()); private set
     private val prefs = context.getSharedPreferences("library", Context.MODE_PRIVATE)
     private val downloadLock = Any()
-    var hasRetainedDownload by mutableStateOf(prefs.getLong("downloadId", -1) >= 0); private set
+    private val downloadRecordKeys = listOf("downloadId", "downloadUrl", "downloadLabel", "downloadBytes", "downloadHash")
+    private val downloadClear = DownloadClearOwner()
+    var hasRetainedDownload by mutableStateOf(downloadId() >= 0); private set
     var sources by mutableStateOf(prefs.getStringSet("sources", setOf(Catalog.DEFAULT))!!.toList()); private set
     init { scope.launch {
         val opened = mutex.withLock {
-            try {
+            failures.initialize(open = {
                 val installed=helper.readableDatabase.rawQuery("SELECT id FROM dictionaries",null).use{c->buildSet{while(c.moveToNext())add(c.getString(0)+".wikblb")}}
                 directory.listFiles()?.filter{it.extension=="part" || (it.extension=="wikblb" && it.name !in installed)}?.forEach{it.delete()}
                 refresh()
-                true
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) {
-                withContext(Dispatchers.Main) { error = "Unable to open your library. Restart the app to try again." }
-                false
-            }
+            }, publishFailure = { change -> withContext(Dispatchers.Main) { change() } })
         }
         if (opened) resumeDownload()
     } }
@@ -202,7 +269,7 @@ class LibraryStore private constructor(private val context: Context) {
     }
     fun removeSource(url: String) { sources = sources - url; prefs.edit().putStringSet("sources", sources.toSet()).apply(); refreshCatalogs() }
     fun cancel() {
-        val id = prefs.getLong("downloadId", -1)
+        val id = downloadId()
         val operation = operations.active
         scope.launch {
             val failure = cancelOwnedDownload({ if (id >= 0) removeDownload(id) }, { operation?.cancel() })
@@ -210,23 +277,41 @@ class LibraryStore private constructor(private val context: Context) {
         }
     }
     private val manager get() = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-    private fun clearDownload(id: Long) = synchronized(downloadLock) {
-        if (prefs.getLong("downloadId", -1) == id) {
-            prefs.edit().remove("downloadId").remove("downloadUrl").remove("downloadLabel").remove("downloadBytes").remove("downloadHash").commit()
-            hasRetainedDownload = false
-        }
+    private fun downloadId() = synchronized(downloadLock) { downloadClear.id(prefs.getLong("downloadId", -1)) }
+    private fun restoreDownloadRecord(record: Map<String, Any?>): Boolean {
+        val edit = prefs.edit()
+        downloadRecordKeys.forEach { edit.remove(it) }
+        record.forEach { (key, value) -> when (value) {
+            is String -> edit.putString(key, value)
+            is Long -> edit.putLong(key, value)
+            is Int -> edit.putInt(key, value)
+            is Boolean -> edit.putBoolean(key, value)
+            is Float -> edit.putFloat(key, value)
+            is Set<*> -> {
+                if (value.any { it !is String }) throw IOException("Could not restore saved download metadata type")
+                edit.putStringSet(key, value.map { it as String }.toSet())
+            }
+            else -> throw IOException("Could not restore saved download metadata type")
+        } }
+        return edit.commit()
     }
+    private fun clearDownload(id: Long) = downloadClear.clear(id, downloadLock,
+        { prefs.getLong("downloadId", -1) },
+        { prefs.all.filterKeys { it in downloadRecordKeys }.mapValues { (_, value) -> if (value is Set<*>) value.toSet() else value } },
+        { hasRetainedDownload = it },
+        { prefs.edit().apply { downloadRecordKeys.forEach { remove(it) } }.commit() },
+        ::restoreDownloadRecord)
     private fun removeDownload(id: Long) = removeOwnedDownload(id, downloadLock,
-        { prefs.getLong("downloadId", -1) }, { manager.remove(it) }, { clearDownload(id) })
+        { downloadId() }, { manager.remove(it) }, { clearDownload(id) })
     private fun resumeDownload() {
-        if (prefs.getLong("downloadId", -1) >= 0) {
+        if (downloadId() >= 0) {
             val item = CatalogItem(prefs.getString("downloadUrl", "")!!, prefs.getString("downloadLabel", "Dictionary")!!,
                 prefs.getLong("downloadBytes", -1).takeIf { it > 0 }, prefs.getString("downloadHash", null))
             operation("Downloading ${item.label}") { watchDownload(item) }
         }
     }
     private suspend fun watchDownload(item: CatalogItem) {
-        val id = prefs.getLong("downloadId", -1)
+        val id = downloadId()
         try { while (true) {
             currentCoroutineContext().ensureActive()
             val state = manager.query(DownloadManager.Query().setFilterById(id)).use { c ->
@@ -303,7 +388,7 @@ class LibraryStore private constructor(private val context: Context) {
         if (!item.url.startsWith("asset://")) {
             require(URI(item.url).let { it.scheme == "https" && it.host != null && it.userInfo == null })
             require(item.bytes == null || item.bytes in 1..32L*1024*1024*1024) { "Dictionary is too large" }
-            val existing = prefs.getLong("downloadId", -1)
+            val existing = downloadId()
             if (existing >= 0 && prefs.getString("downloadUrl", null) != item.url) {
                 error("Finish or cancel the current download first")
             }
@@ -348,10 +433,43 @@ class LibraryStore private constructor(private val context: Context) {
     fun importFile(name: () -> String = { "" }, input: () -> InputStream) = operation("Importing dictionary") {
         val temp = File(directory, "${UUID.randomUUID()}.part")
         try {
-            input().use { source -> temp.outputStream().use { out ->
-                val buffer = ByteArray(256*1024); var total = 0L; val max = directory.usableSpace - 32*1024*1024
-                while (true) { currentCoroutineContext().ensureActive(); val n = source.read(buffer); if (n < 0) break; total += n; require(total <= max); out.write(buffer,0,n) }
-            } }
+            coroutineScope {
+                // Acquire only while this operation owns the mutex; keep the resource in
+                // this scope even if cancellation arrives while the provider opens it.
+                val source = input()
+                var reader: Deferred<Unit>? = null
+                var failure: Throwable? = null
+                try {
+                    reader = async(Dispatchers.IO) {
+                        try {
+                            temp.outputStream().use { out ->
+                                val buffer = ByteArray(256*1024); var total = 0L; val max = directory.usableSpace - 32*1024*1024
+                                while (true) { currentCoroutineContext().ensureActive(); val n = source.read(buffer); if (n < 0) break; total += n; require(total <= max) { "Not enough space to import this dictionary" }; out.write(buffer,0,n) }
+                            }
+                        } catch (readFailure: IOException) {
+                            // Closing our provider FD wakes a blocked read with an I/O
+                            // error. Preserve the user's cancellation in that case.
+                            currentCoroutineContext().ensureActive()
+                            throw readFailure
+                        }
+                    }
+                    reader.await()
+                } catch (error: Throwable) {
+                    failure = error
+                    throw error
+                } finally {
+                    // This must run inside coroutineScope, before it waits for children.
+                    // The owned Android resolver stream signals blocked FD reads on close.
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        try { source.close() }
+                        catch (closeFailure: Throwable) {
+                            val primary = failure
+                            if (primary == null) throw closeFailure
+                            if (closeFailure !== primary) primary.addSuppressed(closeFailure)
+                        } finally { reader?.cancelAndJoin() }
+                    }
+                }
+            }
             val hash = temp.inputStream().use { hashImportedDictionary(it) }
             install(temp, hash, name())
         } finally { temp.delete() }
@@ -373,9 +491,9 @@ class LibraryStore private constructor(private val context: Context) {
                 kind = blobKind(input.read())
                 if (kind == "language") { code = input.nul(); language = input.nul(); require(language.isNotBlank()) } else language = kind.replace('_',' ')
                 validateDictionaryFilename(filename,kind,language)
-                if (alreadyInstalled) return
+                if (alreadyInstalled && final.isFile) return
                 var previous: ByteArray? = null
-                val statement = db.compileStatement("INSERT INTO words VALUES(?,CAST(? AS TEXT),CAST(? AS TEXT),?,?,CAST(? AS TEXT),?)")
+                val statement = if (alreadyInstalled) null else db.compileStatement("INSERT INTO words VALUES(?,CAST(? AS TEXT),CAST(? AS TEXT),?,?,CAST(? AS TEXT),?)")
                 statement.use {
                     while (input.position < source.length) {
                         currentCoroutineContext().ensureActive()
@@ -385,12 +503,17 @@ class LibraryStore private constructor(private val context: Context) {
                         val offset = input.position
                         val alias = if (kind == "alias") AliasDecoder.decode(input.bytes(length.toInt()), title) else null
                         if (alias == null) {
-                            require(input.bytes(4).contentEquals("DPR2".toByteArray())) { "Dictionary is not compiled presentation data" }
-                            input.skipFully(length-4)
+                            // Validate the same complete record the reader will consume,
+                            // before publishing either its rows or backing file.
+                            BlobDecoder.decode(input.bytes(length.toInt()), title, kind,
+                                if (kind == "language") language else null, code)
                         }
                         val lookup = alias?.sourceKey ?: title
-                        statement.bindString(1,id); statement.bindBlob(2,lookup.toByteArray(Charsets.UTF_8)); statement.bindBlob(3,foldSearchKey(lookup).toByteArray(Charsets.UTF_8)); statement.bindLong(4,offset); statement.bindLong(5,length)
-                        statement.bindBlob(6,title.toByteArray(Charsets.UTF_8)); statement.bindString(7,alias?.sourceKind ?: kind); statement.executeInsert(); count++
+                        if (statement != null) {
+                            statement.bindString(1,id); statement.bindBlob(2,lookup.toByteArray(Charsets.UTF_8)); statement.bindBlob(3,foldSearchKey(lookup).toByteArray(Charsets.UTF_8)); statement.bindLong(4,offset); statement.bindLong(5,length)
+                            statement.bindBlob(6,title.toByteArray(Charsets.UTF_8)); statement.bindString(7,alias?.sourceKind ?: kind); statement.executeInsert()
+                        }
+                        count++
                     }
                 }
                 require(input.read() == -1) { "Trailing dictionary data" }
@@ -398,8 +521,12 @@ class LibraryStore private constructor(private val context: Context) {
             }
             require(count > 0 || kind != "language") { "Dictionary has no entries" }
             currentCoroutineContext().ensureActive()
+            // The ID hashes the complete staged bytes. A missing payload may be
+            // restored after full validation without replacing its registered rows.
+            if (alreadyInstalled) require(!final.exists()) { "Dictionary file changed during repair; try importing again" }
             require(temp.renameTo(final)) { "Cannot install dictionary" }
             placedFile = true
+            if (!alreadyInstalled) {
             db.execSQL("INSERT INTO dictionaries VALUES(?,CAST(? AS TEXT),CAST(? AS TEXT),?,?,?,?)", arrayOf<Any>(id,language.toByteArray(Charsets.UTF_8),code.toByteArray(Charsets.UTF_8),kind,count,final.length(),edition))
             if (edition.isNotEmpty()) {
                 val collision = db.rawQuery("""SELECT 1 FROM words a JOIN dictionaries ad ON ad.id=a.dictionary
@@ -407,6 +534,7 @@ class LibraryStore private constructor(private val context: Context) {
                     JOIN words w ON w.dictionary=d.id AND w.title=a.title
                     WHERE ad.kind='alias' AND ad.edition=? LIMIT 1""", arrayOf(edition)).use { it.moveToFirst() }
                 require(!collision) { "Redirect collides with a definition in this edition" }
+            }
             }
             db.setTransactionSuccessful()
         } catch (e: Throwable) {
@@ -511,14 +639,37 @@ class LibraryStore private constructor(private val context: Context) {
                 arrayOf(sqlText(foldSearchKey(key)),dictionary,entry.navigationKind,sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
         }
         if (entry.navigationKind == "language" && entry.navigationLanguage.isNullOrEmpty()) return@withContext null
+        // A language heading names an owner only when that owner is installed in this edition.
+        // Other fragments remain ordinary within-owner section destinations.
+        val fragment = title.substringAfter('#', "").replace('_', ' ')
+        val linkLanguage = if (entry.navigationKind == "language" && dictionaries.any {
+            it.edition == entry.edition && it.kind == "language" && it.language == fragment
+        }) fragment else entry.navigationLanguage.orEmpty()
         helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND edition=? AND kind=? AND (substr(?,2)='' OR language=substr(?,2)) ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
-            arrayOf(sqlText(foldSearchKey(key)),entry.edition,entry.navigationKind,sqlText(entry.navigationLanguage.orEmpty()),sqlText(entry.navigationLanguage.orEmpty()),sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
+            arrayOf(sqlText(foldSearchKey(key)),entry.edition,entry.navigationKind,sqlText(linkLanguage),sqlText(linkLanguage),sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
     }
     fun rememberWord(hit:WordHit) { prefs.edit().putString("lastTitle",hit.title).putString("lastLanguage",hit.language)
         .putString("lastDictionary",hit.dictionary).putString("lastRecordKey",hit.recordKey).putString("lastContextDictionary",hit.contextDictionary).putString("lastEdition",hit.edition).apply() }
     fun remove(id: String) = operation("Removing dictionary") {
-        helper.writableDatabase.apply { beginTransaction();try { delete("words","dictionary=?",arrayOf(id));delete("dictionaries","id=?",arrayOf(id));setTransactionSuccessful() } finally { endTransaction() } }
-        File(directory,"$id.wikblb").delete();refresh()
+        val db = helper.writableDatabase
+        var failure: Throwable? = null
+        db.beginTransaction()
+        try {
+            db.delete("words", "dictionary=?", arrayOf(id))
+            db.delete("dictionaries", "id=?", arrayOf(id))
+            db.setTransactionSuccessful()
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            finishDictionaryRemoval(failure, { db.endTransaction() },
+                registered = { committedDictionaryRegistration(db, id) },
+                removeFile = {
+                    val payload = File(directory, "$id.wikblb")
+                    if (!payload.delete() && payload.exists()) throw IOException("Cannot remove dictionary payload")
+                },
+                refresh = { refresh() })
+        }
     }
 }
 private fun compareUtf8(a: ByteArray,b: ByteArray): Int { for(i in 0 until minOf(a.size,b.size)){val d=(a[i].toInt() and 255)-(b[i].toInt() and 255);if(d!=0)return d};return a.size-b.size }

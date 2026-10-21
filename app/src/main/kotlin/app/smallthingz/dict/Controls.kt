@@ -3,6 +3,7 @@ package app.smallthingz.dict
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -22,11 +23,15 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun DockButton(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+fun DockButton(icon: ImageVector, label: String, selected: Boolean, selectedActionLabel: String? = null, onClick: () -> Unit) {
     val color by animateColorAsState(if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant, label = "dock ink")
     val fill by animateColorAsState(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent, label = "dock fill")
     Box(Modifier.size(56.dp, 48.dp).clip(RoundedCornerShape(18.dp)).background(fill)
-        .selectable(selected = selected, role = Role.Tab, onClick = onClick).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        .then(if (selected && selectedActionLabel != null) {
+            // A selected tab normally omits ACTION_CLICK; this item has a real action.
+            Modifier.clickable(role = Role.Button, onClickLabel = selectedActionLabel, onClick = onClick)
+        } else Modifier.selectable(selected = selected, role = Role.Tab, onClick = onClick))
+        .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         Icon(icon, null, tint = color, modifier = Modifier.size(22.dp))
     }
 }

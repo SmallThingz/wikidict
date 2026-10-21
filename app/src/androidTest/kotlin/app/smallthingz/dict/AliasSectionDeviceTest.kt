@@ -4,7 +4,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.ByteArrayInputStream
@@ -17,7 +16,7 @@ import org.junit.Test
 
 /** Real import/search/navigation over synthetic typed records, with no source parser or network. */
 class AliasSectionDeviceTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val compose = createPhysicalComposeRule()
 
     private fun aliases(): ByteArray {
         fun u32(value: Int) = ByteArray(4) { (value ushr (it * 8)).toByte() }

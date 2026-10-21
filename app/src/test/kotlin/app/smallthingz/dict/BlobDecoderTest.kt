@@ -56,4 +56,64 @@ class BlobDecoderTest {
         assertThrows(Exception::class.java){Catalog.parse("asset://English.wikblb")}
         assertEquals(1,Catalog.parse("asset://English.wikblb",true).size)
     }
+    private fun explanationFixture(version: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        fun byte(v: Int) { out.write(v) }
+        fun u32(v: Int) { repeat(4) { byte(v ushr (it * 8) and 255) } }
+        fun string(v: String) { val b = v.toByteArray(Charsets.UTF_8); u32(b.size); out.write(b) }
+        fun spans(label: String) {
+            u32(1); byte(1); byte(1); byte(10)
+            listOf(label, "glossary", "!", "en", "abbr", "ltr").forEach(::string)
+            if (version == 3) string("Meaning & <plain> \u2067معنى\u2069: $label")
+        }
+        fun block(table: Boolean) {
+            byte(if (table) 12 else 0); byte(0); byte(0)
+            spans(if (table) "table-body" else "body")
+            byte(0); string(""); string(""); byte(if (table) 1 else 0)
+            if (table) { spans("caption"); u32(1); u32(1); byte(0); byte(1); byte(0); byte(1); byte(0); spans("cell") }
+        }
+        out.write("DPR$version".toByteArray()); spans("display")
+        u32(1); byte(3); string("Noun"); u32(2); block(false); block(true)
+        spans("preamble"); u32(0); u32(0)
+        u32(1); u32(1); u32(1); string(""); string(""); spans("reference"); u32(0)
+        return out.toByteArray()
+    }
+    @Test fun legacyAndExplainedWirePreserveAllSpanContainersAndCompactText() {
+        val explained = BlobDecoder.decode(explanationFixture(3), "Word", "language", "English", "en")
+        val lists = listOf(explained.displayTitle, explained.preamble,
+            explained.sections.single().blocks[0].spans, explained.sections.single().blocks[1].spans,
+            explained.sections.single().blocks[1].table!!.caption,
+            explained.sections.single().blocks[1].table!!.rows.single().single().spans,
+            explained.references.single().spans)
+        assertEquals(7, lists.size)
+        lists.forEach { spans ->
+            val span = spans.single()
+            assertEquals("Meaning & <plain> \u2067معنى\u2069: " + span.text, span.explanation)
+            assertEquals(span.text + "!", textOf(spans))
+            assertEquals("glossary", span.target); assertEquals("ltr", span.direction)
+            assertTrue(span.italic && span.small); assertEquals("label", span.role)
+        }
+        val legacy = BlobDecoder.decode(explanationFixture(2), "Word", "language", "English", "en")
+        assertTrue(legacy.abbreviations.isEmpty())
+        assertEquals(textOf(explained.displayTitle), textOf(legacy.displayTitle))
+        records().forEach { (title, payload) ->
+            assertEquals("DPR2", payload.copyOfRange(0, 4).decodeToString())
+            assertTrue(BlobDecoder.decode(payload, title, "language", "English", "en").abbreviations.isEmpty())
+        }
+    }
+    @Test fun explainedWireRejectsTruncatedMalformedUtf8AndUnsupportedVersions() {
+        val bytes = explanationFixture(3)
+        for (length in listOf(0, 3, 8, bytes.size - 1)) assertThrows(Exception::class.java) {
+            BlobDecoder.decode(bytes.copyOf(length), "Word", "language", "English", "en")
+        }
+        val unknown = bytes.copyOf().also { it[3] = '4'.code.toByte() }
+        assertThrows(Exception::class.java) { BlobDecoder.decode(unknown, "Word", "language", "English", "en") }
+        val marker = "Meaning &".toByteArray()
+        val start = bytes.asList().windowed(marker.size).indexOfFirst { it == marker.asList() }
+        assertTrue(start >= 0)
+        val invalid = bytes.copyOf().also { it[start] = 0xff.toByte() }
+        assertThrows(Exception::class.java) { BlobDecoder.decode(invalid, "Word", "language", "English", "en") }
+        assertThrows(Exception::class.java) { BlobDecoder.decode(bytes + byteArrayOf(0), "Word", "language", "English", "en") }
+    }
+
 }

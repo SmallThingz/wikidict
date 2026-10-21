@@ -124,6 +124,67 @@ class DownloadLifecycleTest {
         }
     }
 
+    private class ClearRecord {
+        val lock = Any()
+        val owner = DownloadClearOwner()
+        var values: Map<String, Any?> = mapOf("downloadId" to 7L, "downloadUrl" to "https://example.test/owned.wikblb",
+            "downloadLabel" to "Owned", "downloadBytes" to 123L, "downloadHash" to "a".repeat(64))
+        var retained = true
+        fun id() = synchronized(lock) { owner.id(values["downloadId"] as? Long ?: -1L) }
+        fun clear(id: Long = 7L, commit: () -> Boolean, restore: (Map<String, Any?>) -> Boolean) =
+            removeOwnedDownload(id, lock, { this.id() }, {}) {
+                owner.clear(id, lock, { values["downloadId"] as? Long ?: -1L }, { values.toMap() },
+                    { retained = it }, commit, restore)
+            }
+    }
+
+    @Test fun failedClearCommitRestoresExactPresentFieldsAndKeepsCancelRetryable() {
+        for (restoreSucceeds in listOf(true, false)) for (omitHash in listOf(true, false)) {
+            val state = ClearRecord()
+            if (omitHash) state.values = state.values - "downloadHash"
+            val saved = state.values
+            var cancelled = false
+            val failure = cancelOwnedDownload({ state.clear(commit = {
+                assertTrue(Thread.holdsLock(state.lock)); state.values = emptyMap(); false
+            }, restore = {
+                assertTrue(Thread.holdsLock(state.lock)); assertEquals(saved, it); state.values = it; restoreSucceeds
+            }) }, { cancelled = true })
+            assertTrue(failure is IOException); assertTrue(failure!!.message!!.contains("uncertain"))
+            assertEquals(if (restoreSucceeds) 0 else 1, failure.suppressed.size)
+            assertEquals(saved, state.values); assertEquals(7L, state.id()); assertTrue(state.retained); assertFalse(cancelled)
+            val retry = cancelOwnedDownload({ state.clear(commit = { state.values = emptyMap(); true },
+                restore = { error("Successful clearing must not restore") }) }, { cancelled = true })
+            assertNull(retry); assertTrue(cancelled); assertTrue(state.values.isEmpty()); assertEquals(-1L, state.id()); assertFalse(state.retained)
+        }
+    }
+
+    @Test fun clearAndRestorationExceptionsKeepOriginalFailureAndPendingRetryOwner() {
+        val state = ClearRecord(); val saved = state.values
+        val original = IOException("clear storage unavailable"); val restoration = IOException("restore unavailable")
+        val caught = assertThrows(IOException::class.java) {
+            state.clear(commit = { state.values = emptyMap(); throw original }, restore = { throw restoration })
+        }
+        assertSame(original, caught.cause); assertArrayEquals(arrayOf(restoration), caught.suppressed)
+        assertTrue(state.values.isEmpty()); assertEquals(7L, state.id()); assertTrue(state.retained)
+        state.clear(commit = { state.values = emptyMap(); true }, restore = { error("No restore after successful retry") })
+        assertFalse(state.retained); assertEquals(-1L, state.id()); assertTrue(state.values.isEmpty())
+        assertEquals(7L, saved["downloadId"])
+    }
+
+    @Test fun failedClearCannotRestoreOverAReplacementOrResurrectItsOldOwner() {
+        val state = ClearRecord()
+        val replacement = state.values + mapOf("downloadId" to 9L, "downloadLabel" to "Replacement")
+        var restored = false
+        assertThrows(IOException::class.java) {
+            state.clear(commit = { state.values = replacement; false }, restore = { restored = true; state.values = it; true })
+        }
+        assertFalse(restored); assertEquals(replacement, state.values); assertEquals(9L, state.id()); assertTrue(state.retained)
+        state.clear(id = 7L, commit = { error("Stale clear must not commit") }, restore = { error("Stale clear must not restore") })
+        assertEquals(replacement, state.values)
+        state.clear(id = 9L, commit = { state.values = emptyMap(); true }, restore = { error("No restoration required") })
+        assertEquals(-1L, state.id()); assertFalse(state.retained); assertTrue(state.values.isEmpty())
+    }
+
     private class Record {
         val lock = Any()
         var values: Map<String, Any> = mapOf("downloadId" to 7L, "downloadUrl" to "https://example.test/dictionary.wikblb", "downloadBytes" to 123L, "downloadHash" to "a".repeat(64))

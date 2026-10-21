@@ -8,14 +8,13 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 
 /** Valid DPR2 fixtures; audio is disabled so rendering cannot fetch or play media. */
 class MediaPlacementDeviceTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val compose = createPhysicalComposeRule()
 
     private val firstCaptionLine = "First caption line " + "a".repeat(21)
     private val secondCaptionLine = "Second caption line " + "b".repeat(20)

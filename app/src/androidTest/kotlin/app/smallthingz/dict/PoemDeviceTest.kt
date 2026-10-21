@@ -4,6 +4,13 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.toPixelMap
+import kotlin.math.ceil
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -11,7 +18,6 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
@@ -25,7 +31,7 @@ import org.junit.Test
 
 /** Valid DPR2 only; media stays disabled and the observed link is intercepted. */
 class PoemDeviceTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val compose = createPhysicalComposeRule()
     private val rtlText = "Latin text wraps across this indented poem line and keeps every continuation at its enclosing logical start."
     private val hebrew = "שלום"
     private val defaultHebrew = "עברית"
@@ -60,8 +66,40 @@ class PoemDeviceTest {
             u32(0) + u32(0) + u32(0) + u32(0) + media
     }
 
+    private fun rawBounds(node: SemanticsNodeInteraction): Rect {
+        val actual = node.fetchSemanticsNode()
+        return Rect(actual.positionInRoot, Size(actual.size.width.toFloat(), actual.size.height.toFloat()))
+    }
+
+    private fun showLine(node: SemanticsNodeInteraction, layout: TextLayoutResult, line: Int, label: String): Rect {
+        val outer = compose.onNodeWithTag("entry-scroll")
+        for (attempt in 0 until 4) {
+            val frame = rawBounds(outer)
+            val before = rawBounds(node)
+            val top = before.top + layout.getLineTop(line)
+            val bottom = before.top + layout.getLineBottom(line)
+            val dy = when {
+                top < frame.top -> top - frame.top
+                bottom > frame.bottom -> bottom - frame.bottom
+                else -> break
+            }
+            outer.performSemanticsAction(SemanticsActions.ScrollBy) { action ->
+                assertTrue("$label: outer entry must position visual line $line", action(0f, dy))
+            }
+            compose.waitForIdle()
+            assertTrue("$label: line positioning must make progress", rawBounds(node).top != before.top)
+        }
+        val frame = rawBounds(outer)
+        val actual = rawBounds(node)
+        val top = actual.top + layout.getLineTop(line)
+        val bottom = actual.top + layout.getLineBottom(line)
+        assertTrue("$label: entire tested line $line must be in the reader viewport: $top..$bottom vs $frame",
+            top >= frame.top - 1f && bottom <= frame.bottom + 1f && bottom > top)
+        return actual
+    }
+
     private fun assertStartMargin(
-        layout: TextLayoutResult, start: Int, end: Int, indent: Int,
+        layout: TextLayoutResult, node: SemanticsNodeInteraction, start: Int, end: Int, indent: Int,
         direction: ResolvedTextDirection, label: String,
     ) {
         val text = layout.layoutInput.text.text
@@ -72,17 +110,50 @@ class PoemDeviceTest {
             val offsets = (maxOf(start, layout.getLineStart(line)) until minOf(end, lineEnd))
                 .filter { !text[it].isWhitespace() && Character.getType(text[it]) != Character.FORMAT.toInt() }
             assertTrue("$label: no visible characters on visual line $line", offsets.isNotEmpty())
-            // Compose's upstream line-end fallback uses scroll extents. This fixture's
-            // wrap spaces and terminal isolates/newlines keep every visible glyph interior.
-            assertTrue("$label: visible character reaches the line-edge metric on line $line: offsets=$offsets, end=$lineEnd",
-                offsets.all { it + 1 < lineEnd })
-            val boxes = offsets.map { layout.getBoundingBox(it) }
-            val edge = if (direction == ResolvedTextDirection.Rtl) boxes.maxOf { it.right } else boxes.minOf { it.left }
+            // A real wrap may end directly at a visible character. Compose's
+            // final-character bounding box then uses line-end scroll extents,
+            // so inspect all painted fixture ink instead of skipping that glyph.
+            val bounds = showLine(node, layout, line, label)
+            val root = compose.onRoot()
+            val rootBounds = rawBounds(root)
+            val pixels = root.captureToImage().toPixelMap()
+            assertEquals(rootBounds.width.toInt(), pixels.width)
+            assertEquals(rootBounds.height.toInt(), pixels.height)
+            val lineTop = layout.getLineTop(line)
+            val lineBottom = layout.getLineBottom(line)
+            assertTrue("$label: invalid vertical line bounds on line $line: $lineTop..$lineBottom",
+                lineTop.isFinite() && lineBottom.isFinite() && lineTop >= -1f && lineBottom <= layout.size.height + 1f && lineBottom > lineTop)
+            assertTrue("$label: clipped horizontal line bounds on line $line: ${layout.getLineLeft(line)}..${layout.getLineRight(line)}, width=${layout.size.width}",
+                layout.getLineLeft(line) >= -1f && layout.getLineRight(line) <= layout.size.width + 1f)
+            assertFalse("$label: ellipsis on tested line $line", layout.isLineEllipsized(line))
+            val left = bounds.left - rootBounds.left
+            val right = bounds.right - rootBounds.left
+            val top = bounds.top + lineTop - rootBounds.top
+            val bottom = bounds.top + lineBottom - rootBounds.top
+            assertTrue("$label: entire tested line must be inside the owned root capture",
+                left >= -1f && right <= pixels.width + 1f && top >= -1f && bottom <= pixels.height + 1f)
+            var inkLeft = layout.size.width
+            var inkRight = -1
+            var inkCount = 0
+            for (y in ceil(top).toInt().coerceIn(0, pixels.height) until ceil(bottom).toInt().coerceIn(0, pixels.height)) {
+                for (x in ceil(left).toInt().coerceIn(0, pixels.width) until ceil(right).toInt().coerceIn(0, pixels.width)) {
+                    val color = pixels[x, y]
+                    // Only red ink in this exact text line, after bringing the whole line into view.
+                    if (color.alpha > 0.05f && color.red > color.green + 0.05f && color.red > color.blue + 0.05f) {
+                        val localX = (x - left).toInt()
+                        inkLeft = minOf(inkLeft, localX)
+                        inkRight = maxOf(inkRight, localX)
+                        inkCount++
+                    }
+                }
+            }
+            assertTrue("$label: no painted fixture ink on tested line $line, offsets=$offsets", inkCount > 0)
+            val edge = if (direction == ResolvedTextDirection.Rtl) inkRight + 1f else inkLeft.toFloat()
             val boundary = if (direction == ResolvedTextDirection.Rtl) layout.size.width - margin else margin
             assertTrue("$label on visual line $line: edge=$edge, boundary=$boundary, margin=$margin, " +
                 "width=${layout.size.width}, fontSize=${layout.layoutInput.style.fontSize}, fontPixels=$fontPixels, " +
                 "density=${layout.layoutInput.density.density}, fontScale=${layout.layoutInput.density.fontScale}, " +
-                "lineOffsets=${layout.getLineStart(line)}..$lineEnd, checkedOffsets=$offsets, boxes=$boxes",
+                "lineOffsets=${layout.getLineStart(line)}..$lineEnd, checkedOffsets=$offsets, ink=$inkLeft..$inkRight, pixels=$inkCount",
                 if (direction == ResolvedTextDirection.Rtl) edge <= boundary + 1f else edge >= boundary - 1f)
         }
     }
@@ -94,9 +165,11 @@ class PoemDeviceTest {
         val containerDirection = mutableStateOf(LayoutDirection.Ltr)
         compose.runOnUiThread {
             compose.activity.setContent { MaterialTheme { CompositionLocalProvider(LocalLayoutDirection provides containerDirection.value) {
-                Box(Modifier.width(240.dp)) {
-                    EntryView(entry, false, {}, onLink = { clicked.add(it) },
-                        settings = AppSettings(collapseOtherSections = false, allowImages = false, allowAudio = false))
+                CompositionLocalProvider(LocalContentColor provides Color.Red) {
+                    Box(Modifier.width(240.dp)) {
+                        EntryView(entry, false, {}, onLink = { clicked.add(it) },
+                            settings = AppSettings(collapseOtherSections = false, allowImages = false, allowAudio = false))
+                    }
                 }
             } } }
         }
@@ -120,11 +193,11 @@ class PoemDeviceTest {
         val defaultLatinStart = expected.indexOf(defaultLatin)
         assertEquals(ResolvedTextDirection.Ltr, layout.getParagraphDirection(defaultHebrewStart))
         assertEquals(ResolvedTextDirection.Ltr, layout.getParagraphDirection(defaultLatinStart))
-        assertStartMargin(layout, rtlStart, rtlStart + rtlText.length, 2, ResolvedTextDirection.Rtl,
+        assertStartMargin(layout, node, rtlStart, rtlStart + rtlText.length, 2, ResolvedTextDirection.Rtl,
             "RTL start margin")
-        assertStartMargin(layout, hebrewStart, hebrewStart + hebrew.length, 1, ResolvedTextDirection.Ltr,
+        assertStartMargin(layout, node, hebrewStart, hebrewStart + hebrew.length, 1, ResolvedTextDirection.Ltr,
             "LTR start margin survives opposite lexical direction")
-        assertStartMargin(layout, defaultHebrewStart, defaultHebrewStart + defaultHebrew.length, 1, ResolvedTextDirection.Ltr,
+        assertStartMargin(layout, node, defaultHebrewStart, defaultHebrewStart + defaultHebrew.length, 1, ResolvedTextDirection.Ltr,
             "Absent direction uses the LTR container despite RTL lexical content")
         val rtlStyle = text.paragraphStyles.single { it.start <= rtlStart && it.end > rtlStart }
         assertEquals(2.em, rtlStyle.item.textIndent!!.firstLine)
@@ -140,7 +213,12 @@ class PoemDeviceTest {
         })
         compose.onAllNodesWithContentDescription("Play pronunciation").assertCountEquals(1)
         compose.onNodeWithContentDescription("Play pronunciation").assertIsNotEnabled()
-        node.performTouchInput { click(layout.getBoundingBox(linkStart + 1).center) }
+        val linkBounds = showLine(node, layout, layout.getLineForOffset(linkStart + 1), "Observed glossary link")
+        val rootBounds = rawBounds(compose.onRoot())
+        val glyph = layout.getBoundingBox(linkStart + 1).center
+        compose.onRoot().performTouchInput {
+            click(Offset(linkBounds.left - rootBounds.left + glyph.x, linkBounds.top - rootBounds.top + glyph.y))
+        }
         compose.runOnIdle {
             assertEquals(listOf("dog#Usage_notes"), clicked)
             containerDirection.value = LayoutDirection.Rtl
@@ -156,7 +234,7 @@ class PoemDeviceTest {
         assertEquals(ResolvedTextDirection.Rtl, containerRtl.getParagraphDirection(defaultLatinStart))
         assertEquals(ResolvedTextDirection.Ltr, containerRtl.getParagraphDirection(hebrewStart))
         assertEquals(ResolvedTextDirection.Rtl, containerRtl.getParagraphDirection(rtlStart))
-        assertStartMargin(containerRtl, defaultLatinStart, defaultLatinStart + defaultLatin.length, 1, ResolvedTextDirection.Rtl,
+        assertStartMargin(containerRtl, compose.onNodeWithText(expected, useUnmergedTree = true), defaultLatinStart, defaultLatinStart + defaultLatin.length, 1, ResolvedTextDirection.Rtl,
             "Invalid direction uses the RTL container despite LTR lexical content")
         compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Wiktionary contributors"))
         compose.onNodeWithText("Media").assertDoesNotExist()

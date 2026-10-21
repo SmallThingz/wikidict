@@ -5,6 +5,11 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.view.accessibility.AccessibilityNodeInfo
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentLinkedQueue
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -25,13 +30,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import kotlin.math.ceil
 import kotlin.math.floor
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLayoutResult
@@ -50,7 +55,7 @@ import org.junit.Test
 /** Synthetic renderer contract using the source-backed seven-scalar Egyptian witness. */
 @OptIn(ExperimentalTextApi::class)
 class EgyptianFontDeviceTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val compose = createPhysicalComposeRule()
     private val witness = "𓂜𓐰𓏏𓐱𓏭𓅪𓆑"
     private val expectedFontSha = "360528e3c216b9d75d73b531e5423370c5c28bf1c847eeb79f54ed0bb015dbf7"
 
@@ -298,7 +303,7 @@ class EgyptianFontDeviceTest {
                 }
             }
         }
-        for (case in cases) {
+        for ((caseIndex, case) in cases.withIndex()) {
             compose.runOnIdle { selected = case }
             val count = egyptianTextRuns(case.spans).size
             awaitShaped(case.expected, count)
@@ -310,10 +315,31 @@ class EgyptianFontDeviceTest {
             assertEquals("Native Text must honor the fixed parent width", checkNotNull(requiredWidth.get()), layout.size.width)
             assertFalse("Native text must fit the actual narrow viewport", layout.hasVisualOverflow)
             assertEquals(count, layout.placeholderRects.size)
-            for (rect in layout.placeholderRects) {
-                assertNotNull("Every original run must have a visible placeholder", rect)
-                assertTrue(rect!!.left >= -1f && rect.right <= layout.size.width + 1f)
-                assertTrue(rect.top >= -1f && rect.bottom <= layout.size.height + 1f)
+            val caretGeometry = layout.layoutInput.placeholders.take(16).map { range ->
+                val start = range.start
+                val end = range.end
+                if (start < 0 || end <= start || end > layout.layoutInput.text.length) {
+                    "invalid placeholder range $start..$end"
+                } else {
+                    "$start..$end:primary=${layout.getHorizontalPosition(start, true)}..${layout.getHorizontalPosition(end, true)}," +
+                        "secondary=${layout.getHorizontalPosition(start, false)}..${layout.getHorizontalPosition(end, false)}," +
+                        "bidi=${layout.getBidiRunDirection(start)}..${layout.getBidiRunDirection(end - 1)}," +
+                        "paragraph=${layout.getParagraphDirection(start)}," +
+                        "startContext=${layout.layoutInput.text.text.substring(maxOf(0, start - 2), minOf(layout.layoutInput.text.length, start + 2)).map { it.code }}," +
+                        "endContext=${layout.layoutInput.text.text.substring(maxOf(0, end - 2), minOf(layout.layoutInput.text.length, end + 2)).map { it.code }}"
+                }
+            }
+            for ((rectIndex, rect) in layout.placeholderRects.withIndex()) {
+                val geometry = "case=$caseIndex, placeholder=$rectIndex, expectedLength=${case.expected.length}, " +
+                    "fallback=${case.fallback}, directions=${case.directions}, size=${layout.size}, " +
+                    "constraints=${layout.layoutInput.constraints}, rect=$rect, caretGeometry=$caretGeometry, " +
+                    "rects=${layout.placeholderRects.take(16)}, scales=${semantic[EgyptianVisibleScales]}, " +
+                    "lines=${(0 until minOf(layout.lineCount, 16)).map { line -> "${layout.getLineStart(line)}..${layout.getLineEnd(line)}:${layout.getLineLeft(line)}..${layout.getLineRight(line)}" }}"
+                assertNotNull("Every original run must have a visible placeholder: $geometry", rect)
+                assertTrue("Native placeholder must fit horizontal viewport: $geometry",
+                    rect!!.left >= -1f && rect.right <= layout.size.width + 1f)
+                assertTrue("Native placeholder must fit vertical viewport: $geometry",
+                    rect.top >= -1f && rect.bottom <= layout.size.height + 1f)
             }
             var start = 0
             for (direction in case.directions) {
@@ -386,6 +412,494 @@ class EgyptianFontDeviceTest {
         }
     }
 
+
+    /** Renderer fixture uses the exact two authored AR MdC outputs, not Arabic corpus acceptance. */
+    @Test
+    @SdkSuppress(minSdkVersion = 31)
+    fun authoredOverlayAndCartoucheControlsKeepMixedArabicInkLinksAndToolbarCopy() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val cases = listOf(
+            "Tut overlay" to "𓇋𓏠𓐰𓈖𓏏𓅱𓐴𓏏𓋹",
+            "Akhenaten cartouche" to "𓍹𓐼𓇋𓏏𓐰𓈖𓐰𓇳𓅜𓐍𓐰𓈖𓐽𓍺"
+        )
+        assertEquals(expectedFontSha, sha256(context.resources.openRawResource(R.font.egyptian_hieroglyphs).use { it.readBytes() }))
+        for ((label, signs) in cases) {
+            val points = signs.codePoints().toArray()
+            if (label == "Tut overlay") assertEquals(1, points.count { it == 0x13434 })
+            else {
+                assertEquals(0x13379, points.first()); assertEquals(0x1337A, points.last())
+                assertEquals(1, points.count { it == 0x1343C }); assertEquals(1, points.count { it == 0x1343D })
+            }
+            // Exercise the actual app-owned shaper/font, not nominal glyph count alone.
+            val shaped = runBlocking { EgyptianShaper.shape(context, signs, 100f) }
+            assertTrue(shaped.glyphCount() > 0)
+            assertTrue(shaped.advance.isFinite() && shaped.advance > 0f)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 100f }
+            val ink = RectF()
+            var visible = 0
+            repeat(shaped.glyphCount()) { index ->
+                val bounds = RectF()
+                shaped.getFont(index).getGlyphBounds(shaped.getGlyphId(index), paint, bounds)
+                assertTrue(shaped.clusters[index] in signs.indices)
+                if (!bounds.isEmpty) {
+                    bounds.offset(shaped.getGlyphX(index), shaped.getGlyphY(index))
+                    assertTrue(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom).all { it.isFinite() })
+                    if (visible++ == 0) ink.set(bounds) else ink.union(bounds)
+                }
+            }
+            assertTrue("Actual signs must have finite nonempty ink: $label", visible > 0 && ink.width() > 0f && ink.height() > 0f)
+            val before = "قبل "
+            val after = " بعد "
+            val following = "التالي"
+            val expected = before + "\u2066" + signs + "\u2069" + after + following
+            val entry = Entry(label, emptyList(), "language", "Arabic", "ar",
+                listOf(Section(3, "الأصل والاشتقاق", listOf(Block("paragraph", 0, listOf(
+                    Span("text", before), Span("link", signs, target = "egyptian-origin", language = "egy", classes = "Egyp", direction = "ltr"),
+                    Span("text", after), Span("link", following, target = "following-arabic")
+                ))))), emptyList())
+            val clicked = mutableListOf<String>()
+            val clipboard = AtomicReference<RecordingClipboard?>()
+            compose.runOnUiThread {
+                compose.activity.setContent {
+                    val density = LocalDensity.current
+                    val platform = LocalClipboard.current
+                    val recording = remember(platform) { RecordingClipboard(platform) }
+                    SideEffect { clipboard.set(recording) }
+                    CompositionLocalProvider(LocalClipboard provides recording,
+                        LocalLayoutDirection provides LayoutDirection.Rtl,
+                        LocalDensity provides androidx.compose.ui.unit.Density(density.density, 2f)) {
+                        MaterialTheme(colorScheme = lightColorScheme(primary = Color.Red)) {
+                            androidx.compose.material3.Surface {
+                                androidx.compose.foundation.layout.Box(Modifier.width(180.dp)) {
+                                    EntryView(entry, false, {}, onLink = { clicked += it },
+                                        settings = AppSettings(collapseOtherSections = false, collapseDetails = false))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            try {
+                awaitShaped(expected, 1)
+                val node = compose.onNodeWithText(expected, useUnmergedTree = true)
+                node.assertIsDisplayed()
+                val text = node.fetchSemanticsNode().config[SemanticsProperties.Text].single()
+                assertEquals(expected, text.text)
+                val begin = before.length
+                assertArrayEquals(points, text.text.substring(begin + 1, begin + 1 + signs.length).codePoints().toArray())
+                val links = text.getLinkAnnotations(0, text.length)
+                assertEquals(listOf("egyptian-origin", "following-arabic"), links.map { (it.item as LinkAnnotation.Clickable).tag })
+                val layout = textLayout(node)
+                assertEquals(text, layout.layoutInput.text)
+                assertFalse("Narrow large local font must not clip the authored run: $label", layout.hasVisualOverflow)
+                assertEquals(ResolvedTextDirection.Rtl, layout.getParagraphDirection(0))
+                val box = checkNotNull(layout.placeholderRects.single())
+                assertTrue(box.width > 0f && box.height > 0f)
+                assertTrue(box.left >= -1f && box.right <= layout.size.width + 1f)
+                assertTrue(box.top >= -1f && box.bottom <= layout.size.height + 1f)
+                val root = compose.onRoot(useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+                val bounds = node.fetchSemanticsNode().boundsInRoot
+                assertTrue(bounds.left >= root.left - 1f && bounds.right <= root.right + 1f)
+                assertTrue(bounds.top >= root.top - 1f && bounds.bottom <= root.bottom + 1f)
+                val image = node.captureToImage().toPixelMap()
+                var red = 0
+                for (y in floor(box.top).toInt().coerceAtLeast(0) until ceil(box.bottom).toInt().coerceAtMost(image.height)) {
+                    for (x in floor(box.left).toInt().coerceAtLeast(0) until ceil(box.right).toInt().coerceAtMost(image.width)) {
+                        val color = image[x, y]
+                        if (color.alpha > .5f && color.red > .65f && color.green < .35f && color.blue < .35f) red++
+                    }
+                }
+                assertTrue("The actual native Canvas must draw the control-bearing run: $label", red > 0)
+                node.performTouchInput { click(box.center) }
+                compose.waitUntil(10000) { clicked == listOf("egyptian-origin") }
+                val followingBox = layout.getBoundingBox(expected.indexOf(following))
+                node.performTouchInput { click(followingBox.center) }
+                compose.waitUntil(10000) { clicked == listOf("egyptian-origin", "following-arabic") }
+                copyThroughVisibleToolbar(node, layout, expected, checkNotNull(clipboard.get()))
+            } finally {
+                compose.runOnIdle { compose.activity.setContent {} }
+                compose.waitForIdle()
+            }
+        }
+    }
+
+
+    @Test fun entryAbbreviationsUseOneKeyboardControlWithoutReplacingLinksOrCopiedText() {
+        val (nativeAnnotated, nativeLegacy) = importedAbbreviationInterop()
+        val spans = listOf(Span("link", "f", target = "gender-glossary", explanation = "feminine gender"),
+            Span("text", " / "), Span("text", "ab", explanation = "abbreviation"),
+            Span("text", "br", italic = true, explanation = "abbreviation"), Span("text", " / "),
+            Span("text", "f", explanation = "forte"), Span("text", " "), Span("link", "After", target = "after"))
+        val entry = Entry("Abbreviation fixture", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Noun", listOf(Block("paragraph", 0, spans)))), emptyList())
+        val expected = "f / abbr / f After"
+        fun unlinkedSelectionAnchor(node: SemanticsNodeInteraction, layout: TextLayoutResult,
+                                    text: androidx.compose.ui.text.AnnotatedString, token: String): Int {
+            val start = text.text.indexOf(token)
+            assertTrue("Selection token must exist", start >= 0 && token.isNotEmpty())
+            assertEquals("Anchor layout must describe the actual annotated text", text, layout.layoutInput.text)
+            val textNode = node.fetchSemanticsNode()
+            assertEquals(text, textNode.config[SemanticsProperties.Text].single())
+            assertEquals("Glyph-to-root coordinates require the same text layout size", layout.size, textNode.size)
+            val clickables = compose.onAllNodes(hasClickAction(), useUnmergedTree = true)
+                .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                .filter { candidate -> generateSequence(candidate) { it.parent }.any { it.id == textNode.id } }
+            val links = text.getLinkAnnotations(0, text.length)
+            assertEquals("Every link must retain an observable clickable descendant", links.size, clickables.size)
+            assertTrue("Bounded selected fixture link targets", clickables.size <= 16)
+            val touchBounds = clickables.map { it.touchBoundsInRoot }
+            val origin = textNode.positionInRoot
+            val index = (start until start + token.length).firstOrNull { offset ->
+                !text.text[offset].isWhitespace() && text.getLinkAnnotations(offset, offset + 1).isEmpty() &&
+                    touchBounds.none { it.contains(layout.getBoundingBox(offset).center + origin) }
+            }
+            assertNotNull("Requested unlinked token needs an actual glyph outside observed clickable touch targets: " +
+                "token=$token origin=$origin targets=$touchBounds", index)
+            val actualIndex = checkNotNull(index)
+            val point = layout.getBoundingBox(actualIndex).center + origin
+            assertTrue("Selection starts on an existing nonspace glyph", !text.text[actualIndex].isWhitespace())
+            assertTrue("Selection anchor must be outside every link", text.getLinkAnnotations(actualIndex, actualIndex + 1).isEmpty())
+            assertTrue("Plain selection gesture must stay outside observed clickable touch targets", touchBounds.none { it.contains(point) })
+            android.util.Log.i("TestRunner", "OWNED_UNLINKED_SELECTION_ANCHOR token=$token index=$actualIndex " +
+                "glyphBox=${layout.getBoundingBox(actualIndex)} origin=$origin pointRoot=$point " +
+                "clickableIds=${clickables.map { it.id }} observedTouchBounds=$touchBounds consumer=unattributed")
+            return actualIndex
+        }
+        var selected by mutableStateOf(nativeAnnotated)
+        val clicked = mutableListOf<String>()
+        val clipboard = AtomicReference<RecordingClipboard?>()
+        val inputModeManager = AtomicReference<androidx.compose.ui.input.InputModeManager?>()
+        val observedTouchConfiguration = AtomicReference<FloatArray?>()
+        val observingCopy = AtomicBoolean(false)
+        val pointerCount = AtomicInteger(0)
+        val pointerTrace = ConcurrentLinkedQueue<String>()
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                val platform = LocalClipboard.current
+                val observedDensity = LocalDensity.current
+                val observedViewConfiguration = androidx.compose.ui.platform.LocalViewConfiguration.current
+                SideEffect {
+                    observedTouchConfiguration.set(floatArrayOf(observedDensity.density, observedDensity.fontScale,
+                        observedViewConfiguration.minimumTouchTargetSize.width.value,
+                        observedViewConfiguration.minimumTouchTargetSize.height.value))
+                }
+                val currentInputModeManager = androidx.compose.ui.platform.LocalInputModeManager.current
+                SideEffect { inputModeManager.set(currentInputModeManager) }
+                val recording = remember(platform) { RecordingClipboard(platform) }
+                SideEffect { clipboard.set(recording) }
+                CompositionLocalProvider(LocalClipboard provides recording) {
+                    MaterialTheme {
+                        androidx.compose.material3.Surface(modifier = Modifier.pointerInput(Unit) {
+                            // Observe the same events without consuming or replacing any gesture handler.
+                            val passes = listOf(PointerEventPass.Initial, PointerEventPass.Main, PointerEventPass.Final)
+                            awaitPointerEventScope {
+                                while (true) {
+                                    for (pass in passes) {
+                                        val event = awaitPointerEvent(pass)
+                                        if (observingCopy.get() && pointerCount.getAndIncrement() < 48) {
+                                            pointerTrace.add("pass=$pass type=${event.type} changes=" +
+                                                event.changes.take(2).joinToString { change ->
+                                                    "id=${change.id.value} time=${change.uptimeMillis} " +
+                                                        "pressed=${change.pressed} previous=${change.previousPressed} " +
+                                                        "consumed=${change.isConsumed} position=${change.position}"
+                                                })
+                                        }
+                                    }
+                                }
+                            }
+                        }) {
+                            EntryView(selected, false, {}, onLink = { clicked += it },
+                                settings = AppSettings(collapseOtherSections = false, collapseDetails = true))
+                        }
+                    }
+                }
+            }
+        }
+        try {
+            val nativeCompact = "der. ? lbor. f c m n"
+            val nativeNode = compose.onNodeWithText(nativeCompact, useUnmergedTree = true)
+            nativeNode.performScrollTo().assertIsDisplayed()
+            val nativeText = nativeNode.fetchSemanticsNode().config[SemanticsProperties.Text].single()
+            assertEquals(nativeCompact, nativeText.text)
+            val glossaryTargets = listOf("Appendix:Glossary#derived terms", "Appendix:Glossary#learned borrowing")
+            assertEquals(glossaryTargets, nativeText.getLinkAnnotations(0, nativeText.length).map { (it.item as LinkAnnotation.Clickable).tag })
+            fun nativeCapture(label: String) {
+                val bytes = java.io.ByteArrayOutputStream()
+                assertTrue(compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bytes))
+                saveOwnedCopyImage(label, bytes.toByteArray())
+            }
+            nativeCapture("native-compact")
+            val nativeLayout = textLayout(nativeNode)
+            nativeNode.performTouchInput { click(nativeLayout.getBoundingBox(0).center) }
+            compose.waitUntil(10000) { clicked == glossaryTargets.take(1) }
+            nativeNode.performTouchInput { click(nativeLayout.getBoundingBox(nativeCompact.indexOf("lbor.")).center) }
+            compose.waitUntil(10000) { clicked == glossaryTargets }
+            compose.runOnIdle { assertPhysicalActivity(compose.activity) }
+            val nativeSelectionAnchor = unlinkedSelectionAnchor(nativeNode, nativeLayout, nativeText, "f")
+            val combinedClickableFlag = runCatching {
+                Class.forName("androidx.compose.foundation.ComposeFoundationFlags")
+                    .getField("isNonSuspendingPointerInputInCombinedClickableEnabled").getBoolean(null).toString()
+            }.getOrElse { "unavailable:${it.javaClass.name}" }
+            val selectionBefore = nativeNode.fetchSemanticsNode().config
+                .getOrNull(SemanticsProperties.TextSelectionRange)?.toString() ?: "absent"
+            observingCopy.set(true)
+            try {
+                copyThroughVisibleToolbar(nativeNode, nativeLayout, nativeCompact, checkNotNull(clipboard.get()), selectionAnchorIndex = nativeSelectionAnchor)
+            } catch (failure: Throwable) {
+                val selectionAfter = runCatching {
+                    nativeNode.fetchSemanticsNode().config
+                        .getOrNull(SemanticsProperties.TextSelectionRange)?.toString() ?: "absent"
+                }.getOrElse { "unavailable:${it.javaClass.name}" }
+                failure.addSuppressed(AssertionError("OWNED_LINK_COPY_POINTER_OBSERVATION " +
+                    "nonSuspendingCombinedClickable=$combinedClickableFlag " +
+                    "semanticsSelectionBefore=$selectionBefore semanticsSelectionAfter=$selectionAfter " +
+                    "anchor=verified-unlinked-glyph-index-$nativeSelectionAnchor " +
+                    "passiveSamples=${pointerTrace.size} limit=48\n" + pointerTrace.joinToString("\n")))
+                throw failure
+            } finally {
+                observingCopy.set(false)
+            }
+            compose.runOnIdle { assertEquals("Selecting and copying must not activate a link", glossaryTargets, clicked) }
+            compose.onNodeWithTag("entry-abbreviations").performScrollTo().performClick()
+            val meanings = listOf("derived terms", "uncertain", "learned borrowing", "feminine gender", "common gender", "masculine gender", "neuter gender")
+            assertEquals(meanings, nativeAnnotated.abbreviations.map { it.explanation })
+            assertEquals(listOf("der.", "?", "lbor.", "f", "c", "m", "n"), nativeAnnotated.abbreviations.map { it.label })
+            for (explanation in meanings)
+                compose.onNodeWithText(explanation).performScrollTo().assertIsDisplayed()
+            nativeCapture("native-expanded")
+            compose.runOnIdle { selected = nativeLegacy }
+            compose.onNodeWithTag("entry-abbreviations").assertDoesNotExist()
+            assertTrue(nativeLegacy.sections.flatMap { it.blocks }.any { textOf(it.spans).isNotBlank() })
+            val legacyBody = nativeLegacy.sections.flatMap { it.blocks }.first { textOf(it.spans).isNotBlank() }
+            compose.onNodeWithText(textOf(legacyBody.spans), useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+            compose.runOnIdle { selected = entry; clicked.clear() }
+            val button = compose.onNodeWithTag("entry-abbreviations")
+            button.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+            compose.onAllNodesWithText("Abbreviations").assertCountEquals(1)
+            compose.onNodeWithText("feminine gender").assertDoesNotExist()
+            // Touch-driven navigation precedes this keyboard interaction. System-defined
+            // focusability requires the platform's actual keyboard input mode first.
+            val keyboardInputMode = checkNotNull(inputModeManager.get())
+            compose.runOnIdle {
+                val before = keyboardInputMode.inputMode
+                val requested = keyboardInputMode.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard)
+                android.util.Log.i("TestRunner", "OWNED_ABBREVIATION_INPUT_MODE before=$before requested=$requested after=${keyboardInputMode.inputMode}")
+                assertTrue("The platform must accept keyboard input mode", requested)
+            }
+            compose.waitUntil(10000) {
+                keyboardInputMode.inputMode == androidx.compose.ui.input.InputMode.Keyboard
+            }
+            compose.runOnIdle {
+                assertEquals(androidx.compose.ui.input.InputMode.Keyboard, keyboardInputMode.inputMode)
+                android.util.Log.i("TestRunner", "OWNED_ABBREVIATION_INPUT_MODE verified=${keyboardInputMode.inputMode}")
+            }
+            button.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
+            button.assertIsFocused().performKeyInput {
+                keyDown(androidx.compose.ui.input.key.Key.Enter); keyUp(androidx.compose.ui.input.key.Key.Enter)
+            }
+            button.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+            compose.onNodeWithText("feminine gender").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("abbreviation").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("forte").performScrollTo().assertIsDisplayed()
+            // All three distinct meanings share one source context; show it once, not once per meaning.
+            compose.onNodeWithText("feminine gender").assertIsDisplayed()
+            compose.onNodeWithText("abbreviation").assertIsDisplayed()
+            compose.onAllNodesWithText("Noun: f / abbr / f After", useUnmergedTree = true).assertCountEquals(1)
+            compose.onAllNodesWithText("Abbreviations").assertCountEquals(1)
+            // Return from the keyboard check through the same real collapse touch a user makes.
+            // Compose's direct view injection does not establish the platform touch-mode transition.
+            button.performScrollTo().assertIsDisplayed()
+            val collapseCenter = button.fetchSemanticsNode().boundsInWindow.center
+            val collapseScreen = AtomicReference<android.graphics.PointF?>()
+            compose.runOnIdle {
+                val activity = compose.activity
+                assertPhysicalActivity(activity)
+                val decor = activity.window.decorView
+                assertTrue("Collapse touch requires our focused visible activity window", decor.isShown && activity.hasWindowFocus() && decor.hasWindowFocus())
+                val screen = IntArray(2)
+                val window = IntArray(2)
+                decor.getLocationOnScreen(screen)
+                decor.getLocationInWindow(window)
+                collapseScreen.set(android.graphics.PointF(
+                    collapseCenter.x + screen[0] - window[0],
+                    collapseCenter.y + screen[1] - window[1]))
+            }
+            val collapsePoint = checkNotNull(collapseScreen.get())
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val collapseAutomation = instrumentation.uiAutomation
+            val collapseOriginalFlags = collapseAutomation.serviceInfo.flags
+            try {
+                collapseAutomation.serviceInfo = collapseAutomation.serviceInfo.apply {
+                    flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                }
+                val focusedWindow = collapseAutomation.windowsOnAllDisplays
+                    .get(android.view.Display.DEFAULT_DISPLAY).orEmpty()
+                    .filter { it.isFocused }.single()
+                val focusedBounds = android.graphics.Rect()
+                focusedWindow.getBoundsInScreen(focusedBounds)
+                assertEquals(android.view.Display.DEFAULT_DISPLAY, focusedWindow.displayId)
+                assertTrue("Collapse touch requires the active focused application window", focusedWindow.isActive && focusedWindow.type == AccessibilityWindowInfo.TYPE_APPLICATION)
+                assertEquals(instrumentation.targetContext.packageName, focusedWindow.root?.packageName?.toString())
+                assertTrue("Collapse touch stays inside the observed owned window", focusedBounds.contains(collapsePoint.x.toInt(), collapsePoint.y.toInt()))
+                val downTime = android.os.SystemClock.uptimeMillis()
+                for (action in listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP)) {
+                    val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action, collapsePoint.x, collapsePoint.y, 0)
+                    try {
+                        event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                        instrumentation.sendPointerSync(event)
+                    } finally { event.recycle() }
+                }
+            } finally {
+                collapseAutomation.serviceInfo = collapseAutomation.serviceInfo.apply { flags = collapseOriginalFlags }
+            }
+            compose.waitUntil(10000) {
+                keyboardInputMode.inputMode == androidx.compose.ui.input.InputMode.Touch
+            }
+            compose.runOnIdle {
+                assertPhysicalActivity(compose.activity)
+                assertEquals(androidx.compose.ui.input.InputMode.Touch, keyboardInputMode.inputMode)
+                assertTrue("The owned activity must retain window focus after the collapse touch", compose.activity.hasWindowFocus())
+                android.util.Log.i("TestRunner", "OWNED_ABBREVIATION_INPUT_MODE after-collapse=${keyboardInputMode.inputMode} windowFocus=${compose.activity.hasWindowFocus()}")
+            }
+            button.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+            val node = compose.onNodeWithText(expected, useUnmergedTree = true)
+            node.performScrollTo().assertIsDisplayed()
+            val text = node.fetchSemanticsNode().config[SemanticsProperties.Text].single()
+            assertEquals(expected, text.text)
+            assertEquals(listOf("gender-glossary", "after"), text.getLinkAnnotations(0, text.length).map { (it.item as LinkAnnotation.Clickable).tag })
+            val layout = textLayout(node)
+            node.performTouchInput { click(layout.getBoundingBox(0).center) }
+            compose.waitUntil(10000) { clicked == listOf("gender-glossary") }
+            node.performTouchInput { click(layout.getBoundingBox(expected.indexOf("After")).center) }
+            compose.waitUntil(10000) { clicked == listOf("gender-glossary", "after") }
+            val syntheticSelectionAnchor = unlinkedSelectionAnchor(node, layout, text, "abbr")
+            val syntheticObservation = StringBuilder()
+            // Public layout/semantics measurements are observations, not a winning pointer-hit oracle.
+            runCatching {
+                compose.runOnIdle { assertPhysicalActivity(compose.activity) }
+                val configuration = checkNotNull(observedTouchConfiguration.get())
+                val density = configuration[0]
+                val minimumWidthPx = configuration[2] * density
+                val minimumHeightPx = configuration[3] * density
+                val textBounds = node.fetchSemanticsNode().boundsInRoot
+                val anchorLocal = layout.getBoundingBox(syntheticSelectionAnchor).center
+                val anchorRoot = anchorLocal + textBounds.topLeft
+                syntheticObservation.append("density=$density fontScale=${configuration[1]} " +
+                    "minimumTouchTargetDp=${configuration[2]},${configuration[3]} " +
+                    "minimumTouchTargetPx=$minimumWidthPx,$minimumHeightPx " +
+                    "anchorIndex=$syntheticSelectionAnchor anchorLocal=$anchorLocal anchorRoot=$anchorRoot textBounds=$textBounds\n")
+                text.getLinkAnnotations(0, text.length).take(16).forEach { link ->
+                    val pathBounds = layout.getPathForRange(link.start, link.end).getBounds()
+                    // Source-derived rounded child rectangle and minimum-target envelope only.
+                    // Clipping, pointer type, sibling arbitration and actual consumer remain independent.
+                    val measured = androidx.compose.ui.geometry.Rect(
+                        java.lang.Math.round(pathBounds.left).toFloat(), java.lang.Math.round(pathBounds.top).toFloat(),
+                        java.lang.Math.round(pathBounds.right).toFloat(), java.lang.Math.round(pathBounds.bottom).toFloat())
+                    val padX = ((minimumWidthPx - measured.width) / 2f).coerceAtLeast(0f)
+                    val padY = ((minimumHeightPx - measured.height) / 2f).coerceAtLeast(0f)
+                    val candidate = androidx.compose.ui.geometry.Rect(measured.left - padX, measured.top - padY,
+                        measured.right + padX, measured.bottom + padY)
+                    syntheticObservation.append("linkRange=${link.start}..${link.end} " +
+                        "tag=${(link.item as LinkAnnotation.Clickable).tag} publicPathBounds=$pathBounds " +
+                        "derivedRoundedChild=$measured derivedMinimumEnvelope=$candidate " +
+                        "derivedContainsAnchor=${candidate.contains(anchorLocal)} consumer=unobserved\n")
+                }
+                compose.onAllNodes(hasClickAction(), useUnmergedTree = true)
+                    .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                    .filter { it.boundsInRoot.overlaps(textBounds) }.take(16).forEach { candidate ->
+                        syntheticObservation.append("publicClickableSemanticsId=${candidate.id} " +
+                            "layoutBoundsRoot=${candidate.boundsInRoot} touchBoundsRoot=${candidate.touchBoundsInRoot} " +
+                            "touchContainsAnchor=${candidate.touchBoundsInRoot.contains(anchorRoot)} " +
+                            "linkIdentity=unattributed consumer=unobserved\n")
+                    }
+            }.onFailure { syntheticObservation.append("geometryUnavailable=${it.javaClass.name}:${it.message}\n") }
+            syntheticObservation.toString().lineSequence().take(64).forEachIndexed { index, line ->
+                android.util.Log.i("TestRunner", "OWNED_SYNTHETIC_HIT_OBSERVATION[$index] $line")
+            }
+            pointerCount.set(0)
+            pointerTrace.clear()
+            observingCopy.set(true)
+            try {
+                copyThroughVisibleToolbar(node, layout, expected, checkNotNull(clipboard.get()),
+                    selectionAnchorIndex = syntheticSelectionAnchor)
+            } catch (failure: Throwable) {
+                failure.addSuppressed(AssertionError("OWNED_SYNTHETIC_HIT_OBSERVATION " +
+                    syntheticObservation.toString() + "passiveSamples=${pointerTrace.size} limit=48 " +
+                    "consumptionDoesNotIdentifyConsumer=true\n" + pointerTrace.joinToString("\n")))
+                throw failure
+            } finally {
+                observingCopy.set(false)
+                android.util.Log.i("TestRunner", "OWNED_SYNTHETIC_POINTER_OBSERVATION " +
+                    "passiveSamples=${pointerTrace.size} limit=48 consumer=unattributed")
+                pointerTrace.take(48).forEachIndexed { index, line ->
+                    android.util.Log.i("TestRunner", "OWNED_SYNTHETIC_POINTER_OBSERVATION[$index] $line")
+                }
+            }
+            compose.runOnIdle { assertEquals("Selecting and copying must not activate a link", listOf("gender-glossary", "after"), clicked) }
+            compose.runOnIdle { selected = entry.copy(title = "No abbreviations", sections = listOf(Section(3, "Noun", listOf(Block("paragraph", 0, listOf(Span("text", "Plain body"))))))) }
+            compose.onNodeWithText("Plain body").assertIsDisplayed()
+            compose.onNodeWithTag("entry-abbreviations").assertDoesNotExist()
+            compose.runOnIdle { selected = entry }
+            compose.onNodeWithTag("entry-abbreviations").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+        } finally {
+            compose.runOnIdle { compose.activity.setContent {} }
+            compose.waitForIdle()
+        }
+    }
+
+
+    @Test fun expandedAbbreviationsKeepActualSectionAndReferenceLinkDestinations() {
+        val explained = buildList {
+            repeat(8) { index ->
+                if (index > 0) add(Span("text", " / "))
+                add(Span("text", "x$index", explanation = "Meaning $index"))
+            }
+        }
+        val links = listOf(Span("link", "Section target", target = "#Destination"),
+            Span("text", " / "), Span("link", "Reference target", target = "#reference-1"))
+        val entry = Entry("Navigation fixture", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Noun", listOf(Block("paragraph", 0, explained), Block("paragraph", 0, links))),
+                Section(3, "Destination", listOf(Block("paragraph", 0, listOf(Span("text", "Destination body")))))),
+            listOf(Reference(1, 1, "", listOf(Span("text", "Reference body")))))
+        val escaped = mutableListOf<String>()
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MaterialTheme { androidx.compose.material3.Surface {
+                    EntryView(entry, false, {}, onLink = { escaped += it },
+                        settings = AppSettings(collapseOtherSections = false, collapseDetails = true))
+                } }
+            }
+        }
+        try {
+            compose.onNodeWithTag("entry-abbreviations").performClick()
+            compose.onNodeWithTag("entry-abbreviations").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+            fun tap(label: String) {
+                compose.onNodeWithTag("entry-scroll")
+                    .performScrollToNode(hasText("Section target / Reference target"))
+                val node = compose.onNodeWithText("Section target / Reference target", useUnmergedTree = true)
+                node.performScrollTo().assertIsDisplayed()
+                val layout = textLayout(node)
+                node.performTouchInput { click(layout.getBoundingBox("Section target / Reference target".indexOf(label)).center) }
+            }
+            tap("Section target")
+            compose.waitUntil(10000) {
+                compose.onAllNodesWithText("Destination body", useUnmergedTree = true)
+                    .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+            }
+            compose.onNodeWithText("Destination body", useUnmergedTree = true).assertIsDisplayed()
+            tap("Reference target")
+            compose.waitUntil(10000) {
+                compose.onAllNodesWithText("Reference body", useUnmergedTree = true)
+                    .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+            }
+            compose.onNodeWithText("Reference body", useUnmergedTree = true).assertIsDisplayed()
+            compose.runOnIdle { assertTrue("Local anchors must not escape into dictionary lookup", escaped.isEmpty()) }
+        } finally {
+            compose.runOnIdle { compose.activity.setContent {} }
+            compose.waitForIdle()
+        }
+    }
+
     private fun awaitShaped(text: String, count: Int) {
         compose.waitUntil(10000) {
             compose.onAllNodesWithText(text, useUnmergedTree = true)
@@ -407,7 +921,7 @@ class EgyptianFontDeviceTest {
     }
 
     private fun copyThroughVisibleToolbar(node: SemanticsNodeInteraction, layout: TextLayoutResult,
-                                          expected: String, recording: RecordingClipboard, selectAllRequired: Boolean = true) {
+                                          expected: String, recording: RecordingClipboard, selectAllRequired: Boolean = true, selectionAnchorIndex: Int = 1) {
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         val originalFlags = automation.serviceInfo.flags
         val diagnostics = CopyDiagnostics()
@@ -419,7 +933,9 @@ class EgyptianFontDeviceTest {
             }
             recording.copied = null
             captureCopyState(diagnostics, "before-longClick", node, expected)
-            node.performTouchInput { longClick(layout.getBoundingBox(1).center) }
+            val touch = layout.getBoundingBox(selectionAnchorIndex).center
+            diagnostics.append("longClick-local=$touch layout-size=${layout.size} glyph-box[$selectionAnchorIndex]=${layout.getBoundingBox(selectionAnchorIndex)}")
+            node.performTouchInput { longClick(touch) }
             // Multiword fixtures must select the whole block before copying.
             // Only the observed unspaced whole-selection fixture skips this action.
             captureCopyState(diagnostics, "before-SelectAll", node, expected)
@@ -439,7 +955,20 @@ class EgyptianFontDeviceTest {
             previousCopyDiagnostics = diagnostics.finish()
         } catch (failure: Throwable) {
             if (failure is VirtualMachineError || failure is java.util.concurrent.CancellationException) throw failure
+            // Retain this owned Compose root before teardown; file export is separate from test acceptance.
+            try {
+                val image = java.io.ByteArrayOutputStream()
+                check(compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, image))
+                saveOwnedCopyImage("copy-failure", image.toByteArray())
+                failure.addSuppressed(AssertionError("OWNED_COPY_IMAGE files/qa-copy-evidence/copy-failure.png expectedLength=${expected.length}"))
+            } catch (captureFailure: Throwable) {
+                if (captureFailure is VirtualMachineError || captureFailure is java.util.concurrent.CancellationException) throw captureFailure
+                failure.addSuppressed(AssertionError("Owned copy image capture failed", captureFailure))
+            }
+            val failureDiagnostics = CopyDiagnostics()
+            captureCopyState(failureDiagnostics, "failure-or-timeout", node, expected)
             failure.addSuppressed(AssertionError("COPY_DIAGNOSTICS current\n" + diagnostics.finish()))
+            failure.addSuppressed(AssertionError("COPY_DIAGNOSTICS failure snapshot\n" + failureDiagnostics.finish()))
             previousCopyDiagnostics?.let { failure.addSuppressed(AssertionError("COPY_DIAGNOSTICS preceding successful call\n" + it)) }
             throw failure
         } finally {
@@ -447,16 +976,32 @@ class EgyptianFontDeviceTest {
         }
     }
 
-    private fun ownedToolbarRoots(): List<AccessibilityNodeInfo> {
-        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        val active = automation.rootInActiveWindow ?: return emptyList()
-        val owner = compose.activity.packageName
-        if (active.packageName?.toString() != owner) return emptyList()
-        val roots = listOf(active) + automation.windows
-            .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-            .mapNotNull { it.root }
-        return roots.filter { it.packageName?.toString() == owner }.distinctBy { it.windowId }
+    private fun saveOwnedCopyImage(label: String, bytes: ByteArray) {
+        require(label in setOf("native-compact", "native-expanded", "copy-failure"))
+        require(bytes.size in 45..16_777_216)
+        val files = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
+        val directory = java.io.File(files, "qa-copy-evidence")
+        check(directory.mkdirs() || directory.isDirectory)
+        check(directory.canonicalFile.parentFile == files.canonicalFile)
+        val target = java.io.File(directory, "$label.png")
+        check(target.canonicalFile.parentFile == directory.canonicalFile)
+        target.outputStream().use { it.write(bytes) }
     }
+
+    private fun ownedToolbarWindows(): List<AccessibilityWindowInfo> {
+        val activity = compose.activity // The shared provider verifies our package and physical display.
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        if (android.os.Build.VERSION.SDK_INT < 30) return emptyList()
+        return automation.windowsOnAllDisplays.get(android.view.Display.DEFAULT_DISPLAY).orEmpty()
+            .filter { it.displayId == android.view.Display.DEFAULT_DISPLAY &&
+                it.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
+                it.root?.packageName?.toString() == activity.packageName }
+    }
+
+    private fun ownedToolbarRoots(): List<AccessibilityNodeInfo> =
+        ownedToolbarWindows().mapNotNull { it.root }
+            .filter { it.packageName?.toString() == compose.activity.packageName }
+            .distinctBy { it.windowId }
 
     private fun clickOwnedToolbarAction(vararg labelResources: Int, diagnostics: CopyDiagnostics? = null): Int {
         val labels = labelResources.map { it to compose.activity.getString(it) }
@@ -524,12 +1069,43 @@ class EgyptianFontDeviceTest {
                                  node: SemanticsNodeInteraction, expected: String) {
         diagnostics.append("phase=$phase fixture=${diagnosticValue(expected)} length=${expected.length}")
         try {
-            val range = node.fetchSemanticsNode().config.getOrNull(SemanticsProperties.TextSelectionRange)
+            val semanticNode = node.fetchSemanticsNode()
+            val range = semanticNode.config.getOrNull(SemanticsProperties.TextSelectionRange)
             diagnostics.append("compose-selection=" + (range?.let { "${it.start}:${it.end}" } ?: "absent"))
+            diagnostics.append("compose-node=${semanticNode.id} bounds-in-root=${semanticNode.boundsInRoot} bounds-in-window=${semanticNode.boundsInWindow}")
+            // A Text node need not expose its enclosing selection state itself.
+            // Inspect only this fixture's bounded ancestor chain; absence is not idle proof.
+            var ancestor = semanticNode.parent
+            repeat(6) { depth ->
+                val current = ancestor
+                if (current != null) {
+                    val selection = current.config.getOrNull(SemanticsProperties.TextSelectionRange)
+                    diagnostics.append("compose-parent-depth=$depth id=${current.id} bounds=${current.boundsInRoot} selection=" +
+                        (selection?.let { "${it.start}:${it.end}" } ?: "absent"))
+                    ancestor = current.parent
+                }
+            }
             val roots = ownedToolbarRoots()
+            val owner = compose.activity.packageName
+            val windows = ownedToolbarWindows()
+            diagnostics.append("owned-windows=${windows.size} truncated-windows=${windows.size > 8}")
+            for (window in windows.take(8)) diagnostics.append("owned-window id=${window.id} display=${if (android.os.Build.VERSION.SDK_INT >= 30) window.displayId else -1} type=${window.type} active=${window.isActive} focused=${window.isFocused}")
             diagnostics.append("owned-roots=${roots.size} truncated-roots=${roots.size > 8}")
             for (root in roots.take(8)) {
                 diagnostics.append("root " + diagnosticNode(root))
+                val queue = java.util.ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+                queue.add(root to 0)
+                var visited = 0
+                while (queue.isNotEmpty() && visited < 24) {
+                    val (current, depth) = queue.removeFirst()
+                    if (current.packageName?.toString() != owner || current.windowId != root.windowId) continue
+                    visited++
+                    diagnostics.append("owned-node depth=$depth children=${current.childCount} text=${diagnosticValue(current.text)} " + diagnosticNode(current))
+                    if (depth < 4) for (index in 0 until minOf(current.childCount, 8)) {
+                        current.getChild(index)?.let { queue.add(it to depth + 1) }
+                    }
+                }
+                diagnostics.append("owned-subtree visited=$visited truncated=${queue.isNotEmpty()}")
                 val exact = root.findAccessibilityNodeInfosByText(expected)
                     .filter { it.text?.toString() == expected && it.windowId == root.windowId }
                 diagnostics.append("exact-fixture-nodes=${exact.size} truncated=${exact.size > 8}")
@@ -559,4 +1135,88 @@ class EgyptianFontDeviceTest {
 
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
         .digest(bytes).joinToString("") { "%02x".format(it) }
+
+    /** Required genuine Writer fixture: no hand-built wire or absent-fixture skip. */
+    private fun importedAbbreviationInterop(): Pair<Entry, Entry> = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val root = InstrumentationRegistry.getArguments().getString("abbreviationInteropRoot")?.let {
+            java.io.File(it).canonicalFile.also { directory -> require(directory.isDirectory && directory.isAbsolute) }
+        }
+        fun fixture(name: String): java.io.InputStream = if (root == null)
+            instrumentation.context.assets.open("abbreviation-interop/$name")
+        else java.io.File(root, name).inputStream()
+        val headingHash = MessageDigest.getInstance("SHA-256").digest("English".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val blobName = "languages/$headingHash.wikblb"
+        fun export(name: String): Entry {
+            val envelope = org.json.JSONObject(fixture(name).bufferedReader(Charsets.UTF_8).use { it.readText() })
+            val entries = envelope.getJSONArray("entries")
+            assertEquals(1, entries.length())
+            return interopExpectedEntry(entries.getJSONObject(0))
+        }
+        val expectedAnnotated = export("annotated.export.json")
+        val expectedLegacy = export("legacy.export.json")
+        assertEquals("Acupuncture abbreviation sample", expectedAnnotated.title)
+        assertEquals("Legacy format abbreviation control", expectedLegacy.title)
+        assertEquals("English", expectedAnnotated.language)
+        assertEquals("en", expectedAnnotated.languageCode)
+        assertEquals("English", expectedLegacy.language)
+        assertTrue(expectedAnnotated.abbreviations.isNotEmpty())
+        assertTrue(expectedLegacy.abbreviations.isEmpty())
+        val library = LibraryStore.get(instrumentation.targetContext)
+        val edition = "abbrinterop${java.util.UUID.randomUUID().toString().replace("-", "")}wiktionary-20261001"
+        try {
+            library.importFile(name = { "$edition-$headingHash.wikblb" }) { fixture(blobName) }.join()
+            assertNull(library.error)
+            assertEquals(1, library.dictionaries.count { it.edition == edition })
+            suspend fun read(expected: Entry): Entry {
+                val hit = requireNotNull(library.exact(expected.title, "English", edition))
+                val actual = library.read(hit)
+                assertEquals(expected, actual.copy(edition = "", origin = null, contentDictionary = null))
+                return actual
+            }
+            read(expectedAnnotated) to read(expectedLegacy)
+        } finally {
+            library.dictionaries.filter { it.edition == edition }.forEach { library.remove(it.id).join() }
+            assertTrue(library.dictionaries.none { it.edition == edition })
+        }
+    }
+
+    /** Native JSON is only an independent expected value; presentation still decodes from the imported blob. */
+    private fun interopExpectedEntry(j: org.json.JSONObject): Entry {
+        fun <T> list(a: org.json.JSONArray, read: (org.json.JSONObject) -> T): List<T> =
+            List(a.length()) { read(a.getJSONObject(it)) }
+        fun spans(a: org.json.JSONArray): List<Span> = list(a) { s ->
+            Span(s.getString("kind"), s.getString("text"), s.getString("target"), s.getString("trail"),
+                s.getString("language"), s.getString("classes"), s.getString("direction"),
+                bold = s.getBoolean("bold"), italic = s.getBoolean("italic"), code = s.getBoolean("code"),
+                small = s.getBoolean("small"), superscript = s.getBoolean("superscript"),
+                subscript = s.getBoolean("subscript"), strike = s.getBoolean("strike"),
+                underline = s.getBoolean("underline"), role = s.getString("role"),
+                explanation = s.optString("explanation", ""))
+        }
+        fun block(v: org.json.JSONObject): Block {
+            val table = if (v.isNull("table")) null else v.getJSONObject("table").let { t ->
+                Table(spans(t.getJSONArray("caption")), list(t.getJSONArray("rows")) { row ->
+                    list(row.getJSONArray("cells")) { c ->
+                        Cell(spans(c.getJSONArray("spans")), c.getBoolean("header"), c.getInt("colspan"), c.getInt("rowspan"))
+                    }
+                })
+            }
+            val feature = if (v.isNull("feature")) null else v.getJSONObject("feature").let { f ->
+                Feature(f.getString("kind"), f.getString("language"), f.getString("data"), f.getString("tail_kind"), f.getString("tail"))
+            }
+            return Block(v.getString("kind"), v.getInt("depth"), spans(v.getJSONArray("spans")),
+                v.getString("list_path"), v.getString("number"), table, feature, v.getInt("level"))
+        }
+        assertTrue(j.isNull("redirect"))
+        assertTrue(j.isNull("alias"))
+        return Entry(j.getString("title"), spans(j.getJSONArray("display_title")), j.getString("kind"),
+            if (j.isNull("language")) null else j.getString("language"), j.getString("language_code"),
+            list(j.getJSONArray("sections")) { s -> Section(s.getInt("level"), s.getString("title"), list(s.getJSONArray("blocks"), ::block)) },
+            list(j.getJSONArray("references")) { r -> Reference(r.getInt("number"), r.getInt("group_number"), r.getString("group"), spans(r.getJSONArray("spans"))) },
+            spans(j.getJSONArray("preamble_spans")),
+            list(j.getJSONArray("media")) { m -> Media(m.getString("file"), m.getString("kind"), m.getString("caption")) })
+    }
+
 }

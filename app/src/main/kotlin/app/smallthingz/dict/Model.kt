@@ -18,6 +18,7 @@ data class Span(
     val strike: Boolean = false,
     val underline: Boolean = false,
     val role: String = "normal",
+    val explanation: String = "",
 )
 
 data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int)
@@ -57,6 +58,7 @@ data class Entry(
     val key: String = origin?.key ?: "$kind\u0000${language.orEmpty()}\u0000$title"
     // Constructed with the decoded entry on the import dispatcher.
     val readingRows: List<ReadingRow> = readingRows(sections, media)
+    internal val abbreviations: List<Abbreviation> = entryAbbreviations(this)
     fun clue(): String {
         // Media controls belong in the reader, not a saved word's textual clue.
         fun preview(block: Block) = textOf(block.spans.filterNot { span ->
@@ -80,3 +82,60 @@ private val previewClassWhitespace = Regex("\\s+")
 
 fun textOf(spans: List<Span>): String = spans.joinToString("") { it.text + it.trail }
     .replace(Regex("\\s+"), " ").trim()
+
+
+/** Compiled annotations only: never parse label/source text into explanations. */
+internal data class Abbreviation(val label: String, val explanation: String, val context: String)
+internal fun entryAbbreviations(entry: Entry): List<Abbreviation> {
+    val result = linkedSetOf<Abbreviation>()
+    fun include(spans: List<Span>, location: String) {
+        var cachedContext: String? = null
+        fun context(): String = cachedContext ?: run {
+            val plain = textOf(spans)
+            val points = plain.codePointCount(0, plain.length)
+            val count = minOf(72, points)
+            val excerpt = plain.substring(0, plain.offsetByCodePoints(0, count)) +
+                if (count < points) "…" else ""
+            (if (excerpt.isEmpty()) location else "$location: $excerpt").also { cachedContext = it }
+        }
+        var annotation = ""
+        val label = StringBuilder()
+        fun finish() {
+            if (annotation.isNotEmpty() && label.isNotBlank())
+                result.add(Abbreviation(label.toString(), annotation, context()))
+            label.setLength(0)
+        }
+        for (span in spans) {
+            if (span.kind == "line_break") {
+                finish()
+                annotation = span.explanation
+                label.append(span.trail)
+                finish()
+                annotation = ""
+                continue
+            }
+            if (span.explanation != annotation) {
+                finish()
+                annotation = span.explanation
+            }
+            if (annotation.isNotEmpty()) label.append(span.text).append(span.trail)
+        }
+        finish()
+    }
+    include(entry.displayTitle, "Title")
+    include(entry.preamble, "About this entry")
+    entry.sections.forEach { section ->
+        val location = section.title.ifBlank { entry.title }
+        section.blocks.forEach { block ->
+            include(block.spans, location)
+            block.table?.let { table ->
+                include(table.caption, "$location · Table")
+                table.rows.forEachIndexed { row, cells -> cells.forEachIndexed { column, cell ->
+                    include(cell.spans, "$location · Table ${row + 1}, ${column + 1}")
+                } }
+            }
+        }
+    }
+    entry.references.forEach { include(it.spans, "References ${it.number}") }
+    return result.toList()
+}

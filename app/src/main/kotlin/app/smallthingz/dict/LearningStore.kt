@@ -1,6 +1,7 @@
 package app.smallthingz.dict
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -44,7 +45,7 @@ class LearningStore private constructor(context: Context) {
         }
     }
     private val prefs = context.getSharedPreferences("dict.learning.v1", Context.MODE_PRIVATE)
-    var data by mutableStateOf(load())
+    var data by mutableStateOf(LearningPersistence.load(prefs))
         private set
 
     fun record(entry: Entry) {
@@ -97,10 +98,13 @@ class LearningStore private constructor(context: Context) {
     // One writer preserves update order; serialization never runs on the UI thread.
     private val pending = Channel<LearningData>(Channel.CONFLATED)
     private val writer = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-        for (value in pending) persist(value)
+        for (value in pending) LearningPersistence.persist(prefs, value)
     }
     private fun update(value: LearningData) { data = value; pending.trySend(value) }
-    private fun persist(value: LearningData) {
+}
+
+internal object LearningPersistence {
+    fun persist(prefs: SharedPreferences, value: LearningData) {
         val root = JSONObject()
         root.put("history", JSONArray(value.history.map(::wordJson)))
         root.put("bookmarks", JSONArray(value.bookmarks.map(::wordJson)))
@@ -123,13 +127,13 @@ class LearningStore private constructor(context: Context) {
         prefs.edit { putString("state", root.toString()) }
     }
 
-    private fun load(): LearningData = runCatching {
+    fun load(prefs: SharedPreferences): LearningData = runCatching {
         val raw = prefs.getString("state", null) ?: return@runCatching LearningData()
         val root = JSONObject(raw)
         val settings = root.optJSONObject("settings") ?: JSONObject()
         LearningData(
             history = words(root.optJSONArray("history")).take(100_000),
-            bookmarks = words(root.optJSONArray("bookmarks")).take(1000),
+            bookmarks = words(root.optJSONArray("bookmarks")),
             study = study(root.optJSONObject("study")),
             settings = AppSettings(
                 darkMode = settings.optString("darkMode", "system").takeIf { it in setOf("system", "light", "dark") } ?: "system",

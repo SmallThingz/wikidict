@@ -31,6 +31,8 @@ import androidx.compose.ui.input.nestedscroll.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -63,18 +65,33 @@ private val LocalEntryEdition = staticCompositionLocalOf { "" }
 private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
 private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
 
+@Composable
+internal fun EntryPronunciationButton(active: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
+        Icon(if (active) Icons.Outlined.Stop else Icons.Outlined.VolumeUp,
+            if (active) "Stop pronunciation" else "Pronounce word offline", Modifier.size(22.dp))
+    }
+}
+
 /** A distinct request also permits repeated navigation to the same compiled anchor. */
 class EntryAnchorRequest(val entryKey: String, val target: String)
 
+/** In-memory state for one reader visit; never shared between same-title owners. */
+class EntryReadingState {
+    internal val scroll = androidx.compose.foundation.lazy.LazyListState()
+    internal var foldKey: List<Any?>? = null
+    internal var folds: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>? = null
+}
+
 @Composable
-fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings(), onScrollDirection: (Boolean) -> Unit = {}, anchorRequest: EntryAnchorRequest? = null, onAnchorConsumed: (EntryAnchorRequest) -> Unit = {}, onNavigate: () -> Unit = {}) {
+fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings(), onScrollDirection: (Boolean) -> Unit = {}, anchorRequest: EntryAnchorRequest? = null, onAnchorConsumed: (EntryAnchorRequest) -> Unit = {}, onNavigate: () -> Unit = {}, readingState: EntryReadingState? = null) {
     val uri = LocalUriHandler.current
     val context = LocalContext.current
     DisposableEffect(entry.key) { onDispose { SpeechPlayback.stop() } }
     val colors = MaterialTheme.colorScheme
     CompositionLocalProvider(LocalEntryMedia provides entry.media, LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings) {
       key(entry.key) {
-        val scroll = rememberLazyListState()
+        val scroll = readingState?.scroll ?: rememberLazyListState()
         val reportScroll by rememberUpdatedState(onScrollDirection)
         val threshold = with(LocalDensity.current) { 20.dp.toPx() }
         val dockScroll = remember(scroll, threshold) {
@@ -97,8 +114,9 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         }
         val scope = rememberCoroutineScope()
         var contents by remember { mutableStateOf(false) }
-        val folded = remember(entry.key, settings.collapsePronunciation, settings.collapseEtymology, settings.collapseOtherSections, settings.collapseDetails) {
-            mutableStateMapOf<String, Boolean>().apply {
+        val foldKey = listOf(entry.key, settings.collapsePronunciation, settings.collapseEtymology, settings.collapseOtherSections, settings.collapseDetails)
+        val folded = remember(readingState, foldKey) {
+            readingState?.takeIf { it.foldKey == foldKey }?.folds ?: mutableStateMapOf<String, Boolean>().apply {
                 entry.readingRows.forEach { row -> row.heading?.let {
                     this[row.key] = initiallyFolded(row, settings)
                     if (row.meaningSection) this[row.key + "-details"] = settings.collapseDetails
@@ -106,7 +124,8 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 this["preamble"] = settings.collapseOtherSections && entry.kind != "alias"
                 this["references"] = settings.collapseOtherSections
                 this["media"] = settings.collapseOtherSections
-            }
+                this["abbreviations"] = settings.collapseDetails
+            }.also { readingState?.foldKey = foldKey; readingState?.folds = it }
         }
         val visibleRows = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
         fun jumpToAnchor(target: String): Boolean {
@@ -120,7 +139,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 folded[sectionKey] = false
                 val sectionIndex = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
                     .indexOfFirst { it.key == sectionKey }
-                scroll.requestScrollToItem(sectionIndex + 1 + if (entry.preamble.isNotEmpty()) 1 else 0)
+                scroll.requestScrollToItem(sectionIndex + entryReadingStartIndex(entry, folded.filterValues { it }.keys))
             } else return false
             return true
         }
@@ -147,7 +166,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 Column(Modifier.padding(bottom = 6.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text((entry.language ?: entry.kind.replace('_', ' ')).uppercase(), Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                        IconButton(onClick = { SpeechPlayback.play(context, entry.title, entry.languageCode) }) { Icon(if (SpeechPlayback.active == entry.title) Icons.Outlined.Stop else Icons.Outlined.VolumeUp, "Pronounce word offline", Modifier.size(22.dp)) }
+                        EntryPronunciationButton(SpeechPlayback.active == entry.title) { SpeechPlayback.play(context, entry.title, entry.languageCode) }
                         Box {
                             IconButton(onClick = { contents = true }) { Icon(Icons.AutoMirrored.Filled.List, "Sections", Modifier.size(22.dp)) }
                             DropdownMenu(contents, { contents = false }, Modifier.heightIn(max = 340.dp)) {
@@ -159,7 +178,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                                         val targetIndex = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys).indexOfFirst { it.key == row.key }
                                         scope.launch {
                                             androidx.compose.runtime.withFrameNanos { }
-                                            scroll.animateScrollToItem(targetIndex + 1 + if (entry.preamble.isNotEmpty()) 1 else 0)
+                                            scroll.animateScrollToItem(targetIndex + entryReadingStartIndex(entry, folded.filterValues { it }.keys))
                                         }
                                     })
                                 } }
@@ -169,6 +188,13 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     }
                     if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium, onLink = readerLink)
                     else Text(entry.title, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium.copy(textDirection=TextDirection.Content))
+                    if (entry.abbreviations.isNotEmpty()) {
+                        val closed = folded["abbreviations"] != false
+                        TextButton(onClick = { folded["abbreviations"] = !closed },
+                            modifier = Modifier.testTag("entry-abbreviations").semantics {
+                                stateDescription = if (closed) "Collapsed" else "Expanded"
+                            }) { Text("Abbreviations") }
+                    }
                     entry.redirect?.let { redirect ->
                         Text("${redirect.source} -> ${redirect.target}" + if (redirect.fragment.isEmpty()) "" else "#${redirect.fragment}",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -176,6 +202,19 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     SpeechPlayback.error?.let { message ->
                         Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         TextButton(onClick = { runCatching { context.startActivity(android.content.Intent("com.android.settings.TTS_SETTINGS")) } }) { Text("Speech settings") }
+                    }
+                }
+            }
+            if (folded["abbreviations"] == false) items(entry.abbreviations.indices.toList(),
+                key = { "abbreviation-$it" },
+                contentType = { "abbreviation" }) { index ->
+                val abbreviation = entry.abbreviations[index]
+                Column(Modifier.padding(bottom = 8.dp)) {
+                    Text(abbreviation.label, style = MaterialTheme.typography.labelLarge)
+                    Text(abbreviation.explanation, style = MaterialTheme.typography.bodyMedium)
+                    if (index == 0 || entry.abbreviations[index - 1].context != abbreviation.context) {
+                        Text(abbreviation.context, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -248,7 +287,7 @@ private fun FoldHeading(title: String, folded: Boolean, onClick: () -> Unit) {
 @Composable
 private fun BlockView(block: Block, onLink: (String) -> Unit) {
     when {
-        block.table != null -> Box(Modifier.padding(start = blockIndentDp(block).dp)) { TableView(block.table, onLink) }
+        block.table != null -> Box(Modifier.padding(start = blockIndentDp(block).dp)) { CompiledTableView(block.table, block.feature, onLink) }
         block.kind == "rule" -> HorizontalDivider()
         block.kind == "preformatted" -> Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp)) {
             StyledText(block.spans, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), onLink = onLink, preserveWhitespace = true)
@@ -257,8 +296,24 @@ private fun BlockView(block: Block, onLink: (String) -> Unit) {
             val prefix = blockPrefix(block)
             Row(Modifier.padding(start = blockIndentDp(block).dp)) {
                 if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                StyledText(block.spans, Modifier.weight(1f), weight = if (block.kind == "term") FontWeight.Bold else null, onLink = onLink)
+                StyledText(ordinaryInlineDisplaySpans(block), Modifier.weight(1f), weight = if (block.kind == "term") FontWeight.Bold else null, onLink = onLink)
             }
+        }
+    }
+}
+
+@Composable
+internal fun CompiledTableView(table: Table, feature: Feature?, onLink: (String) -> Unit) {
+    val sample = colorSwatch(feature)
+    if (sample == null) {
+        TableView(table, onLink)
+    } else {
+        Row(Modifier.semantics(mergeDescendants = true) {},
+            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Decorative sample: the visible label supplies its single accessible name.
+            Box(Modifier.size(40.dp).background(androidx.compose.ui.graphics.Color(sample.argb))
+                .testTag("compiled-color-swatch"))
+            Text("Color sample ${sample.hex}", color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }
@@ -295,16 +350,17 @@ private fun TableView(table: Table, onLink: (String) -> Unit) {
                 }
             }) { measurables, _ ->
                 val columnWidth = tableColumnWidth(grid.columns, 136.dp.roundToPx())
+                val heightLimit = columnWidth?.let { tableHeightLimit(it * grid.columns) }
                 // Measure once; native Egyptian cells use SubcomposeLayout, which
                 // deliberately has no intrinsic measurement implementation.
-                val children = if (columnWidth == null) emptyList() else measurables.mapIndexed { index, measurable ->
+                val children = if (columnWidth == null || heightLimit == null) emptyList() else measurables.mapIndexed { index, measurable ->
                     val width = columnWidth * grid.cells[index].colspan
                     measurable.measure(Constraints(minWidth = width, maxWidth = width,
-                        minHeight = 0, maxHeight = TablePixelLimit))
+                        minHeight = 0, maxHeight = heightLimit))
                 }
                 // Saturation at the child height limit is unavailable: it could
                 // mean clipped content, so it must not be promoted to success.
-                val pixels = if (columnWidth == null) null else tablePixelLayout(grid, columnWidth,
+                val pixels = if (columnWidth == null || heightLimit == null) null else tablePixelLayout(grid, columnWidth,
                     40.dp.roundToPx(), IntArray(children.size) { children[it].height })
                 if (pixels == null) {
                     // A following composition exposes the explicit unavailable state.
@@ -431,7 +487,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
         }.also { cache?.values?.getOrPut(spans) { mutableMapOf() }?.put(cacheKey, it) }
     }
     val egyptianRuns = remember(spans) { egyptianTextRuns(spans) }
-    SelectionContainer {
-        EgyptianInlineText(annotated, egyptianRuns, modifier, style.copy(textDirection = TextDirection.Content), linkColor)
+    SelectionContainer(modifier = modifier) {
+        EgyptianInlineText(annotated, egyptianRuns, Modifier, style.copy(textDirection = TextDirection.Content), linkColor)
     }
 }

@@ -37,7 +37,8 @@ fun LibraryScreen(library: LibraryStore, onImport: ()->Unit) {
                 }
             } }
         }
-        (library.error ?: message)?.let { error -> item { Text(error,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodyMedium) } }
+        library.initializationError?.let { error -> item { Text(error,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodyMedium) } }
+        library.error?.let { error -> item { Text(error,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodyMedium) } }
         if(library.dictionaries.isNotEmpty()) item { Text("On this device",style=MaterialTheme.typography.titleLarge) }
         items(library.dictionaries,key={it.id}) { dictionary ->
             Column {
@@ -52,15 +53,20 @@ fun LibraryScreen(library: LibraryStore, onImport: ()->Unit) {
             }
         }
         item { Text("Available",style=MaterialTheme.typography.titleLarge) }
+        if (library.catalog.isEmpty() && library.busy == null) item {
+            Text("No downloads listed. Add a catalogue or import a file.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         items(library.catalog,key={it.url}) { item -> Row(verticalAlignment=Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) { Text(item.label,style=MaterialTheme.typography.titleMedium);item.bytes?.let {Text("${it/1024/1024} MB",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)} }
             val edition = dictionaryEdition(java.net.URI(item.url).path.substringAfterLast('/'))
             val installed = library.dictionaries.any { it.id==if(edition.isEmpty())item.sha256 else "${item.sha256}-$edition" }
             IconButton(onClick={library.download(item)},enabled=!installed&&library.busy==null) {Icon(if(installed) Icons.Outlined.Check else Icons.Outlined.Download,if(installed)"Installed" else "Download ${item.label}")}
         } }
-        item { Row(verticalAlignment=Alignment.CenterVertically) { Text("Catalogue sources",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge);IconButton(onClick={add=!add}){Icon(Icons.Outlined.Add,"Add catalogue")} } }
+        item { Row(verticalAlignment=Alignment.CenterVertically) { Text("Catalogue sources",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge);IconButton(onClick={add=!add;message=null}){Icon(Icons.Outlined.Add,"Add catalogue")} } }
         if(add) item { Column {
-            OutlinedTextField(address,{address=it},singleLine=true,label={Text("HTTPS .list URL")},modifier=Modifier.fillMaxWidth())
+            OutlinedTextField(address,{address=it;message=null},singleLine=true,label={Text("HTTPS .list URL")},
+                isError=message!=null,supportingText=if(message!=null) { { Text(message.orEmpty()) } } else null,
+                modifier=Modifier.fillMaxWidth())
             TextButton(onClick={try{library.addSource(address);address="";add=false;message=null;library.refreshCatalogs()}catch(e:Exception){message=e.message}}){Text("Add source")}
         } }
         items(library.sources,key={it}) { source -> Row(verticalAlignment=Alignment.CenterVertically) {

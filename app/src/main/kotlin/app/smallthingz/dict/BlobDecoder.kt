@@ -4,14 +4,15 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2 decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2/DPR3 decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
     private val inline = listOf("text", "link", "external_link", "line_break")
     fun decode(bytes: ByteArray, title: String, kind: String, language: String?, code: String): Entry {
         val r = Reader(bytes)
-        require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82 && r.byte() == 50) { "Unsupported presentation format" }
+        require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
+        r.explanations = when (r.byte()) { 50 -> false; 51 -> true; else -> error("Unsupported presentation format") }
         val display = r.spans()
         val sections = List(r.count(9)) {
             val level = r.byte(); val name = r.string()
@@ -44,6 +45,7 @@ object BlobDecoder {
     private class Reader(bytes: ByteArray) {
         val buffer: ByteBuffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         private var remainingItems = 1_000_000
+        var explanations = false
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -61,11 +63,14 @@ object BlobDecoder {
         fun index(limit: Int): Int { val n = u32(); require(n < limit); return n.toInt() }
         fun optionalIndex(limit: Int) { val n = u32(); require(n == 0xffffffffL || n < limit) }
         fun indices(limit: Int) { repeat(count(4)) { index(limit) } }
-        fun spans(): List<Span> = List(count(27)) {
+        fun spans(): List<Span> = List(count(if (explanations) 31 else 27)) {
             val kind = enum(inline); val role = enum(roles); val f = byte()
-            Span(kind, string(), string(), string(), string(), string(), string(),
+            val text = string(); val target = string(); val trail = string()
+            val language = string(); val classes = string(); val direction = string()
+            val explanation = if (explanations) string() else ""
+            Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation)
         }
         fun block(): Block {
             val kind = enum(kinds); val depth = byte(); val level = byte()

@@ -10,6 +10,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
@@ -52,7 +53,7 @@ class EntryNavigationTest {
         }
     }
 
-    private inner class Harness(scope: CoroutineScope) {
+    private inner class Harness(scope: CoroutineScope, state: EntryNavigationState = EntryNavigationState()) {
         val dictionaries = mutableSetOf("fixture")
         var read: suspend (WordHit) -> Entry = { entry(it.title) }
         var link: suspend (String, Entry) -> WordHit? = { _, _ -> null }
@@ -68,8 +69,12 @@ class EntryNavigationTest {
         val history = mutableListOf<String>()
         val errors = mutableListOf<String>()
         val reads = mutableListOf<String>()
+        val exactReads = mutableListOf<WordHit>()
+        var visits = state.snapshot()
+        var restoredHit: WordHit? = null
         val navigation = EntryNavigation(
             scope, { hit ->
+                exactReads += hit
                 reads += hit.title
                 read(hit).let { it.copy(origin = it.origin ?: hit, contentDictionary = it.contentDictionary ?: hit.dictionary) }
             }, { target, entry -> link(target, entry) },
@@ -83,7 +88,169 @@ class EntryNavigationTest {
             { loading = it; loadingEvents += it },
             { errors += it; showError(it) },
             installed = { it in dictionaries },
+            visitsChanged = { visits = it },
+            state = state,
+            restore = { hit, entry ->
+                restoredHit = hit
+                title = entry.title
+                target = ""
+                history += hit.title
+                screen = "Dictionary"
+            },
         )
+    }
+
+    @Test fun linkedBackRereadsExactOwnerAndRestoresTheOriginalVisit() = runBlocking {
+        withTimeout(5_000) {
+            val state = EntryNavigationState()
+            val h = Harness(this, state)
+            h.dictionaries += "other"
+            val a = hit("same")
+            val b = a.copy(dictionary = "other")
+            h.navigation.open(a).join()
+            val originalId = h.visits.currentId
+            h.link = { _, _ -> b }
+            h.navigation.openLink("same#Noun", entry("same")).join()
+            val secondId = requireNotNull(h.visits.currentId)
+            assertNotEquals(originalId, secondId)
+            val committed = state.snapshot()
+            // A successor owns committed state even before old disposal/cancellation.
+            val late = Completion<Entry>()
+            h.read = { late.await() }
+            val pending = h.navigation.openLink("late", entry("same"))
+            late.started.await()
+            val recreated = Harness(this, state)
+            recreated.dictionaries += "other"
+            assertEquals(committed, recreated.visits)
+            assertFalse(recreated.loading)
+            late.succeed(entry("late"))
+            pending.join()
+            h.navigation.cancel()
+            assertEquals(listOf("same", "same"), h.history)
+            assertTrue(h.errors.isEmpty())
+            assertEquals(committed, state.snapshot())
+            assertTrue(recreated.navigation.goBack())
+            while (recreated.loading) yield()
+            assertEquals(listOf(a, b, b), h.exactReads)
+            assertEquals(listOf(a), recreated.exactReads)
+            assertEquals(a, recreated.restoredHit)
+            assertEquals(originalId, recreated.visits.currentId)
+            assertEquals(setOf(originalId), recreated.visits.retainedIds)
+            assertEquals("", recreated.target) // Never replay the consumed fragment.
+            assertFalse(recreated.navigation.goBack())
+            recreated.link = { _, _ -> b }
+            recreated.navigation.openLink("same", entry("same")).join()
+            assertTrue(requireNotNull(recreated.visits.currentId) > secondId)
+            // Keep the existing 32 previous visits plus one current visit bound.
+            repeat(35) { recreated.navigation.openLink("same", entry("same")).join() }
+            assertEquals(33, recreated.visits.retainedIds.size)
+            recreated.navigation.open(a).join()
+            assertEquals(1, recreated.visits.retainedIds.size)
+            assertFalse(recreated.navigation.goBack())
+        }
+    }
+
+    @Test fun backCancelsPendingLinkAndReturnWithoutPoppingOrPublishingLateResults() = runBlocking {
+        withTimeout(5_000) {
+            for (returning in listOf(false, true)) {
+                val h = Harness(this)
+                h.navigation.open(hit("A")).join()
+                h.link = { _, _ -> hit("B") }
+                h.navigation.openLink("B", entry("A")).join()
+                val before = h.visits
+                val history = h.history.toList()
+                val completion = Completion<Entry>()
+                h.read = { completion.await() }
+                val pending = if (returning) {
+                    assertTrue(h.navigation.goBack()); null
+                } else h.navigation.openLink("C", entry("B"))
+                completion.started.await()
+                assertTrue(h.navigation.goBack())
+                assertEquals(before, h.visits)
+                completion.succeed(entry(if (returning) "A" else "C"))
+                pending?.join()
+                yield()
+                assertEquals("B", h.title)
+                assertEquals(history, h.history)
+                assertTrue(h.errors.isEmpty())
+                assertFalse(h.loading)
+                h.read = { entry(it.title) }
+                assertTrue(h.navigation.goBack())
+                while (h.loading) yield()
+                assertEquals("A", h.title)
+            }
+        }
+    }
+
+    @Test fun failedReturnAndFailedRootKeepPathButSuccessfulRootResetsIt() = runBlocking {
+        withTimeout(5_000) {
+            val h = Harness(this)
+            h.navigation.open(hit("A")).join()
+            h.link = { _, _ -> hit("B") }
+            h.navigation.openLink("B", entry("A")).join()
+            val before = h.visits
+            h.read = { throw IOException("Unavailable") }
+            assertTrue(h.navigation.goBack())
+            while (h.loading) yield()
+            assertEquals(before, h.visits)
+            assertEquals("B", h.title)
+            h.navigation.open(hit("root")).join()
+            assertEquals(before, h.visits)
+            h.read = { entry(it.title) }
+            h.navigation.open(hit("root")).join()
+            assertFalse(h.visits.canGoBack)
+            assertEquals(1, h.visits.retainedIds.size)
+            assertFalse(h.navigation.goBack())
+        }
+    }
+
+    @Test fun removedOwnersArePrunedAndPendingRootBackStillCancels() = runBlocking {
+        withTimeout(5_000) {
+            val h = Harness(this)
+            h.dictionaries += "other"
+            h.navigation.open(hit("A")).join()
+            h.link = { _, _ -> hit("B").copy(dictionary = "other") }
+            h.navigation.openLink("B", entry("A")).join()
+            h.dictionaries -= "fixture"
+            h.navigation.libraryChanged()
+            assertFalse(h.navigation.goBack())
+            assertEquals(1, h.visits.retainedIds.size)
+            h.dictionaries.clear()
+            h.navigation.libraryChanged()
+            assertTrue(h.visits.retainedIds.isEmpty())
+            assertFalse(h.navigation.goBack())
+            h.dictionaries += "fixture"
+            val completion = Completion<Entry>()
+            h.read = { completion.await() }
+            val pending = h.navigation.open(hit("late"))
+            completion.started.await()
+            assertTrue(h.navigation.goBack())
+            completion.fail(IOException("late failure"))
+            pending.join()
+            assertTrue(h.errors.isEmpty())
+            assertFalse(h.navigation.goBack())
+
+            val returning = Harness(this)
+            returning.dictionaries += "other"
+            returning.navigation.open(hit("A")).join()
+            returning.link = { _, _ -> hit("B").copy(dictionary = "other") }
+            returning.navigation.openLink("B", entry("A")).join()
+            val returnRead = Completion<Entry>()
+            returning.read = { returnRead.await() }
+            assertTrue(returning.navigation.goBack())
+            returnRead.started.await()
+            returning.dictionaries -= "other"
+            returning.navigation.libraryChanged()
+            assertFalse(returning.loading)
+            assertTrue(returning.visits.retainedIds.isEmpty())
+            returnRead.succeed(entry("A"))
+            yield()
+            assertEquals(listOf("A", "B"), returning.history)
+            assertNull(returning.restoredHit)
+            assertTrue(returning.errors.isEmpty())
+            assertFalse(returning.navigation.goBack())
+            requireNotNull(returning.navigation.openInitialIfIdle()).join()
+        }
     }
 
     @Test fun dockAndBackInvalidatePendingReadWithoutPublishingHistory() = runBlocking {

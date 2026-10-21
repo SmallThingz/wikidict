@@ -140,4 +140,75 @@ class InstallTransactionTest {
         assertEquals("unresolved bytes", file.readText())
     }
 
+    @Test fun committedRemovalRefreshesOwnershipWhenTransactionReleaseThrows() {
+        val file = temporary.newFile("removed.wikblb").apply { writeText("dictionary bytes") }
+        val releaseFailure = IOException("release failed after COMMIT")
+        var registered = true
+        var visible = true
+        val events = mutableListOf<String>()
+        val caught = assertThrows(IOException::class.java) {
+            finishDictionaryRemoval(null,
+                endTransaction = { events += "end"; registered = false; throw releaseFailure },
+                registered = { events += "committed query"; registered },
+                removeFile = { events += "delete"; assertTrue(file.delete()) },
+                refresh = { events += "refresh"; visible = registered })
+        }
+        assertSame(releaseFailure, caught)
+        assertEquals(listOf("end", "committed query", "delete", "refresh"), events)
+        assertFalse(file.exists())
+        assertFalse(visible)
+    }
+
+    @Test fun rolledBackRemovalPreservesPayloadAndVisibleOwnership() {
+        val file = temporary.newFile("retained.wikblb").apply { writeText("retained bytes") }
+        val bodyFailure = IOException("delete failed before COMMIT")
+        val releaseFailure = IOException("release failed after ROLLBACK")
+        var pending: Throwable? = null
+        var visible = true
+        val events = mutableListOf<String>()
+        val caught = assertThrows(IOException::class.java) {
+            try { throw bodyFailure }
+            catch (error: Throwable) { pending = error; throw error }
+            finally {
+                finishDictionaryRemoval(pending,
+                    endTransaction = { events += "end"; throw releaseFailure },
+                    registered = { events += "committed query"; true },
+                    removeFile = { throw AssertionError("Registered bytes must remain") },
+                    refresh = { visible = false; throw AssertionError("Rolled back ownership remains") })
+            }
+        }
+        assertSame(bodyFailure, caught)
+        assertArrayEquals(arrayOf<Throwable>(releaseFailure), caught.suppressed)
+        assertEquals(listOf("end", "committed query"), events)
+        assertEquals("retained bytes", file.readText())
+        assertTrue(visible)
+    }
+
+    @Test fun unresolvedRemovalKeepsPayloadAndOriginalFailure() {
+        val file = temporary.newFile("uncertain.wikblb").apply { writeText("uncertain bytes") }
+        val failure = IOException("transaction unresolved")
+        val caught = assertThrows(IOException::class.java) {
+            finishDictionaryRemoval(null, { throw failure }, { null },
+                { throw AssertionError("Unknown registration must retain bytes") },
+                { throw AssertionError("Unknown outcome cannot claim a new snapshot") })
+        }
+        assertSame(failure, caught)
+        assertEquals("uncertain bytes", file.readText())
+    }
+
+    @Test fun committedRemovalRefreshesEvenWhenPayloadCleanupFails() {
+        val file = temporary.newFile("orphan.wikblb").apply { writeText("preserved bytes") }
+        val releaseFailure = IOException("release failed after COMMIT")
+        val cleanupFailure = IOException("payload cleanup failed")
+        var visible = true
+        val caught = assertThrows(IOException::class.java) {
+            finishDictionaryRemoval(null, { throw releaseFailure }, { false },
+                { throw cleanupFailure }, { visible = false })
+        }
+        assertSame(releaseFailure, caught)
+        assertArrayEquals(arrayOf<Throwable>(cleanupFailure), caught.suppressed)
+        assertFalse(visible)
+        assertEquals("preserved bytes", file.readText())
+    }
+
 }

@@ -7,7 +7,6 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.ByteArrayInputStream
@@ -22,7 +21,7 @@ import org.junit.Test
 
 /** Real typed import and DictApp routing; intercepted URIs cannot launch a browser. */
 class BookSourcesDeviceTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val compose = createPhysicalComposeRule()
 
     private fun fixture(source: String, destination: String): ByteArray {
         fun u32(n: Int) = ByteArray(4) { (n ushr (it * 8)).toByte() }

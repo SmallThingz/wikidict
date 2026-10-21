@@ -77,6 +77,63 @@ class SearchCaseFoldDeviceTest {
         } finally {
             library.dictionaries.filter { it.edition == edition }.forEach { library.remove(it.id).join() }
         }
+        verifyExplicitLanguageOwnerFragments(library)
+    }
+
+    private suspend fun verifyExplicitLanguageOwnerFragments(library: LibraryStore) = kotlinx.coroutines.coroutineScope {
+        val edition = "ownernav${UUID.randomUUID().toString().replace("-", "")}wiktionary-20261001"
+        val otherEdition = "other$edition"
+        val editions = setOf(edition, otherEdition)
+        suspend fun install(owner: String, code: String, selectedEdition: String, titles: List<String>) {
+            val bytes = dictionary(owner, titles, code)
+            val hash = MessageDigest.getInstance("SHA-256").digest(owner.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+            library.importFile(name = { "$selectedEdition-$hash.wikblb" }) { ByteArrayInputStream(bytes) }.join()
+            assertNull(library.error)
+        }
+        try {
+            install("Greek", "el", edition, listOf("κρώζω", "μόνο"))
+            install("Ancient Greek", "grc", edition, listOf("κρώζω"))
+            install("Latin", "la", otherEdition, listOf("κρώζω"))
+            val modern = library.read(requireNotNull(library.exact("κρώζω", "Greek", edition)))
+            val ancient = library.read(requireNotNull(library.exact("κρώζω", "Ancient Greek", edition)))
+            val explicit = requireNotNull(library.link("κρώζω#Ancient Greek", modern))
+            assertEquals("Ancient Greek", explicit.language)
+            assertEquals(edition, explicit.edition)
+            assertEquals("grc", library.read(explicit).languageCode)
+            assertEquals(explicit.key, library.link("κρώζω#Ancient_Greek", modern)?.key)
+            assertEquals(ancient.origin?.key, explicit.key)
+            assertEquals(modern.origin?.key, library.link("κρώζω#Greek", ancient)?.key)
+            // Installed owner but absent entry must not fall back to the modern homograph.
+            assertNull(library.link("μόνο#Ancient Greek", modern))
+            // Ordinary subsections and owners absent from this edition keep existing lookup behavior.
+            for (target in listOf("κρώζω", "κρώζω#Etymology_2", "κρώζω#Missing owner", "κρώζω#Latin"))
+                assertEquals(modern.origin?.key, library.link(target, modern)?.key)
+            val legacy = modern.copy(edition = "")
+            assertEquals(modern.origin?.key, library.link("κρώζω#Ancient Greek", legacy)?.key)
+            val supplemental = modern.copy(navigationKind = "supplemental", navigationLanguage = null)
+            assertNull(library.link("κρώζω#Ancient Greek", supplemental))
+
+            val committed = mutableListOf<Triple<WordHit, Entry, String>>()
+            val errors = mutableListOf<String>()
+            val navigation = EntryNavigation(this, library::read, library::link, library::savedWord,
+                library::random, { null }, { hit, entry, target -> committed += Triple(hit, entry, target) },
+                {}, { errors += it }, { id -> library.dictionaries.any { it.id == id } })
+            try {
+                navigation.openLink("κρώζω#Ancient_Greek", modern).join()
+                val (hit, entry, target) = committed.single()
+                assertEquals(explicit.key, hit.key)
+                assertEquals(explicit.key, entry.origin?.key)
+                assertEquals("Ancient Greek", entry.language)
+                assertEquals("κρώζω#Ancient_Greek", target)
+                assertTrue(errors.isEmpty())
+                navigation.openLink("μόνο#Ancient Greek", modern).join()
+                assertEquals(1, committed.size)
+                assertEquals(listOf("This word is not in your installed dictionaries."), errors)
+            } finally { navigation.cancel() }
+        } finally {
+            library.dictionaries.filter { it.edition in editions }.forEach { library.remove(it.id).join() }
+        }
     }
 
     @Test fun versionTwoRekeyRollsBackFailureThenPreservesRowsAndIndexedLookup(): Unit = runBlocking {
@@ -211,7 +268,7 @@ class SearchCaseFoldDeviceTest {
              WHERE d.kind='alias'""")
     }
 
-    private fun dictionary(heading: String, titles: List<String>): ByteArray {
+    private fun dictionary(heading: String, titles: List<String>, code: String = "el"): ByteArray {
         val payload = InstrumentationRegistry.getInstrumentation().context.assets.open("bom-identities.wikblb").use { source ->
             val input = ByteArrayInputStream(source.readBytes())
             val header = ByteArray(9); assertEquals(9, input.read(header))
@@ -224,7 +281,7 @@ class SearchCaseFoldDeviceTest {
         }
         return ByteArrayOutputStream().apply {
             fun nul(value: String) { write(value.toByteArray(Charsets.UTF_8)); write(0) }
-            write("WIKBLB08".toByteArray()); write(1); nul("el"); nul(heading)
+            write("WIKBLB08".toByteArray()); write(1); nul(code); nul(heading)
             titles.sortedWith { a, b ->
                 val x = a.toByteArray(Charsets.UTF_8); val y = b.toByteArray(Charsets.UTF_8)
                 var result = 0

@@ -43,6 +43,41 @@ class ReadingLayoutTest {
         assertEquals(listOf(blankBody), visibleReadingRows(readingRows(listOf(blank)), setOf("heading-0")).mapNotNull { it.block })
     }
 
+    @Test fun selfHeadingCompanionRetainsProducerStylingWithoutAddingAnAction() {
+        val self = Span("text", "Usage notes", classes = "mw-selflink selflink", bold = true, italic = true)
+        val companion = Block("heading", 0, listOf(self), level = 3)
+        val body = Block("paragraph", 0, listOf(Span("text", "Visible body")))
+        fun section(block: Block = companion, title: String = "Usage notes") = Section(3, title, listOf(block, body))
+        for (span in listOf(self, self.copy(bold = false, italic = false),
+            self.copy(classes = "note\tmw-selflink\nselflink extra"))) {
+            val heading = companion.copy(spans = listOf(span))
+            val rows = readingRows(listOf(section(heading)))
+            assertSame(heading, sectionHeadingCompanion(section(heading)))
+            assertSame(heading, rows.first().headingBlock)
+            assertEquals(listOf("heading-0", "block-0-1"), rows.map { it.key })
+            assertEquals(listOf(body), rows.mapNotNull { it.block })
+            assertEquals(listOf(body), visibleReadingRows(rows, emptySet()).mapNotNull { it.block })
+            assertTrue(visibleReadingRows(rows, setOf("heading-0")).mapNotNull { it.block }.isEmpty())
+            assertEquals("text", rows.first().headingBlock!!.spans.single().kind)
+            assertEquals("", rows.first().headingBlock!!.spans.single().target)
+            assertEquals(span, rows.first().headingBlock!!.spans.single())
+        }
+        for (span in listOf(self.copy(classes = ""), self.copy(classes = "mw-selflink"),
+            self.copy(classes = "selflink"), self.copy(classes = "not-mw-selflink selflink"),
+            self.copy(classes = "mw-selflink selflink-suffix"), self.copy(target = "notes"),
+            self.copy(kind = "link"), self.copy(text = "", trail = "Usage notes"))) {
+            val heading = companion.copy(spans = listOf(span))
+            assertNull(sectionHeadingCompanion(section(heading)))
+            assertEquals(listOf(heading, body), readingRows(listOf(section(heading))).mapNotNull { it.block })
+        }
+        assertNull(sectionHeadingCompanion(section(companion.copy(level = 2))))
+        assertNull(sectionHeadingCompanion(section(title = "usage notes")))
+        assertNull(sectionHeadingCompanion(section(companion.copy(spans = listOf(self,
+            Span("line_break", "\n", trail = "extra"))))))
+        val entry = Entry("Fixture", emptyList(), "language", "English", "en", listOf(section()), emptyList())
+        assertEquals("heading-0", sectionScrollKey(entry, "#Usage_notes"))
+    }
+
     @Test fun richHeadingKeepsStableSectionKeysFoldsAndFragmentDestinations() {
         val heading = Block("heading", 0, listOf(Span("link", "Etymology 1", target = "origin")), level = 3)
         val body = Block("paragraph", 0, listOf(Span("text", "Origin body")))
@@ -478,6 +513,36 @@ class ReadingLayoutTest {
         val markedBreak = Span("line_break", "", classes = marker)
         verify(listOf(markedBreak to "\n", markedBreak to "\n"), "\n\n",
             listOf(PoemParagraph(0, 1, 2, "ltr"), PoemParagraph(1, 2, 2, "ltr")))
+    }
+
+    @Test fun authoredEmptyListsKeepMarkersIndentAndNumbering() {
+        val blocks = listOf(
+            Block("list_item", 1, emptyList(), listPath = "*"),
+            Block("list_item", 3, emptyList(), listPath = "###", number = "7"),
+            Block("definition", 2, emptyList(), listPath = "##", number = "4"),
+            Block("example", 2, emptyList(), listPath = "#:"),
+            Block("quotation", 2, emptyList(), listPath = "#*"),
+            Block("list_detail", 3, emptyList(), listPath = "*::"),
+            Block("term", 2, emptyList(), listPath = "*;"),
+            Block("indent", 3, emptyList(), listPath = ":::"),
+        )
+        val rows = readingRows(listOf(Section(3, "Usage", blocks)))
+        assertEquals(blocks, rows.mapNotNull { it.block })
+        assertEquals(listOf("• ", "7. ", "04", "│ ", "│ ", "↳ ", "", ""),
+            rows.mapNotNull { it.block }.map(::blockPrefix))
+        assertEquals(listOf(0, 14, 7, 7, 7, 14, 7, 14), blocks.map(::blockIndentDp))
+        assertEquals(listOf("block-0-0", "block-0-1", "block-0-2", "block-0-3", "block-0-4", "block-0-5", "block-0-6", "block-0-7"),
+            rows.filter { it.block != null }.map { it.key })
+        assertTrue(visibleReadingRows(rows, setOf("heading-0")).none { it.block != null })
+    }
+
+    @Test fun emptyNonListBlocksDoNotInventVisibleMarkers() {
+        val blanks = listOf(
+            Block("blank", 2, emptyList(), listPath = "**"),
+            Block("paragraph", 2, emptyList(), listPath = "**"),
+            Block("list_item", 0, emptyList()),
+        )
+        assertTrue(readingRows(listOf(Section(3, "Usage", blanks))).none { it.block != null })
     }
 
 }

@@ -2,9 +2,13 @@ package app.smallthingz.dict
 
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
@@ -15,7 +19,7 @@ import org.junit.Test
 
 /** Supported typed section/reference links; no wikitext parsing or network fixture. */
 class SectionLinkDeviceTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val compose = createLegacyPhysicalComposeRule()
     private val forwarded = mutableListOf<String>()
 
     private fun show(target: String, label: String, sectionTitle: String, references: List<Reference> = emptyList()) {
@@ -269,7 +273,6 @@ class SectionLinkDeviceTest {
             val destination = library.search("Anchor destination").single { it.dictionary == dictionary.id && it.title == "Anchor destination" }
             fixtureKeys += library.read(source).key
             fixtureKeys += library.read(destination).key
-            library.rememberWord(source)
             compose.runOnUiThread {
                 learning.updateSettings { it.copy(collapseEtymology = true, collapseOtherSections = true, allowImages = false, allowAudio = false) }
                 compose.activity.setContent { MaterialTheme { DictApp(library, learning, {}) } }
@@ -293,13 +296,29 @@ class SectionLinkDeviceTest {
                 compose.onNodeWithContentDescription("Settings").performClick()
                 compose.onNodeWithContentDescription("Dictionary").performClick()
                 compose.onNodeWithContentDescription("Close search").performClick()
+                // Returning retains the anchor scroll; the lazy title may be offscreen.
+                compose.onNodeWithTag("entry-scroll").performScrollToNode(
+                    hasTestTag("entry-title") and hasText("Anchor destination")
+                )
                 waitForTitle("Anchor destination")
             }
+            // A retained reader session is not reset by setContent; select this installed fixture normally.
+            compose.onNodeWithContentDescription("Dictionary").performClick()
+            compose.onNode(hasSetTextAction()).performTextReplacement("Anchor source")
+            val sourceChoice = hasText("Anchor source") and hasText(source.language) and
+                hasText(sourceLabel(source.edition)) and hasClickAction() and !hasSetTextAction()
+            compose.waitUntil(10000) {
+                compose.onAllNodes(sourceChoice).fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1
+            }
+            compose.onAllNodes(sourceChoice).assertCountEquals(1).onFirst().performClick()
             waitForTitle("Anchor source")
+            assertEquals(source.key, runBlocking { library.lastWord() }?.key)
             touchLink("Read destination notes")
             assertDestinationOpen()
             compose.onNodeWithContentDescription("Collapse Usage notes").performClick()
             leaveAndReturn()
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription("Expand Usage notes"))
+            compose.onNodeWithContentDescription("Expand Usage notes").assertIsDisplayed()
             compose.onNodeWithText("DESTINATION USAGE BODY").assertDoesNotExist()
             // A fresh request to the same word and anchor must still be applied.
             compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Read destination notes again"))
@@ -328,5 +347,194 @@ class SectionLinkDeviceTest {
             prefs.edit().apply { previousWord.forEach { (key, value) -> putString(key, value) } }.commit()
         }
     }
+
+    @Test fun selfHeadingCompanionsRenderOnceWithoutActionsAndKeepFoldsAndFragments() {
+        val markers = "mw-selflink selflink"
+        val owner = Span("text", "English", classes = markers, bold = true, italic = true)
+        val normal = Span("text", "Usage notes", classes = markers)
+        val entry = Entry("Self heading fixture", emptyList(), "language", "English", "en", listOf(
+            Section(2, "English", listOf(
+                Block("heading", 0, listOf(owner), level = 2),
+                Block("definition", 1, listOf(Span("link", "Independent entry link", target = "other-entry"))),
+                Block("definition", 1, listOf(Span("link", "Jump to usage", target = "#Usage_notes"))))),
+            Section(3, "Usage notes", listOf(
+                Block("heading", 0, listOf(normal), level = 3),
+                Block("paragraph", 0, listOf(Span("text", "SELF HEADING DESTINATION")))))
+        ), emptyList()).copy(displayTitle = listOf(Span("text", "Self heading fixture", bold = true)))
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                DictTheme("system") { androidx.compose.material3.Surface(
+                    modifier = androidx.compose.ui.Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) { EntryView(entry, false, {}, onLink = { forwarded.add(it) }, settings = AppSettings()) } }
+            }
+        }
+        fun layout(label: String): TextLayoutResult {
+            val node = compose.onNodeWithText(label, useUnmergedTree = true)
+            val results = mutableListOf<TextLayoutResult>()
+            node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(results) }
+            return results.single()
+        }
+        fun selfLabel(label: String, bold: Boolean, italic: Boolean) {
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText(label))
+            compose.onAllNodesWithText(label, useUnmergedTree = true).assertCountEquals(1)
+            compose.onNodeWithText(label, useUnmergedTree = true).assertHasNoClickAction()
+            val text = layout(label).layoutInput.text
+            assertTrue(text.getLinkAnnotations(0, text.length).isEmpty())
+            assertEquals(bold, text.spanStyles.any { it.item.fontWeight == androidx.compose.ui.text.font.FontWeight.Bold })
+            assertEquals(italic, text.spanStyles.any { it.item.fontStyle == androidx.compose.ui.text.font.FontStyle.Italic })
+            touchLink(label) // Physical glyph click must neither navigate nor toggle the separate fold button.
+            compose.runOnIdle { assertTrue(forwarded.isEmpty()) }
+        }
+        // The caller tag belongs to the selectable container; text layout remains on its leaf.
+        compose.onNodeWithTag("entry-title", useUnmergedTree = true).assertIsDisplayed()
+        val titleNode = compose.onNode(
+            hasText("Self heading fixture") and hasAnyAncestor(hasTestTag("entry-title")) and
+                SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult), useUnmergedTree = true)
+        titleNode.assertIsDisplayed().assertHasNoClickAction()
+        val titleLayouts = mutableListOf<TextLayoutResult>()
+        titleNode.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(titleLayouts) }
+        assertEquals("Self heading fixture", titleLayouts.single().layoutInput.text.text)
+        assertTrue(titleLayouts.single().layoutInput.text.spanStyles.any { it.item.fontWeight == androidx.compose.ui.text.font.FontWeight.Bold })
+        selfLabel("English", bold = true, italic = true)
+        compose.onNodeWithContentDescription("Collapse English").assertIsDisplayed()
+        compose.onNodeWithText("Independent entry link").assertIsDisplayed()
+        captureOwnedSelfHeading("self-heading-default.png")
+        touchLink("Independent entry link")
+        compose.runOnIdle { assertEquals(listOf("other-entry"), forwarded); forwarded.clear() }
+        selfLabel("Usage notes", bold = false, italic = false)
+        compose.onNodeWithContentDescription("Expand Usage notes").assertIsDisplayed()
+        compose.onNodeWithText("SELF HEADING DESTINATION").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Expand Usage notes").performClick()
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("SELF HEADING DESTINATION"))
+        compose.onNodeWithText("SELF HEADING DESTINATION").assertIsDisplayed()
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription("Collapse Usage notes"))
+        compose.onNodeWithContentDescription("Collapse Usage notes").performClick()
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Jump to usage"))
+        touchLink("Jump to usage")
+        compose.onNodeWithText("SELF HEADING DESTINATION").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Collapse Usage notes").assertIsDisplayed()
+        compose.onAllNodesWithText("Usage notes", useUnmergedTree = true).assertCountEquals(1)
+        compose.runOnIdle { assertTrue(forwarded.isEmpty()); assertEquals(owner, entry.sections[0].blocks[0].spans.single()); assertEquals(normal, entry.sections[1].blocks[0].spans.single()) }
+
+        // Explicit client-only narrow RTL/2x fixture. No global font, locale or device setting changes.
+        val rtlSelf = "عنوان ذاتي طويل يحافظ على التفاف النص واتجاه القراءة"
+        val rtlNeighbor = "رابط مستقل"
+        val rtlLabel = "$rtlSelf / $rtlNeighbor"
+        val rtlSpans = listOf(
+            Span("text", rtlSelf, classes = markers, direction = "rtl", bold = true, italic = true),
+            Span("text", " / "),
+            Span("link", rtlNeighbor, target = "rtl-other-entry", direction = "rtl"))
+        val rtlEntry = Entry("RTL", emptyList(), "language", "Arabic", "ar", listOf(
+            Section(3, rtlLabel, listOf(
+                Block("heading", 0, rtlSpans, level = 3),
+                Block("paragraph", 0, listOf(Span("text", "RTL FOLD BODY")))))
+        ), emptyList())
+        compose.runOnIdle { forwarded.clear() }
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                val baseDensity = androidx.compose.ui.platform.LocalDensity.current
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(baseDensity.density, 2f),
+                    androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Rtl
+                ) {
+                    DictTheme("system") { androidx.compose.material3.Surface(
+                        modifier = androidx.compose.ui.Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background
+                    ) {
+                        // Consume Surface's full minimum constraints before narrowing the inner owned viewport.
+                        androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
+                            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.width(280.dp).fillMaxSize().testTag("self-heading-rtl-viewport")) {
+                                EntryView(rtlEntry, false, {}, onLink = { forwarded.add(it) }, settings = AppSettings(collapseOtherSections = true))
+                            }
+                        }
+                    } }
+                }
+            }
+        }
+        val mixedMatcher = hasText(rtlSelf, substring = true) and
+            SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult)
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(mixedMatcher)
+        compose.onAllNodes(mixedMatcher, useUnmergedTree = true).assertCountEquals(1)
+        val mixedNode = compose.onNode(mixedMatcher, useUnmergedTree = true)
+        val mixedLayouts = mutableListOf<TextLayoutResult>()
+        mixedNode.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(mixedLayouts) }
+        val mixedLayout = mixedLayouts.single()
+        val mixedText = mixedLayout.layoutInput.text
+        val selfOffset = mixedText.text.indexOf(rtlSelf)
+        val neighborOffset = mixedText.text.indexOf(rtlNeighbor)
+        assertTrue(selfOffset >= 0 && neighborOffset > selfOffset)
+        assertEquals(2f, mixedLayout.layoutInput.density.fontScale, 0f)
+        assertEquals(androidx.compose.ui.text.style.ResolvedTextDirection.Rtl, mixedLayout.getParagraphDirection(selfOffset))
+        assertTrue("Long self text must actually wrap", mixedLayout.getLineForOffset(selfOffset + rtlSelf.length - 1) > mixedLayout.getLineForOffset(selfOffset))
+        assertFalse("Wrapped heading must not truncate", mixedLayout.hasVisualOverflow)
+        val action = mixedText.getLinkAnnotations(0, mixedText.length).single()
+        assertEquals("rtl-other-entry", (action.item as androidx.compose.ui.text.LinkAnnotation.Clickable).tag)
+        assertTrue(neighborOffset in action.start until action.end)
+        assertTrue("Self text must not borrow neighbor action", action.end <= selfOffset || action.start >= selfOffset + rtlSelf.length)
+        captureOwnedSelfHeading("self-heading-rtl-2x.png")
+        val fold = compose.onNodeWithContentDescription("Expand $rtlLabel")
+        fold.assertIsDisplayed().assertHasClickAction()
+            .assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Role, androidx.compose.ui.semantics.Role.Button))
+        val foldNode = fold.fetchSemanticsNode()
+        // Semantics/layout bounds and expanded interactive touch bounds are distinct public APIs.
+        // Both direct SemanticsNode properties below are pixel Rects in root coordinates.
+        val foldBoundsPx: androidx.compose.ui.geometry.Rect = foldNode.boundsInRoot
+        val foldTouchBoundsPx: androidx.compose.ui.geometry.Rect = foldNode.touchBoundsInRoot
+        val textBoundsPx = mixedNode.fetchSemanticsNode().boundsInRoot
+        val density = mixedLayout.layoutInput.density
+        val minimumTouchPx = with(density) { 48.dp.toPx() }
+        val viewportBoundsPx = compose.onNodeWithTag("self-heading-rtl-viewport").fetchSemanticsNode().boundsInRoot
+        val geometry = "visualPx=$foldBoundsPx touchPx=$foldTouchBoundsPx textPx=$textBoundsPx " +
+            "viewportPx=$viewportBoundsPx densityPxPerDp=${density.density} fontScale=${density.fontScale} minimumTouchPx=$minimumTouchPx"
+        assertEquals("Owned viewport width in px: $geometry", with(density) { 280.dp.toPx() }, viewportBoundsPx.width, 1f)
+        assertTrue("Separate fold touch target remains at least 48dp: $geometry", foldTouchBoundsPx.width >= minimumTouchPx - 1f && foldTouchBoundsPx.height >= minimumTouchPx - 1f)
+        assertTrue("RTL visual fold stays beside text without overlap: $geometry", foldBoundsPx.right <= textBoundsPx.left + 1f)
+        assertTrue("RTL touch target stays beside text without overlap: $geometry", foldTouchBoundsPx.right <= textBoundsPx.left + 1f)
+        assertTrue("Visual fold fully inside owned viewport: $geometry", foldBoundsPx.left >= viewportBoundsPx.left - 1f && foldBoundsPx.right <= viewportBoundsPx.right + 1f && foldBoundsPx.top >= viewportBoundsPx.top - 1f && foldBoundsPx.bottom <= viewportBoundsPx.bottom + 1f)
+        assertTrue("Touch target fully inside owned viewport: $geometry", foldTouchBoundsPx.left >= viewportBoundsPx.left - 1f && foldTouchBoundsPx.right <= viewportBoundsPx.right + 1f && foldTouchBoundsPx.top >= viewportBoundsPx.top - 1f && foldTouchBoundsPx.bottom <= viewportBoundsPx.bottom + 1f)
+        assertTrue("Entire measured heading remains visible: $geometry", textBoundsPx.height + 1f >= mixedLayout.size.height && textBoundsPx.width + 1f >= mixedLayout.size.width)
+        assertTrue("Heading fully inside owned viewport: $geometry", textBoundsPx.left >= viewportBoundsPx.left - 1f && textBoundsPx.right <= viewportBoundsPx.right + 1f && textBoundsPx.top >= viewportBoundsPx.top - 1f && textBoundsPx.bottom <= viewportBoundsPx.bottom + 1f)
+        compose.onNodeWithText("RTL FOLD BODY").assertDoesNotExist()
+        mixedNode.performTouchInput { click(mixedLayout.getBoundingBox(selfOffset + 1).center) }
+        compose.runOnIdle { assertTrue(forwarded.isEmpty()) }
+        compose.onNodeWithContentDescription("Expand $rtlLabel").assertIsDisplayed()
+        mixedNode.performTouchInput { click(mixedLayout.getBoundingBox(neighborOffset + 1).center) }
+        compose.runOnIdle { assertEquals(listOf("rtl-other-entry"), forwarded); forwarded.clear() }
+        compose.onNodeWithContentDescription("Expand $rtlLabel").assertIsDisplayed()
+        compose.onNodeWithText("RTL FOLD BODY").assertDoesNotExist()
+        fold.performTouchInput { click() }
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("RTL FOLD BODY"))
+        compose.onNodeWithText("RTL FOLD BODY").assertIsDisplayed()
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription("Collapse $rtlLabel"))
+        compose.onNodeWithContentDescription("Collapse $rtlLabel").performTouchInput { click() }
+        compose.onNodeWithText("RTL FOLD BODY").assertDoesNotExist()
+        compose.onAllNodes(mixedMatcher, useUnmergedTree = true).assertCountEquals(1)
+        compose.runOnIdle { assertTrue(forwarded.isEmpty()); assertEquals(rtlSpans, rtlEntry.sections.single().blocks.first().spans) }
+    }
+
+    private fun captureOwnedSelfHeading(name: String) {
+        require(name in setOf("self-heading-default.png", "self-heading-rtl-2x.png"))
+        // Only this owned Compose root and asserted public self-heading fixture text; never the
+        // system clipboard overlay or the retained original ClipData.
+        try {
+            val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+            try {
+                val files = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
+                val directory = java.io.File(files, "qa-copy-evidence")
+                check(directory.mkdirs() || directory.isDirectory)
+                check(directory.canonicalFile.parentFile == files.canonicalFile)
+                val target = java.io.File(directory, name)
+                check(target.canonicalFile.parentFile == directory.canonicalFile && !target.exists())
+                target.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+            } finally { bitmap.recycle() }
+        } catch (failure: AssertionError) {
+            android.util.Log.i("OwnedSelfHeadingEvidence", "$name unavailable: ${failure.javaClass.simpleName}")
+        } catch (failure: Exception) {
+            // Evidence availability never replaces functional assertions, and
+            // diagnostics do not print a view tree or any clipboard contents.
+            android.util.Log.i("OwnedSelfHeadingEvidence", "$name unavailable: ${failure.javaClass.simpleName}")
+        }
+    }
+
 
 }

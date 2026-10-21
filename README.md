@@ -3,8 +3,12 @@
 Native Android reader for Wiktionary dictionaries produced by
 [wikidict](https://github.com/SmallThingz/wikidict).
 
-The app reads compiled WIKBLB08/DPR2 data directly. It does not ship a WebView, Lua
+The app reads compiled WIKBLB08 dictionaries with DPR2 or DPR3 presentation data directly. It does not ship a WebView, Lua
 runtime, wikitext parser or JSON dictionary format.
+
+DPR3 dictionaries preserve abbreviation explanations and require reader version 0.4.0
+or newer. This reader also supports existing DPR2 dictionaries. Older readers refuse
+unsupported DPR3 imports; update the reader before installing new DPR3 data.
 
 ## Data path
 
@@ -18,7 +22,7 @@ streaming validation + install
 SQLite title / offset index
         |
         v
-on-demand DPR2 decode
+on-demand DPR2 / DPR3 decode
 ```
 
 Only the selected record is decoded. Compressed dictionaries stay compressed on

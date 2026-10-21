@@ -1,5 +1,7 @@
 package app.smallthingz.dict
 
+import androidx.compose.ui.unit.Constraints
+
 /** Paired dimensions at or below this value fit Compose Constraints' 15/16-bit pair. */
 internal const val TablePixelLimit = 32766
 internal data class TablePixelLayout(val columnWidth: Int, val rowOffsets: IntArray, val width: Int) {
@@ -13,16 +15,24 @@ internal fun tableColumnWidth(columns: Int, preferred: Int): Int? {
     return if (columns == 0) preferred.coerceAtMost(TablePixelLimit)
         else minOf(preferred, TablePixelLimit / columns).takeIf { it > 0 }
 }
+/** Preserve the finite table width and ask Compose for its paired height capacity. */
+internal fun tableHeightLimit(width: Int): Int? {
+    if (width !in 0..TablePixelLimit) return null
+    return Constraints.fitPrioritizingWidth(minWidth = width, maxWidth = width,
+        minHeight = 0, maxHeight = Int.MAX_VALUE - 1).maxHeight
+}
 /** Null is an explicit unavailable layout, never permission to clip stored cells. */
 internal fun tablePixelLayout(grid: TableGrid, columnWidth: Int, minRowHeight: Int,
                              measuredHeights: IntArray): TablePixelLayout? {
     if (columnWidth <= 0 || minRowHeight <= 0 || measuredHeights.size != grid.cells.size || grid.rows < 0) return null
     val width = columnWidth.toLong() * grid.columns
-    if (width !in 0L..TablePixelLimit.toLong() || grid.rows.toLong() * minRowHeight > TablePixelLimit) return null
+    if (width !in 0L..TablePixelLimit.toLong()) return null
+    val heightLimit = tableHeightLimit(width.toInt()) ?: return null
+    if (grid.rows.toLong() * minRowHeight > heightLimit) return null
     val heights = LongArray(grid.rows) { minRowHeight.toLong() }
     for ((index, placed) in grid.cells.withIndex()) {
         val end = placed.row.toLong() + placed.cell.rowspan
-        if (placed.row < 0 || end > grid.rows || end <= placed.row || measuredHeights[index] !in 0 until TablePixelLimit) return null
+        if (placed.row < 0 || end > grid.rows || end <= placed.row || measuredHeights[index] !in 0 until heightLimit) return null
         var available = 0L
         for (row in placed.row until end.toInt()) available += heights[row]
         if (measuredHeights[index].toLong() > available) {
@@ -33,7 +43,7 @@ internal fun tablePixelLayout(grid: TableGrid, columnWidth: Int, minRowHeight: I
     var total = 0L
     for ((row, height) in heights.withIndex()) {
         total += height
-        if (total > TablePixelLimit) return null
+        if (total > heightLimit) return null
         offsets[row + 1] = total.toInt()
     }
     return TablePixelLayout(columnWidth, offsets, width.toInt())

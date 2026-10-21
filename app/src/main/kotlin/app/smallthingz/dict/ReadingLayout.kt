@@ -100,13 +100,16 @@ internal fun poemParagraphs(text: String, spans: List<Pair<Span, IntRange>>): Li
 }
 
 
-/** The first typed heading may carry the section label's links without changing its identity. */
+/** The first typed heading may carry label actions or self-link styling without changing its identity. */
 internal fun sectionHeadingCompanion(section: Section): Block? {
     val block = section.blocks.firstOrNull() ?: return null
     // Blank labels have no header affordance; leave their blocks in the visible body.
     if (section.title.isBlank() || block.kind != "heading" || block.level != section.level) return null
     if (block.spans.any { it.kind == "line_break" && it.trail.isNotEmpty() }) return null
-    if (block.spans.none { it.kind in setOf("link", "external_link") && it.target.isNotEmpty() &&
+    if (block.spans.none { (it.explanation.isNotEmpty() ||
+            (it.kind in setOf("link", "external_link") && it.target.isNotEmpty()) ||
+            (it.kind == "text" && it.text.isNotEmpty() && it.target.isEmpty() &&
+                it.hasClassToken("mw-selflink") && it.hasClassToken("selflink"))) &&
             (it.text.isNotEmpty() || it.trail.isNotEmpty()) }) return null
     val label = block.spans.joinToString("") { if (it.kind == "line_break") "\n" else it.text + it.trail }
         .trim(' ', '\t', '\r', '\n', '\u00a0')
@@ -127,7 +130,9 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList()): List
             if (blockIndex == 0 && headingBlock != null) return@forEachIndexed
             val block = compactBlock(original)
             val key = "block-$sectionIndex-$blockIndex"
-            if (block.kind == "blank" || (block.table == null && block.kind != "rule" && block.spans.isEmpty())) return@forEachIndexed
+            val authoredList = block.listPath.isNotEmpty() && block.kind in
+                setOf("definition", "example", "quotation", "list_item", "list_detail", "term", "indent")
+            if (block.kind == "blank" || (block.table == null && block.kind != "rule" && block.spans.isEmpty() && !authoredList)) return@forEachIndexed
             // A caption owns one inline media control across all of its typed lines.
             // Splitting its paragraph would append that control to every resulting row.
             if (block.kind != "paragraph" || block.spans.size < 80 || block.spans.none { it.kind == "line_break" } || block.spans.any {
@@ -142,7 +147,7 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList()): List
                     if (span.kind == "line_break") {
                         if (line.any { it.text.isNotBlank() || it.trail.isNotBlank() }) add(ReadingRow("$key-${part++}", block = block.copy(spans = line), compact = true, sectionKey = sectionKey, meaningSection = meaningSection))
                         line = ArrayList()
-                        if (span.trail.isNotEmpty()) line.add(Span("text", span.trail))
+                        if (span.trail.isNotEmpty()) line.add(Span("text", span.trail, explanation = span.explanation))
                     } else line.add(span)
                 }
                 if (line.isNotEmpty()) add(ReadingRow("$key-$part", block = block.copy(spans = line), compact = true, sectionKey = sectionKey, meaningSection = meaningSection))
@@ -216,10 +221,15 @@ internal fun sectionScrollKey(entry: Entry, target: String): String? {
 }
 
 /** Match only actual compiled reference identities; no source or fragment interpretation. */
+/** Items before the section rows: title/actions, visible explanations and preamble. */
+internal fun entryReadingStartIndex(entry: Entry, folded: Set<String>): Int =
+    1 + (if ("abbreviations" in folded) 0 else entry.abbreviations.size) +
+        if (entry.preamble.isEmpty()) 0 else 1
+
 internal fun referenceScrollIndex(entry: Entry, target: String, folded: Set<String>): Int? {
     val referenceIndex = entry.references.indexOfFirst { target == "#reference-${it.number}" }
     if (referenceIndex < 0) return null
-    return 1 + (if (entry.preamble.isEmpty()) 0 else 1) +
+    return entryReadingStartIndex(entry, folded) +
         visibleReadingRows(entry.readingRows, folded).size + 1 + referenceIndex
 }
 
