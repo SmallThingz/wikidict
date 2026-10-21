@@ -1,7 +1,71 @@
 import {safeURL} from './validate.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
+const poemTokens = span => (span.classes || '').split(/[ \t\r\n\v\f]+/).filter(Boolean);
+const isPoem = span => poemTokens(span).includes('wikidict-poem');
+function poemMetadata(span) {
+  const tokens = poemTokens(span);
+  if (!tokens.includes('wikidict-poem')) return {indent:0,direction:''};
+  const indentTokens=tokens.filter(t=>t.startsWith('wikidict-poem-indent'));
+  const directionTokens=tokens.filter(t=>t.startsWith('wikidict-poem-dir'));
+  const indent=indentTokens.length===0?0:indentTokens.length===1&&/^wikidict-poem-indent-([1-9]|[12][0-9]|3[0-2])$/.test(indentTokens[0])?Number(indentTokens[0].slice(21)):-1;
+  const direction=directionTokens.length===0?'':directionTokens.length===1&&['wikidict-poem-dir-ltr','wikidict-poem-dir-rtl'].includes(directionTokens[0])?directionTokens[0].slice(-3):null;
+  return {indent,direction};
+}
+function poemSpans(values,onLink,explanations,withinSummary) {
+  const fragment=document.createDocumentFragment();
+  let line=[],metadata=null,endedWithBreak=false,lastBreak=null;
+  const include=span=>{
+    const next=poemMetadata(span);
+    if(metadata===null)metadata=next;
+    else {
+      if(metadata.indent!==next.indent)metadata.indent=-1;
+      if(metadata.direction!==next.direction)metadata.direction=null;
+    }
+  };
+  const appendLine=()=>{
+    const el=node('span',null,'poem-line');el.style.display='block';
+    if(metadata?.indent>0)el.style.marginInlineStart=metadata.indent+'em';
+    if(metadata?.direction)el.dir=metadata.direction;
+    el.append(spans(line,onLink,true,explanations,withinSummary));
+    if(!line.some(s=>/[^ \t\r]/.test((s.text||'')+(s.trail||''))))el.append(node('br'));
+    fragment.append(el);line=[];metadata=null;
+  };
+  const appendPart=(span,text,trail)=>{
+    const pieces=text.split('\n');
+    for(let i=0;i<pieces.length;i++){
+      if(pieces[i]){
+        include(span);
+        line.push({...span,...(trail?{kind:'text',target:'',text:'',trail:pieces[i]}:{text:pieces[i],trail:''})});
+        endedWithBreak=false;
+      }
+      if(i+1<pieces.length){
+        include(span);appendLine();endedWithBreak=true;
+        span={...span,classes:poemTokens(span).filter(t=>!t.startsWith('wikidict-poem-indent')).join(' ')};
+        lastBreak=span;
+      }
+    }
+    return span;
+  };
+  for(const original of values){
+    let span=original;
+    if(span.kind==='line_break'){
+      if(isPoem(span))include(span);
+      appendLine();endedWithBreak=true;lastBreak=span;
+      if(span.trail){span=appendPart({...span,kind:'text',text:'',trail:span.trail},span.trail,true);}
+    }else if(!(span.text||'')&&!(span.trail||'')){
+      include(span);line.push(span);endedWithBreak=false;
+    }else{
+      span=appendPart(span,span.text||'',false);
+      appendPart(span,span.trail||'',true);
+    }
+  }
+  if(line.length||metadata!==null)appendLine();
+  else if(endedWithBreak){include(lastBreak);appendLine();}
+  return fragment;
+}
 export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false) {
+  if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary);
   const fragment = document.createDocumentFragment();
   const compact=[];
   for(const span of values){
@@ -86,7 +150,7 @@ function blockView(block, onLink, explanations) {
   el.style.marginInlineStart = margin;
   const prefix = kind==='definition'?(block.number?`${block.number}.`:'•'):['example','quotation'].includes(kind)?'│':kind==='list_item'?(block.number?`${block.number}.`:'•'):kind==='list_detail'?'↳':'';
   if (prefix) el.append(node('span',prefix,'prefix'));
-  const body = node('span',null,'body'); body.append(spans(block.spans,onLink,false,explanations)); el.append(body); return el;
+  const body = node('span',null,'body'); if(block.spans?.some(isPoem))body.style.flex='1'; body.append(spans(block.spans,onLink,false,explanations)); el.append(body); return el;
 }
 function sectionHeadingCompanion(section){
   const first=section.blocks?.[0];
@@ -136,7 +200,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     el.classList.toggle('meaning',meaning);el.id=section.title.replaceAll(' ','_');
     const notes=[];
     for (const block of section.blocks.slice(companion?1:0)) {
-      if(block.kind==='blank'||(!block.table&&block.kind!=='rule'&&!block.spans?.some(s=>s.text?.trim()||s.trail?.trim())))continue;
+      if(block.kind==='blank'||(!block.table&&block.kind!=='rule'&&!block.spans?.some(s=>s.text?.trim()||s.trail?.trim())&&!block.spans?.some(isPoem)))continue;
       const view=blockView(block,followLink,explanations);
       if(meaning&&block.kind!=='definition')notes.push(view);else el.append(view);
     }

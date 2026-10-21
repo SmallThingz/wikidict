@@ -35,3 +35,19 @@ checks strict feature fallback, keyboard traversal, accessible labels and layout
 at 360 and 768 pixels, and saves screenshots. The input is a synthetic compiled
 entry; this does not qualify corpus imports, public downloads or the full browser
 application. Set `CHROMIUM` only when intentionally qualifying another browser.
+
+### Compiled Poem regression
+
+Canonical compiled Poem metadata preserves line indentation, blank stanzas and
+terminal lines without interpreting wikitext. Ordinary inline whitespace and
+preformatted text keep their separate rendering behavior.
+
+```sh
+mkdir -p ../artifacts
+WIKIDICT_POEM_REPORT="$PWD/../artifacts/poem-run01" pnpm test:poem
+```
+
+Use a new absolute report directory each time. This focused Playwright check uses
+synthetic typed spans, exercises styled links, keyboard navigation, accessible
+text, RTL indentation and 360/768-pixel layouts, and retains screenshots. It does
+not rerun the full browser suite or qualify public downloads/corpus content.
