@@ -7098,6 +7098,7 @@ pub const Renderer = struct {
                     const inherited_formatting = self.block_formatting;
                     const inherited_poem_italic = self.poem_base_style.italic;
                     defer self.poem_base_style.italic = inherited_poem_italic;
+                    if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
                     if (try self.htmlFontStyle(tag)) |italic| {
                         self.block_formatting.italic = italic;
                         if (self.poem_depth != 0) self.poem_base_style.italic = italic;
@@ -7446,6 +7447,13 @@ pub const Renderer = struct {
         }
         return result;
     }
+    fn htmlListInheritedFontStyle(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
+        var effective = try self.htmlLanguageDirection(tag, inherited);
+        // Font weight/style inherit; list layout and arbitrary CSS/classes do not.
+        if (try self.htmlFontWeight(tag)) |bold| effective.bold = bold;
+        if (try self.htmlFontStyle(tag)) |italic| effective.italic = italic;
+        return effective;
+    }
     fn htmlList(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, list_tag: syntax.Tag, parent_path: []const u8, depth: usize, style: Style) Error!void {
         if (depth >= max_depth) {
             self.fallbacks.render_limit = true;
@@ -7453,7 +7461,22 @@ pub const Renderer = struct {
             return;
         }
         // Apply explicit container fields after inherited parent-item fields.
-        const list_style = try self.htmlLanguageDirection(list_tag, style);
+        const list_style = try self.htmlListInheritedFontStyle(list_tag, style);
+        const previous_font_flags = self.block_formatting;
+        const previous_poem_italic = self.poem_base_style.italic;
+        defer {
+            self.block_formatting = previous_font_flags;
+            self.poem_base_style.italic = previous_poem_italic;
+        }
+        // Inline shorthand flags may not yet exist in the block context.
+        // Merge only inherited fonts before explicit normal overrides below.
+        self.block_formatting.bold = self.block_formatting.bold or style.bold;
+        self.block_formatting.italic = self.block_formatting.italic or style.italic;
+        if (try self.htmlFontWeight(list_tag)) |bold| self.block_formatting.bold = bold;
+        if (try self.htmlFontStyle(list_tag)) |italic| {
+            self.block_formatting.italic = italic;
+            if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+        }
         const previous_language_direction = self.body_language_direction;
         self.body_language_direction = .{ .language = list_style.language, .direction = list_style.direction, .explanation = list_style.explanation, .explanation_set = list_style.explanation_set };
         defer self.body_language_direction = previous_language_direction;
@@ -7528,6 +7551,18 @@ pub const Renderer = struct {
         return result.toOwnedSlice(self.a);
     }
     fn htmlListItem(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, depth: usize, style: Style) Error!void {
+        const item_style = try self.htmlListInheritedFontStyle(item, style);
+        const previous_font_flags = self.block_formatting;
+        const previous_poem_italic = self.poem_base_style.italic;
+        defer {
+            self.block_formatting = previous_font_flags;
+            self.poem_base_style.italic = previous_poem_italic;
+        }
+        if (try self.htmlFontWeight(item)) |bold| self.block_formatting.bold = bold;
+        if (try self.htmlFontStyle(item)) |italic| {
+            self.block_formatting.italic = italic;
+            if (self.poem_depth != 0) self.poem_base_style.italic = italic;
+        }
         var cursor: usize = 0;
         var preceding: usize = 0;
         var emitted = false;
@@ -7547,7 +7582,6 @@ pub const Renderer = struct {
             try self.htmlListItemPart(blocks, input[preceding..at], if (emitted) .list_detail else kind, path, if (emitted) "" else number, item, !emitted, style);
             emitted = true;
             if (tag.is("table")) {
-                const item_style = try self.htmlLanguageDirection(item, style);
                 const nested = try self.renderBodyWithLanguageDirection(input[at..pair.end], item_style);
                 for (nested) |block_value| {
                     var child = block_value;
@@ -7556,7 +7590,7 @@ pub const Renderer = struct {
                     if (child.kind == .paragraph) child.kind = .list_detail;
                     try self.appendBlockBudgeted(blocks, child);
                 }
-            } else try self.htmlList(blocks, input[tag.end..pair.inner_end], tag, path, depth + 1, try self.htmlLanguageDirection(item, style));
+            } else try self.htmlList(blocks, input[tag.end..pair.inner_end], tag, path, depth + 1, item_style);
             cursor = pair.end;
             preceding = cursor;
         }
@@ -7918,6 +7952,7 @@ pub const Renderer = struct {
                 const inherited_formatting = self.block_formatting;
                 const inherited_poem_italic = self.poem_base_style.italic;
                 defer self.poem_base_style.italic = inherited_poem_italic;
+                if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
                 if (try self.htmlFontStyle(tag)) |italic| {
                     self.block_formatting.italic = italic;
                     if (self.poem_depth != 0) self.poem_base_style.italic = italic;
@@ -7951,11 +7986,13 @@ pub const Renderer = struct {
                         defer self.block_formatting = inherited_formatting;
                         defer self.poem_base_style.italic = inherited_poem_italic;
                         if (!implicit_row) {
+                            if (try self.htmlFontWeight(tag)) |bold| self.block_formatting.bold = bold;
                             if (try self.htmlFontStyle(tag)) |italic| {
                                 self.block_formatting.italic = italic;
                                 if (self.poem_depth != 0) self.poem_base_style.italic = italic;
                             }
                         }
+                        if (try self.htmlFontWeight(cell_tag)) |bold| self.block_formatting.bold = bold;
                         if (try self.htmlFontStyle(cell_tag)) |italic| {
                             self.block_formatting.italic = italic;
                             if (self.poem_depth != 0) self.poem_base_style.italic = italic;
@@ -24589,4 +24626,122 @@ test "closing-only external URL braces retain actions and isolate literal runs" 
     try std.testing.expect(unresolvedExternalActionTarget("https://example.test/{{missing}}"));
     var refused: Renderer = .{ .a = a, .context = .{} };
     try std.testing.expectError(error.UncompiledTemplate, refused.link("https://example.test/{{missing}}", "https://example.test/{{missing}}", .{}, 0, true));
+}
+
+test "HTML list font inheritance preserves nested overrides and continuation scope through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<ul style='font-weight:bold;font-style:italic'><li>parent<ol><li>nested</li><li style='font-weight:normal;font-style:normal'>clear<ul><li>ordinary</li></ul></li></ol>tail</li><li>sibling</li></ul>outside";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    for ([_][]const u8{ "parent", "nested", "tail", "sibling" }) |word| {
+        try FormattingScopeTest.word(a, blocks, word, .{ .bold = true, .italic = true });
+        try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, word, .{ .bold = true, .italic = true });
+    }
+    for ([_][]const u8{ "clear", "ordinary", "outside" }) |word| {
+        try FormattingScopeTest.word(a, blocks, word, .{});
+        try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, word, .{});
+    }
+    try std.testing.expect(!renderer.fallbacks.any());
+    // Item font scope also encloses a nested typed table without styling later siblings.
+    var table_renderer: Renderer = .{ .a = a, .context = .{} };
+    const table_blocks = try table_renderer.renderBody("<ul><li style='font-weight:bold;font-style:italic'>lead<table><tr><td>cell</td></tr></table>end</li><li>plain</li></ul>");
+    const TableCheck = struct {
+        fn check(allocator: A, values: anytype) !void {
+            var table_count: usize = 0;
+            for (values) |value| if (value.table) |table| {
+                table_count += 1;
+                try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+                try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+                const cell = table.rows[0].cells[0];
+                try std.testing.expect(cell.spans.len != 0);
+                try std.testing.expectEqualStrings("cell", try FormattingScopeTest.text(allocator, cell.spans));
+                for (cell.spans) |span| {
+                    const bold = if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                    const italic = if (@hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic;
+                    try std.testing.expect(bold and italic);
+                }
+            };
+            try std.testing.expectEqual(@as(usize, 1), table_count);
+        }
+    };
+    try TableCheck.check(a, table_blocks);
+    const table_stored = try FormattingScopeTest.encode(a, &table_renderer, table_blocks);
+    try TableCheck.check(a, table_stored.entry.sections[0].blocks);
+    try FormattingScopeTest.word(a, table_blocks, "end", .{ .bold = true, .italic = true });
+    try FormattingScopeTest.word(a, table_blocks, "plain", .{});
+    try FormattingScopeTest.word(a, table_stored.entry.sections[0].blocks, "end", .{ .bold = true, .italic = true });
+    try FormattingScopeTest.word(a, table_stored.entry.sections[0].blocks, "plain", .{});
+    // Weight overrides mirror the existing italic scopes on typed table parts.
+    const TableScopeCheck = struct {
+        fn check(allocator: A, values: anytype, row_cells: []const usize, texts: []const []const u8, weights: []const bool, caption_text: []const u8) !void {
+            var table_count: usize = 0;
+            for (values) |value| if (value.table) |table| {
+                table_count += 1;
+                try std.testing.expectEqualStrings(caption_text, try FormattingScopeTest.text(allocator, table.caption));
+                for (table.caption) |span| {
+                    const bold = if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                    const italic = if (@hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic;
+                    try std.testing.expect(!bold and italic);
+                }
+                try std.testing.expectEqual(row_cells.len, table.rows.len);
+                var cell_index: usize = 0;
+                for (table.rows, row_cells) |row, wanted_cells| {
+                    try std.testing.expectEqual(wanted_cells, row.cells.len);
+                    for (row.cells) |cell| {
+                        try std.testing.expect(!cell.header);
+                        try std.testing.expect(cell.spans.len != 0);
+                        try std.testing.expect(cell_index < texts.len);
+                        try std.testing.expectEqualStrings(texts[cell_index], try FormattingScopeTest.text(allocator, cell.spans));
+                        for (cell.spans) |span| {
+                            const bold = if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                            const italic = if (@hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic;
+                            try std.testing.expectEqual(weights[cell_index], bold);
+                            try std.testing.expect(italic);
+                        }
+                        cell_index += 1;
+                    }
+                }
+                try std.testing.expectEqual(texts.len, cell_index);
+            };
+            try std.testing.expectEqual(@as(usize, 1), table_count);
+        }
+    };
+    const table_cases = [_]struct { body: []const u8, rows: []const usize, texts: []const []const u8, weights: []const bool, caption: []const u8 = "" }{
+        .{ .body = "<table><tr><td style='font-weight:normal'>reset</td><td>inherited</td></tr><tr style='font-weight:normal'><td>rowPlain</td><td style='font-weight:bold'>local</td></tr><tr><td>restored</td><td>final</td></tr></table>", .rows = &.{ 2, 2, 2 }, .texts = &.{ "reset", "inherited", "rowPlain", "local", "restored", "final" }, .weights = &.{ false, true, false, true, true, true } },
+        .{ .body = "<table style='font-weight:normal'><caption>caption</caption><tr><td>container</td></tr></table>", .rows = &.{1}, .texts = &.{"container"}, .weights = &.{false}, .caption = "caption" },
+        .{ .body = "<table><caption style='font-weight:normal'>caption</caption><tr><td>body</td></tr></table>", .rows = &.{1}, .texts = &.{"body"}, .weights = &.{true}, .caption = "caption" },
+    };
+    for (table_cases) |case| {
+        const scoped_source = try std.fmt.allocPrint(a, "<ul><li style='font-weight:bold;font-style:italic'>lead{s}scopeEnd</li><li>scopeSibling</li></ul>scopeOutside", .{case.body});
+        var scoped_renderer: Renderer = .{ .a = a, .context = .{} };
+        const scoped_blocks = try scoped_renderer.renderBody(scoped_source);
+        const scoped_stored = try FormattingScopeTest.encode(a, &scoped_renderer, scoped_blocks);
+        try TableScopeCheck.check(a, scoped_blocks, case.rows, case.texts, case.weights, case.caption);
+        try TableScopeCheck.check(a, scoped_stored.entry.sections[0].blocks, case.rows, case.texts, case.weights, case.caption);
+        try FormattingScopeTest.word(a, scoped_blocks, "scopeEnd", .{ .bold = true, .italic = true });
+        try FormattingScopeTest.word(a, scoped_stored.entry.sections[0].blocks, "scopeEnd", .{ .bold = true, .italic = true });
+        for ([_][]const u8{ "scopeSibling", "scopeOutside" }) |word| {
+            try FormattingScopeTest.word(a, scoped_blocks, word, .{});
+            try FormattingScopeTest.word(a, scoped_stored.entry.sections[0].blocks, word, .{});
+        }
+        try std.testing.expect(!scoped_renderer.fallbacks.any());
+    }
+    // A lexical prefix forces the shorthand wrapper through the inline HTML
+    // route, where inherited Style fonts need not already be block flags.
+    const inline_source = "prefix <b><i><ul><li>lead<table><tr><td>inheritedCell</td><td style='font-weight:normal;font-style:normal'>normalCell</td></tr></table>itemTail</li><li style='font-weight:normal;font-style:normal'>normalItem</li><li>afterItem</li></ul></i></b> suffix";
+    var inline_renderer: Renderer = .{ .a = a, .context = .{} };
+    const inline_blocks = try inline_renderer.renderBody(inline_source);
+    const inline_stored = try FormattingScopeTest.encode(a, &inline_renderer, inline_blocks);
+    for ([_][]const u8{ "lead", "inheritedCell", "itemTail", "afterItem" }) |word| {
+        try FormattingScopeTest.word(a, inline_blocks, word, .{ .bold = true, .italic = true });
+        try FormattingScopeTest.word(a, inline_stored.entry.sections[0].blocks, word, .{ .bold = true, .italic = true });
+    }
+    for ([_][]const u8{ "prefix", "normalCell", "normalItem", "suffix" }) |word| {
+        try FormattingScopeTest.word(a, inline_blocks, word, .{});
+        try FormattingScopeTest.word(a, inline_stored.entry.sections[0].blocks, word, .{});
+    }
+    try std.testing.expect(!inline_renderer.fallbacks.any());
 }
