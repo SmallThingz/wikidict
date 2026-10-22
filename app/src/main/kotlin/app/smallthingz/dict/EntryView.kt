@@ -1,5 +1,7 @@
 package app.smallthingz.dict
 
+import androidx.compose.ui.graphics.Color
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -321,6 +323,9 @@ internal fun CompiledTableView(table: Table, feature: Feature?, onLink: (String)
 @Composable
 private fun TableView(table: Table, onLink: (String) -> Unit) {
     val grid = remember(table) { tableGrid(table) }
+    val authoredColors = remember(table) { grid.cells.map { placed ->
+        canonicalColorArgb(placed.cell.background)?.let { androidx.compose.ui.graphics.Color(it) }
+    } }
     var unavailable by remember(table) { mutableStateOf(false) }
     var drawingPixels by remember(table) { mutableStateOf<TablePixelLayout?>(null) }
     val headerColor = MaterialTheme.colorScheme.surfaceContainerHigh
@@ -330,21 +335,21 @@ private fun TableView(table: Table, onLink: (String) -> Unit) {
         if (unavailable) {
             Text("Table is too large to display.")
         } else Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            Layout(modifier = Modifier.drawBehind {
+            Layout(modifier = Modifier.testTag("compiled-table-grid").drawBehind {
                 val pixels = drawingPixels ?: return@drawBehind
-                grid.cells.forEach { placed ->
+                grid.cells.forEachIndexed { index, placed ->
                     val left = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr)
                         pixels.columnWidth * placed.column
                     else pixels.width - pixels.columnWidth * (placed.column + placed.colspan)
                     val top = pixels.rowOffsets[placed.row]
                     val bottom = pixels.rowOffsets[placed.row + placed.cell.rowspan]
-                    drawRect(if (placed.cell.header) headerColor else cellColor,
+                    drawRect(authoredColors[index] ?: if (placed.cell.header) headerColor else cellColor,
                         topLeft = Offset(left.toFloat(), top.toFloat()),
                         size = Size((pixels.columnWidth * placed.colspan).toFloat(), (bottom - top).toFloat()))
                 }
             }, content = {
-                grid.cells.forEach { placed ->
-                    Box(Modifier.background(if (placed.cell.header) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface).padding(10.dp)) {
+                grid.cells.forEachIndexed { index, placed ->
+                    Box(Modifier.background(authoredColors[index] ?: if (placed.cell.header) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface).padding(10.dp)) {
                         StyledText(placed.cell.spans, weight = if (placed.cell.header) FontWeight.SemiBold else null, onLink = onLink)
                     }
                 }
@@ -431,9 +436,10 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val cacheKey = weight to layoutDirection
     val annotated = remember(spans, weight, linkColor, codeColor, cache, layoutDirection) {
         cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
-            val linkStyle = TextLinkStyles(style = SpanStyle(color = linkColor), pressedStyle = SpanStyle(textDecoration = TextDecoration.Underline))
             val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEach { span ->
+                val foreground = canonicalColorArgb(span.foreground)?.let { Color(it) }
+                val linkStyle = TextLinkStyles(style = SpanStyle(color = foreground ?: linkColor), pressedStyle = SpanStyle(textDecoration = TextDecoration.Underline))
                 val start = length
                 when (span.direction) {
                     "rtl" -> append('\u2067')
@@ -452,7 +458,8 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
                         span.classes.split(spanClassWhitespace).any { it == "Egyp" } -> EgyptianFontFamily
                         else -> null
                     }
-                    if (languageTag != null || fontFamily != null || weight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
+                    if (foreground != null || languageTag != null || fontFamily != null || weight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
+                        color = foreground ?: Color.Unspecified,
                         localeList = languageTag?.let { LocaleList(Locale(it)) },
                         fontWeight = if (span.bold) FontWeight.Bold else weight,
                         fontStyle = if (span.italic) FontStyle.Italic else null,

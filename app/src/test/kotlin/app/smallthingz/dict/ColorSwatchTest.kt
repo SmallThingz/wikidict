@@ -18,4 +18,11 @@ class ColorSwatchTest {
         for (data in listOf("#FFFF00", "#ff0", "#ffff0000", "ffff00", " #ffff00", "#ffff00 ", "#gggggg", "background:#ffff00", ""))
             assertNull("Must preserve table for $data", colorSwatch(feature(data = data)))
     }
+    @Test fun compiledCellBackgroundIsOpaqueCanonicalRgbWithoutFeatureOrLabel() {
+        assertEquals(0xffeeeeeeL, canonicalColorArgb("#eeeeee"))
+        assertEquals(0xff000000L, canonicalColorArgb("#000000"))
+        assertNull(canonicalColorArgb(null))
+        for (value in listOf("", "red", "#EEEEEE", "#eee", "#gggggg", "background:#eeeeee")) assertNull(canonicalColorArgb(value))
+    }
+
 }

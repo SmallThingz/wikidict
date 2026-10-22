@@ -299,6 +299,92 @@ class RendererDeviceTest {
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
     }
 
+    @Test fun authoredCellBackgroundFillsRowspansInBothDirectionsAndKeepsLinks() {
+        val table = Table(emptyList(), listOf(
+            listOf(Cell(listOf(Span("text", "\u00a0")), false, 1, 2, "#ff0000"),
+                Cell(listOf(Span("text", "\u00a0")), true, 1, 1, "#00ff00")),
+            listOf(Cell(listOf(Span("link", "Follow", target = "B")), false, 1, 1, "#0000ff"))))
+        val direction = mutableStateOf(androidx.compose.ui.unit.LayoutDirection.Ltr)
+        var followed: String? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction.value) {
+                    androidx.compose.material3.MaterialTheme { CompiledTableView(table, null) { followed = it } }
+                }
+            } }
+            for (value in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
+                compose.runOnIdle { direction.value = value; followed = null }
+                compose.waitForIdle()
+                val image = compose.onNodeWithTag("compiled-table-grid", useUnmergedTree = true).captureToImage().asAndroidBitmap()
+                try {
+                    val redX = if (value == androidx.compose.ui.unit.LayoutDirection.Ltr) image.width / 4 else image.width * 3 / 4
+                    val otherX = image.width - redX - 1
+                    assertEquals(android.graphics.Color.RED, image.getPixel(redX, image.height / 4))
+                    assertEquals(android.graphics.Color.RED, image.getPixel(redX, image.height * 3 / 4))
+                    assertEquals(android.graphics.Color.GREEN, image.getPixel(otherX, 2))
+                    assertEquals(android.graphics.Color.BLUE, image.getPixel(otherX, image.height - 3))
+                } finally { image.recycle() }
+                compose.onNodeWithText("Follow").assertIsDisplayed().performClick()
+                compose.runOnIdle { assertEquals("B", followed) }
+                compose.onNodeWithText("Color sample #ff0000").assertDoesNotExist()
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
+    @Test fun authoredForegroundSurvivesLinksAndNativeEgyptianPaintInBothDirections() {
+        val direction = mutableStateOf(androidx.compose.ui.unit.LayoutDirection.Ltr)
+        val signs = "\uD80C\uDC00"
+        val spans = listOf(
+            Span("link", "Green", target = "green-target", foreground = "#008000"),
+            Span("text", " / "), Span("text", "Blue", foreground = "#0000ff"), Span("text", " / "),
+            Span("link", signs, target = "sign-target", classes = "Egyp", direction = "ltr", foreground = "#40e0d0"))
+        val expectedText = "Green / Blue / \u2066" + signs + "\u2069"
+        val clicked = java.util.concurrent.CopyOnWriteArrayList<String>()
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction.value) {
+                    androidx.compose.material3.MaterialTheme {
+                        StyledText(spans, Modifier.width(300.dp).testTag("authored-foreground"), onLink = { clicked.add(it) })
+                    }
+                }
+            } }
+            for (value in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
+                compose.runOnIdle { direction.value = value; clicked.clear() }
+                if (android.os.Build.VERSION.SDK_INT >= 31) compose.waitUntil(10000) {
+                    compose.onAllNodes(SemanticsMatcher.expectValue(EgyptianShapedRunCount, 1), useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.waitForIdle()
+                val node = compose.onNodeWithText(expectedText, useUnmergedTree = true)
+                val image = compose.onNodeWithTag("authored-foreground", useUnmergedTree = true).captureToImage().asAndroidBitmap()
+                try {
+                    val expected = setOf(0xff008000.toInt(), 0xff0000ff.toInt(), 0xff40e0d0.toInt())
+                    val found = mutableSetOf<Int>()
+                    for (y in 0 until image.height) for (x in 0 until image.width) {
+                        val pixel = image.getPixel(x, y)
+                        if (pixel in expected) found.add(pixel)
+                    }
+                    assertEquals(expected, found)
+                } finally { image.recycle() }
+                val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val layout = layouts.single()
+                val annotated = layout.layoutInput.text
+                assertEquals(expectedText, annotated.text)
+                for (target in listOf("green-target", "sign-target")) {
+                    val range = annotated.getLinkAnnotations(0, annotated.length).single {
+                        (it.item as? androidx.compose.ui.text.LinkAnnotation.Clickable)?.tag == target
+                    }
+                    val offset = range.start + if (target == "sign-target") 1 else 0
+                    val bounds = layout.getBoundingBox(offset)
+                    node.performTouchInput { click(bounds.center) }
+                }
+                compose.runOnIdle { assertEquals(listOf("green-target", "sign-target"), clicked.toList()) }
+                node.assertTextEquals(expectedText)
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
     @Before fun installRealBinaryDictionary() {
         runBlocking {
             library.refreshCatalogs().join()

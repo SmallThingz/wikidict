@@ -19,9 +19,10 @@ data class Span(
     val underline: Boolean = false,
     val role: String = "normal",
     val explanation: String = "",
+    val foreground: String? = null,
 )
 
-data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int)
+data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int, val background: String? = null)
 data class Table(val caption: List<Span>, val rows: List<List<Cell>>)
 data class Block(
     val kind: String,

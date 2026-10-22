@@ -56,7 +56,7 @@ class BlobDecoderTest {
         assertThrows(Exception::class.java){Catalog.parse("asset://English.wikblb")}
         assertEquals(1,Catalog.parse("asset://English.wikblb",true).size)
     }
-    private fun explanationFixture(version: Int): ByteArray {
+    private fun explanationFixture(version: Int, background: String? = null, backgroundPresence: Int? = null, foreground: String? = null, foregroundPresence: Int? = null): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         fun byte(v: Int) { out.write(v) }
         fun u32(v: Int) { repeat(4) { byte(v ushr (it * 8) and 255) } }
@@ -64,13 +64,24 @@ class BlobDecoderTest {
         fun spans(label: String) {
             u32(1); byte(1); byte(1); byte(10)
             listOf(label, "glossary", "!", "en", "abbr", "ltr").forEach(::string)
-            if (version == 3) string("Meaning & <plain> \u2067معنى\u2069: $label")
+            if (version >= 3) string("Meaning & <plain> \u2067معنى\u2069: $label")
+            if (version == 4) {
+                byte(foregroundPresence ?: if (foreground == null) 0 else 1)
+                if (foreground != null) string(foreground)
+            }
         }
         fun block(table: Boolean) {
             byte(if (table) 12 else 0); byte(0); byte(0)
             spans(if (table) "table-body" else "body")
             byte(0); string(""); string(""); byte(if (table) 1 else 0)
-            if (table) { spans("caption"); u32(1); u32(1); byte(0); byte(1); byte(0); byte(1); byte(0); spans("cell") }
+            if (table) {
+                spans("caption"); u32(1); u32(1); byte(0); byte(1); byte(0); byte(1); byte(0)
+                if (version == 4) {
+                    byte(backgroundPresence ?: if (background == null) 0 else 1)
+                    if (background != null) string(background)
+                }
+                spans("cell")
+            }
         }
         out.write("DPR$version".toByteArray()); spans("display")
         u32(1); byte(3); string("Noun"); u32(2); block(false); block(true)
@@ -106,7 +117,7 @@ class BlobDecoderTest {
         for (length in listOf(0, 3, 8, bytes.size - 1)) assertThrows(Exception::class.java) {
             BlobDecoder.decode(bytes.copyOf(length), "Word", "language", "English", "en")
         }
-        val unknown = bytes.copyOf().also { it[3] = '4'.code.toByte() }
+        val unknown = bytes.copyOf().also { it[3] = '5'.code.toByte() }
         assertThrows(Exception::class.java) { BlobDecoder.decode(unknown, "Word", "language", "English", "en") }
         val marker = "Meaning &".toByteArray()
         val start = bytes.asList().windowed(marker.size).indexOfFirst { it == marker.asList() }
@@ -114,6 +125,57 @@ class BlobDecoderTest {
         val invalid = bytes.copyOf().also { it[start] = 0xff.toByte() }
         assertThrows(Exception::class.java) { BlobDecoder.decode(invalid, "Word", "language", "English", "en") }
         assertThrows(Exception::class.java) { BlobDecoder.decode(bytes + byteArrayOf(0), "Word", "language", "English", "en") }
+    }
+
+    @Test fun cellBackgroundWirePreservesEveryOtherEntryFieldAndLegacyRecords() {
+        val legacy = BlobDecoder.decode(explanationFixture(3), "Word", "language", "English", "en")
+        val absent = BlobDecoder.decode(explanationFixture(4), "Word", "language", "English", "en")
+        assertEquals(legacy, absent)
+        val colored = BlobDecoder.decode(explanationFixture(4, "#12ab34"), "Word", "language", "English", "en")
+        val cell = colored.sections.single().blocks[1].table!!.rows.single().single()
+        assertEquals("#12ab34", cell.background)
+        val cleared = colored.copy(sections = colored.sections.map { section -> section.copy(blocks = section.blocks.map { block ->
+            block.copy(table = block.table?.let { table -> table.copy(rows = table.rows.map { row -> row.map { it.copy(background = null) } }) })
+        }) })
+        assertEquals(legacy, cleared)
+        assertNull(BlobDecoder.decode(explanationFixture(2), "Word", "language", "English", "en")
+            .sections.single().blocks[1].table!!.rows.single().single().background)
+    }
+    @Test fun cellBackgroundWireRejectsMalformedPresenceColorAndIncompleteRecords() {
+        for (color in listOf("", "red", "#FFF000", "#ff0", "#ff000000", "#gggggg", " #ffff00", "#ffff00 ", "background:#ffff00"))
+            assertThrows(Exception::class.java) { BlobDecoder.decode(explanationFixture(4, color), "Word", "language", "English", "en") }
+        assertThrows(Exception::class.java) { BlobDecoder.decode(explanationFixture(4, backgroundPresence = 2), "Word", "language", "English", "en") }
+        val bytes = explanationFixture(4, "#12ab34")
+        for (length in bytes.indices) assertThrows(Exception::class.java) {
+            BlobDecoder.decode(bytes.copyOf(length), "Word", "language", "English", "en")
+        }
+        assertThrows(Exception::class.java) { BlobDecoder.decode(bytes + byteArrayOf(0), "Word", "language", "English", "en") }
+    }
+
+    @Test fun spanForegroundWirePreservesAllContainersExplanationsAndActions() {
+        val legacy = BlobDecoder.decode(explanationFixture(3), "Word", "language", "English", "en")
+        val colored = BlobDecoder.decode(explanationFixture(4, foreground = "#008000"), "Word", "language", "English", "en")
+        fun containers(entry: Entry) = listOf(entry.displayTitle, entry.preamble,
+            entry.sections.single().blocks[0].spans, entry.sections.single().blocks[1].spans,
+            entry.sections.single().blocks[1].table!!.caption,
+            entry.sections.single().blocks[1].table!!.rows.single().single().spans,
+            entry.references.single().spans)
+        val before = containers(legacy)
+        val after = containers(colored)
+        assertEquals(7, after.size)
+        after.zip(before).forEach { (spans, original) ->
+            assertEquals("#008000", spans.single().foreground)
+            assertEquals(original, spans.map { it.copy(foreground = null) })
+            assertEquals(textOf(original), textOf(spans))
+        }
+        assertEquals(legacy, BlobDecoder.decode(explanationFixture(4), "Word", "language", "English", "en"))
+        for (color in listOf("", "green", "#00800A", "#080", "#ff008000", " #008000"))
+            assertThrows(Exception::class.java) { BlobDecoder.decode(explanationFixture(4, foreground = color), "Word", "language", "English", "en") }
+        assertThrows(Exception::class.java) { BlobDecoder.decode(explanationFixture(4, foregroundPresence = 2), "Word", "language", "English", "en") }
+        val bytes = explanationFixture(4, "#eeeeee", foreground = "#008000")
+        for (length in bytes.indices) assertThrows(Exception::class.java) {
+            BlobDecoder.decode(bytes.copyOf(length), "Word", "language", "English", "en")
+        }
     }
 
 }

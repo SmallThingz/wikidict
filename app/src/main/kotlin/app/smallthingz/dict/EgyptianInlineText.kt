@@ -40,7 +40,7 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 
-internal data class EgyptianTextRun(val start: Int, val end: Int, val text: String, val reuseLtr: Boolean) {
+internal data class EgyptianTextRun(val start: Int, val end: Int, val text: String, val reuseLtr: Boolean, val foreground: String? = null) {
     val id: String get() = "egyptian:$start:$end"
 }
 
@@ -59,7 +59,7 @@ internal fun egyptianTextRuns(spans: List<Span>): List<EgyptianTextRun> {
                 if (point !in 0x13000..0x13455) { at += Character.charCount(point); continue }
                 val begin = at
                 while (at < text.length && text.codePointAt(at) in 0x13000..0x13455) at += Character.charCount(text.codePointAt(at))
-                runs.add(EgyptianTextRun(offset + begin, offset + at, text.substring(begin, at), span.direction == "ltr"))
+                runs.add(EgyptianTextRun(offset + begin, offset + at, text.substring(begin, at), span.direction == "ltr", span.foreground))
             }
         }
         offset += text.length + span.trail.length
@@ -231,7 +231,7 @@ private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<Egypti
                 max(1f, ceil(2f * max(center - top, bottom - center)) + 2f)
             } else baseSize
             val linked = original.getLinkAnnotations(run.start, run.end).isNotEmpty()
-            val color = if (linked) linkColor else contentColor
+            val color = canonicalColorArgb(run.foreground)?.let { Color(it) } ?: if (linked) linkColor else contentColor
             run.id to InlineTextContent(Placeholder(with(density) { width.toSp() }, with(density) { height.toSp() }, PlaceholderVerticalAlign.TextCenter)) {
                 Canvas(Modifier.fillMaxSize()) {
                     drawIntoCanvas { composeCanvas ->

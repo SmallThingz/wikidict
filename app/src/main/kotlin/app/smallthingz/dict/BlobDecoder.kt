@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2/DPR3 decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2/DPR3/DPR4 decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -12,7 +12,10 @@ object BlobDecoder {
     fun decode(bytes: ByteArray, title: String, kind: String, language: String?, code: String): Entry {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
-        r.explanations = when (r.byte()) { 50 -> false; 51 -> true; else -> error("Unsupported presentation format") }
+        val version = r.byte()
+        require(version in 50..52) { "Unsupported presentation format" }
+        r.explanations = version >= 51
+        r.colors = version == 52
         val display = r.spans()
         val sections = List(r.count(9)) {
             val level = r.byte(); val name = r.string()
@@ -46,6 +49,7 @@ object BlobDecoder {
         val buffer: ByteBuffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         private var remainingItems = 1_000_000
         var explanations = false
+        var colors = false
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -63,14 +67,17 @@ object BlobDecoder {
         fun index(limit: Int): Int { val n = u32(); require(n < limit); return n.toInt() }
         fun optionalIndex(limit: Int) { val n = u32(); require(n == 0xffffffffL || n < limit) }
         fun indices(limit: Int) { repeat(count(4)) { index(limit) } }
-        fun spans(): List<Span> = List(count(if (explanations) 31 else 27)) {
+        fun spans(): List<Span> = List(count(if (colors) 32 else if (explanations) 31 else 27)) {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
             val language = string(); val classes = string(); val direction = string()
             val explanation = if (explanations) string() else ""
+            val foreground = if (colors && presence()) string().also {
+                require(canonicalColorArgb(it) != null) { "Invalid span foreground" }
+            } else null
             Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground)
         }
         fun block(): Block {
             val kind = enum(kinds); val depth = byte(); val level = byte()
@@ -79,10 +86,13 @@ object BlobDecoder {
             val path = string(); val number = string()
             val table = if (!presence()) null else {
                 val caption = spans()
-                Table(caption, List(count(4)) { List(count(9)) {
+                Table(caption, List(count(4)) { List(count(if (colors) 10 else 9)) {
                     val header = presence(); val cols = u16(); val rows = u16()
                     require(cols in 1..100 && rows in 1..100) { "Invalid table span" }
-                    Cell(spans(), header, cols, rows)
+                    val background = if (colors && presence()) string().also {
+                        require(canonicalColorArgb(it) != null) { "Invalid cell background" }
+                    } else null
+                    Cell(spans(), header, cols, rows, background)
                 } }).also { tableGrid(it) }
             }
             return Block(kind, depth, spans, path, number, table, feature, level)
