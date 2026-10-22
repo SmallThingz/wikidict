@@ -429,7 +429,7 @@ class SectionLinkDeviceTest {
             Section(3, rtlLabel, listOf(
                 Block("heading", 0, rtlSpans, level = 3),
                 Block("paragraph", 0, listOf(Span("text", "RTL FOLD BODY")))))
-        ), emptyList())
+        ), emptyList(), preamble = listOf(Span("text", "RTL GENERIC FOLD BODY")))
         compose.runOnIdle { forwarded.clear() }
         compose.runOnUiThread {
             compose.activity.setContent {
@@ -451,6 +451,12 @@ class SectionLinkDeviceTest {
                 }
             }
         }
+        // Exercise the other production disclosure site in the same owned
+        // RTL fixture and existing frame, without a separate screenshot.
+        // collapseOtherSections=true also initializes the preamble collapsed.
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription("Expand About this entry"))
+        compose.onNodeWithText("RTL GENERIC FOLD BODY").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Expand About this entry").assertIsDisplayed().assertHasClickAction()
         val mixedMatcher = hasText(rtlSelf, substring = true) and
             SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult)
         compose.onNodeWithTag("entry-scroll").performScrollToNode(mixedMatcher)
@@ -471,7 +477,7 @@ class SectionLinkDeviceTest {
         assertEquals("rtl-other-entry", (action.item as androidx.compose.ui.text.LinkAnnotation.Clickable).tag)
         assertTrue(neighborOffset in action.start until action.end)
         assertTrue("Self text must not borrow neighbor action", action.end <= selfOffset || action.start >= selfOffset + rtlSelf.length)
-        captureOwnedSelfHeading("self-heading-rtl-2x.png")
+
         val fold = compose.onNodeWithContentDescription("Expand $rtlLabel")
         fold.assertIsDisplayed().assertHasClickAction()
             .assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Role, androidx.compose.ui.semantics.Role.Button))
@@ -495,6 +501,10 @@ class SectionLinkDeviceTest {
         assertTrue("Entire measured heading remains visible: $geometry", textBoundsPx.height + 1f >= mixedLayout.size.height && textBoundsPx.width + 1f >= mixedLayout.size.width)
         assertTrue("Heading fully inside owned viewport: $geometry", textBoundsPx.left >= viewportBoundsPx.left - 1f && textBoundsPx.right <= viewportBoundsPx.right + 1f && textBoundsPx.top >= viewportBoundsPx.top - 1f && textBoundsPx.bottom <= viewportBoundsPx.bottom + 1f)
         compose.onNodeWithText("RTL FOLD BODY").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Expand About this entry", useUnmergedTree = true).assertIsDisplayed()
+        val genericIcon = compose.onNodeWithContentDescription("Expand About this entry", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val rowIcon = compose.onNodeWithContentDescription("Expand $rtlLabel", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        captureOwnedSelfHeading("self-heading-rtl-2x.png", listOf("generic FoldHeading" to genericIcon, "row heading" to rowIcon))
         mixedNode.performTouchInput { click(mixedLayout.getBoundingBox(selfOffset + 1).center) }
         compose.runOnIdle { assertTrue(forwarded.isEmpty()) }
         compose.onNodeWithContentDescription("Expand $rtlLabel").assertIsDisplayed()
@@ -510,15 +520,63 @@ class SectionLinkDeviceTest {
         compose.onNodeWithText("RTL FOLD BODY").assertDoesNotExist()
         compose.onAllNodes(mixedMatcher, useUnmergedTree = true).assertCountEquals(1)
         compose.runOnIdle { assertTrue(forwarded.isEmpty()); assertEquals(rtlSpans, rtlEntry.sections.single().blocks.first().spans) }
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription("Expand About this entry"))
+        compose.onNodeWithContentDescription("Expand About this entry").performClick()
+        compose.onNodeWithText("RTL GENERIC FOLD BODY").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Collapse About this entry").performClick()
+        compose.onNodeWithText("RTL GENERIC FOLD BODY").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Expand About this entry").assertIsDisplayed()
     }
 
-    private fun captureOwnedSelfHeading(name: String) {
+    // Read the existing owned frame's painted chevron, not its rotation state.
+    // For a physical left-pointing chevron the middle ink is left of both arms.
+    private fun paintedLeftChevron(bitmap: android.graphics.Bitmap, icon: androidx.compose.ui.geometry.Rect,
+                                   root: androidx.compose.ui.geometry.Rect): Pair<Boolean, String> {
+        val left = kotlin.math.floor(icon.left - root.left).toInt()
+        val top = kotlin.math.floor(icon.top - root.top).toInt()
+        val right = kotlin.math.ceil(icon.right - root.left).toInt()
+        val bottom = kotlin.math.ceil(icon.bottom - root.top).toInt()
+        check(left >= 0 && top >= 0 && right <= bitmap.width && bottom <= bitmap.height)
+        check(right > left && bottom > top && right - left <= 256 && bottom - top <= 256)
+        val background = bitmap.getPixel(left, top)
+        val ink = ArrayList<Triple<Int, Int, Int>>()
+        for (y in top until bottom) for (x in left until right) {
+            val color = bitmap.getPixel(x, y)
+            val contrast = maxOf(kotlin.math.abs(android.graphics.Color.red(color) - android.graphics.Color.red(background)),
+                kotlin.math.abs(android.graphics.Color.green(color) - android.graphics.Color.green(background)),
+                kotlin.math.abs(android.graphics.Color.blue(color) - android.graphics.Color.blue(background)))
+            if (contrast >= 32) ink.add(Triple(x, y, contrast))
+        }
+        if (ink.isEmpty()) return false to "no contrasting painted ink in icon=$icon"
+        val minY = ink.minOf { it.second }; val maxY = ink.maxOf { it.second }
+        val minX = ink.minOf { it.first }; val maxX = ink.maxOf { it.first }
+        val height = (maxY - minY + 1).toDouble()
+        var middleWeight = 0.0; var middleX = 0.0
+        var armWeight = 0.0; var armX = 0.0
+        for ((x, y, weight) in ink) {
+            val fraction = (y - minY + 0.5) / height
+            if (fraction in 0.35..0.65) { middleWeight += weight; middleX += x * weight.toDouble() }
+            if (fraction <= 0.25 || fraction >= 0.75) { armWeight += weight; armX += x * weight.toDouble() }
+        }
+        if (middleWeight == 0.0 || armWeight == 0.0) return false to "insufficient chevron bands icon=$icon ink=${ink.size}"
+        val middle = middleX / middleWeight; val arms = armX / armWeight
+        val requiredSeparation = (maxX - minX + 1) * 0.1
+        return (middle + requiredSeparation < arms) to "icon=$icon ink=${ink.size} middleX=$middle armsX=$arms requiredPx=$requiredSeparation"
+    }
+
+    private fun captureOwnedSelfHeading(name: String,
+        requiredLeftChevrons: List<Pair<String, androidx.compose.ui.geometry.Rect>> = emptyList()) {
         require(name in setOf("self-heading-default.png", "self-heading-rtl-2x.png"))
         // Only this owned Compose root and asserted public self-heading fixture text; never the
         // system clipboard overlay or the retained original ClipData.
+        val paintChecks = mutableListOf<Pair<String, Pair<Boolean, String>>>()
+        var requiredCaptureFailure: Throwable? = null
         try {
-            val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+            val ownedRoot = compose.onRoot()
+            val rootBounds = ownedRoot.fetchSemanticsNode().boundsInRoot
+            val bitmap = ownedRoot.captureToImage().asAndroidBitmap()
             try {
+                requiredLeftChevrons.forEach { (label, icon) -> paintChecks.add(label to paintedLeftChevron(bitmap, icon, rootBounds)) }
                 val files = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
                 val directory = java.io.File(files, "qa-copy-evidence")
                 check(directory.mkdirs() || directory.isDirectory)
@@ -528,12 +586,19 @@ class SectionLinkDeviceTest {
                 target.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
             } finally { bitmap.recycle() }
         } catch (failure: AssertionError) {
+            if (paintChecks.size != requiredLeftChevrons.size) requiredCaptureFailure = failure
             android.util.Log.i("OwnedSelfHeadingEvidence", "$name unavailable: ${failure.javaClass.simpleName}")
         } catch (failure: Exception) {
+            if (paintChecks.size != requiredLeftChevrons.size) requiredCaptureFailure = failure
             // Evidence availability never replaces functional assertions, and
             // diagnostics do not print a view tree or any clipboard contents.
             android.util.Log.i("OwnedSelfHeadingEvidence", "$name unavailable: ${failure.javaClass.simpleName}")
         }
+        // The original optional PNG export failure may remain diagnostic, but
+        // required painted direction never passes on a missing bitmap or crop.
+        requiredCaptureFailure?.let { throw it }
+        assertEquals("Required owned painted chevrons", requiredLeftChevrons.size, paintChecks.size)
+        paintChecks.forEach { (label, result) -> assertTrue("$label must visibly point left in collapsed RTL: ${result.second}", result.first) }
     }
 
 

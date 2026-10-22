@@ -232,7 +232,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     if (section.title.isNotBlank() && (section.title != entry.language || section.blocks.any { it.kind != "blank" })) {
                         val richHeading = row.headingBlock
                         val label = if (richHeading == null && section.title == entry.language) "Overview" else section.title
-                        val angle by animateFloatAsState(if (folded[row.key] == true) -90f else 0f, label = "Section fold")
+                        val angle by animateFloatAsState(if (folded[row.key] == true) { if (LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) 90f else -90f } else 0f, label = "Section fold")
                         val toggle = { folded[row.key] = folded[row.key] != true }
                         val headingModifier = if (richHeading == null) Modifier.clickable(onClick = toggle) else Modifier
                         Row(Modifier.fillMaxWidth().padding(start = richHeading?.let { blockIndentDp(it).dp } ?: 0.dp).then(headingModifier).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -282,7 +282,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
 
 @Composable
 private fun FoldHeading(title: String, folded: Boolean, onClick: () -> Unit) {
-    val angle by animateFloatAsState(if (folded) -90f else 0f, label = "Section fold")
+    val angle by animateFloatAsState(if (folded) { if (LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) 90f else -90f } else 0f, label = "Section fold")
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
         Icon(Icons.Filled.ExpandMore, if (folded) "Expand $title" else "Collapse $title", Modifier.size(20.dp).rotate(angle))
