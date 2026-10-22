@@ -6653,6 +6653,20 @@ pub const Renderer = struct {
         return trimmed;
     }
 
+    // Project only one physical colon item after an invisible opening line.
+    // Protected, mixed and multi-line contents retain their existing ownership.
+    fn headingColonListBody(self: *Renderer, raw: []const u8) Error!?[]const u8 {
+        const first_end = std.mem.indexOfScalar(u8, raw, '\n') orelse return null;
+        const opening = std.mem.trim(u8, raw[0..first_end], " \t\r");
+        const matcher = self.behaviorControlMatcher();
+        if (syntax.leadingBehaviorControlOffset(opening, matcher) != opening.len) return null;
+        const item = std.mem.trimEnd(u8, raw[first_end + 1 ..], "\r");
+        if (std.mem.indexOfScalar(u8, item, '\n') != null) return null;
+        const prefix = try syntax.controlListPrefixAlloc(self.a, item, matcher);
+        if (!std.mem.eql(u8, prefix.path, ":")) return null;
+        return wikiListLineBody(item[prefix.body_start..]);
+    }
+
     fn bodyRawBlock(self: *Renderer, blocks: *std.ArrayList(Block), source: []const u8, raw: []const u8, quotes: *?QuoteBoundaryScan, kind: Kind, path: []const u8, number: []const u8, level: u8) Error!void {
         const previous = self.next_quote_seed;
         self.next_quote_seed = try self.rawBodyQuoteSeed(source, raw, quotes);
@@ -7288,7 +7302,10 @@ pub const Renderer = struct {
                         self.body_formatting_attributes = parent_attributes;
                         self.body_language_direction = parent_language_direction;
                     }
-                    try self.bodyRawBlock(&blocks, input, wrapper_source[tag.end..pair.inner_end], &body_quotes, .heading, "", "", level);
+                    const heading_body = wrapper_source[tag.end..pair.inner_end];
+                    if (try self.headingColonListBody(heading_body)) |item_body| {
+                        try self.bodyRawBlock(&blocks, input, item_body, &body_quotes, .heading, ":", "", level);
+                    } else try self.bodyRawBlock(&blocks, input, heading_body, &body_quotes, .heading, "", "", level);
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
                     try self.htmlList(&blocks, wrapper_source[tag.end..pair.inner_end], tag, "", 0, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
                 } else if (try self.appendEtymologyTree(&blocks, wrapper_source[tag.end..pair.inner_end], tag)) {
@@ -25078,4 +25095,68 @@ test "authored RGB declaration precedence preserves scopes actions and unrelated
     const spanning = try span_renderer.renderBody("<table><tr bgcolor=red><td rowspan=2>unresolved</td><td rowspan=2 bgcolor=blue>own</td></tr><tr bgcolor=green></tr></table>");
     try std.testing.expect(spanning[0].table.?.rows[0].cells[0].background == null);
     try std.testing.expectEqualStrings("#0000ff", spanning[0].table.?.rows[0].cells[1].background.?);
+}
+
+test "HTML heading single physical colon items retain heading depth and protected literal controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const branches = [_]struct { target: []const u8, label: []const u8 }{
+        .{ .target = "templlar/conj.BEN", .label = "la conchugazión benasquesa" },
+        .{ .target = "templlar/conj.RIB", .label = "la conchugazión ribagorzana" },
+    };
+    for (branches) |branch| {
+        const source = try std.fmt.allocPrint(a, "<h4>__NOEDITSECTION__\n:''Se beiga '''[[{s}|{s}]]''' d'este berbo.''</h4>after", .{ branch.target, branch.label });
+        const expected = try std.fmt.allocPrint(a, "Se beiga {s} d'este berbo.", .{branch.label});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        const saved = try FormattingScopeTest.encode(a, &renderer, blocks);
+        inline for (.{ blocks, saved.entry.sections[0].blocks }) |actual| {
+            try std.testing.expectEqual(@as(usize, 2), actual.len);
+            const heading_block = actual[0];
+            try std.testing.expectEqualStrings("heading", @tagName(heading_block.kind));
+            try std.testing.expectEqual(@as(u8, 4), heading_block.level);
+            try std.testing.expectEqual(@as(u8, 1), heading_block.depth);
+            try std.testing.expectEqualStrings(":", heading_block.list_path);
+            try std.testing.expectEqualStrings(expected, try FormattingScopeTest.text(a, heading_block.spans));
+            var actions: usize = 0;
+            for (heading_block.spans) |span| {
+                const italic = if (@hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic;
+                try std.testing.expect(italic);
+                if (span.kind == .link) {
+                    actions += 1;
+                    try std.testing.expectEqualStrings(branch.target, span.target);
+                    try std.testing.expectEqualStrings(branch.label, span.text);
+                    const bold = if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                    try std.testing.expect(bold);
+                }
+            }
+            try std.testing.expectEqual(@as(usize, 1), actions);
+            try std.testing.expectEqualStrings("paragraph", @tagName(actual[1].kind));
+            try std.testing.expectEqual(@as(u8, 0), actual[1].depth);
+            try std.testing.expectEqualStrings("after", try FormattingScopeTest.text(a, actual[1].spans));
+        }
+        try std.testing.expect(!renderer.fallbacks.any());
+    }
+    const literals = [_][]const u8{
+        "<h4>:literal</h4>",
+        "<h4>\n&#58;literal</h4>",
+        "<h4><nowiki>\n:literal</nowiki></h4>",
+    };
+    for (literals) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        const saved = try FormattingScopeTest.encode(a, &renderer, blocks);
+        inline for (.{ blocks, saved.entry.sections[0].blocks }) |actual| {
+            try std.testing.expectEqual(@as(usize, 1), actual.len);
+            try std.testing.expectEqualStrings("heading", @tagName(actual[0].kind));
+            try std.testing.expectEqual(@as(u8, 0), actual[0].depth);
+            try std.testing.expectEqualStrings("", actual[0].list_path);
+            try std.testing.expect(std.mem.indexOfScalar(u8, try FormattingScopeTest.text(a, actual[0].spans), ':') != null);
+        }
+    }
+    var declined: Renderer = .{ .a = a, .context = .{} };
+    for ([_][]const u8{ "visible\n:item", "\n::item", "\n*:item", "\n:first\n:second", "<pre>\n:literal</pre>", "<nowiki>\n:literal</nowiki>", "\n&#58;literal", ":same-line" }) |raw| {
+        try std.testing.expect((try declined.headingColonListBody(raw)) == null);
+    }
 }

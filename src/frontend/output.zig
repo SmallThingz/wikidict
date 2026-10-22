@@ -565,7 +565,7 @@ fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
         if ((span.kind == .link or span.kind == .external_link) and
             span.target.len != 0 and (span.text.len != 0 or span.trail.len != 0)) navigable = true;
     }
-    if (!navigable and !explained and !styled_self) return null;
+    if (!navigable and !explained and !styled_self and first.depth == 0) return null;
     var cursor: HeadingBytes = .{ .spans = first.spans };
     var offset: usize = 0;
     var begin: ?usize = null;
@@ -595,10 +595,12 @@ fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
     return first.spans;
 }
 fn sectionLabelProjected(w: *std.Io.Writer, section: model.Section, color: bool, projection: ?*PoemProjection) !void {
-    if (sectionHeadingCompanion(section)) |spans|
-        try spansTextProjected(w, spans, color, projection)
-    else
-        try terminalText(w, section.title);
+    if (sectionHeadingCompanion(section)) |spans| {
+        // The companion owns the authored list indentation even when its rich
+        // spans are consumed as the section label instead of an ordinary block.
+        try w.splatByteAll(' ', @as(usize, @min(section.blocks[0].depth, 12)) * 2);
+        try spansTextProjected(w, spans, color, projection);
+    } else try terminalText(w, section.title);
 }
 
 fn sectionTextProjected(w: *std.Io.Writer, section: model.Section, color: bool, projection: ?*PoemProjection) !void {
@@ -839,7 +841,7 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
                 if (per_part_headers) {
                     try w.writeByte('\n');
                     if (color) try w.writeAll("\x1b[1m");
-                    if (companion) |spans| try captions.emitSpans(w, spans, color, projection) else try terminalText(w, part.kind);
+                    if (companion != null) try captions.emitLabel(w, section, color, projection) else try terminalText(w, part.kind);
                     if (part.language.len != 0 and !std.mem.eql(u8, part.language, entry.language orelse "")) {
                         try w.writeAll(" / ");
                         try terminalText(w, part.language);
@@ -2355,4 +2357,62 @@ test "typed table backgrounds cover all Bleoh cells padding wraps and rowspans w
     const end = std.mem.lastIndexOf(u8, styled.written(), "outside").?;
     try std.testing.expect(TypedColorOutputTest.at(styled.written(), end).background == null);
     try std.testing.expect(TypedColorOutputTest.at(styled.written(), end).foreground == null);
+}
+
+test "section heading companions retain authored depth once through plain colored and folded output" {
+    const a = std.testing.allocator;
+    const title = "Se beiga la conchugazión benasquesa 猫.";
+    const rich = [_]model.Span{
+        .{ .text = "Se beiga ", .italic = true },
+        .{ .kind = .link, .text = "la conchugazión benasquesa 猫", .target = "templlar/conj.BEN", .bold = true, .italic = true, .foreground = "#01796f" },
+        .{ .text = ".", .italic = true },
+    };
+    const plain = [_]model.Span{.{ .text = "Plain indented" }};
+    const heading_only = [_]model.Block{.{ .kind = .heading, .level = 4, .depth = 1, .list_path = ":", .spans = &rich }};
+    const plain_only = [_]model.Block{.{ .kind = .heading, .level = 4, .depth = 1, .list_path = ":", .spans = &plain }};
+    const section: model.Section = .{ .level = 4, .title = title, .blocks = &heading_only };
+    const plain_section: model.Section = .{ .level = 4, .title = "Plain indented", .blocks = &plain_only };
+    try std.testing.expect(sectionHeadingCompanion(section) != null);
+    try std.testing.expect(sectionHeadingCompanion(plain_section) != null);
+    var zero_blocks = heading_only;
+    zero_blocks[0].depth = 0;
+    zero_blocks[0].list_path = "";
+    const zero: model.Section = .{ .level = 4, .title = title, .blocks = &zero_blocks };
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try sectionTextProjected(&out.writer, section, false, null);
+    try std.testing.expectEqualStrings("\n  Se beiga la conchugazión benasquesa 猫.\n", out.written());
+    out.clearRetainingCapacity();
+    try sectionTextProjected(&out.writer, plain_section, false, null);
+    try std.testing.expectEqualStrings("\n  Plain indented\n", out.written());
+    out.clearRetainingCapacity();
+    try sectionTextProjected(&out.writer, zero, false, null);
+    try std.testing.expectEqualStrings("\nSe beiga la conchugazión benasquesa 猫.\n", out.written());
+    const sections = [_]model.Section{ section, .{ .level = 3, .title = "After", .blocks = &.{} } };
+    const entry: model.Entry = .{ .title = "templlar", .kind = .language, .language = "aragonés", .sections = &sections };
+    for ([_]bool{ false, true }) |folded| {
+        var expected: std.Io.Writer.Allocating = .init(a);
+        defer expected.deinit();
+        if (folded) _ = try entryTextFolded(&expected, entry, false, .{ .details = true }, &.{}, 0) else try entryText(&expected.writer, entry, false);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expected.written(), title));
+        try std.testing.expect(std.mem.indexOf(u8, expected.written(), "  Se beiga la conchugazión benasquesa 猫.") != null);
+        out.clearRetainingCapacity();
+        if (folded) _ = try entryTextFolded(&out, entry, true, .{ .details = true }, &.{}, 0) else try entryText(&out.writer, entry, true);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[38;2;1;121;111m") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[1m") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[3m") != null);
+        var stripped: std.Io.Writer.Allocating = .init(a);
+        defer stripped.deinit();
+        var pos: usize = 0;
+        while (pos < out.written().len) {
+            if (terminal.sgrLength(out.written()[pos..])) |n| pos += n else {
+                try stripped.writer.writeByte(out.written()[pos]);
+                pos += 1;
+            }
+        }
+        try std.testing.expectEqualStrings(expected.written(), stripped.written());
+    }
+    try std.testing.expectEqualStrings("templlar/conj.BEN", rich[1].target);
+    try std.testing.expectEqualStrings("#01796f", rich[1].foreground.?);
+    try std.testing.expect(rich[1].bold and rich[1].italic);
 }

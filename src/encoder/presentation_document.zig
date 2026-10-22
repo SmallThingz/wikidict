@@ -265,6 +265,8 @@ pub const DisplayTitle = struct {
 };
 
 const WorkSection = struct {
+    title_depth: u8 = 0,
+    title_list_path: []const u8 = "",
     title_spans: []const compiler.Span = &.{},
     level: u8,
     title: []const u8,
@@ -280,6 +282,8 @@ const Work = struct {
     fallbacks: Fallbacks,
 };
 const Builder = struct {
+    title_depth: u8 = 0,
+    title_list_path: []const u8 = "",
     title_spans: []const compiler.Span = &.{},
     a: A,
     renderer: *compiler.Renderer,
@@ -294,6 +298,8 @@ const Builder = struct {
             .level = self.level,
             .title = self.title,
             .title_spans = self.title_spans,
+            .title_depth = self.title_depth,
+            .title_list_path = self.title_list_path,
             .blocks = blocks,
         });
     }
@@ -318,6 +324,8 @@ const Builder = struct {
                 try self.flush(rendered[section_start..i]);
                 self.started = true;
                 self.title_spans = item.spans;
+                self.title_depth = item.depth;
+                self.title_list_path = item.list_path;
                 self.title = trimHeading(try compiler.plainText(self.a, item.spans));
                 self.level = item.level;
                 section_start = i + 1;
@@ -657,9 +665,9 @@ pub fn compileReportedWithReferencesAndPoemFragmentsAlloc(
                 navigable = true;
             }
         }
-        if (navigable or explained or styled_self) {
+        if (navigable or explained or styled_self or section.title_depth != 0 or section.title_list_path.len != 0) {
             const blocks = try a.alloc(compiler.Block, section.blocks.len + 1);
-            blocks[0] = .{ .kind = .heading, .spans = section.title_spans, .level = section.level };
+            blocks[0] = .{ .kind = .heading, .spans = section.title_spans, .level = section.level, .depth = section.title_depth, .list_path = section.title_list_path };
             @memcpy(blocks[1..], section.blocks);
             section.blocks = blocks;
         }
@@ -2197,4 +2205,64 @@ test "literal closing URL braces compile strictly and preserve exact DPR2 target
     try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &internal, null));
     // Nor does the literal URL run exempt ordinary visible markup elsewhere.
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "uncompiled label", .language, "English", "en", "https://example.test/a}} {{missing}}", null));
+}
+
+test "physical colon heading metadata survives full document compilation and strict decode" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const branches = [_]struct { target: []const u8, label: []const u8 }{
+        .{ .target = "templlar/conj.BEN", .label = "la conchugazión benasquesa" },
+        .{ .target = "templlar/conj.RIB", .label = "la conchugazión ribagorzana" },
+    };
+    for (branches) |branch| {
+        const source = try std.fmt.allocPrint(a, "<h4>__NOEDITSECTION__\n:''Se beiga '''[[{s}|{s}]]''' d'este berbo.''</h4>after\n<h4>[[Normal|normal]]</h4>\nfollowing", .{ branch.target, branch.label });
+        const expected = try std.fmt.allocPrint(a, "Se beiga {s} d'este berbo.", .{branch.label});
+        const payload = try compileAlloc(a, "templlar", .language, "aragonés", "an", source, null);
+        const decoded = try codec.decodeAlloc(a, payload, "templlar", .language, .{ .code = "an", .heading = "aragonés" });
+        try std.testing.expectEqual(@as(usize, 2), decoded.entry.sections.len);
+        const first = decoded.entry.sections[0];
+        try std.testing.expectEqualStrings(expected, first.title);
+        try std.testing.expectEqual(@as(u8, 4), first.level);
+        try std.testing.expectEqual(@as(usize, 2), first.blocks.len);
+        const heading_block = first.blocks[0];
+        try std.testing.expect(heading_block.kind == .heading);
+        try std.testing.expectEqual(@as(u8, 4), heading_block.level);
+        try std.testing.expectEqual(@as(u8, 1), heading_block.depth);
+        try std.testing.expectEqualStrings(":", heading_block.list_path);
+        var text: std.ArrayList(u8) = .empty;
+        var actions: usize = 0;
+        for (heading_block.spans) |span| {
+            try text.appendSlice(a, span.text);
+            try text.appendSlice(a, span.trail);
+            try std.testing.expect(span.italic);
+            if (span.kind == .link) {
+                actions += 1;
+                try std.testing.expectEqualStrings(branch.target, span.target);
+                try std.testing.expectEqualStrings(branch.label, span.text);
+                try std.testing.expect(span.bold);
+            }
+        }
+        try std.testing.expectEqualStrings(expected, text.items);
+        try std.testing.expectEqual(@as(usize, 1), actions);
+        try std.testing.expect(first.blocks[1].kind == .paragraph and first.blocks[1].depth == 0);
+        try std.testing.expectEqualStrings("after", first.blocks[1].spans[0].text);
+        const next = decoded.entry.sections[1];
+        try std.testing.expectEqualStrings("normal", next.title);
+        try std.testing.expectEqual(@as(usize, 2), next.blocks.len);
+        try std.testing.expect(next.blocks[0].kind == .heading and next.blocks[0].depth == 0);
+        try std.testing.expectEqualStrings("", next.blocks[0].list_path);
+        try std.testing.expectEqualStrings("Normal", next.blocks[0].spans[0].target);
+        try std.testing.expectEqualStrings("following", next.blocks[1].spans[0].text);
+    }
+    // Indentation is semantic even without a navigable/explained heading label.
+    const plain = try compileAlloc(a, "entry", .language, "English", "en", "<h4>\n:plain</h4>", null);
+    const decoded_plain = try codec.decodeAlloc(a, plain, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 1), decoded_plain.entry.sections.len);
+    const plain_section = decoded_plain.entry.sections[0];
+    try std.testing.expectEqualStrings("plain", plain_section.title);
+    try std.testing.expectEqual(@as(usize, 1), plain_section.blocks.len);
+    try std.testing.expect(plain_section.blocks[0].kind == .heading and plain_section.blocks[0].level == 4 and plain_section.blocks[0].depth == 1);
+    try std.testing.expectEqualStrings(":", plain_section.blocks[0].list_path);
+    try std.testing.expectEqualStrings("plain", plain_section.blocks[0].spans[0].text);
 }
