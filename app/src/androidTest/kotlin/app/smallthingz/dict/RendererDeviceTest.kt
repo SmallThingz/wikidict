@@ -726,6 +726,25 @@ class RendererDeviceTest {
                 }
                 val caseId = "heading-${direction.toString().lowercase()}-$mode"
                 var initialEvidence = "Initial owned fixture evidence not yet available"
+                var stage = "install-fixture"
+                var primaryFailure: Throwable? = null
+                val lifecycleTrace = mutableListOf<String>()
+                fun observeOwnedFixture(at: String) {
+                    stage = at
+                    val roots = runCatching {
+                        compose.onAllNodesWithTag("heading-fixture", useUnmergedTree = true)
+                            .fetchSemanticsNodes(atLeastOneRootRequired = false).size.toString()
+                    }.getOrElse { "unavailable:${it.javaClass.simpleName}" }
+                    val activity = runCatching {
+                        var state = "scenario=${compose.activityRule.scenario.state}"
+                        compose.activityRule.scenario.onActivity { owned ->
+                            val view = owned.window.decorView
+                            state += "; lifecycle=${owned.lifecycle.currentState}; finishing=${owned.isFinishing}; destroyed=${owned.isDestroyed}; attached=${view.isAttachedToWindow}; " + ownedLayoutState(view)
+                        }
+                        state
+                    }.getOrElse { "activity-unavailable:${it.javaClass.simpleName}:${it.message}" }
+                    lifecycleTrace += "timeMs=${System.currentTimeMillis()}; case=$caseId; stage=$at; roots=$roots; $activity".take(1600)
+                }
                 println("HEADING_FIXTURE_BEGIN $caseId initialDepth=$initialDepth")
                 try {
                     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
@@ -752,6 +771,7 @@ class RendererDeviceTest {
                         renderedLayoutFailureEvidence(caseId, initialLayouts.singleOrNull(), semantic,
                             viewport, "$caseId.png") + "\nOWNED_FIXTURE_TREE\n" + tree
                     }.getOrElse { "OWNED_FIXTURE_EVIDENCE_UNAVAILABLE ${it.javaClass.name}: ${it.message}" }
+                    observeOwnedFixture("initial-display")
                     node.assertIsDisplayed()
                     compose.onAllNodesWithText(label, useUnmergedTree = true).assertCountEquals(1)
                     // StyledText puts the heading modifier on its SelectionContainer;
@@ -783,9 +803,13 @@ class RendererDeviceTest {
                     compose.runOnIdle { assertEquals("templlar/conj.BEN", followed) }
                     }
                     if (companion) {
+                        observeOwnedFixture("before-collapse")
                         compose.onNodeWithContentDescription("Collapse $label").performClick()
+                        observeOwnedFixture("after-collapse")
                         compose.onNodeWithText("Following body", useUnmergedTree = true).assertDoesNotExist()
+                        observeOwnedFixture("before-expand")
                         compose.onNodeWithContentDescription("Expand $label").performClick()
+                        observeOwnedFixture("after-expand")
                         compose.onNodeWithText("Following body", useUnmergedTree = true).assertIsDisplayed()
                     }
                     // addResults is emitted in the final raw instrumentation result bundle.
@@ -797,11 +821,37 @@ class RendererDeviceTest {
                             "\nOWNED_FIXTURE_TREE\n" + initialEvidence.substringAfter("\nOWNED_FIXTURE_TREE\n", "").take(12000)
                     InstrumentationRegistry.getInstrumentation().addResults(android.os.Bundle().apply {
                         putString("heading_fixture_$caseId", successEvidence)
+                        putString("heading_lifecycle_$caseId", lifecycleTrace.joinToString("\n").take(10000))
                     })
                     println("HEADING_FIXTURE_PASS $caseId")
-                } catch (failure: AssertionError) {
-                    throw AssertionError("case=$caseId depth=${depth.value}: " + failure.message + "\n" + initialEvidence, failure)
-                } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+                } catch (failure: Throwable) {
+                    primaryFailure = failure
+                    val failedStage = stage
+                    observeOwnedFixture("failure-after-$failedStage")
+                    val currentTree = runCatching {
+                        compose.onNodeWithTag("heading-fixture", useUnmergedTree = true)
+                            .printToString(maxDepth = 8).take(12000)
+                    }.getOrElse { "OWNED_TREE_UNAVAILABLE ${it.javaClass.name}: ${it.message}" }
+                    // Preserve the original exception and assertions; diagnostics cannot
+                    // replace it or capture another Activity when this fixture is absent.
+                    val diagnostic = ("case=$caseId depth=${depth.value} stage=$failedStage\n" +
+                        lifecycleTrace.joinToString("\n") + "\nINITIAL_OWNED_EVIDENCE\n" +
+                        initialEvidence.substringBefore("\nOWNED_PNG_BEGIN").take(14000) +
+                        "\nCURRENT_OWNED_FIXTURE_TREE\n" + currentTree).take(56000)
+                    runCatching {
+                        InstrumentationRegistry.getInstrumentation().addResults(android.os.Bundle().apply {
+                            putString("heading_failure_$caseId", diagnostic)
+                        })
+                    }.onFailure { failure.addSuppressed(it) }
+                    failure.addSuppressed(AssertionError(diagnostic))
+                    throw failure
+                } finally {
+                    try { compose.activityRule.scenario.onActivity { it.setContent {} } }
+                    catch (cleanup: Throwable) {
+                        val original = primaryFailure
+                        if (original != null) original.addSuppressed(cleanup) else throw cleanup
+                    }
+                }
             }
         }
     }
