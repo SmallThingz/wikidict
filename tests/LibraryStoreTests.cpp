@@ -196,25 +196,52 @@ int main(int argc, char **argv) {
             LibraryStorage::recoverPendingMutation(first.path());
             require(!QFileInfo::exists(destination) && !QFileInfo::exists(first.filePath(QStringLiteral("languages.tsv"))), "interrupted first import restores genuinely empty root");
         }
-        // Both ordinary and embedded alias payloads now pass the full native decoder.
-        for (const QByteArray &magic : {QByteArray("DPR2"), QByteArray("DPR3"), QByteArray("DPR4")}) {
-            const QByteArray presentation = magic + QByteArray(28, '\0');
+        // Both ordinary and DAL1 records use the same full native DPR2/3/4 decoder.
+        const QByteArray coloredPresentation = QByteArray::fromHex("445052340100000000000005000000636f6c6f72000000000000000000000000000000000000000000000000010700000023316333396262000000000000000000000000000000000000000000000000");
+        const QList<QByteArray> supportedPresentations{
+            QByteArray("DPR2") + QByteArray(28, '\0'),
+            QByteArray("DPR3") + QByteArray(28, '\0'),
+            QByteArray("DPR4") + QByteArray(28, '\0'),
+            coloredPresentation,
+        };
+        for (qsizetype version = 0; version < supportedPresentations.size(); ++version) {
+            const auto &presentation = supportedPresentations[version];
+            const QString gateRoot = temporary.filePath(QStringLiteral("gate-%1").arg(version));
             const QByteArray ordinary = blob("English", {"annotation"}, 1, presentation);
-            const QString gateRoot = temporary.filePath(QStringLiteral("gate-") + QString::fromLatin1(magic));
             write(source, ordinary);
-            if (magic == "DPR4")
-                rejects([&] { LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress); }, "reject unsupported ordinary presentation version");
-            else {
-                auto accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
-                require(accepted->dictionary.words == 1, "accept complete ordinary DPR2 and DPR3 documents");
-            }
+            auto accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
+            require(accepted->dictionary.words == 1, "accept complete ordinary DPR2/3/4 including RGB span");
+            LibraryStorage::commitImport(gateRoot, *accepted);
+            auto installed = LibraryStorage::installed(gateRoot);
+            require(installed.size() == 1 && read(installed.first().path) == ordinary,
+                    "ordinary import roundtrips exact supported presentation bytes");
+            LibraryStorage::removeDictionary(gateRoot, installed.first());
+            const QByteArray alias = aliasBlob(aliasRecord("Cats", "cat", presentation));
+            write(source, alias);
+            accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
+            require(accepted->dictionary.kind == QStringLiteral("alias") && accepted->dictionary.words == 1,
+                    "accept complete DPR2/3/4 DAL1 including RGB span");
+            LibraryStorage::commitImport(gateRoot, *accepted);
+            installed = LibraryStorage::installed(gateRoot);
+            require(installed.size() == 1 && read(installed.first().path) == alias,
+                    "alias import roundtrips exact envelope and supported presentation bytes");
+            LibraryStorage::removeDictionary(gateRoot, installed.first());
+        }
+        QByteArray invalidRgb = coloredPresentation;
+        const qsizetype rgbAt = invalidRgb.indexOf("#1c39bb");
+        require(rgbAt >= 0, "RGB fixture contains its canonical source color");
+        invalidRgb[rgbAt + 1] = 'G';
+        for (const QByteArray &presentation : {
+                QByteArray("DPR5") + QByteArray(28, '\0'),
+                coloredPresentation.chopped(1), coloredPresentation + QByteArray(1, '\0'), invalidRgb}) {
+            const QString gateRoot = temporary.filePath(QStringLiteral("invalid-version-gate"));
+            write(source, blob("English", {"annotation"}, 1, presentation));
+            rejects([&] { LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress); },
+                    "reject unknown or malformed ordinary presentation");
             write(source, aliasBlob(aliasRecord("Cats", "cat", presentation)));
-            if (magic == "DPR4")
-                rejects([&] { LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress); }, "reject unsupported DAL1 presentation version");
-            else {
-                auto accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
-                require(accepted->dictionary.kind == QStringLiteral("alias"), "accept complete DPR2 and DPR3 DAL1 embedded documents");
-            }
+            rejects([&] { LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress); },
+                    "reject unknown or malformed DAL1 presentation through full native decoder");
+            require(LibraryStorage::installed(gateRoot).isEmpty(), "failed presentation validation publishes no dictionary");
         }
         // Preserve compact legacy spans and explained DPR3 fields, not just their magic.
         for (const QByteArray &presentation : {

@@ -336,7 +336,8 @@ QJsonArray sectionHeadingSpans(const QJsonObject &section) {
     qsizetype start = 0, end = label.size();
     while (start < end && edgeSpace(label[start])) ++start;
     while (end > start && edgeSpace(label[end - 1])) --end;
-    return rich && label.mid(start, end - start) == title ? spans : QJsonArray{};
+    const bool indented = first.value(QStringLiteral("depth")).toInt() > 0;
+    return (rich || indented) && label.mid(start, end - start) == title ? spans : QJsonArray{};
 }
 
 QStringList poemClassTokens(const QJsonObject &span) {
@@ -1662,7 +1663,13 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
     }
     if (kind == QStringLiteral("list_detail") || kind == QStringLiteral("indent"))
         return QStringLiteral("<p style='margin-left:%1px'>%2</p>").arg(30 + indent).arg(body);
-    if (kind == QStringLiteral("heading")) return QStringLiteral("<h3>%1</h3>").arg(body);
+    if (kind == QStringLiteral("heading")) {
+        const int sourceLevel = block.value(QStringLiteral("level")).toInt();
+        const int headingLevel = sourceLevel >= 1 && sourceLevel <= 6 ? sourceLevel : 3;
+        // Preserve the existing h3-sized typography while retaining source semantics and depth.
+        return QStringLiteral("<h%1 style=\"font-family:&quot;%3&quot;;font-size:large;margin-left:%2px\">%4</h%1>")
+            .arg(headingLevel).arg(outerIndent).arg(readerFamily().toHtmlEscaped(), body);
+    }
     if (depth > 0)
         return QStringLiteral("<p style='margin-left:%1px'>%2</p>")
             .arg(30 + std::clamp(depth - 1, 0, 20) * 16).arg(body);
@@ -1672,7 +1679,7 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
 QString MainWindow::entryHtml(const QJsonObject &entry) const {
     QString out = QStringLiteral(
         "<style>body{font-family:'%4';font-size:%1pt;color:%2;}"
-        "h2{font-family:sans-serif;font-size:%1pt;margin-top:20px;}"
+        ".wikidict-section-heading{font-family:sans-serif;font-size:x-large;margin-top:20px;}"
         "a{color:%3;text-decoration:none;}blockquote{margin:8px 18px;}"
         "code,pre{font-family:monospace;}</style><body>")
         .arg(readingPointSize_).arg(palette().color(QPalette::Text).name(), palette().color(QPalette::Link).name(), readerFamily());
@@ -1742,10 +1749,16 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         if (renderRichHeading) {
             // The fold control and lexical links are siblings, never nested anchors.
             collectEmbeddedMedia(richHeading);
-            out += QStringLiteral("<h2><a href='section:%1'>%2</a> %3</h2>").arg(index)
+            const QJsonObject companion = section.value(QStringLiteral("blocks")).toArray().first().toObject();
+            const int depth = companion.value(QStringLiteral("depth")).toInt();
+            const int margin = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
+            const int headingLevel = level >= 1 && level <= 6 ? level : 2;
+            // Section typography stays compact; the semantic heading level and indentation are authored.
+            out += QStringLiteral("<h%1 class='wikidict-section-heading' style='font-family:sans-serif;font-size:%2pt;margin-top:20px;margin-left:%3px'><a href='section:%4'>%5</a> %6</h%1>")
+                .arg(headingLevel).arg(readingPointSize_).arg(margin).arg(index)
                 .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), spansHtml(richHeading));
         } else if (!ownerLanguage) {
-            out += QStringLiteral("<h2><a href='section:%1'>%2 %3</a></h2>").arg(index)
+            out += QStringLiteral("<h2 class='wikidict-section-heading'><a href='section:%1'>%2 %3</a></h2>").arg(index)
                 .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), title.toHtmlEscaped());
         }
         if (collapsedSections_.contains(index)) continue;

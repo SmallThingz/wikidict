@@ -170,7 +170,7 @@ function sectionHeadingCompanion(section){
     label+=span.kind==='line_break'?'\n':(span.text||'')+(span.trail||'');
   }
   const trimmed=label.replace(/^[ \t\r\n\u00a0]+|[ \t\r\n\u00a0]+$/g,'');
-  return (navigable||explained||selfStyled)&&trimmed===section.title?first:null;
+  return (navigable||explained||selfStyled||first.depth>0)&&trimmed===section.title?first:null;
 }
 export function renderEntry(entry, onLink, settings = {}, mediaView = () => null) {
   const root = document.createDocumentFragment(), references = new Map();
@@ -193,9 +193,9 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   const title = node('h1'); title.append(entry.display_title?.length?spans(entry.display_title,followLink,false,explanations):document.createTextNode(entry.title)); root.append(title);
   if(entry.redirect){const r=entry.redirect;root.append(node('p',(r.followed?'Redirected from '+r.source_title+' to ':'Redirect to ')+r.target_title+(r.fragment?'#'+r.fragment:''),'entry-redirect'));}
   if(entry.alias&&entry.redirect?.followed){const a=entry.alias;root.append(node('p','Redirect to '+a.target_title+(a.fragment?'#'+a.fragment:''),'entry-alias'));}
-  function fold(title, open=false, rich=null) {
+  function fold(title, open=false, rich=null, depth=0) {
     const el=node('details'),summary=node('summary',rich?null:title);el.open=open;
-    if(rich){const label=node('span',null,'heading-label');label.append(spans(rich,followLink,false,explanations,true));summary.append(label);}
+    if(rich){const label=node('span',null,'heading-label');if(depth>0){label.style.display='inline-block';label.style.marginInlineStart=`${Math.min(depth,8)*.45}rem`;}label.append(spans(rich,followLink,false,explanations,true));summary.append(label);}
     el.append(summary);return el;
   }
   if (entry.preamble_spans?.length) { const preamble=fold('About this entry',entry.kind==='alias'||!settings.collapseOtherSections);preamble.append(spans(entry.preamble_spans,followLink,false,explanations));root.append(preamble); }
@@ -203,7 +203,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     const meaning=section.blocks.some(b=>b.kind==='definition');
     const expanded=meaning || (section.title.startsWith('Pronunciation')?!settings.collapsePronunciation:section.title.startsWith('Etymology')?!settings.collapseEtymology:!settings.collapseOtherSections);
     const companion=sectionHeadingCompanion(section);
-    const el=fold(section.title===entry.language?'Overview':section.title||'Notes',expanded,companion?.spans);
+    const el=fold(section.title===entry.language?'Overview':section.title||'Notes',expanded,companion?.spans,companion?.depth);
     el.classList.toggle('meaning',meaning);el.id=section.title.replaceAll(' ','_');
     const notes=[];
     for (const block of section.blocks.slice(companion?1:0)) {
@@ -212,7 +212,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
       if(meaning&&block.kind!=='definition')notes.push(view);else el.append(view);
     }
     if(notes.length){const details=fold('Examples & notes',!settings.collapseDetails);details.className='sense-notes';details.append(...notes);el.append(details);}
-    if(el.children.length>1)root.append(el);
+    if(el.children.length>1||companion)root.append(el);
   }
   if (entry.references?.length) {
     const section=fold('References',!settings.collapseOtherSections);

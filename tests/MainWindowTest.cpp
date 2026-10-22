@@ -2565,6 +2565,213 @@ private slots:
         QCOMPARE(entry, original);
     }
 
+    void headingsKeepCompiledDepthLevelAndCompanionActions() {
+        MainWindow window{QString()};
+        const auto heading = [](const QString &dialect, int depth, int level = 4) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("heading")}, {QStringLiteral("level"), level},
+                {QStringLiteral("depth"), depth}, {QStringLiteral("list_path"), QString(depth, QChar(':'))},
+                {QStringLiteral("spans"), QJsonArray{
+                    QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), QStringLiteral("Se beiga ")}, {QStringLiteral("italic"), true}},
+                    QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")}, {QStringLiteral("text"), QStringLiteral("la conchugazión ") + dialect},
+                        {QStringLiteral("target"), QStringLiteral("templlar/conj.") + (dialect == QStringLiteral("benasquesa") ? QStringLiteral("BEN") : QStringLiteral("RIB"))},
+                        {QStringLiteral("bold"), true}, {QStringLiteral("italic"), true}},
+                    QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), QStringLiteral(" d'este berbo.")}, {QStringLiteral("italic"), true}}}}};
+        };
+        // Use entryHtml so the section h2 stylesheet is present: ordinary h2 must not inherit its sans-serif family.
+        QJsonArray levelBlocks;
+        for (int level = 1; level <= 6; ++level)
+            levelBlocks.append(heading(QStringLiteral("level%1").arg(level), 0, level));
+        const QJsonObject levelsEntry{{QStringLiteral("kind"), QStringLiteral("language")},
+            {QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), QStringLiteral("Typography controls")},
+                {QStringLiteral("level"), 2}, {QStringLiteral("blocks"), levelBlocks}}}}};
+        QTextDocument levelsDocument;
+        QString levelsHtml = window.entryHtml(levelsEntry);
+        const qsizetype bodyEnd = levelsHtml.lastIndexOf(QStringLiteral("</body>"));
+        QVERIFY(bodyEnd >= 0);
+        levelsHtml.insert(bodyEnd, QStringLiteral("<h3>Legacy h3 typography control</h3>"));
+        levelsDocument.setHtml(levelsHtml);
+        levelsDocument.setTextWidth(560);
+        levelsDocument.documentLayout()->documentSize();
+        const QTextCursor oldH3Style = levelsDocument.find(QStringLiteral("Legacy h3 typography control"));
+        QVERIFY(!oldH3Style.isNull());
+        const auto glyphSizes = [](const QTextCursor &cursor) {
+            QJsonArray sizes;
+            const QTextBlock block = cursor.block();
+            for (const QGlyphRun &run : block.layout()->glyphRuns(cursor.selectionStart() - block.position(), cursor.selectedText().size()))
+                sizes.append(run.rawFont().pixelSize());
+            return sizes;
+        };
+        const auto glyphFamilies = [](const QTextCursor &cursor) {
+            QJsonArray families;
+            const QTextBlock block = cursor.block();
+            for (const QGlyphRun &run : block.layout()->glyphRuns(cursor.selectionStart() - block.position(), cursor.selectedText().size())) {
+                const QString family = run.rawFont().familyName();
+                if (!families.contains(family)) families.append(family);
+            }
+            return families;
+        };
+        const QJsonArray legacyFamilies = glyphFamilies(oldH3Style);
+        QVERIFY(!legacyFamilies.isEmpty());
+        const QJsonArray legacyPixels = glyphSizes(oldH3Style);
+        QVERIFY(!legacyPixels.isEmpty());
+        QJsonArray computedFonts;
+        for (int level = 1; level <= 6; ++level) {
+            const QTextCursor cursor = levelsDocument.find(QStringLiteral("level%1").arg(level));
+            QVERIFY(!cursor.isNull());
+            computedFonts.append(QJsonObject{{QStringLiteral("level"), level},
+                {QStringLiteral("size_adjustment"), cursor.charFormat().intProperty(QTextFormat::FontSizeAdjustment)},
+                {QStringLiteral("requested_point_size"), cursor.charFormat().fontPointSize()},
+                {QStringLiteral("glyph_pixel_sizes"), glyphSizes(cursor)},
+                {QStringLiteral("resolved_glyph_families"), glyphFamilies(cursor)}});
+        }
+        qInfo().noquote() << "HEADING_FONT_METRICS" << QJsonDocument(QJsonObject{
+            {QStringLiteral("legacy_h3_adjustment"), oldH3Style.charFormat().intProperty(QTextFormat::FontSizeAdjustment)},
+            {QStringLiteral("legacy_h3_glyph_pixels"), legacyPixels},
+            {QStringLiteral("legacy_h3_resolved_glyph_families"), legacyFamilies}, {QStringLiteral("computed_headings"), computedFonts}}).toJson(QJsonDocument::Compact);
+        for (int level = 1; level <= 6; ++level) {
+            const QTextCursor cursor = levelsDocument.find(QStringLiteral("level%1").arg(level));
+            QVERIFY(!cursor.isNull());
+            QCOMPARE(cursor.blockFormat().headingLevel(), level);
+            QCOMPARE(cursor.charFormat().fontFamilies(), oldH3Style.charFormat().fontFamilies());
+            QCOMPARE(glyphFamilies(cursor), legacyFamilies);
+            QCOMPARE(cursor.charFormat().property(QTextFormat::FontSizeAdjustment), oldH3Style.charFormat().property(QTextFormat::FontSizeAdjustment));
+            QVERIFY(cursor.charFormat().fontWeight() >= QFont::Bold);
+            const QJsonArray pixels = glyphSizes(cursor);
+            QVERIFY(!pixels.isEmpty());
+            for (const QJsonValue &size : pixels) QVERIFY(qAbs(size.toDouble() - legacyPixels.first().toDouble()) < 0.05);
+        }
+        for (int level = 1; level <= 6; ++level) {
+            const QString dialect = QStringLiteral("section-level%1").arg(level);
+            const QString sectionTitle = QStringLiteral("Se beiga la conchugazión ") + dialect + QStringLiteral(" d'este berbo.");
+            const QJsonObject sectionEntry{{QStringLiteral("kind"), QStringLiteral("language")},
+                {QStringLiteral("sections"), QJsonArray{
+                    QJsonObject{{QStringLiteral("title"), QStringLiteral("Compact section control")}, {QStringLiteral("level"), 2}, {QStringLiteral("blocks"), QJsonArray{}}},
+                    QJsonObject{{QStringLiteral("title"), sectionTitle}, {QStringLiteral("level"), level},
+                        {QStringLiteral("blocks"), QJsonArray{heading(dialect, 1, level)}}}}}};
+            QTextDocument compactDocument;
+            compactDocument.setHtml(window.entryHtml(sectionEntry));
+            compactDocument.setTextWidth(560);
+            compactDocument.documentLayout()->documentSize();
+            const QTextCursor control = compactDocument.find(QStringLiteral("Compact section control"));
+            const QTextCursor rich = compactDocument.find(dialect);
+            QVERIFY(!control.isNull() && !rich.isNull());
+            qInfo().noquote() << "COMPACT_HEADING_FONT_METRICS" << QJsonDocument(QJsonObject{
+                {QStringLiteral("level"), level},
+                {QStringLiteral("size_adjustment"), rich.charFormat().intProperty(QTextFormat::FontSizeAdjustment)},
+                {QStringLiteral("control_h2_size_adjustment"), control.charFormat().intProperty(QTextFormat::FontSizeAdjustment)},
+                {QStringLiteral("requested_point_size"), rich.charFormat().fontPointSize()},
+                {QStringLiteral("control_h2_requested_point_size"), control.charFormat().fontPointSize()},
+                {QStringLiteral("resolved_glyph_families"), glyphFamilies(rich)},
+                {QStringLiteral("control_h2_resolved_glyph_families"), glyphFamilies(control)},
+                {QStringLiteral("glyph_pixel_sizes"), glyphSizes(rich)},
+                {QStringLiteral("control_h2_glyph_pixel_sizes"), glyphSizes(control)}}).toJson(QJsonDocument::Compact);
+            QCOMPARE(rich.charFormat().property(QTextFormat::FontSizeAdjustment), control.charFormat().property(QTextFormat::FontSizeAdjustment));
+            QCOMPARE(rich.blockFormat().headingLevel(), level);
+            QCOMPARE(rich.blockFormat().leftMargin(), 30.0);
+            QCOMPARE(rich.charFormat().fontFamilies(), control.charFormat().fontFamilies());
+            QCOMPARE(rich.charFormat().fontPointSize(), control.charFormat().fontPointSize());
+            QCOMPARE(glyphFamilies(rich), glyphFamilies(control));
+            QCOMPARE(glyphSizes(rich), glyphSizes(control));
+        }
+        const QJsonObject ben = heading(QStringLiteral("benasquesa"), 1);
+        const QJsonObject rib = heading(QStringLiteral("ribagorzana"), 2);
+        QTextDocument direct;
+        direct.setHtml(window.blockHtml(ben) + window.blockHtml(rib)
+            + window.blockHtml(heading(QStringLiteral("fallback"), 0, 99)) + QStringLiteral("<h3>Old heading control</h3>"));
+        const QTextCursor first = direct.find(QStringLiteral("la conchugazión benasquesa"));
+        const QTextCursor second = direct.find(QStringLiteral("la conchugazión ribagorzana"));
+        QVERIFY(!first.isNull() && !second.isNull());
+        QCOMPARE(first.blockFormat().headingLevel(), 4);
+        QCOMPARE(first.blockFormat().leftMargin(), 30.0);
+        QCOMPARE(second.blockFormat().leftMargin(), 46.0);
+        QCOMPARE(direct.find(QStringLiteral("fallback")).blockFormat().headingLevel(), 3);
+        QCOMPARE(first.charFormat().property(QTextFormat::FontSizeAdjustment), direct.find(QStringLiteral("Old heading control")).charFormat().property(QTextFormat::FontSizeAdjustment));
+        QCOMPARE(first.charFormat().anchorHref(), QStringLiteral("dict:templlar%2Fconj.BEN"));
+        QCOMPARE(QUrl(first.charFormat().anchorHref()).path(QUrl::FullyDecoded), QStringLiteral("templlar/conj.BEN"));
+        QVERIFY(first.charFormat().fontItalic());
+        QVERIFY(first.charFormat().fontWeight() >= QFont::Bold);
+        QVERIFY(!direct.toPlainText().contains(QStringLiteral(":Se beiga")));
+        const QString title = QStringLiteral("Se beiga la conchugazión benasquesa d'este berbo.");
+        const QJsonObject plain{{QStringLiteral("kind"), QStringLiteral("heading")}, {QStringLiteral("level"), 4}, {QStringLiteral("depth"), 1},
+            {QStringLiteral("list_path"), QStringLiteral(":")}, {QStringLiteral("spans"), QJsonArray{QJsonObject{
+                {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), QStringLiteral("Plain indented heading")}}}}};
+        const QJsonObject entry{{QStringLiteral("kind"), QStringLiteral("language")}, {QStringLiteral("title"), QStringLiteral("templlar")},
+            {QStringLiteral("sections"), QJsonArray{
+                QJsonObject{{QStringLiteral("title"), title}, {QStringLiteral("level"), 4}, {QStringLiteral("blocks"), QJsonArray{ben}}},
+                QJsonObject{{QStringLiteral("title"), QStringLiteral("Plain indented heading")}, {QStringLiteral("level"), 4}, {QStringLiteral("blocks"), QJsonArray{plain}}}}}};
+        QTextDocument document;
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(document.toPlainText().count(title), 1);
+        QCOMPARE(document.toPlainText().count(QStringLiteral("Plain indented heading")), 1);
+        const QTextCursor companion = document.find(QStringLiteral("la conchugazión benasquesa"));
+        QCOMPARE(companion.blockFormat().headingLevel(), 4);
+        QCOMPARE(companion.blockFormat().leftMargin(), 30.0);
+        QCOMPARE(companion.charFormat().anchorHref(), QStringLiteral("dict:templlar%2Fconj.BEN"));
+        QCOMPARE(QUrl(companion.charFormat().anchorHref()).path(QUrl::FullyDecoded), QStringLiteral("templlar/conj.BEN"));
+        QVERIFY(hasAnchor(&document, QStringLiteral("section-0")));
+        QVERIFY(window.entryHtml(entry).contains(QStringLiteral("href='section:0'")));
+        window.collapsedSections_.insert(0);
+        document.setHtml(window.entryHtml(entry));
+        QCOMPARE(document.toPlainText().count(title), 1);
+        QCOMPARE(document.find(QStringLiteral("la conchugazión benasquesa")).charFormat().anchorHref(), QStringLiteral("dict:templlar%2Fconj.BEN"));
+        QCOMPARE(QUrl(document.find(QStringLiteral("la conchugazión benasquesa")).charFormat().anchorHref()).path(QUrl::FullyDecoded), QStringLiteral("templlar/conj.BEN"));
+    }
+
+    void headingFixtureRendersNarrowLtrAndRtlWithoutClipping() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        const auto section = [](const QString &label, const QString &target, const QString &direction, int depth, bool companion) {
+            QJsonObject span{{QStringLiteral("kind"), target.isEmpty() ? QStringLiteral("text") : QStringLiteral("link")},
+                {QStringLiteral("text"), label}, {QStringLiteral("target"), target}, {QStringLiteral("direction"), direction},
+                {QStringLiteral("bold"), !target.isEmpty()}, {QStringLiteral("italic"), true}};
+            QJsonObject heading{{QStringLiteral("kind"), QStringLiteral("heading")}, {QStringLiteral("level"), 4},
+                {QStringLiteral("depth"), depth}, {QStringLiteral("list_path"), QString(depth, QChar(':'))},
+                {QStringLiteral("spans"), QJsonArray{span}}};
+            return QJsonObject{{QStringLiteral("title"), companion ? label : QStringLiteral("Ordinary heading control")},
+                {QStringLiteral("level"), 4}, {QStringLiteral("blocks"), QJsonArray{heading}}};
+        };
+        window.resize(580, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const QJsonObject sourceResponse = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object();
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        for (const QString &direction : {QStringLiteral("ltr"), QStringLiteral("rtl")}) {
+            const QString linked = direction == QStringLiteral("ltr")
+                ? QStringLiteral("Se beiga la conchugazión benasquesa d'este berbo.")
+                : QString::fromUtf8("عنوان عربي طويل لاختبار التفاف النص واتجاه القراءة");
+            const QJsonObject entry{{QStringLiteral("kind"), QStringLiteral("language")}, {QStringLiteral("title"), QStringLiteral("Heading renderer fixture")},
+                {QStringLiteral("sections"), QJsonArray{
+                    section(linked, QStringLiteral("templlar/conj.BEN"), direction, 1, true),
+                    section(QStringLiteral("Plain indented companion"), {}, direction, 1, true),
+                    section(QStringLiteral("Ordinary source heading retains depth"), {}, direction, 1, false)}}};
+            QJsonObject response = sourceResponse;
+            response.insert(QStringLiteral("entries"), QJsonArray{entry});
+            window.renderResponse(QJsonDocument(response).toJson());
+            QCoreApplication::processEvents();
+            const QString frame = QStringLiteral(".tmp/ui-screenshots/heading-companion-%1-580.png").arg(direction);
+            QVERIFY(window.grab().save(frame));
+            QCOMPARE(window.size(), QSize(580, 480));
+            QVERIFY(window.reading_->viewport()->width() > 100);
+            QVERIFY(window.reading_->viewport()->height() > 100);
+            QCOMPARE(window.reading_->horizontalScrollBar()->maximum(), 0);
+            const QTextCursor link = window.reading_->document()->find(linked);
+            QVERIFY2(!link.isNull(), qPrintable(window.reading_->toPlainText()));
+            QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("dict:templlar%2Fconj.BEN"));
+            QCOMPARE(QUrl(link.charFormat().anchorHref()).path(QUrl::FullyDecoded), QStringLiteral("templlar/conj.BEN"));
+            QCOMPARE(link.blockFormat().leftMargin(), 30.0);
+            QCOMPARE(link.blockFormat().headingLevel(), 4);
+            QCOMPARE(window.reading_->toPlainText().count(linked), 1);
+            QCOMPARE(window.reading_->toPlainText().count(QStringLiteral("Plain indented companion")), 1);
+            const QTextCursor ordinary = window.reading_->document()->find(QStringLiteral("Ordinary source heading retains depth"));
+            QVERIFY(!ordinary.isNull());
+            QCOMPARE(ordinary.blockFormat().headingLevel(), 4);
+            QCOMPARE(ordinary.blockFormat().leftMargin(), 30.0);
+            window.reading_->setTextCursor(ordinary); window.reading_->ensureCursorVisible();
+            QCoreApplication::processEvents();
+            const QString lowerFrame = QStringLiteral(".tmp/ui-screenshots/heading-ordinary-%1-580.png").arg(direction);
+            QVERIFY(window.grab().save(lowerFrame));
+        }
+    }
+
     void nestedTermsKeepTheirCompiledDepth() {
         MainWindow window{QString()};
         const auto term = [](const QString &text, int depth, const QString &path) {

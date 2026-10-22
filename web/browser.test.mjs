@@ -158,6 +158,51 @@ try{
  assert.deepEqual(await rendererPage.evaluate(()=>window.headingLinks),['Heading target']);assert.equal(await headingSection.evaluate(el=>el.open),false);
  await headingSection.locator(':scope > summary').focus();await rendererPage.keyboard.press('Enter');assert.equal(await headingSection.evaluate(el=>el.open),true);
 
+  const indentedHeading=await rendererPage.evaluate(()=>{
+   const host=document.getElementById('compiled-renderer-fixture');window.indentedHeadingLinks=[];
+   const phrase="Se beiga la conchugazión benasquesa d'este berbo.";
+   const heading={kind:'heading',level:4,depth:1,list_path:':',spans:[
+    {kind:'text',text:'Se beiga ',italic:true},
+    {kind:'link',text:'la conchugazión benasquesa',target:'templlar/conj.BEN',bold:true,italic:true},
+    {kind:'text',text:" d'este berbo.",italic:true}]};
+   host.replaceChildren(WikidictRendererQA.renderEntry({title:'templlar',kind:'language',sections:[
+    {title:phrase,level:4,blocks:[heading]},
+    {title:'Plain indented',level:4,blocks:[{kind:'heading',level:4,depth:1,list_path:':',spans:[{kind:'text',text:'Plain indented'}]}]},
+    {title:'Empty plain control',level:4,blocks:[]},
+    {title:'Mismatch control',level:4,blocks:[{...heading,spans:[{kind:'text',text:'Different heading'}]}]}
+   ]},target=>window.indentedHeadingLinks.push(target),{collapseOtherSections:true}));
+   const sections=[...host.querySelectorAll(':scope > details')];
+   const first=sections[0],label=first.querySelector('.heading-label');first.id='indented-heading-case';
+   return {count:sections.length,text:first.textContent,duplicate:first.querySelectorAll('.block.heading').length,
+    margin:label.style.marginInlineStart,plainCount:sections[1].textContent.split('Plain indented').length-1,
+    plainMargin:sections[1].querySelector('.heading-label').style.marginInlineStart,
+    mismatch:sections[2].querySelectorAll('.block.heading').length,
+    bold:!!label.querySelector('a strong'),italic:!!label.querySelector('a em'),open:first.open};
+  });
+  assert.equal(indentedHeading.count,3);assert.equal(indentedHeading.text,"Se beiga la conchugazión benasquesa d'este berbo.");
+  assert.equal(indentedHeading.duplicate,0);assert.equal(indentedHeading.margin,'0.45rem');assert.equal(indentedHeading.plainCount,1);
+  assert.equal(indentedHeading.plainMargin,'0.45rem');assert.equal(indentedHeading.mismatch,1);
+  assert.equal(indentedHeading.bold,true);assert.equal(indentedHeading.italic,true);assert.equal(indentedHeading.open,false);
+  const indentedSection=rendererPage.locator('#indented-heading-case');
+  await indentedSection.locator('summary a').focus();await rendererPage.keyboard.press('Enter');
+  assert.deepEqual(await rendererPage.evaluate(()=>window.indentedHeadingLinks),['templlar/conj.BEN']);
+  assert.equal(await indentedSection.evaluate(el=>el.open),false);
+  await indentedSection.locator('summary').focus();await rendererPage.keyboard.press('Enter');
+  assert.equal(await indentedSection.evaluate(el=>el.open),true);
+  await rendererPage.setViewportSize({width:360,height:640});
+  await rendererPage.addStyleTag({content:'#compiled-renderer-fixture{padding-bottom:0!important;max-width:100%}'});
+  assert.equal(await indentedSection.evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await rendererPage.screenshot({path:path.join(report,'heading-companion-ltr-360.png'),fullPage:true});
+  await rendererPage.evaluate(()=>{
+   const label='عنوان عربي طويل لاختبار التفاف النص واتجاه القراءة';
+   document.getElementById('compiled-renderer-fixture').replaceChildren(WikidictRendererQA.renderEntry({title:'RTL renderer control',kind:'language',sections:[
+    {title:label,level:4,blocks:[{kind:'heading',level:4,depth:1,list_path:':',spans:[{kind:'link',text:label,target:'RTL control target',direction:'rtl',bold:true,italic:true}]}]}
+   ]},()=>{}, {collapseOtherSections:false}));
+   document.querySelector('#compiled-renderer-fixture details').dir='rtl';
+  });
+  assert.equal(await rendererPage.locator('#compiled-renderer-fixture details').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await rendererPage.screenshot({path:path.join(report,'heading-companion-rtl-360.png'),fullPage:true});
+
  await rendererPage.close();
  }
 

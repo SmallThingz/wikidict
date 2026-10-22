@@ -198,6 +198,103 @@ void answerFile(const QString &path) {
         }
     });
 }
+
+// Exercise the real replacement prompt, independently of the direct storage tests.
+void checkReplacementPreservesUserState(const QString &source, const QString &root,
+                                       const QString &replacementSource) {
+    std::atomic_bool cancelled = false;
+    auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled,
+        [](const QString &, qint64, qint64) {});
+    LibraryStorage::commitImport(root, *prepared);
+    const auto initial = LibraryStorage::installed(root);
+    require(initial.size() == 1, "replacement starts with one installed dictionary");
+    const auto read = [](const QString &path) {
+        QFile file(path);
+        require(file.open(QIODevice::ReadOnly), "read replacement preservation file");
+        return file.readAll();
+    };
+    const QByteArray original = read(initial.first().path);
+    const QString manifest = QDir(root).filePath(QStringLiteral(".desktop-library.json"));
+    const QString languages = QDir(root).filePath(QStringLiteral("languages.tsv"));
+    const QByteArray originalManifest = read(manifest), originalLanguages = read(languages);
+    QSettings learning(QStringLiteral("SmallThingz"), QStringLiteral("Dict"));
+    QSettings settings;
+    const QVariant oldLearning = learning.value(QStringLiteral("learning/state"));
+    const QVariant oldTheme = settings.value(QStringLiteral("library/catalogSources"));
+    auto restore = qScopeGuard([&] {
+        if (oldLearning.isValid()) learning.setValue(QStringLiteral("learning/state"), oldLearning);
+        else learning.remove(QStringLiteral("learning/state"));
+        if (oldTheme.isValid()) settings.setValue(QStringLiteral("library/catalogSources"), oldTheme);
+        else settings.remove(QStringLiteral("library/catalogSources"));
+    });
+    // Exact persisted LearningStore schema: saved history/bookmark and quiz progress.
+    const QByteArray savedState = QByteArrayLiteral(R"({"history":[{"key":"en:cat","title":"cat","language":"English","kind":"Noun","clue":"a feline","views":3}],"bookmarks":[{"key":"en:cat","title":"cat","language":"English","kind":"Noun","clue":"a feline"}],"study":{"en:cat":{"right":2,"wrong":1,"last":123}},"settings":{"theme":"dark","quiz_length":7,"random_pool":"bookmarks"}})");
+    learning.setValue(QStringLiteral("learning/state"), savedState);
+    settings.setValue(QStringLiteral("library/catalogSources"), QStringList{});
+    const auto assertUserState = [&] {
+        require(QSettings(QStringLiteral("SmallThingz"), QStringLiteral("Dict"))
+                    .value(QStringLiteral("learning/state")).toByteArray() == savedState,
+                "replacement preserves saved words and learning progress exactly");
+        require(QSettings().value(QStringLiteral("library/catalogSources")).toStringList() == QStringList{},
+                "replacement preserves unrelated user settings");
+    };
+    LibraryDialog dialog(nullptr, root);
+    dialog.show();
+    auto *progress = control<QProgressBar>(dialog, "libraryProgress");
+    auto *installed = control<QTreeWidget>(dialog, "installedDictionaries");
+    auto *import = control<QPushButton>(dialog, "importDictionary");
+    require(QTest::qWaitFor([&] { return !progress->isVisible() && installed->topLevelItemCount() == 1; }, 15000),
+            "replacement library initial listing settles");
+    const auto replace = [&](const QString &path, bool accept) {
+        bool answered = false;
+        QTimer responder;
+        QObject::connect(&responder, &QTimer::timeout, &dialog, [&] {
+            for (auto *widget : QApplication::topLevelWidgets()) {
+                auto *box = qobject_cast<QMessageBox *>(widget);
+                if (!box || !box->isVisible() || box->windowTitle() != QStringLiteral("Replace dictionary?")) continue;
+                require(box->defaultButton() == box->button(QMessageBox::No), "replacement defaults to No");
+                answered = true;
+                responder.stop();
+                if (accept) QTest::mouseClick(box->button(QMessageBox::Yes), Qt::LeftButton);
+                else QTest::keyClick(box, Qt::Key_Return);
+                return;
+            }
+        });
+        responder.start(10);
+        answerFile(path);
+        QTest::mouseClick(import, Qt::LeftButton);
+        require(QTest::qWaitFor([&] { return answered && !progress->isVisible(); }, 15000),
+                "replacement prompt and operation finish");
+        require(import->isEnabled() && installed->topLevelItemCount() == 1,
+                "replacement restores controls and keeps one dictionary");
+        require(QDir(root).entryList({QStringLiteral(".import-*")}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty(),
+                "replacement retires staging");
+        assertUserState();
+    };
+    replace(source, false);
+    require(!dialog.libraryChanged(), "declining replacement does not request reader reload");
+    require(control<QLabel>(dialog, "libraryStatus")->text() == QStringLiteral("Import cancelled. The installed dictionary is unchanged."),
+            "declining replacement reports unchanged installation");
+    require(read(initial.first().path) == original && read(manifest) == originalManifest && read(languages) == originalLanguages,
+            "default-No preserves exact installed payload and manifests");
+    // Distinct valid one-entry English dictionary, confined to this private library.
+    QByteArray replacement("WIKBLB08", 8);
+    replacement.append(char(1)); replacement.append("en", 2); replacement.append(char(0));
+    replacement.append("English", 7); replacement.append(char(0));
+    replacement.append("replacement-only", 16); replacement.append(char(0));
+    replacement.append(char(32)); replacement.append("DPR2", 4); replacement.append(QByteArray(28, '\0'));
+    require(replacement != original, "replacement fixture differs from installed content");
+    QFile file(replacementSource);
+    require(file.open(QIODevice::WriteOnly) && file.write(replacement) == replacement.size(), "write private replacement fixture");
+    file.close();
+    replace(replacementSource, true);
+    const auto updated = LibraryStorage::installed(root);
+    require(dialog.libraryChanged() && updated.size() == 1 && updated.first().words == 1,
+            "accepted replacement requests reload and refreshes metadata without duplicates");
+    require(read(updated.first().path) == replacement && read(languages) == originalLanguages,
+            "accepted replacement installs exact new content and preserves language listing");
+    dialog.close();
+}
 }
 int main(int argc, char **argv) {
     try {
@@ -277,6 +374,8 @@ int main(int argc, char **argv) {
             return EXIT_SUCCESS;
         }
         QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        checkReplacementPreservesUserState(source, temp.filePath(QStringLiteral("replacement-library")),
+                                          temp.filePath(QStringLiteral("replacement-English.wikblb")));
         // The real pending-recovery path must return to the event loop before
         // publishing its recovered listing; no user files or worker test hook.
         {
