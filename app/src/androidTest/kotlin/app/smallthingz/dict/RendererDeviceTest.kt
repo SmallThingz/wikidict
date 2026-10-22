@@ -2706,7 +2706,8 @@ class RendererDeviceTest {
 
     @Test fun attributionActionsWrapWithinNarrowLargeTextAndKeepIndependentDestinations() {
         fun captureAttribution(name: String) {
-            require(name in setOf("attribution-narrow-ltr.png", "attribution-narrow-rtl.png"))
+            require(name in setOf("attribution-narrow-ltr.png", "attribution-narrow-rtl.png",
+                "attribution-normal-ltr.png", "attribution-normal-rtl.png"))
             // The same owned Compose-root/file route used by the retained SectionLink frames.
             // Only this public fixture is captured, never a system overlay or another app.
             val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
@@ -2769,6 +2770,8 @@ class RendererDeviceTest {
                 compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("CC BY-SA 4.0"))
                 val viewport = compose.onNodeWithTag("attribution-viewport")
                 val viewportBounds = viewport.fetchSemanticsNode().boundsInRoot
+                // Retain this owned scene even if a later text/geometry/action assertion fails.
+                captureAttribution("attribution-${if (large) "narrow" else "normal"}-${direction.name.lowercase()}.png")
                 val bounds = mutableListOf<androidx.compose.ui.geometry.Rect>()
                 for (label in listOf("Wiktionary contributors", "CC BY-SA 4.0")) {
                     val button = compose.onNodeWithText(label)
@@ -2783,7 +2786,8 @@ class RendererDeviceTest {
                             androidx.compose.ui.semantics.Role.Button))
                     assertEquals(evidence, scale, layout.layoutInput.density.fontScale, 0f)
                     assertEquals(evidence, with(layout.layoutInput.density) { width.toPx() }, viewportBounds.width, 1f)
-                    assertFalse(evidence, layout.hasVisualOverflow)
+                    try { assertCompletePlainTextLayout(layout, label) }
+                    catch (failure: AssertionError) { throw AssertionError(evidence, failure) }
                     val visual = node.boundsInRoot
                     val touch = node.touchBoundsInRoot
                     for (rect in listOf(visual, touch)) {
@@ -2796,8 +2800,6 @@ class RendererDeviceTest {
                 }
                 assertFalse("$caseId buttons must not overlap: $bounds", bounds[0].overlaps(bounds[1]))
                 if (!large) assertEquals("$caseId retains the ordinary single row", bounds[0].top, bounds[1].top, 1f)
-                if (large) captureAttribution(if (direction == androidx.compose.ui.unit.LayoutDirection.Ltr)
-                    "attribution-narrow-ltr.png" else "attribution-narrow-rtl.png")
                 compose.runOnIdle {
                     assertEquals("$caseId independent destinations", listOf(attributionUrl(entry), licenseUrl), opened)
                     opened.clear()
