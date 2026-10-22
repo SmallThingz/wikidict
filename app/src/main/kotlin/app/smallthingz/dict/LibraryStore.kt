@@ -206,11 +206,19 @@ internal class LibraryOperationOwner(private val mutex: Mutex) {
     @Volatile var active: Job? = null
         private set
 
-    suspend fun run(action: suspend () -> Unit) = mutex.withLock {
+    suspend fun run(
+        start: suspend () -> Unit = {},
+        finish: suspend () -> Unit = {},
+        action: suspend () -> Unit,
+    ) = mutex.withLock {
         val owner = currentCoroutineContext().job
         active = owner
-        try { action() }
-        finally { if (active === owner) active = null }
+        try {
+            // Publication can complete before cancellation wins its return dispatch.
+            // Own cleanup before entering that first cancellable boundary.
+            try { start(); action() }
+            finally { finish() }
+        } finally { if (active === owner) active = null }
     }
 }
 
@@ -361,11 +369,13 @@ class LibraryStore private constructor(private val context: Context) {
         catch (e: Exception) { failOwnedDownload(e) { removeDownload(id) } }
     }
     private fun operation(label: String, action: suspend () -> Unit): Job = scope.launch {
-        operations.run {
-            withContext(Dispatchers.Main) { busy = label; error = null; progress = 0f; transferDetail = null }
+        operations.run(
+            start = { withContext(Dispatchers.Main) { busy = label; error = null; progress = 0f; transferDetail = null } },
+            finish = { withContext(NonCancellable + Dispatchers.Main) { busy = null; transferDetail = null } },
+        ) {
             try { action() } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 withContext(Dispatchers.Main) { error = e.message ?: "Could not complete this operation" }
-            } finally { withContext(NonCancellable + Dispatchers.Main) { busy = null; transferDetail = null } }
+            }
         }
     }
     fun refreshCatalogs() = operation("Reading catalogues") {

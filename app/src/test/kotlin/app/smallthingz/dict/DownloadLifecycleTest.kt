@@ -124,6 +124,81 @@ class DownloadLifecycleTest {
         }
     }
 
+    @Test fun cancellationAfterBusyPublicationCleansBeforeQueuedOperationStarts() = runBlocking {
+        withTimeout(5_000) {
+            // Explicit queues stop at the actual UI-to-owner return dispatch;
+            // no sleeps, threads, Android Main replacement or timing race.
+            class QueueDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
+                private val queued = java.util.ArrayDeque<Runnable>()
+                override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) { queued.addLast(block) }
+                fun next() { check(queued.isNotEmpty()); queued.removeFirst().run() }
+                fun drain() {
+                    repeat(64) { if (queued.isEmpty()) return; next() }
+                    check(queued.isEmpty()) { "Dispatcher exceeded bounded lifecycle schedule" }
+                }
+            }
+            val worker = QueueDispatcher()
+            val ui = QueueDispatcher()
+            val operations = LibraryOperationOwner(Mutex())
+            var busy: String? = null
+            var bodyRan = false
+            var cleanupCalls = 0
+            var transferDetail: String? = null
+            var nextRan = false
+            val owned = mutableListOf<kotlinx.coroutines.Job>()
+            try {
+                val first = launch(worker) {
+                    operations.run(
+                        start = { kotlinx.coroutines.withContext(ui) { busy = "Importing dictionary"; transferDetail = "Reading" } },
+                        finish = { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + ui) {
+                            busy = null
+                            transferDetail = null
+                            cleanupCalls++
+                        } },
+                    ) { bodyRan = true }
+                }
+                owned += first
+                worker.next() // Enter owner; queue first UI publication.
+                assertSame(first, operations.active)
+                val next = launch(worker) {
+                    operations.run {
+                        assertEquals(1, cleanupCalls)
+                        assertNull(busy)
+                        assertNull(transferDetail)
+                        assertSame(currentCoroutineContext().job, operations.active)
+                        nextRan = true
+                    }
+                }
+                owned += next
+                worker.next() // Queue behind the held mutex, before publication.
+                ui.next() // Publish busy; worker return remains queued.
+                assertEquals("Importing dictionary", busy)
+                assertFalse(bodyRan)
+                first.cancel()
+                worker.drain() // Cancelled return must enter cleanup, awaiting UI.
+                assertFalse(nextRan)
+                ui.drain()
+                worker.drain()
+                first.join(); next.join()
+                assertTrue(first.isCancelled)
+                assertFalse(bodyRan)
+                assertEquals(1, cleanupCalls)
+                assertNull(busy)
+                assertNull(transferDetail)
+                assertTrue(nextRan)
+                assertTrue(next.isCompleted && !next.isCancelled)
+                assertNull(operations.active)
+            } finally {
+                // Assertions can fail with a child suspended on either queue.
+                // Cancel every created job and service both dispatchers so the
+                // enclosing structured scope never waits on an undrained child.
+                owned.forEach { it.cancel() }
+                repeat(8) { worker.drain(); ui.drain() }
+                check(owned.all { it.isCompleted }) { "Owned lifecycle jobs did not finish during teardown" }
+            }
+        }
+    }
+
     private class ClearRecord {
         val lock = Any()
         val owner = DownloadClearOwner()
