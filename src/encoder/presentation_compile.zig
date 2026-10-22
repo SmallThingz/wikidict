@@ -1,6 +1,8 @@
 //! Build-time wikitext presentation compiler. No HTML strings are executed and no network is required.
 //! Reuses the portable document IR tokenizer, adding block layout, HTML, references,
 //! entities, and a deliberately bounded set of Wiktionary template presentations.
+const missing_dependency = @import("missing_dependency");
+pub const MissingText = missing_dependency.Text;
 const std = @import("std");
 const ir = @import("blob_encoder").document_ir;
 const entities = @import("shared_xml_decode").html_entities;
@@ -242,7 +244,7 @@ fn htmlListItemCount(input: []const u8) i32 {
     return count;
 }
 pub const media_types = @import("presentation_media.zig");
-pub const Error = A.Error || error{ RenderLimit, InvalidPreContext, UncompiledTemplate };
+pub const Error = A.Error || error{ RenderLimit, InvalidPreContext, UncompiledTemplate, InvalidMissingDependencyCopy };
 
 // Build-only coordinates in an already page-TOC-prepared owner fragment.
 // The source owner map, rather than a new tag search here, proves these scopes.
@@ -453,6 +455,23 @@ pub fn parsePoemPhaseAlloc(a: A, full_output: []const u8, display_title: ?[]cons
     return result;
 }
 
+fn missingSlice(a: A, parent: MissingText, child: []const u8) Error!MissingText {
+    const base = @intFromPtr(parent.bytes.ptr);
+    const at = @intFromPtr(child.ptr);
+    if (at < base or at - base > parent.bytes.len or child.len > parent.bytes.len - (at - base))
+        return MissingText.transformed(child);
+    if (parent.ranges.len == 0) return .{ .bytes = child, .unknown = parent.unknown };
+    return missing_dependency.slice(a, parent, at - base, at - base + child.len);
+}
+fn missingEdit(source: MissingText, start: usize, end: usize, bytes: []const u8) MissingText {
+    var unknown = source.unknown;
+    for (source.ranges) |r| if (r.start < end and r.end > start) {
+        unknown = true;
+        break;
+    };
+    return .{ .bytes = bytes, .unknown = unknown };
+}
+
 pub const Context = struct {
     poem_phase: ?*const PoemPhase = null,
     external_links_prepared: bool = false,
@@ -502,6 +521,7 @@ pub const Style = struct {
     // Keep the internal label parser while emitting an anchor without an action.
     // This build-only marker is never stored in a presentation span.
     self_link_target: ?[]const u8 = null,
+    missing_nonaction: bool = false,
 };
 fn inheritInlineMetadata(style: *Style, parent: Style) void {
     if (!style.explanation_set and style.explanation.len == 0) {
@@ -940,14 +960,120 @@ fn normalizeWikiQuotesSeededWithContext(a: A, input: []const u8, depth: usize, l
     return out.toOwnedSlice(a);
 }
 
-pub const Reference = struct { number: usize, group_number: usize, name: []const u8 = "", group: []const u8 = "", body: []const u8 = "", spans: []const Span = &.{}, poem: bool = false, poem_direction: []const u8 = "" };
-pub const ReferenceDefinition = struct { name: []const u8, group: []const u8 = "", body: []const u8 = "", list_defined: bool = false };
+fn appendMissingBuffer(a: A, out: *missing_dependency.Builder, buffer: *missing_dependency.Builder) Error!void {
+    const saved = try buffer.finish(a);
+    try out.append(a, saved);
+    buffer.* = .{};
+}
+fn quoteTransitionMissing(out: *missing_dependency.Builder, buffer: *missing_dependency.Builder, a: A, state: *QuoteState, run: usize) Error!void {
+    const transition = quoteTransitionValue(state.*, run);
+    try out.append(a, MissingText.untracked(transition.prefix));
+    if (state.* == .both) try appendMissingBuffer(a, out, buffer);
+    try out.append(a, MissingText.untracked(transition.suffix));
+    state.* = transition.state;
+}
+fn quoteFinishMissing(out: *missing_dependency.Builder, buffer: *missing_dependency.Builder, a: A, state: QuoteState) Error!void {
+    const close: []const u8 = switch (state) {
+        .none, .both => "",
+        .b => "</b>",
+        .i => "</i>",
+        .bi => "</i></b>",
+        .ib => "</b></i>",
+    };
+    if (state == .both and buffer.bytes.items.len != 0) {
+        try out.append(a, MissingText.untracked("<b><i>"));
+        try appendMissingBuffer(a, out, buffer);
+        try out.append(a, MissingText.untracked("</i></b>"));
+    }
+    try out.append(a, MissingText.untracked(close));
+}
+fn normalizeHtmlWithMissing(a: A, source: MissingText, depth: usize, recognize_external_links: bool) Error!MissingText {
+    return normalizeMisnestedHtmlWithMissing(a, source, depth, recognize_external_links);
+}
+fn normalizeWikiQuotesWithMissing(a: A, source: MissingText, depth: usize, label_scope: bool, context: Context, initial: ?QuoteSeed) Error!MissingText {
+    const input = source.bytes;
+    const registry = context.behavior_switches;
+    const boundaries = if (initial) |seed| seed.boundaries else QuoteBoundaries.init(input);
+    if (initial == null and !try hasWikiQuoteMarkers(a, input, depth, boundaries, registry, context)) return source;
+    var out: missing_dependency.Builder = .{};
+    var buffer: missing_dependency.Builder = .{};
+    var line_start: usize = 0;
+    var count_opaque: syntax.OpaqueScan = .{};
+    var emit_opaque: syntax.OpaqueScan = .{};
+    while (line_start < input.len) {
+        const info: QuoteLineInfo = if (line_start == 0 and initial != null)
+            .{ .end = @min(initial.?.line_end, input.len), .correction = initial.?.correction }
+        else
+            try quoteLineInfo(a, input, line_start, label_scope, boundaries, registry, &count_opaque, context);
+        const end = info.end;
+        const correction = info.correction;
+        var cursor = line_start;
+        var state: QuoteState = if (line_start == 0 and initial != null) initial.?.state else .none;
+        if (state != .none and state != .both) try out.append(a, MissingText.untracked(switch (state) {
+            .b => "<b>",
+            .i => "<i>",
+            .bi => "<b><i>",
+            .ib => "<i><b>",
+            else => unreachable,
+        }));
+        while (cursor < end) {
+            const sink = if (state == .both) &buffer else &out;
+            if (try quoteOpaqueEnd(a, input, cursor, boundaries, &emit_opaque, context)) |skip| {
+                if (starts(input[cursor..], "[[")) {
+                    const inner = input[cursor + 2 .. skip - 2];
+                    if (syntax.delimiter(inner, "|", 0)) |pipe| {
+                        try sink.appendSlice(a, source, cursor, cursor + 2 + pipe + 1);
+                        try sink.append(a, try normalizeHtmlWithMissing(a, try normalizeWikiQuotesWithMissing(a, try missing_dependency.slice(a, source, cursor + 2 + pipe + 1, skip - 2), depth + 1, true, context, null), depth + 1, false));
+                        try sink.appendSlice(a, source, skip - 2, skip);
+                    } else try sink.appendSlice(a, source, cursor, skip);
+                } else try sink.appendSlice(a, source, cursor, skip);
+                cursor = skip;
+                continue;
+            }
+            if (try quoteControlEnd(a, input, cursor, registry)) |skip| {
+                try sink.appendSlice(a, source, cursor, skip);
+                cursor = skip;
+                continue;
+            }
+            const quote = try quoteRun(a, input, cursor, registry);
+            const run = quote.count;
+            if (run >= 2) {
+                var normalized = if (run == 4) @as(usize, 3) else if (run > 5) @as(usize, 5) else run;
+                var literal = if (run == 4) @as(usize, 1) else if (run > 5) run - 5 else 0;
+                if (correction != null and correction.? == cursor) {
+                    normalized = 2;
+                    literal += 1;
+                }
+                // Encoded extras cannot become fresh quote markers in recursive HTML.
+                for (0..literal) |_| try sink.append(a, missingEdit(source, cursor, quote.end, "&#39;"));
+                try quoteTransitionMissing(&out, &buffer, a, &state, normalized);
+                cursor = quote.end;
+            } else {
+                try sink.appendSlice(a, source, cursor, cursor + 1);
+                cursor += 1;
+            }
+        }
+        try quoteFinishMissing(&out, &buffer, a, state);
+        if (end < input.len) try out.appendSlice(a, source, end, end + 1);
+        line_start = if (end < input.len) end + 1 else end;
+    }
+    return out.finish(a);
+}
+
+pub const Reference = struct { number: usize, group_number: usize, name: []const u8 = "", group: []const u8 = "", body: []const u8 = "", missing: ?MissingText = null, spans: []const Span = &.{}, poem: bool = false, poem_direction: []const u8 = "" };
+pub const ReferenceDefinition = struct { name: []const u8, group: []const u8 = "", body: []const u8 = "", missing: ?MissingText = null, list_defined: bool = false };
 pub const ReferenceDefinitions = struct { items: []const ReferenceDefinition = &.{}, fallbacks: @import("presentation_fallback.zig").Report = .{} };
 
 /// Collect names once without rendering reference bodies or creating citations.
 pub fn referenceDefinitionsAlloc(a: std.mem.Allocator, source: []const u8) Error!ReferenceDefinitions {
     var renderer: Renderer = .{ .a = a, .context = .{} };
     try renderer.referenceDefinitions(source, "");
+    return .{ .items = try renderer.ref_defs.toOwnedSlice(a), .fallbacks = renderer.fallbacks };
+}
+
+pub fn referenceDefinitionsWithMissingAlloc(a: A, source: MissingText) Error!ReferenceDefinitions {
+    var renderer: Renderer = .{ .a = a, .context = .{}, .body_missing = source };
+    try renderer.referenceDefinitions(source.bytes, "");
     return .{ .items = try renderer.ref_defs.toOwnedSlice(a), .fallbacks = renderer.fallbacks };
 }
 
@@ -1250,6 +1376,110 @@ fn normalizeMisnestedHtmlDepth(a: A, input: []const u8, depth: usize, recognize_
     try out.appendSlice(a, input[pos..]);
     return out.toOwnedSlice(a);
 }
+
+fn appendHtmlFrameCloseMissing(a: A, out: *missing_dependency.Builder, frame: HtmlNormalizationFrame) Error!void {
+    if (frame.external_close_at != null) {
+        if (std.mem.trim(u8, out.bytes.items[frame.label_output_start..], " \t\r\n").len == 0)
+            try out.append(a, MissingText.untracked("<span></span>"));
+        return out.append(a, MissingText.untracked("]"));
+    }
+    try out.append(a, MissingText.untracked("</"));
+    try out.append(a, MissingText.untracked(frame.name));
+    try out.append(a, MissingText.untracked(">"));
+}
+fn normalizeMisnestedHtmlWithMissing(a: A, source: MissingText, depth: usize, recognize_external_links: bool) Error!MissingText {
+    const input = source.bytes;
+    var no_more_nowiki_close = false;
+    var opaque_scan: syntax.OpaqueScan = .{};
+    if (!hasMisnestedHtml(input, depth, recognize_external_links)) return source;
+    const boundaries = QuoteBoundaries.init(input);
+    var out: missing_dependency.Builder = .{};
+    var frames: [max_html_normalization_frames]HtmlNormalizationFrame = undefined;
+    var frame_count: usize = 0;
+    var pos: usize = 0;
+    while (std.mem.indexOfAnyPos(u8, input, pos, "<[]")) |at| {
+        try out.appendSlice(a, source, pos, at);
+        if (input[at] == '<') if (opaque_scan.protectedEnd(input, at, &no_more_nowiki_close)) |end| {
+            try out.appendSlice(a, source, at, end);
+            pos = end;
+            continue;
+        };
+        if (starts(input[at..], "[[")) {
+            if (boundaries.canClose(input, at)) if (syntax.balancedWithOpaqueScan(input, at, &opaque_scan)) |pair| {
+                const inner = input[at + 2 .. pair.inner_end];
+                if (syntax.delimiter(inner, "|", 0)) |pipe| {
+                    try out.appendSlice(a, source, at, at + 2 + pipe + 1);
+                    try out.append(a, try normalizeMisnestedHtmlWithMissing(a, try missing_dependency.slice(a, source, at + 2 + pipe + 1, pair.inner_end), depth + 1, false));
+                    try out.appendSlice(a, source, pair.inner_end, pair.end);
+                } else try out.appendSlice(a, source, at, pair.end);
+                pos = pair.end;
+                continue;
+            };
+            try out.appendSlice(a, source, at, at + 2);
+            pos = at + 2;
+            continue;
+        }
+        if (input[at] == '<') if (opaque_scan.tagAt(input, at, &no_more_nowiki_close)) |tag| {
+            if (!normalizableHtmlTag(tag.name) or tag.self_closing) {
+                try out.appendSlice(a, source, at, tag.end);
+                pos = tag.end;
+                continue;
+            }
+        };
+        const token = htmlNormalizationToken(input, at, recognize_external_links) orelse {
+            try out.appendSlice(a, source, at, at + 1);
+            pos = at + 1;
+            continue;
+        };
+        if (!token.closing) {
+            try out.appendSlice(a, source, at, token.end);
+            if (frame_count == frames.len) return source;
+            var frame = token.frame;
+            if (frame.external_close_at != null) frame.label_output_start = out.bytes.items.len;
+            frames[frame_count] = frame;
+            frame_count += 1;
+            pos = token.end;
+            continue;
+        }
+        const index = htmlNormalizationMatch(frames[0..frame_count], token, at) orelse {
+            try out.appendSlice(a, source, at, token.end);
+            pos = token.end;
+            continue;
+        };
+        const above = frames[index + 1 .. frame_count];
+        var close_index = above.len;
+        while (close_index != 0) {
+            close_index -= 1;
+            try appendHtmlFrameCloseMissing(a, &out, above[close_index]);
+        }
+        const closed = frames[index];
+        if (closed.external_close_at != null and closed.repair_generated and
+            std.mem.trim(u8, out.bytes.items[closed.label_output_start..], " \t\r\n").len == 0)
+            try out.append(a, MissingText.untracked("<span></span>"));
+        try out.appendSlice(a, source, at, token.end);
+        var retained: [max_html_normalization_frames]HtmlNormalizationFrame = undefined;
+        var retained_len: usize = 0;
+        for (above) |frame| if (frame.formatting) {
+            retained[retained_len] = frame;
+            retained_len += 1;
+        };
+        frame_count = index;
+        for (retained[0..retained_len]) |frame| {
+            try out.append(a, try missingSlice(a, source, frame.opener));
+            var reopened = frame;
+            if (frame.external_close_at != null) {
+                try out.append(a, MissingText.untracked(" "));
+                reopened.label_output_start = out.bytes.items.len;
+                reopened.repair_generated = true;
+            }
+            frames[frame_count] = reopened;
+            frame_count += 1;
+        }
+        pos = token.end;
+    }
+    try out.appendSlice(a, source, pos, input.len);
+    return out.finish(a);
+}
 inline fn referenceStringEqual(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     if (a.len == 0) return true;
@@ -1534,7 +1764,11 @@ fn boundedTraceHex(buffer: []u8, bytes: []const u8) []const u8 {
 /// Returns input when unchanged; otherwise the caller owns the allocated slice.
 /// Reference/list bodies retain the existing deferred-reference policy, not Cite parity.
 pub fn preparePageTocSourceAlloc(a: A, input: []const u8, registry: ?*const @import("namespace_registry").behavior_switches.Registry) Error![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
+    return (try preparePageTocSourceWithMissingAlloc(a, MissingText.untracked(input), registry)).bytes;
+}
+pub fn preparePageTocSourceWithMissingAlloc(a: A, source: MissingText, registry: ?*const @import("namespace_registry").behavior_switches.Registry) Error!MissingText {
+    const input = source.bytes;
+    var out: missing_dependency.Builder = .{};
     errdefer out.deinit(a);
     var emitted: usize = 0;
     var scan: usize = 0;
@@ -1562,7 +1796,7 @@ pub fn preparePageTocSourceAlloc(a: A, input: []const u8, registry: ?*const @imp
             if (toc_end != null and toc_end.? == end) {
                 if (first_toc) {
                     const copied = input[emitted..scan];
-                    try out.appendSlice(a, copied);
+                    try out.appendSlice(a, source, emitted, scan);
                     for (copied) |ch| {
                         if (ch == '\n') hyphen_line = true else if (ch != '-') hyphen_line = false;
                     }
@@ -1570,7 +1804,7 @@ pub fn preparePageTocSourceAlloc(a: A, input: []const u8, registry: ?*const @imp
                     if (hyphen_line and end < input.len and input[end] == '-') {
                         // Preserve this existing suffix byte without joining it
                         // to an authored hyphen run across the removed control.
-                        try out.appendSlice(a, "&#45;");
+                        try out.append(a, missingEdit(source, end, end + 1, "&#45;"));
                         emitted = end + 1;
                         hyphen_line = false;
                     }
@@ -1579,16 +1813,43 @@ pub fn preparePageTocSourceAlloc(a: A, input: []const u8, registry: ?*const @imp
             scan = @max(end, emitted);
         } else scan += 1;
     }
-    if (emitted == 0) return input;
-    try out.appendSlice(a, input[emitted..]);
-    return try out.toOwnedSlice(a);
+    if (emitted == 0) return source;
+    try out.appendSlice(a, source, emitted, input.len);
+    return try out.finish(a);
 }
 
 // Build-only preparation. Numeric labels are resolved before language-owner
 // regrouping, while the original Poem transport and its authenticated items stay
 // immutable. All returned strings/overlays belong to the supplied page allocator.
+const MissingBuffer = struct {
+    builder: missing_dependency.Builder = .{},
+    items: []const u8 = &.{},
+    const empty: @This() = .{};
+    fn append(self: *@This(), a: A, byte: u8) Error!void {
+        try self.builder.append(a, MissingText.untracked(&.{byte}));
+        self.items = self.builder.bytes.items;
+    }
+    fn appendCopied(self: *@This(), a: A, parent: MissingText, bytes: []const u8) Error!void {
+        try self.builder.append(a, try missingSlice(a, parent, bytes));
+        self.items = self.builder.bytes.items;
+    }
+    fn view(self: *const @This()) MissingText {
+        return .{ .bytes = self.items, .ranges = self.builder.ranges.items, .unknown = self.builder.unknown };
+    }
+    fn take(self: *@This(), a: A) Error!MissingText {
+        const value = try self.builder.finish(a);
+        self.* = .empty;
+        return value;
+    }
+    fn deinit(self: *@This(), a: A) void {
+        self.builder.deinit(a);
+        self.* = .empty;
+    }
+};
+
 pub const PreparedExternalLinks = struct {
     source: []const u8,
+    missing: MissingText,
     poem_phase: ?*const PoemPhase,
 };
 const PageExternalNumbering = struct {
@@ -1643,30 +1904,34 @@ const PageExternalNumbering = struct {
         try self.edits.append(self.a, .{ .start = first, .end = last, .value = value });
     }
     fn apply(self: *@This(), input: []const u8) Error![]const u8 {
+        return (try self.applyWithMissing(MissingText.untracked(input))).bytes;
+    }
+    fn applyWithMissing(self: *@This(), source: MissingText) Error!MissingText {
+        const input = source.bytes;
         const begin = self.address(input, 0);
         const end = begin + input.len;
         var selected: std.ArrayList(Edit) = .empty;
         defer selected.deinit(self.a);
         for (self.edits.items) |edit| if (enclosed(begin, end, edit))
             try selected.append(self.a, edit);
-        if (selected.items.len == 0) return input;
+        if (selected.items.len == 0) return source;
         std.mem.sort(Edit, selected.items, {}, struct {
             fn less(_: void, lhs: Edit, rhs: Edit) bool {
                 return lhs.start < rhs.start;
             }
         }.less);
-        var out: std.ArrayList(u8) = .empty;
+        var out: missing_dependency.Builder = .{};
         errdefer out.deinit(self.a);
         var position: usize = 0;
         for (selected.items) |edit| {
             const start = edit.start - begin;
             if (start < position) return error.InvalidPreContext;
-            try out.appendSlice(self.a, input[position..start]);
-            try out.appendSlice(self.a, edit.value);
+            try out.appendSlice(self.a, source, position, start);
+            try out.append(self.a, missingEdit(source, start, edit.end - begin, edit.value));
             position = edit.end - begin;
         }
-        try out.appendSlice(self.a, input[position..]);
-        return out.toOwnedSlice(self.a);
+        try out.appendSlice(self.a, source, position, input.len);
+        return out.finish(self.a);
     }
     fn reference(self: *@This(), site: usize, name: []const u8, group: []const u8, source: []const u8, depth: usize) Error!void {
         // Anonymous references have no reusable referenceIndex. Their source site
@@ -1871,11 +2136,15 @@ const PageExternalNumbering = struct {
     }
 };
 pub fn preparePageExternalLinksAlloc(a: A, source: []const u8, context: Context) Error!PreparedExternalLinks {
+    return preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(source), context);
+}
+pub fn preparePageExternalLinksWithMissingAlloc(a: A, tracked: MissingText, context: Context) Error!PreparedExternalLinks {
+    const source = tracked.bytes;
     // Repeated whole-page rendering reuses its already numbered root. Owner
     // subdomains keep that root as definition authority without replacing it.
-    if (context.poem_phase) |known| if (known.numbered_source) |root| {
+    if (tracked.ranges.len == 0) if (context.poem_phase) |known| if (known.numbered_source) |root| {
         if (std.mem.eql(u8, source, root) or std.mem.eql(u8, source, known.full_output))
-            return .{ .source = root, .poem_phase = known };
+            return .{ .source = root, .missing = MissingText.transformed(root), .poem_phase = known };
     };
     var prep: PageExternalNumbering = .{
         .a = a,
@@ -1893,13 +2162,15 @@ pub fn preparePageExternalLinksAlloc(a: A, source: []const u8, context: Context)
     // Recollect against the exact prepared domain; native metadata originals
     // remain authentication evidence, not mutable source-rewrite storage.
     prep.renderer.ref_defs.clearRetainingCapacity();
-    const input = try prep.renderer.externalSourceControls(source);
+    const controlled = try prep.renderer.externalSourceControlsWithMissing(tracked);
+    const input = controlled.bytes;
     try prep.renderer.referenceDefinitions(input, "");
     prep.renderer.poem_definitions_complete = true;
     for (prep.renderer.ref_defs.items) |definition| if (definition.list_defined)
         try prep.reference(@intFromPtr(definition.body.ptr), definition.name, definition.group, definition.body, 0);
     try prep.domain(input, false, 0);
-    const prepared = try prep.apply(input);
+    const prepared_missing = try prep.applyWithMissing(controlled);
+    const prepared = prepared_missing.bytes;
     var phase = context.poem_phase;
     if (phase) |original| {
         const bodies = try a.alloc(?[]const u8, original.items.len);
@@ -1925,15 +2196,20 @@ pub fn preparePageExternalLinksAlloc(a: A, source: []const u8, context: Context)
             phase = overlay;
         } else a.free(bodies);
     }
-    return .{ .source = prepared, .poem_phase = phase };
+    return .{ .source = prepared, .missing = prepared_missing, .poem_phase = phase };
 }
 
 pub const Renderer = struct {
     fallbacks: @import("presentation_fallback.zig").Report = .{},
     a: A,
     context: Context,
+    // The exact current parser domain; allocated transformations decline unless
+    // their explicit copy builder supplied a new map. Never a pointer registry.
+    body_missing: ?MissingText = null,
+    inline_missing: ?MissingText = null,
     rendered_templates: usize = 0,
     unresolved_templates: usize = 0,
+    diagnosed_missing_targets: usize = 0,
     nodes: usize = 0,
     truncated: bool = false,
     span_limit_marker: bool = false,
@@ -2664,6 +2940,10 @@ pub const Renderer = struct {
     }
     fn textRaw(self: *Renderer, value: []const u8, original: Style) Error!void {
         var s = original;
+        if (s.missing_nonaction and s.kind != .line_break) {
+            s.kind = .text;
+            s.target = "";
+        }
         const self_link = if (s.self_link_target) |target| std.mem.eql(u8, s.target, target) else false;
         if (self_link) {
             if (s.kind == .link) s.kind = .text;
@@ -2830,10 +3110,14 @@ pub const Renderer = struct {
         return std.unicode.utf8ValidateSlice(input[start..index]) and ir.linkBoundaryBefore(input, index);
     }
     fn externalSourceControls(self: *Renderer, input: []const u8) Error![]const u8 {
+        return (try self.externalSourceControlsWithMissing(MissingText.untracked(input))).bytes;
+    }
+    fn externalSourceControlsWithMissing(self: *Renderer, source: MissingText) Error!MissingText {
+        const input = source.bytes;
         // Project only a recognized external-URL lexical candidate. The rest
         // of the inline source remains byte-exact, including earlier-phase
         // template/tag/quote syntax. DocIR still owns URL parsing and trimming.
-        var out: std.ArrayList(u8) = .empty;
+        var out: missing_dependency.Builder = .{};
         var emitted: usize = 0;
         var cursor: usize = 0;
         var leading_controls: ?usize = null;
@@ -2884,8 +3168,8 @@ pub const Renderer = struct {
                 // A TOC immediately before an absolute protocol is the same
                 // official markup boundary, including after lexical word text.
                 if ((try self.externalProtocolThroughControls(input, end, false)) != null) {
-                    try out.appendSlice(self.a, input[emitted..cursor]);
-                    try out.appendSlice(self.a, "<meta property=\"mw:PageProp/toc\" />");
+                    try out.appendSlice(self.a, source, emitted, cursor);
+                    try out.append(self.a, MissingText.untracked("<meta property=\"mw:PageProp/toc\" />"));
                     emitted = end;
                     toc_protocol_start = end;
                 }
@@ -2942,26 +3226,26 @@ pub const Renderer = struct {
                 while (scan < end) {
                     if (try self.externalControlEnd(input[0..end], scan)) |next| {
                         if (!changed) {
-                            try out.appendSlice(self.a, input[emitted..begin]);
+                            try out.appendSlice(self.a, source, emitted, begin);
                             changed = true;
                         }
-                        try out.appendSlice(self.a, input[copy_start..scan]);
+                        try out.appendSlice(self.a, source, copy_start, scan);
                         copy_start = next;
                         scan = next;
                     } else scan += 1;
                 }
                 if (toc_end) |next| {
-                    if (!changed) try out.appendSlice(self.a, input[emitted..begin]);
-                    try out.appendSlice(self.a, input[copy_start..end]);
+                    if (!changed) try out.appendSlice(self.a, source, emitted, begin);
+                    try out.appendSlice(self.a, source, copy_start, end);
                     // The official first-TOC placeholder is an invisible markup
                     // boundary before external-link parsing, never URL bytes.
-                    try out.appendSlice(self.a, "<meta property=\"mw:PageProp/toc\" />");
+                    try out.append(self.a, MissingText.untracked("<meta property=\"mw:PageProp/toc\" />"));
                     emitted = next;
                     toc_protocol_start = next;
                     cursor = next;
                 } else {
                     if (changed) {
-                        try out.appendSlice(self.a, input[copy_start..end]);
+                        try out.appendSlice(self.a, source, copy_start, end);
                         emitted = end;
                     }
                     cursor = end;
@@ -2975,9 +3259,9 @@ pub const Renderer = struct {
             const width = std.unicode.utf8ByteSequenceLength(input[cursor]) catch 1;
             cursor += if (width <= input.len - cursor and std.unicode.utf8ValidateSlice(input[cursor .. cursor + width])) width else 1;
         }
-        if (emitted == 0) return input;
-        try out.appendSlice(self.a, input[emitted..]);
-        return try out.toOwnedSlice(self.a);
+        if (emitted == 0) return source;
+        try out.appendSlice(self.a, source, emitted, input.len);
+        return try out.finish(self.a);
     }
 
     // Behavior switches act on authored source before link-title decoding.
@@ -3383,6 +3667,10 @@ pub const Renderer = struct {
         try self.text(value[start..], style);
     }
     pub fn link(self: *Renderer, label: []const u8, target: []const u8, style: Style, depth: usize, external: bool) Error!void {
+        return self.linkWithMissing(MissingText.untracked(label), target, style, depth, external);
+    }
+    pub fn linkWithMissing(self: *Renderer, tracked: MissingText, target: []const u8, style: Style, depth: usize, external: bool) Error!void {
+        const label = tracked.bytes;
         var s = style;
         const resolved_target = if (external) try self.externalUrlTarget(target) else target;
         if (external and unresolvedExternalActionTarget(resolved_target)) {
@@ -3396,7 +3684,7 @@ pub const Renderer = struct {
                 return error.UncompiledTemplate;
             }
             const label_start = self.spans.items.len;
-            try self.inlineText(label, s, depth + 1);
+            try self.inlineTextWithMissing(try missingSlice(self.a, tracked, label), s, depth + 1);
             // Only this rejected action's emitted label is checked. Real
             // protected/entity literals are not deferred source instructions.
             var previous: u8 = 0;
@@ -3434,17 +3722,21 @@ pub const Renderer = struct {
                 try self.text(visible, s);
             return;
         }
-        try self.inlineText(label, s, depth + 1);
+        try self.inlineTextWithMissing(try missingSlice(self.a, tracked, label), s, depth + 1);
     }
     fn referenceIndex(self: *Renderer, name: []const u8, group: []const u8, body: []const u8) Error!?usize {
         const use_short_name_compare = self.refs.items.len >= 16;
         if (name.len != 0) for (self.refs.items, 0..) |*ref, i| {
             const same_name = if (use_short_name_compare) referenceStringEqual(ref.name, name) else std.mem.eql(u8, ref.name, name);
             if (!same_name or !std.mem.eql(u8, ref.group, group)) continue;
-            if (ref.body.len == 0 and body.len != 0) ref.body = body;
+            if (ref.body.len == 0 and body.len != 0) {
+                ref.body = body;
+                ref.missing = if (self.inline_missing) |parent| try missingSlice(self.a, parent, body) else if (self.body_missing) |parent| try missingSlice(self.a, parent, body) else MissingText.untracked(body);
+            }
             return i;
         };
         var resolved_body = body;
+        var resolved_missing = if (self.inline_missing) |parent| try missingSlice(self.a, parent, body) else if (self.body_missing) |parent| try missingSlice(self.a, parent, body) else MissingText.untracked(body);
         // Authenticated native phase definitions include opaque Poem bodies
         // in emitted page order. The legacy raw table cannot see those bodies.
         // Ordinary/legacy calls retain the exact previous table and precedence.
@@ -3452,12 +3744,14 @@ pub const Renderer = struct {
         if (name.len != 0) for (page_definitions) |definition| {
             if (definition.body.len != 0 and std.mem.eql(u8, definition.name, name) and std.mem.eql(u8, definition.group, group)) {
                 resolved_body = definition.body;
+                resolved_missing = definition.missing orelse MissingText.transformed(definition.body);
                 break;
             }
         };
         if (name.len != 0 and resolved_body.len == 0) for (self.ref_defs.items) |definition| {
             if (std.mem.eql(u8, definition.name, name) and std.mem.eql(u8, definition.group, group)) {
                 resolved_body = definition.body;
+                resolved_missing = definition.missing orelse MissingText.transformed(definition.body);
                 break;
             }
         };
@@ -3472,7 +3766,7 @@ pub const Renderer = struct {
                 if (std.mem.eql(u8, ref.group, group)) group_number += 1;
             }
         }
-        try self.refs.append(self.a, .{ .number = index + 1, .group_number = group_number, .name = name, .group = group, .body = resolved_body, .poem = self.poem_depth != 0, .poem_direction = self.poem_direction });
+        try self.refs.append(self.a, .{ .number = index + 1, .group_number = group_number, .name = name, .group = group, .body = resolved_body, .missing = resolved_missing, .poem = self.poem_depth != 0, .poem_direction = self.poem_direction });
         return index;
     }
     fn reference(self: *Renderer, name: []const u8, group: []const u8, body: []const u8, style: Style) Error!void {
@@ -3572,6 +3866,7 @@ pub const Renderer = struct {
                 if (!std.mem.eql(u8, definition.name, name) or !std.mem.eql(u8, definition.group, group)) continue;
                 if (definition.body.len == 0 and body.len != 0) {
                     definition.body = body;
+                    definition.missing = if (self.body_missing) |parent| try missingSlice(self.a, parent, body) else MissingText.untracked(body);
                     definition.list_defined = list_defined;
                 }
                 found = true;
@@ -3582,10 +3877,13 @@ pub const Renderer = struct {
                     self.fallbacks.render_limit = true;
                     return;
                 }
-                try self.ref_defs.append(self.a, .{ .name = name, .group = group, .body = body, .list_defined = list_defined });
+                try self.ref_defs.append(self.a, .{ .name = name, .group = group, .body = body, .missing = if (self.body_missing) |parent| try missingSlice(self.a, parent, body) else MissingText.untracked(body), .list_defined = list_defined });
             }
             for (self.refs.items) |*ref| {
-                if (std.mem.eql(u8, ref.name, name) and std.mem.eql(u8, ref.group, group) and ref.body.len == 0 and body.len != 0) ref.body = body;
+                if (std.mem.eql(u8, ref.name, name) and std.mem.eql(u8, ref.group, group) and ref.body.len == 0 and body.len != 0) {
+                    ref.body = body;
+                    ref.missing = if (self.body_missing) |parent| try missingSlice(self.a, parent, body) else MissingText.untracked(body);
+                }
             }
             pos = pair.end;
         }
@@ -3608,7 +3906,7 @@ pub const Renderer = struct {
                 self.poem_base_style = previous_style;
                 self.poem_line_indent = previous_indent;
             }
-            ref.spans = try self.parseSpans(if (ref.body.len != 0) ref.body else "Reference text unavailable", .{});
+            ref.spans = try self.parseSpansWithMissing(if (ref.body.len != 0) ref.missing orelse MissingText.transformed(ref.body) else MissingText.untracked("Reference text unavailable"), .{});
         }
         return self.refs.items;
     }
@@ -4080,9 +4378,13 @@ pub const Renderer = struct {
     // structural parsing. Matched scopes and nowiki remain opaque; allowed HTML
     // pre keeps its separate parsed whitespace/layout behavior.
     fn prepareUnmatchedOpaque(self: *Renderer, input: []const u8) Error![]const u8 {
+        return (try self.prepareUnmatchedOpaqueWithMissing(MissingText.untracked(input))).bytes;
+    }
+    fn prepareUnmatchedOpaqueWithMissing(self: *Renderer, source: MissingText) Error!MissingText {
+        const input = source.bytes;
         var opaque_scan: syntax.OpaqueScan = .{};
         var no_more_nowiki_close = false;
-        var out: std.ArrayList(u8) = .empty;
+        var out: missing_dependency.Builder = .{};
         errdefer out.deinit(self.a);
         var emitted: usize = 0;
         var scan: usize = 0;
@@ -4112,23 +4414,27 @@ pub const Renderer = struct {
             }
             if (tag.is("pre")) continue;
             self.markUnclosed(input, tag, "literal-extension-opener");
-            try out.appendSlice(self.a, input[emitted..at]);
-            try out.appendSlice(self.a, "&lt;");
+            try out.appendSlice(self.a, source, emitted, at);
+            try out.append(self.a, missingEdit(source, at, at + 1, "&lt;"));
             // The preprocessor made the whole unmatched opener literal before
             // expansion. Do not run fallback templates in its attributes later.
-            for (input[at + 1 .. tag.end]) |ch| switch (ch) {
-                '{' => try out.appendSlice(self.a, "&#123;"),
-                '}' => try out.appendSlice(self.a, "&#125;"),
-                else => try out.append(self.a, ch),
+            for (input[at + 1 .. tag.end], at + 1..) |ch, byte_at| switch (ch) {
+                '{' => try out.append(self.a, missingEdit(source, byte_at, byte_at + 1, "&#123;")),
+                '}' => try out.append(self.a, missingEdit(source, byte_at, byte_at + 1, "&#125;")),
+                else => try out.appendSlice(self.a, source, byte_at, byte_at + 1),
             };
             emitted = tag.end;
         }
-        if (out.items.len == 0) return input;
-        try out.appendSlice(self.a, input[emitted..]);
-        return out.toOwnedSlice(self.a);
+        if (out.bytes.items.len == 0) return source;
+        try out.appendSlice(self.a, source, emitted, input.len);
+        return out.finish(self.a);
     }
 
     fn opaqueExtension(self: *Renderer, input: []const u8, tag: syntax.Tag, style: Style, depth: usize) Error!usize {
+        return self.opaqueExtensionWithMissing(MissingText.untracked(input), tag, style, depth);
+    }
+    fn opaqueExtensionWithMissing(self: *Renderer, tracked: MissingText, tag: syntax.Tag, style: Style, depth: usize) Error!usize {
+        const input = tracked.bytes;
         if (tag.self_closing) return tag.end;
         const matched_pair = syntax.matchingTag(input, tag);
         if (tag.html_pre or (tag.is("pre") and matched_pair == null)) {
@@ -4137,7 +4443,7 @@ pub const Renderer = struct {
             var parsed_style = style;
             parsed_style.code = true;
             parsed_style.preserve_whitespace = true;
-            try self.inlineText(input[tag.end..parsed_pair.inner_end], parsed_style, depth + 1);
+            try self.inlineTextWithMissing(try missingSlice(self.a, tracked, input[tag.end..parsed_pair.inner_end]), parsed_style, depth + 1);
             return parsed_pair.end;
         }
         const pair = matched_pair orelse {
@@ -5370,6 +5676,10 @@ pub const Renderer = struct {
     }
 
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
+        return self.htmlTagWithMissing(MissingText.untracked(input), at, style, depth, no_more_nowiki_close, opaque_scan);
+    }
+    fn htmlTagWithMissing(self: *Renderer, tracked: MissingText, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
+        const input = tracked.bytes;
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
         const raw_tag = opaque_scan.tagAt(input, at, no_more_nowiki_close) orelse return null;
         const tag = try self.normalizedTag(raw_tag);
@@ -5383,7 +5693,7 @@ pub const Renderer = struct {
                 defer self.bidi_scope_depth = parent_depth;
                 // Keep the existing visible literal/error path exactly once;
                 // only eligibility for the containing auto scan is excluded.
-                try self.inlineText(input[at..excluded.end], style, depth + 1);
+                try self.inlineTextWithMissing(try missingSlice(self.a, tracked, input[at..excluded.end]), style, depth + 1);
                 for (self.spans.items[start..]) |*span| span.bidi_auto_excluded = true;
                 return excluded.end;
             }
@@ -5457,7 +5767,7 @@ pub const Renderer = struct {
                     if (self.poem_depth != 0) self.poem_base_style.italic = italic;
                 }
             }
-            try self.inlineText(input[tag.end..pair.inner_end], cell_style, depth + 1);
+            try self.inlineTextWithMissing(try missingSlice(self.a, tracked, input[tag.end..pair.inner_end]), cell_style, depth + 1);
             return pair.end;
         }
         if (tag.is("ref") and !tag.closing) {
@@ -5490,7 +5800,7 @@ pub const Renderer = struct {
             };
             var s = style;
             s.small = true;
-            try self.inlineText(input[tag.end..pair.inner_end], s, depth + 1);
+            try self.inlineTextWithMissing(try missingSlice(self.a, tracked, input[tag.end..pair.inner_end]), s, depth + 1);
             return pair.end;
         }
         if (tag.is("poem") and !tag.closing and self.context.poem_phase != null) {
@@ -5500,7 +5810,7 @@ pub const Renderer = struct {
                 return tag.end;
             }
         }
-        if ((tag.isOpaque() or tag.html_pre) and !tag.closing and !tag.is("nowiki")) return try self.opaqueExtension(input, tag, style, depth);
+        if ((tag.isOpaque() or tag.html_pre) and !tag.closing and !tag.is("nowiki")) return try self.opaqueExtensionWithMissing(tracked, tag, style, depth);
         if (tag.is("hr")) {
             if (!tag.closing) {
                 try self.lineBreak(style);
@@ -5648,7 +5958,7 @@ pub const Renderer = struct {
                 self.block_formatting = parent_flags;
             }
             try self.blocksInline(try self.renderBody(content), s);
-        } else try self.inlineText(content, s, depth + 1);
+        } else try self.inlineTextWithMissing(try missingSlice(self.a, tracked, content), s, depth + 1);
         if (parenthetical and annotation_start < self.spans.items.len and
             std.mem.eql(u8, self.spans.items[annotation_start].text, "（"))
         {
@@ -5691,16 +6001,23 @@ pub const Renderer = struct {
         return try out.toOwnedSlice(self.a);
     }
     pub fn inlineText(self: *Renderer, source: []const u8, inherited: Style, depth: usize) Error!void {
+        return self.inlineTextWithMissing(MissingText.untracked(source), inherited, depth);
+    }
+    pub fn inlineTextWithMissing(self: *Renderer, tracked: MissingText, inherited: Style, depth: usize) Error!void {
         if (depth > max_depth) {
             self.fallbacks.render_limit = true;
             try self.text("[render nesting limit]", inherited);
             return;
         }
-        const numbered_source = if (depth == 0) try self.prepareNumberedInput(source, inherited) else source;
+        const numbered = if (depth == 0) try self.prepareNumberedWithMissing(tracked, inherited) else tracked;
         const numbering_before = self.context.external_links_prepared;
         self.context.external_links_prepared = true;
         defer self.context.external_links_prepared = numbering_before;
-        const input = if (self.navigation_target_probe != null) numbered_source else try self.externalSourceControls(try self.prepareUnmatchedOpaque(numbered_source));
+        const prepared_missing = if (self.navigation_target_probe != null) numbered else try self.externalSourceControlsWithMissing(try self.prepareUnmatchedOpaqueWithMissing(numbered));
+        const input = prepared_missing.bytes;
+        const previous_missing = self.inline_missing;
+        self.inline_missing = prepared_missing;
+        defer self.inline_missing = previous_missing;
         var it: ir.InlineIterator = .{
             .input = input,
             .bold = inherited.bold,
@@ -5720,7 +6037,7 @@ pub const Renderer = struct {
             s.bold = it.bold;
             s.italic = it.italic;
             if (input[it.cursor] == '<') {
-                if (try self.htmlTag(input, it.cursor, s, depth, &no_more_nowiki_close, &opaque_scan)) |end| {
+                if (try self.htmlTagWithMissing(prepared_missing, it.cursor, s, depth, &no_more_nowiki_close, &opaque_scan)) |end| {
                     it.cursor = end;
                     continue;
                 }
@@ -5745,7 +6062,7 @@ pub const Renderer = struct {
                 const body = input[it.cursor + offset .. pair.inner_end];
                 if (offset == 3) {
                     if (syntax.delimiter(body, "|", 0)) |pipe| {
-                        try self.inlineText(body[pipe + 1 ..], s, depth + 1);
+                        try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, body[pipe + 1 ..]), s, depth + 1);
                     } else {
                         // Preserve the established visible source-error marker,
                         // and classify it in reported build diagnostics as well.
@@ -5775,6 +6092,67 @@ pub const Renderer = struct {
                         input.ptr == self.navigation_probe_source.ptr and input.len == self.navigation_probe_source.len and
                         token_start == 0 and it.cursor == input.len;
                     var target = token.target;
+                    const input_address = @intFromPtr(input.ptr);
+                    const target_address = @intFromPtr(token.target.ptr);
+                    const target_in_input = target_address >= input_address and target_address - input_address <= input.len and token.target.len <= input.len - (target_address - input_address);
+                    const raw_target_start = if (target_in_input) target_address - input_address else 0;
+                    const raw_target_end = raw_target_start + token.target.len;
+                    var generated_missing_target = false;
+                    for (prepared_missing.ranges) |occurrence| {
+                        if (target_in_input and occurrence.start >= raw_target_start and occurrence.end <= raw_target_end) {
+                            generated_missing_target = true;
+                            break;
+                        }
+                    }
+                    if (generated_missing_target and !safeInternalTarget(token.target)) {
+                        if (probing_root) return;
+                        self.fallbacks.literal_markup = true;
+                        self.fallbacks.missing_template = true;
+                        self.unresolved_templates += 1;
+                        self.diagnosed_missing_targets += 1;
+                        var nonaction = s;
+                        nonaction.kind = .text;
+                        nonaction.target = "";
+                        nonaction.self_link_target = null;
+                        nonaction.missing_nonaction = true;
+                        var usable = token.link_has_pipe and !token.link_empty_label and trim(token.text).len != 0;
+                        var label_start: usize = 0;
+                        if (usable) {
+                            const label_address = @intFromPtr(token.text.ptr);
+                            if (label_address < input_address or label_address - input_address > input.len or token.text.len > input.len - (label_address - input_address)) {
+                                usable = false;
+                            } else {
+                                label_start = label_address - input_address;
+                                for (prepared_missing.ranges) |occurrence| {
+                                    if (occurrence.start < label_start + token.text.len and occurrence.end > label_start) usable = false;
+                                }
+                            }
+                        }
+                        if (usable) {
+                            const label_first = self.spans.items.len;
+                            try self.inlineTextWithMissing(try missing_dependency.slice(self.a, prepared_missing, label_start, label_start + token.text.len), nonaction, depth + 1);
+                            for (self.spans.items[label_first..]) |*label_span| {
+                                if (label_span.kind == .link or label_span.kind == .external_link) label_span.kind = .text;
+                                label_span.target = "";
+                            }
+                            var visible_label = false;
+                            for (self.spans.items[label_first..]) |label_span| {
+                                if (trim(label_span.text).len != 0) visible_label = true;
+                            }
+                            if (visible_label) {
+                                try self.text(token.trail, nonaction);
+                                try self.text(" [missing template]", nonaction);
+                            } else {
+                                self.spans.items.len = label_first;
+                                try self.text("[missing template]", nonaction);
+                                try self.text(token.trail, nonaction);
+                            }
+                        } else {
+                            try self.text("[missing template]", nonaction);
+                            try self.text(token.trail, nonaction);
+                        }
+                        continue;
+                    }
                     var label_value = if (token.link_empty_label) "" else token.text;
                     const trail = token.trail;
                     const label_spaces = unpipedLinkLabelSpaces(input, token, it.cursor);
@@ -5788,7 +6166,7 @@ pub const Renderer = struct {
                         const literal_style = s;
                         self.fallbacks.literal_markup = true;
                         try self.plain("[[", literal_style);
-                        try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, input[raw_start + 2 .. it.cursor], depth + 1, true), literal_style, depth + 1);
+                        try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, try normalizeMisnestedHtmlDepth(self.a, input[raw_start + 2 .. it.cursor], depth + 1, true)), literal_style, depth + 1);
                         continue;
                     }
                     // An authored inner opener is a separate link. Keep the
@@ -5804,7 +6182,7 @@ pub const Renderer = struct {
                             literal_style.target = "";
                             self.fallbacks.literal_markup = true;
                             try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..nested_start])), literal_style);
-                            try self.inlineText(input[nested_start..it.cursor], literal_style, depth + 1);
+                            try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, input[nested_start..it.cursor]), literal_style, depth + 1);
                             continue;
                         }
                     }
@@ -5821,7 +6199,7 @@ pub const Renderer = struct {
                         if (token.link_has_pipe) {
                             const label_start = @intFromPtr(token.text.ptr) - @intFromPtr(input.ptr);
                             try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..label_start])), literal_style);
-                            try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, input[label_start..it.cursor], depth + 1, true), literal_style, depth + 1);
+                            try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, try normalizeMisnestedHtmlDepth(self.a, input[label_start..it.cursor], depth + 1, true)), literal_style, depth + 1);
                         } else {
                             try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..it.cursor])), literal_style);
                         }
@@ -5849,7 +6227,7 @@ pub const Renderer = struct {
                                 try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..label_start])), literal_style);
                                 // Invalid outer syntax still leaves authored label
                                 // emphasis, HTML and inner links eligible for parsing.
-                                try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, input[label_start..it.cursor], depth + 1, true), literal_style, depth + 1);
+                                try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, try normalizeMisnestedHtmlDepth(self.a, input[label_start..it.cursor], depth + 1, true)), literal_style, depth + 1);
                             } else {
                                 try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..it.cursor])), literal_style);
                             }
@@ -5873,7 +6251,7 @@ pub const Renderer = struct {
                         diagnostic_style.target = "";
                         const label_start = self.spans.items.len;
                         if (token.link_has_pipe and label_value.len != 0)
-                            try self.inlineText(label_value, diagnostic_style, depth + 1);
+                            try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, label_value), diagnostic_style, depth + 1);
                         var has_diagnostic = false;
                         for (self.spans.items[label_start..]) |*span| {
                             // Retain authored visible labels and formatting,
@@ -5949,7 +6327,7 @@ pub const Renderer = struct {
                             // This refused outer has no internal-link holder: external
                             // brackets participate in the ordinary formatting phase.
                             try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..label_start])), literal_style);
-                            try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, input[label_start..it.cursor], depth + 1, true), literal_style, depth + 1);
+                            try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, try normalizeMisnestedHtmlDepth(self.a, input[label_start..it.cursor], depth + 1, true)), literal_style, depth + 1);
                             continue;
                         }
                     }
@@ -6024,15 +6402,15 @@ pub const Renderer = struct {
                                 var mapped_style = action_style;
                                 mapped_style.kind = .external_link;
                                 mapped_style.target = destination.target;
-                                try self.inlineText(label_value, mapped_style, depth + 2);
+                                try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, label_value), mapped_style, depth + 2);
                             } else {
-                                try self.link(label_value, destination.target, action_style, depth + 1, false);
+                                try self.linkWithMissing(try missingSlice(self.a, prepared_missing, label_value), destination.target, action_style, depth + 1, false);
                             }
                             if (trail.len != 0) {
                                 try self.text(trail, action_style);
                             }
                         } else {
-                            try self.inlineText(label_value, s, depth + 1);
+                            try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, label_value), s, depth + 1);
                             try self.text(trail, s);
                         }
                         continue;
@@ -6055,9 +6433,9 @@ pub const Renderer = struct {
                         {
                             // Only an authored label strictly inside this consumed
                             // token recurses. Bare/unlabelled URLs keep the path above.
-                            try self.inlineText(token.text, s, depth + 1);
+                            try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, token.text), s, depth + 1);
                         } else try self.text(label, s);
-                    } else try self.link(label, token.target, s, depth + 1, true);
+                    } else try self.linkWithMissing(try missingSlice(self.a, prepared_missing, label), token.target, s, depth + 1, true);
                 },
                 .template => try self.resolveTemplate(token.text, s, depth),
             }
@@ -6106,10 +6484,13 @@ pub const Renderer = struct {
         }
     }
     fn prepareNumberedInput(self: *Renderer, source: []const u8, style: Style) Error![]const u8 {
+        return (try self.prepareNumberedWithMissing(MissingText.untracked(source), style)).bytes;
+    }
+    fn prepareNumberedWithMissing(self: *Renderer, tracked: MissingText, style: Style) Error!MissingText {
         if (self.context.external_links_prepared or self.pre_scope_observer != null or self.in_reference or self.poem_depth != 0 or
             self.navigation_target_probe != null or self.body_link_target.len != 0 or
-            style.kind == .external_link or (style.kind == .link and !style.poem_independent_parse)) return source;
-        const prepared = try preparePageExternalLinksAlloc(self.a, source, self.context);
+            style.kind == .external_link or (style.kind == .link and !style.poem_independent_parse)) return tracked;
+        const prepared = try preparePageExternalLinksWithMissingAlloc(self.a, tracked, self.context);
         if (prepared.poem_phase != self.context.poem_phase) {
             self.context.poem_phase = prepared.poem_phase;
             if (self.poem_phase_loaded) if (prepared.poem_phase) |phase| {
@@ -6123,10 +6504,14 @@ pub const Renderer = struct {
                 }
             };
         }
-        return prepared.source;
+        return prepared.missing;
     }
     pub fn parseSpans(self: *Renderer, source: []const u8, style: Style) Error![]const Span {
-        const input = try self.prepareNumberedInput(source, style);
+        return self.parseSpansWithMissing(MissingText.untracked(source), style);
+    }
+    pub fn parseSpansWithMissing(self: *Renderer, tracked: MissingText, style: Style) Error![]const Span {
+        const numbered_missing = try self.prepareNumberedWithMissing(tracked, style);
+        const input = numbered_missing.bytes;
         const numbering_before = self.context.external_links_prepared;
         self.context.external_links_prepared = true;
         defer self.context.external_links_prepared = numbering_before;
@@ -6169,7 +6554,7 @@ pub const Renderer = struct {
             inherited.strike = inherited.strike or outer.strike;
             inherited.underline = inherited.underline or outer.underline;
         }
-        try self.inlineText(try normalizeMisnestedHtmlDepth(self.a, try normalizeWikiQuotesSeededWithContext(self.a, try self.prepareUnmatchedOpaque(input), 0, false, self.context, quote_seed), 0, inherited.kind != .link or inherited.poem_independent_parse), inherited, 0);
+        try self.inlineTextWithMissing(try normalizeHtmlWithMissing(self.a, try normalizeWikiQuotesWithMissing(self.a, try self.prepareUnmatchedOpaqueWithMissing(numbered_missing), 0, false, self.context, quote_seed), 0, inherited.kind != .link or inherited.poem_independent_parse), inherited, 0);
         return try self.spans.toOwnedSlice(self.a);
     }
     fn appendBlockBudgeted(self: *Renderer, list: *std.ArrayList(Block), value: Block) Error!void {
@@ -6352,15 +6737,27 @@ pub const Renderer = struct {
     }
 
     pub fn renderBody(self: *Renderer, source: []const u8) Error![]const Block {
-        const input = try self.prepareNumberedInput(source, .{});
+        return self.renderBodyWithMissing(MissingText.untracked(source));
+    }
+    pub fn renderBodyWithMissing(self: *Renderer, tracked: MissingText) Error![]const Block {
+        const numbered_missing = try self.prepareNumberedWithMissing(tracked, .{});
+        const input = numbered_missing.bytes;
         const numbering_before = self.context.external_links_prepared;
         self.context.external_links_prepared = true;
         defer self.context.external_links_prepared = numbering_before;
         try self.loadPoemPhase();
         if (self.context.poem_phase == null and self.poem_depth == 0 and !self.in_reference and std.mem.indexOf(u8, input, poem_prefix) != null)
             self.poem_authored_token = true;
-        return self.renderBodyWithInlineStart(try preparePageTocSourceAlloc(self.a, try self.prepareUnmatchedOpaque(input), self.context.behavior_switches), false);
+        const prepared = try preparePageTocSourceWithMissingAlloc(self.a, try self.prepareUnmatchedOpaqueWithMissing(numbered_missing), self.context.behavior_switches);
+        const previous_missing = self.body_missing;
+        self.body_missing = prepared;
+        defer self.body_missing = previous_missing;
+        return self.renderBodyWithInlineStart(prepared.bytes, false);
     }
+    pub fn prepareBodySourceWithMissing(self: *Renderer, source: MissingText) Error!MissingText {
+        return self.prepareUnmatchedOpaqueWithMissing(source);
+    }
+
     pub fn prepareBodySource(self: *Renderer, input: []const u8) Error![]const u8 {
         return self.prepareUnmatchedOpaque(input);
     }
@@ -6378,6 +6775,12 @@ pub const Renderer = struct {
 
     // Keep references, media, Poem state and budgets on this Renderer, while
     // restoring the lexical pre state at every independently owned fragment.
+    pub fn renderBodyWithFragmentPreAndMissing(self: *Renderer, tracked: MissingText, context: FragmentPreContext) Error![]const Block {
+        const previous = self.body_missing;
+        self.body_missing = tracked;
+        defer self.body_missing = previous;
+        return self.renderBodyWithFragmentPre(tracked.bytes, context);
+    }
     pub fn renderBodyWithFragmentPre(self: *Renderer, input: []const u8, context: FragmentPreContext) Error![]const Block {
         var inherited_pre: usize = 0;
         for (context.initial) |scope| if (scope.kind == .pre) {
@@ -6904,7 +7307,12 @@ pub const Renderer = struct {
         return self.renderBodySliceSeeded(source, initial_inline, terminal_inline, source_origin, initial_quote, null);
     }
     fn renderBodySliceSeeded(self: *Renderer, source: []const u8, initial_inline: bool, terminal_inline: bool, source_origin: ?usize, initial_quote: ?QuoteSeed, initial_list: ?BodyListSeed) Error![]const Block {
-        const input = try self.prepareUnmatchedOpaque(source);
+        const tracked = if (self.body_missing) |parent| try missingSlice(self.a, parent, source) else MissingText.untracked(source);
+        const prepared_missing = try self.prepareUnmatchedOpaqueWithMissing(tracked);
+        const input = prepared_missing.bytes;
+        const previous_missing = self.body_missing;
+        self.body_missing = prepared_missing;
+        defer self.body_missing = previous_missing;
         // An allocated preparation is a different source domain. Do not infer
         // its original offsets; the caller prepares the whole page first.
         const origin = if (input.ptr == source.ptr and input.len == source.len) source_origin else null;
@@ -7640,7 +8048,7 @@ pub const Renderer = struct {
     fn parseBodySpans(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
         // Structural entry points opt into the current DOM parent. Recursive
         // inline parsers already carry an effective style, including lang="".
-        return self.parseSpans(input, self.bodyFormattingStyle(style));
+        return self.parseSpansWithMissing(if (self.body_missing) |parent| try missingSlice(self.a, parent, input) else MissingText.untracked(input), self.bodyFormattingStyle(style));
     }
     fn bodyFormattingStyle(self: *Renderer, style: Style) Style {
         var effective = style;
@@ -7661,7 +8069,8 @@ pub const Renderer = struct {
         const previous = self.body_language_direction;
         self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set };
         defer self.body_language_direction = previous;
-        return self.renderBody(input);
+        const tracked = if (self.body_missing) |parent| try missingSlice(self.a, parent, input) else MissingText.untracked(input);
+        return self.renderBodyWithMissing(tracked);
     }
     fn parseSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
         // HTML captions, like cells and wiki captions, are local inline domains.
@@ -8260,12 +8669,12 @@ pub const Renderer = struct {
         return .{ .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) };
     }
     const TableResult = struct { table: Table, end: usize, body_end: usize, fostered: []const Block, has_caption: bool, feature: ?Feature = null };
-    fn flushWikiTableFostered(self: *Renderer, blocks: *std.ArrayList(Block), source: *std.ArrayList(u8)) Error!void {
+    fn flushWikiTableFostered(self: *Renderer, blocks: *std.ArrayList(Block), source: *MissingBuffer) Error!void {
         if (source.items.len == 0) return;
         // Rendered spans may borrow their input; release the accumulated
         // slice from the mutable buffer before another fostered segment.
-        const body = try source.toOwnedSlice(self.a);
-        try blocks.appendSlice(self.a, try self.renderBody(body));
+        const body = try source.take(self.a);
+        try blocks.appendSlice(self.a, try self.renderBodyWithMissing(body));
     }
     fn wikiTableIndent(line: []const u8) ?[]const u8 {
         var indent: usize = 0;
@@ -8291,11 +8700,11 @@ pub const Renderer = struct {
             try caption.append(self.a, .{ .kind = .line_break, .text = "" });
         try caption.appendSlice(self.a, spans);
     }
-    fn finishWikiTableCaption(self: *Renderer, caption: *std.ArrayList(Span), source: *std.ArrayList(u8), pending: *bool) Error!void {
+    fn finishWikiTableCaption(self: *Renderer, caption: *std.ArrayList(Span), source: *MissingBuffer, pending: *bool) Error!void {
         if (!pending.*) return;
         // Parsed spans can borrow source bytes; detach the completed caption.
-        const body = try source.toOwnedSlice(self.a);
-        try self.appendTableCaption(caption, try self.cellSpans(body));
+        const body = try source.take(self.a);
+        try self.appendTableCaption(caption, try self.cellSpansWithMissing(body));
         pending.* = false;
     }
     const LayoutTableBody = struct { body: []const u8, end: usize };
@@ -8416,22 +8825,26 @@ pub const Renderer = struct {
         return found and depth == 0;
     }
 
-    fn parseTable(self: *Renderer, input: []const u8, start: usize, swatch_background: ?[]const u8, table_background: ?[]const u8) Error!TableResult {
+    fn parseTable(self: *Renderer, source: []const u8, start: usize, swatch_background: ?[]const u8, table_background: ?[]const u8) Error!TableResult {
+        const tracked = if (self.body_missing) |parent| try missingSlice(self.a, parent, source) else MissingText.untracked(source);
+        // Slicing tracked ranges owns a copied byte domain. Derive every cell
+        // and caption slice from that same domain before copying provenance.
+        const input = tracked.bytes;
         var row_background = table_background;
         var swatch_foreground: ?[]const u8 = null;
         var swatch_allowed = true;
         var rows: std.ArrayList(Row) = .empty;
         var fostered: std.ArrayList(Block) = .empty;
         var cells: std.ArrayList(Cell) = .empty;
-        var cell_source: std.ArrayList(u8) = .empty;
-        var outside_source: std.ArrayList(u8) = .empty;
+        var cell_source: MissingBuffer = .empty;
+        var outside_source: MissingBuffer = .empty;
         defer outside_source.deinit(self.a);
         var current: ?Cell = null;
         const inherited_formatting = self.block_formatting;
         var row_formatting = inherited_formatting;
         var cell_formatting = inherited_formatting;
         var caption: std.ArrayList(Span) = .empty;
-        var caption_source: std.ArrayList(u8) = .empty;
+        var caption_source: MissingBuffer = .empty;
         var caption_pending = false;
         var has_caption = false;
         var pos = start;
@@ -8450,14 +8863,14 @@ pub const Renderer = struct {
                 // retain it as fostered source until the enclosing boundary.
                 const nested_source = if (caption_pending) &caption_source else if (current != null) &cell_source else &outside_source;
                 if (nested_source.items.len != 0) try nested_source.append(self.a, '\n');
-                try nested_source.appendSlice(self.a, raw_line);
+                try nested_source.appendCopied(self.a, tracked, raw_line);
                 nested_tables += 1;
                 continue;
             }
             if (nested_tables != 0) {
                 const nested_source = if (caption_pending) &caption_source else if (current != null) &cell_source else &outside_source;
                 if (nested_source.items.len != 0) try nested_source.append(self.a, '\n');
-                try nested_source.appendSlice(self.a, raw_line);
+                try nested_source.appendCopied(self.a, tracked, raw_line);
                 if (starts(line, "|}")) nested_tables -= 1;
                 continue;
             }
@@ -8482,7 +8895,7 @@ pub const Renderer = struct {
                 try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                 // Preceding outside text registers references before the caption.
                 try self.flushWikiTableFostered(&fostered, &outside_source);
-                try caption_source.appendSlice(self.a, (try self.cellContent(line[2..])).text);
+                try caption_source.appendCopied(self.a, tracked, (try self.cellContent(line[2..])).text);
                 caption_pending = true;
                 has_caption = true;
             } else if (line.len != 0 and (line[0] == '!' or line[0] == '|')) {
@@ -8508,7 +8921,7 @@ pub const Renderer = struct {
                     const background_fallback = if (content.rowspan == 1) row_background else null;
                     const background = if (cellAttributePipe(raw_cell)) |pipe| try self.tableCellBackground(.{ .name = "td", .attrs = raw_cell[0..pipe], .end = 0, .closing = false, .self_closing = false }, background_fallback) else background_fallback;
                     current = .{ .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan, .background = background };
-                    try cell_source.appendSlice(self.a, content.text);
+                    try cell_source.appendCopied(self.a, tracked, content.text);
                     if (split_at == line.len) break;
                     offset = split_at + 2;
                 }
@@ -8530,7 +8943,7 @@ pub const Renderer = struct {
                     // without registering references before recovery.
                     try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                     if (outside_source.items.len != 0) try outside_source.append(self.a, '\n');
-                    try outside_source.appendSlice(self.a, raw_line);
+                    try outside_source.appendCopied(self.a, tracked, raw_line);
                     continue;
                 }
                 try self.flushWikiTableFostered(&fostered, &outside_source);
@@ -8545,19 +8958,19 @@ pub const Renderer = struct {
                 }
             } else if (caption_pending) {
                 if (caption_source.items.len != 0) try caption_source.append(self.a, '\n');
-                try caption_source.appendSlice(self.a, raw_line);
+                try caption_source.appendCopied(self.a, tracked, raw_line);
             } else if (current != null) {
                 if (!try self.swatchCellSourceAllowed(raw_line)) swatch_allowed = false;
                 // A marker after an empty cell opener starts a block list;
                 // the same marker on the opener's own line stays inline text.
                 if (cell_source.items.len != 0 or (raw_line.len != 0 and (raw_line[0] == ' ' or std.mem.indexOfScalar(u8, "#*:;", raw_line[0]) != null or self.tableCellHeading(raw_line) != null)))
                     try cell_source.append(self.a, '\n');
-                try cell_source.appendSlice(self.a, raw_line);
+                try cell_source.appendCopied(self.a, tracked, raw_line);
             } else {
                 // Ordinary text outside a wiki cell is fostered before the
                 // table, just as the HTML-table path retains non-cell text.
                 if (outside_source.items.len != 0) try outside_source.append(self.a, '\n');
-                try outside_source.appendSlice(self.a, raw_line);
+                try outside_source.appendCopied(self.a, tracked, raw_line);
             }
         }
         try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
@@ -8583,7 +8996,7 @@ pub const Renderer = struct {
         return result;
     }
 
-    fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *std.ArrayList(u8), current: *?Cell, formatting: SpanFlags) Error!void {
+    fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *MissingBuffer, current: *?Cell, formatting: SpanFlags) Error!void {
         if (current.*) |value| {
             if (!self.spend()) {
                 source.* = .empty;
@@ -8598,7 +9011,7 @@ pub const Renderer = struct {
                 defer self.poem_base_style.italic = inherited_poem_italic;
                 self.block_formatting = formatting;
                 if (self.poem_depth != 0) self.poem_base_style.italic = formatting.italic;
-                break :scoped try self.cellSpans(source.items);
+                break :scoped try self.cellSpansWithMissing(source.view());
             };
             try cells.append(self.a, cell);
             source.* = .empty;
@@ -8625,6 +9038,12 @@ pub const Renderer = struct {
         return headingLineControlled(line, control_matcher);
     }
 
+    fn cellSpansWithMissing(self: *Renderer, tracked: MissingText) Error![]const Span {
+        const previous = self.body_missing;
+        self.body_missing = tracked;
+        defer self.body_missing = previous;
+        return self.cellSpans(tracked.bytes);
+    }
     fn cellSpans(self: *Renderer, source: []const u8) Error![]const Span {
         // Table cells and wiki captions form local inline domains. An outer
         // multiline label resumes around the table, never inside these spans.
@@ -8653,7 +9072,8 @@ pub const Renderer = struct {
             body = source[if (end < source.len) end + 1 else end..];
             if (body.len != 0) try self.lineBreak(.{});
         }
-        try self.blocksInline(try self.renderBody(body), .{});
+        const tracked_body = if (self.body_missing) |missing_parent| try missingSlice(self.a, missing_parent, body) else MissingText.untracked(body);
+        try self.blocksInline(try self.renderBodyWithMissing(tracked_body), .{});
         return self.spans.toOwnedSlice(self.a);
     }
 

@@ -1,3 +1,5 @@
+const missing_dependency = @import("missing_dependency");
+const MissingText = missing_dependency.Text;
 const std = @import("std");
 const blobs = @import("blob_encoder");
 const blob_format = blobs.blob_format;
@@ -1559,6 +1561,19 @@ const PageLanguageGroup = struct {
     }
 };
 
+fn missingOwnerSourceAlloc(a: std.mem.Allocator, source: MissingText, fragments: []const PageSourceFragment, prefix: []const u8) !MissingText {
+    var out: missing_dependency.Builder = .{};
+    errdefer out.deinit(a);
+    if (prefix.len != 0) try out.appendSlice(a, source, 0, prefix.len);
+    for (fragments) |fragment| {
+        if (fragment.original_start) |start| {
+            if (start > source.bytes.len or fragment.source.len > source.bytes.len - start) return error.InvalidPreContext;
+            try out.appendSlice(a, source, start, start + fragment.source.len);
+        } else try out.append(a, MissingText.transformed(fragment.source));
+    }
+    return out.finish(a);
+}
+
 fn preCandidate(input: []const u8) bool {
     var at: usize = 0;
     while (std.mem.indexOfScalarPos(u8, input, at, '<')) |opening| {
@@ -1769,6 +1784,10 @@ fn fragmentPreContextAlloc(a: std.mem.Allocator, start: usize, end: usize, scope
 }
 
 fn ownerSourceFragmentsAlloc(a: std.mem.Allocator, source: []const u8, fragments: []const PageSourceFragment, prefix: []const u8, scopes: []const presentation_document.ObservedPreScope, quotes: PageQuoteCuts) ![]const presentation_document.SourceFragment {
+    return ownerSourceFragmentsWithMissingAlloc(a, MissingText.untracked(source), fragments, prefix, scopes, quotes);
+}
+fn ownerSourceFragmentsWithMissingAlloc(a: std.mem.Allocator, tracked: MissingText, fragments: []const PageSourceFragment, prefix: []const u8, scopes: []const presentation_document.ObservedPreScope, quotes: PageQuoteCuts) ![]const presentation_document.SourceFragment {
+    const source = tracked.bytes;
     var ranges: std.ArrayList(PageSourceFragment) = .empty;
     defer ranges.deinit(a);
     if (prefix.len != 0) try ranges.append(a, .{ .source = prefix, .original_start = 0 });
@@ -1796,6 +1815,7 @@ fn ownerSourceFragmentsAlloc(a: std.mem.Allocator, source: []const u8, fragments
     for (ranges.items, result) |range, *fragment| {
         fragment.* = .{
             .source = range.source,
+            .missing = if (range.original_start) |start| try missing_dependency.slice(a, tracked, start, start + range.source.len) else MissingText.transformed(range.source),
             .pre = if (range.original_start) |start|
                 try fragmentPreContextAlloc(a, start, start + range.source.len, scopes, quotes)
             else
@@ -1967,8 +1987,10 @@ fn processMain(
     stats: *BuildStats,
     fallbacks: *presentation_document.Fallbacks,
     raw_poem_phase: ?*const presentation_document.PoemPhase,
+    missing_phase: ?*const missing_dependency.Phase,
 ) !void {
-    const numbered = try presentation_document.preparePageExternalLinksAlloc(page_allocator, source_raw, .{
+    const raw_missing = if (missing_phase) |phase| phase.output() else MissingText.untracked(source_raw);
+    const numbered = try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
         .title = title,
         .link_trail = codes.link_trail,
         .namespace_catalog = codes.namespace_catalog,
@@ -1981,24 +2003,25 @@ fn processMain(
     const may_cross_pre = preCandidate(numbered.source) or presentation_document.mayHaveFormattingScopes(numbered.source);
     const may_cross_link = presentation_document.mayHaveMultilineLinks(numbered.source);
     const body_source: presentation_document.PreparedBodySource = if (may_cross_pre or may_cross_link)
-        try presentation_document.prepareBodySourceAlloc(page_allocator, title, numbered.source)
+        try presentation_document.prepareBodySourceWithMissingAlloc(page_allocator, title, numbered.missing)
     else
-        .{ .source = numbered.source, .fallbacks = .{} };
+        .{ .source = numbered.source, .missing = numbered.missing, .fallbacks = .{} };
     defer if (body_source.source.ptr != numbered.source.ptr) page_allocator.free(body_source.source);
     fallbacks.merge(body_source.fallbacks);
-    const source = try presentation_document.preparePageTocSourceAlloc(page_allocator, body_source.source, codes.behavior_switches);
+    const source_missing = try presentation_document.preparePageTocSourceWithMissingAlloc(page_allocator, body_source.missing orelse MissingText.transformed(body_source.source), codes.behavior_switches);
+    const source = source_missing.bytes;
     defer if (source.ptr != body_source.source.ptr) page_allocator.free(source);
     stats.main_pages += 1;
 
     if (fallbacks.expansion_error and source.len == 0) {
         const language = codes.content() orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
-        const payload = try presentation_document.compileReportedWithOptionsAndPoemAlloc(
+        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(
             page_allocator,
             title,
             .language,
             language.heading,
             language.code,
-            "",
+            MissingText.untracked(""),
             null,
             codes.link_trail,
             codes.namespace_catalog,
@@ -2021,7 +2044,7 @@ fn processMain(
     }
     var page_sections: std.ArrayList(language_source.Section) = .empty;
     defer page_sections.deinit(page_allocator);
-    const reference_context = try presentation_document.referenceDefinitionsAlloc(page_allocator, source);
+    const reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, source_missing);
     // Ordinary navigation admission is established by the actual renderer,
     // before ownership cuts. The same raw-domain map later carries rendering.
     const early_observation: presentation_document.PreObservation = if (may_cross_link)
@@ -2097,14 +2120,14 @@ fn processMain(
         // expansion changed the boundaries, retain the whole page without
         // guessing which rendered bytes belong to the unknown language.
         fallbacks.unresolved_language_heading = true;
-        const payload = try presentation_document.compileReportedWithOptionsAndPoemAlloc(
+        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(
             page_allocator,
             title,
             .language,
             "Unclassified",
             "",
-            source,
-            if (display_title) |value| .{ .source = value, .page_title = title } else null,
+            source_missing,
+            if (display_title) |value| .{ .source = value, .page_title = title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null,
             codes.link_trail,
             codes.namespace_catalog,
             codes.behavior_switches,
@@ -2266,14 +2289,14 @@ fn processMain(
             break :native language;
         };
         const language = explicit orelse native_default orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
-        const payload = try presentation_document.compileReportedWithOptionsAndPoemAlloc(
+        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(
             page_allocator,
             title,
             .language,
             language.heading,
             language.code,
-            source,
-            if (display_title) |value| .{ .source = value, .page_title = title } else null,
+            source_missing,
+            if (display_title) |value| .{ .source = value, .page_title = title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null,
             codes.link_trail,
             codes.namespace_catalog,
             codes.behavior_switches,
@@ -2329,7 +2352,7 @@ fn processMain(
         defer probe_arena.deinit();
         const probe_allocator = probe_arena.allocator();
         const prefix_fragments = if (pre_observation.scopes.len != 0)
-            try ownerSourceFragmentsAlloc(probe_allocator, source, &.{.{ .source = page_prefix, .original_start = 0 }}, "", pre_observation.scopes, quote_cuts)
+            try ownerSourceFragmentsWithMissingAlloc(probe_allocator, source_missing, &.{.{ .source = page_prefix, .original_start = 0 }}, "", pre_observation.scopes, quote_cuts)
         else
             &.{};
         if (try presentation_document.hasBodyContentWithReferencesAndPoemFragmentsAlloc(
@@ -2360,12 +2383,9 @@ fn processMain(
         // preserve this exact page-level diagnostic after an ownership cut.
         if (try refusedOpeningInFragments(source, group.fragments.items, pre_observation.refused_link_openings))
             fallbacks.literal_markup = true;
-        const group_source = if (preserve_prefix)
-            try std.mem.concat(page_allocator, u8, &.{ page_prefix, group.source.items })
-        else
-            group.source.items;
+        const group_missing = try missingOwnerSourceAlloc(page_allocator, source_missing, group.fragments.items, if (preserve_prefix) page_prefix else "");
         const fragments = if (pre_observation.scopes.len != 0)
-            try ownerSourceFragmentsAlloc(page_allocator, source, group.fragments.items, if (preserve_prefix) page_prefix else "", pre_observation.scopes, quote_cuts)
+            try ownerSourceFragmentsWithMissingAlloc(page_allocator, source_missing, group.fragments.items, if (preserve_prefix) page_prefix else "", pre_observation.scopes, quote_cuts)
         else
             &.{};
         defer {
@@ -2375,14 +2395,14 @@ fn processMain(
             }
             if (fragments.len != 0) page_allocator.free(fragments);
         }
-        const payload = try presentation_document.compileReportedWithReferencesAndPoemFragmentsAlloc(
+        const payload = try presentation_document.compileReportedWithReferencesAndPhasesFragmentsAlloc(
             page_allocator,
             title,
             .language,
             group.language.heading,
             group.language.code,
-            group_source,
-            if (display_title) |value| .{ .source = value, .page_title = title } else null,
+            group_missing,
+            if (display_title) |value| .{ .source = value, .page_title = title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null,
             codes.link_trail,
             codes.namespace_catalog,
             codes.behavior_switches,
@@ -2411,19 +2431,20 @@ fn processNamespace(
     stats: *BuildStats,
     fallbacks: *presentation_document.Fallbacks,
     poem_phase: ?*const presentation_document.PoemPhase,
+    missing_phase: ?*const missing_dependency.Phase,
 ) !void {
     const kind = ns.kind;
     // Supplemental namespaces share one file, so keep their full localized
     // names to avoid collisions between identically named namespace suffixes.
     const local_title = if (kind == .supplemental) title else localNamespaceTitle(title);
-    const payload = try presentation_document.compileReportedWithOptionsAndPoemAlloc(
+    const payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(
         page_allocator,
         local_title,
         kind,
         null,
         "",
-        source,
-        if (display_title) |value| .{ .source = value, .page_title = title } else null,
+        if (missing_phase) |phase| phase.output() else MissingText.untracked(source),
+        if (display_title) |value| .{ .source = value, .page_title = title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null,
         link_trail,
         namespace_catalog,
         behavior_switches,
@@ -2526,24 +2547,36 @@ pub const Writer = struct {
         return self.addAliasExpanded(a, record, "", null, .{}, &.{});
     }
     pub fn addAliasExpanded(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8) !void {
-        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, null);
+        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, null, null);
     }
 
     pub fn addAliasExpandedWithPoem(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_metadata: ?[]const u8) !void {
         var phase_arena = std.heap.ArenaAllocator.init(a);
         defer phase_arena.deinit();
         const phase = try presentation_document.parsePoemPhaseAlloc(phase_arena.allocator(), tail, display_title, poem_metadata);
-        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, phase);
+        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, phase, null);
     }
 
-    fn addAliasExpandedInternal(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_phase: ?*const presentation_document.PoemPhase) !void {
+    pub fn addAliasExpandedWithPhases(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_metadata: ?[]const u8, missing_dependency_metadata: ?[]const u8) !void {
+        var phase_arena = std.heap.ArenaAllocator.init(a);
+        defer phase_arena.deinit();
+        const poem = try presentation_document.parsePoemPhaseAlloc(phase_arena.allocator(), tail, display_title, poem_metadata);
+        var missing: ?missing_dependency.Phase = if (missing_dependency_metadata) |bytes| try missing_dependency.decode(phase_arena.allocator(), bytes, tail, display_title orelse "") else null;
+        defer if (missing) |*phase| phase.deinit();
+        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, poem, if (missing) |*phase| phase else null);
+    }
+
+    fn addAliasExpandedInternal(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_phase: ?*const presentation_document.PoemPhase, missing_phase: ?*const missing_dependency.Phase) !void {
         if (self.finished) return error.WriterFinished;
         var fallbacks = initial_fallbacks;
+        if (missing_phase) |phase| if (phase.occurrences().len != 0) {
+            fallbacks.missing_template = true;
+        };
         const destination = if (record.fragment.len == 0) record.target_title else try std.fmt.allocPrint(a, "{s}#{s}", .{ record.target_title, record.fragment });
         const link: blobs.presentation_types.Span = .{ .kind = .link, .text = destination, .target = destination };
         var entry: blobs.presentation_types.Entry = .{ .title = record.source_title, .kind = .alias, .preamble_spans = &.{link} };
         if (tail.len != 0) {
-            const tail_payload = try presentation_document.compileReportedWithOptionsAndPoemAlloc(a, record.source_title, .alias, null, "", tail, if (display_title) |value| .{ .source = value, .page_title = record.source_title } else null, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, &fallbacks, poem_phase);
+            const tail_payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(a, record.source_title, .alias, null, "", if (missing_phase) |phase| phase.output() else MissingText.untracked(tail), if (display_title) |value| .{ .source = value, .page_title = record.source_title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, &fallbacks, poem_phase);
             entry = (try blobs.presentation_codec.decodeAlloc(a, tail_payload, record.source_title, .alias, null)).entry;
             const preamble = try a.alloc(blobs.presentation_types.Span, entry.preamble_spans.len + 2);
             preamble[0] = link;
@@ -2563,26 +2596,35 @@ pub const Writer = struct {
     }
 
     pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, display_title: ?[]const u8) !void {
-        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, .{}, &.{}, null);
+        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, .{}, &.{}, null, null);
     }
 
     pub fn addExpandedPage(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8) !void {
-        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, &.{}, null);
+        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, &.{}, null, null);
     }
 
     pub fn addExpandedPageWithReasons(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8, extra_reasons: []const []const u8) !void {
-        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, extra_reasons, null);
+        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, extra_reasons, null, null);
     }
 
     pub fn addExpandedPageWithReasonsAndPoem(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8, extra_reasons: []const []const u8, poem_metadata: ?[]const u8) !void {
         var phase_arena = std.heap.ArenaAllocator.init(page_allocator);
         defer phase_arena.deinit();
         const phase = try presentation_document.parsePoemPhaseAlloc(phase_arena.allocator(), source, display_title, poem_metadata);
-        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, extra_reasons, phase);
+        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, extra_reasons, phase, null);
+    }
+
+    pub fn addExpandedPageWithReasonsAndPhases(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, raw_source: []const u8, display_title: ?[]const u8, extra_reasons: []const []const u8, poem_metadata: ?[]const u8, missing_dependency_metadata: ?[]const u8) !void {
+        var phase_arena = std.heap.ArenaAllocator.init(page_allocator);
+        defer phase_arena.deinit();
+        const poem = try presentation_document.parsePoemPhaseAlloc(phase_arena.allocator(), source, display_title, poem_metadata);
+        var missing: ?missing_dependency.Phase = if (missing_dependency_metadata) |bytes| try missing_dependency.decode(phase_arena.allocator(), bytes, source, display_title orelse "") else null;
+        defer if (missing) |*phase| phase.deinit();
+        return self.addPageInternal(page_allocator, ns, title, source, raw_source, display_title, .{}, extra_reasons, poem, if (missing) |*phase| phase else null);
     }
 
     pub fn addPageWithFallback(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks) !void {
-        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, &.{}, null);
+        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, &.{}, null, null);
     }
 
     pub fn addExpansionFailure(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, reasons: []const []const u8) !void {
@@ -2590,7 +2632,7 @@ pub const Writer = struct {
         // synthesize. Retain an empty data-only record and put the exact cause
         // in the build report instead of inventing visible reader content.
         const source = "";
-        return self.addPageInternal(page_allocator, ns, title, source, null, null, .{ .expansion_error = true }, reasons, null);
+        return self.addPageInternal(page_allocator, ns, title, source, null, null, .{ .expansion_error = true }, reasons, null, null);
     }
 
     pub fn addPageWithFallbackReasons(
@@ -2603,7 +2645,7 @@ pub const Writer = struct {
         initial_fallbacks: presentation_document.Fallbacks,
         extra_reasons: []const []const u8,
     ) !void {
-        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, extra_reasons, null);
+        return self.addPageInternal(page_allocator, ns, title, source, source, display_title, initial_fallbacks, extra_reasons, null, null);
     }
 
     fn addPageInternal(
@@ -2617,13 +2659,17 @@ pub const Writer = struct {
         initial_fallbacks: presentation_document.Fallbacks,
         extra_reasons: []const []const u8,
         poem_phase: ?*const presentation_document.PoemPhase,
+        missing_phase: ?*const missing_dependency.Phase,
     ) !void {
         if (self.finished) return error.WriterFinished;
         var fallbacks = initial_fallbacks;
+        if (missing_phase) |phase| if (phase.occurrences().len != 0) {
+            fallbacks.missing_template = true;
+        };
         if (ns.kind == .language) {
-            try processMain(page_allocator, &self.spools, self.language_codes, title, source, raw_source, display_title, &self.stats, &fallbacks, poem_phase);
+            try processMain(page_allocator, &self.spools, self.language_codes, title, source, raw_source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
         } else {
-            try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, ns, title, source, display_title, &self.stats, &fallbacks, poem_phase);
+            try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, ns, title, source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
         }
         try self.reportFallback(page_allocator, ns, title, fallbacks, extra_reasons);
     }

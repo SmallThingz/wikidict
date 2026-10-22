@@ -7,6 +7,8 @@ pub const max_path_bytes: usize = 4096;
 pub const max_title_bytes: usize = 4096;
 const request_version: u8 = 3;
 pub const max_poem_metadata_bytes: usize = 16 * 1024 * 1024;
+// Encoder-only occurrence provenance; independent from Poem and never DPR data.
+pub const max_missing_dependency_metadata_bytes: usize = 16 * 1024 * 1024;
 const request_header_len: usize = 1 + 8 + 8 + 4 * 4;
 const success_header_len: usize = 1 + 4 * 2 + 1;
 const error_header_len: usize = 1 + 4 * 3;
@@ -25,6 +27,7 @@ pub const SuccessReply = struct {
     display_title: []const u8,
     unsupported_parser_function: bool = false,
     poem_metadata: ?[]const u8 = null,
+    missing_dependency_metadata: ?[]const u8 = null,
 };
 
 pub const ErrorReply = struct {
@@ -120,15 +123,25 @@ pub fn writeSuccess(w: *std.Io.Writer, output: []const u8, display_title: []cons
 }
 
 pub fn writeSuccessWithPoem(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool, poem_metadata: ?[]const u8) !void {
+    return writeSuccessWithMetadata(w, output, display_title, unsupported_parser_function, poem_metadata, null);
+}
+
+// Missing-dependency phase bytes are opaque here. The shared phase decoder
+// authenticates occurrence IDs/ranges against these exact output/title bytes.
+pub fn writeSuccessWithMetadata(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool, poem_metadata: ?[]const u8, missing_dependency_metadata: ?[]const u8) !void {
     if (poem_metadata) |metadata| {
         if (metadata.len == 0 or metadata.len > max_poem_metadata_bytes or !std.unicode.utf8ValidateSlice(metadata)) return error.InvalidPoemMetadata;
     }
+    if (missing_dependency_metadata) |metadata| {
+        if (metadata.len == 0 or metadata.len > max_missing_dependency_metadata_bytes or !std.unicode.utf8ValidateSlice(metadata)) return error.InvalidMissingDependencyMetadata;
+    }
     if (output.len > max_source_bytes or display_title.len > max_display_title_bytes) return error.FrameTooLarge;
-    const payload_len = try checkedFramePayload(&.{ success_header_len, if (poem_metadata != null) @as(usize, 4) else 0, output.len, display_title.len, if (poem_metadata) |metadata| metadata.len else 0 });
+    const payload_len = try checkedFramePayload(&.{ success_header_len, if (poem_metadata != null) @as(usize, 4) else 0, if (missing_dependency_metadata != null) @as(usize, 4) else 0, output.len, display_title.len, if (poem_metadata) |metadata| metadata.len else 0, if (missing_dependency_metadata) |metadata| metadata.len else 0 });
     var outer: [4]u8 = undefined;
     std.mem.writeInt(u32, &outer, payload_len, .little);
     var header: [success_header_len]u8 = undefined;
-    header[0] = if (poem_metadata != null) 4 else 0;
+    // Existing success0/4 are byte-for-byte unchanged without the new phase.
+    header[0] = if (missing_dependency_metadata != null) (if (poem_metadata != null) @as(u8, 6) else 5) else (if (poem_metadata != null) @as(u8, 4) else 0);
     try putU32(header[1..5], output.len);
     try putU32(header[5..9], display_title.len);
     header[9] = @intFromBool(unsupported_parser_function);
@@ -139,9 +152,15 @@ pub fn writeSuccessWithPoem(w: *std.Io.Writer, output: []const u8, display_title
         try putU32(&length, metadata.len);
         try w.writeAll(&length);
     }
+    if (missing_dependency_metadata) |metadata| {
+        var length: [4]u8 = undefined;
+        try putU32(&length, metadata.len);
+        try w.writeAll(&length);
+    }
     try w.writeAll(output);
     try w.writeAll(display_title);
     if (poem_metadata) |metadata| try w.writeAll(metadata);
+    if (missing_dependency_metadata) |metadata| try w.writeAll(metadata);
     try w.flush();
 }
 
@@ -178,7 +197,7 @@ pub fn writeError(w: *std.Io.Writer, stage: []const u8, error_name: []const u8, 
 
 pub fn decodeReply(bytes: []const u8) !Reply {
     if (bytes.len == 0 or bytes.len > max_frame_bytes) return error.InvalidFrame;
-    if (bytes[0] == 0 or bytes[0] == 4) {
+    if (bytes[0] == 0 or bytes[0] == 4 or bytes[0] == 5 or bytes[0] == 6) {
         if (bytes.len < success_header_len) return error.InvalidFrame;
         var cursor: usize = 1;
         const output_len = try takeU32(bytes, &cursor);
@@ -186,16 +205,22 @@ pub fn decodeReply(bytes: []const u8) !Reply {
         if (output_len > max_source_bytes or display_title_len > max_display_title_bytes) return error.InvalidFrame;
         const diagnostic = (try take(bytes, &cursor, 1))[0];
         if (diagnostic > 1) return error.InvalidFrame;
-        const metadata_len = if (bytes[0] == 4) try takeU32(bytes, &cursor) else 0;
-        if (bytes[0] == 4 and (metadata_len == 0 or metadata_len > max_poem_metadata_bytes)) return error.InvalidFrame;
+        const has_poem = bytes[0] == 4 or bytes[0] == 6;
+        const has_missing = bytes[0] == 5 or bytes[0] == 6;
+        const metadata_len = if (has_poem) try takeU32(bytes, &cursor) else 0;
+        const missing_len = if (has_missing) try takeU32(bytes, &cursor) else 0;
+        if (has_poem and (metadata_len == 0 or metadata_len > max_poem_metadata_bytes)) return error.InvalidFrame;
+        if (has_missing and (missing_len == 0 or missing_len > max_missing_dependency_metadata_bytes)) return error.InvalidFrame;
         const success: SuccessReply = .{
             .unsupported_parser_function = diagnostic == 1,
             .output = try take(bytes, &cursor, output_len),
             .display_title = try take(bytes, &cursor, display_title_len),
-            .poem_metadata = if (bytes[0] == 4) try take(bytes, &cursor, metadata_len) else null,
+            .poem_metadata = if (has_poem) try take(bytes, &cursor, metadata_len) else null,
+            .missing_dependency_metadata = if (has_missing) try take(bytes, &cursor, missing_len) else null,
         };
         if (cursor != bytes.len) return error.InvalidFrame;
         if (success.poem_metadata) |metadata| if (!std.unicode.utf8ValidateSlice(metadata)) return error.InvalidFrame;
+        if (success.missing_dependency_metadata) |metadata| if (!std.unicode.utf8ValidateSlice(metadata)) return error.InvalidFrame;
         return .{ .output = success };
     }
     if (bytes[0] == 3) {
@@ -337,7 +362,7 @@ test "Poem success rejects truncated unknown oversized and invalid UTF8 metadata
     @memcpy(bad, payload);
     bad[bad.len - 1] = 0xff;
     try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
-    bad[0] = 5;
+    bad[0] = 7;
     try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
     try std.testing.expectError(error.InvalidPoemMetadata, writeSuccessWithPoem(&bytes.writer, "", "", false, ""));
     try std.testing.expectError(error.InvalidPoemMetadata, writeSuccessWithPoem(&bytes.writer, "", "", false, &.{0xff}));
@@ -358,4 +383,64 @@ test "bundle request version rejects old native workers" {
     try std.testing.expectError(error.InvalidFrame, decodeRequest(payload));
     payload[0] = 4;
     try std.testing.expectError(error.InvalidFrame, decodeRequest(payload));
+}
+
+test "missing dependency phase preserves legacy success bytes and independent metadata slices" {
+    var legacy: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer legacy.deinit();
+    try writeSuccessWithMetadata(&legacy.writer, "B", "T", false, null, null);
+    try std.testing.expectEqualSlices(u8, &.{ 12, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 'B', 'T' }, legacy.written());
+    var poem_only: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer poem_only.deinit();
+    try writeSuccessWithMetadata(&poem_only.writer, "B", "T", false, "{}", null);
+    try std.testing.expectEqualSlices(u8, &.{ 18, 0, 0, 0, 4, 1, 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 'B', 'T', '{', '}' }, poem_only.written());
+    const phase = "{\"schema\":\"wikidict.missing-dependency-phase.v1\"}";
+    for ([_]?[]const u8{ null, "{}" }) |poem| {
+        var framed: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer framed.deinit();
+        try writeSuccessWithMetadata(&framed.writer, "body", "title", true, poem, phase);
+        const payload = framed.written()[4..];
+        try std.testing.expectEqual(@as(u8, if (poem != null) 6 else 5), payload[0]);
+        try std.testing.expectEqual(@as(u32, @intCast(payload.len)), std.mem.readInt(u32, framed.written()[0..4], .little));
+        const decoded = (try decodeReply(payload)).output;
+        try std.testing.expectEqualStrings("body", decoded.output);
+        try std.testing.expectEqualStrings("title", decoded.display_title);
+        try std.testing.expect(decoded.unsupported_parser_function);
+        try std.testing.expectEqualStrings(phase, decoded.missing_dependency_metadata.?);
+        const offset: usize = (if (poem != null) @as(usize, 18) else 14) + 4 + 5 + (if (poem) |value| value.len else 0);
+        try std.testing.expect(decoded.missing_dependency_metadata.?.ptr == payload[offset..].ptr);
+        if (poem) |value| try std.testing.expectEqualStrings(value, decoded.poem_metadata.?) else try std.testing.expect(decoded.poem_metadata == null);
+    }
+}
+
+test "missing dependency phase strictly rejects malformed lengths truncation and UTF8" {
+    for ([_]?[]const u8{ null, "{}" }) |poem| {
+        var framed: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer framed.deinit();
+        try writeSuccessWithMetadata(&framed.writer, "body", "title", false, poem, "{}");
+        const payload = framed.written()[4..];
+        for (0..payload.len) |end| try std.testing.expectError(error.InvalidFrame, decodeReply(payload[0..end]));
+        const bad = try std.testing.allocator.dupe(u8, payload);
+        defer std.testing.allocator.free(bad);
+        const at: usize = if (poem != null) 14 else 10;
+        for ([_]u32{ 0, @intCast(max_missing_dependency_metadata_bytes + 1), 0xffff_ffff }) |length| {
+            @memcpy(bad, payload);
+            std.mem.writeInt(u32, bad[at..][0..4], length, .little);
+            try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
+        }
+        @memcpy(bad, payload);
+        bad[bad.len - 1] = 0xff;
+        try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
+        @memcpy(bad, payload);
+        bad[9] = 2;
+        try std.testing.expectError(error.InvalidFrame, decodeReply(bad));
+        try framed.writer.writeByte(0);
+        try std.testing.expectError(error.InvalidFrame, decodeReply(framed.written()[4..]));
+    }
+    var invalid: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer invalid.deinit();
+    try std.testing.expectError(error.InvalidMissingDependencyMetadata, writeSuccessWithMetadata(&invalid.writer, "", "", false, null, ""));
+    try std.testing.expectError(error.InvalidMissingDependencyMetadata, writeSuccessWithMetadata(&invalid.writer, "", "", false, null, &.{0xff}));
+    try std.testing.expectEqual(@as(usize, 0), invalid.written().len);
+    try std.testing.expectError(error.FrameTooLarge, checkedFramePayload(&.{ success_header_len + 8, max_source_bytes, max_poem_metadata_bytes, max_missing_dependency_metadata_bytes }));
 }

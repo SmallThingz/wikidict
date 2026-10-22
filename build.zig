@@ -23,6 +23,9 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = test_optimize,
     });
+    // Build-only occurrence coordinates are shared by producer and receiver.
+    const missing_dependency_mod = b.createModule(.{ .root_source_file = b.path("src/shared/missing_dependency.zig"), .target = target, .optimize = optimize });
+    const missing_dependency_test_mod = b.createModule(.{ .root_source_file = b.path("src/shared/missing_dependency.zig"), .target = target, .optimize = test_optimize });
     const shared_xml_decode_mod = b.createModule(.{
         .root_source_file = b.path("src/shared/xml_decode.zig"),
         .target = target,
@@ -94,6 +97,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod.addImport("shared_xml_decode", shared_xml_decode_mod);
     encoder_mod.addImport("blob_encoder", blob_encoder_mod);
     encoder_mod.addImport("build_diagnostics", build_diagnostics_mod);
+    encoder_mod.addImport("missing_dependency", missing_dependency_mod);
 
     const encoder_mod_test = b.addModule("encoder_test", .{
         .root_source_file = b.path("src/encoder/root.zig"),
@@ -104,6 +108,7 @@ pub fn build(b: *std.Build) void {
     encoder_mod_test.addImport("shared_xml_decode", shared_xml_decode_mod_test);
     encoder_mod_test.addImport("blob_encoder", blob_encoder_mod_test);
     encoder_mod_test.addImport("build_diagnostics", build_diagnostics_test_mod);
+    encoder_mod_test.addImport("missing_dependency", missing_dependency_test_mod);
 
     const blob_decoder_mod = b.addModule("blob_decoder", .{
         .root_source_file = b.path("src/decoder/blob_root.zig"),
@@ -391,6 +396,7 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     lua_tests.root_module.addImport("namespace_registry", namespace_registry_test_mod);
+    lua_tests.root_module.addImport("missing_dependency", missing_dependency_test_mod);
     lua_tests.root_module.linkSystemLibrary("LLVM", .{ .use_pkg_config = .no });
     lua_tests.root_module.linkSystemLibrary("bz2", .{});
     lua_tests.root_module.linkSystemLibrary("zstd", .{});
@@ -421,6 +427,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     zig_runtime_test_mod.addImport("namespace_registry", namespace_registry_test_mod);
+    zig_runtime_test_mod.addImport("missing_dependency", missing_dependency_test_mod);
     zig_runtime_test_mod.addImport("lua_static_fields", lua_static_fields_test_mod);
     const value_leaf_test_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/value_leaf_build.zig"),
@@ -553,6 +560,7 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    lua_scribunto_tests.root_module.addImport("missing_dependency", missing_dependency_test_mod);
     const lua_wikitext_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/lua/runtime/wikitext.zig"),
@@ -569,6 +577,7 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
+    lua_wikitext_tests.root_module.addImport("missing_dependency", missing_dependency_test_mod);
     const blob_wasm_smoke = b.addObject(.{
         .name = "dict-blob-wasm-smoke",
         .root_module = b.createModule(.{
@@ -668,6 +677,9 @@ pub fn build(b: *std.Build) void {
     const run_closure_tests = b.addRunArtifact(closure_tests);
     b.step("test-usage-closure", "Test sparse cross-namespace transclusion closure").dependOn(&run_closure_tests.step);
     const test_step = b.step("test", "Run bundle encoder, data reader, Lua, and tooling tests");
+    const missing_dependency_tests = b.addTest(.{ .root_module = missing_dependency_test_mod, .test_runner = .{ .path = test_runner, .mode = .simple } });
+    const run_missing_dependency_tests = b.addRunArtifact(missing_dependency_tests);
+    test_step.dependOn(&run_missing_dependency_tests.step);
     b.step("test-lua-core", "Run Lua runtime core tests serially").dependOn(&run_lua_core_tests_only.step);
     b.step("test-global-index", "Run Lua global-name index tests serially").dependOn(&run_global_index_tests_only.step);
     b.step("test-lua-abi", "Run Lua LLVM ABI tests serially").dependOn(&run_lua_abi_tests_only.step);
@@ -747,6 +759,7 @@ fn bundleValueLeafObject(b: *std.Build) *std.Build.Step.Compile {
             .{ .name = "namespace_registry", .module = namespace },
         },
     });
+    runtime.addImport("missing_dependency", b.createModule(.{ .root_source_file = b.path("src/shared/missing_dependency.zig"), .target = target, .optimize = .fast }));
     return b.addObject(.{
         .name = "value_leaf_build",
         .root_module = b.createModule(.{
@@ -774,9 +787,11 @@ fn bundleWorkerObject(b: *std.Build) *std.Build.Step.Compile {
     const expression = workerModule(b, "src/lua/wikitext/expression.zig");
     const xml = workerModule(b, "src/shared/xml_decode.zig");
     const dump = workerModule(b, "src/shared/wikimedia_dump.zig");
+    const missing_dependency = workerModule(b, "src/shared/missing_dependency.zig");
     const runtime = workerModule(b, "src/lua/runtime/core.zig");
     runtime.addImport("lua_static_fields", fields);
     runtime.addImport("namespace_registry", namespace);
+    runtime.addImport("missing_dependency", missing_dependency);
     const static_decode = workerModule(b, "src/lua/runtime/static_literal_decode.zig");
     static_decode.addImport("zig_runtime", runtime);
     static_decode.addImport("lua_static_literal_format", static_format);
@@ -789,6 +804,7 @@ fn bundleWorkerObject(b: *std.Build) *std.Build.Step.Compile {
     scribunto.addImport("lua_wikitext_preprocess", preprocess);
     scribunto.addImport("lua_wikitext_expression", expression);
     scribunto.addImport("shared_xml_decode", xml);
+    scribunto.addImport("missing_dependency", missing_dependency);
     const program = workerModule(b, "src/lua/runtime/llvm_program.zig");
     program.addImport("zig_runtime", runtime);
     program.addImport("zig_stdlib", stdlib);
@@ -807,6 +823,7 @@ fn bundleWorkerObject(b: *std.Build) *std.Build.Step.Compile {
     root.addImport("shared_xml_decode", xml);
     root.addImport("lua_wikitext_preprocess", preprocess);
     root.addImport("wikimedia_dump", dump);
+    root.addImport("missing_dependency", missing_dependency);
     return b.addObject(.{
         .name = "dict-bundle-runtime",
         .root_module = root,

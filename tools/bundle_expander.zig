@@ -10,6 +10,7 @@ pub const Expansion = struct {
     display_title: ?[]const u8 = null,
     unsupported_parser_function: bool = false,
     poem_metadata: ?[]const u8 = null,
+    missing_dependency_metadata: ?[]const u8 = null,
 };
 
 pub const Failure = protocol.ErrorReply;
@@ -288,6 +289,7 @@ pub const Worker = struct {
                 .output => |success| return .{
                     .source = success.output,
                     .poem_metadata = success.poem_metadata,
+                    .missing_dependency_metadata = success.missing_dependency_metadata,
                     .unsupported_parser_function = success.unsupported_parser_function,
                     .display_title = if (success.display_title.len == 0) null else success.display_title,
                 },

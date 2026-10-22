@@ -1,4 +1,5 @@
 const std = @import("std");
+const dependency = @import("missing_dependency");
 const shared_xml_decode = @import("shared_xml_decode");
 const LocalBumpArena = rt.LocalBumpArena;
 const work_stats = rt.work_stats;
@@ -204,6 +205,11 @@ pub const Expander = struct {
     display_title: ?[]const u8 = null,
     unsupported_parser_function: bool = false,
     poem_metadata: ?[]const u8 = null,
+    missing_dependency_metadata: ?[]const u8 = null,
+    dependency_page: dependency.Page = .{},
+    dependency_display_title: dependency.Text = .{ .bytes = "" },
+    dependency_arguments: std.ArrayList(DependencyArgument) = .empty,
+    dependency_native_arguments_disabled: bool = false,
     poem_handled_empty: bool = false,
     poem_items: std.ArrayList(PoemItem) = .empty,
     poem_literal_bytes: usize = 0,
@@ -218,6 +224,7 @@ pub const Expander = struct {
     lazy_template_args: std.ArrayList(LazyTemplateArgs) = .empty,
     transclusion_frame: ?*const TransclusionFrame = null,
     usage_recovery: ?*UsageRecovery = null,
+    const DependencyArgument = struct { target: *rt.Table, key: Value, value: dependency.Text };
     const UsageRecovery = struct {
         args: *rt.Table,
         exact_wrapper: bool = false,
@@ -279,6 +286,11 @@ pub const Expander = struct {
         self.display_title = null;
         self.unsupported_parser_function = false;
         self.poem_metadata = null;
+        self.missing_dependency_metadata = null;
+        self.dependency_page = .{};
+        self.dependency_display_title = .{ .bytes = "" };
+        self.dependency_arguments = .empty;
+        self.dependency_native_arguments_disabled = false;
         self.poem_handled_empty = false;
         self.poem_items = .empty;
         self.poem_literal_bytes = 0;
@@ -363,6 +375,7 @@ pub const Expander = struct {
         const a = self.page_allocator orelse self.runtime.allocator;
         const previous = self.display_title;
         self.display_title = try a.dupe(u8, value);
+        self.dependency_display_title = dependency.Text.transformed(self.display_title.?);
         if (previous) |old| if (!std.mem.eql(u8, old, value))
             return "<span class=\"error\"><strong>Warning:</strong> Display title overrides earlier display title.</span>";
         return "";
@@ -516,7 +529,8 @@ pub const Expander = struct {
         if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(comments_start);
         defer self.runtime.allocator.free(stripped);
         const params = try self.runtime.newTable();
-        var output = try self.expandPageWikitext(stripped, params, title);
+        var output_text = try self.expandPageWikitextTracked(stripped, params, title);
+        var output = output_text.bytes;
         errdefer self.runtime.allocator.free(output);
         if (std.mem.indexOf(u8, output, "<!--") != null) {
             if (work_stats.current()) |work| work.comment_bytes +|= output.len;
@@ -524,13 +538,16 @@ pub const Expander = struct {
             const normalized = try preprocess.stripExpandedComments(self.runtime.allocator, output);
             self.runtime.allocator.free(output);
             output = normalized;
+            output_text = dependency.Text.transformed(output);
             if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(start);
         }
         const restored_hiero = try self.restoreHieroMarkers(self.runtime.allocator, output);
         if (restored_hiero.ptr != output.ptr) self.runtime.allocator.free(output);
+        if (restored_hiero.ptr != output.ptr or restored_hiero.len != output.len) output_text = dependency.Text.transformed(restored_hiero);
         output = restored_hiero;
         const finalized_nowiki = try self.finalizeNowikiMarkers(self.runtime.allocator, output);
         if (finalized_nowiki.ptr != output.ptr) self.runtime.allocator.free(output);
+        if (finalized_nowiki.ptr != output.ptr or finalized_nowiki.len != output.len) output_text = dependency.Text.transformed(finalized_nowiki);
         output = finalized_nowiki;
         if (self.display_title) |display| {
             const general = try self.restoreHieroMarkers(self.runtime.allocator, display);
@@ -538,9 +555,30 @@ pub const Expander = struct {
         }
         const normalized = try self.normalizeUnknownPoemAlloc(output);
         if (normalized.ptr != output.ptr) self.runtime.allocator.free(output);
+        if (normalized.ptr != output.ptr or normalized.len != output.len) output_text = dependency.Text.transformed(normalized);
         output = normalized;
         if (self.display_title) |display| self.display_title = try self.normalizeUnknownPoemAlloc(display);
         try self.finishPoemMetadata(output);
+        // The existing normalization helpers return the original slice when
+        // they make no edit. An edited result conservatively loses its ranges.
+        const final_title = self.display_title orelse "";
+        var title_text = self.dependency_display_title;
+        if (title_text.bytes.ptr != final_title.ptr or title_text.bytes.len != final_title.len)
+            title_text = dependency.Text.transformed(final_title);
+        if (self.dependency_page.occurrences.items.len != 0) {
+            output_text.unknown = output_text.unknown or self.dependency_page.metadata_unknown;
+            // Protocol max_frame_bytes is a payload ceiling: its outer four
+            // length bytes are excluded. Header10 + optional Poem length4 +
+            // missing phase length4 remain included. Never alter visible bytes.
+            const max_frame_bytes: usize = 32 * 1024 * 1024;
+            const poem_bytes = if (self.poem_metadata) |bytes| 4 +| bytes.len else 0;
+            const occupied = 10 +| output.len +| final_title.len +| poem_bytes +| 4;
+            const available = max_frame_bytes -| occupied;
+            const encoded = try dependency.encodeBudgeted(self.page_allocator orelse self.runtime.allocator, output_text, title_text, self.dependency_page.occurrences.items, available);
+            self.missing_dependency_metadata = encoded.metadata;
+            if (encoded.limited or self.dependency_page.metadata_unknown)
+                work_stats.logLine("warning: missing dependency provenance capacity: page={s} source-bytes={d} title-bytes={d} occurrence-count={d} phase={s} semantic-completeness=unknown\n", .{ title[0..@min(title.len, 256)], output.len, final_title.len, self.dependency_page.occurrences.items.len, if (encoded.metadata != null) @as([]const u8, "bounded") else "absent" });
+        }
         return output;
     }
 
@@ -579,51 +617,7 @@ pub const Expander = struct {
     }
 
     fn expandPageWikitext(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8) anyerror![]const u8 {
-        if (work_stats.current()) |work| {
-            work.scan_calls +|= 1;
-            work.scan_bytes +|= text.len;
-        }
-        var out: std.ArrayList(u8) = .empty;
-        errdefer out.deinit(self.runtime.allocator);
-        var pos: usize = 0;
-        var expansion_scan: preprocess.ExpansionScan = .{};
-        while (expansion_scan.next(text, pos, true)) |node| {
-            if (work_stats.current()) |work| work.constructs +|= 1;
-            const open = switch (node) {
-                .construct => |v| v.open,
-                .poem => |v| v.open,
-            };
-            const literal = text[pos..open];
-            try self.observePageOutput(literal);
-            try self.appendPoemLiteral(&out, literal, false);
-            var template = false;
-            const expanded = switch (node) {
-                .poem => |region| blk: {
-                    pos = region.end;
-                    break :blk try self.expandPoemNode(text, region, params, host_title, 1, false);
-                },
-                .construct => |construct| switch (construct.kind) {
-                    .parameter => blk: {
-                        pos = construct.close + 3;
-                        break :blk try self.expandParameter(text[construct.open + 3 .. construct.close], params, host_title, 1);
-                    },
-                    .template => blk: {
-                        pos = construct.close + 2;
-                        template = true;
-                        break :blk try self.expandConstruct(text[construct.open + 2 .. construct.close], params, host_title, 1);
-                    },
-                },
-            };
-            if (template and implicitBlockNewline(text, open, expanded)) {
-                try self.observePageOutput("\n");
-                try out.append(self.runtime.allocator, '\n');
-            }
-            try self.observePageOutput(expanded);
-            try out.appendSlice(self.runtime.allocator, expanded);
-        }
-        try self.observePageOutput(text[pos..]);
-        try self.appendPoemLiteral(&out, text[pos..], false);
-        return out.toOwnedSlice(self.runtime.allocator);
+        return (try self.expandPageWikitextTracked(text, params, host_title)).bytes;
     }
 
     fn valueToWikitext(self: *Expander, value: Value) ![]const u8 {
@@ -1071,12 +1065,16 @@ pub const Expander = struct {
         return self.expandWikitextMode(text, params, host_title, depth, true, false);
     }
     fn expandWikitextMode(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize, allow_poem: bool, prepared: bool) anyerror![]const u8 {
+        return (try self.expandWikitextModeTracked(text, params, host_title, depth, allow_poem, prepared)).bytes;
+    }
+
+    fn expandWikitextModeTracked(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize, allow_poem: bool, prepared: bool) anyerror!dependency.Text {
         if (depth > self.max_depth) return error.TemplateDepth;
         if (work_stats.current()) |work| {
             work.scan_calls +|= 1;
             work.scan_bytes +|= text.len;
         }
-        var out: std.ArrayList(u8) = .empty;
+        var out: dependency.Builder = .{};
         errdefer out.deinit(self.runtime.allocator);
         var pos: usize = 0;
         var expansion_scan: preprocess.ExpansionScan = .{};
@@ -1085,26 +1083,343 @@ pub const Expander = struct {
                 .construct => |v| v.open,
                 .poem => |v| v.open,
             };
-            try self.appendPoemLiteral(&out, text[pos..open], prepared);
+            try self.appendPoemLiteral(&out.bytes, text[pos..open], prepared);
             if (work_stats.current()) |work| work.constructs +|= 1;
             switch (node) {
                 .poem => |region| {
-                    try out.appendSlice(self.runtime.allocator, try self.expandPoemNode(text, region, params, host_title, depth + 1, prepared));
+                    try out.append(self.runtime.allocator, dependency.Text.transformed(try self.expandPoemNode(text, region, params, host_title, depth + 1, prepared)));
                     pos = region.end;
                 },
                 .construct => |construct| {
                     const expanded = switch (construct.kind) {
-                        .parameter => try self.expandParameter(text[construct.open + 3 .. construct.close], params, host_title, depth + 1),
-                        .template => try self.expandConstruct(text[construct.open + 2 .. construct.close], params, host_title, depth + 1),
+                        .parameter => try self.expandParameterTracked(text[construct.open + 3 .. construct.close], params, host_title, depth + 1),
+                        .template => try self.expandConstructTracked(text[construct.open + 2 .. construct.close], params, host_title, depth + 1),
                     };
-                    if (construct.kind == .template and implicitBlockNewline(text, construct.open, expanded)) try out.append(self.runtime.allocator, '\n');
-                    try out.appendSlice(self.runtime.allocator, expanded);
+                    if (construct.kind == .template and implicitBlockNewline(text, construct.open, expanded.bytes)) try out.append(self.runtime.allocator, dependency.Text.untracked("\n"));
+                    try out.append(self.runtime.allocator, expanded);
                     pos = construct.close + if (construct.kind == .parameter) @as(usize, 3) else 2;
                 },
             }
         }
-        try self.appendPoemLiteral(&out, text[pos..], prepared);
-        return out.toOwnedSlice(self.runtime.allocator);
+        try self.appendPoemLiteral(&out.bytes, text[pos..], prepared);
+        return out.finish(self.runtime.allocator);
+    }
+
+    fn expandWikitextTracked(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!dependency.Text {
+        return self.expandWikitextModeTracked(text, params, host_title, depth, true, false);
+    }
+    fn trimDependency(self: *Expander, value: dependency.Text, characters: []const u8) !dependency.Text {
+        const trimmed = std.mem.trim(u8, value.bytes, characters);
+        if (value.ranges.len == 0) return .{ .bytes = trimmed, .unknown = value.unknown };
+        const left = value.bytes.len - std.mem.trimStart(u8, value.bytes, characters).len;
+        return dependency.slice(self.page_allocator orelse self.runtime.allocator, value, left, left + trimmed.len);
+    }
+    fn invalidateNativeDependencyArguments(self: *Expander) void {
+        // Once any Lua caller can observe/mutate argument tables, never infer
+        // provenance from their later values, even when the bytes are equal.
+        self.dependency_native_arguments_disabled = true;
+        self.dependency_arguments.items.len = 0;
+    }
+    fn nativeDependencyArgument(self: *Expander, params: *rt.Table, key: Value) ?dependency.Text {
+        if (self.dependency_native_arguments_disabled) return null;
+        for (self.dependency_arguments.items) |item| {
+            if (item.target == params and rt.rawEqual(item.key, key)) return item.value;
+        }
+        return null;
+    }
+    fn rememberDependencyArgument(self: *Expander, params: *rt.Table, key: Value, value: dependency.Text) !void {
+        if (self.dependency_native_arguments_disabled or value.ranges.len == 0) return;
+        if (self.dependency_arguments.items.len >= dependency.max_metadata_bytes / @sizeOf(DependencyArgument)) {
+            self.invalidateNativeDependencyArguments();
+            self.dependency_page.metadata_unknown = true;
+            return;
+        }
+        const a = self.page_allocator orelse self.runtime.allocator;
+        const owned_key: Value = if (key == .string) .{ .string = try a.dupe(u8, key.string) } else key;
+        try self.dependency_arguments.append(a, .{ .target = params, .key = owned_key, .value = try dependency.duplicate(a, value) });
+    }
+
+    fn expandPageWikitextTracked(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8) anyerror!dependency.Text {
+        if (work_stats.current()) |work| {
+            work.scan_calls +|= 1;
+            work.scan_bytes +|= text.len;
+        }
+        var out: dependency.Builder = .{};
+        errdefer out.deinit(self.runtime.allocator);
+        var pos: usize = 0;
+        var expansion_scan: preprocess.ExpansionScan = .{};
+        while (expansion_scan.next(text, pos, true)) |node| {
+            if (work_stats.current()) |work| work.constructs +|= 1;
+            const open = switch (node) {
+                .construct => |v| v.open,
+                .poem => |v| v.open,
+            };
+            const literal = text[pos..open];
+            try self.observePageOutput(literal);
+            try self.appendPoemLiteral(&out.bytes, literal, false);
+            var template = false;
+            const expanded = switch (node) {
+                .poem => |region| blk: {
+                    pos = region.end;
+                    break :blk dependency.Text.transformed(try self.expandPoemNode(text, region, params, host_title, 1, false));
+                },
+                .construct => |construct| switch (construct.kind) {
+                    .parameter => blk: {
+                        pos = construct.close + 3;
+                        break :blk try self.expandParameterTracked(text[construct.open + 3 .. construct.close], params, host_title, 1);
+                    },
+                    .template => blk: {
+                        pos = construct.close + 2;
+                        template = true;
+                        break :blk try self.expandConstructTracked(text[construct.open + 2 .. construct.close], params, host_title, 1);
+                    },
+                },
+            };
+            if (template and implicitBlockNewline(text, open, expanded.bytes)) {
+                try self.observePageOutput("\n");
+                try out.append(self.runtime.allocator, dependency.Text.untracked("\n"));
+            }
+            try self.observePageOutput(expanded.bytes);
+            try out.append(self.runtime.allocator, expanded);
+        }
+        try self.observePageOutput(text[pos..]);
+        try self.appendPoemLiteral(&out.bytes, text[pos..], false);
+        return out.finish(self.runtime.allocator);
+    }
+
+    fn expandTransclusionTextTracked(self: *Expander, title: []const u8, text: []const u8, args: *rt.Table, depth: usize) anyerror!dependency.Text {
+        const frame: TransclusionFrame = .{ .title = title, .parent = self.transclusion_frame };
+        self.transclusion_frame = &frame;
+        defer self.transclusion_frame = frame.parent;
+        if (self.usage_recovery) |recovery| {
+            if (recovery.args == args and std.mem.eql(u8, std.mem.trim(u8, text, " \t\r\n"), "{{#invoke:usex|display|short=1}}"))
+                recovery.exact_wrapper = true;
+        }
+        return self.expandWikitextTracked(text, args, title, depth);
+    }
+
+    fn expandTemplateSourceTracked(self: *Expander, title: []const u8, raw: []const u8, args: *rt.Table, depth: usize) anyerror!dependency.Text {
+        if (work_stats.current()) |work| {
+            work.template_preprocess_calls +|= 1;
+            work.template_preprocess_bytes +|= raw.len;
+        }
+        const preprocess_start = work_stats.cpuNow();
+        const body = try preprocess.transcludeDecodedForParsingAlloc(self.runtime.allocator, raw);
+        if (work_stats.current()) |work| work.template_preprocess_ns +|= work_stats.elapsed(preprocess_start);
+        defer self.runtime.allocator.free(body);
+        return self.expandTransclusionTextTracked(title, body, args, depth + 1);
+    }
+
+    fn expandTemplateByNameTracked(self: *Expander, raw_name: []const u8, args: *rt.Table, host_title: ?[]const u8, depth: usize, missing: MissingTemplate) anyerror!dependency.Text {
+        if (depth > self.max_depth) return error.TemplateDepth;
+        if (self.template_depth >= self.max_template_depth) return error.TemplateDepth;
+        self.template_depth += 1;
+        defer self.template_depth -= 1;
+        const title = try self.normalizeTransclusionName(raw_name, host_title);
+        if (self.provider.get_transclusion_body) |get| {
+            const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
+                return self.missingTemplateResultTracked(raw_name, title, missing);
+            defer if (!body.borrowed) self.runtime.allocator.free(body.text);
+            if (try self.templateLoopWarning(title, body.title)) |warning| return dependency.Text.untracked(warning);
+            return self.expandTransclusionTextTracked(body.title, body.text, args, depth + 1);
+        }
+        const raw = if (self.provider.get_transclusion) |get|
+            (try get(self.provider.ctx, self.runtime.allocator, title)) orelse
+                return self.missingTemplateResultTracked(raw_name, title, missing)
+        else
+            (try hostPageContent(self, self.runtime.allocator, title)) orelse
+                return self.missingTemplateResultTracked(raw_name, title, missing);
+        if (try self.templateLoopWarning(title, title)) |warning| return dependency.Text.untracked(warning);
+        return self.expandTemplateSourceTracked(title, raw, args, depth);
+    }
+
+    fn expandTemplateBySymbolTracked(self: *Expander, symbol: CallSymbol, args: *rt.Table, host_title: ?[]const u8, depth: usize) anyerror!dependency.Text {
+        if (depth > self.max_depth) return error.TemplateDepth;
+        if (self.template_depth >= self.max_template_depth) return error.TemplateDepth;
+        self.template_depth += 1;
+        defer self.template_depth -= 1;
+        const title = try self.normalizeTransclusionName(symbol.text, host_title);
+        if (self.provider.get_template_symbol == null) if (self.provider.get_transclusion_body) |get| {
+            const body = (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return self.missingTemplateMarkupTracked(title);
+            defer if (!body.borrowed) self.runtime.allocator.free(body.text);
+            if (try self.templateLoopWarning(title, body.title)) |warning| return dependency.Text.untracked(warning);
+            return self.expandTransclusionTextTracked(body.title, body.text, args, depth + 1);
+        };
+        const raw = if (self.provider.get_template_symbol) |get|
+            (try get(self.provider.ctx, self.runtime.allocator, symbol.id)) orelse return self.missingTemplateMarkupTracked(title)
+        else if (self.provider.get_transclusion) |get|
+            (try get(self.provider.ctx, self.runtime.allocator, title)) orelse return self.missingTemplateMarkupTracked(title)
+        else
+            (try hostPageContent(self, self.runtime.allocator, title)) orelse return self.missingTemplateMarkupTracked(title);
+        if (try self.templateLoopWarning(title, title)) |warning| return dependency.Text.untracked(warning);
+        return self.expandTemplateSourceTracked(title, raw, args, depth);
+    }
+
+    fn expandTemplateWithUsageRecoveryTracked(self: *Expander, name: []const u8, symbol: ?CallSymbol, args: *rt.Table, raw_args: []const []const u8, host_title: []const u8, depth: usize) anyerror!dependency.Text {
+        // Unrelated corpus templates keep their original normalization path:
+        // the prefilter borrows bytes and allocates nothing.
+        const candidate = if (symbol) |value| value.text else name;
+        const colon = std.mem.lastIndexOfScalar(u8, candidate, ':');
+        const basename = std.mem.trim(u8, candidate[if (colon) |at| at + 1 else 0..], " \t\r\n");
+        if (!std.mem.eql(u8, basename, "ux") and !std.mem.eql(u8, basename, "usex")) {
+            return if (symbol) |value|
+                self.expandTemplateBySymbolTracked(value, args, host_title, depth)
+            else
+                self.expandTemplateByNameTracked(name, args, host_title, depth, .link);
+        }
+        const title = try self.normalizeTransclusionName(name, host_title);
+        const resolved = self.runtime.namespace_catalog.?.ofTitle(title);
+        const eligible = resolved.id == 10 and (std.mem.eql(u8, resolved.text, "ux") or std.mem.eql(u8, resolved.text, "usex"));
+        var recovery: UsageRecovery = .{ .args = args };
+        const previous = self.usage_recovery;
+        if (eligible) self.usage_recovery = &recovery;
+        defer self.usage_recovery = previous;
+        const expanded = if (symbol) |value|
+            try self.expandTemplateBySymbolTracked(value, args, host_title, depth)
+        else
+            try self.expandTemplateByNameTracked(name, args, host_title, depth, .link);
+        if (!eligible or !recovery.exact_wrapper or !recovery.missing_display) return expanded;
+        const recovered = (try self.usageSemanticHtml(args, raw_args)) orelse return expanded;
+        work_stats.logLine("warning: native usage content recovery: article={s} template={s} module=usex export=display failure=InvokeFunctionMissing diagnostic=build-log recovery=recovered\n", .{ host_title[0..@min(host_title.len, 256)], title[0..@min(title.len, 256)] });
+        return dependency.Text.transformed(recovered);
+    }
+
+    fn missingTemplateMarkupTracked(self: *Expander, title: []const u8) !dependency.Text {
+        const bytes = try self.missingTemplateMarkup(title);
+        return self.dependency_page.missing(self.page_allocator orelse self.runtime.allocator, title, bytes);
+    }
+    fn missingTemplateResultTracked(self: *Expander, raw_name: []const u8, title: []const u8, mode: MissingTemplate) !dependency.Text {
+        if (mode == .link) return self.missingTemplateMarkupTracked(title);
+        return dependency.Text.transformed(try self.missingTemplateResult(raw_name, title, mode));
+    }
+
+    fn resolveLazyTemplateArgTracked(self: *Expander, params: *rt.Table, key: Value) anyerror!?dependency.Text {
+        const lazy = self.lazyTemplateArgsFor(params) orelse return null;
+        const raw = lazy.raw_values.rawGet(key) orelse return null;
+        if (raw != .string) return error.StringExpected;
+        // PPTemplateFrame expands argument nodes in its parent frame. A nested
+        // invocation supplied by the caller is not recursion by this callee.
+        const callee_frame = self.transclusion_frame;
+        self.transclusion_frame = lazy.caller_transclusion_frame;
+        defer self.transclusion_frame = callee_frame;
+        const expanded_raw = try self.expandWikitextTracked(raw.string, lazy.caller_params, lazy.caller_title, lazy.depth + 1);
+        const trim_value = key == .string or
+            (key == .number and std.mem.indexOfScalar(f64, lazy.named_numeric_keys, key.number) != null);
+        const expanded = if (trim_value)
+            try self.trimDependency(expanded_raw, " \t\r\n\x00\x0b")
+        else
+            expanded_raw;
+        try params.rawSet(self.runtime.allocator, key, .{ .string = expanded.bytes });
+        try self.rememberDependencyArgument(params, key, expanded);
+        return expanded;
+    }
+
+    fn expandParameterTracked(self: *Expander, inside: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!dependency.Text {
+        const split = preprocess.splitParameter(inside);
+        const expanded_key = try self.expandWikitext(split.key, params, host_title, depth + 1);
+        const key_text = std.mem.trim(u8, expanded_key, " \t\r\n");
+        const key: Value = if (std.fmt.parseInt(i64, key_text, 10)) |number|
+            .{ .number = @floatFromInt(number) }
+        else |_|
+            .{ .string = key_text };
+        if (params.rawGet(key)) |value| return self.nativeDependencyArgument(params, key) orelse dependency.Text.transformed(try self.valueToWikitext(value));
+        if (try self.resolveLazyTemplateArgTracked(params, key)) |value| return value;
+        if (split.default) |fallback| return self.expandWikitextTracked(fallback, params, host_title, depth + 1);
+        return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "{{{{{{{s}}}}}}}", .{inside}));
+    }
+
+    fn expandParserHeadTracked(self: *Expander, head: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!?dependency.Text {
+        if (raw_args.len == 0) {
+            if (try self.resolveTitleMagic(head, .variable)) |name| {
+                if (try self.statisticsMagic(name, "")) |value| return dependency.Text.transformed(value);
+                return dependency.Text.transformed((try self.titleMagic(name, null)) orelse unreachable);
+            }
+        }
+        if (try self.magicWord(head)) |value| return dependency.Text.transformed(value);
+        if (preprocess.findTopParserColon(head)) |colon| {
+            const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
+            if (try self.resolveParserFunction(raw_name)) |name| {
+                const first = head[colon.index + colon.len ..];
+                if (std.ascii.eqlIgnoreCase(name, "#if")) {
+                    const condition = try self.expandWikitext(first, params, host_title, depth + 1);
+                    const chosen = if (std.mem.trim(u8, condition, " \t\r\n").len != 0)
+                        (if (raw_args.len > 0) raw_args[0] else "")
+                    else
+                        (if (raw_args.len > 1) raw_args[1] else "");
+                    return try self.trimDependency(try self.expandWikitextTracked(chosen, params, host_title, depth + 2), " \t\r\n");
+                }
+                if (std.ascii.eqlIgnoreCase(name, "#ifeq")) {
+                    const lhs = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 2), " \t\r\n");
+                    const rhs = if (raw_args.len != 0) std.mem.trim(u8, try self.expandWikitext(raw_args[0], params, host_title, depth + 2), " \t\r\n") else "";
+                    const chosen = if (ifEqEqual(lhs, rhs)) (if (raw_args.len > 1) raw_args[1] else "") else (if (raw_args.len > 2) raw_args[2] else "");
+                    return try self.trimDependency(try self.expandWikitextTracked(chosen, params, host_title, depth + 3), " \t\r\n");
+                }
+                if (std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) {
+                    const value = try self.expandWikitextTracked(first, params, host_title, depth + 1);
+                    const warning = try self.recordDisplayTitle(value.bytes);
+                    self.dependency_display_title = .{ .bytes = self.display_title.?, .ranges = try (self.page_allocator orelse self.runtime.allocator).dupe(dependency.Range, value.ranges), .unknown = value.unknown };
+                    return dependency.Text.untracked(warning);
+                }
+            }
+        }
+        // All other parser/Lua transformations retain their existing bytes.
+        // They cannot acquire output provenance through equality with an input.
+        if (try self.expandParserHead(head, raw_args, params, host_title, depth)) |value|
+            return dependency.Text.transformed(value);
+        return null;
+    }
+
+    fn expandConstructTracked(self: *Expander, content: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!dependency.Text {
+        const lazy_base = self.lazy_template_args.items.len;
+        defer self.lazy_template_args.items.len = lazy_base;
+        var parts: std.ArrayList([]const u8) = .empty;
+        defer parts.deinit(self.runtime.allocator);
+        try preprocess.splitWikitextTop(self.runtime.allocator, content, '|', &parts);
+        if (parts.items.len == 0) return error.MalformedWikitext;
+        var raw_head = stripSubstPrefix(parts.items[0]);
+        if (raw_head.len == 0)
+            return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content}));
+        if (try self.expandParserHeadTracked(raw_head, parts.items[1..], params, host_title, depth)) |value| return value;
+        if (raw_head[0] == '#') {
+            self.unsupported_parser_function = true;
+            // Unknown calls remain literal, but MediaWiki expands their child
+            // nodes. Valid parser functions already returned above, preserving
+            // lazy branch selection. Protect only the recovered outer braces.
+            const expanded_head = try self.expandWikitext(raw_head, params, host_title, depth + 1);
+            return dependency.Text.transformed(try self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, true));
+        }
+        switch (try self.classifyInterwikiTransclusion(raw_head)) {
+            .normal => {},
+            .current_wiki => |local_name| raw_head = local_name,
+            .literal => return dependency.Text.untracked(try std.fmt.allocPrint(
+                self.runtime.allocator,
+                "<nowiki>{{{{{s}}}}}</nowiki>",
+                .{content},
+            )),
+            .external => return error.ExternalInterwikiTransclusionUnsupported,
+        }
+        if (try self.callSymbol(raw_head, .template)) |symbol| {
+            const args = try self.buildTemplateArgs(parts.items[1..], params, host_title, depth + 1);
+            return self.expandTemplateWithUsageRecoveryTracked(raw_head, symbol, args, parts.items[1..], host_title, depth + 1);
+        }
+        const expanded_head = try self.expandWikitext(raw_head, params, host_title, depth + 1);
+        const title = stripSubstPrefix(expanded_head);
+        if (title.len == 0)
+            return dependency.Text.transformed(try self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, false));
+        if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
+            if (try self.expandParserHeadTracked(title, parts.items[1..], params, host_title, depth)) |value| return value;
+        }
+        if (title.len != 0 and title[0] == '#') {
+            self.unsupported_parser_function = true;
+            return dependency.Text.transformed(try self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, true));
+        }
+        if (invalidTransclusionTitle(title)) {
+            if (invalidTransclusionNeedsProtection(title))
+                return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content}));
+            return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content}));
+        }
+        const args = try self.buildTemplateArgs(parts.items[1..], params, host_title, depth + 1);
+        return self.expandTemplateWithUsageRecoveryTracked(title, null, args, parts.items[1..], host_title, depth + 1);
     }
 
     fn lazyTemplateArgsFor(self: *const Expander, params: *rt.Table) ?LazyTemplateArgs {
@@ -1118,23 +1433,7 @@ pub const Expander = struct {
     }
 
     fn resolveLazyTemplateArg(self: *Expander, params: *rt.Table, key: Value) anyerror!?[]const u8 {
-        const lazy = self.lazyTemplateArgsFor(params) orelse return null;
-        const raw = lazy.raw_values.rawGet(key) orelse return null;
-        if (raw != .string) return error.StringExpected;
-        // PPTemplateFrame expands argument nodes in its parent frame. A nested
-        // invocation supplied by the caller is not recursion by this callee.
-        const callee_frame = self.transclusion_frame;
-        self.transclusion_frame = lazy.caller_transclusion_frame;
-        defer self.transclusion_frame = callee_frame;
-        const expanded_raw = try self.expandWikitext(raw.string, lazy.caller_params, lazy.caller_title, lazy.depth + 1);
-        const trim_value = key == .string or
-            (key == .number and std.mem.indexOfScalar(f64, lazy.named_numeric_keys, key.number) != null);
-        const expanded = if (trim_value)
-            std.mem.trim(u8, expanded_raw, " \t\r\n\x00\x0b")
-        else
-            expanded_raw;
-        try params.rawSet(self.runtime.allocator, key, .{ .string = expanded });
-        return expanded;
+        return if (try self.resolveLazyTemplateArgTracked(params, key)) |value| value.bytes else null;
     }
 
     fn materializeLazyTemplateArgs(self: *Expander, params: *rt.Table) anyerror!void {
@@ -1511,6 +1810,7 @@ pub const Expander = struct {
         const ustring = try self.runtime.getIndex(mw, .{ .string = "ustring" });
         if (ustring != .table) return error.MissingUstring;
         const callable = try self.runtime.getIndex(ustring, .{ .string = if (upper) "upper" else "lower" });
+        self.invalidateNativeDependencyArguments();
         const result = try self.runtime.callValue(callable, &.{.{ .string = text }});
         defer rt.freeResults(result);
         if (result.len == 0 or result[0] != .string) return error.StringExpected;
@@ -1522,11 +1822,13 @@ pub const Expander = struct {
         const mw = self.runtime.getGlobal(self.mw_slot);
         if (mw != .table) return error.MissingMw;
         const get_language = try self.runtime.getIndex(mw, .{ .string = "getContentLanguage" });
+        self.invalidateNativeDependencyArguments();
         const language_result = try self.runtime.callValue(get_language, &.{});
         defer rt.freeResults(language_result);
         if (language_result.len == 0 or language_result[0] != .table) return error.TableExpected;
         const language = language_result[0];
         const callable = try self.runtime.getIndex(language, .{ .string = if (upper) "ucfirst" else "lcfirst" });
+        self.invalidateNativeDependencyArguments();
         const result = try self.runtime.callValue(callable, &.{ language, .{ .string = text } });
         defer rt.freeResults(result);
         if (result.len == 0 or result[0] != .string) return error.StringExpected;
@@ -2050,6 +2352,7 @@ pub const Expander = struct {
             // MediaWiki's urlencode parser function treats empty and unknown
             // modes as QUERY; Scribunto mw.uri.encode rejects unknown modes.
         }
+        self.invalidateNativeDependencyArguments();
         const result = try self.runtime.callValue(encode, call_args[0..count]);
         defer rt.freeResults(result);
         if (result.len == 0 or result[0] != .string) return error.StringExpected;
@@ -2391,6 +2694,7 @@ pub const Expander = struct {
     }
 
     fn expandInvoke(self: *Expander, module_expr: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        self.invalidateNativeDependencyArguments();
         if (work_stats.current()) |work| work.invokes +|= 1;
         const module_symbol = try self.callSymbol(module_expr, .module);
         const module_raw = if (module_symbol) |symbol|
@@ -3242,6 +3546,7 @@ pub const Expander = struct {
 
     fn hostFramePreprocess(raw: ?*anyopaque, a: std.mem.Allocator, source: []const u8, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        self.invalidateNativeDependencyArguments();
         const stripped = try preprocess.stripDecodedCommentsPreservingPoem(a, source);
         defer a.free(stripped);
         if (stripped.len >= 2 and stripped[0] == '=' and stripped[stripped.len - 1] == '=' and
@@ -3257,11 +3562,13 @@ pub const Expander = struct {
 
     fn hostFrameExpandTemplate(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        self.invalidateNativeDependencyArguments();
         return self.expandTemplateByName(title, args, null, 0, .lua_error);
     }
 
     fn hostFrameExtensionTag(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, content: ?Value, attrs: ?*rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        self.invalidateNativeDependencyArguments();
         if (std.ascii.eqlIgnoreCase(name, "poem")) {
             const params = try self.runtime.newTable();
             return self.expandPoemValue(if (content) |value| try self.scalarText(value) else "", attrs, params, self.host.current_title, self.poem_hook_depth + 1);
@@ -3799,6 +4106,7 @@ pub const Expander = struct {
 
     fn hostFrameParserFunction(raw: ?*anyopaque, a: std.mem.Allocator, raw_name: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        self.invalidateNativeDependencyArguments();
         const name = (try self.resolveParserFunction(raw_name)) orelse return error.UnsupportedParserFunction;
         const first = args.rawGet(.{ .number = 1 });
         const second = args.rawGet(.{ .number = 2 });
@@ -7367,4 +7675,68 @@ test "CategoryTree collapsed roots retain Appendix filters and authored class te
     const authored_class = try expander.expandFragment("Appendix:Hebrew patterns/test", "{{#categorytree:Probe|depth=0|namespaces=\"Appendix -\"|class=\"derivedterms<nowiki/> Hebr\"}}", 1_670_803_200);
     try std.testing.expect(std.mem.indexOf(u8, authored_class, "derivedterms&lt;nowiki/&gt; Hebr CategoryTreeTag") != null);
     try std.testing.expect(std.mem.indexOf(u8, authored_class, "[[:Category:Probe|Probe]]") != null);
+}
+
+const MissingDependencyRegression = struct {
+    fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        if (std.mem.eql(u8, title, "Template:Outer")) return "{{Inner|{{{value}}}}}";
+        if (std.mem.eql(u8, title, "Template:Inner")) return "{{#if:yes|{{{1}}}|unused}}|{{#ifeq:1|1|{{{1}}}|unused}}";
+        if (std.mem.eql(u8, title, "Template:Term")) return "<span class='mention-Latn'>[[{{{1}}}#{{language|{{{lang}}}}}|{{{1}}}]]</span>";
+        return null;
+    }
+};
+test "native missing dependency provenance preserves copied arguments and distinguishes authored bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = MissingDependencyRegression.get, .exists = TestProvider.exists } };
+    const output = try expander.expandFragment("Page", "[[:Template:Missing]]|{{Outer|value= {{Missing}} }}", null);
+    try std.testing.expectEqualStrings("[[:Template:Missing]]|[[:Template:Missing]]|[[:Template:Missing]]", output);
+    var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, output, "");
+    defer phase.deinit();
+    try std.testing.expectEqual(@as(usize, 1), phase.occurrences().len);
+    try std.testing.expectEqual(@as(usize, 2), phase.output().ranges.len);
+    try std.testing.expectEqual(@as(u32, 22), phase.output().ranges[0].start);
+    try std.testing.expectEqual(phase.output().ranges[0].occurrence, phase.output().ranges[1].occurrence);
+    const term = try expander.expandFragment("Page", "{{Term|beran|lang=ang}}", null);
+    try std.testing.expectEqualStrings("<span class='mention-Latn'>[[beran#[[:Template:language]]|beran]]</span>", term);
+    var term_phase = try dependency.decode(a, expander.missing_dependency_metadata.?, term, "");
+    defer term_phase.deinit();
+    try std.testing.expectEqual(@as(usize, 1), term_phase.output().ranges.len);
+    try std.testing.expectEqualStrings("Template:language", term_phase.occurrences()[0].title);
+    _ = try expander.expandFragment("Next", "[[:Template:Missing]]", null);
+    try std.testing.expect(expander.missing_dependency_metadata == null);
+    try std.testing.expectEqual(@as(usize, 0), expander.dependency_page.occurrences.items.len);
+}
+test "native missing dependency title overrides and Lua argument exposure do not infer origin" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = MissingDependencyRegression.get, .exists = TestProvider.exists } };
+    const output = try expander.expandFragment("Page", "{{DISPLAYTITLE:{{Missing}}}}{{DISPLAYTITLE:Final}}BODY", null);
+    var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, output, expander.display_title.?);
+    defer phase.deinit();
+    try std.testing.expectEqualStrings("Final", expander.display_title.?);
+    try std.testing.expectEqual(@as(usize, 0), phase.displayTitle().ranges.len);
+    const params = try runtime.newTable();
+    const key: Value = .{ .string = "value" };
+    const generated = try expander.missingTemplateMarkupTracked("Template:Missing");
+    try params.rawSet(a, key, .{ .string = generated.bytes });
+    try expander.rememberDependencyArgument(params, key, generated);
+    try std.testing.expect(expander.nativeDependencyArgument(params, key) != null);
+    expander.invalidateNativeDependencyArguments();
+    // A byte-identical return/mutable table cannot regain origin after exposure.
+    const returned = try expander.expandParameterTracked("value", params, "Page", 0);
+    try std.testing.expectEqualStrings(generated.bytes, returned.bytes);
+    try std.testing.expect(returned.unknown and returned.ranges.len == 0);
 }

@@ -1,3 +1,5 @@
+const missing_dependency = @import("missing_dependency");
+pub const MissingText = missing_dependency.Text;
 const std = @import("std");
 const compiler = @import("presentation_compile.zig");
 const semantic = @import("presentation_layout.zig");
@@ -37,6 +39,7 @@ pub const bodyQuoteCutSeedsAlloc = compiler.bodyQuoteCutSeedsAlloc;
 pub const linkQuoteCutSeedsAlloc = compiler.linkQuoteCutSeedsAlloc;
 pub const SourceFragment = struct {
     source: []const u8,
+    missing: ?MissingText = null,
     pre: FragmentPreContext = .{},
 };
 
@@ -56,12 +59,18 @@ pub const ObservedPreScope = struct {
 };
 pub const PreparedBodySource = struct {
     source: []const u8,
+    missing: ?MissingText = null,
     fallbacks: Fallbacks,
 };
 pub fn prepareBodySourceAlloc(a: A, title: []const u8, source: []const u8) !PreparedBodySource {
     var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv() } };
     const prepared = try renderer.prepareBodySource(source);
     return .{ .source = prepared, .fallbacks = renderer.fallbacks };
+}
+pub fn prepareBodySourceWithMissingAlloc(a: A, title: []const u8, source: MissingText) !PreparedBodySource {
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv() } };
+    const prepared = try renderer.prepareBodySourceWithMissing(source);
+    return .{ .source = prepared.bytes, .missing = prepared, .fallbacks = renderer.fallbacks };
 }
 pub const PreObservation = struct {
     scopes: []const ObservedPreScope,
@@ -188,7 +197,10 @@ pub fn parsePoemPhaseAlloc(a: A, full_output: []const u8, display_title: ?[]cons
 pub const referenceDefinitionsAlloc = compiler.referenceDefinitionsAlloc;
 pub const mayHaveMultilineLinks = compiler.mayHaveMultilineLinks;
 pub const mayHaveFormattingScopes = compiler.mayHaveFormattingScopes;
+pub const referenceDefinitionsWithMissingAlloc = compiler.referenceDefinitionsWithMissingAlloc;
 pub const preparePageTocSourceAlloc = compiler.preparePageTocSourceAlloc;
+pub const preparePageTocSourceWithMissingAlloc = compiler.preparePageTocSourceWithMissingAlloc;
+pub const preparePageExternalLinksWithMissingAlloc = compiler.preparePageExternalLinksWithMissingAlloc;
 pub const preparePageExternalLinksAlloc = compiler.preparePageExternalLinksAlloc;
 
 fn requireCompiledText(text: []const u8) !void {
@@ -261,6 +273,7 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
 
 pub const DisplayTitle = struct {
     source: []const u8,
+    missing: ?MissingText = null,
     page_title: []const u8,
 };
 
@@ -305,14 +318,17 @@ const Builder = struct {
     }
 
     fn render(self: *Builder, source: []const u8) !void {
-        try self.consume(try self.renderer.renderBody(source));
+        try self.renderWithMissing(MissingText.untracked(source));
+    }
+    fn renderWithMissing(self: *Builder, source: MissingText) !void {
+        try self.consume(try self.renderer.renderBodyWithMissing(source));
     }
 
     fn renderFragments(self: *Builder, fragments: []const SourceFragment) !void {
         var rendered: std.ArrayList(compiler.Block) = .empty;
         defer rendered.deinit(self.a);
         for (fragments) |fragment| {
-            try rendered.appendSlice(self.a, try self.renderer.renderBodyWithFragmentPre(fragment.source, fragment.pre));
+            try rendered.appendSlice(self.a, try self.renderer.renderBodyWithFragmentPreAndMissing(fragment.missing orelse MissingText.untracked(fragment.source), fragment.pre));
         }
         try self.consume(try rendered.toOwnedSlice(self.a));
     }
@@ -343,6 +359,9 @@ fn workAllocWithPoem(a: A, title: []const u8, language: []const u8, source: []co
     return workAllocWithPoemFragments(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, &.{});
 }
 fn workAllocWithPoemFragments(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment) !Work {
+    return workAllocWithMissingFragments(a, title, language, MissingText.untracked(source), link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments);
+}
+fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment) !Work {
     var renderer: compiler.Renderer = .{
         .a = a,
         .context = .{
@@ -363,7 +382,7 @@ fn workAllocWithPoemFragments(a: A, title: []const u8, language: []const u8, sou
         .renderer = &renderer,
         .title = if (language.len == 0) title else language,
     };
-    if (fragments.len == 0) try builder.render(source) else try builder.renderFragments(fragments);
+    if (fragments.len == 0) try builder.renderWithMissing(tracked) else try builder.renderFragments(fragments);
     return .{
         .sections = try builder.sections.toOwnedSlice(a),
         .references = try renderer.finishReferences(),
@@ -390,7 +409,7 @@ fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, li
             .poem_phase = poem_phase,
         },
     };
-    const spans = renderer.parseSpans(value.source, .{ .role = .headword }) catch |err| {
+    const spans = renderer.parseSpansWithMissing(value.missing orelse MissingText.untracked(value.source), .{ .role = .headword }) catch |err| {
         if (fallbacks) |report| switch (err) {
             error.RenderLimit => {
                 report.render_limit = true;
@@ -400,8 +419,9 @@ fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, li
             else => return err,
         } else return err;
     };
+    if (fallbacks == null and (renderer.rendered_templates != 0 or renderer.unresolved_templates != 0)) return error.UncompiledTemplate;
     if (fallbacks) |report| report.merge(renderer.fallbacks);
-    if (renderer.rendered_templates != 0 or renderer.unresolved_templates != 0) {
+    if (renderer.rendered_templates != 0 or renderer.unresolved_templates > renderer.diagnosed_missing_targets) {
         if (fallbacks) |report| {
             report.template_presentation = report.template_presentation or renderer.rendered_templates != 0;
             report.missing_template = report.missing_template or renderer.unresolved_templates != 0;
@@ -622,7 +642,26 @@ pub fn compileReportedWithReferencesAndPoemFragmentsAlloc(
     poem_phase: ?*const PoemPhase,
     fragments: []const SourceFragment,
 ) ![]u8 {
-    const work = try workAllocWithPoemFragments(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments);
+    return compileReportedWithReferencesAndPhasesFragmentsAlloc(a, title, kind, language, language_code, MissingText.untracked(source), display_title, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, fallbacks, poem_phase, fragments);
+}
+pub fn compileReportedWithReferencesAndPhasesFragmentsAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: MissingText,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    reference_context: compiler.ReferenceDefinitions,
+    fallbacks: ?*Fallbacks,
+    poem_phase: ?*const PoemPhase,
+    fragments: []const SourceFragment,
+) ![]u8 {
+    const work = try workAllocWithMissingFragments(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;
@@ -2305,4 +2344,182 @@ test "reported missing internal targets encode semantic diagnostic without rejec
         };
     };
     try std.testing.expect(standalone_found);
+}
+
+pub fn compileReportedWithOptionsAndPhasesAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: MissingText,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    fallbacks: ?*Fallbacks,
+    poem_phase: ?*const PoemPhase,
+) ![]u8 {
+    return compileReportedWithReferencesAndPhasesFragmentsAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, .{}, fallbacks, poem_phase, &.{});
+}
+
+test "authenticated missing target survives page copies and preserves nonaction label style trail" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var page: missing_dependency.Page = .{};
+    const generated = try page.missing(a, "Template:language", "[[:Template:language]]");
+    var joined: missing_dependency.Builder = .{};
+    try joined.append(a, MissingText.untracked("__TOC__\n__TOC__\n==English==\n[https://example.test/first]\n[[x"));
+    try joined.append(a, generated);
+    try joined.append(a, MissingText.untracked("|''<span lang=la class=Latn>ferre</span>'']]s\n"));
+    // Unrelated transformed text never invalidates this independently exact range.
+    try joined.append(a, MissingText.transformed("unrelated Lua text"));
+    const tracked = try joined.finish(a);
+    const metadata = try missing_dependency.encode(a, tracked, MissingText.untracked(""), page.occurrences.items);
+    var phase = try missing_dependency.decode(a, metadata, tracked.bytes, "");
+    defer phase.deinit();
+    const trail: ir.LinkTrail = .{ .contains_fn = struct {
+        fn contains(_: ?*const anyopaque, cp: u21) bool {
+            return cp == 's';
+        }
+    }.contains };
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedWithOptionsAndPhasesAlloc(a, "host", .language, "English", "en", phase.output(), null, trail, null, null, null, &report, null);
+    const decoded = try codec.decodeAlloc(a, bytes, "host", .language, .{ .code = "en", .heading = "English" });
+    var visible: std.ArrayList(u8) = .empty;
+    var styled_label = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |item| for (item.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        try visible.appendSlice(a, span.trail);
+        if (std.mem.eql(u8, span.text, "ferre")) {
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            try std.testing.expect(span.italic);
+            try std.testing.expectEqualStrings("la", span.language);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "Latn") != null);
+            styled_label = true;
+        }
+        if (std.mem.indexOf(u8, span.text, "missing template") != null)
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+    };
+    try std.testing.expect(styled_label and report.literal_markup and report.missing_template);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "ferres [missing template]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Template:language") == null);
+    // This compiler remains strict when no build report owns source diagnostics.
+    try std.testing.expectError(error.UncompiledTemplate, compileReportedWithOptionsAndPhasesAlloc(a, "host", .language, "English", "en", phase.output(), null, trail, null, null, null, null, null));
+}
+
+test "identical authored unknown and protected target bytes cannot authorize missing diagnostic" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "[[x[[:Template:language]]|label]]";
+    for ([_]MissingText{ MissingText.untracked(source), MissingText.transformed(source) }) |tracked| {
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedWithOptionsAndPhasesAlloc(a, "host", .language, "English", "en", tracked, null, .{}, null, null, null, &report, null);
+        const decoded = try codec.decodeAlloc(a, bytes, "host", .language, .{ .code = "en", .heading = "English" });
+        for (decoded.entry.sections) |section| for (section.blocks) |item| for (item.spans) |span|
+            try std.testing.expect(std.mem.indexOf(u8, span.text, "[missing template]") == null);
+        try std.testing.expect(!report.missing_template);
+    }
+    var page: missing_dependency.Page = .{};
+    const generated = try page.missing(a, "Template:language", source);
+    var literal: missing_dependency.Builder = .{};
+    try literal.append(a, MissingText.untracked("<nowiki>"));
+    try literal.append(a, generated);
+    try literal.append(a, MissingText.untracked("</nowiki>"));
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedWithOptionsAndPhasesAlloc(a, "host", .language, "English", "en", try literal.finish(a), null, .{}, null, null, null, &report, null);
+    const decoded = try codec.decodeAlloc(a, bytes, "host", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualStrings(source, decoded.entry.sections[0].blocks[0].spans[0].text);
+    try std.testing.expect(!report.missing_template);
+}
+
+test "authenticated missing target copied into wiki caption and cell stays nonaction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var page: missing_dependency.Page = .{};
+    const generated = try page.missing(a, "Template:language", "[[:Template:language]]");
+    var source: missing_dependency.Builder = .{};
+    try source.append(a, MissingText.untracked("==English==\n{|\n|+ [[x"));
+    try source.append(a, generated);
+    try source.append(a, MissingText.untracked("|caption]]\n| [[x"));
+    try source.append(a, generated);
+    try source.append(a, MissingText.untracked("|<small>cell</small>]]\n|}\n"));
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedWithOptionsAndPhasesAlloc(a, "host", .language, "English", "en", try source.finish(a), null, .{}, null, null, null, &report, null);
+    const decoded = try codec.decodeAlloc(a, bytes, "host", .language, .{ .code = "en", .heading = "English" });
+    var caption_found = false;
+    var cell_found = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |item| {
+        if (item.table) |table| {
+            var caption: std.ArrayList(u8) = .empty;
+            for (table.caption) |span| {
+                try std.testing.expect(span.kind == .text and span.target.len == 0);
+                try caption.appendSlice(a, span.text);
+            }
+            caption_found = caption_found or std.mem.indexOf(u8, caption.items, "caption [missing template]") != null;
+            for (table.rows) |row| for (row.cells) |cell| {
+                var visible: std.ArrayList(u8) = .empty;
+                var small_label = false;
+                for (cell.spans) |span| {
+                    try std.testing.expect(span.kind == .text and span.target.len == 0);
+                    try visible.appendSlice(a, span.text);
+                    if (std.mem.eql(u8, span.text, "cell")) small_label = span.small;
+                }
+                cell_found = cell_found or (small_label and std.mem.indexOf(u8, visible.items, "cell [missing template]") != null);
+            };
+        }
+    };
+    try std.testing.expect(caption_found and cell_found and report.missing_template and report.literal_markup);
+}
+
+test "empty rendered missing-target label emits marker before authored trail" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "", "<small></small>", "<span lang=la></span>" }) |label| {
+        var page: missing_dependency.Page = .{};
+        const generated = try page.missing(a, "Template:language", "[[:Template:language]]");
+        var source: missing_dependency.Builder = .{};
+        try source.append(a, MissingText.untracked("[[x"));
+        try source.append(a, generated);
+        try source.append(a, MissingText.untracked("|"));
+        try source.append(a, MissingText.untracked(label));
+        try source.append(a, MissingText.untracked("]]s"));
+        const trail: ir.LinkTrail = .{ .contains_fn = struct {
+            fn contains(_: ?*const anyopaque, cp: u21) bool {
+                return cp == 's';
+            }
+        }.contains };
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedWithOptionsAndPhasesAlloc(a, "host", .language, "English", "en", try source.finish(a), null, trail, null, null, null, &report, null);
+        const decoded = try codec.decodeAlloc(a, bytes, "host", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        for (decoded.entry.sections) |section| for (section.blocks) |item| for (item.spans) |span| {
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+        };
+        try std.testing.expectEqualStrings("[missing template]s", visible.items);
+    }
+}
+
+test "display-title-only missing target retains strict unreported refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var page: missing_dependency.Page = .{};
+    const generated = try page.missing(a, "Template:language", "[[:Template:language]]");
+    var source: missing_dependency.Builder = .{};
+    try source.append(a, MissingText.untracked("[[x"));
+    try source.append(a, generated);
+    try source.append(a, MissingText.untracked("|label]]"));
+    const tracked = try source.finish(a);
+    // Refusal precedes both mismatching and coincidentally matching plain titles.
+    for ([_][]const u8{ "host", "label [missing template]" }) |title| {
+        try std.testing.expectError(error.UncompiledTemplate, displayTitleSpansAlloc(a, .{ .source = tracked.bytes, .page_title = title, .missing = tracked }, "English", .{}, null, null, null, null, null));
+    }
 }

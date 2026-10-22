@@ -407,11 +407,11 @@ const ExpansionSlot = struct {
         if (self.expansion) |expanded| {
             const extra_reasons: []const []const u8 = if (expanded.unsupported_parser_function) &.{"unsupported_parser_function"} else &.{};
             if (self.job.alias_record) |alias| {
-                try writer.addAliasExpandedWithPoem(self.arena.allocator(), alias, expanded.source, expanded.display_title, .{}, extra_reasons, expanded.poem_metadata);
+                try writer.addAliasExpandedWithPhases(self.arena.allocator(), alias, expanded.source, expanded.display_title, .{}, extra_reasons, expanded.poem_metadata, expanded.missing_dependency_metadata);
                 return true;
             }
             const fallback_before = writer.stats.fallback_pages;
-            writer.addExpandedPageWithReasonsAndPoem(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title, extra_reasons, expanded.poem_metadata) catch |err| {
+            writer.addExpandedPageWithReasonsAndPhases(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title, extra_reasons, expanded.poem_metadata, expanded.missing_dependency_metadata) catch |err| {
                 diagnostics.printLine(
                     "blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n",
                     .{ self.job.title, self.job.ordinal, self.job.ns.id, self.job.source.len, expanded.source.len, @errorName(err) },

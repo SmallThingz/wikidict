@@ -2091,6 +2091,7 @@ pub fn main(init: std.process.Init) !void {
     try failureMetadataProbe(&h, dir);
     try expansionFallbackProbe(&h, argv[6], verifier, bin, dir);
     try poemPhaseProbe(&h, pipeline, argv[6], verifier, bin, dir);
+    try missingDependencyOccurrenceProbe(&h, pipeline, verifier, dir);
     try abbreviationInteropProbe(&h, verifier, bin, dir);
     h.checks += 1;
 
@@ -2873,4 +2874,84 @@ fn abbreviationInteropProbe(h: *Harness, verifier: []const u8, bin: []const u8, 
         try h.require(std.mem.eql(u8, decoded_json.value.title, word), "exported title, complete span fields, explanations and navigation equal the native record");
     }
     h.checks += 1;
+}
+
+// A real ordinary-template chain and normal native worker transport distinguish
+// generated dependencies from byte-identical authored and unknown Lua text.
+fn missingDependencyOccurrenceProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, dir: []const u8) !void {
+    const root = try std.fs.path.join(h.a, &.{ dir, "missing-dependency-occurrences" });
+    const dump = try std.fs.path.join(h.a, &.{ dir, "missing-dependency-occurrences.xml" });
+    const namespaces = try std.fs.path.join(h.a, &.{ dir, "missing-dependency-namespaces.tsv" });
+    const languages = try std.fs.path.join(h.a, &.{ dir, "missing-dependency-languages.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = namespaces, .data = @import("namespace_registry").english_test_fixture });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = languages, .data = "# wikidict-language-registry-v2\n# content-language\ten\n# mediawiki\nen\tEnglish\ten\teng\n# iso-639-3\n" });
+    const before = "==English==\nBefore <span lang=\"la\" class=\"tr\">''[[";
+    const after = ":ferre|'''ferre''']]s''</span> After\n";
+    const pages = [_]Page{
+        .{ .title = "GeneratedMissingTarget", .ns = 0, .id = 1, .body = before ++ "{{ProvenanceOuter}}" ++ after },
+        .{ .title = "AuthoredMissingCounterpart", .ns = 0, .id = 2, .body = before ++ "[[:Template:language]]" ++ after },
+        .{ .title = "LuaUnknownCounterpart", .ns = 0, .id = 3, .body = before ++ "{{#invoke:ProvenanceUnknown|target}}" ++ after },
+        .{ .title = "Template:ProvenanceOuter", .ns = 10, .id = 10, .body = "{{ProvenanceInner}}" },
+        .{ .title = "Template:ProvenanceInner", .ns = 10, .id = 11, .body = "{{language|la}}" },
+        .{ .title = "Module:ProvenanceUnknown", .ns = 828, .id = 12, .body = "return {target=function() return '[[:Template:language]]' end}" },
+    };
+    try writePages(h.io, h.a, dump, &pages);
+    // This is a complete normal build, not an injected provenance manifest.
+    // Native expansion, protocol, page-slot lifetime and Writer all participate.
+    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespaces, "--language-registry-snapshot", languages, "--llvm-workers", "1", "--now-unix", "1791072000" }, 0);
+    _ = try h.run(&.{ verifier, root }, 0);
+    const generated = try readPoemRecord(h, root, "English", "GeneratedMissingTarget");
+    const authored = try readPoemRecord(h, root, "English", "AuthoredMissingCounterpart");
+    const unknown = try readPoemRecord(h, root, "English", "LuaUnknownCounterpart");
+    const Observed = struct {
+        text: std.ArrayList(u8) = .empty,
+        actions: usize = 0,
+        styled_label: bool = false,
+        fn collect(self: *@This(), harness: *Harness, entry_value: encoder.presentation_types.Entry) !void {
+            try harness.require(entry_value.references.len == 0 and entry_value.media.len == 0 and entry_value.preamble_spans.len == 0, "missing-target fixture has no hidden reference/media/preamble payload");
+            for (entry_value.sections) |section| for (section.blocks) |block_value| {
+                try harness.require(block_value.table == null, "missing-target fixture has no unexamined table body");
+                for (block_value.spans) |value| {
+                    try self.text.appendSlice(harness.a, value.text);
+                    if (value.kind == .link) self.actions += 1;
+                    if (std.mem.eql(u8, value.text, "ferre") and value.bold and value.italic and std.mem.eql(u8, value.language, "la") and poemHasClass(value.classes, "tr")) self.styled_label = true;
+                }
+            };
+        }
+    };
+    var generated_seen: Observed = .{};
+    var authored_seen: Observed = .{};
+    var unknown_seen: Observed = .{};
+    try generated_seen.collect(h, generated.stored.entry);
+    try authored_seen.collect(h, authored.stored.entry);
+    try unknown_seen.collect(h, unknown.stored.entry);
+    try h.require(std.mem.eql(u8, generated_seen.text.items, "Before ferres [missing template] After"), "ordinary-template dependency preserves meaningful outer label, consumed trail and surroundings with one explicit diagnostic");
+    try h.require(generated_seen.actions == 0 and generated_seen.styled_label, "strict decoded generated diagnostic has no fabricated action and retains bold italic language/transliteration label styles");
+    try h.require(std.mem.indexOf(u8, authored_seen.text.items, "[missing template]") == null and std.mem.indexOf(u8, unknown_seen.text.items, "[missing template]") == null, "authored and unknown Lua text are not reclassified by redlink spelling");
+    try std.testing.expectEqualDeep(authored.stored.entry.sections, unknown.stored.entry.sections);
+    try h.require(authored_seen.actions != 0 and unknown_seen.actions == authored_seen.actions, "unproven counterparts retain their existing nested ordinary-link behavior rather than an invented clean label");
+    // The semantic diagnostic must remain visible to publication quality
+    // accounting as well as to the reader. Other source-error rows stay intact.
+    const fallback_bytes = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, "fallback-pages.jsonl" }), h.a, .limited(4096));
+    var fallback_lines = std.mem.tokenizeScalar(u8, fallback_bytes, '\n');
+    var generated_rows: usize = 0;
+    while (fallback_lines.next()) |line| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, h.a, line, .{});
+        defer parsed.deinit();
+        const row = parsed.value.object;
+        if (!std.mem.eql(u8, row.get("title").?.string, "GeneratedMissingTarget")) continue;
+        generated_rows += 1;
+        var missing_template = false;
+        var literal_markup = false;
+        for (row.get("reasons").?.array.items) |reason| {
+            missing_template = missing_template or std.mem.eql(u8, reason.string, "missing_template");
+            literal_markup = literal_markup or std.mem.eql(u8, reason.string, "literal_markup");
+        }
+        try h.require(row.get("namespace").?.integer == 0 and missing_template and literal_markup, "generated missing-target nonaction output retains missing_template and literal_markup publication diagnostics");
+    }
+    try h.require(generated_rows == 1, "the generated source-error fixture remains one explicitly diagnosed published page");
+    for ([_][]const u8{ generated.payload, authored.payload, unknown.payload }) |payload| {
+        try h.require(std.mem.indexOf(u8, payload, "wikidict.missing-dependency-phase.v1") == null and std.mem.indexOf(u8, payload, "output_sha256") == null, "build-only occurrence metadata is absent from strict decoded published records");
+    }
+    h.checks += 3;
 }

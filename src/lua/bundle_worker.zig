@@ -26,6 +26,7 @@ const Expansion = struct {
     display_title: []const u8,
     unsupported_parser_function: bool,
     poem_metadata: ?[]const u8 = null,
+    missing_dependency_metadata: ?[]const u8 = null,
 };
 
 fn limit(resource: std.posix.rlimit_resource, value: u64) !void {
@@ -200,7 +201,7 @@ const Engine = struct {
             return err;
         };
         page_work.expand_ns +|= work_stats.elapsed(expand_start);
-        return .{ .output = output, .display_title = expander.display_title orelse "", .unsupported_parser_function = expander.unsupported_parser_function, .poem_metadata = expander.poem_metadata };
+        return .{ .output = output, .display_title = expander.display_title orelse "", .unsupported_parser_function = expander.unsupported_parser_function, .poem_metadata = expander.poem_metadata, .missing_dependency_metadata = expander.missing_dependency_metadata };
     }
 };
 
@@ -280,7 +281,7 @@ pub fn run(io: std.Io, persistent: A) !void {
                 try protocol.writeError(&output.interface, stage, "ExpandedSourceTooLarge", "");
                 continue;
             }
-            try protocol.writeSuccessWithPoem(&output.interface, value.output, value.display_title, value.unsupported_parser_function, value.poem_metadata);
+            try protocol.writeSuccessWithMetadata(&output.interface, value.output, value.display_title, value.unsupported_parser_function, value.poem_metadata, value.missing_dependency_metadata);
         } else {
             try protocol.writeSkip(&output.interface);
         }
