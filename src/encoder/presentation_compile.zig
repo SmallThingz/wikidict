@@ -612,6 +612,10 @@ pub const Block = struct {
     number: []const u8 = "",
     level: u8 = 0,
     table: ?Table = null,
+    anchor: []const u8 = "",
+    anchor_fallback: []const u8 = "",
+    heading_source_offset: ?usize = null,
+    heading_authored_id: []const u8 = "",
     // Build-only hint captured while rendering; it is not serialized into DPR2.
     relation_note: bool = false,
 };
@@ -2229,7 +2233,11 @@ pub fn preparePageExternalLinksWithMissingAlloc(a: A, tracked: MissingText, cont
     return .{ .source = prepared, .missing = prepared_missing, .poem_phase = phase };
 }
 
+const HeadingSourceAlias = struct { copied: []const u8, original: []const u8 };
+const HeadingSourceCopy = struct { start: usize, original: []const u8 };
+
 pub const Renderer = struct {
+    heading_source: ?[]const u8 = null,
     fallbacks: @import("presentation_fallback.zig").Report = .{},
     a: A,
     context: Context,
@@ -2237,6 +2245,7 @@ pub const Renderer = struct {
     // their explicit copy builder supplied a new map. Never a pointer registry.
     body_missing: ?MissingText = null,
     inline_missing: ?MissingText = null,
+    heading_source_aliases: std.ArrayList(HeadingSourceAlias) = .empty,
     rendered_templates: usize = 0,
     unresolved_templates: usize = 0,
     diagnosed_missing_targets: usize = 0,
@@ -4415,6 +4424,8 @@ pub const Renderer = struct {
         var opaque_scan: syntax.OpaqueScan = .{};
         var no_more_nowiki_close = false;
         var out: missing_dependency.Builder = .{};
+        var heading_copies: std.ArrayList(HeadingSourceCopy) = .empty;
+        defer heading_copies.deinit(self.a);
         errdefer out.deinit(self.a);
         var emitted: usize = 0;
         var scan: usize = 0;
@@ -4444,20 +4455,22 @@ pub const Renderer = struct {
             }
             if (tag.is("pre")) continue;
             self.markUnclosed(input, tag, "literal-extension-opener");
-            try out.appendSlice(self.a, source, emitted, at);
-            try out.append(self.a, missingEdit(source, at, at + 1, "&lt;"));
+            try self.appendMissingHeadingSourceCopy(&out, &heading_copies, source, emitted, at);
+            try self.appendMissingHeadingSourceEdit(&out, &heading_copies, source, at, "&lt;");
             // The preprocessor made the whole unmatched opener literal before
             // expansion. Do not run fallback templates in its attributes later.
             for (input[at + 1 .. tag.end], at + 1..) |ch, byte_at| switch (ch) {
-                '{' => try out.append(self.a, missingEdit(source, byte_at, byte_at + 1, "&#123;")),
-                '}' => try out.append(self.a, missingEdit(source, byte_at, byte_at + 1, "&#125;")),
-                else => try out.appendSlice(self.a, source, byte_at, byte_at + 1),
+                '{' => try self.appendMissingHeadingSourceEdit(&out, &heading_copies, source, byte_at, "&#123;"),
+                '}' => try self.appendMissingHeadingSourceEdit(&out, &heading_copies, source, byte_at, "&#125;"),
+                else => try self.appendMissingHeadingSourceCopy(&out, &heading_copies, source, byte_at, byte_at + 1),
             };
             emitted = tag.end;
         }
         if (out.bytes.items.len == 0) return source;
-        try out.appendSlice(self.a, source, emitted, input.len);
-        return out.finish(self.a);
+        try self.appendMissingHeadingSourceCopy(&out, &heading_copies, source, emitted, input.len);
+        const result = try out.finish(self.a);
+        try self.registerHeadingSourceCopies(result.bytes, heading_copies.items);
+        return result;
     }
 
     fn opaqueExtension(self: *Renderer, input: []const u8, tag: syntax.Tag, style: Style, depth: usize) Error!usize {
@@ -4887,6 +4900,61 @@ pub const Renderer = struct {
         const tag = syntax.tagAtCached(input, at, no_more_close) orelse return null;
         return try self.normalizedTag(tag);
     }
+    fn headingAuthoredId(self: *Renderer, tag: syntax.Tag) Error![]const u8 {
+        const normalized = try self.normalizedTag(tag);
+        var raw: ?[]const u8 = null;
+        var at: usize = 0;
+        // MediaWiki keeps the last duplicate attribute, including a bare id.
+        while (at < normalized.attrs.len) {
+            while (at < normalized.attrs.len and (std.ascii.isWhitespace(normalized.attrs[at]) or normalized.attrs[at] == '/')) : (at += 1) {}
+            const start = at;
+            while (at < normalized.attrs.len and !std.ascii.isWhitespace(normalized.attrs[at]) and normalized.attrs[at] != '=' and normalized.attrs[at] != '/') : (at += 1) {}
+            if (at == start) {
+                at += 1;
+                continue;
+            }
+            const name = normalized.attrs[start..at];
+            while (at < normalized.attrs.len and std.ascii.isWhitespace(normalized.attrs[at])) : (at += 1) {}
+            var value: []const u8 = "";
+            if (at < normalized.attrs.len and normalized.attrs[at] == '=') {
+                at += 1;
+                while (at < normalized.attrs.len and std.ascii.isWhitespace(normalized.attrs[at])) : (at += 1) {}
+                if (at < normalized.attrs.len) {
+                    const quote = normalized.attrs[at];
+                    const quoted = quote == '\'' or quote == '"';
+                    if (quoted) at += 1;
+                    const value_start = at;
+                    while (at < normalized.attrs.len and (if (quoted) normalized.attrs[at] != quote else !std.ascii.isWhitespace(normalized.attrs[at]))) : (at += 1) {}
+                    value = normalized.attrs[value_start..at];
+                    if (quoted and at < normalized.attrs.len) at += 1;
+                }
+            }
+            if (std.ascii.eqlIgnoreCase(name, "id")) raw = value;
+        }
+        const value = std.mem.trim(u8, raw orelse return "", " \t\n\r\x00\x0b");
+        var clean: std.ArrayList(u8) = .empty;
+        defer clean.deinit(self.a);
+        var whitespace = false;
+        for (value) |byte| {
+            if (byte == ' ' or byte == '\t' or byte == '\r' or byte == '\n') {
+                whitespace = true;
+            } else {
+                if (whitespace) try clean.append(self.a, ' ');
+                whitespace = false;
+                try clean.append(self.a, byte);
+            }
+        }
+        // Normalize authored whitespace before decoding, so encoded spaces
+        // remain significant and protected/entity source is decoded only once.
+        const id = try self.a.dupe(u8, try self.poemCleanField(try self.entityText(clean.items)));
+        // Sanitizer escapes an authored id before Parser reads the heading's
+        // DOM attribute. In particular encoded tabs do not get a .09 alias.
+        for (id) |*byte| if (byte.* == ' ' or byte.* == '\t' or byte.* == '\n' or byte.* == '\r' or byte.* == '\x0c') {
+            byte.* = '_';
+        };
+        return id;
+    }
+
     fn semanticAttribute(self: *Renderer, tag: syntax.Tag, name: []const u8) Error!?[]const u8 {
         const normalized = try self.normalizedTag(tag);
         return try self.poemCleanField(try self.entityText(normalized.attr(name) orelse return null));
@@ -6840,7 +6908,8 @@ pub const Renderer = struct {
             else => false,
         };
         if (spans.len == 0 and kind != .heading and kind != .blank and kind != .rule and !list_furniture) return;
-        try self.appendBlockBudgeted(list, .{ .kind = kind, .text = raw, .spans = spans, .depth = @intCast(@min(path.len, 255)), .list_path = path[0..@min(path.len, 255)], .number = number, .level = level, .relation_note = hints.relation_note });
+        const heading_source_offset: ?usize = if (kind == .heading) self.headingSourceOffset(raw) else null;
+        try self.appendBlockBudgeted(list, .{ .kind = kind, .text = raw, .spans = spans, .depth = @intCast(@min(path.len, 255)), .list_path = path[0..@min(path.len, 255)], .number = number, .level = level, .relation_note = hints.relation_note, .heading_source_offset = heading_source_offset });
     }
     fn paragraphWithQuoteSeed(self: *Renderer, list: *std.ArrayList(Block), text_value: []const u8, seed: ?QuoteSeed) Error!void {
         const previous = self.next_quote_seed;
@@ -7397,6 +7466,89 @@ pub const Renderer = struct {
         return wikiListLineBody(item[prefix.body_start..]);
     }
 
+    pub fn renderBodyWithHeadingOffsets(self: *Renderer, tracked: MissingText) Error![]const Block {
+        const previous_source = self.heading_source;
+        const previous_missing = self.body_missing;
+        self.heading_source = tracked.bytes;
+        self.body_missing = tracked;
+        defer {
+            self.heading_source = previous_source;
+            self.body_missing = previous_missing;
+        }
+        try self.loadPoemPhase();
+        return self.renderBodySlice(tracked.bytes, false, false, 0, null);
+    }
+
+    fn missingSliceWithHeadingSource(self: *Renderer, parent: MissingText, child: []const u8) Error!MissingText {
+        const tracked = try missingSlice(self.a, parent, child);
+        if (self.heading_source != null and child.len != 0 and tracked.bytes.ptr != child.ptr)
+            try self.heading_source_aliases.append(self.a, .{ .copied = tracked.bytes, .original = child });
+        return tracked;
+    }
+
+    fn headingSourceOffset(self: *const Renderer, raw: []const u8) ?usize {
+        const root = self.heading_source orelse return null;
+        var address = @intFromPtr(raw.ptr);
+        var depth: usize = 0;
+        while (depth < max_depth) : (depth += 1) {
+            const root_address = @intFromPtr(root.ptr);
+            if (address >= root_address and address - root_address <= root.len and (address - root_address < root.len or raw.len == 0))
+                return address - root_address;
+            var mapped = false;
+            for (self.heading_source_aliases.items) |alias| {
+                const copied = @intFromPtr(alias.copied.ptr);
+                if (address >= copied and address - copied < alias.copied.len) {
+                    address = @intFromPtr(alias.original.ptr) + (address - copied);
+                    mapped = true;
+                    break;
+                }
+            }
+            if (!mapped) return null;
+        }
+        return null;
+    }
+
+    fn appendHeadingSourceCopy(self: *Renderer, output: *std.ArrayList(u8), copies: *std.ArrayList(HeadingSourceCopy), original: []const u8) Error!void {
+        const start = output.items.len;
+        try output.appendSlice(self.a, original);
+        try self.recordHeadingSourceCopy(copies, start, original);
+    }
+
+    fn recordHeadingSourceCopy(self: *Renderer, copies: *std.ArrayList(HeadingSourceCopy), start: usize, original: []const u8) Error!void {
+        if (self.heading_source == null or original.len == 0) return;
+        if (copies.items.len != 0) {
+            const previous = &copies.items[copies.items.len - 1];
+            if (previous.start + previous.original.len == start and
+                @intFromPtr(previous.original.ptr) + previous.original.len == @intFromPtr(original.ptr))
+            {
+                previous.original = previous.original.ptr[0 .. previous.original.len + original.len];
+                return;
+            }
+        }
+        try copies.append(self.a, .{ .start = start, .original = original });
+    }
+
+    fn appendMissingHeadingSourceCopy(self: *Renderer, output: *missing_dependency.Builder, copies: *std.ArrayList(HeadingSourceCopy), source: MissingText, start: usize, end: usize) Error!void {
+        const output_start = output.bytes.items.len;
+        try output.appendSlice(self.a, source, start, end);
+        try self.recordHeadingSourceCopy(copies, output_start, source.bytes[start..end]);
+    }
+
+    fn appendMissingHeadingSourceEdit(self: *Renderer, output: *missing_dependency.Builder, copies: *std.ArrayList(HeadingSourceCopy), source: MissingText, at: usize, replacement: []const u8) Error!void {
+        const output_start = output.bytes.items.len;
+        try output.append(self.a, missingEdit(source, at, at + 1, replacement));
+        // Only the replacement's first byte identifies its authored source byte.
+        // The remaining generated entity spelling has no source identity.
+        if (replacement.len != 0) try self.recordHeadingSourceCopy(copies, output_start, source.bytes[at .. at + 1]);
+    }
+
+    fn registerHeadingSourceCopies(self: *Renderer, output: []const u8, copies: []const HeadingSourceCopy) Error!void {
+        for (copies) |copy| try self.heading_source_aliases.append(self.a, .{
+            .copied = output[copy.start .. copy.start + copy.original.len],
+            .original = copy.original,
+        });
+    }
+
     fn bodyRawBlock(self: *Renderer, blocks: *std.ArrayList(Block), source: []const u8, raw: []const u8, quotes: *?QuoteBoundaryScan, kind: Kind, path: []const u8, number: []const u8, level: u8) Error!void {
         const previous = self.next_quote_seed;
         self.next_quote_seed = try self.rawBodyQuoteSeed(source, raw, quotes);
@@ -7550,7 +7702,7 @@ pub const Renderer = struct {
         return self.renderBodySliceSeeded(source, initial_inline, terminal_inline, source_origin, initial_quote, null);
     }
     fn renderBodySliceSeeded(self: *Renderer, source: []const u8, initial_inline: bool, terminal_inline: bool, source_origin: ?usize, initial_quote: ?QuoteSeed, initial_list: ?BodyListSeed) Error![]const Block {
-        const tracked = if (self.body_missing) |parent| try missingSlice(self.a, parent, source) else MissingText.untracked(source);
+        const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, source) else MissingText.untracked(source);
         const prepared_missing = try self.prepareUnmatchedOpaqueWithMissing(tracked);
         const input = prepared_missing.bytes;
         const previous_missing = self.body_missing;
@@ -7999,25 +8151,28 @@ pub const Renderer = struct {
                         // Translation tables are layout wrappers around wiki lists,
                         // with optional tr/td end tags. Keep their reading blocks.
                         var body: std.ArrayList(u8) = .empty;
+                        var heading_copies: std.ArrayList(HeadingSourceCopy) = .empty;
+                        defer heading_copies.deinit(self.a);
                         const content = wrapper_source[tag.end..pair.inner_end];
                         var cursor: usize = 0;
                         while (cursor < content.len) {
                             // Literal extension bodies and comments are not table wrappers.
                             if (content[cursor] == '<') if (syntax.protectedEnd(content, cursor)) |protected_end| {
-                                try body.appendSlice(self.a, content[cursor..protected_end]);
+                                try self.appendHeadingSourceCopy(&body, &heading_copies, content[cursor..protected_end]);
                                 cursor = protected_end;
                                 continue;
                             };
                             if (content[cursor] == '<') if (try self.semanticTagAt(content, cursor)) |cell| {
                                 // Keep ordinary tags whole so quoted attribute text is not rescanned.
                                 if (!oneOf(cell.name, &.{ "tr", "td", "th", "tbody" }))
-                                    try body.appendSlice(self.a, content[cursor..cell.end]);
+                                    try self.appendHeadingSourceCopy(&body, &heading_copies, content[cursor..cell.end]);
                                 cursor = cell.end;
                                 continue;
                             };
-                            try body.append(self.a, content[cursor]);
+                            try self.appendHeadingSourceCopy(&body, &heading_copies, content[cursor .. cursor + 1]);
                             cursor += 1;
                         }
+                        try self.registerHeadingSourceCopies(body.items, heading_copies.items);
                         try blocks.appendSlice(self.a, try self.renderBodyWithLanguageDirection(body.items, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{})));
                     } else {
                         var fostered: std.ArrayList(Block) = .empty;
@@ -8041,6 +8196,7 @@ pub const Renderer = struct {
                     if (try self.headingColonListBody(heading_body)) |item_body| {
                         try self.bodyRawBlock(&blocks, input, item_body, &body_quotes, .heading, ":", "", level);
                     } else try self.bodyRawBlock(&blocks, input, heading_body, &body_quotes, .heading, "", "", level);
+                    blocks.items[blocks.items.len - 1].heading_authored_id = try self.headingAuthoredId(tag);
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
                     try self.htmlList(&blocks, wrapper_source[tag.end..pair.inner_end], tag, "", 0, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
                 } else if (try self.appendEtymologyTree(&blocks, wrapper_source[tag.end..pair.inner_end], tag)) {
@@ -8312,7 +8468,7 @@ pub const Renderer = struct {
         const previous = self.body_language_direction;
         self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set };
         defer self.body_language_direction = previous;
-        const tracked = if (self.body_missing) |parent| try missingSlice(self.a, parent, input) else MissingText.untracked(input);
+        const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, input) else MissingText.untracked(input);
         return self.renderBodyWithMissing(tracked);
     }
     fn parseSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
@@ -8664,13 +8820,15 @@ pub const Renderer = struct {
         // HTML moves non-cell table content before the table. Preserve that
         // visible content in ordinary blocks, never in a fabricated caption.
         var source: std.ArrayList(u8) = .empty;
-        for (formatting.items) |opening| try source.appendSlice(self.a, opening);
+        var heading_copies: std.ArrayList(HeadingSourceCopy) = .empty;
+        defer heading_copies.deinit(self.a);
+        for (formatting.items) |opening| try self.appendHeadingSourceCopy(&source, &heading_copies, opening);
         var local_blocks: std.ArrayList([]const u8) = .empty;
         var at: usize = 0;
         while (at < input.len) {
             if (input[at] == '<') {
                 if (syntax.protectedEnd(input, at)) |end| {
-                    try source.appendSlice(self.a, input[at..end]);
+                    try self.appendHeadingSourceCopy(&source, &heading_copies, input[at..end]);
                     at = end;
                     continue;
                 }
@@ -8691,7 +8849,7 @@ pub const Renderer = struct {
                     }
                     if (!tag.closing and oneOf(tag.name, &.{ "script", "style", "iframe", "object", "embed" })) {
                         if (syntax.matchingTag(input, tag)) |pair| {
-                            try source.appendSlice(self.a, input[at..pair.end]);
+                            try self.appendHeadingSourceCopy(&source, &heading_copies, input[at..pair.end]);
                             at = pair.end;
                             continue;
                         }
@@ -8712,12 +8870,12 @@ pub const Renderer = struct {
                             }
                         } else if (!tag.self_closing and stack.items.len < max_depth) try stack.append(self.a, input[at..tag.end]);
                     }
-                    try source.appendSlice(self.a, input[at..tag.end]);
+                    try self.appendHeadingSourceCopy(&source, &heading_copies, input[at..tag.end]);
                     at = tag.end;
                     continue;
                 }
             }
-            try source.append(self.a, input[at]);
+            try self.appendHeadingSourceCopy(&source, &heading_copies, input[at .. at + 1]);
             at += 1;
         }
         // Cell entry pops layout wrappers; active HTML formatting elements
@@ -8752,6 +8910,7 @@ pub const Renderer = struct {
             cursor = tag.end;
             if (oneOf(tag.name, &.{ "div", "p", "blockquote", "center", "ul", "ol", "dl", "table", "h1", "h2", "h3", "h4", "h5", "h6" })) explicit_blocks = true;
         }
+        try self.registerHeadingSourceCopies(source.items, heading_copies.items);
         const produced = if (explicit_blocks) try self.renderBody(source.items) else blk: {
             // Parsing inline character data directly retains source boundary
             // whitespace. Joining adds no separator that was not in source.
@@ -8916,11 +9075,18 @@ pub const Renderer = struct {
         return .{ .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) };
     }
     const TableResult = struct { table: Table, end: usize, body_end: usize, fostered: []const Block, has_caption: bool, feature: ?Feature = null };
-    fn flushWikiTableFostered(self: *Renderer, blocks: *std.ArrayList(Block), source: *MissingBuffer) Error!void {
+    fn appendWikiTableFosteredCopy(self: *Renderer, output: *MissingBuffer, copies: *std.ArrayList(HeadingSourceCopy), tracked: MissingText, bytes: []const u8) Error!void {
+        const start = output.items.len;
+        try output.appendCopied(self.a, tracked, bytes);
+        try self.recordHeadingSourceCopy(copies, start, bytes);
+    }
+    fn flushWikiTableFostered(self: *Renderer, blocks: *std.ArrayList(Block), source: *MissingBuffer, copies: *std.ArrayList(HeadingSourceCopy)) Error!void {
         if (source.items.len == 0) return;
         // Rendered spans may borrow their input; release the accumulated
         // slice from the mutable buffer before another fostered segment.
         const body = try source.take(self.a);
+        try self.registerHeadingSourceCopies(body.bytes, copies.items);
+        copies.clearRetainingCapacity();
         try blocks.appendSlice(self.a, try self.renderBodyWithMissing(body));
     }
     fn wikiTableIndent(line: []const u8) ?[]const u8 {
@@ -9082,7 +9248,7 @@ pub const Renderer = struct {
     }
 
     fn parseTable(self: *Renderer, source: []const u8, start: usize, swatch_background: ?[]const u8, table_background: ?[]const u8) Error!TableResult {
-        const tracked = if (self.body_missing) |parent| try missingSlice(self.a, parent, source) else MissingText.untracked(source);
+        const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, source) else MissingText.untracked(source);
         // Slicing tracked ranges owns a copied byte domain. Derive every cell
         // and caption slice from that same domain before copying provenance.
         const input = tracked.bytes;
@@ -9095,6 +9261,8 @@ pub const Renderer = struct {
         var cell_source: MissingBuffer = .empty;
         var outside_source: MissingBuffer = .empty;
         defer outside_source.deinit(self.a);
+        var outside_copies: std.ArrayList(HeadingSourceCopy) = .empty;
+        defer outside_copies.deinit(self.a);
         var current: ?Cell = null;
         const inherited_formatting = self.block_formatting;
         var row_formatting = inherited_formatting;
@@ -9121,14 +9289,20 @@ pub const Renderer = struct {
                 // retain it as fostered source until the enclosing boundary.
                 const nested_source = if (caption_pending) &caption_source else if (current != null) &cell_source else &outside_source;
                 if (nested_source.items.len != 0) try nested_source.append(self.a, '\n');
-                try nested_source.appendCopied(self.a, tracked, raw_line);
+                if (nested_source == &outside_source)
+                    try self.appendWikiTableFosteredCopy(&outside_source, &outside_copies, tracked, raw_line)
+                else
+                    try nested_source.appendCopied(self.a, tracked, raw_line);
                 nested_tables += 1;
                 continue;
             }
             if (nested_tables != 0) {
                 const nested_source = if (caption_pending) &caption_source else if (current != null) &cell_source else &outside_source;
                 if (nested_source.items.len != 0) try nested_source.append(self.a, '\n');
-                try nested_source.appendCopied(self.a, tracked, raw_line);
+                if (nested_source == &outside_source)
+                    try self.appendWikiTableFosteredCopy(&outside_source, &outside_copies, tracked, raw_line)
+                else
+                    try nested_source.appendCopied(self.a, tracked, raw_line);
                 if (starts(line, "|}")) nested_tables -= 1;
                 continue;
             }
@@ -9152,7 +9326,7 @@ pub const Renderer = struct {
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
                 try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                 // Preceding outside text registers references before the caption.
-                try self.flushWikiTableFostered(&fostered, &outside_source);
+                try self.flushWikiTableFostered(&fostered, &outside_source, &outside_copies);
                 const raw_caption = line[2..];
                 caption_style = self.body_language_direction orelse .{};
                 caption_formatting = inherited_formatting;
@@ -9166,7 +9340,7 @@ pub const Renderer = struct {
                 has_caption = true;
             } else if (line.len != 0 and (line[0] == '!' or line[0] == '|')) {
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
-                try self.flushWikiTableFostered(&fostered, &outside_source);
+                try self.flushWikiTableFostered(&fostered, &outside_source, &outside_copies);
                 const header = line[0] == '!';
                 var offset: usize = 1;
                 while (offset <= line.len) {
@@ -9209,10 +9383,10 @@ pub const Renderer = struct {
                     // without registering references before recovery.
                     try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                     if (outside_source.items.len != 0) try outside_source.append(self.a, '\n');
-                    try outside_source.appendCopied(self.a, tracked, raw_line);
+                    try self.appendWikiTableFosteredCopy(&outside_source, &outside_copies, tracked, raw_line);
                     continue;
                 }
-                try self.flushWikiTableFostered(&fostered, &outside_source);
+                try self.flushWikiTableFostered(&fostered, &outside_source, &outside_copies);
                 try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
                 if (try self.htmlTable(line, &fostered, true, self.body_language_direction orelse .{}, row_background)) |table| {
@@ -9236,7 +9410,7 @@ pub const Renderer = struct {
                 // Ordinary text outside a wiki cell is fostered before the
                 // table, just as the HTML-table path retains non-cell text.
                 if (outside_source.items.len != 0) try outside_source.append(self.a, '\n');
-                try outside_source.appendCopied(self.a, tracked, raw_line);
+                try self.appendWikiTableFosteredCopy(&outside_source, &outside_copies, tracked, raw_line);
             }
         }
         try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
@@ -9244,7 +9418,7 @@ pub const Renderer = struct {
         // Rowless recovery already renders the full body; avoid rendering its
         // outside text twice (including reference-registration side effects).
         if (has_caption or rows.items.len != 0 or cells.items.len != 0)
-            try self.flushWikiTableFostered(&fostered, &outside_source);
+            try self.flushWikiTableFostered(&fostered, &outside_source, &outside_copies);
         if (body_end == input.len) self.fallbacks.malformed_table = true;
         if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
         try self.resolveZeroRowspans(rows.items, 0);
@@ -26397,4 +26571,142 @@ test "HTML list items retain typed heading ancestry through DPR2" {
         }
         try std.testing.expect(!r.fallbacks.any());
     }
+}
+
+test "allocated translation and fostered headings retain authored source offsets" {
+    const cases = [_]struct { source: []const u8, title_start: []const u8 }{
+        .{ .source = "<table class=translations><tr><td>\n==Noun==\nbody\n</td></tr></table>", .title_start = "Noun" },
+        .{ .source = "<table class=translations><tr><td>\n==No<td>un==\nbody\n</td></tr></table>", .title_start = "No<td>" },
+        .{ .source = "<table><h3>Noun</h3><tr><td>cell</td></tr></table>", .title_start = "Noun" },
+        .{ .source = "<ref>unmatched\n===Noun===\nbody", .title_start = "Noun" },
+        .{ .source = "{|\n|-\n|<div>\n==Noun==\n{|\n! head !! other\n|-\n| one || two\n|}\n</div>\n|}", .title_start = "Noun" },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var renderer: Renderer = .{ .a = arena.allocator(), .context = .{}, .heading_source = case.source };
+        const blocks = try renderer.renderBody(case.source);
+        var found: usize = 0;
+        for (blocks) |block_value| if (block_value.kind == .heading) {
+            found += 1;
+            try std.testing.expectEqualStrings("Noun", try plainText(arena.allocator(), block_value.spans));
+            try std.testing.expectEqual(@as(?usize, std.mem.indexOf(u8, case.source, case.title_start)), block_value.heading_source_offset);
+        };
+        try std.testing.expectEqual(@as(usize, 1), found);
+    }
+}
+
+test "wiki table fostered copies retain distinct heading offsets without mapping generated newlines" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The malformed closer ends the row, leaving later headings fostered.
+    // Repeated labels must keep their distinct authored byte positions.
+    const source = "{|\n==Noun==\n| cell\n|-}\n==Noun==\nbody\n===Verb===\nrest";
+    var renderer: Renderer = .{ .a = a, .context = .{}, .heading_source = source };
+    const blocks = try renderer.renderBody(source);
+    const first = std.mem.indexOf(u8, source, "Noun").?;
+    const second = std.mem.indexOfPos(u8, source, first + 4, "Noun").?;
+    const expected = [_]usize{ first, second, std.mem.indexOf(u8, source, "Verb").? };
+    var headings: usize = 0;
+    var tables: usize = 0;
+    for (blocks) |block_value| {
+        if (block_value.kind == .heading) {
+            try std.testing.expect(headings < expected.len);
+            try std.testing.expectEqual(@as(?usize, expected[headings]), block_value.heading_source_offset);
+            try std.testing.expectEqualStrings(if (headings == 2) "Verb" else "Noun", try plainText(a, block_value.spans));
+            headings += 1;
+        }
+        if (block_value.table) |table| {
+            tables += 1;
+            try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+            try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+            try std.testing.expectEqualStrings("cell", try plainText(a, table.rows[0].cells[0].spans));
+        }
+    }
+    try std.testing.expectEqual(expected.len, headings);
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    try std.testing.expect(renderer.fallbacks.malformed_table);
+
+    var copied: MissingBuffer = .empty;
+    var copies: std.ArrayList(HeadingSourceCopy) = .empty;
+    try renderer.appendWikiTableFosteredCopy(&copied, &copies, MissingText.untracked(source), source[first .. first + 4]);
+    try copied.append(a, '\n');
+    try renderer.appendWikiTableFosteredCopy(&copied, &copies, MissingText.untracked(source), source[second .. second + 4]);
+    const detached = try copied.take(a);
+    try renderer.registerHeadingSourceCopies(detached.bytes, copies.items);
+    try std.testing.expectEqual(@as(?usize, first), renderer.headingSourceOffset(detached.bytes[0..4]));
+    try std.testing.expectEqual(@as(?usize, null), renderer.headingSourceOffset(detached.bytes[4..5]));
+    try std.testing.expectEqual(@as(?usize, second), renderer.headingSourceOffset(detached.bytes[5..9]));
+}
+
+test "unmatched opaque escaping maps the first entity byte to its authored heading start" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = "===<ref>literal===\nbody";
+    var renderer: Renderer = .{ .a = arena.allocator(), .context = .{}, .heading_source = source };
+    const blocks = try renderer.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(Kind.heading, blocks[0].kind);
+    try std.testing.expectEqualStrings("<ref>literal", try plainText(arena.allocator(), blocks[0].spans));
+    try std.testing.expectEqual(@as(?usize, 3), blocks[0].heading_source_offset);
+
+    var probe: Renderer = .{ .a = arena.allocator(), .context = .{}, .heading_source = source };
+    const prepared = try probe.prepareUnmatchedOpaqueWithMissing(MissingText.untracked(source));
+    const entity_at = std.mem.indexOf(u8, prepared.bytes, "&lt;").?;
+    try std.testing.expectEqual(@as(?usize, 3), probe.headingSourceOffset(prepared.bytes[entity_at..]));
+    try std.testing.expectEqual(@as(?usize, null), probe.headingSourceOffset(prepared.bytes[entity_at + 1 ..]));
+}
+
+test "heading source aliases compose through allocated copies and ignore generated bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "start No<td>un finish";
+    var renderer: Renderer = .{ .a = a, .context = .{}, .heading_source = source };
+    var first: std.ArrayList(u8) = .empty;
+    var first_copies: std.ArrayList(HeadingSourceCopy) = .empty;
+    try renderer.appendHeadingSourceCopy(&first, &first_copies, source[6..8]);
+    try renderer.appendHeadingSourceCopy(&first, &first_copies, source[12..14]);
+    try renderer.registerHeadingSourceCopies(first.items, first_copies.items);
+    var second: std.ArrayList(u8) = .empty;
+    var second_copies: std.ArrayList(HeadingSourceCopy) = .empty;
+    try second.appendSlice(a, "generated ");
+    try renderer.appendHeadingSourceCopy(&second, &second_copies, first.items);
+    try renderer.registerHeadingSourceCopies(second.items, second_copies.items);
+    try std.testing.expectEqual(@as(?usize, 6), renderer.headingSourceOffset(second.items[10..]));
+    try std.testing.expectEqual(@as(?usize, 12), renderer.headingSourceOffset(second.items[12..]));
+    try std.testing.expectEqual(@as(?usize, null), renderer.headingSourceOffset(second.items[0..]));
+    try std.testing.expectEqual(@as(?usize, source.len), renderer.headingSourceOffset(source[source.len..]));
+}
+
+test "tracked body slices preserve missing coordinates and page heading IDs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source: []const u8 = "prefix\n==Noun==\nbody\n<div lang=fr>\n==Noun==\nbody\n</div>\n{|\n| cell\n|}\n";
+    const body_at = std.mem.indexOf(u8, source, "body").?;
+    const ranges = [_]missing_dependency.Range{.{ .start = @intCast(body_at), .end = @intCast(body_at + 4), .occurrence = 1 }};
+    const tracked: MissingText = .{ .bytes = source, .ranges = &ranges, .unknown = true };
+    var renderer: Renderer = .{ .a = a, .context = .{}, .heading_source = source };
+    const copied = try renderer.missingSliceWithHeadingSource(tracked, source[7..]);
+    try std.testing.expect(copied.bytes.ptr != source[7..].ptr);
+    try std.testing.expectEqualStrings(source[7..], copied.bytes);
+    try std.testing.expectEqual(@as(usize, 1), copied.ranges.len);
+    try std.testing.expectEqual(@as(u32, @intCast(body_at - 7)), copied.ranges[0].start);
+    try std.testing.expectEqual(@as(u32, @intCast(body_at + 4 - 7)), copied.ranges[0].end);
+    try std.testing.expectEqual(@as(u32, 1), copied.ranges[0].occurrence);
+    try std.testing.expect(copied.unknown);
+    try std.testing.expectEqual(@as(?usize, std.mem.indexOf(u8, source, "Noun")), renderer.headingSourceOffset(copied.bytes[2..]));
+    try std.testing.expectEqual(@as(u32, @intCast(body_at)), tracked.ranges[0].start);
+    try std.testing.expectEqual(@as(u32, @intCast(body_at + 4)), tracked.ranges[0].end);
+
+    const document = @import("presentation_document.zig");
+    const observation = try document.observeHeadingAnchorsAlloc(a, "entry", tracked, .{}, null, null, null, .{}, null);
+    try std.testing.expectEqual(@as(usize, 2), observation.items.len);
+    try std.testing.expectEqual(std.mem.indexOf(u8, source, "Noun").?, observation.items[0].source_offset);
+    try std.testing.expectEqual(std.mem.lastIndexOf(u8, source, "Noun").?, observation.items[1].source_offset);
+    try std.testing.expectEqualStrings("Noun", observation.items[0].anchor);
+    try std.testing.expectEqualStrings("Noun_2", observation.items[1].anchor);
+    for (observation.items) |item| try std.testing.expectEqualStrings("", item.anchor_fallback);
 }

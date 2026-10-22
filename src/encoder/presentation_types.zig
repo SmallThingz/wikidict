@@ -43,11 +43,15 @@ pub const Block = struct {
     list_path: []const u8 = "",
     number: []const u8 = "",
     level: u8 = 0,
+    anchor: []const u8 = "",
+    anchor_fallback: []const u8 = "",
     table: ?Table = null,
 };
 pub const Section = struct {
     level: u8,
     title: []const u8,
+    anchor: []const u8 = "",
+    anchor_fallback: []const u8 = "",
     blocks: []const Block = &.{},
 };
 pub const Form = struct { relation: []const u8, target: []const u8, language: []const u8 };
@@ -172,6 +176,7 @@ pub fn validateStored(
     try validateSpanColors(entry.preamble_spans);
     for (entry.references) |reference| try validateSpanColors(reference.spans);
     for (entry.sections) |section| for (section.blocks) |block| {
+        if ((block.anchor.len != 0 or block.anchor_fallback.len != 0) and block.kind != .heading) return error.InvalidPresentation;
         try validateSpanColors(block.spans);
         if (block.table) |table| {
             try validateSpanColors(table.caption);

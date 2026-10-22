@@ -38,6 +38,7 @@ pub const linkQuoteCutSeedsWithContextAlloc = compiler.linkQuoteCutSeedsWithCont
 pub const bodyQuoteCutSeedsAlloc = compiler.bodyQuoteCutSeedsAlloc;
 pub const linkQuoteCutSeedsAlloc = compiler.linkQuoteCutSeedsAlloc;
 pub const SourceFragment = struct {
+    original_start: ?usize = null,
     source: []const u8,
     missing: ?MissingText = null,
     pre: FragmentPreContext = .{},
@@ -281,7 +282,17 @@ pub const DisplayTitle = struct {
     page_title: []const u8,
 };
 
+const heading_ids = @import("presentation_heading_anchors.zig");
+pub const HeadingSourceRange = struct { owner_start: usize, page_start: usize, len: usize };
+pub const HeadingAnchor = struct { source_offset: usize, anchor: []const u8, anchor_fallback: []const u8 = "" };
+pub const HeadingObservation = struct { items: []const HeadingAnchor = &.{} };
+
 const WorkSection = struct {
+    is_heading: bool = false,
+    anchor: []const u8 = "",
+    anchor_fallback: []const u8 = "",
+    heading_source_offset: ?usize = null,
+    heading_authored_id: []const u8 = "",
     title_depth: u8 = 0,
     title_list_path: []const u8 = "",
     title_spans: []const compiler.Span = &.{},
@@ -299,6 +310,9 @@ const Work = struct {
     fallbacks: Fallbacks,
 };
 const Builder = struct {
+    is_heading: bool = false,
+    heading_source_offset: ?usize = null,
+    heading_authored_id: []const u8 = "",
     title_depth: u8 = 0,
     title_list_path: []const u8 = "",
     title_spans: []const compiler.Span = &.{},
@@ -314,6 +328,9 @@ const Builder = struct {
         try self.sections.append(self.a, .{
             .level = self.level,
             .title = self.title,
+            .is_heading = self.is_heading,
+            .heading_source_offset = self.heading_source_offset,
+            .heading_authored_id = self.heading_authored_id,
             .title_spans = self.title_spans,
             .title_depth = self.title_depth,
             .title_list_path = self.title_list_path,
@@ -343,6 +360,9 @@ const Builder = struct {
             if (item.kind == .heading) {
                 try self.flush(rendered[section_start..i]);
                 self.started = true;
+                self.is_heading = true;
+                self.heading_source_offset = item.heading_source_offset;
+                self.heading_authored_id = item.heading_authored_id;
                 self.title_spans = item.spans;
                 self.title_depth = item.depth;
                 self.title_list_path = item.list_path;
@@ -396,6 +416,51 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
         .unresolved_templates = renderer.unresolved_templates,
         .fallbacks = renderer.fallbacks,
     };
+}
+
+fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment) !Work {
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .poem_phase = poem_phase } };
+    renderer.page_reference_definitions = reference_context.items;
+    renderer.fallbacks.merge(reference_context.fallbacks);
+    var builder: Builder = .{ .a = a, .renderer = &renderer, .title = if (language.len == 0) title else language };
+    if (fragments.len == 0) {
+        try builder.consume(try renderer.renderBodyWithHeadingOffsets(source));
+    } else {
+        var rendered: std.ArrayList(compiler.Block) = .empty;
+        defer rendered.deinit(a);
+        var owner_at: usize = 0;
+        for (fragments) |fragment| {
+            const tracked = fragment.missing orelse MissingText.untracked(fragment.source);
+            renderer.heading_source = tracked.bytes;
+            const blocks = try renderer.renderBodyWithFragmentPreAndMissing(tracked, fragment.pre);
+            for (@constCast(blocks)) |*block| if (block.heading_source_offset) |offset| {
+                block.heading_source_offset = owner_at + offset;
+            };
+            try rendered.appendSlice(a, blocks);
+            owner_at += fragment.source.len;
+        }
+        renderer.heading_source = null;
+        try builder.consume(try rendered.toOwnedSlice(a));
+    }
+    return .{ .sections = try builder.sections.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
+}
+
+pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase) !HeadingObservation {
+    const work = try workWithHeadingOffsetsAlloc(a, title, "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, &.{});
+    var registry: heading_ids.Registry = .{};
+    defer registry.deinit(a);
+    var result: std.ArrayList(HeadingAnchor) = .empty;
+    defer result.deinit(a);
+    for (work.sections) |section| {
+        if (!section.is_heading) continue;
+        const offset = section.heading_source_offset orelse return error.InvalidHeadingProjection;
+        var report: Fallbacks = .{};
+        try validateSpans(a, section.title_spans, &report);
+        const text = trimHeading(try compiler.plainText(a, section.title_spans));
+        const identity = if (section.heading_authored_id.len != 0) try registry.authoredIds(a, section.heading_authored_id) else try registry.headingIds(a, text);
+        try result.append(a, .{ .source_offset = offset, .anchor = identity.anchor, .anchor_fallback = identity.anchor_fallback });
+    }
+    return .{ .items = try result.toOwnedSlice(a) };
 }
 
 fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, fallbacks: ?*Fallbacks, poem_phase: ?*const PoemPhase) ![]const compiler.Span {
@@ -666,7 +731,31 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAlloc(
     poem_phase: ?*const PoemPhase,
     fragments: []const SourceFragment,
 ) ![]u8 {
-    const work = try workAllocWithMissingFragments(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments);
+    return compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, fallbacks, poem_phase, fragments, null, &.{});
+}
+pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: MissingText,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    reference_context: compiler.ReferenceDefinitions,
+    fallbacks: ?*Fallbacks,
+    poem_phase: ?*const PoemPhase,
+    fragments: []const SourceFragment,
+    heading_observation: ?*const HeadingObservation,
+    heading_projection: []const HeadingSourceRange,
+) ![]u8 {
+    const work = if (heading_observation != null)
+        try workWithHeadingOffsetsAlloc(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments)
+    else
+        try workAllocWithMissingFragments(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;
@@ -692,6 +781,30 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAlloc(
         try validateSpans(a, caption_spans, fallbacks);
         @constCast(work.media)[index].caption = try compiler.plainText(a, caption_spans);
     }
+    var heading_registry: heading_ids.Registry = .{};
+    defer heading_registry.deinit(a);
+    for (@constCast(work.sections)) |*section| {
+        // A synthetic preamble section is a reader label, not a source heading.
+        if (!section.is_heading) continue;
+        const identity = if (heading_observation) |observation| blk: {
+            const local = section.heading_source_offset orelse return error.InvalidHeadingProjection;
+            var page: ?usize = null;
+            for (heading_projection) |range| {
+                if (local >= range.owner_start and local - range.owner_start < range.len) {
+                    page = range.page_start + (local - range.owner_start);
+                    break;
+                }
+            }
+            const offset = page orelse return error.InvalidHeadingProjection;
+            for (observation.items) |item| if (item.source_offset == offset) break :blk heading_ids.Ids{ .anchor = item.anchor, .anchor_fallback = item.anchor_fallback };
+            return error.InvalidHeadingProjection;
+        } else if (section.heading_authored_id.len != 0)
+            try heading_registry.authoredIds(a, section.heading_authored_id)
+        else
+            try heading_registry.headingIds(a, section.title);
+        section.anchor = identity.anchor;
+        section.anchor_fallback = identity.anchor_fallback;
+    }
     // DPR2 section titles remain stable plain labels for TOC/folding. A linked
     // title includes self links whose styling survives without a navigation target.
     // It also retains its final validated spans in the first ordinary heading
@@ -711,7 +824,7 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAlloc(
         }
         if (navigable or explained or styled_self or section.title_depth != 0 or section.title_list_path.len != 0) {
             const blocks = try a.alloc(compiler.Block, section.blocks.len + 1);
-            blocks[0] = .{ .kind = .heading, .spans = section.title_spans, .level = section.level, .depth = section.title_depth, .list_path = section.title_list_path };
+            blocks[0] = .{ .kind = .heading, .spans = section.title_spans, .level = section.level, .depth = section.title_depth, .list_path = section.title_list_path, .anchor = section.anchor, .anchor_fallback = section.anchor_fallback };
             @memcpy(blocks[1..], section.blocks);
             section.blocks = blocks;
         }
@@ -2718,4 +2831,136 @@ test "invalid nowiki literal angles pass strict document compilation with active
     // Merely setting ordinary parsed text to look literal cannot bypass the guard.
     const raw = [_]compiler.Span{.{ .text = "<nowiki/ >[[still raw]]</nowiki>" }};
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+}
+
+test "duplicate semantic headings retain distinct page IDs and shared companion IDs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "=== [[A|Noun]] ===\n# first\n=== [[B|Noun]] ===\n# second\n";
+    const encoded = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualStrings("DPR5", encoded[0..4]);
+    for (decoded.entry.sections, [_][]const u8{ "Noun", "Noun_2" }) |section, anchor| {
+        try std.testing.expectEqualStrings("Noun", section.title);
+        try std.testing.expectEqualStrings(anchor, section.anchor);
+        try std.testing.expectEqualStrings(anchor, section.blocks[0].anchor);
+    }
+}
+
+test "heading projection retains another language's page-wide collision history" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const french = "==French==\n===Noun===\n# French noun\n";
+    const english = "==English==\n===Noun===\n# English noun\n";
+    const page = french ++ english;
+    const observation = try observeHeadingAnchorsAlloc(a, "entry", MissingText.untracked(page), .{}, null, null, null, .{}, null);
+    const projection = [_]HeadingSourceRange{.{ .owner_start = 0, .page_start = french.len, .len = english.len }};
+    const encoded = try compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(a, "entry", .language, "English", "en", MissingText.untracked(english), null, .{}, null, null, null, .{}, null, null, &.{}, &observation, &projection);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualStrings("English", decoded.entry.sections[0].anchor);
+    try std.testing.expectEqualStrings("Noun_2", decoded.entry.sections[1].anchor);
+    try std.testing.expectEqualStrings("Noun", decoded.entry.sections[1].title);
+    const wrong = [_]HeadingSourceRange{.{ .owner_start = 0, .page_start = 1, .len = english.len }};
+    try std.testing.expectError(error.InvalidHeadingProjection, compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(a, "entry", .language, "English", "en", MissingText.untracked(english), null, .{}, null, null, null, .{}, null, null, &.{}, &observation, &wrong));
+}
+
+test "allocated tracked fragments retain projected page-wide heading IDs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const french = "==French==\n===Noun===\n# French noun\n";
+    const english_heading = "==English==\n";
+    const english_body = "=== [[word|Noun]] ===\n# English noun\n";
+    const english = english_heading ++ english_body;
+    const page = french ++ english;
+    const observation = try observeHeadingAnchorsAlloc(a, "entry", MissingText.untracked(page), .{}, null, null, null, .{}, null);
+    const fragments = [_]SourceFragment{
+        .{ .source = english_heading, .missing = try missing_dependency.slice(a, MissingText.untracked(page), french.len, french.len + english_heading.len) },
+        .{ .source = english_body, .missing = try missing_dependency.slice(a, MissingText.untracked(page), french.len + english_heading.len, page.len) },
+    };
+    // Tracked slices own copied bytes, as Writer's recovery fragments do.
+    for (fragments) |fragment| {
+        try std.testing.expect(fragment.source.ptr != fragment.missing.?.bytes.ptr);
+        try std.testing.expectEqualStrings(fragment.source, fragment.missing.?.bytes);
+    }
+    const projection = [_]HeadingSourceRange{.{ .owner_start = 0, .page_start = french.len, .len = english.len }};
+    const encoded = try compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(a, "entry", .language, "English", "en", MissingText.untracked(english), null, .{}, null, null, null, .{}, null, null, &fragments, &observation, &projection);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualStrings("English", decoded.entry.sections[0].anchor);
+    try std.testing.expectEqualStrings("Noun_2", decoded.entry.sections[1].anchor);
+    try std.testing.expectEqualStrings("Noun", decoded.entry.sections[1].title);
+    try std.testing.expectEqualStrings("Noun_2", decoded.entry.sections[1].blocks[0].anchor);
+}
+
+test "protected and entity literal heading text remains semantic display data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "===<nowiki>[[Noun]]</nowiki>===\n# first\n===&#91;&#91;Noun&#93;&#93;===\n# second\n";
+    const encoded = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualStrings("[[Noun]]", decoded.entry.sections[0].title);
+    try std.testing.expectEqualStrings("[[Noun]]", decoded.entry.sections[0].anchor);
+    try std.testing.expectEqualStrings("[[Noun]]_2", decoded.entry.sections[1].anchor);
+}
+
+test "authored HTML heading IDs reserve canonical destinations without parsing their labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<h3 id=\"Custom&amp;ID\">Noun</h3>\n# first\n===Custom&amp;ID===\n# second\n===Noun===\n# third\n";
+    const encoded = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualStrings("Noun", decoded.entry.sections[0].title);
+    try std.testing.expectEqualStrings("Custom&ID", decoded.entry.sections[0].anchor);
+    try std.testing.expectEqualStrings("Custom&ID_2", decoded.entry.sections[1].anchor);
+    try std.testing.expectEqualStrings("Noun", decoded.entry.sections[2].anchor);
+}
+
+test "authored HTML heading IDs sanitize raw whitespace before entity decoding" {
+    const cases = [_]struct { source: []const u8, anchor: []const u8 }{
+        .{ .source = "<h3 id=\" Custom  ID \">Noun</h3>\nbody", .anchor = "Custom_ID" },
+        .{ .source = "<h3 id=\"\tCustom\r\n ID\t\">Noun</h3>\nbody", .anchor = "Custom_ID" },
+        .{ .source = "<h3 id=\"   \">Noun</h3>\nbody", .anchor = "Noun" },
+        .{ .source = "<h3 id=\"&#32;Custom&#32;&#32;ID&#32;\">Noun</h3>\nbody", .anchor = "_Custom__ID_" },
+        .{ .source = "<h3 id=First ID=Last>Noun</h3>\nbody", .anchor = "Last" },
+        .{ .source = "<h3 id=First id>Noun</h3>\nbody", .anchor = "Noun" },
+        .{ .source = "<h3 id=\"Custom&#9;ID\">Noun</h3>\nbody", .anchor = "Custom_ID" },
+        .{ .source = "<h3 id=\"Custom&#12;ID\">Noun</h3>\nbody", .anchor = "Custom_ID" },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const encoded = try compileAlloc(a, "entry", .language, "English", "en", case.source, null);
+        const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualStrings("Noun", decoded.entry.sections[0].title);
+        try std.testing.expectEqualStrings(case.anchor, decoded.entry.sections[0].anchor);
+        try std.testing.expectEqualStrings("", decoded.entry.sections[0].anchor_fallback);
+        const observation = try observeHeadingAnchorsAlloc(a, "entry", MissingText.untracked(case.source), .{}, null, null, null, .{}, null);
+        try std.testing.expectEqual(@as(usize, 1), observation.items.len);
+        try std.testing.expectEqualStrings(case.anchor, observation.items[0].anchor);
+        try std.testing.expectEqualStrings("", observation.items[0].anchor_fallback);
+    }
+}
+
+test "legacy destination aliases and literal fallback-shaped headings retain distinct identities" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "=== [[A|\xc3\xa4]] ===\n# [[#.C3.A4|first]]\n=== [[B|.C3.A4]] ===\n# literal\n=== [[C|\xc3\xa4]] ===\n# [[#.C3.A4_3|later]]\n";
+    const encoded = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    const primary = [_][]const u8{ "\xc3\xa4", ".C3.A4_2", "\xc3\xa4_2" };
+    const fallback = [_][]const u8{ ".C3.A4", "", ".C3.A4_3" };
+    for (decoded.entry.sections, primary, fallback) |section, id, alias| {
+        try std.testing.expectEqualStrings(id, section.anchor);
+        try std.testing.expectEqualStrings(alias, section.anchor_fallback);
+        try std.testing.expectEqualStrings(id, section.blocks[0].anchor);
+        try std.testing.expectEqualStrings(alias, section.blocks[0].anchor_fallback);
+    }
+    try std.testing.expectEqualStrings("#.C3.A4", decoded.entry.sections[0].blocks[1].spans[0].target);
+    try std.testing.expectEqualStrings("#.C3.A4 3", decoded.entry.sections[2].blocks[1].spans[0].target);
 }

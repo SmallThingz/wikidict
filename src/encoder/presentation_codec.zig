@@ -6,7 +6,8 @@ const A = std.mem.Allocator;
 pub const magic = "DPR2";
 pub const explained_magic = "DPR3";
 pub const color_magic = "DPR4";
-const Version = enum { plain, explained, colored };
+pub const anchor_magic = "DPR5";
+const Version = enum { plain, explained, colored, anchored };
 const max_items: usize = 1 << 20;
 const max_string_bytes: usize = 32 * 1024 * 1024;
 const no_index: u32 = std.math.maxInt(u32);
@@ -119,7 +120,7 @@ const Encoder = struct {
             pos += string_value.len;
         }
         std.debug.assert(pos == encoded.len);
-        if (self.version == .colored) {
+        if ((self.version == .colored or self.version == .anchored)) {
             const foreground: ?[]const u8 = if (comptime @hasField(@TypeOf(value), "foreground")) value.foreground else null;
             try self.byte(@intFromBool(foreground != null));
             if (foreground) |color| {
@@ -146,7 +147,7 @@ const Encoder = struct {
         try self.byte(@intFromBool(value.header));
         try self.writeU16(value.colspan);
         try self.writeU16(value.rowspan);
-        if (self.version == .colored) {
+        if ((self.version == .colored or self.version == .anchored)) {
             const background: ?[]const u8 = if (comptime @hasField(@TypeOf(value), "background")) value.background else null;
             try self.byte(@intFromBool(background != null));
             if (background) |color| {
@@ -169,6 +170,7 @@ const Encoder = struct {
         } else try self.byte(0);
     }
     fn block(self: *Encoder, value: anytype) !void {
+        if ((anchorValue(value).len != 0 or fallbackValue(value).len != 0) and (try enumByteValue(types.BlockKind, value.kind)) != @backingInt(types.BlockKind.heading)) return error.InvalidPresentation;
         try self.enumByte(types.BlockKind, value.kind);
         try self.byte(value.depth);
         try self.byte(value.level);
@@ -177,12 +179,20 @@ const Encoder = struct {
         try self.string(value.list_path);
         try self.string(value.number);
         try self.table(value.table);
+        if (self.version == .anchored) {
+            try self.string(anchorValue(value));
+            try self.string(fallbackValue(value));
+        }
     }
     fn sections(self: *Encoder, values: anytype) !void {
         try self.count(values.len);
         for (values) |section| {
             try self.byte(section.level);
             try self.string(section.title);
+            if (self.version == .anchored) {
+                try self.string(anchorValue(section));
+                try self.string(fallbackValue(section));
+            }
             try self.count(section.blocks.len);
             for (section.blocks) |block_value| try self.block(block_value);
         }
@@ -480,7 +490,7 @@ const Reader = struct {
             .classes = try self.string(),
             .direction = try self.string(),
             .explanation = if (self.version != .plain) try self.string() else "",
-            .foreground = if (self.version == .colored and try self.presence()) foreground: {
+            .foreground = if ((self.version == .colored or self.version == .anchored) and try self.presence()) foreground: {
                 const value = try self.string();
                 if (!types.isCanonicalRgb(value)) return error.InvalidPresentation;
                 break :foreground value;
@@ -488,7 +498,7 @@ const Reader = struct {
         };
     }
     fn spans(self: *Reader) ![]const types.Span {
-        const len = try self.count(if (self.version == .colored) 32 else if (self.version == .explained) 31 else 27);
+        const len = try self.count(if ((self.version == .colored or self.version == .anchored)) 32 else if (self.version == .explained) 31 else 27);
         const out = try self.a.alloc(types.Span, len);
         for (out) |*value| value.* = try self.span();
         return out;
@@ -508,7 +518,7 @@ const Reader = struct {
             .header = try self.presence(),
             .colspan = try self.readU16(),
             .rowspan = try self.readU16(),
-            .background = if (self.version == .colored and try self.presence()) background: {
+            .background = if ((self.version == .colored or self.version == .anchored) and try self.presence()) background: {
                 const value = try self.string();
                 if (!types.isCanonicalRgb(value)) return error.InvalidPresentation;
                 break :background value;
@@ -517,7 +527,7 @@ const Reader = struct {
         };
     }
     fn row(self: *Reader) !types.Row {
-        const len = try self.count(if (self.version == .colored) 10 else 9);
+        const len = try self.count(if ((self.version == .colored or self.version == .anchored)) 10 else 9);
         const out = try self.a.alloc(types.Cell, len);
         for (out) |*cell_value| cell_value.* = try self.cell();
         return .{ .cells = out };
@@ -542,15 +552,19 @@ const Reader = struct {
             .list_path = try self.string(),
             .number = try self.string(),
             .table = try self.table(),
+            .anchor = if (self.version == .anchored) try self.string() else "",
+            .anchor_fallback = if (self.version == .anchored) try self.string() else "",
         };
     }
     fn sections(self: *Reader) ![]const types.Section {
-        const len = try self.count(9);
+        const len = try self.count(if (self.version == .anchored) 17 else 9);
         const out = try self.a.alloc(types.Section, len);
         for (out) |*section| {
             section.level = try self.byte();
             section.title = try self.string();
-            const block_len = try self.count(17);
+            section.anchor = if (self.version == .anchored) try self.string() else "";
+            section.anchor_fallback = if (self.version == .anchored) try self.string() else "";
+            const block_len = try self.count(if (self.version == .anchored) 25 else 17);
             const blocks = try self.a.alloc(types.Block, block_len);
             for (blocks) |*block_value| block_value.* = try self.block();
             section.blocks = blocks;
@@ -662,17 +676,34 @@ fn hasColor(display: anytype, sections_value: anytype, preamble: anytype, refere
     return false;
 }
 
+fn anchorValue(value: anytype) []const u8 {
+    return if (comptime @hasField(@TypeOf(value), "anchor")) value.anchor else "";
+}
+
+fn fallbackValue(value: anytype) []const u8 {
+    return if (comptime @hasField(@TypeOf(value), "anchor_fallback")) value.anchor_fallback else "";
+}
+
+fn hasAnchors(sections: anytype) bool {
+    for (sections) |section| {
+        if (anchorValue(section).len != 0 or fallbackValue(section).len != 0) return true;
+        for (section.blocks) |block_value| if (anchorValue(block_value).len != 0 or fallbackValue(block_value).len != 0) return true;
+    }
+    return false;
+}
+
 fn versionMagic(version: Version) []const u8 {
     return switch (version) {
         .plain => magic,
         .explained => explained_magic,
         .colored => color_magic,
+        .anchored => anchor_magic,
     };
 }
 
 pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (!std.mem.eql(u8, stored.schema, types.schema)) return error.InvalidPresentation;
-    const version: Version = if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
+    const version: Version = if (hasAnchors(stored.entry.sections)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
     var encoder: Encoder = .{ .a = a, .version = version };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, versionMagic(version));
@@ -695,7 +726,7 @@ pub fn encodeBuildAlloc(
     references_value: anytype,
     media_value: anytype,
 ) ![]u8 {
-    const version: Version = if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
+    const version: Version = if (hasAnchors(sections)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
     var encoder: Encoder = .{ .a = a, .version = version };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, versionMagic(version));
@@ -744,7 +775,7 @@ fn decodeImpl(
     metrics: ?*DecodeMetrics,
 ) !types.Stored {
     if (payload.len < magic.len) return error.InvalidPresentation;
-    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else return error.InvalidPresentation;
+    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else if (std.mem.eql(u8, payload[0..anchor_magic.len], anchor_magic)) .anchored else return error.InvalidPresentation;
     var reader: Reader = .{ .a = a, .version = version, .bytes = payload, .pos = magic.len, .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
@@ -1151,7 +1182,7 @@ test "DPR3 explanations traverse every stored span container and reject corrupt 
         std.mem.writeInt(u32, oversized[at - 4 ..][0..4], max_string_bytes + 1, .little);
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, oversized, "entry", .supplemental, null));
         const unknown = try a.dupe(u8, bytes);
-        unknown[3] = '5';
+        unknown[3] = '6';
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, unknown, "entry", .supplemental, null));
     }
 }
@@ -1209,11 +1240,86 @@ test "DPR4 RGB fields roundtrip every span container and preserve legacy table b
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad_presence, "colors", .supplemental, null));
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0 .. bytes.len - 1], "colors", .supplemental, null));
         const unknown = try a.dupe(u8, bytes);
-        unknown[3] = '5';
+        unknown[3] = '6';
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, unknown, "colors", .supplemental, null));
     }
     const invalid = [_]types.Span{.{ .text = "invalid", .foreground = "red" }};
     const invalid_stored: types.Stored = .{ .entry = .{ .title = "colors", .kind = .supplemental, .display_title = &invalid } };
     try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid_stored));
     try std.testing.expectError(error.InvalidPresentation, types.validateStored(invalid_stored, "colors", .supplemental, null));
+}
+
+test "DPR5 preserves section and standalone heading anchors with rich fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const blocks = [_]types.Block{
+        .{ .kind = .heading, .level = 3, .anchor = "Usage_notes_2", .anchor_fallback = "Usage.20notes_2", .spans = &.{.{ .text = "Usage notes", .explanation = "note", .foreground = "#123abc" }} },
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "body" }} },
+        .{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .background = "#abcdef", .spans = &.{.{ .text = "cell", .foreground = "#123abc" }} }} }} } },
+    };
+    const sections = [_]types.Section{.{ .level = 2, .title = "English", .anchor = "English_2", .anchor_fallback = "English.202", .blocks = &blocks }};
+    const stored: types.Stored = .{ .entry = .{ .title = "test", .kind = .supplemental, .sections = &sections } };
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(anchor_magic, bytes[0..4]);
+    const decoded = try decodeAlloc(a, bytes, "test", .supplemental, null);
+    try std.testing.expectEqualStrings("English_2", decoded.entry.sections[0].anchor);
+    const heading = decoded.entry.sections[0].blocks[0];
+    try std.testing.expectEqualStrings("Usage_notes_2", heading.anchor);
+    try std.testing.expectEqualStrings("Usage.20notes_2", heading.anchor_fallback);
+    try std.testing.expectEqualStrings("English.202", decoded.entry.sections[0].anchor_fallback);
+    try std.testing.expectEqualStrings("note", heading.spans[0].explanation);
+    try std.testing.expectEqualStrings("#123abc", heading.spans[0].foreground.?);
+    try std.testing.expectEqualStrings("", decoded.entry.sections[0].blocks[1].anchor);
+    const cell = decoded.entry.sections[0].blocks[2].table.?.rows[0].cells[0];
+    try std.testing.expectEqualStrings("#abcdef", cell.background.?);
+    try std.testing.expectEqualStrings("#123abc", cell.spans[0].foreground.?);
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"anchor\":\"English_2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"anchor\":\"Usage_notes_2\"") != null);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    const built = try encodeBuildAlloc(a, stored.entry.display_title, &sections, stored.entry.organization, stored.entry.references, stored.entry.media);
+    try std.testing.expectEqualSlices(u8, bytes, built);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"anchor_fallback\":\"English.202\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"anchor_fallback\":\"Usage.20notes_2\"") != null);
+    const malformed_fallback = try a.dupe(u8, bytes);
+    malformed_fallback[std.mem.indexOf(u8, malformed_fallback, "Usage.20notes_2").?] = 0xff;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, malformed_fallback, "test", .supplemental, null));
+    const FallbackSection = struct { level: u8, title: []const u8, anchor_fallback: []const u8, blocks: []const types.Block = &.{} };
+    const fallback_sections = [_]FallbackSection{.{ .level = 2, .title = "English", .anchor_fallback = "English.202" }};
+    const fallback_bytes = try encodeBuildAlloc(a, stored.entry.display_title, &fallback_sections, stored.entry.organization, stored.entry.references, stored.entry.media);
+    try std.testing.expectEqualStrings(anchor_magic, fallback_bytes[0..4]);
+    const fallback_decoded = try decodeAlloc(a, fallback_bytes, "test", .supplemental, null);
+    try std.testing.expectEqualStrings("", fallback_decoded.entry.sections[0].anchor);
+    try std.testing.expectEqualStrings("English.202", fallback_decoded.entry.sections[0].anchor_fallback);
+    const malformed = try a.dupe(u8, bytes);
+    const anchor_offset = std.mem.indexOf(u8, malformed, "English_2").?;
+    malformed[anchor_offset] = 0xff;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, malformed, "test", .supplemental, null));
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0 .. bytes.len - 1], "test", .supplemental, null));
+    const standalone = [_]types.Section{.{ .level = 2, .title = "English", .blocks = &blocks }};
+    const standalone_bytes = try encodeBuildAlloc(a, stored.entry.display_title, &standalone, stored.entry.organization, stored.entry.references, stored.entry.media);
+    try std.testing.expectEqualStrings(anchor_magic, standalone_bytes[0..4]);
+    const fallback_blocks = [_]types.Block{.{ .kind = .heading, .anchor_fallback = "Usage.20notes" }};
+    const fallback_block_sections = [_]types.Section{.{ .level = 2, .title = "English", .blocks = &fallback_blocks }};
+    const fallback_block_bytes = try encodeBuildAlloc(a, stored.entry.display_title, &fallback_block_sections, stored.entry.organization, stored.entry.references, stored.entry.media);
+    try std.testing.expectEqualStrings(anchor_magic, fallback_block_bytes[0..4]);
+    const fallback_block_decoded = try decodeAlloc(a, fallback_block_bytes, "test", .supplemental, null);
+    try std.testing.expectEqualStrings("Usage.20notes", fallback_block_decoded.entry.sections[0].blocks[0].anchor_fallback);
+    const invalid_blocks = [_]types.Block{.{ .kind = .paragraph, .anchor_fallback = "invalid" }};
+    const invalid_sections = [_]types.Section{.{ .level = 2, .title = "English", .blocks = &invalid_blocks }};
+    try std.testing.expectError(error.InvalidPresentation, encodeBuildAlloc(a, stored.entry.display_title, &invalid_sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+}
+
+test "legacy generic sections without anchors retain DPR2 and decode empty anchors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const LegacySection = struct { level: u8, title: []const u8, blocks: []const types.Block = &.{} };
+    const sections = [_]LegacySection{.{ .level = 2, .title = "English" }};
+    const bytes = try encodeBuildAlloc(a, @as([]const types.Span, &.{}), &sections, @as(types.Layout, .{}), @as([]const types.Reference, &.{}), @as([]const types.Media, &.{}));
+    try std.testing.expectEqualStrings(magic, bytes[0..4]);
+    const decoded = try decodeAlloc(a, bytes, "test", .supplemental, null);
+    try std.testing.expectEqualStrings("", decoded.entry.sections[0].anchor);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
 }

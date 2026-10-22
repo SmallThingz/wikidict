@@ -2831,7 +2831,7 @@ fn abbreviationInteropProbe(h: *Harness, verifier: []const u8, bin: []const u8, 
     _ = try verifyFixture(h, verifier, root, null);
     const annotated = try readPoemRecord(h, root, "English", title);
     const legacy = try readPoemRecord(h, root, "English", control);
-    try h.require(std.mem.startsWith(u8, annotated.payload, "DPR3") and std.mem.startsWith(u8, legacy.payload, "DPR2"), "normal Writer produces explained DPR3 beside unannotated legacy-format DPR2");
+    try h.require(std.mem.startsWith(u8, annotated.payload, "DPR5") and std.mem.startsWith(u8, legacy.payload, "DPR5"), "normal Writer preserves heading anchors in DPR5 with and without explanations");
     const labels = [_][]const u8{ "der.", "?", "lbor.", "f", "c", "m", "n" };
     const explanations = [_][]const u8{ "derived terms", "uncertain", "learned borrowing", "feminine gender", "common gender", "masculine gender", "neuter gender" };
     var seen: [7]std.ArrayList(u8) = @splat(.empty);

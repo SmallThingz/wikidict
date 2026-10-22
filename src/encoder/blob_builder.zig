@@ -1574,6 +1574,21 @@ fn missingOwnerSourceAlloc(a: std.mem.Allocator, source: MissingText, fragments:
     return out.finish(a);
 }
 
+// Match missingOwnerSourceAlloc's concatenation without changing the renderer's
+// existing owner-fragment boundaries or reparsing any heading source here.
+fn ownerHeadingSourceRangesAlloc(a: std.mem.Allocator, fragments: []const PageSourceFragment, prefix_len: usize) ![]const presentation_document.HeadingSourceRange {
+    var ranges: std.ArrayList(presentation_document.HeadingSourceRange) = .empty;
+    errdefer ranges.deinit(a);
+    var owner_start: usize = prefix_len;
+    if (prefix_len != 0) try ranges.append(a, .{ .owner_start = 0, .page_start = 0, .len = prefix_len });
+    for (fragments) |fragment| {
+        if (fragment.original_start) |page_start|
+            try ranges.append(a, .{ .owner_start = owner_start, .page_start = page_start, .len = fragment.source.len });
+        owner_start = try std.math.add(usize, owner_start, fragment.source.len);
+    }
+    return ranges.toOwnedSlice(a);
+}
+
 fn preCandidate(input: []const u8) bool {
     var at: usize = 0;
     while (std.mem.indexOfScalarPos(u8, input, at, '<')) |opening| {
@@ -1815,6 +1830,7 @@ fn ownerSourceFragmentsWithMissingAlloc(a: std.mem.Allocator, tracked: MissingTe
     for (ranges.items, result) |range, *fragment| {
         fragment.* = .{
             .source = range.source,
+            .original_start = range.original_start,
             .missing = if (range.original_start) |start| try missing_dependency.slice(a, tracked, start, start + range.source.len) else MissingText.transformed(range.source),
             .pre = if (range.original_start) |start|
                 try fragmentPreContextAlloc(a, start, start + range.source.len, scopes, quotes)
@@ -2164,6 +2180,22 @@ fn processMain(
     else
         try sharedImagePrefix(page_allocator, codes, page_prefix);
 
+    // Reserve heading IDs in the original semantic page order before owners
+    // regroup repeated language sections or omit another owner's headings.
+    var heading_arena = std.heap.ArenaAllocator.init(page_allocator);
+    defer heading_arena.deinit();
+    const heading_observation = try presentation_document.observeHeadingAnchorsAlloc(
+        heading_arena.allocator(),
+        title,
+        source_missing,
+        codes.link_trail,
+        codes.namespace_catalog,
+        codes.behavior_switches,
+        codes.image_options,
+        reference_context,
+        poem_phase,
+    );
+
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
     defer {
         for (groups.items) |*group| {
@@ -2232,7 +2264,7 @@ fn processMain(
         if (resolved) |language| {
             const group_index = groupIndex(groups.items, language) orelse blk: {
                 try groups.append(page_allocator, .{ .language = language });
-                if (shared_prefix) |prefix| try groups.items[groups.items.len - 1].appendSource(page_allocator, .{ .source = prefix });
+                if (shared_prefix) |prefix| try groups.items[groups.items.len - 1].appendSource(page_allocator, .{ .source = prefix, .original_start = 0 });
                 break :blk groups.items.len - 1;
             };
             current = group_index;
@@ -2384,6 +2416,8 @@ fn processMain(
         if (try refusedOpeningInFragments(source, group.fragments.items, pre_observation.refused_link_openings))
             fallbacks.literal_markup = true;
         const group_missing = try missingOwnerSourceAlloc(page_allocator, source_missing, group.fragments.items, if (preserve_prefix) page_prefix else "");
+        const heading_projection = try ownerHeadingSourceRangesAlloc(page_allocator, group.fragments.items, if (preserve_prefix) page_prefix.len else 0);
+        defer page_allocator.free(heading_projection);
         const fragments = if (pre_observation.scopes.len != 0)
             try ownerSourceFragmentsWithMissingAlloc(page_allocator, source_missing, group.fragments.items, if (preserve_prefix) page_prefix else "", pre_observation.scopes, quote_cuts)
         else
@@ -2395,7 +2429,7 @@ fn processMain(
             }
             if (fragments.len != 0) page_allocator.free(fragments);
         }
-        const payload = try presentation_document.compileReportedWithReferencesAndPhasesFragmentsAlloc(
+        const payload = try presentation_document.compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
             page_allocator,
             title,
             .language,
@@ -2411,6 +2445,8 @@ fn processMain(
             fallbacks,
             poem_phase,
             fragments,
+            &heading_observation,
+            heading_projection,
         );
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
         stats.language_records += 1;
@@ -3876,7 +3912,13 @@ test "redirect tail presentation and recoverable tail failures retain exact acco
     const doc = try blobs.presentation_codec.decodeAlloc(pa, first.presentation, first.source_title, .alias, null);
     try std.testing.expectEqualStrings("Missing#Part", doc.entry.preamble_spans[0].target);
     try std.testing.expect(std.mem.indexOf(u8, first.presentation, "Visible body.") != null);
-    try std.testing.expect(std.mem.startsWith(u8, first.presentation, "DPR3"));
+    try std.testing.expect(std.mem.startsWith(u8, first.presentation, "DPR5"));
+    var details_anchor = false;
+    for (doc.entry.sections) |section| if (std.mem.eql(u8, section.title, "Details")) {
+        try std.testing.expectEqualStrings("Details", section.anchor);
+        details_anchor = true;
+    };
+    try std.testing.expect(details_anchor);
     var explained_links: usize = 0;
     for (doc.entry.preamble_spans) |span| if (std.mem.eql(u8, span.target, "retained")) {
         try std.testing.expectEqualStrings("retained", span.text);
@@ -7918,4 +7960,43 @@ test "metadata-only alias tails preserve display titles and rejection accounting
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, report, "\n"));
     try std.testing.expect(std.mem.indexOf(u8, report, "\"title\":\"Rejected\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, report, "display_title_rejected") != null);
+}
+
+test "page heading IDs survive actual language publication and repeated owner regrouping" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const out_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, out_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const cases = [_]struct { title: []const u8, source: []const u8, english_ids: []const []const u8 }{
+        .{ .title = "French first", .source = "==French==\n===Noun===\n# French body\n==English==\n===Noun===\n# English body\n", .english_ids = &.{"Noun_2"} },
+        .{ .title = "English first", .source = "==English==\n===Noun===\n# English body\n==French==\n===Noun===\n# French body\n", .english_ids = &.{"Noun"} },
+        .{ .title = "Repeated English", .source = "==English==\n===Noun===\n# English first\n==French==\n===Noun===\n# French body\n==English==\n===Noun===\n# English later\n", .english_ids = &.{ "Noun", "Noun_3" } },
+    };
+    for (cases) |case| try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, case.title, case.source, case.source, null, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 6), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, out_root, "English"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    for (cases) |case| {
+        const record = (try index.find(case.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var nouns: usize = 0;
+        for (decoded.entry.sections) |section| if (std.mem.eql(u8, section.title, "Noun")) {
+            try std.testing.expect(nouns < case.english_ids.len);
+            try std.testing.expectEqualStrings(case.english_ids[nouns], section.anchor);
+            nouns += 1;
+        };
+        try std.testing.expectEqual(case.english_ids.len, nouns);
+    }
 }
