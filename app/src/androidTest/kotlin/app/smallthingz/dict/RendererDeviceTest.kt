@@ -724,19 +724,35 @@ class RendererDeviceTest {
                         listOf(Section(4, if (companion) label else "Conchugazión", listOf(heading,
                             Block("paragraph", 0, listOf(Span("text", "Following body")))))), emptyList())
                 }
+                val caseId = "heading-${direction.toString().lowercase()}-$mode"
+                var initialEvidence = "Initial owned fixture evidence not yet available"
+                println("HEADING_FIXTURE_BEGIN $caseId initialDepth=$initialDepth")
                 try {
                     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
                         CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction) {
                             DictTheme("system") {
                                 density = LocalDensity.current.density
                                 expectedWeight = androidx.compose.material3.MaterialTheme.typography.titleMedium.fontWeight
-                                androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
-                                    EntryView(value(), false, {}, onLink = { followed = it }, settings = AppSettings(collapseDetails = false))
+                                androidx.compose.material3.Surface(Modifier.fillMaxSize().testTag("heading-fixture")) {
+                                    EntryView(value(), false, {}, onLink = { followed = it }, settings = AppSettings(collapseDetails = false, collapseOtherSections = false))
                                 }
                             }
                         }
                     } }
-                    val node = compose.onNodeWithText(label, useUnmergedTree = true).assertIsDisplayed()
+                    val node = compose.onNodeWithText(label, useUnmergedTree = true)
+                    // Capture only this synthetic fixture before the first display assertion.
+                    // Diagnostics cannot turn an assertion failure into a pass.
+                    initialEvidence = runCatching {
+                        val viewport = compose.onNodeWithTag("heading-fixture", useUnmergedTree = true)
+                        val semantic = runCatching { node.fetchSemanticsNode() }.getOrNull()
+                        val initialLayouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                        runCatching { node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(initialLayouts) } }
+                        val tree = runCatching { viewport.printToString(maxDepth = 8).take(12000) }
+                            .getOrElse { "OWNED_TREE_UNAVAILABLE ${it.javaClass.name}: ${it.message}" }
+                        renderedLayoutFailureEvidence(caseId, initialLayouts.singleOrNull(), semantic,
+                            viewport, "$caseId.png") + "\nOWNED_FIXTURE_TREE\n" + tree
+                    }.getOrElse { "OWNED_FIXTURE_EVIDENCE_UNAVAILABLE ${it.javaClass.name}: ${it.message}" }
+                    node.assertIsDisplayed()
                     compose.onAllNodesWithText(label, useUnmergedTree = true).assertCountEquals(1)
                     // StyledText puts the heading modifier on its SelectionContainer;
                     // the unmerged Text descendant still supplies link/layout evidence.
@@ -772,6 +788,19 @@ class RendererDeviceTest {
                         compose.onNodeWithContentDescription("Expand $label").performClick()
                         compose.onNodeWithText("Following body", useUnmergedTree = true).assertIsDisplayed()
                     }
+                    // addResults is emitted in the final raw instrumentation result bundle.
+                    // Six bounded values stay below the Binder transaction budget; never
+                    // truncate a PNG payload into something that looks decodable.
+                    val successEvidence = if (initialEvidence.length <= 56 * 1024) initialEvidence else
+                        initialEvidence.substringBefore("\nOWNED_PNG_BEGIN").take(14000) +
+                            "\nOWNED_PNG_UNAVAILABLE $caseId success result exceeds 57344 characters" +
+                            "\nOWNED_FIXTURE_TREE\n" + initialEvidence.substringAfter("\nOWNED_FIXTURE_TREE\n", "").take(12000)
+                    InstrumentationRegistry.getInstrumentation().addResults(android.os.Bundle().apply {
+                        putString("heading_fixture_$caseId", successEvidence)
+                    })
+                    println("HEADING_FIXTURE_PASS $caseId")
+                } catch (failure: AssertionError) {
+                    throw AssertionError("case=$caseId depth=${depth.value}: " + failure.message + "\n" + initialEvidence, failure)
                 } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
             }
         }
