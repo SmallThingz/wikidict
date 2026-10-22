@@ -33,6 +33,7 @@ import androidx.compose.ui.input.nestedscroll.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.Modifier
@@ -233,10 +234,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         val angle by animateFloatAsState(if (folded[row.key] == true) -90f else 0f, label = "Section fold")
                         val toggle = { folded[row.key] = folded[row.key] != true }
                         val headingModifier = if (richHeading == null) Modifier.clickable(onClick = toggle) else Modifier
-                        Row(Modifier.fillMaxWidth().then(headingModifier).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.fillMaxWidth().padding(start = richHeading?.let { blockIndentDp(it).dp } ?: 0.dp).then(headingModifier).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                             val headingStyle = if (row.meaningSection) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium
                             if (richHeading == null) Text(label, Modifier.weight(1f), style = headingStyle)
-                            else StyledText(richHeading.spans, Modifier.weight(1f), style = headingStyle, onLink = readerLink)
+                            else StyledText(richHeading.spans, Modifier.weight(1f).semantics { heading() }, style = headingStyle, onLink = readerLink)
                             if (row.meaningSection && section.blocks.any { it !== richHeading && it.kind !in setOf("definition", "blank") }) {
                                 IconToggleButton(checked = folded[row.key + "-details"] != true, onCheckedChange = { folded[row.key + "-details"] = !it }) {
                                     Icon(Icons.Outlined.Notes, if (folded[row.key + "-details"] == true) "Show examples and notes for ${section.title}" else "Hide examples and notes for ${section.title}", Modifier.size(20.dp))
@@ -290,6 +291,9 @@ private fun FoldHeading(title: String, folded: Boolean, onClick: () -> Unit) {
 private fun BlockView(block: Block, onLink: (String) -> Unit) {
     when {
         block.table != null -> Box(Modifier.padding(start = blockIndentDp(block).dp)) { CompiledTableView(block.table, block.feature, onLink) }
+        block.kind == "heading" -> StyledText(ordinaryInlineDisplaySpans(block),
+            Modifier.fillMaxWidth().padding(start = blockIndentDp(block).dp).semantics { heading() },
+            style = MaterialTheme.typography.titleMedium, onLink = onLink)
         block.kind == "rule" -> HorizontalDivider()
         block.kind == "preformatted" -> Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp)) {
             StyledText(block.spans, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), onLink = onLink, preserveWhitespace = true)

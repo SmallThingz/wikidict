@@ -704,6 +704,79 @@ class RendererDeviceTest {
         compose.waitForIdle()
     }
 
+    @Test fun ordinaryAndCompanionHeadingsKeepRolesLinksAndLogicalDepthInBothDirections() {
+        val spans = listOf(Span("text", "Se beiga ", italic = true),
+            Span("link", "la conchugazión benasquesa", target = "templlar/conj.BEN", bold = true, italic = true),
+            Span("text", " d'este berbo.", italic = true))
+        val label = spans.joinToString("") { it.text }
+        for (direction in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
+            for (mode in listOf("ordinary", "rich-companion", "plain-companion")) {
+                val companion = mode != "ordinary"
+                val plain = mode == "plain-companion"
+                val initialDepth = if (plain) 1 else 0
+                val depth = mutableStateOf(initialDepth)
+                var followed: String? = null
+                var density = 0f
+                var expectedWeight: androidx.compose.ui.text.font.FontWeight? = null
+                fun value(): Entry {
+                    val heading = Block("heading", depth.value, if (plain) listOf(Span("text", label)) else spans, listPath = ":".repeat(depth.value), level = 4)
+                    return Entry("templlar", emptyList(), "language", "Aragonese", "an",
+                        listOf(Section(4, if (companion) label else "Conchugazión", listOf(heading,
+                            Block("paragraph", 0, listOf(Span("text", "Following body")))))), emptyList())
+                }
+                try {
+                    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                        CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction) {
+                            DictTheme("system") {
+                                density = LocalDensity.current.density
+                                expectedWeight = androidx.compose.material3.MaterialTheme.typography.titleMedium.fontWeight
+                                androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                                    EntryView(value(), false, {}, onLink = { followed = it }, settings = AppSettings(collapseDetails = false))
+                                }
+                            }
+                        }
+                    } }
+                    val node = compose.onNodeWithText(label, useUnmergedTree = true).assertIsDisplayed()
+                    compose.onAllNodesWithText(label, useUnmergedTree = true).assertCountEquals(1)
+                    // StyledText puts the heading modifier on its SelectionContainer;
+                    // the unmerged Text descendant still supplies link/layout evidence.
+                    assertTrue(generateSequence(node.fetchSemanticsNode()) { it.parent }.any {
+                        it.config.contains(androidx.compose.ui.semantics.SemanticsProperties.Heading)
+                    })
+                    val before = node.fetchSemanticsNode().boundsInRoot
+                    val bodyBefore = compose.onNodeWithText("Following body", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+                    compose.runOnIdle { depth.value = initialDepth + 1 }
+                    val after = node.fetchSemanticsNode().boundsInRoot
+                    val bodyAfter = compose.onNodeWithText("Following body", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+                    val logicalShift = if (direction == androidx.compose.ui.unit.LayoutDirection.Ltr) after.left - before.left else before.right - after.right
+                    assertEquals(7f * density, logicalShift, 1.1f)
+                    assertEquals(bodyBefore.left, bodyAfter.left, 1.1f)
+                    assertEquals(bodyBefore.right, bodyAfter.right, 1.1f)
+                    val text = node.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.Text].single()
+                    val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                    node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                    assertEquals(expectedWeight, layouts.single().layoutInput.style.fontWeight)
+                    if (plain) {
+                        assertTrue(text.getLinkAnnotations(0, text.length).isEmpty())
+                    } else {
+                    val link = text.getLinkAnnotations(0, text.length).single()
+                    assertEquals("templlar/conj.BEN", (link.item as androidx.compose.ui.text.LinkAnnotation.Clickable).tag)
+                    assertTrue(text.spanStyles.any { it.start == 0 && it.item.fontStyle == androidx.compose.ui.text.font.FontStyle.Italic })
+                    assertTrue(text.spanStyles.any { it.start == link.start && it.end == link.end && it.item.fontWeight == androidx.compose.ui.text.font.FontWeight.Bold })
+                    node.performTouchInput { click(layouts.single().getBoundingBox(link.start).center) }
+                    compose.runOnIdle { assertEquals("templlar/conj.BEN", followed) }
+                    }
+                    if (companion) {
+                        compose.onNodeWithContentDescription("Collapse $label").performClick()
+                        compose.onNodeWithText("Following body", useUnmergedTree = true).assertDoesNotExist()
+                        compose.onNodeWithContentDescription("Expand $label").performClick()
+                        compose.onNodeWithText("Following body", useUnmergedTree = true).assertIsDisplayed()
+                    }
+                } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+            }
+        }
+    }
+
     @Test fun ordinaryInlineSpacingRendersCollapsedRangesAndKeepsLiteralControls() {
         val original = listOf(Span("text", "left  ", italic = true, trail = "\t"),
             Span("link", "\t target", target = "B#English", bold = true), Span("text", " \t right"))

@@ -100,13 +100,14 @@ internal fun poemParagraphs(text: String, spans: List<Pair<Span, IntRange>>): Li
 }
 
 
-/** The first typed heading may carry label actions or self-link styling without changing its identity. */
+/** The first typed heading may carry actions, self-link styling, or explicit nesting metadata. */
 internal fun sectionHeadingCompanion(section: Section): Block? {
     val block = section.blocks.firstOrNull() ?: return null
     // Blank labels have no header affordance; leave their blocks in the visible body.
     if (section.title.isBlank() || block.kind != "heading" || block.level != section.level) return null
     if (block.spans.any { it.kind == "line_break" && it.trail.isNotEmpty() }) return null
-    if (block.spans.none { (it.explanation.isNotEmpty() ||
+    val nestedHeading = block.depth > 0 && block.listPath.isNotBlank()
+    if (!nestedHeading && block.spans.none { (it.explanation.isNotEmpty() ||
             (it.kind in setOf("link", "external_link") && it.target.isNotEmpty()) ||
             (it.kind == "text" && it.text.isNotEmpty() && it.target.isEmpty() &&
                 it.hasClassToken("mw-selflink") && it.hasClassToken("selflink"))) &&
@@ -210,8 +211,9 @@ internal fun blockPrefix(block: Block): String = when (block.kind) {
     else -> ""
 }
 
-/** Shared nesting indentation for tables and ordinary text/list blocks. */
-internal fun blockIndentDp(block: Block): Int = (block.depth - 1).coerceIn(0, 8) * 7
+/** Headings retain their full structural depth; other blocks keep their existing list offset. */
+internal fun blockIndentDp(block: Block): Int =
+    (if (block.kind == "heading") block.depth else block.depth - 1).coerceIn(0, 8) * 7
 
 /** Same-entry section links match compiled headings, with the usual underscore spelling. */
 internal fun sectionScrollKey(entry: Entry, target: String): String? {

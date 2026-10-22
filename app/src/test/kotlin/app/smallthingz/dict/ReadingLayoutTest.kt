@@ -6,6 +6,54 @@ import androidx.compose.ui.unit.em
 
 class ReadingLayoutTest {
 
+    @Test fun plainNestedHeadingCompanionUsesExplicitMetadataWithoutDuplicatingItsLabel() {
+        val heading = Block("heading", 1, listOf(Span("text", "Plain nested heading")), listPath = ":", level = 4)
+        val body = Block("paragraph", 0, listOf(Span("text", "Following body")))
+        val section = Section(4, "Plain nested heading", listOf(heading, body))
+        assertSame(heading, sectionHeadingCompanion(section))
+        val rows = readingRows(listOf(section))
+        assertSame(heading, rows.first().headingBlock)
+        assertEquals(listOf(body), rows.mapNotNull { it.block })
+        assertEquals(7, blockIndentDp(rows.first().headingBlock!!))
+        assertTrue(visibleReadingRows(rows, setOf(rows.first().key)).mapNotNull { it.block }.isEmpty())
+        for (notCompanion in listOf(heading.copy(depth = 0), heading.copy(listPath = ""),
+            heading.copy(level = 3), heading.copy(kind = "paragraph"),
+            heading.copy(spans = listOf(Span("text", "Different label"))))) {
+            assertNull(sectionHeadingCompanion(section.copy(blocks = listOf(notCompanion, body))))
+        }
+    }
+
+    @Test fun templlarRichHeadingsRetainCompanionDepthWithoutDuplicatingTextOrIndentingFollowingBody() {
+        for ((dialect, target) in listOf("benasquesa" to "templlar/conj.BEN", "ribagorzana" to "templlar/conj.RIB")) {
+            val spans = listOf(Span("text", "Se beiga ", italic = true),
+                Span("link", "la conchugazión $dialect", target = target, bold = true, italic = true),
+                Span("text", " d'este berbo.", italic = true))
+            val label = spans.joinToString("") { it.text }
+            val heading = Block("heading", 1, spans, listPath = ":", level = 4)
+            val body = Block("paragraph", 0, listOf(Span("text", "Following body")))
+            val rows = readingRows(listOf(Section(4, label, listOf(heading, body))))
+            assertSame(heading, rows.first().headingBlock)
+            assertEquals(listOf(body), rows.mapNotNull { it.block })
+            assertEquals(listOf(body), visibleReadingRows(rows, emptySet()).mapNotNull { it.block })
+            assertTrue(visibleReadingRows(rows, setOf(rows.first().key)).mapNotNull { it.block }.isEmpty())
+            assertEquals(7, blockIndentDp(heading))
+            assertEquals(0, blockIndentDp(heading.copy(depth = 0, listPath = "")))
+            assertEquals(0, blockIndentDp(body))
+            assertEquals("", blockPrefix(heading))
+            assertEquals(spans, rows.first().headingBlock!!.spans)
+            val ordinary = readingRows(listOf(Section(3, "Conchugazión", listOf(heading, body))))
+            assertNull(ordinary.first().headingBlock)
+            assertEquals(listOf(heading, body), ordinary.mapNotNull { it.block })
+        }
+        // Existing non-heading nesting must not change with the heading repair.
+        assertEquals(listOf(0, 14, 7, 7, 7, 14, 7, 14), listOf(
+            Block("list_item", 1, emptyList()), Block("list_item", 3, emptyList()),
+            Block("definition", 2, emptyList()), Block("example", 2, emptyList()),
+            Block("quotation", 2, emptyList()), Block("list_detail", 3, emptyList()),
+            Block("term", 2, emptyList()), Block("indent", 3, emptyList())).map(::blockIndentDp))
+    }
+
+
     @Test fun richHeadingCompanionRequiresExactFirstLevelLabelAndActionableSpans() {
         val linked = Block("heading", 0, listOf(
             Span("text", "\u00a0 \t"), Span("link", "Usage", target = "usage", trail = " notes", bold = true),
