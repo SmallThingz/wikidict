@@ -378,29 +378,68 @@ pub const TextStyle = struct {
     underline: bool = false,
     strike: bool = false,
     link: bool = false,
+    foreground: ?[3]u8 = null,
+    background: ?[3]u8 = null,
     fn scan(self: *TextStyle, text: []const u8) void {
         var i: usize = 0;
         while (i < text.len) {
             if (sgrLength(text[i..])) |n| {
                 var parts = std.mem.splitScalar(u8, text[i + 2 .. i + n - 1], ';');
-                while (parts.next()) |part| switch (std.fmt.parseInt(u8, part, 10) catch 0) {
-                    0 => self.* = .{},
-                    1 => self.bold = true,
-                    2 => self.dim = true,
-                    3 => self.italic = true,
-                    4 => self.underline = true,
-                    9 => self.strike = true,
-                    36 => self.link = true,
-                    22 => {
-                        self.bold = false;
-                        self.dim = false;
-                    },
-                    23 => self.italic = false,
-                    24 => self.underline = false,
-                    29 => self.strike = false,
-                    39 => self.link = false,
-                    else => {},
-                };
+                while (parts.next()) |part| {
+                    const code = std.fmt.parseInt(u8, part, 10) catch 0;
+                    switch (code) {
+                        0 => self.* = .{},
+                        1 => self.bold = true,
+                        2 => self.dim = true,
+                        3 => self.italic = true,
+                        4 => self.underline = true,
+                        9 => self.strike = true,
+                        36 => {
+                            self.link = true;
+                            self.foreground = null;
+                        },
+                        38, 48 => {
+                            const mode = std.fmt.parseInt(u8, parts.next() orelse "", 10) catch 0;
+                            if (mode == 2) {
+                                var rgb: [3]u8 = undefined;
+                                var valid = true;
+                                for (&rgb) |*channel| {
+                                    const value = parts.next() orelse {
+                                        valid = false;
+                                        break;
+                                    };
+                                    channel.* = std.fmt.parseInt(u8, value, 10) catch {
+                                        valid = false;
+                                        continue;
+                                    };
+                                }
+                                if (valid) {
+                                    if (code == 38) {
+                                        self.foreground = rgb;
+                                        self.link = false;
+                                    } else self.background = rgb;
+                                }
+                            } else if (mode == 5) {
+                                // Consume an unsupported indexed-color atom as a unit;
+                                // its palette number must not become an emphasis code.
+                                _ = parts.next();
+                            }
+                        },
+                        22 => {
+                            self.bold = false;
+                            self.dim = false;
+                        },
+                        23 => self.italic = false,
+                        24 => self.underline = false,
+                        29 => self.strike = false,
+                        39 => {
+                            self.link = false;
+                            self.foreground = null;
+                        },
+                        49 => self.background = null,
+                        else => {},
+                    }
+                }
                 i += n;
             } else i += 1;
         }
@@ -411,7 +450,10 @@ pub const TextStyle = struct {
         if (self.dim) try w.writeAll("\x1b[2m");
         if (self.underline) try w.writeAll("\x1b[4m");
         if (self.strike) try w.writeAll("\x1b[9m");
-        if (self.link) try w.writeAll("\x1b[36m");
+        if (self.foreground) |rgb|
+            try w.print("\x1b[38;2;{d};{d};{d}m", .{ rgb[0], rgb[1], rgb[2] })
+        else if (self.link) try w.writeAll("\x1b[36m");
+        if (self.background) |rgb| try w.print("\x1b[48;2;{d};{d};{d}m", .{ rgb[0], rgb[1], rgb[2] });
     }
 };
 pub const PoemLine = struct { offset: usize, lead_bytes: usize = 0, lead_cells: usize = 0, left: usize = 0, continuation_left: usize = 0, right: usize = 0 };
@@ -513,4 +555,36 @@ test "Poem terminal wrapping preserves spaces blank lines and bounded borrowed o
     defer rendered.deinit();
     try writeRenderRow(&rendered.writer, rows[1], 5, "");
     try std.testing.expectEqualStrings("  def", rendered.written());
+}
+
+test "truecolor SGR atoms preserve independent channels styles and wrap carry" {
+    initLocale();
+    const a = std.testing.allocator;
+    const source = "\x1b[1;38;2;0;3;36;48;2;1;0;9m猫ABCDEFGHIJ\x1b[0mplain";
+    const rows = try wrapStyled(a, source, 4);
+    defer a.free(rows);
+    try std.testing.expect(rows.len >= 3);
+    const carried = rows[1].carry;
+    try std.testing.expect(carried.bold);
+    try std.testing.expect(!carried.italic and !carried.dim and !carried.link and !carried.strike);
+    try std.testing.expectEqual([3]u8{ 0, 3, 36 }, carried.foreground.?);
+    try std.testing.expectEqual([3]u8{ 1, 0, 9 }, carried.background.?);
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try carried.write(&out.writer);
+    try std.testing.expectEqualStrings("\x1b[1m\x1b[38;2;0;3;36m\x1b[48;2;1;0;9m", out.written());
+    var style = carried;
+    style.scan("\x1b[39m");
+    try std.testing.expect(style.foreground == null and style.background != null and style.bold);
+    style.scan("\x1b[49m");
+    try std.testing.expect(style.background == null and style.bold);
+    style.scan("\x1b[36m");
+    try std.testing.expect(style.link and style.foreground == null);
+    style.scan("\x1b[38;2;1;2;3m");
+    try std.testing.expect(!style.link and style.foreground != null);
+    style.scan("\x1b[0m");
+    try std.testing.expect(!style.bold and !style.italic and !style.link and style.foreground == null and style.background == null);
+    style.scan("\x1b[38;5;1m");
+    try std.testing.expect(!style.bold and style.foreground == null);
+    for (rows) |row| try std.testing.expect(cellWidth(row.bytes) <= 4);
 }

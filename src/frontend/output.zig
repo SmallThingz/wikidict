@@ -217,6 +217,19 @@ const ScriptDisplayRuns = struct {
     }
 };
 
+fn canonicalRgb(value: ?[]const u8) ?[3]u8 {
+    const text = value orelse return null;
+    if (text.len != 7 or text[0] != '#') return null;
+    for (text[1..]) |byte| {
+        if (!std.ascii.isDigit(byte) and !(byte >= 'a' and byte <= 'f')) return null;
+    }
+    return .{
+        std.fmt.parseInt(u8, text[1..3], 16) catch return null,
+        std.fmt.parseInt(u8, text[3..5], 16) catch return null,
+        std.fmt.parseInt(u8, text[5..7], 16) catch return null,
+    };
+}
+
 fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace, scripts: *ScriptDisplayRuns) !void {
     const span = piece.span;
     if (piece.bytes.len == 0) return;
@@ -225,7 +238,12 @@ fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?
     if (color and span.underline) try w.writeAll("\x1b[4m");
     if (color and span.strike) try w.writeAll("\x1b[9m");
     if (color and (span.small or span.role == .label or span.role == .citation)) try w.writeAll("\x1b[2m");
-    if (color and (span.kind == .link or span.kind == .external_link)) try w.writeAll("\x1b[36m");
+    if (color) {
+        if (canonicalRgb(span.foreground)) |rgb|
+            try w.print("\x1b[38;2;{d};{d};{d}m", .{ rgb[0], rgb[1], rgb[2] })
+        else if (span.kind == .link or span.kind == .external_link)
+            try w.writeAll("\x1b[36m");
+    }
     try scripts.prefix(w, span, piece.initial);
     if (whitespace) |state| try state.write(w, piece.bytes, span.code or piece.info.marked) else try terminalText(w, piece.bytes);
     if (color) try w.writeAll("\x1b[0m");
@@ -281,11 +299,23 @@ fn tableCellRows(a: std.mem.Allocator, text: []const u8, columns: usize) ![]term
     for (text, 0..) |byte, i| if (byte == '\n') try lines.append(a, .{ .offset = i + 1 });
     return terminal.wrapStyledProjected(a, text, columns, lines.items);
 }
-fn tableWrappedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, color: bool) !void {
+// Cell fill owns its two padding spaces but never the neutral frame/borders.
+// Span resets restore the cell base without inheriting the previous span font.
+fn tableWrappedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, color: bool, background: ?[3]u8) !void {
+    var base_buffer: [40]u8 = undefined;
+    const base: []const u8 = if (color) if (background) |rgb|
+        try std.fmt.bufPrint(&base_buffer, "\x1b[0m\x1b[48;2;{d};{d};{d}m", .{ rgb[0], rgb[1], rgb[2] })
+    else
+        "" else "";
+    try w.writeAll(base);
+    try w.writeByte(' ');
     if (color) try line.carry.write(w);
-    try w.writeAll(line.bytes);
+    if (base.len != 0) try terminal.writeStyled(w, line.bytes, base) else try w.writeAll(line.bytes);
     if (color) try w.writeAll("\x1b[0m");
+    try w.writeAll(base);
     try w.splatByteAll(' ', width -| terminal.cellWidth(line.bytes));
+    try w.writeByte(' ');
+    if (base.len != 0) try w.writeAll("\x1b[0m");
 }
 
 fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection) !void {
@@ -293,7 +323,7 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
     defer arena.deinit();
     const a = arena.allocator();
     terminal.initLocale();
-    const Placed = struct { row: usize, column: usize, colspan: usize, rowspan: usize, text: []const u8, lines: []const []const u8, wrapped: ?[]terminal.RenderRow = null };
+    const Placed = struct { row: usize, column: usize, colspan: usize, rowspan: usize, text: []const u8, lines: []const []const u8, wrapped: ?[]terminal.RenderRow = null, background: ?[3]u8 = null };
     var cells: std.ArrayList(Placed) = .empty;
     var occupied: std.ArrayList(usize) = .empty;
     var widths: std.ArrayList(usize) = .empty;
@@ -332,7 +362,7 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
             var available: usize = 3 * (colspan - 1);
             for (widths.items[column..][0..colspan]) |width| available += width;
             if (needed > available) widths.items[column + colspan - 1] += needed - available;
-            try cells.append(a, .{ .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items });
+            try cells.append(a, .{ .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items, .background = canonicalRgb(cell.background) });
             column += colspan;
         }
     }
@@ -358,9 +388,9 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
                     try w.writeByte('\n');
                     const wrapped = try tableCellRows(a, cell.text, width);
                     for (wrapped) |line| {
-                        try w.writeAll("  │ ");
-                        try tableWrappedLine(w, line, width, color);
-                        try w.writeAll(" │\n");
+                        try w.writeAll("  │");
+                        try tableWrappedLine(w, line, width, color, cell.background);
+                        try w.writeAll("│\n");
                     }
                 }
                 try w.writeByte('\n');
@@ -399,15 +429,17 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
             height = @max(height, if (cell.wrapped) |wrapped| wrapped.len else cell.lines.len);
         }
         for (0..height) |line_index| {
-            try w.writeAll("  │ ");
+            try w.writeAll("  │");
             var column: usize = 0;
             while (column < widths.items.len) {
                 var span: usize = 1;
                 var line: []const u8 = "";
                 var wrapped_line: ?terminal.RenderRow = null;
+                var background: ?[3]u8 = null;
                 if (active[column]) |index| {
                     const cell = cells.items[index];
                     span = cell.colspan;
+                    background = cell.background;
                     if (cell.row == r) {
                         if (cell.wrapped) |wrapped| {
                             if (line_index < wrapped.len) wrapped_line = wrapped[line_index];
@@ -416,12 +448,9 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
                 }
                 var width: usize = 3 * (span - 1);
                 for (widths.items[column..][0..span]) |part| width += part;
-                if (wrapped_line) |value| try tableWrappedLine(w, value, width, color) else {
-                    try w.writeAll(line);
-                    try w.splatByteAll(' ', width -| terminal.cellWidth(line));
-                }
+                try tableWrappedLine(w, wrapped_line orelse .{ .bytes = line, .carry = .{} }, width, color, background);
                 column += span;
-                try w.writeAll(if (column == widths.items.len) " │\n" else " │ ");
+                try w.writeAll(if (column == widths.items.len) "│\n" else "│");
             }
         }
     }
@@ -433,16 +462,7 @@ fn colorSwatchRgb(block: model.Block) ?[3]u8 {
     const feature = block.feature orelse return null;
     if (!std.mem.eql(u8, feature.kind, "color_swatch") or feature.language.len != 0 or
         !std.mem.eql(u8, feature.tail_kind, "none") or feature.tail.len != 0) return null;
-    const data = feature.data;
-    if (data.len != 7 or data[0] != '#') return null;
-    for (data[1..]) |byte| {
-        if (!std.ascii.isDigit(byte) and !(byte >= 'a' and byte <= 'f')) return null;
-    }
-    return .{
-        std.fmt.parseInt(u8, data[1..3], 16) catch return null,
-        std.fmt.parseInt(u8, data[3..5], 16) catch return null,
-        std.fmt.parseInt(u8, data[5..7], 16) catch return null,
-    };
+    return canonicalRgb(feature.data);
 }
 
 fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void {
@@ -2177,4 +2197,162 @@ test "narrow typed table cells preserve Unicode styles spans and literal whitesp
     try tableText(&text.writer, .{ .rows = &crowded }, true, &projection);
     try std.testing.expectEqual(@as(usize, 7), std.mem.count(u8, text.written(), "  Row 1, column "));
     try std.testing.expect(try NarrowTableTest.framed(text.written(), 36) >= 7);
+}
+
+const TypedColorOutputTest = struct {
+    const Colors = struct { foreground: ?[3]u8 = null, background: ?[3]u8 = null };
+    // Independent observation of renderer-emitted color and reset atoms only.
+    fn at(text: []const u8, limit: usize) Colors {
+        var colors: Colors = .{};
+        var pos: usize = 0;
+        while (pos < limit) {
+            if (terminal.sgrLength(text[pos..])) |n| {
+                const code = text[pos .. pos + n];
+                if (std.mem.eql(u8, code, "\x1b[0m")) colors = .{} else {
+                    const foreground = std.mem.startsWith(u8, code, "\x1b[38;2;");
+                    if (foreground or std.mem.startsWith(u8, code, "\x1b[48;2;")) {
+                        var values = std.mem.splitScalar(u8, code[7 .. code.len - 1], ';');
+                        const rgb: [3]u8 = .{
+                            std.fmt.parseInt(u8, values.next().?, 10) catch unreachable,
+                            std.fmt.parseInt(u8, values.next().?, 10) catch unreachable,
+                            std.fmt.parseInt(u8, values.next().?, 10) catch unreachable,
+                        };
+                        if (foreground) colors.foreground = rgb else colors.background = rgb;
+                    }
+                }
+                pos += n;
+            } else pos += 1;
+        }
+        return colors;
+    }
+    fn fill(text: []const u8, left: usize, right: usize, rgb: [3]u8) !void {
+        var pos = left;
+        var visible: usize = 0;
+        while (pos < right) {
+            if (terminal.sgrLength(text[pos..])) |n| pos += n else {
+                try std.testing.expectEqual(rgb, at(text, pos).background.?);
+                pos += std.unicode.utf8ByteSequenceLength(text[pos]) catch 1;
+                visible += 1;
+            }
+        }
+        try std.testing.expect(visible >= 2); // Includes both cell padding spaces.
+    }
+};
+
+test "typed span foreground preserves plain text links and truecolor wrap state" {
+    const a = std.testing.allocator;
+    const spans = [_]model.Span{
+        .{ .text = "green", .foreground = "#008000" },
+        .{ .kind = .link, .text = "blue", .target = "same target", .foreground = "#1c39bb", .italic = true },
+        .{ .text = "plain" },
+        .{ .text = "invalid", .foreground = "red" },
+    };
+    var plain: std.Io.Writer.Allocating = .init(a);
+    defer plain.deinit();
+    var styled: std.Io.Writer.Allocating = .init(a);
+    defer styled.deinit();
+    try spansText(&plain.writer, &spans, false);
+    try spansText(&styled.writer, &spans, true);
+    try std.testing.expectEqualStrings("greenblueplaininvalid", plain.written());
+    const visible = try NarrowTableTest.plain(a, styled.written());
+    defer a.free(visible);
+    try std.testing.expectEqualStrings(plain.written(), visible);
+    try std.testing.expectEqual([3]u8{ 0, 128, 0 }, TypedColorOutputTest.at(styled.written(), std.mem.indexOf(u8, styled.written(), "green").?).foreground.?);
+    try std.testing.expectEqual([3]u8{ 28, 57, 187 }, TypedColorOutputTest.at(styled.written(), std.mem.indexOf(u8, styled.written(), "blue").?).foreground.?);
+    try std.testing.expect(TypedColorOutputTest.at(styled.written(), std.mem.indexOf(u8, styled.written(), "plain").?).foreground == null);
+    try std.testing.expect(std.mem.indexOf(u8, styled.written(), "\x1b[36m") == null);
+    try std.testing.expectEqualStrings("same target", spans[1].target);
+    for ([_]?[]const u8{ null, "red", "#FFF000", "#fff", "#ffff0000", "#gggggg", "#ffff00;" }) |invalid| {
+        try std.testing.expect(canonicalRgb(invalid) == null);
+    }
+    const long = [_]model.Span{.{ .text = "ABCDEFGHIJKLMNO", .foreground = "#010924", .bold = true }};
+    styled.clearRetainingCapacity();
+    try spansText(&styled.writer, &long, true);
+    const wrapped = try terminal.wrapStyled(a, styled.written(), 4);
+    defer a.free(wrapped);
+    try std.testing.expect(wrapped.len >= 3);
+    try std.testing.expectEqual([3]u8{ 1, 9, 36 }, wrapped[1].carry.foreground.?);
+    try std.testing.expect(wrapped[1].carry.bold and !wrapped[1].carry.strike and !wrapped[1].carry.link);
+}
+
+test "typed table backgrounds cover all Bleoh cells padding wraps and rowspans without changing plain output" {
+    const types = @import("blob_encoder").presentation_types;
+    const a = std.testing.allocator;
+    terminal.initLocale();
+    const labels = [_][]const u8{ "blæc", "grǣg", "hwīt", "seolfor", "gold", "rēod", "basu", "hǣwen", "grēne", "geolu", "geolorēad" };
+    const colors = [_][]const u8{ "#000000", "#808080", "#ffffff", "#c0c0c0", "#ffd700", "#ff0000", "#800080", "#0000ff", "#008000", "#ffff00", "#ffa500" };
+    var label_spans: [11][1]model.Span = undefined;
+    const blank = [_]model.Span{.{ .text = "\u{a0}" }};
+    var cells: [11][2]types.Cell = undefined;
+    var rows: [11]types.Row = undefined;
+    for (labels, colors, 0..) |label, background, i| {
+        label_spans[i] = .{.{ .kind = .link, .text = label, .target = if (i == 3) "Seolfor" else label }};
+        cells[i] = .{ .{ .spans = &label_spans[i], .background = "#eeeeee" }, .{ .spans = &blank, .background = background } };
+        rows[i] = .{ .cells = &cells[i] };
+    }
+    var plain: std.Io.Writer.Allocating = .init(a);
+    defer plain.deinit();
+    var styled: std.Io.Writer.Allocating = .init(a);
+    defer styled.deinit();
+    try tableText(&plain.writer, .{ .rows = &rows }, false, null);
+    try tableText(&styled.writer, .{ .rows = &rows }, true, null);
+    const visible = try NarrowTableTest.plain(a, styled.written());
+    defer a.free(visible);
+    try std.testing.expectEqualStrings(plain.written(), visible);
+    try std.testing.expect(std.mem.indexOfScalar(u8, plain.written(), 0x1b) == null);
+    var lines = std.mem.splitScalar(u8, styled.written(), '\n');
+    var count: usize = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        const first = std.mem.indexOf(u8, line, "│").?;
+        const middle = std.mem.indexOfPos(u8, line, first + "│".len, "│").?;
+        const last = std.mem.indexOfPos(u8, line, middle + "│".len, "│").?;
+        try TypedColorOutputTest.fill(line, first + "│".len, middle, .{ 238, 238, 238 });
+        try TypedColorOutputTest.fill(line, middle + "│".len, last, canonicalRgb(colors[count]).?);
+        for ([_]usize{ first, middle, last }) |position| try std.testing.expect(TypedColorOutputTest.at(line, position).background == null);
+        try std.testing.expect(std.mem.indexOf(u8, line, labels[count]) != null);
+        try std.testing.expect(std.mem.indexOf(u8, line, "\u{a0}") != null);
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 11), count); // Eleven label cells + eleven swatches.
+    try std.testing.expectEqualStrings("Seolfor", label_spans[3][0].target);
+    try std.testing.expect(std.mem.indexOf(u8, styled.written(), "Color sample") == null);
+    for (&cells) |*row| {
+        for (row) |*cell| cell.background = null;
+    }
+    var baseline: std.Io.Writer.Allocating = .init(a);
+    defer baseline.deinit();
+    try tableText(&baseline.writer, .{ .rows = &rows }, false, null);
+    try std.testing.expectEqualStrings(baseline.written(), plain.written());
+
+    const long = [_]model.Span{.{ .text = "ABCDEFGH 猫é end", .kind = .link, .target = "unchanged", .foreground = "#010924", .bold = true, .code = true }};
+    const first = [_]types.Cell{ .{ .spans = &long, .rowspan = 2, .background = "#01796f" }, .{ .spans = &.{.{ .text = "other" }}, .background = "#ff4040" } };
+    const second = [_]types.Cell{.{ .spans = &.{.{ .text = "next" }} }};
+    const spanning = [_]types.Row{ .{ .cells = &first }, .{ .cells = &second } };
+    plain.clearRetainingCapacity();
+    styled.clearRetainingCapacity();
+    var pm: std.ArrayList(terminal.PoemLine) = .empty;
+    defer pm.deinit(a);
+    var sm: std.ArrayList(terminal.PoemLine) = .empty;
+    defer sm.deinit(a);
+    var pp: PoemProjection = .{ .frame = &plain, .allocator = a, .lines = &pm, .table_columns = 20 };
+    var sp: PoemProjection = .{ .frame = &styled, .allocator = a, .lines = &sm, .table_columns = 20 };
+    try tableText(&plain.writer, .{ .rows = &spanning }, false, &pp);
+    try tableText(&styled.writer, .{ .rows = &spanning }, true, &sp);
+    const unstyled = try NarrowTableTest.plain(a, styled.written());
+    defer a.free(unstyled);
+    try std.testing.expectEqualStrings(plain.written(), unstyled);
+    try std.testing.expect(try NarrowTableTest.framed(unstyled, 20) > 2);
+    var wrapped_lines = std.mem.splitScalar(u8, styled.written(), '\n');
+    while (wrapped_lines.next()) |line| {
+        if (line.len == 0) continue;
+        const left = std.mem.indexOf(u8, line, "│").?;
+        const right = std.mem.indexOfPos(u8, line, left + "│".len, "│").?;
+        try TypedColorOutputTest.fill(line, left + "│".len, right, .{ 1, 121, 111 });
+    }
+    const ordinary = [_]model.Span{.{ .text = "outside" }};
+    try spansText(&styled.writer, &ordinary, true);
+    const end = std.mem.lastIndexOf(u8, styled.written(), "outside").?;
+    try std.testing.expect(TypedColorOutputTest.at(styled.written(), end).background == null);
+    try std.testing.expect(TypedColorOutputTest.at(styled.written(), end).foreground == null);
 }

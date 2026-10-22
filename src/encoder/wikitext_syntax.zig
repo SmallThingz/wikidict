@@ -226,7 +226,7 @@ pub fn trim(text: []const u8) []const u8 {
     return std.mem.trim(u8, text, " \t\r\n");
 }
 pub fn isMultilineContainerTag(name: []const u8) bool {
-    inline for (&.{ "ref", "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) |tag| {
+    inline for (&.{ "ref", "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude", "h1", "h2", "h3", "h4", "h5", "h6" }) |tag| {
         if (std.ascii.eqlIgnoreCase(name, tag)) return true;
     }
     return false;
@@ -1222,4 +1222,27 @@ test "pre HTML fallback multiline scope and absence cache keep later body outsid
     try std.testing.expect(matchingTagWithOpaqueScan(rewind, tagAt(rewind, later).?, &forward) == null);
     const earlier = matchingTagWithOpaqueScan(rewind, tagAt(rewind, 0).?, &forward).?;
     try std.testing.expectEqualStrings("closed", rewind["<pre/ >".len..earlier.inner_end]);
+}
+
+test "multiline HTML headings retain one logical domain without widening ordinary tags" {
+    const a = std.testing.allocator;
+    inline for (&.{ "h1", "h2", "h3", "h4", "h5", "h6", "H1", "H2", "H3", "H4", "H5", "H6" }) |name| {
+        const source = try std.fmt.allocPrint(a, "<{s} id='heading'>first\n''second'' [[term]]</{s}>\nnext", .{ name, name });
+        defer a.free(source);
+        const boundary = std.mem.indexOf(u8, source, "\nnext").?;
+        try std.testing.expect(isMultilineContainerTag(name));
+        try std.testing.expectEqual(boundary, logicalEnd(source, 0));
+        try std.testing.expectEqual(source.len, logicalEnd(source, boundary + 1));
+        const opening = tagAt(source, 0).?;
+        const pair = matchingTag(source, opening).?;
+        try std.testing.expectEqualStrings("first\n''second'' [[term]]", source[opening.end..pair.inner_end]);
+        const prefixed = try std.fmt.allocPrint(a, "before {s}", .{source});
+        defer a.free(prefixed);
+        try std.testing.expectEqual(boundary + "before ".len, logicalEnd(prefixed, 0));
+    }
+    const unmatched = "<h4>first\nsecond</h3>\nnext";
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, unmatched, '\n').?, logicalEnd(unmatched, 0));
+    const inline_span = "<span>first\nsecond</span>\nnext";
+    try std.testing.expect(!isMultilineContainerTag("span"));
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, inline_span, '\n').?, logicalEnd(inline_span, 0));
 }

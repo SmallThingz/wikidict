@@ -13,6 +13,7 @@ pub const Span = struct {
     classes: []const u8 = "",
     direction: []const u8 = "",
     explanation: []const u8 = "",
+    foreground: ?[]const u8 = null,
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -31,7 +32,7 @@ pub const Feature = struct {
     tail: []const u8 = "",
 };
 pub const BlockKind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table };
-pub const Cell = struct { spans: []const Span = &.{}, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1 };
+pub const Cell = struct { spans: []const Span = &.{}, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1, background: ?[]const u8 = null };
 pub const Row = struct { cells: []const Cell = &.{} };
 pub const Table = struct { caption: []const Span = &.{}, rows: []const Row = &.{} };
 pub const Block = struct {
@@ -108,7 +109,20 @@ pub const Entry = struct {
 };
 pub const Stored = struct { schema: []const u8 = schema, entry: Entry };
 
+// Consumer-facing authored background values are canonical opaque RGB only.
+pub fn isCanonicalRgb(value: []const u8) bool {
+    if (value.len != 7 or value[0] != '#') return false;
+    for (value[1..]) |byte| if (!(std.ascii.isDigit(byte) or (byte >= 'a' and byte <= 'f'))) return false;
+    return true;
+}
+
 pub const ValidationError = error{InvalidPresentation};
+
+fn validateSpanColors(spans: []const Span) ValidationError!void {
+    for (spans) |span| if (span.foreground) |color| {
+        if (!isCanonicalRgb(color)) return error.InvalidPresentation;
+    };
+}
 
 fn blockIndexValid(indices: []const usize, block_count: usize) bool {
     for (indices) |index| if (index >= block_count) return false;
@@ -153,6 +167,22 @@ pub fn validateStored(
                 !blockIndexValid(sense.notes, block_count)) return error.InvalidPresentation;
         }
     }
+
+    try validateSpanColors(entry.display_title);
+    try validateSpanColors(entry.preamble_spans);
+    for (entry.references) |reference| try validateSpanColors(reference.spans);
+    for (entry.sections) |section| for (section.blocks) |block| {
+        try validateSpanColors(block.spans);
+        if (block.table) |table| {
+            try validateSpanColors(table.caption);
+            for (table.rows) |row| for (row.cells) |cell| try validateSpanColors(cell.spans);
+        }
+    };
+    for (entry.sections) |section| for (section.blocks) |block| if (block.table) |table| {
+        for (table.rows) |row| for (row.cells) |cell| if (cell.background) |background| {
+            if (!isCanonicalRgb(background)) return error.InvalidPresentation;
+        };
+    };
 
     for (entry.references) |reference| {
         if (reference.number == 0 or reference.group_number == 0) return error.InvalidPresentation;

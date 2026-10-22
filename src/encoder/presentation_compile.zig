@@ -254,6 +254,8 @@ pub const FormattingAttributes = struct {
     direction: []const u8 = "",
     explanation: []const u8 = "",
     explanation_set: bool = false,
+    foreground: ?[]const u8 = null,
+    foreground_set: bool = false,
 };
 pub const FragmentPreContext = struct {
     pub const Kind = enum { pre, formatting, link, refused_link };
@@ -475,6 +477,8 @@ pub const Style = struct {
     explanation: []const u8 = "",
     // Build-only presence: an explicit empty title must suppress inheritance.
     explanation_set: bool = false,
+    foreground: ?[]const u8 = null,
+    foreground_set: bool = false,
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -499,10 +503,14 @@ pub const Style = struct {
     // This build-only marker is never stored in a presentation span.
     self_link_target: ?[]const u8 = null,
 };
-fn inheritExplanation(style: *Style, parent: Style) void {
+fn inheritInlineMetadata(style: *Style, parent: Style) void {
     if (!style.explanation_set and style.explanation.len == 0) {
         style.explanation = parent.explanation;
         style.explanation_set = parent.explanation_set or parent.explanation.len != 0;
+    }
+    if (!style.foreground_set and style.foreground == null) {
+        style.foreground = parent.foreground;
+        style.foreground_set = parent.foreground_set or parent.foreground != null;
     }
 }
 
@@ -533,13 +541,15 @@ pub const Span = struct {
     explanation: []const u8 = "",
     // Build-only scope provenance, omitted from both wire versions.
     explanation_set: bool = false,
+    foreground: ?[]const u8 = null,
+    foreground_set: bool = false,
     flags: SpanFlags = .{},
     role: Role = .normal,
 };
 pub const Feature = struct { kind: []const u8, language: []const u8 = "", data: []const u8 = "", tail_kind: []const u8 = "none", tail: []const u8 = "" };
 const SemanticHints = struct { relation_note: bool = false, ordinary_paragraph: bool = false };
 pub const Kind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table };
-pub const Cell = struct { spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1 };
+pub const Cell = struct { spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1, background: ?[]const u8 = null };
 pub const Row = struct { cells: []const Cell };
 pub const Table = struct { caption: []const Span = &.{}, rows: []const Row };
 pub const Block = struct {
@@ -2600,7 +2610,7 @@ pub const Renderer = struct {
         var style = original;
         if (self.poem_depth != 0) {
             const parent = self.poem_base_style;
-            inheritExplanation(&style, parent);
+            inheritInlineMetadata(&style, parent);
             style.bold = style.bold or parent.bold;
             style.italic = style.italic or parent.italic;
             style.code = style.code or parent.code;
@@ -2679,7 +2689,7 @@ pub const Renderer = struct {
         }
         const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
         const inherited_flags: SpanFlags = @bitCast(@as(u8, @bitCast(flags)) | @as(u8, @bitCast(self.block_formatting)));
-        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .flags = inherited_flags, .role = s.role });
+        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .flags = inherited_flags, .role = s.role });
     }
     pub fn lineBreak(self: *Renderer, s: Style) Error!void {
         var style = s;
@@ -4198,6 +4208,8 @@ pub const Renderer = struct {
                 label_style.direction = span.direction;
                 label_style.explanation = span.explanation;
                 label_style.explanation_set = span.explanation_set;
+                label_style.foreground = span.foreground;
+                label_style.foreground_set = span.foreground_set;
                 label_style.classes = try self.mediaCaptionClasses(style.classes, span.classes);
                 label_style.role = span.role;
                 if (span.self_link) {
@@ -4555,6 +4567,130 @@ pub const Renderer = struct {
             if (oneOf(value, &.{ "inline", "inline-block", "inline-table" })) inline_display = true else if (oneOf(value, &.{ "block", "table" })) inline_display = false else return null;
         }
         return inline_display;
+    }
+
+    // Canonical opaque named/hex RGB only. No dynamic CSS values are evaluated.
+    fn canonicalColor(self: *Renderer, raw: []const u8) Error!?[]const u8 {
+        const value = trim(raw);
+        const names = .{ "aliceblue", "antiquewhite", "aqua", "aquamarine", "azure", "beige", "bisque", "black", "blanchedalmond", "blue", "blueviolet", "brown", "burlywood", "cadetblue", "chartreuse", "chocolate", "coral", "cornflowerblue", "cornsilk", "crimson", "cyan", "darkblue", "darkcyan", "darkgoldenrod", "darkgray", "darkgreen", "darkgrey", "darkkhaki", "darkmagenta", "darkolivegreen", "darkorange", "darkorchid", "darkred", "darksalmon", "darkseagreen", "darkslateblue", "darkslategray", "darkslategrey", "darkturquoise", "darkviolet", "deeppink", "deepskyblue", "dimgray", "dimgrey", "dodgerblue", "firebrick", "floralwhite", "forestgreen", "fuchsia", "gainsboro", "ghostwhite", "gold", "goldenrod", "gray", "green", "greenyellow", "grey", "honeydew", "hotpink", "indianred", "indigo", "ivory", "khaki", "lavender", "lavenderblush", "lawngreen", "lemonchiffon", "lightblue", "lightcoral", "lightcyan", "lightgoldenrodyellow", "lightgray", "lightgreen", "lightgrey", "lightpink", "lightsalmon", "lightseagreen", "lightskyblue", "lightslategray", "lightslategrey", "lightsteelblue", "lightyellow", "lime", "limegreen", "linen", "magenta", "maroon", "mediumaquamarine", "mediumblue", "mediumorchid", "mediumpurple", "mediumseagreen", "mediumslateblue", "mediumspringgreen", "mediumturquoise", "mediumvioletred", "midnightblue", "mintcream", "mistyrose", "moccasin", "navajowhite", "navy", "oldlace", "olive", "olivedrab", "orange", "orangered", "orchid", "palegoldenrod", "palegreen", "paleturquoise", "palevioletred", "papayawhip", "peachpuff", "peru", "pink", "plum", "powderblue", "purple", "rebeccapurple", "red", "rosybrown", "royalblue", "saddlebrown", "salmon", "sandybrown", "seagreen", "seashell", "sienna", "silver", "skyblue", "slateblue", "slategray", "slategrey", "snow", "springgreen", "steelblue", "tan", "teal", "thistle", "tomato", "turquoise", "violet", "wheat", "white", "whitesmoke", "yellow", "yellowgreen" };
+        const colors = .{ "#f0f8ff", "#faebd7", "#00ffff", "#7fffd4", "#f0ffff", "#f5f5dc", "#ffe4c4", "#000000", "#ffebcd", "#0000ff", "#8a2be2", "#a52a2a", "#deb887", "#5f9ea0", "#7fff00", "#d2691e", "#ff7f50", "#6495ed", "#fff8dc", "#dc143c", "#00ffff", "#00008b", "#008b8b", "#b8860b", "#a9a9a9", "#006400", "#a9a9a9", "#bdb76b", "#8b008b", "#556b2f", "#ff8c00", "#9932cc", "#8b0000", "#e9967a", "#8fbc8f", "#483d8b", "#2f4f4f", "#2f4f4f", "#00ced1", "#9400d3", "#ff1493", "#00bfff", "#696969", "#696969", "#1e90ff", "#b22222", "#fffaf0", "#228b22", "#ff00ff", "#dcdcdc", "#f8f8ff", "#ffd700", "#daa520", "#808080", "#008000", "#adff2f", "#808080", "#f0fff0", "#ff69b4", "#cd5c5c", "#4b0082", "#fffff0", "#f0e68c", "#e6e6fa", "#fff0f5", "#7cfc00", "#fffacd", "#add8e6", "#f08080", "#e0ffff", "#fafad2", "#d3d3d3", "#90ee90", "#d3d3d3", "#ffb6c1", "#ffa07a", "#20b2aa", "#87cefa", "#778899", "#778899", "#b0c4de", "#ffffe0", "#00ff00", "#32cd32", "#faf0e6", "#ff00ff", "#800000", "#66cdaa", "#0000cd", "#ba55d3", "#9370db", "#3cb371", "#7b68ee", "#00fa9a", "#48d1cc", "#c71585", "#191970", "#f5fffa", "#ffe4e1", "#ffe4b5", "#ffdead", "#000080", "#fdf5e6", "#808000", "#6b8e23", "#ffa500", "#ff4500", "#da70d6", "#eee8aa", "#98fb98", "#afeeee", "#db7093", "#ffefd5", "#ffdab9", "#cd853f", "#ffc0cb", "#dda0dd", "#b0e0e6", "#800080", "#663399", "#ff0000", "#bc8f8f", "#4169e1", "#8b4513", "#fa8072", "#f4a460", "#2e8b57", "#fff5ee", "#a0522d", "#c0c0c0", "#87ceeb", "#6a5acd", "#708090", "#708090", "#fffafa", "#00ff7f", "#4682b4", "#d2b48c", "#008080", "#d8bfd8", "#ff6347", "#40e0d0", "#ee82ee", "#f5deb3", "#ffffff", "#f5f5f5", "#ffff00", "#9acd32" };
+        inline for (names, colors) |name, color| if (std.ascii.eqlIgnoreCase(value, name)) return color;
+        if ((value.len != 4 and value.len != 7) or value[0] != '#') return null;
+        for (value[1..]) |byte| if (!std.ascii.isHex(byte)) return null;
+        const color = try self.a.alloc(u8, 7);
+        color[0] = '#';
+        for (0..6) |i| color[i + 1] = std.ascii.toLower(value[if (value.len == 4) 1 + i / 2 else i + 1]);
+        return color;
+    }
+
+    // Split declarations at top-level semicolons only. Quoted font names,
+    // escaped bytes and function bodies cannot create a color declaration.
+    fn nextColorDeclaration(self: *Renderer, css: []const u8, pos: *usize) Error!?[]const u8 {
+        if (pos.* >= css.len) return null;
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(self.a);
+        var quote: u8 = 0;
+        var depth: usize = 0;
+        while (pos.* < css.len) {
+            const byte = css[pos.*];
+            pos.* += 1;
+            if (byte == '\\' and pos.* < css.len) {
+                try out.append(self.a, byte);
+                try out.append(self.a, css[pos.*]);
+                pos.* += 1;
+                continue;
+            }
+            if (quote != 0) {
+                try out.append(self.a, byte);
+                if (byte == quote) quote = 0;
+                continue;
+            }
+            if (byte == '\'' or byte == '"') {
+                quote = byte;
+                try out.append(self.a, byte);
+                continue;
+            }
+            if (byte == '/' and pos.* < css.len and css[pos.*] == '*') {
+                const close = std.mem.indexOfPos(u8, css, pos.* + 1, "*/") orelse {
+                    pos.* = css.len;
+                    break;
+                };
+                pos.* = close + 2;
+                try out.append(self.a, ' ');
+                continue;
+            }
+            if (byte == '(' or byte == '[' or byte == '{') depth += 1;
+            if ((byte == ')' or byte == ']' or byte == '}') and depth != 0) depth -= 1;
+            if (byte == ';' and depth == 0) break;
+            try out.append(self.a, byte);
+        }
+        return try out.toOwnedSlice(self.a);
+    }
+
+    const AuthoredColor = struct { value: ?[]const u8, specified: bool = false };
+    fn authoredColor(self: *Renderer, tag: syntax.Tag, property: []const u8, legacy: ?[]const u8, fallback: ?[]const u8) Error!AuthoredColor {
+        var result: AuthoredColor = .{ .value = fallback };
+        if (legacy) |attribute| if (try self.semanticAttribute(tag, attribute)) |raw| {
+            result = .{ .value = try self.canonicalColor(raw), .specified = true };
+        };
+        const css = (try self.semanticAttribute(tag, "style")) orelse return result;
+        var pos: usize = 0;
+        var important_seen = false;
+        while (try self.nextColorDeclaration(css, &pos)) |raw| {
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+            const name = trim(raw[0..colon]);
+            const matches = std.ascii.eqlIgnoreCase(name, property);
+            const background_reset = std.ascii.eqlIgnoreCase(property, "background-color") and
+                std.ascii.eqlIgnoreCase(name, "background");
+            if (!matches and !background_reset) continue;
+            var value = trim(raw[colon + 1 ..]);
+            var important = false;
+            if (std.mem.lastIndexOfScalar(u8, value, '!')) |bang| {
+                if (!std.ascii.eqlIgnoreCase(trim(value[bang + 1 ..]), "important")) continue;
+                important = true;
+                value = trim(value[0..bang]);
+            }
+            var next: ?[]const u8 = null;
+            if (std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset") or
+                std.ascii.eqlIgnoreCase(value, "currentcolor"))
+            {
+                next = if (std.ascii.eqlIgnoreCase(property, "color") or !std.ascii.eqlIgnoreCase(value, "currentcolor")) fallback else null;
+            } else if (std.ascii.eqlIgnoreCase(value, "transparent") or std.ascii.eqlIgnoreCase(value, "initial") or
+                (background_reset and std.ascii.eqlIgnoreCase(value, "none")))
+            {
+                next = if (std.ascii.eqlIgnoreCase(property, "background-color")) fallback else null;
+            } else if (try self.canonicalColor(value)) |color| {
+                // A single opaque color is also a complete supported shorthand.
+                next = color;
+            } else if (unrepresentedColorValue(value) or (background_reset and std.mem.indexOfAny(u8, value, " /\t") != null)) {
+                // Valid dynamic/system/alpha or complex background values do
+                // not have a supported opaque RGB projection. Suppress stale
+                // prior color, without evaluating functions/images/layers.
+                next = null;
+            } else continue; // An invalid declaration has no cascade priority.
+            if (important_seen and !important) continue;
+            important_seen = important;
+            result.specified = true;
+            result.value = next;
+        }
+        return result;
+    }
+
+    fn unrepresentedColorValue(value: []const u8) bool {
+        if (std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer")) return true;
+        const system_names = .{ "accentcolor", "accentcolortext", "activetext", "buttonborder", "buttonface", "buttontext", "canvas", "canvastext", "field", "fieldtext", "graytext", "highlight", "highlighttext", "linktext", "mark", "marktext", "selecteditem", "selecteditemtext", "visitedtext", "activeborder", "activecaption", "appworkspace", "background", "buttonhighlight", "buttonshadow", "captiontext", "inactiveborder", "inactivecaption", "inactivecaptiontext", "infobackground", "infotext", "menu", "menutext", "scrollbar", "threeddarkshadow", "threedface", "threedhighlight", "threedlightshadow", "threedshadow", "window", "windowframe", "windowtext" };
+        inline for (system_names) |name| if (std.ascii.eqlIgnoreCase(value, name)) return true;
+        if (std.mem.indexOfScalar(u8, value, '(')) |open| {
+            const name = trim(value[0..open]);
+            inline for (.{ "rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "light-dark", "contrast-color", "device-cmyk", "var", "env", "url", "linear-gradient", "radial-gradient", "conic-gradient", "repeating-linear-gradient", "repeating-radial-gradient", "repeating-conic-gradient" }) |supported_function| {
+                if (std.ascii.eqlIgnoreCase(name, supported_function)) return true;
+            }
+        }
+        return false;
+    }
+
+    fn tableCellBackground(self: *Renderer, tag: syntax.Tag, fallback: ?[]const u8) Error!?[]const u8 {
+        return (try self.authoredColor(tag, "background-color", "bgcolor", fallback)).value;
     }
 
     fn canonicalSwatchHex(self: *Renderer, raw: []const u8) Error!?[]const u8 {
@@ -5469,7 +5605,7 @@ pub const Renderer = struct {
             const parent_attributes = self.body_formatting_attributes;
             const parent_language_direction = self.body_language_direction;
             const parent_flags = self.block_formatting;
-            self.restoreFormattingAttributes(.{ .classes = s.classes, .role = s.role, .relation_note = parent_attributes.relation_note, .language = s.language, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set });
+            self.restoreFormattingAttributes(.{ .classes = s.classes, .role = s.role, .relation_note = parent_attributes.relation_note, .language = s.language, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .foreground = s.foreground, .foreground_set = s.foreground_set });
             const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
             self.block_formatting = @bitCast(@as(u8, @bitCast(parent_flags)) | @as(u8, @bitCast(flags)));
             defer {
@@ -5930,7 +6066,7 @@ pub const Renderer = struct {
         }
         if (self.poem_depth != 0) {
             const outer = self.poem_base_style;
-            inheritExplanation(&inherited, outer);
+            inheritInlineMetadata(&inherited, outer);
             if (inherited.kind == .text and (outer.kind == .link or outer.kind == .external_link)) {
                 inherited.kind = outer.kind;
                 inherited.target = outer.target;
@@ -6051,6 +6187,10 @@ pub const Renderer = struct {
         if (self.body_language_direction) |style| {
             value.language = style.language;
             value.direction = style.direction;
+            if (style.foreground_set or style.foreground != null) {
+                value.foreground = style.foreground;
+                value.foreground_set = style.foreground_set;
+            }
             if (style.explanation_set or style.explanation.len != 0) {
                 value.explanation = style.explanation;
                 value.explanation_set = style.explanation_set;
@@ -6060,11 +6200,11 @@ pub const Renderer = struct {
     }
     fn restoreFormattingAttributes(self: *Renderer, value: FormattingAttributes) void {
         self.body_formatting_attributes = value;
-        self.body_language_direction = .{ .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set };
+        self.body_language_direction = .{ .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set, .foreground = value.foreground, .foreground_set = value.foreground_set };
     }
     fn formattingSeparator(self: *Renderer) Span {
         const value = self.formattingAttributes();
-        return .{ .text = " ", .flags = self.block_formatting, .classes = value.classes, .role = value.role, .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set };
+        return .{ .text = " ", .flags = self.block_formatting, .classes = value.classes, .role = value.role, .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set, .foreground = value.foreground, .foreground_set = value.foreground_set };
     }
     fn formattingVisibleEndsSpace(spans: []const Span) bool {
         var at = spans.len;
@@ -6802,7 +6942,7 @@ pub const Renderer = struct {
                                 defer self.semantic_capture = previous_capture;
                                 break :blk try self.htmlInlineStyle(tag, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
                             };
-                            self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = scoped_hints.relation_note, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set });
+                            self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = scoped_hints.relation_note, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set });
                             defer {
                                 self.body_formatting_attributes = parent_attribute_storage;
                                 self.body_language_direction = parent_language_direction;
@@ -6834,7 +6974,7 @@ pub const Renderer = struct {
                                     var leading: std.ArrayList(Span) = .empty;
                                     const previous = &blocks.items[index];
                                     if (join_separator and !formattingVisibleEndsSpace(previous.spans))
-                                        try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set });
+                                        try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set, .foreground = parent_attributes.foreground, .foreground_set = parent_attributes.foreground_set });
                                     try leading.appendSlice(self.a, scoped_blocks[0].spans);
                                     try self.appendParagraphSpans(&blocks, index, leading.items, false);
                                     blocks.items[index].relation_note = previous.relation_note or scoped_blocks[0].relation_note;
@@ -6850,7 +6990,7 @@ pub const Renderer = struct {
                                 var leading: std.ArrayList(Span) = .empty;
                                 const previous = &blocks.items[blocks.items.len - 1];
                                 if (join_separator and !formattingVisibleEndsSpace(previous.spans))
-                                    try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set });
+                                    try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set, .foreground = parent_attributes.foreground, .foreground_set = parent_attributes.foreground_set });
                                 try leading.appendSlice(self.a, scoped_blocks[0].spans);
                                 try self.appendParagraphSpans(&blocks, blocks.items.len - 1, leading.items, false);
                                 blocks.items[blocks.items.len - 1].relation_note = previous.relation_note or scoped_blocks[0].relation_note;
@@ -7132,7 +7272,7 @@ pub const Renderer = struct {
                         try blocks.appendSlice(self.a, try self.renderBodyWithLanguageDirection(body.items, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{})));
                     } else {
                         var fostered: std.ArrayList(Block) = .empty;
-                        if (try self.htmlTable(wrapper_source[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{}))) |table_value| {
+                        if (try self.htmlTable(wrapper_source[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{}), try self.tableCellBackground(tag, null))) |table_value| {
                             try blocks.appendSlice(self.a, fostered.items);
                             try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value, .feature = try self.htmlSwatchFeature(tag, wrapper_source[tag.end..pair.inner_end], table_value, fostered.items) });
                         } else try self.block(&blocks, .preformatted, wrapper_source[0..pair.end], "", "", 0);
@@ -7143,7 +7283,7 @@ pub const Renderer = struct {
                     const parent_attributes = self.body_formatting_attributes;
                     const parent_language_direction = self.body_language_direction;
                     const scoped_style = try self.htmlInlineStyle(tag, self.bodyFormattingStyle(.{}));
-                    self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = parent_attributes.relation_note, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set });
+                    self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = parent_attributes.relation_note, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set });
                     defer {
                         self.body_formatting_attributes = parent_attributes;
                         self.body_language_direction = parent_language_direction;
@@ -7165,7 +7305,7 @@ pub const Renderer = struct {
                     defer self.block_formatting = parent_formatting;
                     const parent_language_direction = self.body_language_direction;
                     const scoped_style = try self.htmlLanguageDirection(tag, parent_language_direction orelse .{});
-                    self.body_language_direction = .{ .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set };
+                    self.body_language_direction = .{ .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set };
                     defer self.body_language_direction = parent_language_direction;
                     // Ordinary quoted lines do not open implicit preformatted blocks.
                     // Explicit pre/nowiki and actual list/heading rules stay independent.
@@ -7241,7 +7381,7 @@ pub const Renderer = struct {
                 }
                 const table_open = std.mem.indexOf(u8, clean, "{|").?;
                 const table_tag: syntax.Tag = .{ .name = "table", .attrs = clean[table_open + 2 ..], .end = 0, .closing = false, .self_closing = false };
-                const table = try self.parseTable(input, pos, try self.swatchCssHex(table_tag, "background-color"));
+                const table = try self.parseTable(input, pos, try self.swatchCssHex(table_tag, "background-color"), try self.tableCellBackground(table_tag, null));
                 pos = table.end;
                 // A close-marker suffix remains on its authored physical line;
                 // it cannot introduce a new wiki list, heading or leading-space block.
@@ -7409,16 +7549,16 @@ pub const Renderer = struct {
             hints.relation_note = true;
         };
         if (self.body_language_direction) |base| {
-            inheritExplanation(&effective, base);
+            inheritInlineMetadata(&effective, base);
             if (effective.language.len == 0) effective.language = base.language;
             if (effective.direction.len == 0) effective.direction = base.direction;
         }
-        inheritExplanation(&effective, .{ .explanation = self.body_formatting_attributes.explanation, .explanation_set = self.body_formatting_attributes.explanation_set });
+        inheritInlineMetadata(&effective, .{ .explanation = self.body_formatting_attributes.explanation, .explanation_set = self.body_formatting_attributes.explanation_set, .foreground = self.body_formatting_attributes.foreground, .foreground_set = self.body_formatting_attributes.foreground_set });
         return effective;
     }
     fn renderBodyWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Block {
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set };
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set };
         defer self.body_language_direction = previous;
         return self.renderBody(input);
     }
@@ -7428,18 +7568,21 @@ pub const Renderer = struct {
         self.body_link_target = "";
         defer self.body_link_target = previous_target;
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set };
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set };
         defer self.body_language_direction = previous;
-        return self.parseBodySpans(input, .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set });
+        return self.parseBodySpans(input, .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set });
     }
     fn cellSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set };
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set };
         defer self.body_language_direction = previous;
         return self.cellSpans(input);
     }
     fn htmlLanguageDirection(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
         var result = inherited;
+        const foreground = try self.authoredColor(tag, "color", if (tag.is("font")) "color" else null, inherited.foreground);
+        result.foreground = foreground.value;
+        if (foreground.specified) result.foreground_set = true;
         if ((try self.semanticAttribute(tag, "lang"))) |lang| result.language = lang;
         if ((try self.semanticAttribute(tag, "dir"))) |dir| {
             const decoded_dir = dir;
@@ -7478,7 +7621,7 @@ pub const Renderer = struct {
             if (self.poem_depth != 0) self.poem_base_style.italic = italic;
         }
         const previous_language_direction = self.body_language_direction;
-        self.body_language_direction = .{ .language = list_style.language, .direction = list_style.direction, .explanation = list_style.explanation, .explanation_set = list_style.explanation_set };
+        self.body_language_direction = .{ .language = list_style.language, .direction = list_style.direction, .explanation = list_style.explanation, .explanation_set = list_style.explanation_set, .foreground = list_style.foreground, .foreground_set = list_style.foreground_set };
         defer self.body_language_direction = previous_language_direction;
         const reversed = list_tag.is("ol") and htmlAttributePresent(list_tag, "reversed");
         const default_start: i32 = if (reversed) htmlListItemCount(input) else 1;
@@ -7709,7 +7852,7 @@ pub const Renderer = struct {
         const previous_poem_italic = self.poem_base_style.italic;
         defer self.poem_base_style.italic = previous_poem_italic;
         const previous_flow = self.html_list_item_flow;
-        self.restoreFormattingAttributes(.{ .classes = item_style.classes, .role = item_style.role, .relation_note = hints.relation_note, .language = item_style.language, .direction = item_style.direction, .explanation = item_style.explanation, .explanation_set = item_style.explanation_set });
+        self.restoreFormattingAttributes(.{ .classes = item_style.classes, .role = item_style.role, .relation_note = hints.relation_note, .language = item_style.language, .direction = item_style.direction, .explanation = item_style.explanation, .explanation_set = item_style.explanation_set, .foreground = item_style.foreground, .foreground_set = item_style.foreground_set });
         const flags: SpanFlags = .{ .bold = item_style.bold, .italic = item_style.italic, .code = item_style.code, .small = item_style.small, .superscript = item_style.superscript, .subscript = item_style.subscript, .strike = item_style.strike, .underline = item_style.underline };
         self.block_formatting = @bitCast(@as(u8, @bitCast(previous_formatting)) | @as(u8, @bitCast(flags)));
         self.html_list_item_flow = true;
@@ -7919,7 +8062,7 @@ pub const Renderer = struct {
         return true;
     }
 
-    fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block), defer_zero_rowspans: bool, style: Style) Error!?Table {
+    fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block), defer_zero_rowspans: bool, style: Style, table_background: ?[]const u8) Error!?Table {
         if (!htmlTableCaptionsComplete(input)) return null;
         var rows: std.ArrayList(Row) = .empty;
         var caption: std.ArrayList(Span) = .empty;
@@ -7962,6 +8105,7 @@ pub const Renderer = struct {
                 processed = pair.end;
                 continue;
             }
+            const row_background = if (implicit_row) table_background else try self.tableCellBackground(tag, table_background);
             const row_style = if (implicit_row) style else try self.htmlLanguageDirection(tag, style);
             var cells: std.ArrayList(Cell) = .empty;
             // Reuse the same cell parser, beginning before the actual first
@@ -7979,6 +8123,8 @@ pub const Renderer = struct {
                 try self.htmlTableFostered(fostered, input[processed..cell_open], &foster_joinable, &foster_formatting);
                 processed = cell_pair.end;
                 if (!self.spend()) continue;
+                const cell_rowspan = try self.tableSpanAttr(cell_tag, "rowspan");
+                const background_fallback = if (cell_rowspan == 1) row_background else null;
                 try cells.append(self.a, .{
                     .spans = scoped: {
                         const inherited_formatting = self.block_formatting;
@@ -7999,9 +8145,10 @@ pub const Renderer = struct {
                         }
                         break :scoped try self.cellSpansWithLanguageDirection(input[cell_tag.end..cell_pair.inner_end], try self.htmlLanguageDirection(cell_tag, row_style));
                     },
+                    .background = try self.tableCellBackground(cell_tag, background_fallback),
                     .header = cell_tag.is("th"),
                     .colspan = try self.tableSpanAttr(cell_tag, "colspan"),
-                    .rowspan = try self.tableSpanAttr(cell_tag, "rowspan"),
+                    .rowspan = cell_rowspan,
                 });
             }
             if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
@@ -8168,7 +8315,8 @@ pub const Renderer = struct {
         return found and depth == 0;
     }
 
-    fn parseTable(self: *Renderer, input: []const u8, start: usize, swatch_background: ?[]const u8) Error!TableResult {
+    fn parseTable(self: *Renderer, input: []const u8, start: usize, swatch_background: ?[]const u8, table_background: ?[]const u8) Error!TableResult {
+        var row_background = table_background;
         var swatch_foreground: ?[]const u8 = null;
         var swatch_allowed = true;
         var rows: std.ArrayList(Row) = .empty;
@@ -8225,6 +8373,8 @@ pub const Renderer = struct {
                         pos = @intFromPtr(line.ptr) - @intFromPtr(input.ptr) + 2;
                     break;
                 }
+                const row_tag: syntax.Tag = .{ .name = "tr", .attrs = line[2..], .end = 0, .closing = false, .self_closing = false };
+                row_background = try self.tableCellBackground(row_tag, table_background);
                 row_formatting = try self.wikiTableFontFormatting(line[2..], inherited_formatting);
             } else if (starts(line, "|+")) {
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending);
@@ -8254,7 +8404,9 @@ pub const Renderer = struct {
                         row_formatting;
                     swatch_foreground = content.swatch_color;
                     if (!try self.swatchCellSourceAllowed(content.text)) swatch_allowed = false;
-                    current = .{ .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan };
+                    const background_fallback = if (content.rowspan == 1) row_background else null;
+                    const background = if (cellAttributePipe(raw_cell)) |pipe| try self.tableCellBackground(.{ .name = "td", .attrs = raw_cell[0..pipe], .end = 0, .closing = false, .self_closing = false }, background_fallback) else background_fallback;
+                    current = .{ .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan, .background = background };
                     try cell_source.appendSlice(self.a, content.text);
                     if (split_at == line.len) break;
                     offset = split_at + 2;
@@ -8283,7 +8435,7 @@ pub const Renderer = struct {
                 try self.flushWikiTableFostered(&fostered, &outside_source);
                 try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
-                if (try self.htmlTable(line, &fostered, true, self.body_language_direction orelse .{})) |table| {
+                if (try self.htmlTable(line, &fostered, true, self.body_language_direction orelse .{}, row_background)) |table| {
                     // Reuse the already-rendered caption, including its effects
                     // and scoped spans, in the same source order as wiki captions.
                     try self.appendTableCaption(&caption, table.caption);
@@ -21021,6 +21173,29 @@ test "matched HTML headings preserve typed levels links styles and same-line suf
         }
         try std.testing.expect(!r.fallbacks.any());
     }
+    // Ordinary physical newlines inside HTML headings stay in the same
+    // supported heading domain. This does not assert colon/list semantics.
+    for (1..7) |level| {
+        const source = try std.fmt.allocPrint(a, "alpha<h{d} class=note lang=fr dir=rtl>[[A|beta]]\n''[[B|delta]]''</h{d}>gamma", .{ level, level });
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(source);
+        const saved = try FormattingScopeTest.encode(a, &r, blocks);
+        inline for (.{ blocks, saved.entry.sections[0].blocks }) |actual| {
+            try std.testing.expectEqual(@as(usize, 3), actual.len);
+            try std.testing.expectEqualStrings("paragraph", @tagName(actual[0].kind));
+            try std.testing.expectEqualStrings("heading", @tagName(actual[1].kind));
+            try std.testing.expectEqualStrings("paragraph", @tagName(actual[2].kind));
+            try std.testing.expectEqual(@as(u8, @intCast(level)), actual[1].level);
+            try std.testing.expectEqualStrings("alpha", try FormattingScopeTest.text(a, actual[0].spans));
+            try std.testing.expectEqualStrings("beta delta", try FormattingScopeTest.text(a, actual[1].spans));
+            try std.testing.expectEqualStrings("gamma", try FormattingScopeTest.text(a, actual[2].spans));
+            try FormattingScopeTest.word(a, actual, "beta", .{ .kind = .link, .target = "A", .classes = "note", .language = "fr", .direction = "rtl" });
+            try FormattingScopeTest.word(a, actual, "delta", .{ .kind = .link, .target = "B", .classes = "note", .language = "fr", .direction = "rtl", .italic = true });
+            try FormattingScopeTest.word(a, actual, "alpha", .{});
+            try FormattingScopeTest.word(a, actual, "gamma", .{});
+        }
+        try std.testing.expect(!r.fallbacks.any());
+    }
     const suffixes = [_][]const u8{ "* tail", "==tail==", "{| tail" };
     for (suffixes) |suffix| {
         const source = try std.fmt.allocPrint(a, "<H3>[[A|beta]]</H3>{s}", .{suffix});
@@ -24744,4 +24919,163 @@ test "HTML list font inheritance preserves nested overrides and continuation sco
         try FormattingScopeTest.word(a, inline_stored.entry.sections[0].blocks, word, .{});
     }
     try std.testing.expect(!inline_renderer.fallbacks.any());
+}
+
+test "captured Bleoh swatches and BEN dialect colors preserve typed RGB through DPR4" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "== Englisc bleoh ==\n\n{| cellpadding=\"5\" cellspacing=\"0\" border=\"1\"\n|-  bgcolor=\"#eeeeee\"\n| [[blæc]]\n| bgcolor=\"black\" | &nbsp;\n|-  bgcolor=\"#eeeeee\"\n| [[grǣg]]\n| bgcolor=\"gray\" | &nbsp;\n|- bgcolor=\"#eeeeee\"\n| [[hwīt]]\n| bgcolor=\"white\" | &nbsp;\n|- bgcolor=\"#eeeeee\"\n| [[Seolfor|seolfor]]\n| bgcolor=\"silver\" | &nbsp;\n|- bgcolor=\"#eeeeee\"\n| [[gold]]\n| bgcolor=\"gold\" | &nbsp;\n|- bgcolor=\"#eeeeee\"\n| [[rēod]]\n| bgcolor=\"red\" | &nbsp;\n|- bgcolor=\"#eeeeee\"\n| [[basu]]\n| bgcolor=\"purple\" | &nbsp;\n|- bgcolor=\"#eeeeee\"\n| [[hǣwen]]\n| bgcolor=\"blue\" | &nbsp;\n|- bgcolor=\"#eeeeee\"\n| [[grēne]]\n| bgcolor=\"green\" | &nbsp;\n|- bgcolor=\"#eeeeee\"\n| [[geolu]]\n| bgcolor=\"yellow\" | &nbsp;\n|- bgcolor=\"#eeeeee\"\n| [[geolorēad]]\n| bgcolor=\"orange\" | &nbsp;\n|}\n\n\n[[Category:Portas]]";
+    const labels = [_][]const u8{ "blæc", "grǣg", "hwīt", "seolfor", "gold", "rēod", "basu", "hǣwen", "grēne", "geolu", "geolorēad" };
+    const targets = [_][]const u8{ "blæc", "grǣg", "hwīt", "Seolfor", "gold", "rēod", "basu", "hǣwen", "grēne", "geolu", "geolorēad" };
+    const colors = [_][]const u8{ "#000000", "#808080", "#ffffff", "#c0c0c0", "#ffd700", "#ff0000", "#800080", "#0000ff", "#008000", "#ffff00", "#ffa500" };
+    const Check = struct {
+        fn table(blocks: anytype, expected_labels: []const []const u8, expected_targets: []const []const u8, expected_colors: []const []const u8) !void {
+            var found: usize = 0;
+            for (blocks) |block| if (block.table) |table_value| {
+                found += 1;
+                try std.testing.expectEqual(@as(usize, 11), table_value.rows.len);
+                for (table_value.rows, expected_labels, expected_targets, expected_colors) |row, label, target, color| {
+                    try std.testing.expectEqual(@as(usize, 2), row.cells.len);
+                    const left = row.cells[0];
+                    const right = row.cells[1];
+                    try std.testing.expectEqualStrings("#eeeeee", left.background.?);
+                    try std.testing.expectEqualStrings(color, right.background.?);
+                    try std.testing.expectEqual(@as(usize, 1), left.spans.len);
+                    try std.testing.expectEqual(@as(usize, 1), right.spans.len);
+                    try std.testing.expectEqualStrings(label, left.spans[0].text);
+                    try std.testing.expectEqualStrings(target, left.spans[0].target);
+                    try std.testing.expect(left.spans[0].kind == .link);
+                    try std.testing.expectEqualStrings(" ", right.spans[0].text);
+                    try std.testing.expect(right.spans[0].kind == .text and right.spans[0].target.len == 0);
+                    for (row.cells) |cell| {
+                        try std.testing.expect(!cell.header and cell.colspan == 1 and cell.rowspan == 1);
+                        try std.testing.expect(cell.spans[0].foreground == null);
+                    }
+                }
+            };
+            try std.testing.expectEqual(@as(usize, 1), found);
+        }
+        fn ben(allocator: A, blocks: anytype) !void {
+            var seen = [_]bool{ false, false, false, false };
+            const words = [_][]const u8{ "berda", "asul", "turquesa", "bas aiguanebar" };
+            const expected = [_][]const u8{ "#008000", "#1c39bb", "#01796f", "#ff4040" };
+            var tables: usize = 0;
+            for (blocks) |block| if (block.table) |table_value| {
+                tables += 1;
+                try std.testing.expectEqual(@as(usize, 2), table_value.rows.len);
+                for (table_value.rows, 0..) |row, row_index| for (row.cells) |cell| {
+                    try std.testing.expectEqualStrings(if (row_index == 0) "#e2e4c0" else "#f0f0f0", cell.background.?);
+                    try std.testing.expect(cell.colspan == (if (row_index == 0) @as(u16, 8) else 1));
+                    for (cell.spans) |span| for (words, expected, 0..) |word, color, i| if (std.mem.eql(u8, span.text, word)) {
+                        try std.testing.expectEqualStrings(color, span.foreground.?);
+                        if (comptime @hasField(@TypeOf(span), "flags")) {
+                            if (i == 3) try std.testing.expect(span.flags.bold) else try std.testing.expect(span.flags.small);
+                        } else {
+                            if (i == 3) try std.testing.expect(span.bold) else try std.testing.expect(span.small);
+                        }
+                        seen[i] = true;
+                    };
+                };
+                const caption_text = try FormattingScopeTest.text(allocator, table_value.rows[0].cells[0].spans);
+                try std.testing.expectEqualStrings("En color berda les diferensies dan el primer, en asul les que ten dan el segundo. Dan el turquesa se marquen les que fan diferensia d'es dos.", caption_text);
+            };
+            for (seen) |present| try std.testing.expect(present);
+            try std.testing.expectEqual(@as(usize, 1), tables);
+        }
+    };
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    try Check.table(blocks, &labels, &targets, &colors);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    try Check.table(stored.entry.sections[0].blocks, &labels, &targets, &colors);
+    var ben_renderer: Renderer = .{ .a = a, .context = .{} };
+    const ben_blocks = try ben_renderer.renderBody("<table style=\"background:#F0F0F0\"><tr><th colspan=\"8\" style=\"background:#e2e4c0\"><small>En color <span style=\"color:#008000;\">berda</span> les diferensies dan el primer, en <span style=\"color:#1C39BB;\">asul</span> les que ten dan el segundo. Dan el <span style=\"color:#01796F;\">turquesa</span> se marquen les que fan diferensia d'es dos.</small></th></tr><tr><td><span style=\"color:#FF4040;\">'''bas aiguanebar'''</span></td></tr></table>");
+    try Check.ben(a, ben_blocks);
+    const ben_stored = try FormattingScopeTest.encode(a, &ben_renderer, ben_blocks);
+    try Check.ben(a, ben_stored.entry.sections[0].blocks);
+}
+
+test "authored RGB declaration precedence preserves scopes actions and unrelated CSS" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const source = "{| class=wikitable bgcolor='#abc'\n|- bgcolor='#eeeeee'\n| style=\"font-family:'x;y';background-color:RED\" | [[A|red]]\n| style='background-color:blue!important;background-color:green' | [[B|blue]]\n| style='background-color:transparent' | row\n| style='background:url(x)' | unsupported\n|-\n| fallback\n|}";
+    const blocks = try renderer.renderBody(source);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const Check = struct {
+        fn table(blocks_value: anytype) !void {
+            var tables: usize = 0;
+            for (blocks_value) |block| if (block.table) |table_value| {
+                tables += 1;
+                try std.testing.expectEqual(@as(usize, 2), table_value.rows.len);
+                try std.testing.expectEqual(@as(usize, 4), table_value.rows[0].cells.len);
+                const cells = table_value.rows[0].cells;
+                try std.testing.expectEqualStrings("#ff0000", cells[0].background.?);
+                try std.testing.expectEqualStrings("#0000ff", cells[1].background.?);
+                try std.testing.expectEqualStrings("#eeeeee", cells[2].background.?);
+                try std.testing.expect(cells[3].background == null);
+                try std.testing.expectEqualStrings("A", cells[0].spans[0].target);
+                try std.testing.expectEqualStrings("B", cells[1].spans[0].target);
+                try std.testing.expectEqualStrings("#aabbcc", table_value.rows[1].cells[0].background.?);
+            };
+            try std.testing.expectEqual(@as(usize, 1), tables);
+        }
+        fn spans(values: anytype) !void {
+            var text: std.ArrayList(u8) = .empty;
+            defer text.deinit(std.testing.allocator);
+            var actions: usize = 0;
+            var green: usize = 0;
+            var blue: usize = 0;
+            var reset: usize = 0;
+            for (values) |span| {
+                try text.appendSlice(std.testing.allocator, span.text);
+                if (span.target.len != 0) {
+                    actions += 1;
+                    try std.testing.expectEqualStrings("A", span.target);
+                    try std.testing.expectEqualStrings("#008000", span.foreground.?);
+                }
+                if (std.mem.indexOf(u8, span.text, "green") != null) {
+                    green += 1;
+                    try std.testing.expectEqualStrings("#008000", span.foreground.?);
+                }
+                if (std.mem.eql(u8, span.text, "blue")) {
+                    blue += 1;
+                    try std.testing.expectEqualStrings("#1c39bb", span.foreground.?);
+                }
+                if (std.mem.eql(u8, span.text, "reset")) {
+                    reset += 1;
+                    try std.testing.expect(span.foreground == null);
+                }
+            }
+            try std.testing.expectEqualStrings("green link italicbluegreenresetgreen plain", text.items);
+            try std.testing.expect(actions == 1 and green == 3 and blue == 1 and reset == 1);
+            try std.testing.expect(values[values.len - 1].foreground == null);
+        }
+    };
+    try Check.table(blocks);
+    try Check.table(stored.entry.sections[0].blocks);
+    var inline_renderer: Renderer = .{ .a = a, .context = .{} };
+    const inline_blocks = try inline_renderer.renderBody("<span class=note style=\"font-family:'x;y';color:#008000\">green [[A|link]] <i>italic</i><span style='color:#1C39BB'>blue</span>green<span style='color:initial'>reset</span>green</span> plain");
+    try Check.spans(inline_blocks[0].spans);
+    const inline_stored = try FormattingScopeTest.encode(a, &inline_renderer, inline_blocks);
+    try Check.spans(inline_stored.entry.sections[0].blocks[0].spans);
+    // Local declaration parsing must not discover color inside a quoted value.
+    const tag: syntax.Tag = .{ .name = "td", .attrs = "class=wikitable style=\"font-family:'x;background-color:blue';background-color:red;background-image:url(x)\"", .end = 0, .closing = false, .self_closing = false };
+    try std.testing.expectEqualStrings("#ff0000", (try renderer.tableCellBackground(tag, "#ffffff")).?);
+    const reset_tag: syntax.Tag = .{ .name = "td", .attrs = "style='background-color:red;background:var(--sample)'", .end = 0, .closing = false, .self_closing = false };
+    try std.testing.expect((try renderer.tableCellBackground(reset_tag, "#ffffff")) == null);
+    const shorthand: syntax.Tag = .{ .name = "td", .attrs = "class=wikitable style='background:#c0e4c0;background-image:none'", .end = 0, .closing = false, .self_closing = false };
+    try std.testing.expectEqualStrings("#c0e4c0", (try renderer.tableCellBackground(shorthand, null)).?);
+    const invalid: syntax.Tag = .{ .name = "font", .attrs = "color=red style='color:banana!important;color:green'", .end = 0, .closing = false, .self_closing = false };
+    try std.testing.expectEqualStrings("#008000", (try renderer.authoredColor(invalid, "color", "color", null)).value.?);
+    const legacy: syntax.Tag = .{ .name = "font", .attrs = "color=red style='color:banana'", .end = 0, .closing = false, .self_closing = false };
+    try std.testing.expectEqualStrings("#ff0000", (try renderer.authoredColor(legacy, "color", "color", null)).value.?);
+    const unsupported: syntax.Tag = .{ .name = "td", .attrs = "style='background-color:rgba(0,0,0,0.5)'", .end = 0, .closing = false, .self_closing = false };
+    try std.testing.expect((try renderer.tableCellBackground(unsupported, "#eeeeee")) == null);
+    var span_renderer: Renderer = .{ .a = a, .context = .{} };
+    const spanning = try span_renderer.renderBody("<table><tr bgcolor=red><td rowspan=2>unresolved</td><td rowspan=2 bgcolor=blue>own</td></tr><tr bgcolor=green></tr></table>");
+    try std.testing.expect(spanning[0].table.?.rows[0].cells[0].background == null);
+    try std.testing.expectEqualStrings("#0000ff", spanning[0].table.?.rows[0].cells[1].background.?);
 }
