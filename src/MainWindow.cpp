@@ -576,15 +576,15 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     if (!currentEntry_.isEmpty()) {
                         search_->setText(word);
                         refreshSearch();
-                        collapsedSections_ = visit.collapsed;
-                        refreshReading();
-                        reading_->verticalScrollBar()->setValue(visit.scroll);
+                        restoreVisitReading(visit);
                         visitIndex_ = restoreVisit;
                         updateNavigation();
                     }
                 } catch (const std::exception &error) { resultStatus_->setText(QString::fromUtf8(error.what())); }
             } else if (!word.isEmpty()) openWord(word, fragment);
-            if ((fragment || requireExactWord) && !currentEntry_.isEmpty()) reading_->setFocus();
+            const bool restoredReader = restoreVisit >= 0 && restoreVisit < visits_.size()
+                && visits_[restoreVisit].readerFocused && !currentEntry_.isEmpty();
+            if ((restoredReader || fragment || requireExactWord) && !currentEntry_.isEmpty()) reading_->setFocus();
             else search_->setFocus();
             statusBar()->showMessage(QStringLiteral("Opened %1").arg(QDir::toNativeSeparators(root)), 4000);
         };
@@ -1366,6 +1366,25 @@ void MainWindow::saveVisit() {
     if (visitIndex_ < 0 || visitIndex_ >= visits_.size() || currentEntry_.isEmpty()) return;
     visits_[visitIndex_].scroll = reading_->verticalScrollBar()->value();
     visits_[visitIndex_].collapsed = collapsedSections_;
+    const QTextCursor cursor = reading_->textCursor();
+    visits_[visitIndex_].cursorPosition = cursor.position();
+    visits_[visitIndex_].cursorAnchor = cursor.anchor();
+    visits_[visitIndex_].readerFocused = reading_->hasFocus();
+}
+
+void MainWindow::restoreVisitReading(const Visit &visit) {
+    collapsedSections_ = visit.collapsed;
+    refreshReading();
+    // Store offsets, never a cursor tied to the document replaced by setHtml.
+    const int last = qMax(0, reading_->document()->characterCount() - 1);
+    QTextCursor cursor(reading_->document());
+    cursor.setPosition(qBound(0, visit.cursorAnchor, last));
+    cursor.setPosition(qBound(0, visit.cursorPosition, last), QTextCursor::KeepAnchor);
+    reading_->setTextCursor(cursor);
+    if (visit.readerFocused) reading_->setFocus(Qt::OtherFocusReason);
+    else search_->setFocus(Qt::OtherFocusReason);
+    // Cursor/focus restoration can scroll; the saved reading position wins.
+    reading_->verticalScrollBar()->setValue(visit.scroll);
 }
 
 void MainWindow::updateNavigation() {
@@ -1397,9 +1416,7 @@ void MainWindow::navigate(int direction) {
         language_->setEnabled(visit.kind == QStringLiteral("language"));
         search_->setText(visit.title);
         refreshSearch();
-        collapsedSections_ = visit.collapsed;
-        refreshReading();
-        reading_->verticalScrollBar()->setValue(visit.scroll);
+        restoreVisitReading(visit);
         visitIndex_ = index;
         updateNavigation();
     } catch (const std::exception &error) {

@@ -42,6 +42,9 @@ private:
         QString kind;
         int scroll = 0;
         QSet<int> collapsed;
+        int cursorPosition = 0;
+        int cursorAnchor = 0;
+        bool readerFocused = false;
     };
 
     void setupUi();
@@ -70,6 +73,7 @@ private:
     void jumpToSection(int section);
     void navigate(int direction);
     void saveVisit();
+    void restoreVisitReading(const Visit &visit);
     void updateNavigation();
     QString entryHtml(const QJsonObject &entry) const;
     QString blockHtml(const QJsonObject &block) const;

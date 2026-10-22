@@ -2101,6 +2101,100 @@ private slots:
         QVERIFY(assertNoFallback());
     }
 
+    void keyboardBackRestoresReaderLinkContext() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-keyboard-history-XXXXXX"));
+        QVERIFY(directory.isValid());
+        // A persistent native DPR2 fixture: three distinct ordinary links in the
+        // preamble survive the real lookup performed when Back rebuilds HTML.
+        const auto u32 = [](QByteArray &out, quint32 value) {
+            for (int shift = 0; shift < 32; shift += 8) out.append(char(value >> shift));
+        };
+        const auto string = [&](QByteArray &out, const QByteArray &value) {
+            u32(out, quint32(value.size())); out += value;
+        };
+        QByteArray presentation = QByteArrayLiteral("DPR2");
+        u32(presentation, 0); // display title
+        u32(presentation, 0); // sections
+        u32(presentation, 3); // preamble spans
+        for (const QByteArray &target : {QByteArray("same"), QByteArray("fallback"), QByteArray("neighbor")}) {
+            presentation += QByteArray::fromHex("010000"); // link, normal, no flags
+            string(presentation, target); string(presentation, target);
+            for (int field = 0; field < 4; ++field) string(presentation, {});
+        }
+        for (int count = 0; count < 4; ++count) u32(presentation, 0); // layout, refs, media
+        const auto install = [&](const QByteArray &code, const QByteArray &owner, const QStringList &titles) {
+            QByteArray bytes = QByteArrayLiteral("WIKBLB08") + char(1) + code + '\0' + owner + '\0';
+            for (const QString &word : titles) {
+                bytes += word.toUtf8() + '\0';
+                quint64 length = quint64(presentation.size());
+                do { const auto byte = static_cast<unsigned char>(length & 127); length >>= 7;
+                    bytes += char(byte | (length ? 128 : 0)); } while (length);
+                bytes += presentation;
+            }
+            QFile source(directory.path() + QStringLiteral("/history-") + QString::fromUtf8(code) + QStringLiteral(".wikblb"));
+            if (!source.open(QIODevice::WriteOnly) || source.write(bytes) != bytes.size()) return false;
+            source.close(); std::atomic_bool cancelled = false;
+            auto prepared = LibraryStorage::prepareImport(directory.path() + QStringLiteral("/library"), source.fileName(), {}, -1, cancelled, [](const QString &, qint64, qint64) {});
+            LibraryStorage::commitImport(directory.path() + QStringLiteral("/library"), *prepared);
+            return true;
+        };
+        QVERIFY(install("el", "Greek", {QStringLiteral("same"), QStringLiteral("source")}));
+        QVERIFY(install("und", "Unclassified", {QStringLiteral("fallback"), QStringLiteral("neighbor")}));
+        const QString root = directory.path() + QStringLiteral("/library");
+        QFile edition(root + QStringLiteral("/.desktop-edition")); QVERIFY(edition.open(QIODevice::WriteOnly));
+        QCOMPARE(edition.write("enwiktionary-20261001\n"), qint64(22)); edition.close();
+        QSettings().setValue(QStringLiteral("reader/language"), QStringLiteral("Greek"));
+        MainWindow window(root, QStringLiteral("source")); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("source"));
+        const auto key = [&](Qt::Key value, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+            QWidget *focused = QApplication::focusWidget();
+            if (!focused || !window.isAncestorOf(focused)) return false;
+            QTest::keyClick(focused, value, modifiers); return true;
+        };
+        const auto href = [&] { return window.reading_->textCursor().charFormat().anchorHref(); };
+        window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+        // Select the second anchor by actual Tab traversal, not cursor injection.
+        QVERIFY(key(Qt::Key_Tab)); QTRY_COMPARE(href(), QStringLiteral("dict:same"));
+        QVERIFY(key(Qt::Key_Tab)); QTRY_COMPARE(href(), QStringLiteral("dict:fallback"));
+        const int position = window.reading_->textCursor().position();
+        const int anchor = window.reading_->textCursor().anchor();
+        const int scroll = window.reading_->verticalScrollBar()->value();
+        QVERIFY(key(Qt::Key_Return));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Unclassified"), 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("fallback"));
+        QVERIFY(key(Qt::Key_Left, Qt::AltModifier));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Greek"), 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("source"));
+        QTRY_VERIFY(window.reading_->hasFocus());
+        QCOMPARE(window.reading_->textCursor().position(), position);
+        QCOMPARE(window.reading_->textCursor().anchor(), anchor);
+        QCOMPARE(window.reading_->verticalScrollBar()->value(), scroll);
+        QVERIFY(key(Qt::Key_Tab)); QTRY_COMPARE(href(), QStringLiteral("dict:neighbor"));
+        QVERIFY(key(Qt::Key_Return));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Unclassified"), 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("neighbor"));
+        // Same-owner history uses the same public cursor reconstruction path.
+        QVERIFY(key(Qt::Key_Left, Qt::AltModifier));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Greek"), 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("source"));
+        QVERIFY(key(Qt::Key_Backtab, Qt::ShiftModifier));
+        QVERIFY(key(Qt::Key_Backtab, Qt::ShiftModifier)); QTRY_COMPARE(href(), QStringLiteral("dict:same"));
+        QVERIFY(key(Qt::Key_Return)); QTRY_COMPARE(title(window), QStringLiteral("same"));
+        QVERIFY(key(Qt::Key_Left, Qt::AltModifier)); QTRY_COMPARE(title(window), QStringLiteral("source"));
+        QTRY_VERIFY(window.reading_->hasFocus()); QTRY_COMPARE(href(), QStringLiteral("dict:same"));
+        QVERIFY(key(Qt::Key_Tab)); QTRY_COMPARE(href(), QStringLiteral("dict:fallback"));
+        // Revisiting a search-origin visit must not steal focus into the reader.
+        window.search_->setText(QStringLiteral("same")); window.search_->setFocus();
+        QTRY_VERIFY(window.search_->hasFocus());
+        QVERIFY(key(Qt::Key_Return)); QTRY_COMPARE(title(window), QStringLiteral("same"));
+        for (int step = 0; step < 64 && !window.reading_->hasFocus(); ++step)
+            QVERIFY(key(Qt::Key_Tab));
+        QTRY_VERIFY(window.reading_->hasFocus());
+        QVERIFY(key(Qt::Key_Left, Qt::AltModifier)); QTRY_COMPARE(title(window), QStringLiteral("source"));
+        QTRY_VERIFY(window.search_->hasFocus());
+    }
+
     void exactSearchPreservesExplicitSelection_data() {
         QTest::addColumn<QString>("action");
         QTest::addColumn<bool>("typeSecond");
