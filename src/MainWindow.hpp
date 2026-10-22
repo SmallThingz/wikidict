@@ -47,7 +47,7 @@ private:
     void setupUi();
     void updateReaderLayout();
     void openRoot(const QString &root, const QString &word = {});
-    void loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word = {}, int restoreVisit = -1, const QString &expectedRoot = {}, const QString &expectedEdition = {}, const std::optional<QString> &fragment = std::nullopt);
+    void loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word = {}, int restoreVisit = -1, const QString &expectedRoot = {}, const QString &expectedEdition = {}, const std::optional<QString> &fragment = std::nullopt, bool requireExactWord = false);
     void setLoading(bool loading);
     void chooseRoot();
     void refreshSearch();
@@ -55,7 +55,7 @@ private:
     void submitSearch();
     bool eventFilter(QObject *watched, QEvent *event) override;
     void selectDataset();
-    bool openWord(const QString &word, const std::optional<QString> &fragment = std::nullopt);
+    bool openWord(const QString &word, const std::optional<QString> &fragment = std::nullopt, bool allowUnclassifiedFallback = false);
     void openSavedWord(const SavedWord &word);
     void showRandomWord();
     void showLearningDialog(int tab = 0);

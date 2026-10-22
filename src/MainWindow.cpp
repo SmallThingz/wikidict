@@ -410,6 +410,7 @@ struct LoadedDataset {
     QString originRoot;
     QString originEdition;
     QString error;
+    QString missingWord;
     bool emptyLibrary = false;
 };
 
@@ -479,7 +480,7 @@ void MainWindow::openRoot(const QString &root, const QString &word) {
     loadDataset(root, QSettings().value(QStringLiteral("reader/language"), QStringLiteral("English")).toString(), QStringLiteral("language"), true, word);
 }
 
-void MainWindow::loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word, int restoreVisit, const QString &expectedRoot, const QString &expectedEdition, const std::optional<QString> &fragment) {
+void MainWindow::loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word, int restoreVisit, const QString &expectedRoot, const QString &expectedEdition, const std::optional<QString> &fragment, bool requireExactWord) {
     if (cancelLoad_) cancelLoad_->store(true);
     const auto cancelled = std::make_shared<std::atomic_bool>(false);
     cancelLoad_ = cancelled;
@@ -489,12 +490,27 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
     setLoading(true);
     resultStatus_->setText(QStringLiteral("Opening dictionaries and preparing search..."));
     auto *watcher = new QFutureWatcher<std::shared_ptr<LoadedDataset>>(this);
-    connect(watcher, &QFutureWatcher<std::shared_ptr<LoadedDataset>>::finished, this, [this, watcher, cancelled, serial, root, resetVisits, word, restoreVisit, fragment] {
+    connect(watcher, &QFutureWatcher<std::shared_ptr<LoadedDataset>>::finished, this, [this, watcher, cancelled, serial, root, resetVisits, word, restoreVisit, fragment, requireExactWord] {
         const auto loaded = watcher->result();
         watcher->deleteLater();
         if (serial != loadSerial_ || cancelled->load()) return;
-        auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit, fragment] {
+        auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit, fragment, requireExactWord] {
             if (serial != loadSerial_ || cancelled->load()) return;
+            if (!loaded->missingWord.isEmpty()) {
+                // A fallback miss must not replace a readable current owner or entry.
+                setLoading(false);
+                if (api_) {
+                    QSignalBlocker kindBlocker(kind_);
+                    QSignalBlocker languageBlocker(language_);
+                    kind_->setCurrentIndex(kind_->findData(api_->kind()));
+                    language_->setCurrentText(api_->language());
+                }
+                search_->setText(loaded->missingWord);
+                refreshSearch();
+                resultStatus_->setText(QStringLiteral("No exact entry for “%1”. Try a suggestion or another collection.").arg(loaded->missingWord));
+                search_->setFocus();
+                return;
+            }
             if (loaded->emptyLibrary || !loaded->error.isEmpty()) {
                 if (!loaded->error.isEmpty())
                     qWarning().noquote() << "Dictionary opening failed:" << root << loaded->error;
@@ -568,7 +584,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     }
                 } catch (const std::exception &error) { resultStatus_->setText(QString::fromUtf8(error.what())); }
             } else if (!word.isEmpty()) openWord(word, fragment);
-            if (fragment && !currentEntry_.isEmpty()) reading_->setFocus();
+            if ((fragment || requireExactWord) && !currentEntry_.isEmpty()) reading_->setFocus();
             else search_->setFocus();
             statusBar()->showMessage(QStringLiteral("Opened %1").arg(QDir::toNativeSeparators(root)), 4000);
         };
@@ -577,7 +593,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
         if (libraryDialogActive_) deferredDatasetPublication_ = std::move(publish);
         else publish();
     });
-    watcher->setFuture(QtConcurrent::run([root, language, kind, resetVisits, cancelled, expectedRoot, expectedEdition] {
+    watcher->setFuture(QtConcurrent::run([root, language, kind, resetVisits, cancelled, expectedRoot, expectedEdition, word, requireExactWord] {
         auto loaded = std::make_shared<LoadedDataset>();
         try {
             if (root.isEmpty()) {
@@ -618,6 +634,27 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 catch (const std::exception &) { /* Try the next available collection. */ }
             }
             if (!selectedCollection) throw DictApiError("No readable dictionary was found for this collection. Import a dictionary in Library.");
+            if (requireExactWord) {
+                QJsonParseError parseError{};
+                const QJsonDocument response = QJsonDocument::fromJson(loaded->api->lookup(word), &parseError);
+                if (parseError.error != QJsonParseError::NoError || !response.isObject() ||
+                    !response.object().value(QStringLiteral("entries")).isArray())
+                    throw DictApiError("invalid JSON returned by dictionary core");
+                const QJsonArray entries = response.object().value(QStringLiteral("entries")).toArray();
+                const bool exactOrdinary = entries.size() == 1 && std::all_of(entries.begin(), entries.end(), [&](const QJsonValue &value) {
+                    const QJsonObject entry = value.toObject();
+                    return entry.value(QStringLiteral("title")).toString() == word &&
+                        entry.value(QStringLiteral("kind")).toString() == QStringLiteral("language") &&
+                        entry.value(QStringLiteral("language")).toString() == QStringLiteral("Unclassified") &&
+                        entry.value(QStringLiteral("redirect")).toObject().isEmpty();
+                });
+                if (!exactOrdinary) {
+                    if (QFileInfo(root).canonicalFilePath() != loaded->originRoot || LibraryStorage::editionIdentity(root) != loaded->originEdition)
+                        throw DictApiError("The dictionary changed while opening. Open it again.");
+                    loaded->missingWord = word;
+                    return loaded;
+                }
+            }
             for (qsizetype offset = 0; !cancelled->load();) {
                 const QJsonObject page = QJsonDocument::fromJson(loaded->api->search(QString(), 1000, offset)).object();
                 const QJsonArray matches = page.value(QStringLiteral("matches")).toArray();
@@ -932,17 +969,19 @@ void MainWindow::setupUi() {
             const std::optional<QString> section = target.contains(QChar('#')) ?
                 std::optional<QString>(target.section(QChar('#'), 1)) : std::nullopt;
             if (!word.isEmpty()) {
+                bool explicitOwner = false;
                 if (api_ && !loading_ && api_->kind() == QStringLiteral("language") && section) {
                     QString owner = *section;
                     owner.replace(QChar('_'), QChar(' '));
                     // Only exact installed owner headings in this edition select another dictionary.
-                    if (owner != api_->language() && language_->findText(owner, Qt::MatchExactly | Qt::MatchCaseSensitive) >= 0) {
+                    explicitOwner = language_->findText(owner, Qt::MatchExactly | Qt::MatchCaseSensitive) >= 0;
+                    if (owner != api_->language() && explicitOwner) {
                         loadDataset(api_->root(), owner, api_->kind(), false, word, -1,
                             originRoot_, originEdition_, section);
                         return;
                     }
                 }
-                if (!openWord(word, section)) return;
+                if (!openWord(word, section, !explicitOwner && !url.hasQuery() && !url.hasFragment())) return;
             } else if (section) jumpToFragment(*section);
         }
         else if (url.scheme() == QStringLiteral("section")) {
@@ -1116,21 +1155,39 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
     return QMainWindow::eventFilter(watched, event);
 }
 
-bool MainWindow::openWord(const QString &word, const std::optional<QString> &fragment) {
+bool MainWindow::openWord(const QString &word, const std::optional<QString> &fragment, bool allowUnclassifiedFallback) {
     if (!api_ || loading_ || word.trimmed().isEmpty()) return false;
     try {
         QString exact = word.trimmed();
         QByteArray response = api_->lookup(exact);
-        QJsonDocument document = QJsonDocument::fromJson(response);
+        QJsonParseError parseError{};
+        QJsonDocument document = QJsonDocument::fromJson(response, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject() ||
+            !document.object().value(QStringLiteral("entries")).isArray())
+            throw DictApiError("invalid JSON returned by dictionary core");
         if (document.object().value(QStringLiteral("entries")).toArray().isEmpty()) {
             const auto found = std::lower_bound(searchTitles_.cbegin(), searchTitles_.cend(), exact, titleLess);
             if (found != searchTitles_.cend() && found->compare(exact, Qt::CaseInsensitive) == 0) {
                 exact = *found;
                 response = api_->lookup(exact);
-                document = QJsonDocument::fromJson(response);
+                document = QJsonDocument::fromJson(response, &parseError);
+                if (parseError.error != QJsonParseError::NoError || !document.isObject() ||
+                    !document.object().value(QStringLiteral("entries")).isArray())
+                    throw DictApiError("invalid JSON returned by dictionary core");
             }
         }
         if (document.object().value(QStringLiteral("entries")).toArray().isEmpty()) {
+            // Only compiled ordinary links opt in: searches, aliases and history do not.
+            if (allowUnclassifiedFallback && api_->kind() == QStringLiteral("language") &&
+                currentEntry_.value(QStringLiteral("kind")).toString() == QStringLiteral("language") &&
+                currentEntry_.value(QStringLiteral("redirect")).toObject().isEmpty() &&
+                !originRoot_.isEmpty() && !originEdition_.isEmpty() &&
+                api_->language() != QStringLiteral("Unclassified") &&
+                language_->findText(QStringLiteral("Unclassified"), Qt::MatchExactly | Qt::MatchCaseSensitive) >= 0) {
+                loadDataset(api_->root(), QStringLiteral("Unclassified"), api_->kind(), false,
+                    word.trimmed(), -1, originRoot_, originEdition_, fragment, true);
+                return true;
+            }
             search_->setText(word);
             refreshSearch();
             resultStatus_->setText(QStringLiteral("No exact entry for “%1”. Try a suggestion or another collection.").arg(word));

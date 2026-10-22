@@ -1982,6 +1982,125 @@ private slots:
         QCOMPARE(window.learning_.history().size(), historyCount);
     }
 
+    void ordinaryLinksFallBackOnlyToExactSameEditionUnclassified() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-unclassified-links-XXXXXX"));
+        QVERIFY(directory.isValid());
+        QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(),
+            {QStringLiteral("source"), QStringLiteral("Shared")}, QByteArrayLiteral("el"), QByteArrayLiteral("Greek")));
+        QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(),
+            {QStringLiteral("fallback"), QStringLiteral("Shared")}, QByteArrayLiteral("und"), QByteArrayLiteral("Unclassified"), true));
+        QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(),
+            {QStringLiteral("foreign-only")}, QByteArrayLiteral("fr"), QByteArrayLiteral("French"), true));
+        const QString root = directory.path() + QStringLiteral("/library");
+        QFile edition(root + QStringLiteral("/.desktop-edition"));
+        QVERIFY(edition.open(QIODevice::WriteOnly));
+        const QByteArray editionBytes = QByteArrayLiteral("enwiktionary-20261001\n");
+        QCOMPARE(edition.write(editionBytes), qint64(editionBytes.size()));
+        edition.close();
+        QSettings().setValue(QStringLiteral("reader/language"), QStringLiteral("Greek"));
+        MainWindow window(root, QStringLiteral("source")); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("source"));
+        const QString originRoot = window.originRoot_, originEdition = window.originEdition_;
+        const QString sourceKey = window.savedWord(window.currentEntry_).key;
+        const auto follow = [&](const QString &target) {
+            QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(title(window))).object();
+            QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+            QJsonArray spans = entry.value(QStringLiteral("preamble_spans")).toArray();
+            spans.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")},
+                {QStringLiteral("text"), QStringLiteral("Follow installed target")}, {QStringLiteral("target"), target}});
+            entry.insert(QStringLiteral("preamble_spans"), spans);
+            response.insert(QStringLiteral("entries"), QJsonArray{entry});
+            window.renderResponse(QJsonDocument(response).toJson(), false);
+            return clickAnchor(window.reading_, QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target)));
+        };
+        // The current owner's case retry wins over an equally named fallback record.
+        const unsigned initialSerial = window.loadSerial_;
+        QVERIFY(follow(QStringLiteral("shared")));
+        QCOMPARE(window.loadSerial_, initialSerial);
+        QCOMPARE(title(window), QStringLiteral("Shared"));
+        QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        QVERIFY(window.openWord(QStringLiteral("source")));
+        QVERIFY(follow(QStringLiteral("fallback#Etymology")));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Unclassified"), 30000);
+        QCOMPARE(title(window), QStringLiteral("fallback"));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A river animal.")));
+        QCOMPARE(window.originRoot_, originRoot); QCOMPARE(window.originEdition_, originEdition);
+        QCOMPARE(window.language_->currentText(), QStringLiteral("Unclassified"));
+        QTRY_VERIFY(window.reading_->hasFocus());
+        const int section = window.sections_->findText(QStringLiteral("Etymology"));
+        QVERIFY(section >= 0);
+        QVERIFY(!window.collapsedSections_.contains(window.sections_->itemData(section).toInt()));
+        QVERIFY(window.savedWord(window.currentEntry_).key != sourceKey);
+        QTest::mouseClick(window.back_, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Greek"), 30000);
+        QCOMPARE(title(window), QStringLiteral("source"));
+        QCOMPARE(window.savedWord(window.currentEntry_).key, sourceKey);
+        QTest::mouseClick(window.forward_, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Unclassified"), 30000);
+        QCOMPARE(title(window), QStringLiteral("fallback"));
+        QTest::mouseClick(window.back_, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Greek"), 30000);
+        QCOMPARE(title(window), QStringLiteral("source"));
+
+        // A default search, explicit current-owner fragment, and another installed
+        // language must not borrow an Unclassified or arbitrary-language target.
+        unsigned serial = window.loadSerial_;
+        QVERIFY(!window.openWord(QStringLiteral("fallback")));
+        QCOMPARE(window.loadSerial_, serial);
+        QVERIFY(follow(QStringLiteral("fallback#Greek")));
+        QCOMPARE(window.loadSerial_, serial);
+        QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
+        for (const QString &target : {QStringLiteral("FALLBACK"), QStringLiteral("foreign-only"), QStringLiteral("absent")}) {
+            const int visitIndex = window.visitIndex_, visitCount = window.visits_.size();
+            const int historyCount = window.learning_.history().size();
+            QVERIFY(follow(target));
+            const QJsonObject entry = window.currentEntry_;
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+            QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
+            QCOMPARE(window.currentEntry_, entry);
+            QCOMPARE(window.originRoot_, originRoot); QCOMPARE(window.originEdition_, originEdition);
+            QCOMPARE(window.visitIndex_, visitIndex); QCOMPARE(window.visits_.size(), visitCount);
+            QCOMPARE(window.learning_.history().size(), historyCount);
+            QCOMPARE(QSettings().value(QStringLiteral("reader/language")).toString(), QStringLiteral("Greek"));
+            QVERIFY(window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        }
+
+        // Cancellation before publication cannot install a stale fallback owner.
+        const QString body = window.reading_->toPlainText();
+        QVERIFY(QMetaObject::invokeMethod(window.reading_, "anchorClicked", Qt::DirectConnection,
+            Q_ARG(QUrl, QUrl(QStringLiteral("dict:fallback")))));
+        QVERIFY(window.loading_);
+        const auto watchers = window.findChildren<QFutureWatcherBase *>();
+        QVERIFY(!watchers.isEmpty()); const QPointer<QFutureWatcherBase> pending = watchers.last();
+        window.cancelOpening_->click();
+        QVERIFY(!window.loading_);
+        QTRY_VERIFY_WITH_TIMEOUT(!pending || pending->isFinished(), 30000);
+        QCoreApplication::processEvents();
+        QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
+        QCOMPARE(title(window), QStringLiteral("source"));
+        QCOMPARE(window.reading_->toPlainText(), body);
+        QCOMPARE(window.originRoot_, originRoot); QCOMPARE(window.originEdition_, originEdition);
+
+        // Empty/legacy edition identity and alias-origin presentation stay excluded.
+        const auto assertNoFallback = [&] {
+            const unsigned before = window.loadSerial_;
+            QMetaObject::invokeMethod(window.reading_, "anchorClicked", Qt::DirectConnection,
+                Q_ARG(QUrl, QUrl(QStringLiteral("dict:fallback"))));
+            return !window.loading_ && window.loadSerial_ == before && window.api_->language() == QStringLiteral("Greek");
+        };
+        window.currentEntry_.insert(QStringLiteral("redirect"), QJsonObject{{QStringLiteral("followed"), true}});
+        QVERIFY(assertNoFallback());
+        window.currentEntry_.remove(QStringLiteral("redirect"));
+        window.currentEntry_.insert(QStringLiteral("kind"), QStringLiteral("alias"));
+        QVERIFY(assertNoFallback());
+        window.currentEntry_.insert(QStringLiteral("kind"), QStringLiteral("language"));
+        window.originEdition_.clear();
+        QVERIFY(assertNoFallback());
+    }
+
     void exactSearchPreservesExplicitSelection_data() {
         QTest::addColumn<QString>("action");
         QTest::addColumn<bool>("typeSecond");
