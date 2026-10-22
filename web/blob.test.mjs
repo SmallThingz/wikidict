@@ -54,11 +54,12 @@ test('supplemental namespaces preserve full Unicode titles in raw and XZ',async(
 // Hand-encoded protocol controls; these do not stand in for the native fixture.
 const testU32=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n);return b;};
 const testString=value=>{const b=Buffer.isBuffer(value)?value:Buffer.from(value);return Buffer.concat([testU32(b.length),b]);};
-function explanationProtocolFixture(magic,{explanation='meaning',invalidLength=false,classes='Latn',blockKind=12,blockLevel=0}={}){
+function explanationProtocolFixture(magic,{explanation='meaning',invalidLength=false,classes='Latn',blockKind=12,blockLevel=0,foreground=null,background=null,foregroundPresence=null}={}){
  const string=testString;
- const span=text=>Buffer.concat([Buffer.from([1,0,1]),...[text,'Target','!','en',classes,'ltr'].map(string),...(magic==='DPR3'?[invalidLength?Buffer.concat([testU32(32*1024*1024+1),Buffer.from('x')]):string(explanation)]:[])]);
+ const rgb=value=>value===null?Buffer.from([0]):Buffer.concat([Buffer.from([1]),string(value)]);
+ const span=text=>Buffer.concat([Buffer.from([1,0,1]),...[text,'Target','!','en',classes,'ltr'].map(string),...(magic!=='DPR2'?[invalidLength?Buffer.concat([testU32(32*1024*1024+1),Buffer.from('x')]):string(explanation)]:[]),...(magic==='DPR4'?[foregroundPresence===null?rgb(foreground):Buffer.from([foregroundPresence])]:[])]);
  const spans=text=>Buffer.concat([testU32(1),span(text)]);
- const cell=Buffer.concat([Buffer.from([0,1,0,1,0]),spans('Cell')]);
+ const cell=Buffer.concat([Buffer.from([0,1,0,1,0]),...(magic==='DPR4'?[rgb(background)]:[]),spans('Cell')]);
  const table=Buffer.concat([spans('Caption'),testU32(1),testU32(1),cell]);
  const block=Buffer.concat([Buffer.from([blockKind,0,blockLevel]),spans('Body'),Buffer.from([0]),string(''),string(''),Buffer.from([1]),table]);
  const section=Buffer.concat([Buffer.from([2]),string('Section'),testU32(1),block]);
@@ -96,7 +97,7 @@ test('DPR2 and DPR3 use strict version framing in every serialized span containe
 });
 test('DPR3 refuses unknown versions incomplete strings UTF8 limits and trailing bytes',async()=>{
  const valid=explanationProtocolFixture('DPR3');
- for(const magic of ['DPR1','DPR4','XXXX']){
+ for(const magic of ['DPR1','DPR5','XXXX']){
   const invalid=Buffer.concat([Buffer.from(magic),valid.subarray(4)]);assert.throws(()=>decode(invalid,{}));
   await assert.rejects(()=>buildIndex(new RawSource(new Blob([dictionaryBlob(1,[['Bad',invalid]])]))));
  }
@@ -124,4 +125,18 @@ test('genuine native abbreviation fixture matches normal CLI JSON for DPR3 and l
    assert.equal(actual.sections.flatMap(s=>s.blocks).flatMap(b=>b.spans).map(s=>s.text+s.trail).join(''),'der. ? lbor. f c m n');
   }else assert.ok(spans.every(s=>s.explanation===''));
  }
+});
+
+test('DPR4 preserves RGB and explanations in all containers and nested aliases beside legacy versions',async()=>{
+ for(const magic of ['DPR2','DPR3','DPR4']){
+  const payload=explanationProtocolFixture(magic,{foreground:'#01796f',background:'#eeeeee'}),entry=decode(payload,{title:'RGB'});
+  for(const list of presentationSpanLists(entry))for(const span of list){assert.equal(span.foreground,magic==='DPR4'?'#01796f':null);assert.equal(span.explanation,magic==='DPR2'?'':'meaning');assert.equal(span.target,'Target');assert.equal(span.bold,true);}
+  assert.equal(entry.sections[0].blocks[0].table.rows[0].cells[0].background,magic==='DPR4'?'#eeeeee':null);
+  assert.deepEqual(decodeAlias(aliasPayload({compiled:payload}),'1\tCats').entry.display_title,entry.display_title);
+  const index=await buildIndex(new RawSource(new Blob([dictionaryBlob(1,[['RGB',payload]])])));assert.equal(index.rows.length,1);
+ }
+ const uncolored=decode(explanationProtocolFixture('DPR4'),{});assert.equal(uncolored.display_title[0].foreground,null);assert.equal(uncolored.sections[0].blocks[0].table.rows[0].cells[0].background,null);
+ for(const value of ['#ABCDEF','#abc','red','#01796f\n']){assert.throws(()=>decode(explanationProtocolFixture('DPR4',{foreground:value}),{}));assert.throws(()=>decode(explanationProtocolFixture('DPR4',{background:value}),{}));}
+ assert.throws(()=>decode(explanationProtocolFixture('DPR4',{foregroundPresence:2}),{}));
+ const valid=explanationProtocolFixture('DPR4',{foreground:'#01796f',background:'#eeeeee'});assert.throws(()=>decode(valid.subarray(0,-1),{}));assert.throws(()=>decode(Buffer.concat([valid,Buffer.from([0])]),{}));
 });

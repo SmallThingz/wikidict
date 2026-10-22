@@ -1,3 +1,4 @@
+const canonicalRGB=value=>typeof value==='string'&&value.length===7&&/^#[0-9a-f]{6}$/.test(value);
 import {safeURL} from './validate.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
@@ -68,12 +69,13 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
   if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary);
   const fragment = document.createDocumentFragment();
   const compact=[];
+  const blank=value=>!(value||'').includes('\u00a0')&&!(value||'').trim();
   for(const span of values){
     if(span.kind==='line_break' && !span.trail && (!compact.length||compact.at(-1).kind==='line_break'))continue;
-    if(span.kind==='text'&&!span.text?.trim()&&!span.trail?.trim()&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
+    if(span.kind==='text'&&blank(span.text)&&blank(span.trail)&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
     compact.push(span);
   }
-  while(compact.length&&((compact.at(-1).kind==='line_break'&&!compact.at(-1).trail?.trim())||(!compact.at(-1).text?.trim()&&!compact.at(-1).trail?.trim())))compact.pop();
+  while(compact.length&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
   const visible = preserve?values:compact, described = new Map();
   for (let i=0;i<visible.length;) {
     const explanation=visible[i].explanation;
@@ -90,14 +92,17 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     i=end;
   }
   const trailNode=(span,i)=>{
-    if(!span.explanation||!span.trail)return document.createTextNode(span.trail||'');
-    const trail=node('abbr',span.trail);trail.title=span.explanation;
-    if(described.has(i))trail.setAttribute('aria-describedby',described.get(i));
+    if(!span.explanation&&!canonicalRGB(span.foreground))return document.createTextNode(span.trail||'');
+    if(!span.trail)return document.createTextNode('');
+    const trail=node(span.explanation?'abbr':'span',span.trail);
+    if(span.explanation){trail.title=span.explanation;if(described.has(i))trail.setAttribute('aria-describedby',described.get(i));}
+    if(canonicalRGB(span.foreground))trail.style.color=span.foreground;
     return trail;
   };
   for (const [i,span] of visible.entries()) {
     if (span.kind === 'line_break') { fragment.append(node('br'),trailNode(span,i)); continue; }
     let el = node('span', span.text || '');
+    if(canonicalRGB(span.foreground))el.style.color=span.foreground;
     if (span.language) el.lang = span.language;
     if (['rtl','ltr'].includes(span.direction)) { el.dir = span.direction; el.style.unicodeBidi = 'isolate'; }
     if (['label','citation','pronunciation','headword'].includes(span.role)) el.classList.add(span.role);
@@ -139,7 +144,7 @@ function blockView(block, onLink, explanations) {
     }
     const wrap = node('div', null, 'table-scroll'), table = node('table'); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
     if (block.table.caption?.length) { const caption = node('caption'); caption.append(spans(block.table.caption,onLink,false,explanations)); table.append(caption); }
-    for (const row of block.table.rows) { const tr = node('tr'); for (const cell of row.cells) { const td = node(cell.header?'th':'td'); td.colSpan = cell.colspan || 1; td.rowSpan = cell.rowspan || 1; td.append(spans(cell.spans,onLink,false,explanations)); tr.append(td); } table.append(tr); }
+    for (const row of block.table.rows) { const tr = node('tr'); for (const cell of row.cells) { const td = node(cell.header?'th':'td'); td.colSpan = cell.colspan || 1; td.rowSpan = cell.rowspan || 1; if(canonicalRGB(cell.background))td.style.backgroundColor=cell.background; td.append(spans(cell.spans,onLink,false,explanations)); tr.append(td); } table.append(tr); }
     wrap.append(table); return wrap;
   }
   if (block.kind === 'rule') return node('hr');

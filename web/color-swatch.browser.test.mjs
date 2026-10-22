@@ -40,6 +40,20 @@ try {
   assert.ok(bounds.left>=0&&bounds.right<=width);assert.equal(bounds.width,40);assert.equal(bounds.height,40);
   const name=`color-swatch-${width}.png`;await page.screenshot({path:path.join(report,name),fullPage:true});frames.push(name);
  }
+ const rgbResult=await page.evaluate(()=>{
+  document.querySelector('main').replaceChildren();window.links=[];
+  const colors=['#000000','#808080','#ffffff','#c0c0c0','#ffd700','#ff0000','#800080','#0000ff','#008000','#ffff00','#ffa500'];
+  const rows=colors.map((background,i)=>({cells:[{background:'#eeeeee',spans:[{kind:'link',text:'Label '+i,target:'Label '+i,foreground:'#01796f',bold:true,trail:'!'}]},{background,spans:[{kind:'text',text:'\u00a0'}]}]}));
+  rows.push({cells:[{background:'#01796f',rowspan:2,colspan:1,spans:[{text:'own fill'}]},{background:null,spans:[{text:'no fill'}]}]},{cells:[{background:'red',spans:[{text:'invalid fill',foreground:'red'}]}]});
+  const entry={title:'Typed RGB',sections:[{title:'Colors',blocks:[{kind:'paragraph',spans:[{kind:'text',text:'   '},{kind:'text',text:'ASCII sentinel'}]},{kind:'paragraph',spans:[{text:'invalid foreground',foreground:'#01796f\n'}]},{kind:'table',table:{caption:[{text:'Caption',foreground:'#1c39bb'}],rows}}]}]};const before=JSON.stringify(entry);
+  document.querySelector('main').append(Renderer.renderEntry(entry,t=>window.links.push(t)));
+  return {unchanged:before===JSON.stringify(entry),backgrounds:[...document.querySelectorAll('tr')].slice(0,11).map(tr=>[...tr.cells].map(td=>td.style.backgroundColor)),blank:[...document.querySelectorAll('tr')].slice(0,11).map(tr=>tr.cells[1].textContent),linkColor:getComputedStyle(document.querySelector('td a span')).color,trailColor:getComputedStyle(document.querySelector('td > span')).color,bold:!!document.querySelector('td a strong'),caption:getComputedStyle(document.querySelector('caption span')).color,rowspan:document.querySelectorAll('tr')[11].cells[0].rowSpan,nullFill:document.querySelectorAll('tr')[11].cells[1].style.backgroundColor,invalidFill:document.querySelectorAll('tr')[12].cells[0].style.backgroundColor,asciiBlank:document.querySelector('.block.paragraph .body').textContent,invalidForeground:document.querySelectorAll('.block.paragraph .body')[1].firstChild.style.color};
+ });
+ assert.equal(rgbResult.unchanged,true);assert.equal(rgbResult.backgrounds.length,11);assert.deepEqual(rgbResult.backgrounds,['rgb(0, 0, 0)','rgb(128, 128, 128)','rgb(255, 255, 255)','rgb(192, 192, 192)','rgb(255, 215, 0)','rgb(255, 0, 0)','rgb(128, 0, 128)','rgb(0, 0, 255)','rgb(0, 128, 0)','rgb(255, 255, 0)','rgb(255, 165, 0)'].map(color=>['rgb(238, 238, 238)',color]));assert.ok(rgbResult.blank.every(text=>text==='\u00a0'));
+ assert.equal(rgbResult.linkColor,'rgb(1, 121, 111)');assert.equal(rgbResult.trailColor,'rgb(1, 121, 111)');assert.equal(rgbResult.caption,'rgb(28, 57, 187)');assert.equal(rgbResult.bold,true);assert.equal(rgbResult.rowspan,2);assert.equal(rgbResult.nullFill,'');assert.equal(rgbResult.invalidFill,'');assert.equal(rgbResult.asciiBlank,'ASCII sentinel');assert.equal(rgbResult.invalidForeground,'');
+ await page.getByRole('link',{name:'Label 0',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.links),['Label 0']);
+ await page.setViewportSize({width:768,height:640});
+ await page.screenshot({path:path.join(report,'typed-rgb-768.png'),fullPage:true});frames.push('typed-rgb-768.png');
  assert.deepEqual(errors,[]);
  await writeFile(path.join(report,'result.json'),JSON.stringify({passed:true,scope:'Focused compiled feature render, strict fallback, label accessibility, no focus stop, responsive bounds; synthetic typed input, not corpus import or public transport.',result,accessibleSnapshot:snapshot,frames,errors},null,2)+'\n');
  console.log('WEB_COLOR_SWATCH_PASS');
