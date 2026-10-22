@@ -538,6 +538,9 @@ pub const Registry = struct {
             // Do not lend its body to the preceding resolved Old High German.
             const owned = self.arena.allocator();
             try self.language_boundaries.put(owned, try owned.dupe(u8, "Middel Hēah Þēodisc"), {});
+            // Dagur and ek attest Faroisc as a distinct language label. Its
+            // exact canonical code is unproven; never inherit preceding Icelandic.
+            try self.language_boundaries.put(owned, try owned.dupe(u8, "Faroisc"), {});
         }
         if (self.content_code) |code_value| {
             if (self.resolve(code_value) == null) return error.InvalidLanguageRegistry;
@@ -1819,4 +1822,30 @@ test "curated ANG Old High German heading resolves exactly without broad German 
     try std.testing.expect(missing.resolveTrusted("Ealdnoren") == null);
     try std.testing.expect(missing.isLanguageBoundary("Middel Hēah Þēodisc"));
     try std.testing.expect(missing.resolve("Middel Hēah Þēodisc") == null);
+}
+
+test "exact ANG Faroisc remains an ownerless language boundary beside registered Icelandic and Faroese" {
+    var r = Registry.empty(std.testing.allocator);
+    defer r.deinit();
+    try r.addTsv("# content-language\tang\nang\tOld English\nis\tIcelandic\nfo\tFaroese\n");
+    try r.addLocalNamesLua("local names = { ang = \"Englisc\", is = \"Īslendisc\", fo = \"Faerisc\" }\nlocal aliases = {}\n");
+    try std.testing.expectEqualStrings("is", r.resolveStrong("Īslendisc").?.code);
+    try std.testing.expectEqualStrings("fo", r.resolveStrong("Faerisc").?.code);
+    try std.testing.expect(r.isLanguageBoundary("Faroisc"));
+    try std.testing.expect(r.resolve("Faroisc") == null);
+    try std.testing.expect(r.resolveTrusted("Faroisc") == null);
+    try std.testing.expect(!r.isLanguageBoundary("faroisc"));
+    try std.testing.expect(!r.isLanguageBoundary("Faro isc"));
+    try std.testing.expect(!r.isLanguageBoundary("Unrelated topic"));
+    var other = Registry.empty(std.testing.allocator);
+    defer other.deinit();
+    try other.addTsv("# content-language\ten\nen\tEnglish\nis\tIcelandic\nfo\tFaroese\n");
+    try std.testing.expect(!other.isLanguageBoundary("Faroisc"));
+    try std.testing.expect(other.resolveTrusted("Faroisc") == null);
+    var missing = Registry.empty(std.testing.allocator);
+    defer missing.deinit();
+    try missing.addTsv("# content-language\tang\nang\tOld English\nis\tIcelandic\n");
+    try std.testing.expect(missing.isLanguageBoundary("Faroisc"));
+    try std.testing.expect(missing.resolve("Faroisc") == null);
+    try std.testing.expect(missing.resolveTrusted("Faroisc") == null);
 }

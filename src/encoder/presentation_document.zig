@@ -2266,3 +2266,43 @@ test "physical colon heading metadata survives full document compilation and str
     try std.testing.expectEqualStrings(":", plain_section.blocks[0].list_path);
     try std.testing.expectEqualStrings("plain", plain_section.blocks[0].spans[0].text);
 }
+
+test "reported missing internal targets encode semantic diagnostic without rejected link syntax" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==English==\n===Adjective===\n{|\n| Ealla ōðra ansīena: [[{{{Othera_declinunga}}}|{{{Othera_declinunga}}}]]\n|}\n";
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "first", .language, "English", "en", source, null));
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "first", .language, "English", "en", source, null, &report);
+    try std.testing.expect(report.literal_markup and report.missing_template);
+    const decoded = try codec.decodeAlloc(a, bytes, "first", .language, .{ .code = "en", .heading = "English" });
+    var found = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block_value| {
+        if (block_value.table) |table_value| for (table_value.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
+            try std.testing.expect(span.kind == .text);
+            try std.testing.expectEqualStrings("", span.target);
+            try std.testing.expect(std.mem.indexOf(u8, span.text, "[[") == null);
+            try std.testing.expect(std.mem.indexOf(u8, span.text, "{{{") == null);
+            found = found or std.mem.indexOf(u8, span.text, "[missing parameter]") != null;
+        };
+    };
+    try std.testing.expect(found);
+    const standalone_source = "==English==\n===Verb===\n{|\n| <small>{{{stem}}}</small>\n|}\n";
+    // A pre-existing caller diagnostic must survive classification and encoding.
+    var standalone_report: Fallbacks = .{ .malformed_table = true };
+    const standalone_bytes = try compileReportedAlloc(a, "confegurar", .language, "English", "en", standalone_source, null, &standalone_report);
+    try std.testing.expect(standalone_report.malformed_table and standalone_report.missing_template);
+    const standalone_decoded = try codec.decodeAlloc(a, standalone_bytes, "confegurar", .language, .{ .code = "en", .heading = "English" });
+    var standalone_found = false;
+    for (standalone_decoded.entry.sections) |section| for (section.blocks) |block_value| {
+        if (block_value.table) |table_value| for (table_value.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
+            if (std.mem.eql(u8, span.text, "[missing parameter]")) {
+                try std.testing.expect(span.kind == .text and span.small);
+                try std.testing.expectEqualStrings("", span.target);
+                standalone_found = true;
+            }
+        };
+    };
+    try std.testing.expect(standalone_found);
+}

@@ -3011,6 +3011,40 @@ pub const Renderer = struct {
         try out.appendSlice(self.a, value[emitted..]);
         return try out.toOwnedSlice(self.a);
     }
+    // Inspect authored source before entity decoding, preserving protected bodies.
+    const UnboundInternalTarget = enum { none, missing, render_limit };
+    fn internalTargetHasUnboundParameter(self: *Renderer, value: []const u8, depth: usize) Error!UnboundInternalTarget {
+        if (depth >= max_depth) {
+            self.fallbacks.render_limit = true;
+            return .render_limit;
+        }
+        var scan: usize = 0;
+        var opaque_scan: syntax.OpaqueScan = .{};
+        while (scan < value.len) {
+            if (value[scan] == '<') {
+                if (syntax.protectedEnd(value, scan)) |end| {
+                    scan = end;
+                    continue;
+                }
+                if (try self.semanticTagAt(value, scan)) |tag| {
+                    scan = tag.end;
+                    continue;
+                }
+            }
+            if (starts(value[scan..], "{{{")) {
+                if (syntax.balancedWithOpaqueScan(value, scan, &opaque_scan)) |pair| {
+                    const body = value[scan + 3 .. pair.inner_end];
+                    const pipe = syntax.delimiter(body, "|", 0) orelse return .missing;
+                    const nested = try self.internalTargetHasUnboundParameter(body[pipe + 1 ..], depth + 1);
+                    if (nested != .none) return nested;
+                    scan = pair.end;
+                    continue;
+                }
+            }
+            scan += 1;
+        }
+        return .none;
+    }
     fn isbnEntityByte(self: *Renderer, value: []const u8, cursor: *usize) Error!?u8 {
         while (cursor.* < value.len) {
             if (value[cursor.*] == '<') return null;
@@ -5710,7 +5744,15 @@ pub const Renderer = struct {
                 const offset: usize = if (starts(input[it.cursor..], "{{{")) 3 else 2;
                 const body = input[it.cursor + offset .. pair.inner_end];
                 if (offset == 3) {
-                    if (syntax.delimiter(body, "|", 0)) |pipe| try self.inlineText(body[pipe + 1 ..], s, depth + 1) else try self.text("[missing parameter]", s);
+                    if (syntax.delimiter(body, "|", 0)) |pipe| {
+                        try self.inlineText(body[pipe + 1 ..], s, depth + 1);
+                    } else {
+                        // Preserve the established visible source-error marker,
+                        // and classify it in reported build diagnostics as well.
+                        self.unresolved_templates += 1;
+                        self.fallbacks.missing_template = true;
+                        try self.text("[missing parameter]", s);
+                    }
                 } else {
                     try self.resolveTemplate(body, s, depth);
                 }
@@ -5814,6 +5856,48 @@ pub const Renderer = struct {
                             continue;
                         }
                     }
+                    // An active unresolved target is a diagnosed source error,
+                    // never shipped outer link syntax or an invented action.
+                    // Inspect source before decoding intentional entity literals.
+                    const unbound_target = try self.internalTargetHasUnboundParameter(target, 0);
+                    if (unbound_target != .none) {
+                        if (probing_root) return;
+                        self.fallbacks.literal_markup = true;
+                        if (unbound_target == .missing) {
+                            self.unresolved_templates += 1;
+                            self.fallbacks.missing_template = true;
+                        }
+                        const diagnostic = if (unbound_target == .render_limit) "[render nesting limit]" else "[missing parameter]";
+                        var diagnostic_style = s;
+                        diagnostic_style.kind = .text;
+                        diagnostic_style.target = "";
+                        const label_start = self.spans.items.len;
+                        if (token.link_has_pipe and label_value.len != 0)
+                            try self.inlineText(label_value, diagnostic_style, depth + 1);
+                        var has_diagnostic = false;
+                        for (self.spans.items[label_start..]) |*span| {
+                            // Retain authored visible labels and formatting,
+                            // but no action from this rejected destination.
+                            if (span.kind != .line_break) span.kind = .text;
+                            span.target = "";
+                            has_diagnostic = has_diagnostic or
+                                std.mem.indexOf(u8, span.text, diagnostic) != null;
+                        }
+                        const has_label = self.spans.items.len != label_start;
+                        if (!has_diagnostic) {
+                            if (has_label) {
+                                // A consumed linktrail belongs to the authored
+                                // label before the separate diagnostic marker.
+                                try self.text(trail, diagnostic_style);
+                                try self.text(" ", diagnostic_style);
+                            }
+                            try self.text(diagnostic, diagnostic_style);
+                        }
+                        // With no usable label (or its own missing marker),
+                        // retain the authored suffix after that single marker.
+                        if (has_diagnostic or !has_label) try self.text(trail, diagnostic_style);
+                        continue;
+                    }
                     target = try self.entityText(target);
                     if (std.mem.indexOfAny(u8, target, "[]{}") != null) {
                         if (probing_root) return;
@@ -5822,8 +5906,8 @@ pub const Renderer = struct {
                         literal_style.kind = .text;
                         literal_style.target = "";
                         self.fallbacks.literal_markup = true;
-                        // Undefined parameters and encoded invalid targets are
-                        // literal output, not another expansion/label input.
+                        // Other invalid targets, including entity-authored braces,
+                        // remain literal output, not another expansion input.
                         try self.plain(try self.entityText(try self.withoutBehaviorControls(input[raw_start..it.cursor])), literal_style);
                         continue;
                     }
@@ -10025,8 +10109,8 @@ test "pipe trick strips syntactic colon prefixes and final disambiguators" {
         .{ .source = "[[prefix [[taking]] suffix]]", .visible = "[[prefix taking suffix]]", .target = "taking", .label = "taking" },
         .{ .source = "[[[[taking]]|label]]", .visible = "[[taking|label]]", .target = "taking", .label = "taking" },
         .{ .source = "[[[[Tom&#39;&#39;s]]]]", .visible = "[[Tom''s]]", .target = "Tom''s", .label = "Tom''s" },
-        .{ .source = "[[{{{7}}}]]", .visible = "[[{{{7}}}]]" },
-        .{ .source = "[[{{{7}}}|label]]", .visible = "[[{{{7}}}|label]]" },
+        .{ .source = "[[{{{7}}}]]", .visible = "[missing parameter]" },
+        .{ .source = "[[{{{7}}}|label]]", .visible = "label [missing parameter]" },
         .{ .source = "[[a[b]c]]", .visible = "[[a[b]c]]" },
         .{ .source = "[[a{b}c]]", .visible = "[[a{b}c]]" },
         .{ .source = "[[taking#x[y]]]", .visible = "[[taking#x[y]]]" },
@@ -25159,4 +25243,87 @@ test "HTML heading single physical colon items retain heading depth and protecte
     for ([_][]const u8{ "visible\n:item", "\n::item", "\n*:item", "\n:first\n:second", "<pre>\n:literal</pre>", "<nowiki>\n:literal</nowiki>", "\n&#58;literal", ":same-line" }) |raw| {
         try std.testing.expect((try declined.headingColonListBody(raw)) == null);
     }
+}
+
+test "active missing internal targets produce nonaction diagnostics while intentional literals survive" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, diagnosed: bool, unresolved: usize = 1 }{
+        .{ .source = "[[{{{Othera_declinunga}}}|{{{Othera_declinunga}}}]]", .visible = "[missing parameter]", .diagnosed = true, .unresolved = 2 },
+        .{ .source = "[[{{{7}}}|meaningful authored label]]", .visible = "meaningful authored label [missing parameter]", .diagnosed = true },
+        .{ .source = "[[{{{7}}}|label]]s", .visible = "labels [missing parameter]", .diagnosed = true },
+        .{ .source = "[[{{{7}}}]]s", .visible = "[missing parameter]s", .diagnosed = true },
+        .{ .source = "[[{{{7}}}|{{{7}}}]]s", .visible = "[missing parameter]s", .diagnosed = true, .unresolved = 2 },
+        .{ .source = "[[{{{7}}}]]", .visible = "[missing parameter]", .diagnosed = true },
+        .{ .source = "[[{{{outer|{{{inner}}}}}}|label]]", .visible = "label [missing parameter]", .diagnosed = true },
+        .{ .source = "[[&#123;&#123;&#123;7&#125;&#125;&#125;|label]]", .visible = "[[{{{7}}}|label]]", .diagnosed = false },
+        .{ .source = "<nowiki>[[{{{7}}}|label]]</nowiki>", .visible = "[[{{{7}}}|label]]", .diagnosed = false },
+        .{ .source = "[[<nowiki>{{{7}}}</nowiki>|label]]", .visible = "[[{{{7}}}|label]]", .diagnosed = false },
+        .{ .source = "[rīmcræftig]]", .visible = "[rīmcræftig]]", .diagnosed = false },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        try std.testing.expectEqual(case.diagnosed, renderer.fallbacks.missing_template);
+        if (case.diagnosed) {
+            try std.testing.expect(renderer.fallbacks.literal_markup);
+            try std.testing.expectEqual(case.unresolved, renderer.unresolved_templates);
+        }
+        for (spans) |span| {
+            try std.testing.expect(span.kind == .text);
+            try std.testing.expectEqualStrings("", span.target);
+        }
+    }
+    var trailing: Renderer = .{ .a = a, .context = .{} };
+    const trailing_spans = try trailing.parseSpans("[[{{{7}}}|label]]s", .{ .small = true, .italic = true, .language = "an" });
+    try std.testing.expectEqualStrings("labels [missing parameter]", try flattened(a, trailing_spans));
+    var found_suffix = false;
+    for (trailing_spans) |span| {
+        try std.testing.expect(span.kind == .text and span.flags.small and span.flags.italic);
+        try std.testing.expectEqualStrings("", span.target);
+        try std.testing.expectEqualStrings("an", span.language);
+        found_suffix = found_suffix or std.mem.eql(u8, span.text, "s");
+    }
+    try std.testing.expect(found_suffix);
+    var standalone: Renderer = .{ .a = a, .context = .{} };
+    const standalone_spans = try standalone.parseSpans("{{{stem}}}", .{ .small = true, .italic = true, .language = "an" });
+    try std.testing.expectEqualStrings("[missing parameter]", try flattened(a, standalone_spans));
+    try std.testing.expect(standalone.fallbacks.missing_template and !standalone.fallbacks.literal_markup);
+    try std.testing.expectEqual(@as(usize, 1), standalone.unresolved_templates);
+    try std.testing.expect(standalone_spans[0].flags.small and standalone_spans[0].flags.italic);
+    try std.testing.expectEqualStrings("an", standalone_spans[0].language);
+    for ([_][]const u8{ "{{{stem|retained default}}}", "<nowiki>{{{stem}}}</nowiki>", "&#123;&#123;&#123;stem&#125;&#125;&#125;" }, [_][]const u8{ "retained default", "{{{stem}}}", "{{{stem}}}" }) |source, visible| {
+        var literal: Renderer = .{ .a = a, .context = .{} };
+        const literal_spans = try literal.parseSpans(source, .{});
+        try std.testing.expectEqualStrings(visible, try flattened(a, literal_spans));
+        try std.testing.expect(!literal.fallbacks.missing_template);
+        try std.testing.expectEqual(@as(usize, 0), literal.unresolved_templates);
+    }
+    var styled: Renderer = .{ .a = a, .context = .{} };
+    const spans = try styled.parseSpans("[[{{{7}}}|<b><i><small>label</small></i></b>]]", .{});
+    try std.testing.expectEqualStrings("label [missing parameter]", try flattened(a, spans));
+    try std.testing.expect(spans[0].flags.bold and spans[0].flags.italic and spans[0].flags.small);
+    var defaults: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expect((try defaults.internalTargetHasUnboundParameter("{{{safe|resolved default}}}", 0)) == .none);
+    try std.testing.expect(!defaults.fallbacks.render_limit);
+    var nested: std.ArrayList(u8) = .empty;
+    try nested.appendSlice(a, "[[");
+    for (0..max_depth + 1) |_| try nested.appendSlice(a, "{{{safe|");
+    try nested.appendSlice(a, "resolved");
+    for (0..max_depth + 1) |_| try nested.appendSlice(a, "}}}");
+    try nested.appendSlice(a, "|meaningful label]]s");
+    var limited: Renderer = .{ .a = a, .context = .{} };
+    const limited_spans = try limited.parseSpans(nested.items, .{});
+    try std.testing.expectEqualStrings("meaningful labels [render nesting limit]", try flattened(a, limited_spans));
+    try std.testing.expect(limited.fallbacks.render_limit and limited.fallbacks.literal_markup);
+    try std.testing.expectEqual(@as(usize, 0), limited.unresolved_templates);
+    for (limited_spans) |span| {
+        try std.testing.expect(span.kind == .text);
+        try std.testing.expectEqualStrings("", span.target);
+    }
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expect((try protected.internalTargetHasUnboundParameter("<syntaxhighlight>{{{7}}}</syntaxhighlight>", 0)) == .none);
+    try std.testing.expect((try protected.internalTargetHasUnboundParameter("<span title='{{{7}}}'>literal</span>", 0)) == .none);
 }
