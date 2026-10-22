@@ -243,6 +243,8 @@ fn reportOpenError(io: std.Io, opts: args.Options, err: anyerror) !void {
     const w = &stderr.interface;
     if (opts.command == .install) {
         try w.writeAll("dict: could not install in ");
+    } else if (opts.command == .languages) {
+        try w.writeAll("dict: could not read the language catalogue in ");
     } else {
         try w.writeAll("dict: could not open ");
         try output.terminalText(w, if (opts.kind == .language) opts.language else @tagName(opts.kind));
@@ -251,10 +253,16 @@ fn reportOpenError(io: std.Io, opts: args.Options, err: anyerror) !void {
     try output.terminalText(w, opts.root);
     try w.print(" ({s}).\n", .{@errorName(err)});
     try w.writeAll(switch (err) {
-        error.FileNotFound => "Choose an installed dataset with --root PATH.\nUse 'dict languages --root PATH' to check its language names.\nFor a new dictionary, run 'dict catalog', then 'dict install URL --root PATH'.\n",
+        error.FileNotFound => if (opts.command == .languages)
+            "The language catalogue or a listed dictionary file is missing. Reinstall missing dictionaries, or choose a completed dataset with --root PATH.\n"
+        else
+            "Choose an installed dataset with --root PATH.\nUse 'dict languages --root PATH' to check its language names.\nFor a new dictionary, run 'dict catalog', then 'dict install URL --root PATH'.\n",
         error.DictionaryBuildIncomplete => "This dataset is still being built. Wait for its build to finish or choose a completed dataset with --root PATH.\n",
         error.AccessDenied => "Check that you can read the dataset folder and its files, or choose another folder with --root PATH.\n",
-        else => "Check the selected language with 'dict languages --root PATH', or choose a valid compiled dataset with --root PATH.\n",
+        else => if (opts.command == .languages)
+            "Check the language catalogue and its listed dictionary files, or choose a valid compiled dataset with --root PATH.\n"
+        else
+            "Check the selected language with 'dict languages --root PATH', or choose a valid compiled dataset with --root PATH.\n",
     });
     try w.flush();
 }

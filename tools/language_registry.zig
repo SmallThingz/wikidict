@@ -528,6 +528,16 @@ pub const Registry = struct {
             // Exact macron spelling is independently attested by the same
             // archive's language category and its acute-category redirect.
             try self.addLocalAlias("Nīwe Englisc", "en");
+            // Gast names this exact historical heading; its retained language
+            // categories and sprǣcnaman register identify Old High German only.
+            try self.addLocalAlias("Eald Hēah Þēodisc", "goh");
+            // Land names this exact heading; its noun category and sprǣcnaman
+            // register independently identify Old Norse, not Old English.
+            try self.addLocalAlias("Ealdnoren", "non");
+            // Exact authored Middle heading is only a known unresolved boundary.
+            // Do not lend its body to the preceding resolved Old High German.
+            const owned = self.arena.allocator();
+            try self.language_boundaries.put(owned, try owned.dupe(u8, "Middel Hēah Þēodisc"), {});
         }
         if (self.content_code) |code_value| {
             if (self.resolve(code_value) == null) return error.InvalidLanguageRegistry;
@@ -1770,4 +1780,43 @@ test "reviewed local heading directives are independent of ordinary row order" {
         defer r.deinit();
         try std.testing.expectError(error.InvalidLanguageRegistry, r.addTsv(if (before) ambiguous_directive ++ ambiguous_rows else ambiguous_rows ++ ambiguous_directive));
     }
+}
+
+test "curated ANG Old High German heading resolves exactly without broad German inference" {
+    var r = Registry.empty(std.testing.allocator);
+    defer r.deinit();
+    try r.addTsv("# content-language\tang\nang\tÆnglisc\ngoh\tOld High German\nnon\tOld Norse\ngmh\tMiddle High German\nde\tGerman\n");
+    try r.addLocalNamesLua("local names = { ang = \"Englisc\", goh = \"Ealdhēahþēodisc\", non = \"Eald Noren\" }\nlocal aliases = {}\n");
+    const resolved = r.resolveTrusted("Eald Hēah Þēodisc").?;
+    try std.testing.expectEqualStrings("goh", resolved.code);
+    try std.testing.expectEqualStrings("Ealdhēahþēodisc", resolved.heading);
+    const norse = r.resolveTrusted("Ealdnoren").?;
+    try std.testing.expectEqualStrings("non", norse.code);
+    try std.testing.expectEqualStrings("Eald Noren", norse.heading);
+    try std.testing.expect(r.resolve("ealdnoren") == null);
+    try std.testing.expect(r.resolve("Eald noren") == null);
+    try std.testing.expect(r.isLanguageBoundary("Middel Hēah Þēodisc"));
+    try std.testing.expect(r.resolve("Middel Hēah Þēodisc") == null);
+    try std.testing.expect(r.resolveTrusted("Middel Hēah Þēodisc") == null);
+    try std.testing.expect(!r.isLanguageBoundary("Unrelated topic"));
+    try std.testing.expect(!r.isLanguageBoundary("Middel Hēah  Þēodisc"));
+    try std.testing.expect(r.resolve("Hēah Þēodisc") == null);
+    try std.testing.expect(r.resolve("Eald Hēah  Þēodisc") == null);
+    try std.testing.expectEqualStrings("de", r.resolve("German").?.code);
+    var other = Registry.empty(std.testing.allocator);
+    defer other.deinit();
+    try other.addTsv("# content-language\ten\nen\tEnglish\ngoh\tOld High German\nnon\tOld Norse\n");
+    try std.testing.expect(other.resolve("Eald Hēah Þēodisc") == null);
+    try std.testing.expect(other.resolve("Ealdnoren") == null);
+    try std.testing.expect(other.resolveTrusted("Ealdnoren") == null);
+    try std.testing.expect(!other.isLanguageBoundary("Middel Hēah Þēodisc"));
+    try std.testing.expect(other.resolveTrusted("Middel Hēah Þēodisc") == null);
+    var missing = Registry.empty(std.testing.allocator);
+    defer missing.deinit();
+    try missing.addTsv("# content-language\tang\nang\tÆnglisc\nde\tGerman\n");
+    try std.testing.expect(missing.resolve("Eald Hēah Þēodisc") == null);
+    try std.testing.expect(missing.resolve("Ealdnoren") == null);
+    try std.testing.expect(missing.resolveTrusted("Ealdnoren") == null);
+    try std.testing.expect(missing.isLanguageBoundary("Middel Hēah Þēodisc"));
+    try std.testing.expect(missing.resolve("Middel Hēah Þēodisc") == null);
 }
