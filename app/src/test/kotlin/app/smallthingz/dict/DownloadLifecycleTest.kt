@@ -199,6 +199,112 @@ class DownloadLifecycleTest {
         }
     }
 
+    @Test fun delayedCancelCannotOverwriteACompletedNewerOperation() = runBlocking {
+        withTimeout(5_000) {
+            for (captureActive in listOf(true, false)) for (removeFails in listOf(true, false)) {
+                val worker = CancellationQueueDispatcher()
+                val cancelWorker = CancellationQueueDispatcher()
+                val ui = CancellationQueueDispatcher()
+                val operations = LibraryOperationOwner(Mutex())
+                val releaseFirst = CompletableDeferred<Unit>()
+                val owned = mutableListOf<kotlinx.coroutines.Job>()
+                var message: String? = "Old operation"
+                var currentDownload = 7L
+                val removed = mutableListOf<Long>()
+                try {
+                    if (captureActive) {
+                        owned += launch(worker) { operations.run { releaseFirst.await() } }
+                        worker.drain()
+                    }
+                    val captured = operations.capture()
+                    val capturedId = currentDownload
+                    val cancellation = launch(cancelWorker) {
+                        val failure = cancelOwnedDownload({
+                            removed += capturedId
+                            if (removeFails) throw IOException("Old removal failed")
+                            removeOwnedDownload(capturedId, Any(), { currentDownload }, {}, { currentDownload = -1 })
+                        }, { captured.job?.cancel() })
+                        kotlinx.coroutines.withContext(ui) { operations.publishIfCurrent(captured) {
+                            message = failure?.message
+                        } }
+                    }
+                    owned += cancellation
+                    val next = launch(worker) { operations.run {
+                        currentDownload = 9L
+                        kotlinx.coroutines.withContext(ui) { message = "New operation failed" }
+                    } }
+                    owned += next
+                    worker.drain() // The next operation waits if the first still owns the mutex.
+                    releaseFirst.complete(Unit)
+                    worker.drain(); ui.drain(); worker.drain()
+                    assertTrue(next.isCompleted && !next.isCancelled)
+                    assertNull(operations.active) // Both operations finished; null identity is insufficient.
+                    assertEquals("New operation failed", message)
+                    cancelWorker.drain(); ui.drain(); cancelWorker.drain()
+                    assertTrue(cancellation.isCompleted && !cancellation.isCancelled)
+                    assertEquals(listOf(7L), removed)
+                    assertEquals(9L, currentDownload)
+                    assertEquals("New operation failed", message)
+                    assertNull(operations.active)
+                } finally {
+                    owned.forEach { it.cancel() }
+                    repeat(8) { worker.drain(); cancelWorker.drain(); ui.drain() }
+                    check(owned.all { it.isCompleted })
+                }
+            }
+        }
+    }
+
+    @Test fun currentEpochCancelStillReportsSuccessAndFailureWithOrWithoutActiveJob() = runBlocking {
+        withTimeout(5_000) {
+            for (captureActive in listOf(true, false)) for (removeFails in listOf(true, false)) {
+                val worker = CancellationQueueDispatcher()
+                val ui = CancellationQueueDispatcher()
+                val operations = LibraryOperationOwner(Mutex())
+                val owned = mutableListOf<kotlinx.coroutines.Job>()
+                var message: String? = "Previous error"
+                var removed = false
+                try {
+                    val active = if (captureActive) launch(worker) { operations.run { awaitCancellation() } }
+                        .also { owned += it; worker.drain() } else null
+                    val captured = operations.capture()
+                    assertSame(active, captured.job)
+                    val cancellation = launch(worker) {
+                        val failure = cancelOwnedDownload({
+                            removed = true
+                            if (removeFails) throw IOException("Removal failed")
+                        }, { captured.job?.cancel() })
+                        kotlinx.coroutines.withContext(ui) { operations.publishIfCurrent(captured) {
+                            message = failure?.message
+                        } }
+                    }
+                    owned += cancellation
+                    worker.drain(); ui.drain(); worker.drain()
+                    assertTrue(removed)
+                    assertTrue(cancellation.isCompleted && !cancellation.isCancelled)
+                    assertEquals(if (removeFails) "Removal failed" else null, message)
+                    if (active != null) {
+                        if (removeFails) { assertTrue(active.isActive); assertSame(active, operations.active) }
+                        else { assertTrue(active.isCancelled); assertNull(operations.active) }
+                    } else assertNull(operations.active)
+                } finally {
+                    owned.forEach { it.cancel() }
+                    repeat(8) { worker.drain(); ui.drain() }
+                    check(owned.all { it.isCompleted })
+                }
+            }
+        }
+    }
+
+    private class CancellationQueueDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
+        private val queued = java.util.ArrayDeque<Runnable>()
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) { queued.addLast(block) }
+        fun drain() {
+            repeat(64) { if (queued.isEmpty()) return; queued.removeFirst().run() }
+            check(queued.isEmpty()) { "Dispatcher exceeded bounded cancellation schedule" }
+        }
+    }
+
     private class ClearRecord {
         val lock = Any()
         val owner = DownloadClearOwner()

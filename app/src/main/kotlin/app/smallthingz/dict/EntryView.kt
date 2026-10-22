@@ -237,7 +237,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         val headingModifier = if (richHeading == null) Modifier.clickable(onClick = toggle) else Modifier
                         Row(Modifier.fillMaxWidth().padding(start = richHeading?.let { blockIndentDp(it).dp } ?: 0.dp).then(headingModifier).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                             val headingStyle = if (row.meaningSection) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium
-                            if (richHeading == null) Text(label, Modifier.weight(1f), style = headingStyle)
+                            if (richHeading == null) Text(label, Modifier.weight(1f).semantics { heading() }, style = headingStyle)
                             else StyledText(richHeading.spans, Modifier.weight(1f).semantics { heading() }, style = headingStyle, onLink = readerLink)
                             if (row.meaningSection && section.blocks.any { it !== richHeading && it.kind !in setOf("definition", "blank") }) {
                                 IconToggleButton(checked = folded[row.key + "-details"] != true, onCheckedChange = { folded[row.key + "-details"] = !it }) {
@@ -284,7 +284,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
 private fun FoldHeading(title: String, folded: Boolean, onClick: () -> Unit) {
     val angle by animateFloatAsState(if (folded) { if (LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) 90f else -90f } else 0f, label = "Section fold")
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+        Text(title, Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleMedium)
         Icon(Icons.Filled.ExpandMore, if (folded) "Expand $title" else "Collapse $title", Modifier.size(20.dp).rotate(angle))
     }
 }

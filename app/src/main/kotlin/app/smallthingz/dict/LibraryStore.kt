@@ -203,8 +203,15 @@ internal inline fun finishDictionaryRemoval(
 
 // Queued operations must not replace the job that currently owns the library.
 internal class LibraryOperationOwner(private val mutex: Mutex) {
-    @Volatile var active: Job? = null
-        private set
+    // One coherent capture owns both the job and its operation epoch. Keep the
+    // epoch after completion so an old Cancel cannot overwrite a newer result.
+    internal class Snapshot internal constructor(val job: Job?, internal val epoch: Any)
+    @Volatile private var state = Snapshot(null, Any())
+    val active: Job? get() = state.job
+    fun capture(): Snapshot = state
+    fun publishIfCurrent(captured: Snapshot, publish: () -> Unit): Unit = synchronized(this) {
+        if (state.epoch === captured.epoch) publish()
+    }
 
     suspend fun run(
         start: suspend () -> Unit = {},
@@ -212,13 +219,15 @@ internal class LibraryOperationOwner(private val mutex: Mutex) {
         action: suspend () -> Unit,
     ) = mutex.withLock {
         val owner = currentCoroutineContext().job
-        active = owner
+        val owned = synchronized(this) { Snapshot(owner, Any()).also { state = it } }
         try {
             // Publication can complete before cancellation wins its return dispatch.
             // Own cleanup before entering that first cancellable boundary.
             try { start(); action() }
             finally { finish() }
-        } finally { if (active === owner) active = null }
+        } finally { synchronized(this) {
+            if (state === owned) state = Snapshot(null, owned.epoch)
+        } }
     }
 }
 
@@ -278,10 +287,12 @@ class LibraryStore private constructor(private val context: Context) {
     fun removeSource(url: String) { sources = sources - url; prefs.edit().putStringSet("sources", sources.toSet()).apply(); refreshCatalogs() }
     fun cancel() {
         val id = downloadId()
-        val operation = operations.active
+        val operation = operations.capture()
         scope.launch {
-            val failure = cancelOwnedDownload({ if (id >= 0) removeDownload(id) }, { operation?.cancel() })
-            withContext(Dispatchers.Main) { error = failure?.let { "Could not cancel download: ${it.message ?: "Try again"}" } }
+            val failure = cancelOwnedDownload({ if (id >= 0) removeDownload(id) }, { operation.job?.cancel() })
+            withContext(Dispatchers.Main) { operations.publishIfCurrent(operation) {
+                error = failure?.let { "Could not cancel download: ${it.message ?: "Try again"}" }
+            } }
         }
     }
     private val manager get() = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
