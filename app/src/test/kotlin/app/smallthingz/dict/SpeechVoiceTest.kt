@@ -17,4 +17,35 @@ class SpeechVoiceTest {
         assertNull(chooseSpeechVoice(listOf(british), "fr", british.name, Locale.FRANCE))
         assertEquals(british, chooseSpeechVoice(listOf(jamaican, british), "en", null, Locale.UK))
     }
+    @Test fun failedInitializationWithoutPendingRequestPreservesErrorAndReleasesEngine() {
+        val releases = mutableListOf<String>()
+        // Exercise the completion policy with no request, including an existing reader error.
+        for (currentError in listOf(null, "This entry has no identified language for speech.")) {
+            var error = currentError
+            finishFailedSpeechInitialization(false, { error = "engine failed" }, { releases += "release" })
+            assertEquals(currentError, error)
+        }
+        assertEquals(listOf("release", "release"), releases)
+    }
+    @Test fun failedInitializationWithPendingRequestPublishesAndAlwaysReleasesEngine() {
+        val steps = mutableListOf<String>()
+        var active: String? = "requested word"
+        var error: String? = null
+        finishFailedSpeechInitialization(true, {
+            error = "engine failed"
+            active = null
+            steps += "publish"
+        }, { steps += "release" })
+        assertEquals("engine failed", error)
+        assertNull(active)
+        assertEquals(listOf("publish", "release"), steps)
+        val expected = IllegalStateException("owned publication failure")
+        try {
+            finishFailedSpeechInitialization(true, { throw expected }, { steps += "release-after-error" })
+            fail("Expected the original publication failure")
+        } catch (actual: IllegalStateException) {
+            assertSame(expected, actual)
+        }
+        assertEquals(listOf("publish", "release", "release-after-error"), steps)
+    }
 }

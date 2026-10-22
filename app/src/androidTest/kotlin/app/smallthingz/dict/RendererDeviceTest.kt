@@ -2703,4 +2703,107 @@ class RendererDeviceTest {
         }
     }
 
+
+    @Test fun attributionActionsWrapWithinNarrowLargeTextAndKeepIndependentDestinations() {
+        fun captureAttribution(name: String) {
+            require(name in setOf("attribution-narrow-ltr.png", "attribution-narrow-rtl.png"))
+            // The same owned Compose-root/file route used by the retained SectionLink frames.
+            // Only this public fixture is captured, never a system overlay or another app.
+            val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+            try {
+                val files = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
+                val directory = java.io.File(files, "qa-copy-evidence")
+                check(directory.mkdirs() || directory.isDirectory)
+                check(directory.canonicalFile.parentFile == files.canonicalFile)
+                val target = java.io.File(directory, name)
+                check(target.canonicalFile.parentFile == directory.canonicalFile && !target.exists())
+                target.outputStream().use { output ->
+                    var count = 0
+                    val bounded = object : java.io.OutputStream() {
+                        override fun write(value: Int) {
+                            check(count < 16 * 1024 * 1024)
+                            output.write(value); count++
+                        }
+                        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                            check(length <= 16 * 1024 * 1024 - count)
+                            output.write(bytes, offset, length); count += length
+                        }
+                    }
+                    check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bounded))
+                }
+            } finally { bitmap.recycle() }
+        }
+        val entry = Entry("Attribution fixture", emptyList(), "language", "English", "en",
+            listOf(Section(2, "English", listOf(Block("definition", 1,
+                listOf(Span("text", "Owned attribution fixture body")))))), emptyList())
+            .copy(edition = "enwiktionary-20261001")
+        val licenseUrl = "https://creativecommons.org/licenses/by-sa/4.0/"
+        val opened = mutableListOf<String>()
+        for (direction in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
+            for (large in listOf(false, true)) {
+                val width = if (large) 280.dp else 360.dp
+                val scale = if (large) 2f else 1f
+                val caseId = "attribution-${direction.name.lowercase()}-${if (large) "large" else "normal"}"
+                compose.runOnUiThread {
+                    compose.activity.setContent {
+                        val density = LocalDensity.current
+                        CompositionLocalProvider(
+                            LocalDensity provides Density(density.density, scale),
+                            androidx.compose.ui.platform.LocalLayoutDirection provides direction,
+                            androidx.compose.ui.platform.LocalUriHandler provides object : androidx.compose.ui.platform.UriHandler {
+                                override fun openUri(uri: String) { opened.add(uri) }
+                            }
+                        ) {
+                            DictTheme("system") {
+                                androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                                    Box(Modifier.fillMaxSize()) {
+                                        Box(Modifier.width(width).fillMaxSize().testTag("attribution-viewport")) {
+                                            EntryView(entry, false, {}, settings = AppSettings(collapseOtherSections = false))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("CC BY-SA 4.0"))
+                val viewport = compose.onNodeWithTag("attribution-viewport")
+                val viewportBounds = viewport.fetchSemanticsNode().boundsInRoot
+                val bounds = mutableListOf<androidx.compose.ui.geometry.Rect>()
+                for (label in listOf("Wiktionary contributors", "CC BY-SA 4.0")) {
+                    val button = compose.onNodeWithText(label)
+                    val text = compose.onNodeWithText(label, useUnmergedTree = true)
+                    val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                    text.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                    val layout = layouts.single()
+                    val node = button.fetchSemanticsNode()
+                    val evidence = "$caseId: " + renderedLayoutFailureEvidence(label, layout, node, viewport, null)
+                    button.assertIsDisplayed().assertHasClickAction().assert(
+                        SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Role,
+                            androidx.compose.ui.semantics.Role.Button))
+                    assertEquals(evidence, scale, layout.layoutInput.density.fontScale, 0f)
+                    assertEquals(evidence, with(layout.layoutInput.density) { width.toPx() }, viewportBounds.width, 1f)
+                    assertFalse(evidence, layout.hasVisualOverflow)
+                    val visual = node.boundsInRoot
+                    val touch = node.touchBoundsInRoot
+                    for (rect in listOf(visual, touch)) {
+                        assertTrue(evidence, rect.width > 0f && rect.height > 0f &&
+                            rect.left >= viewportBounds.left - 1f && rect.right <= viewportBounds.right + 1f &&
+                            rect.top >= viewportBounds.top - 1f && rect.bottom <= viewportBounds.bottom + 1f)
+                    }
+                    bounds.add(visual)
+                    button.performClick()
+                }
+                assertFalse("$caseId buttons must not overlap: $bounds", bounds[0].overlaps(bounds[1]))
+                if (!large) assertEquals("$caseId retains the ordinary single row", bounds[0].top, bounds[1].top, 1f)
+                if (large) captureAttribution(if (direction == androidx.compose.ui.unit.LayoutDirection.Ltr)
+                    "attribution-narrow-ltr.png" else "attribution-narrow-rtl.png")
+                compose.runOnIdle {
+                    assertEquals("$caseId independent destinations", listOf(attributionUrl(entry), licenseUrl), opened)
+                    opened.clear()
+                }
+            }
+        }
+    }
+
 }

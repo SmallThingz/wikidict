@@ -136,6 +136,96 @@ class SearchCaseFoldDeviceTest {
         }
     }
 
+    @Test fun ordinaryLinksFallBackOnlyToExactSameEditionUnclassifiedTargets(): Unit = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        assertTrue(context.packageName.endsWith(".validation"))
+        val library = LibraryStore.get(context)
+        val edition = "unclassifiedlink${UUID.randomUUID().toString().replace("-", "")}wiktionary-20261001"
+        val otherEdition = "other$edition"
+        val editions = setOf(edition, otherEdition)
+        val beforeIds = library.dictionaries.map { it.id }.toSet()
+        suspend fun install(owner: String, code: String, selectedEdition: String, titles: List<String>) {
+            val bytes = dictionary(owner, titles, code)
+            val hash = MessageDigest.getInstance("SHA-256").digest(owner.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+            library.importFile(name = { "$selectedEdition-$hash.wikblb" }) { ByteArrayInputStream(bytes) }.join()
+            assertNull(library.error)
+        }
+        try {
+            install("aragonés", "an", edition, listOf("templlar", "same", "LOCAL"))
+            install("Unclassified", "", edition, listOf("templlar/conj.BEN", "same", "local", "ExactOnly"))
+            install("Other owner", "en", edition, listOf("elsewhere"))
+            install("Unclassified", "", otherEdition, listOf("foreign-only"))
+            val source = library.read(requireNotNull(library.exact("templlar", "aragonés", edition)))
+            val target = requireNotNull(library.exact("templlar/conj.BEN", "Unclassified", edition))
+            val hit = requireNotNull(library.link("templlar/conj.BEN", source))
+            assertEquals(target.key, hit.key)
+            assertEquals("Unclassified", hit.language)
+            assertEquals(edition, hit.edition)
+            assertEquals(target.key, library.link("templlar/conj.BEN#Conjugation", source)?.key)
+            assertEquals(library.exact("same", "aragonés", edition)?.key, library.link("same", source)?.key)
+            // Keep the old current-owner folded match ahead of an exact unowned match.
+            assertEquals("LOCAL", library.link("local", source)?.title)
+            assertNull(library.link("exactonly", source))
+            assertNull(library.link("elsewhere", source))
+            assertNull(library.link("foreign-only", source))
+            assertNull(library.link("templlar/conj.BEN#Other_owner", source))
+            assertNull(library.link("templlar/conj.BEN#aragonés", source))
+            assertEquals(target.key, library.link("templlar/conj.BEN#Unclassified", source)?.key)
+            assertNull(library.link("templlar/conj.BEN", source.copy(edition = "")))
+            assertNull(library.link("templlar/conj.BEN", source.copy(kind = "supplemental", navigationKind = "supplemental", navigationLanguage = null)))
+            assertNull(library.link("templlar/conj.BEN", source.copy(redirect = Redirect("old", "templlar", "", true))))
+            val committed = mutableListOf<Triple<WordHit, Entry, String>>()
+            val errors = mutableListOf<String>()
+            val navigation = EntryNavigation(this, library::read, library::link, library::savedWord,
+                library::random, { null }, { selected, entry, action -> committed += Triple(selected, entry, action) },
+                {}, { errors += it }, { id -> library.dictionaries.any { it.id == id } })
+            try {
+                navigation.open(requireNotNull(source.origin)).join()
+                navigation.openLink("templlar/conj.BEN#Conjugation", source).join()
+                val (selected, entry, action) = committed.last()
+                assertEquals(2, committed.size)
+                assertEquals(target.key, selected.key)
+                assertEquals(target.key, entry.origin?.key)
+                assertEquals("Unclassified", entry.language)
+                assertEquals("templlar/conj.BEN#Conjugation", action)
+                assertTrue(errors.isEmpty())
+                navigation.openLink("templlar/conj.BEN#Other_owner", source).join()
+                assertEquals(2, committed.size)
+                assertEquals(listOf("This word is not in your installed dictionaries."), errors)
+                assertTrue(navigation.goBack())
+                kotlinx.coroutines.withTimeout(5_000) {
+                    while (committed.size != 3) kotlinx.coroutines.yield()
+                }
+                assertEquals(source.origin?.key, committed.last().first.key)
+                assertFalse(navigation.goBack())
+            } finally { navigation.cancel() }
+            val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val cancelledCommits = mutableListOf<WordHit>()
+            val cancelledErrors = mutableListOf<String>()
+            val cancelled = EntryNavigation(this, library::read, { action, entry ->
+                val resolved = library.link(action, entry)
+                entered.complete(Unit)
+                release.await()
+                resolved
+            }, library::savedWord, library::random, { null }, { selected, _, _ -> cancelledCommits += selected },
+                {}, { cancelledErrors += it }, { id -> library.dictionaries.any { it.id == id } })
+            try {
+                val pending = cancelled.openLink("templlar/conj.BEN", source)
+                kotlinx.coroutines.withTimeout(5_000) { entered.await() }
+                cancelled.cancel()
+                release.complete(Unit)
+                pending.join()
+                assertTrue(cancelledCommits.isEmpty())
+                assertTrue(cancelledErrors.isEmpty())
+            } finally { cancelled.cancel(); release.complete(Unit) }
+        } finally {
+            library.dictionaries.filter { it.edition in editions }.forEach { library.remove(it.id).join() }
+            assertEquals(beforeIds, library.dictionaries.map { it.id }.toSet())
+        }
+    }
+
     @Test fun versionTwoRekeyRollsBackFailureThenPreservesRowsAndIndexedLookup(): Unit = runBlocking {
         withContext(Dispatchers.IO) {
             val context = InstrumentationRegistry.getInstrumentation().targetContext

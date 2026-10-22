@@ -8,6 +8,19 @@ import android.speech.tts.UtteranceProgressListener
 import androidx.compose.runtime.*
 import java.util.Locale
 
+/** Cancelled requests must not publish an error; the failed engine is always released. */
+internal inline fun finishFailedSpeechInitialization(
+    hasPendingRequest: Boolean,
+    publishFailure: () -> Unit,
+    releaseFailedEngine: () -> Unit,
+) {
+    try {
+        if (hasPendingRequest) publishFailure()
+    } finally {
+        releaseFailedEngine()
+    }
+}
+
 /** A local Android speech service, never a network voice or dictionary execution engine. */
 object SpeechPlayback {
     private var engine: TextToSpeech? = null
@@ -54,7 +67,21 @@ object SpeechPlayback {
                         @Deprecated("Android callback") override fun onError(id: String?) { main.post { if (utterance.toString() == id) { active = null; error = "The local voice could not speak." } } }
                     })
                     val next = pending; pending = null; next?.invoke()
-                } else { error = "Install a local text-to-speech engine in speech settings."; active = null; pending = null; engine?.shutdown(); engine = null }
+                } else {
+                    finishFailedSpeechInitialization(
+                        hasPendingRequest = pending != null,
+                        publishFailure = {
+                            error = "Install a local text-to-speech engine in speech settings."
+                            active = null
+                        },
+                        releaseFailedEngine = {
+                            pending = null
+                            val failed = engine
+                            engine = null
+                            failed?.shutdown()
+                        },
+                    )
+                }
             } }
             }
         }

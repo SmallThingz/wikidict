@@ -642,11 +642,23 @@ class LibraryStore private constructor(private val context: Context) {
         // A language heading names an owner only when that owner is installed in this edition.
         // Other fragments remain ordinary within-owner section destinations.
         val fragment = title.substringAfter('#', "").replace('_', ' ')
-        val linkLanguage = if (entry.navigationKind == "language" && dictionaries.any {
+        val explicitOwner = entry.navigationKind == "language" && dictionaries.any {
             it.edition == entry.edition && it.kind == "language" && it.language == fragment
-        }) fragment else entry.navigationLanguage.orEmpty()
-        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND edition=? AND kind=? AND (substr(?,2)='' OR language=substr(?,2)) ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
+        }
+        val linkLanguage = if (explicitOwner) fragment else entry.navigationLanguage.orEmpty()
+        val current = helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND edition=? AND kind=? AND (substr(?,2)='' OR language=substr(?,2)) ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
             arrayOf(sqlText(foldSearchKey(key)),entry.edition,entry.navigationKind,sqlText(linkLanguage),sqlText(linkLanguage),sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
+        if (current != null || explicitOwner || entry.kind != "language" || entry.navigationKind != "language" || entry.redirect != null)
+            return@withContext current
+        // Ownerless pages are installed separately. Only an exact ordinary target in
+        // this edition may follow a current-owner miss; aliases keep their own route.
+        val unclassified = dictionaries.singleOrNull {
+            it.edition == entry.edition && it.kind == "language" && it.language == "Unclassified"
+        } ?: return@withContext null
+        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND kind='language' AND title=substr(?,2) LIMIT 2",
+            arrayOf(unclassified.id,sqlText(key))).use { c ->
+            if (!c.moveToFirst()) null else hit(c).takeUnless { c.moveToNext() }
+        }
     }
     fun rememberWord(hit:WordHit) { prefs.edit().putString("lastTitle",hit.title).putString("lastLanguage",hit.language)
         .putString("lastDictionary",hit.dictionary).putString("lastRecordKey",hit.recordKey).putString("lastContextDictionary",hit.contextDictionary).putString("lastEdition",hit.edition).apply() }
