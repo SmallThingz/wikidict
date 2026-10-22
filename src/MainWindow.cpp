@@ -1412,6 +1412,16 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 classes.simplified().split(QChar(' '), Qt::SkipEmptyParts).contains(QStringLiteral("Egyp")))
                 text = QStringLiteral("<span style=\"font-family:'%1'\">%2</span>")
                     .arg(egyptianFamily().toHtmlEscaped(), text);
+            const QJsonValue foregroundValue = span.value(QStringLiteral("foreground"));
+            const QString foreground = foregroundValue.toString();
+            bool canonicalForeground = foregroundValue.isString() && foreground.size() == 7 && foreground.startsWith(QChar('#'));
+            for (const QChar digit : foreground.mid(1))
+                canonicalForeground = canonicalForeground && ((digit >= QChar('0') && digit <= QChar('9'))
+                    || (digit >= QChar('a') && digit <= QChar('f')));
+            // Keep the authored color on the characters inside a possible link,
+            // so the default anchor palette cannot replace its semantic color.
+            if (canonicalForeground)
+                text = QStringLiteral("<span style=\"color:%1\">%2</span>").arg(foreground, text);
             if (kind == QStringLiteral("template"))
                 throw DictApiError("compiled dictionary contains an uncompiled template span");
             if (kind == QStringLiteral("link")) {
@@ -1566,8 +1576,16 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth) const {
             const QString tag = cell.value(QStringLiteral("header")).toBool() ? QStringLiteral("th") : QStringLiteral("td");
             const int colspan = std::max(1, cell.value(QStringLiteral("colspan")).toInt(1));
             const int rowspan = std::max(1, cell.value(QStringLiteral("rowspan")).toInt(1));
-            out += QStringLiteral("<%1 colspan='%2' rowspan='%3' style='border:1px solid %4'>%5</%1>")
-                .arg(tag).arg(colspan).arg(rowspan).arg(palette().color(QPalette::Mid).name(), spansHtml(cell.value(QStringLiteral("spans")).toArray()));
+            QString style = QStringLiteral("border:1px solid %1").arg(palette().color(QPalette::Mid).name());
+            const QJsonValue backgroundValue = cell.value(QStringLiteral("background"));
+            const QString background = backgroundValue.toString();
+            bool canonicalBackground = backgroundValue.isString() && background.size() == 7 && background.startsWith(QChar('#'));
+            for (const QChar digit : background.mid(1))
+                canonicalBackground = canonicalBackground && ((digit >= QChar('0') && digit <= QChar('9'))
+                    || (digit >= QChar('a') && digit <= QChar('f')));
+            if (canonicalBackground) style += QStringLiteral(";background-color:") + background;
+            out += QStringLiteral("<%1 colspan='%2' rowspan='%3' style='%4'>%5</%1>")
+                .arg(tag).arg(colspan).arg(rowspan).arg(style, spansHtml(cell.value(QStringLiteral("spans")).toArray()));
         }
         out += QStringLiteral("</tr>");
     }

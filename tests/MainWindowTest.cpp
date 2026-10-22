@@ -3432,6 +3432,146 @@ private slots:
         QVERIFY(activated.count() >= 1);
     }
 
+    void typedSpanForegroundPreservesBenDistinctionsAndLinkedActions() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const auto colored = [](const QString &text, const QString &foreground, bool bold = false) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), text},
+                {QStringLiteral("foreground"), foreground}, {QStringLiteral("bold"), bold}};
+        };
+        // Exact authored BEN key words and forms, including a color-only form.
+        const QJsonArray sourceSpans{
+            colored(QStringLiteral("berda"), QStringLiteral("#008000")),
+            QJsonObject{{QStringLiteral("text"), QStringLiteral(" | ")}},
+            colored(QStringLiteral("asul"), QStringLiteral("#1c39bb")),
+            QJsonObject{{QStringLiteral("text"), QStringLiteral(" | ")}},
+            colored(QStringLiteral("turquesa"), QStringLiteral("#01796f")),
+            QJsonObject{{QStringLiteral("text"), QStringLiteral(" | ")}},
+            colored(QStringLiteral("aiguanebabe"), QStringLiteral("#008000"), true),
+            QJsonObject{{QStringLiteral("text"), QStringLiteral(" | ")}},
+            colored(QStringLiteral("aiguanebem"), QStringLiteral("#1c39bb"), true),
+            QJsonObject{{QStringLiteral("text"), QStringLiteral(" | ")}},
+            colored(QStringLiteral("aiga aiguanebau"), QStringLiteral("#1c39bb")),
+            QJsonObject{{QStringLiteral("text"), QStringLiteral(" | ")}},
+            colored(QStringLiteral("aiguanebats"), QStringLiteral("#01796f"), true),
+            QJsonObject{{QStringLiteral("text"), QStringLiteral(" plain neighbor ")}},
+            // Typed link control, not a claim that this link color occurs in BEN.
+            QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")}, {QStringLiteral("text"), QStringLiteral("Follow")},
+                {QStringLiteral("target"), QStringLiteral("dog")}, {QStringLiteral("foreground"), QStringLiteral("#008000")},
+                {QStringLiteral("italic"), true}}
+        };
+        for (const QString &theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+            window.learning_.setTheme(theme);
+            window.applyTheme();
+            window.reading_->setHtml(window.spansHtml(QJsonArray{QJsonObject{{QStringLiteral("text"), QStringLiteral("plain neighbor")}}}));
+            const QBrush defaultForeground = window.reading_->document()->find(QStringLiteral("plain neighbor")).charFormat().foreground();
+            window.reading_->setHtml(window.spansHtml(sourceSpans));
+            for (const QJsonValue &value : sourceSpans) {
+                const QJsonObject span = value.toObject();
+                if (!span.contains(QStringLiteral("foreground"))) continue;
+                const QTextCursor found = window.reading_->document()->find(span.value(QStringLiteral("text")).toString());
+                QVERIFY(!found.isNull());
+                QCOMPARE(found.charFormat().foreground().color(), QColor(span.value(QStringLiteral("foreground")).toString()));
+                QCOMPARE(found.charFormat().fontWeight() >= QFont::Bold, span.value(QStringLiteral("bold")).toBool());
+            }
+            QCOMPARE(window.reading_->document()->find(QStringLiteral("plain neighbor")).charFormat().foreground(), defaultForeground);
+            const QTextCharFormat link = window.reading_->document()->find(QStringLiteral("Follow")).charFormat();
+            QVERIFY(link.isAnchor());
+            QCOMPARE(link.anchorHref(), QStringLiteral("dict:dog"));
+            QVERIFY(link.fontItalic());
+        }
+        QSignalSpy activated(window.reading_, &QTextBrowser::anchorClicked);
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:dog")));
+        QTRY_COMPARE_WITH_TIMEOUT(title(window), QStringLiteral("dog"), 30000);
+        QVERIFY(activated.count() >= 1);
+
+        const QJsonObject ordinary{{QStringLiteral("text"), QStringLiteral("unchanged")}};
+        const QString unchanged = window.spansHtml(QJsonArray{ordinary});
+        for (const QJsonValue &invalid : {QJsonValue(), QJsonValue(false), QJsonValue(123),
+                QJsonValue(QStringLiteral("green")), QJsonValue(QStringLiteral("#008000;")),
+                QJsonValue(QStringLiteral("#1C39BB")), QJsonValue(QStringLiteral("#080")),
+                QJsonValue(QStringLiteral("#008000ff")), QJsonValue(QStringLiteral("#gggggg"))}) {
+            QJsonObject span = ordinary;
+            span.insert(QStringLiteral("foreground"), invalid);
+            QCOMPARE(window.spansHtml(QJsonArray{span}), unchanged);
+        }
+    }
+
+    void typedCellBackgroundPreservesBleohTableAndLinks() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        // Source-authored Bleoh row backgrounds and named swatch overrides;
+        // the stored API supplies canonical RGB, not CSS or replacement labels.
+        const QStringList labels{QStringLiteral("blæc"), QStringLiteral("grǣg"), QStringLiteral("hwīt"), QStringLiteral("seolfor"), QStringLiteral("gold"), QStringLiteral("rēod"), QStringLiteral("basu"), QStringLiteral("hǣwen"), QStringLiteral("grēne"), QStringLiteral("geolu"), QStringLiteral("geolorēad")};
+        const QStringList targets{QStringLiteral("blæc"), QStringLiteral("grǣg"), QStringLiteral("hwīt"), QStringLiteral("Seolfor"), QStringLiteral("gold"), QStringLiteral("rēod"), QStringLiteral("basu"), QStringLiteral("hǣwen"), QStringLiteral("grēne"), QStringLiteral("geolu"), QStringLiteral("geolorēad")};
+        const QStringList colors{QStringLiteral("#000000"), QStringLiteral("#808080"), QStringLiteral("#ffffff"), QStringLiteral("#c0c0c0"), QStringLiteral("#ffd700"), QStringLiteral("#ff0000"), QStringLiteral("#800080"), QStringLiteral("#0000ff"), QStringLiteral("#008000"), QStringLiteral("#ffff00"), QStringLiteral("#ffa500")};
+        QJsonArray rows;
+        for (int index = 0; index < labels.size(); ++index) {
+            const QJsonObject link{{QStringLiteral("kind"), QStringLiteral("link")},
+                {QStringLiteral("text"), labels[index]}, {QStringLiteral("target"), targets[index]}};
+            const QJsonObject blank{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), QString(QChar(0x00a0))}};
+            rows.append(QJsonObject{{QStringLiteral("cells"), QJsonArray{
+                QJsonObject{{QStringLiteral("spans"), QJsonArray{link}}, {QStringLiteral("background"), QStringLiteral("#eeeeee")}},
+                QJsonObject{{QStringLiteral("spans"), QJsonArray{blank}}, {QStringLiteral("background"), colors[index]}}
+            }}});
+        }
+        window.reading_->setHtml(window.tableHtml(QJsonObject{{QStringLiteral("rows"), rows}}, 0));
+        QTextTable *table = nullptr;
+        for (QTextFrame *frame : window.reading_->document()->rootFrame()->childFrames())
+            if (auto *candidate = qobject_cast<QTextTable *>(frame)) { table = candidate; break; }
+        QVERIFY(table);
+        QCOMPARE(table->rows(), 11);
+        QCOMPARE(table->columns(), 2);
+        for (int index = 0; index < labels.size(); ++index) {
+            const QTextTableCell label = table->cellAt(index, 0);
+            const QTextTableCell sample = table->cellAt(index, 1);
+            QCOMPARE(label.format().background().color(), QColor(QStringLiteral("#eeeeee")));
+            QCOMPARE(sample.format().background().color(), QColor(colors[index]));
+            QCOMPARE(label.rowSpan(), 1);
+            QCOMPARE(label.columnSpan(), 1);
+            QCOMPARE(sample.rowSpan(), 1);
+            QCOMPARE(sample.columnSpan(), 1);
+            QCOMPARE(label.firstCursorPosition().block().text(), labels[index]);
+            QCOMPARE(sample.firstCursorPosition().block().text(), QString(QChar(0x00a0)));
+            const QTextFragment fragment = label.firstCursorPosition().block().begin().fragment();
+            QVERIFY(fragment.isValid());
+            QVERIFY(fragment.charFormat().isAnchor());
+            QCOMPARE(fragment.charFormat().anchorHref(), QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(targets[index])));
+        }
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("Color sample")));
+
+        const QJsonObject span{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), QStringLiteral("unchanged")}};
+        const QJsonObject ordinary{{QStringLiteral("spans"), QJsonArray{span}}};
+        const auto oneCellTable = [&](const QJsonObject &cell) {
+            return QJsonObject{{QStringLiteral("rows"), QJsonArray{QJsonObject{{QStringLiteral("cells"), QJsonArray{cell}}}}}};
+        };
+        const QString unchanged = window.tableHtml(oneCellTable(ordinary), 0);
+        for (const QJsonValue &invalid : {QJsonValue(), QJsonValue(false), QJsonValue(123),
+                QJsonValue(QStringLiteral("red")), QJsonValue(QStringLiteral("#FFF000")),
+                QJsonValue(QStringLiteral("#ff0")), QJsonValue(QStringLiteral("#ffff0000")),
+                QJsonValue(QStringLiteral("#gggggg")), QJsonValue(QStringLiteral("#ffff00;"))}) {
+            QJsonObject cell = ordinary;
+            cell.insert(QStringLiteral("background"), invalid);
+            QCOMPARE(window.tableHtml(oneCellTable(cell), 0), unchanged);
+        }
+        QJsonObject colored = ordinary;
+        colored.insert(QStringLiteral("background"), QStringLiteral("#000000"));
+        window.reading_->setHtml(window.tableHtml(QJsonObject{{QStringLiteral("rows"), QJsonArray{
+            QJsonObject{{QStringLiteral("cells"), QJsonArray{colored, ordinary}}}
+        }}}, 0));
+        table = nullptr;
+        for (QTextFrame *frame : window.reading_->document()->rootFrame()->childFrames())
+            if (auto *candidate = qobject_cast<QTextTable *>(frame)) { table = candidate; break; }
+        QVERIFY(table);
+        QCOMPARE(table->cellAt(0, 0).format().background().color(), QColor(QStringLiteral("#000000")));
+        QCOMPARE(table->cellAt(0, 1).format().background().style(), Qt::NoBrush);
+    }
+
     void typedColorSwatchRendersWithAccessibleTextAndKeepsFallback() {
         MainWindow window(fixture_, QStringLiteral("cat"));
         window.show();
