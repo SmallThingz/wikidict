@@ -2575,13 +2575,14 @@ pub const Writer = struct {
         const destination = if (record.fragment.len == 0) record.target_title else try std.fmt.allocPrint(a, "{s}#{s}", .{ record.target_title, record.fragment });
         const link: blobs.presentation_types.Span = .{ .kind = .link, .text = destination, .target = destination };
         var entry: blobs.presentation_types.Entry = .{ .title = record.source_title, .kind = .alias, .preamble_spans = &.{link} };
-        if (tail.len != 0) {
+        if (tail.len != 0 or display_title != null) {
             const tail_payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(a, record.source_title, .alias, null, "", if (missing_phase) |phase| phase.output() else MissingText.untracked(tail), if (display_title) |value| .{ .source = value, .page_title = record.source_title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, &fallbacks, poem_phase);
             entry = (try blobs.presentation_codec.decodeAlloc(a, tail_payload, record.source_title, .alias, null)).entry;
-            const preamble = try a.alloc(blobs.presentation_types.Span, entry.preamble_spans.len + 2);
+            const prefix_len: usize = if (tail.len == 0) 1 else 2;
+            const preamble = try a.alloc(blobs.presentation_types.Span, entry.preamble_spans.len + prefix_len);
             preamble[0] = link;
-            preamble[1] = .{ .kind = .line_break };
-            @memcpy(preamble[2..], entry.preamble_spans);
+            if (prefix_len == 2) preamble[1] = .{ .kind = .line_break };
+            @memcpy(preamble[prefix_len..], entry.preamble_spans);
             entry.preamble_spans = preamble;
         }
         var compiled = record;
@@ -6237,10 +6238,11 @@ test "Writer refused ordinary roots expose language owners without inheriting na
         .{ .title = "refused-owner", .source = "==English==\n[[First|one\nfirst]]\n[[Target|lead\n==French==\nbody [[cat|explicit]]\nend]] '''after''' plain", .forbidden = "Target", .nested = false },
         .{ .title = "refused-inner-owner", .source = "==English==\n[[Outer|lead [[Inner|one\n==French==\nbody]] tail]] outside", .forbidden = "Outer", .nested = true },
     };
-    const english = [_]Part{ .{ .text = "one", .target = "First" }, .{ .text = "first", .target = "First" }, .{ .text = "[[Target|lead" } };
-    const french = [_]Part{ .{ .text = "body" }, .{ .text = "explicit", .target = "cat" }, .{ .text = "end]]" }, .{ .text = "after", .bold = true }, .{ .text = "plain" } };
-    const nested_english = [_]Part{ .{ .text = "[[Outer|lead" }, .{ .text = "one", .target = "Inner" } };
-    const nested_french = [_]Part{ .{ .text = "French", .target = "Inner" }, .{ .text = "body", .target = "Inner" }, .{ .text = "tail]]" }, .{ .text = "outside" } };
+    // Check.spans ignores actual ASCII whitespace; Part text stores only its nonspace token sequence.
+    const english = [_]Part{ .{ .text = "one", .target = "First" }, .{ .text = "first", .target = "First" }, .{ .text = "[malformedlink]Target|lead" } };
+    const french = [_]Part{ .{ .text = "body" }, .{ .text = "explicit", .target = "cat" }, .{ .text = "end[malformedlink]" }, .{ .text = "after", .bold = true }, .{ .text = "plain" } };
+    const nested_english = [_]Part{ .{ .text = "[malformedlink]Outer|lead" }, .{ .text = "one", .target = "Inner" } };
+    const nested_french = [_]Part{ .{ .text = "French", .target = "Inner" }, .{ .text = "body", .target = "Inner" }, .{ .text = "tail[malformedlink]" }, .{ .text = "outside" } };
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -7795,4 +7797,125 @@ test "Amharic external heading fallback retains the original display label" {
     try std.testing.expectEqualStrings("en", result.code);
     try std.testing.expect(result.heading.ptr == label.ptr);
     try std.testing.expectEqual(label.len, result.heading.len);
+}
+
+test "invalid nowiki Poem saved reply passes strict Writer with active child link" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TestLanguages.codes();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact source and authenticated metadata from run03's failing saved reply.
+    const output = "==English==\n\x7fWDPOEM:1:6de7476e1f06bcb2b22fadf63003350241885381b5a12baee0348cf587b53545\x7f";
+    const metadata = "{\"schema\":\"wikidict.poem-phase.v1\",\"handled\":true,\"output_sha256\":\"f41413c95346a2d3881ec4226db5f8734e8edfb56f078a759f83f7cff93e73bd\",\"display_title_sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"items\":[{\"token\":\"\x7fWDPOEM:0:f273b723e2adefbc9471956fd51a33396ca639a64bf2809e8fcb0b8cae5027a8\x7f\",\"kind\":\"scope\"},{\"token\":\"\x7fWDPOEM:1:6de7476e1f06bcb2b22fadf63003350241885381b5a12baee0348cf587b53545\x7f\",\"kind\":\"literal\",\"tag\":\"poem\",\"body\":\"\x7fWDPOEM:0:f273b723e2adefbc9471956fd51a33396ca639a64bf2809e8fcb0b8cae5027a8\x7f<poem><nowiki/ >A\\n[[cat]]</nowiki></poem>\"}]}";
+    try writer.addExpandedPageWithReasonsAndPoem(a, .{ .id = 0, .kind = .language }, "PoemInvalidProtectedOpener", output, "==English==\n<poem><nowiki/ >{{PhaseLines}}</nowiki></poem>", null, &.{}, metadata);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "English"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("PoemInvalidProtectedOpener")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    var visible: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    var breaks: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        try visible.appendSlice(a, span.trail);
+        if (span.kind == .line_break) breaks += 1;
+        if (span.kind == .link) {
+            actions += 1;
+            try std.testing.expectEqualStrings("cat", span.target);
+        }
+    };
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "<nowiki/ >") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "</nowiki>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "WDPOEM:") == null);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    try std.testing.expectEqual(@as(usize, 0), breaks);
+}
+
+test "metadata-only alias tails preserve display titles and rejection accounting" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const pa = arena.allocator();
+    const root = try std.fmt.allocPrint(pa, ".zig-cache/tmp/{s}/alias-display-only", .{tmp.sub_path});
+    var writer = try Writer.init(io, a, root);
+    defer writer.deinit();
+    const Case = struct {
+        title: []const u8,
+        tail: []const u8,
+        display: ?[]const u8,
+        formatted: bool = false,
+    };
+    const cases = [_]Case{
+        .{ .title = "Plain", .tail = "", .display = null },
+        .{ .title = "Formatted", .tail = "", .display = "''Formatted''", .formatted = true },
+        .{ .title = "Rejected", .tail = "", .display = "Different" },
+        .{ .title = "Body", .tail = "Retained body.", .display = "''Body''", .formatted = true },
+    };
+    for (cases) |case| {
+        try writer.namespace_coverage.input(a, 0, "", .language, true);
+        try writer.addAliasExpanded(pa, .{
+            .source_namespace = 0,
+            .source_kind = .language,
+            .source_title = case.title,
+            .source_key = case.title,
+            .xml_target = "word",
+            .target_title = "word",
+            .target_namespace = null,
+            .target_kind = null,
+            .target_key = "",
+            .fragment = "Part",
+            .presentation = "",
+        }, case.tail, case.display, .{}, &.{});
+    }
+    writer.stats.pages_seen = cases.len;
+    const stats = try writer.finish(.{});
+    try std.testing.expectEqual(@as(usize, cases.len), stats.alias_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    const coverage = writer.namespace_coverage.rows.get(0).?;
+    try std.testing.expectEqual(@as(u64, cases.len), coverage.alias_pages);
+    try std.testing.expectEqual(@as(u64, cases.len - 1), coverage.expanded_pages);
+    try std.testing.expectEqual(@as(u64, 1), coverage.fallback_pages);
+
+    var mapped = try mmapPath(io, try std.fs.path.join(pa, &.{ root, "aliases.wikblb" }));
+    defer mapped.deinit();
+    const view = try blob_format.inspect(mapped.bytes);
+    var rows = view.iterator();
+    var count: usize = 0;
+    while (try rows.next()) |row| {
+        const alias = try blobs.alias_codec.decode(row.payload);
+        try blobs.alias_codec.validateKey(row.title, alias);
+        const doc = try blobs.presentation_codec.decodeAlloc(pa, alias.presentation, alias.source_title, .alias, null);
+        const case = for (cases) |candidate| {
+            if (std.mem.eql(u8, candidate.title, alias.source_title)) break candidate;
+        } else return error.UnexpectedAlias;
+        try std.testing.expectEqualStrings("word#Part", doc.entry.preamble_spans[0].target);
+        if (case.tail.len == 0) try std.testing.expectEqual(@as(usize, 1), doc.entry.preamble_spans.len);
+        if (case.formatted) {
+            try std.testing.expectEqual(@as(usize, 1), doc.entry.display_title.len);
+            try std.testing.expectEqualStrings(case.title, doc.entry.display_title[0].text);
+            try std.testing.expect(doc.entry.display_title[0].italic);
+        } else try std.testing.expectEqual(@as(usize, 0), doc.entry.display_title.len);
+        if (case.tail.len != 0) try std.testing.expect(std.mem.indexOf(u8, alias.presentation, case.tail) != null);
+        count += 1;
+    }
+    try std.testing.expectEqual(cases.len, count);
+    const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(pa, &.{ root, "fallback-pages.jsonl" }), pa, .limited(64 * 1024));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, report, "\n"));
+    try std.testing.expect(std.mem.indexOf(u8, report, "\"title\":\"Rejected\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, report, "display_title_rejected") != null);
 }

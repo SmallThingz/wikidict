@@ -232,9 +232,10 @@ fn requireCompiledSpans(a: A, spans: []const compiler.Span) !void {
 
 fn validateText(text: []const u8, report: ?*Fallbacks) !void {
     requireCompiledText(text) catch |err| {
-        if (report) |fallback| {
-            fallback.literal_markup = true;
-        } else return err;
+        if (report) |fallback| fallback.literal_markup = true;
+        // Reported diagnostics do not authorize raw parsed source in a record.
+        // Protected/entity literals are excluded by validateSpans provenance.
+        return err;
     };
 }
 
@@ -260,6 +261,9 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
         if (span.kind == .link and compiler.unresolvedActionTarget(span.target))
             return error.UncompiledTemplate;
     }
+    // Only explicitly generated diagnostic spans may receive boundary spaces.
+    // Authored text and protected/entity provenance are never rewritten here.
+    try compiler.separateGeneratedDiagnosticBoundaries(a, @constCast(spans));
     var parsed: std.ArrayList(u8) = .empty;
     defer parsed.deinit(a);
     for (spans) |span| {
@@ -455,9 +459,10 @@ pub fn compileAlloc(
     return compileReportedAlloc(a, title, kind, language, language_code, source, display_title, null);
 }
 
-// Explicit publication policy: MediaWiki renders malformed delimiters as
-// literal text. This path records that decision; strict compiler callers keep
-// rejecting it. Neither path places an executable template in the blob.
+// Reported compilation retains typed source-error diagnostics, not raw parsed
+// syntax. Compiler recoveries preserve independently parsed semantic content;
+// any unsupported parsed leftovers still reject publication. Explicit protected
+// and entity literal provenance remains display data, not an expansion input.
 pub fn compileReportedAlloc(
     a: A,
     title: []const u8,
@@ -750,7 +755,7 @@ test "reported publication audits malformed external link syntax" {
     try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
 
     var report: Fallbacks = .{};
-    _ = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report));
     try std.testing.expect(report.literal_markup);
 }
 
@@ -989,10 +994,11 @@ test "template parse limits fail publication instead of preserving executable sy
 test "reported recovery matches MediaWiki literal and formatting fixtures" {
     // Live oracle: tools/check_mediawiki_recovery.py and its fixture file.
     const cases = [_][2][]const u8{
-        .{ "A [[-", "A [[-" },
-        .{ "B ]]word]]", "B ]]word]]" },
+        .{ "A [[-", "A [malformed link] -" },
+        .{ "B ]]word]]", "B  [malformed link]word [malformed link]" },
         .{ "C <small>x<small> y", "C x y" },
-        .{ "D [[]] E", "D [[]] E" },
+        // The raw empty wrapper is compiled into a nonaction diagnostic.
+        .{ "D [[]] E", "D [malformed link] E" },
         .{ "|}\nAfter", "|} After" },
         .{ "{|\n* [[one]]\n|}", "one" },
         .{ "X <script>y</script> Z", "X <script>y</script> Z" },
@@ -1002,11 +1008,25 @@ test "reported recovery matches MediaWiki literal and formatting fixtures" {
         defer arena.deinit();
         const a = arena.allocator();
         var report: Fallbacks = .{};
+        // The old MediaWiki literal display oracle is not a permission to ship
+        // active parsed source. Preserve it above as the before-policy witness.
+        if (std.mem.eql(u8, case[0], "|}\nAfter") or
+            std.mem.eql(u8, case[0], "X <script>y</script> Z"))
+        {
+            try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", case[0], null, &report));
+            try std.testing.expect(report.literal_markup);
+            continue;
+        }
         const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", case[0], null, &report);
         const parsed = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
         var text: std.ArrayList(u8) = .empty;
         for (parsed.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
             try text.appendSlice(a, span.text);
+            if (std.mem.eql(u8, case[0], "D [[]] E")) {
+                try std.testing.expectEqual(types.InlineKind.text, span.kind);
+                try std.testing.expectEqualStrings("", span.target);
+                try std.testing.expectEqualStrings("", span.trail);
+            }
         };
         try std.testing.expectEqualStrings(case[1], text.items);
         try std.testing.expect(report.any());
@@ -1044,7 +1064,9 @@ test "literal provenance never authorizes malformed parsed suffixes or split del
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<nowiki>{{example}}</nowiki> [[broken", null));
+    // The raw malformed suffix is now diagnosed before serialization; the
+    // protected prefix retains literal bytes without authorizing raw leftovers.
+    _ = try compileAlloc(a, "entry", .language, "English", "en", "<nowiki>{{example}}</nowiki> [[broken", null);
     const spans = [_]compiler.Span{ .{ .text = "{" }, .{ .text = "{uncompiled}}", .flags = .{ .bold = true } } };
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &spans, null));
     var report: Fallbacks = .{};
@@ -1320,23 +1342,27 @@ test "external HTML-label boundary compiles the Arabic Navbar witness as data-on
     try std.testing.expect(!protected_report.any());
     const attribute_source = "<span title=\"[https://example.test/x<abbr>hidden</abbr>]\">visible</span>";
     var attribute_report: Fallbacks = .{};
-    const attribute_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", attribute_source, null, &attribute_report);
-    const attribute = try codec.decodeAlloc(a, attribute_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
-    const spans = attribute.entry.sections[0].blocks[0].spans;
+    // A parsed tag prefix cannot be published as literal HTML. Keep the
+    // compiler's independently recovered child action assertions below.
+    try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", attribute_source, null, &attribute_report));
+    const attribute = try workAlloc(a, "entry", "English", attribute_source, .{}, null, null, null, .{});
+    const spans = attribute.sections[0].blocks[0].spans;
     // Adjacent plain-text chunks may differ across scanner entry paths. Preserve
     // the exact visible prefix/link/suffix boundary and navigation instead.
     var attribute_prefix: std.ArrayList(u8) = .empty;
     var attribute_suffix: std.ArrayList(u8) = .empty;
     var attribute_links: usize = 0;
     for (spans) |span| {
-        try std.testing.expectEqualStrings("", span.trail);
+        // Work spans encode trailing text as ordinary spans, covered below.
+        try std.testing.expect(!span.self_link);
         if (span.kind == .external_link) {
             try std.testing.expectEqual(@as(usize, 0), attribute_links);
             try std.testing.expectEqualStrings("https://example.test/x", span.target);
             try std.testing.expectEqualStrings("hidden", span.text);
             attribute_links += 1;
         } else {
-            try std.testing.expectEqual(types.InlineKind.text, span.kind);
+            try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+            try std.testing.expectEqualStrings("", span.target);
             if (attribute_links == 0) {
                 try attribute_prefix.appendSlice(a, span.text);
             } else {
@@ -1391,33 +1417,63 @@ test "post-expansion generated-comment fixture preserves control semantics and I
     // Exact normalized fixture asserted by the real native AOT invoke test.
     // This boundary consumes expanded source; it must not re-expand raw Lua output.
     const normalized = "Authored A__NOEDITSECTION__B\n\nGenerated A__NOEDITSECTION__B\nISBN 9780306406157\n__TOC__\nISBN 97803__TOC__06406157\nTail\n&lt;nowiki>__NOEDITSECTION__[[B]]</nowiki>\nAB\n\n<nowiki>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</nowiki>\n\n<pre>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</pre>\n\n<source>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</source>\n\n<syntaxhighlight>__NOEDIT<!--literal-->SECTION__ ISBN 97803<!--literal-->06406157</syntaxhighlight>\n\n<code>Ordinary AB __NOEDITSECTION__</code>\n\n&#95;&#95;NOEDITSECTION__\n\nUnclosed &lt;!--tail __NOEDITSECTION__ [[B]] ISBN 9780306406157";
-    var report: Fallbacks = .{};
-    // Production retains intentional visible markup with an explicit diagnostic.
-    // The unmatched closing nowiki spelling must not weaken strict validation.
-    const encoded = try compileReportedAlloc(a, "entry", .language, "English", "en", normalized, null, &report);
-    try std.testing.expect(report.literal_markup);
-    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
-    var visible: std.ArrayList(u8) = .empty;
-    var isbn_links: usize = 0;
-    for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
-        try visible.appendSlice(a, span.text);
-        if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) isbn_links += 1;
+    // An entity-spelled opener does not protect its body. The compiler owns
+    // only the literal angles of the unmatched raw closer; independent links
+    // and controls keep the same semantics as explicitly entity-spelled edges.
+    const raw_closer = "&lt;nowiki>__NOEDITSECTION__[[B]]</nowiki>";
+    const literal_closer = "&lt;nowiki>__NOEDITSECTION__[[B]]&lt;/nowiki>";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, normalized, raw_closer));
+    const closer_at = std.mem.indexOf(u8, normalized, raw_closer).?;
+    const literal_normalized = try std.fmt.allocPrint(a, "{s}{s}{s}", .{ normalized[0..closer_at], literal_closer, normalized[closer_at + raw_closer.len ..] });
+    for ([_][]const u8{ normalized, literal_normalized }) |fixture| {
+        var report: Fallbacks = .{};
+        const encoded = try compileReportedAlloc(a, "entry", .language, "English", "en", fixture, null, &report);
+        try std.testing.expect(!report.literal_markup);
+        const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        var isbn_links: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) isbn_links += 1;
+        };
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "Authored AB") != null);
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "Generated AB") != null);
+        try std.testing.expectEqual(@as(usize, 3), isbn_links);
+        try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, visible.items, "__NOEDIT<!--literal-->SECTION__"));
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "<nowiki>") != null);
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "</nowiki>") != null);
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "Unclosed <!--tail ") != null);
+        var b_links: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, "B")) b_links += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 2), b_links);
+        // Only the entity-authored spelling remains a visible complete control.
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "__NOEDITSECTION__"));
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "Ordinary AB") != null);
+    }
+    // Check compiler provenance before DPR2 discards this internal distinction.
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(raw_closer);
+    var literal_angles: usize = 0;
+    var body_links: usize = 0;
+    for (blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.text, "<") or std.mem.eql(u8, span.text, ">")) {
+            try std.testing.expect(span.provenance == .entity_literal);
+            try std.testing.expect(span.kind == .text and !span.generated_diagnostic);
+            literal_angles += 1;
+        }
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("B", span.target);
+            try std.testing.expect(span.provenance == .parsed);
+            body_links += 1;
+        }
     };
-    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Authored AB") != null);
-    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Generated AB") != null);
-    try std.testing.expectEqual(@as(usize, 3), isbn_links);
-    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, visible.items, "__NOEDIT<!--literal-->SECTION__"));
-    try std.testing.expect(std.mem.indexOf(u8, visible.items, "<nowiki>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, visible.items, "</nowiki>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Unclosed <!--tail ") != null);
-    var b_links: usize = 0;
-    for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
-        if (span.kind == .link and std.mem.eql(u8, span.target, "B")) b_links += 1;
-    };
-    try std.testing.expectEqual(@as(usize, 2), b_links);
-    // Only the entity-authored spelling remains a visible complete control.
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "__NOEDITSECTION__"));
-    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Ordinary AB") != null);
+    // Entity-authored opening '<', plus both compiler-owned closing angles.
+    try std.testing.expectEqual(@as(usize, 3), literal_angles);
+    try std.testing.expectEqual(@as(usize, 1), body_links);
+    const raw = [_]compiler.Span{.{ .text = "</nowiki>" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
 }
 
 test "poem lines metadata and protected strip breaks survive ordinary DPR2" {
@@ -1668,11 +1724,11 @@ test "unresolved action targets cannot cross reported compilation and DPR2" {
     var missing_report: Fallbacks = .{};
     const synthesized = try a.dupe(compiler.Span, &[_]compiler.Span{.{ .kind = .template, .text = "missing", .target = "{{nested}}" }});
     try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, synthesized, &missing_report));
-    // Existing ordinary literal diagnostics outside the rejected label do not
-    // become page-wide hard errors merely because another action was refused.
+    // An unrelated rejected action does not grant a page-wide waiver for
+    // still-uncompiled parsed text outside its diagnostic label.
     var outside_report: Fallbacks = .{ .rejected_external_target = true };
     const outside = [_]compiler.Span{.{ .kind = .text, .text = "[[literal outside", .provenance = .parsed }};
-    try validateSpans(a, &outside, &outside_report);
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &outside, &outside_report));
     try std.testing.expect(outside_report.literal_markup);
     var unprotected_report: Fallbacks = .{};
     _ = try compileReportedAlloc(a, "unresolved label", .language, "English", "en", "[https://example.test/?q=&#123;&#123;missing&#125;&#125; {{missing-label}}]", null, &unprotected_report);
@@ -2522,4 +2578,144 @@ test "display-title-only missing target retains strict unreported refusal" {
     for ([_][]const u8{ "host", "label [missing template]" }) |title| {
         try std.testing.expectError(error.UncompiledTemplate, displayTitleSpansAlloc(a, .{ .source = tracked.bytes, .page_title = title, .missing = tracked }, "English", .{}, null, null, null, null, null));
     }
+}
+
+test "malformed source recovery roundtrip stores diagnostics not active syntax" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, actions: usize, marker_bold: ?bool = null, bold_closer: bool = false }{
+        .{ .source = "before {Wendung|en|run}} after", .visible = "before [malformed template] after", .actions = 0 },
+        .{ .source = "[rīmcræftig]] (cræftig in [[rīmung]]e)", .visible = "rīmcræftig [malformed link] (cræftig in rīmunge)", .actions = 2 },
+        .{ .source = "([[[[irregular]]]])", .visible = "(irregular [malformed link])", .actions = 1 },
+        .{ .source = "'''[[[[taking]]s]]'''", .visible = "takings [malformed link]", .actions = 2 },
+        .{ .source = "[[prefix [[taking]] suffix]]", .visible = "prefix taking suffix [malformed link]", .actions = 1 },
+        .{ .source = "[[[[taking]]|label]]", .visible = "taking|label [malformed link]", .actions = 1 },
+        .{ .source = "[[Engle]] [[-", .visible = "Engle [malformed link] -", .actions = 1 },
+        .{ .source = "[[bótian]] (bet weorðan]]", .visible = "bótian (bet weorðan [malformed link]", .actions = 1 },
+        .{ .source = "[[khrisma]", .visible = "khrisma [malformed link]", .actions = 0 },
+        // Keep the authored outside bracket separate from the diagnostic close.
+        .{ .source = "[[taking#x[y]]]", .visible = "taking#x[y [malformed link] ]", .actions = 0 },
+        .{ .source = "[[]]<b>]</b>", .visible = "[malformed link] ]", .actions = 0, .marker_bold = false, .bold_closer = true },
+        .{ .source = "{{broken]", .visible = "[malformed template] ]", .actions = 0 },
+        .{ .source = "[<b>[[]]</b>", .visible = "[ [malformed link]", .actions = 0, .marker_bold = true },
+        .{ .source = "[[gacat\nto]]w", .visible = "gacat tow [malformed link]", .actions = 0 },
+    };
+    for (cases) |case| {
+        var report: Fallbacks = .{};
+        const encoded = try compileReportedAlloc(a, "fixture", .language, "English", "en", case.source, null, &report);
+        const decoded = try codec.decodeAlloc(a, encoded, "fixture", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        var actions: usize = 0;
+        var bold_closers: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            if (span.kind == .link) actions += 1;
+            if (std.mem.indexOf(u8, span.text, "[malformed") != null) {
+                try std.testing.expect(span.kind == .text);
+                try std.testing.expectEqualStrings("", span.target);
+                if (case.marker_bold) |bold| try std.testing.expectEqual(bold, span.bold);
+            } else if (case.bold_closer and span.bold) {
+                try std.testing.expectEqualStrings("]", std.mem.trim(u8, span.text, " "));
+                try std.testing.expect(span.kind == .text);
+                try std.testing.expectEqualStrings("", span.target);
+                bold_closers += 1;
+            }
+        };
+        if (case.bold_closer) try std.testing.expectEqual(@as(usize, 1), bold_closers);
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        try std.testing.expectEqual(case.actions, actions);
+        try std.testing.expect(report.literal_markup and !report.missing_template);
+        try std.testing.expect(std.mem.indexOf(u8, encoded, "Wendung|en|run") == null);
+    }
+    var protected_report: Fallbacks = .{};
+    const encoded = try compileReportedAlloc(a, "literal", .language, "English", "en", "<nowiki>{Wendung|en|run}} [[broken</nowiki>", null, &protected_report);
+    const decoded = try codec.decodeAlloc(a, encoded, "literal", .language, .{ .code = "en", .heading = "English" });
+    var visible: std.ArrayList(u8) = .empty;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| try visible.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("{Wendung|en|run}} [[broken", visible.items);
+    try std.testing.expect(!protected_report.literal_markup);
+    var valid_report: Fallbacks = .{};
+    const valid = try compileReportedAlloc(a, "multiline label", .language, "English", "en", "[[A|first\nsecond]]", null, &valid_report);
+    const valid_decoded = try codec.decodeAlloc(a, valid, "multiline label", .language, .{ .code = "en", .heading = "English" });
+    var valid_action = false;
+    for (valid_decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "A")) valid_action = true;
+    };
+    try std.testing.expect(valid_action and !valid_report.literal_markup);
+    var residual: Fallbacks = .{};
+    const split = [_]compiler.Span{ .{ .text = "[" }, .{ .text = "[uncompiled", .flags = .{ .bold = true } } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, &residual));
+    try std.testing.expect(residual.literal_markup);
+    var authored_marker_report: Fallbacks = .{};
+    const authored_marker = [_]compiler.Span{ .{ .text = "[malformed link]" }, .{ .text = "]", .flags = .{ .bold = true } } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &authored_marker, &authored_marker_report));
+    try std.testing.expect(authored_marker_report.literal_markup);
+    const generated_copy = try a.dupe(compiler.Span, &.{
+        .{ .text = "[", .flags = .{ .bold = true } },
+        .{ .text = "" },
+        .{ .text = "[malformed link]", .generated_diagnostic = true },
+        .{ .text = "" },
+        .{ .text = "]", .flags = .{ .italic = true } },
+    });
+    var copied_report: Fallbacks = .{};
+    try validateSpans(a, generated_copy, &copied_report);
+    try std.testing.expectEqualStrings("[", generated_copy[0].text);
+    try std.testing.expectEqualStrings("]", generated_copy[4].text);
+    try std.testing.expect(generated_copy[0].flags.bold and generated_copy[4].flags.italic);
+    try std.testing.expectEqualStrings(" [malformed link] ", generated_copy[2].text);
+    const once = generated_copy[2].text;
+    try validateSpans(a, generated_copy, &copied_report);
+    try std.testing.expectEqualStrings(once, generated_copy[2].text);
+}
+
+test "invalid nowiki literal angles pass strict document compilation with active children" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_][2][]const u8{
+        .{ "<nowiki/ >[[cat]]</nowiki>", "<nowiki/ >cat</nowiki>" },
+        .{ "<NoWiKi/\t>[[cat]]</nowiki>", "<NoWiKi/\t>cat</nowiki>" },
+        .{ "<nowiki/attr>[[cat]]</nowiki>", "<nowiki/attr>cat</nowiki>" },
+        .{ "<nowiki/[[cat]]>[[dog]]</nowiki>", "<nowiki/cat>dog</nowiki>" },
+    };
+    for (cases, 0..) |case, i| {
+        var report: Fallbacks = .{};
+        const encoded = try compileReportedAlloc(a, "fixture", .language, "English", "en", case[0], null, &report);
+        const decoded = try codec.decodeAlloc(a, encoded, "fixture", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        var actions: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            if (span.kind == .link) {
+                actions += 1;
+                try std.testing.expect(std.mem.eql(u8, span.target, "cat") or (i == 3 and std.mem.eql(u8, span.target, "dog")));
+            }
+        };
+        try std.testing.expectEqualStrings(case[1], visible.items);
+        try std.testing.expectEqual(@as(usize, if (i == 3) 2 else 1), actions);
+    }
+    // The closing angle may occur inside a link label crossing the visible
+    // rejected token. Token-local parsing would incorrectly sever that link.
+    var crossing_report: Fallbacks = .{};
+    const crossing_bytes = try compileReportedAlloc(a, "fixture", .language, "English", "en", "</nowiki [[Target|>label]]", null, &crossing_report);
+    const crossing = try codec.decodeAlloc(a, crossing_bytes, "fixture", .language, .{ .code = "en", .heading = "English" });
+    var crossing_visible: std.ArrayList(u8) = .empty;
+    var crossing_label: std.ArrayList(u8) = .empty;
+    for (crossing.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try crossing_visible.appendSlice(a, span.text);
+        try crossing_visible.appendSlice(a, span.trail);
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("Target", span.target);
+            try crossing_label.appendSlice(a, span.text);
+            try crossing_label.appendSlice(a, span.trail);
+        }
+    };
+    try std.testing.expectEqualStrings("</nowiki >label", crossing_visible.items);
+    try std.testing.expectEqualStrings(">label", crossing_label.items);
+    // Merely setting ordinary parsed text to look literal cannot bypass the guard.
+    const raw = [_]compiler.Span{.{ .text = "<nowiki/ >[[still raw]]</nowiki>" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
 }

@@ -306,6 +306,13 @@ const State = struct {
     fn next(self: State) usize {
         return term.nextClusterEnd(self.query[0..self.len], self.cursor);
     }
+    fn openSelected(self: *State) !void {
+        self.focus = .entry;
+        if (self.count() != 0) if (self.reading) |r| {
+            try r.remember(try self.db.titleAt(self.recordIndex(self.selected)));
+            try r.save(self.io);
+        };
+    }
     fn key(self: *State, event: term.Event) !bool {
         if (event.key == .quit) return false;
         if (self.help) {
@@ -476,18 +483,12 @@ const State = struct {
                 .entry => self.focus = .matches,
                 .matches, .search => try self.navigate(.search),
             },
-            .tab => self.focus = switch (self.focus) {
-                .search => .matches,
-                .matches => .entry,
-                .entry => .search,
+            .tab => switch (self.focus) {
+                .search => self.focus = .matches,
+                .matches => try self.openSelected(),
+                .entry => self.focus = .search,
             },
-            .enter => if (self.count() != 0) {
-                self.focus = .entry;
-                if (self.reading) |r| {
-                    try r.remember(try self.db.titleAt(self.recordIndex(self.selected)));
-                    try r.save(self.io);
-                }
-            },
+            .enter => if (self.count() != 0) try self.openSelected(),
             .up, .down => {
                 if (self.focus == .search and self.count() != 0) self.focus = .matches else self.page(event.key == .down, 1);
             },
@@ -497,7 +498,7 @@ const State = struct {
                 if (self.focus == .search) self.cursor = self.previous() else self.focus = .matches;
             },
             .right => {
-                if (self.focus == .search) self.cursor = self.next() else self.focus = .entry;
+                if (self.focus == .search) self.cursor = self.next() else if (self.focus != .entry and self.nav != .learn) try self.openSelected() else self.focus = .entry;
             },
             .home => {
                 switch (self.focus) {
@@ -1079,6 +1080,50 @@ test "terminal query editing is bounded and UTF8-aware" {
     try std.testing.expect(try state.key(.{ .key = .text, .bytes = .{ 'q', 0, 0, 0 }, .len = 1, .pasted = true }));
     try std.testing.expectEqual(Focus.search, state.focus);
     try std.testing.expectEqualStrings("q", state.query[0..state.len]);
+
+    // Opening an already formatted preview must persist just like Enter.
+    for ([_]term.Key{ .tab, .right }) |key| {
+        for ([_]usize{ 36, 50, 92 }) |width| {
+            for ([_]usize{ 0, 1000 }) |history_limit| {
+                const label = try std.fmt.allocPrint(a, "focus-{s}-{d}-{d}", .{ @tagName(key), width, history_limit });
+                defer a.free(label);
+                const root = std.fs.path.dirname(path).?;
+                var focused_reading = ReadingState.init(a);
+                defer focused_reading.deinit();
+                try focused_reading.load(std.testing.io, root, label);
+                focused_reading.data.history_limit = history_limit;
+                var focused: State = .{
+                    .io = std.testing.io,
+                    .a = a,
+                    .db = &db,
+                    .reading = &focused_reading,
+                    .label = label,
+                    .theme = .terminal,
+                    .color = false,
+                    .focus = .matches,
+                    .range = .{ .start = 0, .end = db.count() },
+                };
+                defer focused.deinit();
+                try focused.prepare(width);
+                const preview = focused.text.ptr;
+                try std.testing.expectEqual(@as(usize, 0), focused_reading.data.history.len);
+                try std.testing.expectEqualStrings("", focused_reading.data.last_title);
+                _ = try focused.key(.{ .key = key });
+                try focused.prepare(width);
+                try std.testing.expectEqual(Focus.entry, focused.focus);
+                try std.testing.expect(focused.text.ptr == preview);
+                _ = try focused.key(.{ .key = .escape });
+                _ = try focused.key(.{ .key = .escape });
+                try std.testing.expectEqual(Focus.search, focused.focus);
+                var restored_focus = ReadingState.init(a);
+                defer restored_focus.deinit();
+                try restored_focus.load(std.testing.io, root, label);
+                try std.testing.expectEqualStrings("café", restored_focus.data.last_title);
+                try std.testing.expectEqual(@as(usize, if (history_limit == 0) 0 else 1), restored_focus.data.history.len);
+                if (history_limit != 0) try std.testing.expectEqualStrings("café", restored_focus.data.history[0]);
+            }
+        }
+    }
 
     var reading = ReadingState.init(a);
     defer reading.deinit();
