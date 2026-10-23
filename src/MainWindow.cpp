@@ -59,6 +59,7 @@
 #include <QTextEdit>
 #include <QTextFragment>
 #include <QTextOption>
+#include <QTextTable>
 #include <QTimer>
 #include <QtMath>
 #include <QUrl>
@@ -295,7 +296,14 @@ public:
         else if (format.verticalAlignment() == QTextCharFormat::AlignSubScript) result += QStringLiteral("text-position:sub;");
         result += QStringLiteral("direction:%1;").arg(block.textDirection() == Qt::RightToLeft ? QStringLiteral("rtl") : QStringLiteral("ltr"));
         const QColor foreground = format.foreground().style() == Qt::NoBrush ? browser_->palette().color(QPalette::Text) : format.foreground().color();
-        const QColor background = format.background().style() == Qt::NoBrush ? browser_->palette().color(QPalette::Base) : format.background().color();
+        auto backgroundBrush = format.background();
+        if (backgroundBrush.style() == Qt::NoBrush) {
+            if (auto *table = cursor.currentTable()) {
+                const auto cell = table->cellAt(cursor);
+                if (cell.isValid()) backgroundBrush = cell.format().background();
+            }
+        }
+        const QColor background = backgroundBrush.style() == Qt::NoBrush ? browser_->palette().color(QPalette::Base) : backgroundBrush.color();
         result += QStringLiteral("color:rgb(%1,%2,%3);background-color:rgb(%4,%5,%6);")
             .arg(foreground.red()).arg(foreground.green()).arg(foreground.blue())
             .arg(background.red()).arg(background.green()).arg(background.blue());

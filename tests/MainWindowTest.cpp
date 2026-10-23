@@ -4355,6 +4355,14 @@ private slots:
         MainWindow window(fixture_, QStringLiteral("cat"));
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+        QVERIFY(accessible);
+        auto *accessibleText = accessible->textInterface();
+        QVERIFY(accessibleText);
+        const auto attributesAt = [accessibleText](const QTextCursor &cursor) {
+            int start = -1, end = -1;
+            return accessibleText->attributes(cursor.selectionStart(), &start, &end).split(QChar(';'), Qt::SkipEmptyParts);
+        };
         const auto painted = [](const QString &text, const QString &color) {
             return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
                 {QStringLiteral("text"), text}, {QStringLiteral("background"), color}};
@@ -4401,6 +4409,14 @@ private slots:
             auto *rendered = qobject_cast<QTextTable *>(window.reading_->document()->rootFrame()->childFrames().first());
             QVERIFY(rendered);
             QCOMPARE(rendered->cellAt(0, 0).format().background().color(), QColor(QStringLiteral("#fffdd0")));
+            QVERIFY(!neighbor.isNull());
+            const auto neighborAttributes = attributesAt(neighbor);
+            QVERIFY(neighborAttributes.contains(QStringLiteral("color:rgb(0,0,0)")));
+            QVERIFY(neighborAttributes.contains(QStringLiteral("background-color:rgb(255,253,208)")));
+            QVERIFY(!darkInner.isNull());
+            const auto innerAttributes = attributesAt(darkInner);
+            QVERIFY(innerAttributes.contains(QStringLiteral("color:rgb(255,255,255)")));
+            QVERIFY(innerAttributes.contains(QStringLiteral("background-color:rgb(0,0,0)")));
             QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
             window.resize(900, 700);
             QCoreApplication::processEvents();
@@ -4416,7 +4432,14 @@ private slots:
                 QJsonObject{{QStringLiteral("text"), QStringLiteral("theme neighbor")}}}));
             QCOMPARE(window.reading_->document()->find(QStringLiteral("dark paint")).charFormat().foreground().color(), QColor(QStringLiteral("#ffffff")));
             QCOMPARE(window.reading_->document()->find(QStringLiteral("authored ink")).charFormat().foreground().color(), QColor(QStringLiteral("#123456")));
-            QCOMPARE(window.reading_->document()->find(QStringLiteral("theme neighbor")).charFormat().foreground().style(), Qt::NoBrush);
+            const auto themeNeighbor = window.reading_->document()->find(QStringLiteral("theme neighbor"));
+            QVERIFY(!themeNeighbor.isNull());
+            QCOMPARE(themeNeighbor.charFormat().foreground().style(), Qt::NoBrush);
+            QCOMPARE(themeNeighbor.charFormat().background().style(), Qt::NoBrush);
+            QVERIFY(!themeNeighbor.currentTable());
+            const QColor base = window.reading_->palette().color(QPalette::Base);
+            QVERIFY(attributesAt(themeNeighbor).contains(QStringLiteral("background-color:rgb(%1,%2,%3)")
+                .arg(base.red()).arg(base.green()).arg(base.blue())));
         }
         for (const QString &invalid : {QStringLiteral("#FFFFE0"), QStringLiteral("#fff"), QStringLiteral("yellow"), QStringLiteral("#ffffe0\n")}) {
             window.reading_->setHtml(window.spansHtml(QJsonArray{painted(QStringLiteral("invalid paint"), invalid)}));
