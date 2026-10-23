@@ -33,6 +33,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QMenu>
 #include <QPalette>
 #include <QPushButton>
@@ -59,6 +60,7 @@
 #include <QTextFragment>
 #include <QTextOption>
 #include <QTimer>
+#include <QtMath>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -66,9 +68,82 @@
 #include <algorithm>
 #include <array>
 namespace {
+class HeadingBrowser final : public QTextBrowser {
+public:
+    explicit HeadingBrowser(QWidget *parent) : QTextBrowser(parent) {
+        setFrameShape(QFrame::NoFrame);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setTextInteractionFlags(Qt::TextSelectableByMouse);
+        setFocusPolicy(Qt::ClickFocus);
+        setOpenLinks(false);
+        setOpenExternalLinks(false);
+        document()->setDocumentMargin(0);
+        setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        setStyleSheet(QStringLiteral("background: transparent; border: 0; padding: 0;"));
+        connect(document(), &QTextDocument::contentsChanged, this, [this] {
+            setAccessibleName(toPlainText());
+            fitHeight();
+        });
+        connect(document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged,
+                this, [this] { fitHeight(); });
+    }
+protected:
+    void resizeEvent(QResizeEvent *event) override {
+        QTextBrowser::resizeEvent(event);
+        fitHeight();
+    }
+private:
+    bool fitting_ = false;
+    void fitHeight() {
+        if (fitting_) return;
+        fitting_ = true;
+        document()->setTextWidth(qMax(1, viewport()->width()));
+        setFixedHeight(qMax(1, qCeil(document()->size().height())));
+        fitting_ = false;
+    }
+};
+
 class ReadingBrowser final : public QTextBrowser {
 public:
     using QTextBrowser::QTextBrowser;
+    bool keyboardActivation = false;
+    quint64 interaction = 0;
+    void restoreAnchor(const QUrl &url) {
+        int count = 0;
+        bool present = false;
+        for (auto block = document()->begin(); block.isValid(); block = block.next()) {
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment();
+                if (!fragment.isValid() || fragment.charFormat().anchorHref().isEmpty()) continue;
+                ++count;
+                present |= QUrl(fragment.charFormat().anchorHref()) == url;
+            }
+        }
+        if (!present) return;
+        QTextCursor beginning(document());
+        beginning.movePosition(QTextCursor::Start);
+        setTextCursor(beginning);
+        for (int i = 0; i <= count; ++i) {
+            if (!QTextBrowser::focusNextPrevChild(true)) break;
+            QTextCursor selected = textCursor();
+            if (!selected.hasSelection()) continue;
+            selected.setPosition(selected.selectionStart());
+            selected.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+            if (QUrl(selected.charFormat().anchorHref()) == url) break;
+        }
+    }
+protected:
+    void keyPressEvent(QKeyEvent *event) override {
+        ++interaction;
+        keyboardActivation = event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter;
+        QTextBrowser::keyPressEvent(event);
+        keyboardActivation = false;
+    }
+    void mousePressEvent(QMouseEvent *event) override {
+        ++interaction;
+        QTextBrowser::mousePressEvent(event);
+    }
 };
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0)
@@ -601,7 +676,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     sections_->clear();
                     sections_->setEnabled(false);
                     bookmark_->setEnabled(false);
-                    title_->setText(QStringLiteral("Open your dictionaries"));
+                    title_->setHtml(QStringLiteral("Open your dictionaries"));
                     meta_->setText(QStringLiteral("Your words stay on this computer."));
                     reading_->setHtml(loaded->emptyLibrary
                         ? QStringLiteral("<p>No dictionaries are installed yet.</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>")
@@ -634,7 +709,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             bookmark_->setEnabled(false);
             sections_->clear();
             sections_->setEnabled(false);
-            title_->setText(QStringLiteral("Find the word."));
+            title_->setHtml(QStringLiteral("Find the word."));
             meta_->setText(QStringLiteral("%1 · %2").arg(api_->kind() == QStringLiteral("language") ? api_->language() : QStringLiteral("All languages"), kindLabel(api_->kind())));
             reading_->setHtml(QStringLiteral("<p>Type a word to search. Press Enter to open it, or use the arrow keys to choose a suggestion.</p><p>Ctrl+L focuses search. Alt+Left and Alt+Right revisit words.</p>"));
             json_->clear();
@@ -925,15 +1000,13 @@ void MainWindow::setupUi() {
     readerHeading_ = new QWidget(content);
     auto *heading = new QVBoxLayout(readerHeading_);
     heading->setContentsMargins(0, 0, 0, 0);
-    title_ = new QLabel(QStringLiteral("Find the word."), content);
+    title_ = new HeadingBrowser(content);
+    title_->setHtml(QStringLiteral("Find the word."));
     QFont titleFont = title_->font();
     titleFont.setFamily(readerFamily());
     titleFont.setPointSize(30);
     titleFont.setBold(true);
     title_->setFont(titleFont);
-    title_->setTextFormat(Qt::RichText);
-    title_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    title_->setWordWrap(true);
     title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     meta_ = new QLabel(QStringLiteral("Local Wiktionary"), content);
     meta_->setTextFormat(Qt::PlainText);
@@ -1019,7 +1092,7 @@ void MainWindow::setupUi() {
             sections_->clear();
             sections_->setEnabled(false);
             bookmark_->setEnabled(false);
-            title_->setText(QStringLiteral("Open your dictionaries"));
+            title_->setHtml(QStringLiteral("Open your dictionaries"));
             meta_->setText(QStringLiteral("Your words stay on this computer."));
             reading_->setHtml(QStringLiteral("<p>Opening cancelled.</p><p>Open <b>Library</b> to import a dictionary or choose another folder.</p>"));
         }
@@ -1077,7 +1150,20 @@ void MainWindow::setupUi() {
             const int index = url.path().toInt();
             if (collapsedSections_.contains(index)) collapsedSections_.remove(index);
             else collapsedSections_.insert(index);
+            auto *browser = static_cast<ReadingBrowser *>(reading_);
+            const bool keyboard = browser->keyboardActivation;
             refreshReading();
+            if (keyboard) {
+                const int revision = reading_->document()->revision();
+                const int scroll = reading_->verticalScrollBar()->value();
+                const quint64 interaction = browser->interaction;
+                QTimer::singleShot(0, browser, [browser, url, revision, scroll, interaction] {
+                    if (!browser->hasFocus() || browser->interaction != interaction ||
+                        browser->document()->revision() != revision) return;
+                    browser->restoreAnchor(url);
+                    browser->verticalScrollBar()->setValue(scroll);
+                });
+            }
         }
         else if (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https")) QDesktopServices::openUrl(url);
     });
@@ -1312,7 +1398,7 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     const QJsonArray displayTitle = currentEntry_.value(QStringLiteral("display_title")).toArray();
     const QString language = currentEntry_.value(QStringLiteral("language")).toString();
     const QString kind = currentEntry_.value(QStringLiteral("kind")).toString();
-    title_->setText(displayTitle.isEmpty() ? title.toHtmlEscaped() : spansHtml(displayTitle));
+    title_->setHtml(displayTitle.isEmpty() ? title.toHtmlEscaped() : spansHtml(displayTitle));
     meta_->setText(QStringLiteral("%1 · %2").arg(language.isEmpty() ? QStringLiteral("All languages") : language, kindLabel(kind)));
     const QJsonArray sections = currentEntry_.value(QStringLiteral("sections")).toArray();
     sections_->clear();
@@ -1375,10 +1461,7 @@ QVector<QPair<QString, QString>> MainWindow::readingExplanations() const {
             }
         }
     };
-    // QLabel exposes the exact rendered rich-text HTML, not a public QTextDocument.
-    QTextDocument titleDocument;
-    titleDocument.setHtml(title_->text());
-    collect(titleDocument);
+    collect(*title_->document());
     collect(*reading_->document());
     return result;
 }

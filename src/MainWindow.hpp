@@ -110,7 +110,7 @@ private:
     QPushButton *smaller_ = nullptr;
     QPushButton *larger_ = nullptr;
     bool compactReader_ = false;
-    QLabel *title_ = nullptr;
+    QTextBrowser *title_ = nullptr;
     QLabel *meta_ = nullptr;
     QTabWidget *entryTabs_ = nullptr;
     QTextBrowser *reading_ = nullptr;

@@ -256,7 +256,7 @@ private slots:
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
         QVERIFY(!window.api_);
-        QCOMPARE(window.title_->text(), QStringLiteral("Open your dictionaries"));
+        QCOMPARE(window.title_->toPlainText(), QStringLiteral("Open your dictionaries"));
         QCOMPARE(window.resultStatus_->text(), QStringLiteral("No dictionary open"));
         const QString guidance = window.reading_->toPlainText();
         QVERIFY(guidance.contains(QStringLiteral("No dictionaries are installed yet.")));
@@ -326,7 +326,7 @@ private slots:
 
     void narrowReaderKeepsNavigationAndHeadingVisible() {
         MainWindow window{QString()};
-        window.title_->setText(QStringLiteral("acupuncture"));
+        window.title_->setHtml(QStringLiteral("acupuncture"));
         window.resize(480, 540);
         window.show();
         QTRY_VERIFY(window.compactReader_);
@@ -348,6 +348,79 @@ private slots:
         QCOMPARE(window.sections_, sections);
         QTRY_VERIFY(window.back_->geometry().top() <= window.sections_->geometry().bottom());
         QTRY_VERIFY(window.sections_->geometry().top() <= window.back_->geometry().bottom());
+    }
+
+    void richLongTitleWrapsWithoutAddingKeyboardStop() {
+        MainWindow window{QString()};
+        const QString title = QStringLiteral("StyledHeadingWitnessStyledHeadingWitnessStyledHeadingWitness");
+        window.title_->setHtml(QStringLiteral("<b><i title='title explanation'>%1</i></b>").arg(title));
+        window.resize(900, 700);
+        window.show();
+        QTRY_COMPARE(window.title_->accessibleName(), title);
+        QVERIFY(!(window.title_->focusPolicy() & Qt::TabFocus));
+        QCOMPARE(window.title_->focusPolicy(), Qt::ClickFocus);
+        QVERIFY(window.title_->textInteractionFlags().testFlag(Qt::TextSelectableByMouse));
+        QVERIFY(!window.title_->openLinks());
+        QVERIFY(!window.title_->openExternalLinks());
+        for (const int width : {900, 640}) {
+            window.resize(width, 700);
+            QTRY_VERIFY(window.title_->document()->size().height() <= window.title_->viewport()->height() + 1);
+            QVERIFY(window.title_->document()->idealWidth() <= window.title_->viewport()->width() + 1);
+            const QTextCursor text = window.title_->document()->find(title);
+            QVERIFY(!text.isNull());
+            QVERIFY(text.charFormat().fontItalic());
+            QVERIFY(text.charFormat().fontWeight() >= QFont::Bold);
+            QCOMPARE(text.charFormat().toolTip(), QStringLiteral("title explanation"));
+            window.title_->setTextCursor(text);
+            QCOMPARE(window.title_->textCursor().selectedText(), title);
+        }
+    }
+
+    void keyboardFoldRetainsItsActivationAnchor() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.learning_.setCollapseEtymology(false);
+        window.resize(900, 700);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto selectedAnchor = [&] {
+            QTextCursor selected = window.reading_->textCursor();
+            if (!selected.hasSelection()) return QUrl();
+            selected.setPosition(selected.selectionStart());
+            selected.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+            return QUrl(selected.charFormat().anchorHref());
+        };
+        window.search_->setFocus();
+        QTRY_VERIFY(window.search_->hasFocus());
+        window.reading_->setFocus(Qt::TabFocusReason);
+        QTRY_VERIFY(window.reading_->hasFocus());
+        int anchorFragments = 0;
+        bool sectionAnchorPresent = false;
+        for (auto block = window.reading_->document()->begin(); block.isValid(); block = block.next()) {
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const QString href = it.fragment().charFormat().anchorHref();
+                if (href.isEmpty()) continue;
+                ++anchorFragments;
+                sectionAnchorPresent |= QUrl(href).scheme() == QStringLiteral("section");
+            }
+        }
+        QVERIFY(sectionAnchorPresent);
+        QVERIFY(window.collapsedSections_.isEmpty());
+        QStringList traversed;
+        for (int i = 0; i <= anchorFragments && selectedAnchor().scheme() != QStringLiteral("section"); ++i) {
+            QTest::keyClick(window.reading_, Qt::Key_Tab);
+            traversed.append(selectedAnchor().toString());
+        }
+        QVERIFY2(selectedAnchor().scheme() == QStringLiteral("section"), qPrintable(traversed.join(QStringLiteral(", "))));
+        const QUrl anchor = selectedAnchor();
+        QTest::keyClick(window.reading_, Qt::Key_Return);
+        QTRY_VERIFY(!window.collapsedSections_.isEmpty());
+        const auto collapsed = window.collapsedSections_;
+        QTRY_COMPARE(selectedAnchor(), anchor);
+        QTest::keyClick(window.reading_, Qt::Key_Return);
+        QTRY_VERIFY(window.collapsedSections_.isEmpty());
+        QTRY_COMPARE(selectedAnchor(), anchor);
+        QTest::keyClick(window.reading_, Qt::Key_Return);
+        QTRY_COMPARE(window.collapsedSections_, collapsed);
     }
 
     void narrowTablesKeepWordsAndScrollHorizontally() {
@@ -928,7 +1001,7 @@ private slots:
         window.renderResponse(QJsonDocument(titleResponse).toJson(), false);
         QVERIFY(window.title_->isVisible());
         QTextDocument displayedTitle;
-        displayedTitle.setHtml(window.title_->text());
+        displayedTitle.setHtml(window.title_->toHtml());
         QCOMPARE(displayedTitle.toPlainText(), QStringLiteral("f"));
         const QVector<QPair<QString, QString>> titleOnly{{QStringLiteral("f"), QStringLiteral("title feminine gender")}};
         QCOMPARE(window.readingExplanations(), titleOnly);
@@ -1191,7 +1264,7 @@ private slots:
         QVERIFY(!window.moreResults_->isEnabled());
         QVERIFY(!window.back_->isEnabled());
         QVERIFY(!window.forward_->isEnabled());
-        QCOMPARE(window.title_->text(), QStringLiteral("Open your dictionaries"));
+        QCOMPARE(window.title_->toPlainText(), QStringLiteral("Open your dictionaries"));
         QCOMPARE(window.resultStatus_->text(), cancelReload
             ? QStringLiteral("Opening cancelled. Choose a folder to try again.")
             : QStringLiteral("No dictionary open"));
