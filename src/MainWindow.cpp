@@ -17,6 +17,7 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDebug>
+#include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFontDatabase>
@@ -340,6 +341,69 @@ QJsonArray sectionHeadingSpans(const QJsonObject &section) {
     return (rich || indented) && label.mid(start, end - start) == title ? spans : QJsonArray{};
 }
 
+struct HeadingDestination {
+    QString title;
+    QString anchor;
+    QString anchorFallback;
+    int section;
+    int block = -1;
+};
+
+QVector<HeadingDestination> headingDestinations(const QJsonObject &entry) {
+    QVector<HeadingDestination> result;
+    const QJsonArray sections = entry.value(QStringLiteral("sections")).toArray();
+    for (qsizetype i = 0; i < sections.size(); ++i) {
+        const QJsonObject section = sections[i].toObject();
+        const QString title = section.value(QStringLiteral("title")).toString();
+        if (!title.isEmpty()) result.append({title, section.value(QStringLiteral("anchor")).toString(), section.value(QStringLiteral("anchor_fallback")).toString(), int(i)});
+        const bool companion = !sectionHeadingSpans(section).isEmpty();
+        const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
+        for (qsizetype j = 0; j < blocks.size(); ++j) {
+            if (j == 0 && companion) continue;
+            const QJsonObject block = blocks[j].toObject();
+            if (block.value(QStringLiteral("kind")).toString() != QStringLiteral("heading")) continue;
+            QString label;
+            for (const QJsonValue &value : block.value(QStringLiteral("spans")).toArray()) {
+                const QJsonObject span = value.toObject();
+                label += span.value(QStringLiteral("kind")).toString() == QStringLiteral("line_break") ? QStringLiteral("\n")
+                    : span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString();
+            }
+            if (!label.isEmpty()) result.append({label, block.value(QStringLiteral("anchor")).toString(), block.value(QStringLiteral("anchor_fallback")).toString(), int(i), int(j)});
+        }
+    }
+    return result;
+}
+
+// Layout whitespace has no words, actions or formatting metadata. In a
+// section-heading edge it duplicates the enclosing block boundary; in an
+// ordinary depth-zero paragraph it must not manufacture another empty block.
+// Explicit code/Poem/NBSP/bidi/media metadata never takes this display path.
+bool ordinaryLayoutWhitespaceSpan(const QJsonObject &span, bool allowBreak) {
+    const QString kind = span.value(QStringLiteral("kind")).toString();
+    if (kind != QStringLiteral("text") && !(allowBreak && kind == QStringLiteral("line_break"))) return false;
+    for (const QString &key : {QStringLiteral("target"), QStringLiteral("trail"), QStringLiteral("language"),
+         QStringLiteral("classes"), QStringLiteral("direction"), QStringLiteral("explanation")})
+        if (!span.value(key).toString().isEmpty()) return false;
+    const QString role = span.value(QStringLiteral("role")).toString();
+    if (!role.isEmpty() && role != QStringLiteral("normal")) return false;
+    if (!span.value(QStringLiteral("foreground")).toString().isEmpty()) return false;
+    for (const QString &key : {QStringLiteral("bold"), QStringLiteral("italic"), QStringLiteral("code"),
+         QStringLiteral("small"), QStringLiteral("superscript"), QStringLiteral("subscript"),
+         QStringLiteral("strike"), QStringLiteral("underline")})
+        if (span.value(key).toBool()) return false;
+    for (const QChar c : span.value(QStringLiteral("text")).toString())
+        if (c != QChar(' ') && c != QChar('\t') && c != QChar('\r') && c != QChar('\n')) return false;
+    return true;
+}
+QJsonArray compactSectionHeadingDisplaySpans(const QJsonArray &spans) {
+    qsizetype start = 0, end = spans.size();
+    while (start < end && ordinaryLayoutWhitespaceSpan(spans[start].toObject(), true)) ++start;
+    while (end > start && ordinaryLayoutWhitespaceSpan(spans[end - 1].toObject(), true)) --end;
+    QJsonArray display;
+    for (qsizetype i = start; i < end; ++i) display.append(spans[i]);
+    return display;
+}
+
 QStringList poemClassTokens(const QJsonObject &span) {
     const QString value = span.value(QStringLiteral("classes")).toString();
     const auto space = [](QChar c) { return c == QChar(' ') || (c.unicode() >= 9 && c.unicode() <= 13); };
@@ -611,6 +675,22 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             loaded->originEdition = LibraryStorage::editionIdentity(root);
             if (!expectedRoot.isEmpty() && (loaded->originRoot != expectedRoot || loaded->originEdition != expectedEdition))
                 throw DictApiError("The saved dictionary has changed. Open its original folder.");
+            // Removing the final dictionary retains its manifest and cache.
+            // Only a valid empty manifest with no remaining blobs is empty.
+            QFile manifest(directory.filePath(QStringLiteral("languages.tsv")));
+            const QFileInfo languageFolder(directory.filePath(QStringLiteral("languages")));
+            const QDir languageDirectory(languageFolder.filePath());
+            const QStringList blobs{QStringLiteral("*.wikblb"), QStringLiteral("*.wikblb.xz")};
+            const auto blobEntries = QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot;
+            if (directory.isReadable() && !QFileInfo::exists(directory.filePath(QStringLiteral(".incomplete")))
+                && manifest.open(QIODevice::ReadOnly) && manifest.read(9) == QByteArrayLiteral("heading\n")
+                && manifest.error() == QFileDevice::NoError && manifest.atEnd()
+                && directory.entryList(blobs, blobEntries).isEmpty()
+                && ((!languageFolder.exists() && !languageFolder.isSymLink()) || (languageFolder.isDir() && !languageFolder.isSymLink()
+                    && languageDirectory.isReadable() && languageDirectory.entryList(blobs, blobEntries).isEmpty()))) {
+                loaded->emptyLibrary = true;
+                return loaded;
+            }
             loaded->api = std::make_unique<DictApi>(root);
             if (cancelled->load()) return loaded;
             if (QFileInfo::exists(QDir(root).filePath(QStringLiteral("languages.tsv")))) {
@@ -994,7 +1074,13 @@ void MainWindow::setupUi() {
     });
     connect(back_, &QPushButton::clicked, this, [this] { navigate(-1); });
     connect(forward_, &QPushButton::clicked, this, [this] { navigate(1); });
-    connect(sections_, &QComboBox::activated, this, [this](int index) { jumpToSection(sections_->itemData(index).toInt()); });
+    connect(sections_, &QComboBox::activated, this, [this](int index) {
+        const int section = sections_->itemData(index).toInt();
+        if (section < 0) return;
+        jumpToSection(section);
+        const int block = sections_->itemData(index, Qt::UserRole + 1).toInt();
+        if (block >= 0) reading_->scrollToAnchor(QStringLiteral("block-%1-%2").arg(section).arg(block));
+    });
     auto resizeText = [this](int delta) {
         readingPointSize_ = std::clamp(readingPointSize_ + delta, 9, 24);
         QSettings().setValue(QStringLiteral("reader/pointSize"), readingPointSize_);
@@ -1223,13 +1309,13 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     sections_->clear();
     sections_->addItem(QStringLiteral("Jump to section"), -1);
     bool ownerLanguageListed = false;
-    for (qsizetype i = 0; i < sections.size(); ++i) {
-        const QJsonObject section = sections[i].toObject();
-        const QString sectionTitle = section.value(QStringLiteral("title")).toString();
-        const bool ownerLanguage = kind == QStringLiteral("language") &&
-            section.value(QStringLiteral("level")).toInt() == 2 && sectionTitle == language;
-        if (sectionTitle.isEmpty() || (ownerLanguage && ownerLanguageListed)) continue;
-        sections_->addItem(sectionTitle, i);
+    for (const auto &heading : headingDestinations(currentEntry_)) {
+        const QJsonObject section = sections[heading.section].toObject();
+        const bool ownerLanguage = heading.block < 0 && kind == QStringLiteral("language") &&
+            section.value(QStringLiteral("level")).toInt() == 2 && heading.title == language;
+        if (ownerLanguage && ownerLanguageListed) continue;
+        sections_->addItem(heading.title, heading.section);
+        sections_->setItemData(sections_->count() - 1, heading.block, Qt::UserRole + 1);
         if (ownerLanguage) ownerLanguageListed = true;
     }
     sections_->setEnabled(sections_->count() > 1);
@@ -1246,15 +1332,18 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     learning_.record(word);
     bookmark_->setEnabled(true);
     bookmark_->setText(learning_.isBookmarked(word.key) ? QStringLiteral("★ Saved") : QStringLiteral("☆ Bookmark"));
+    const QJsonObject redirect = currentEntry_.value(QStringLiteral("redirect")).toObject();
+    const QString sourceTitle = redirect.value(QStringLiteral("source_title")).toString();
+    // Revisit the selected alias, preserving the same single redirect edge.
+    const QString lookupTitle = sourceTitle.isEmpty() ? title : sourceTitle;
     if (addVisit) {
         visits_.resize(visitIndex_ + 1);
-        if (visits_.isEmpty() || visits_.last().title != title || visits_.last().language != api_->language() || visits_.last().kind != api_->kind())
-            visits_.push_back({title, api_->language(), api_->kind(), 0, {}});
+        if (visits_.isEmpty() || visits_.last().title != lookupTitle || visits_.last().language != api_->language() || visits_.last().kind != api_->kind())
+            visits_.push_back({lookupTitle, api_->language(), api_->kind(), 0, {}});
         if (visits_.size() > 100) visits_.removeFirst();
         visitIndex_ = visits_.size() - 1;
         updateNavigation();
     }
-    const QJsonObject redirect = currentEntry_.value(QStringLiteral("redirect")).toObject();
     const QString destination = fragment ? *fragment :
         (redirect.value(QStringLiteral("followed")).toBool() ? redirect.value(QStringLiteral("fragment")).toString() : QString());
     jumpToFragment(destination);
@@ -1344,14 +1433,51 @@ void MainWindow::resetFolding() {
 
 void MainWindow::jumpToFragment(const QString &fragment) {
     if (fragment.isEmpty()) return;
-    if (fragment.startsWith(QStringLiteral("reference-"))) {
+    const auto headings = headingDestinations(currentEntry_);
+    const HeadingDestination *destination = nullptr;
+    QString spaced = fragment;
+    spaced.replace(QChar(' '), QChar('_'));
+    for (const QString &identity : {fragment, spaced}) {
+        for (const auto &heading : headings) {
+            if ((!heading.anchor.isEmpty() && heading.anchor == identity) ||
+                (!heading.anchorFallback.isEmpty() && heading.anchorFallback == identity)) {
+                if (destination) return;
+                destination = &heading;
+            }
+        }
+        if (destination) break;
+    }
+    if (!destination && fragment.startsWith(QStringLiteral("reference-"))) {
         reading_->scrollToAnchor(fragment);
         return;
     }
-    QString heading = fragment;
-    heading.replace(QChar('_'), QChar(' '));
-    const int index = sections_->findText(heading);
-    if (index >= 0) jumpToSection(sections_->itemData(index).toInt());
+    if (!destination) {
+        // Older records retain unambiguous label jumps and the coalesced owner language.
+        QString label = fragment;
+        label.replace(QChar('_'), QChar(' '));
+        bool ownerLanguageDestination = false;
+        const QJsonArray sections = currentEntry_.value(QStringLiteral("sections")).toArray();
+        for (const auto &heading : headings) {
+            if (heading.title != label) continue;
+            if (!heading.anchor.isEmpty() || !heading.anchorFallback.isEmpty()) return;
+            const bool ownerLanguage = heading.block < 0 &&
+                currentEntry_.value(QStringLiteral("kind")).toString() == QStringLiteral("language") &&
+                heading.title == currentEntry_.value(QStringLiteral("language")).toString() &&
+                sections[heading.section].toObject().value(QStringLiteral("level")).toInt() == 2;
+            // Match the existing single owner-language menu destination for old records.
+            // Ordinary duplicate labels remain ambiguous; compiled IDs were resolved above.
+            if (destination) {
+                if (!ownerLanguageDestination || !ownerLanguage) return;
+                continue;
+            }
+            destination = &heading;
+            ownerLanguageDestination = ownerLanguage;
+        }
+    }
+    if (!destination) return;
+    jumpToSection(destination->section);
+    if (destination->block >= 0)
+        reading_->scrollToAnchor(QStringLiteral("block-%1-%2").arg(destination->section).arg(destination->block));
 }
 
 void MainWindow::jumpToSection(int section) {
@@ -1697,6 +1823,16 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
     if (table.isObject()) return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt());
     const QJsonArray spans = block.value(QStringLiteral("spans")).toArray();
     const bool poem = hasPoemSpans(spans);
+    if (kind == QStringLiteral("paragraph") && block.value(QStringLiteral("depth")).toInt() == 0 &&
+        block.value(QStringLiteral("list_path")).toString().isEmpty() &&
+        block.value(QStringLiteral("number")).toString().isEmpty() &&
+        block.value(QStringLiteral("level")).toInt() == 0 &&
+        !poem && feature.isEmpty() && !spans.isEmpty()) {
+        bool layoutOnly = true;
+        for (const QJsonValue &span : spans)
+            layoutOnly = layoutOnly && ordinaryLayoutWhitespaceSpan(span.toObject(), false);
+        if (layoutOnly) return {};
+    }
     const int indent = std::clamp(block.value(QStringLiteral("depth")).toInt(1) - 1, 0, 20) * 16;
     const int depth = block.value(QStringLiteral("depth")).toInt();
     const int outerIndent = kind == QStringLiteral("definition") || kind == QStringLiteral("term") ? indent
@@ -1830,7 +1966,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
             // Section typography stays compact; the semantic heading level and indentation are authored.
             out += QStringLiteral("<h%1 class='wikidict-section-heading' style='font-family:sans-serif;font-size:%2pt;margin-top:20px;margin-left:%3px'><a href='section:%4'>%5</a> %6</h%1>")
                 .arg(headingLevel).arg(readingPointSize_).arg(margin).arg(index)
-                .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), spansHtml(richHeading));
+                .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), spansHtml(compactSectionHeadingDisplaySpans(richHeading)));
         } else if (!ownerLanguage) {
             out += QStringLiteral("<h2 class='wikidict-section-heading'><a href='section:%1'>%2 %3</a></h2>").arg(index)
                 .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), title.toHtmlEscaped());
@@ -1851,6 +1987,8 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                             collectEmbeddedMedia(cell.toObject().value(QStringLiteral("spans")).toArray());
                 } else collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
             }
+            if (kind == QStringLiteral("heading"))
+                out += QStringLiteral("<a name='block-%1-%2'></a>").arg(index).arg(blockIndex);
             out += blockHtml(block);
         }
     }

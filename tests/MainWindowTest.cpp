@@ -173,6 +173,56 @@ private:
     }
 
 private slots:
+    void sectionHeadingLayoutWhitespaceDoesNotCreateEmptyReadingBlocks() {
+        MainWindow window(QString{});
+        const auto text = [](const QString &value) { return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), value}}; };
+        QJsonObject linked = text(QStringLiteral("Heading"));
+        linked.insert(QStringLiteral("kind"), QStringLiteral("link"));
+        linked.insert(QStringLiteral("target"), QStringLiteral("Lexical heading target"));
+        const QJsonObject br{{QStringLiteral("kind"), QStringLiteral("line_break")}, {QStringLiteral("text"), QStringLiteral("\n")}};
+        const auto paragraph = [](const QJsonArray &spans) { return QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")}, {QStringLiteral("depth"), 0}, {QStringLiteral("spans"), spans}}; };
+        const auto fixture = [&](bool layoutWhitespace) {
+            QJsonArray heading{linked};
+            if (layoutWhitespace) heading.append(br);
+            QJsonArray blocks{QJsonObject{{QStringLiteral("kind"), QStringLiteral("heading")}, {QStringLiteral("level"), 2}, {QStringLiteral("spans"), heading}}};
+            if (layoutWhitespace) blocks.append(paragraph(QJsonArray{text(QStringLiteral(" "))}));
+            blocks.append(paragraph(QJsonArray{text(QStringLiteral("Actual lexical body"))}));
+            return QJsonObject{{QStringLiteral("title"), QStringLiteral("Fixture")}, {QStringLiteral("kind"), QStringLiteral("language")},
+                {QStringLiteral("language"), QStringLiteral("English")}, {QStringLiteral("sections"), QJsonArray{QJsonObject{
+                    {QStringLiteral("level"), 2}, {QStringLiteral("title"), QStringLiteral("Heading")}, {QStringLiteral("blocks"), blocks}}}}};
+        };
+        const QJsonObject entry = fixture(true), original = entry;
+        const QString html = window.entryHtml(entry), control = window.entryHtml(fixture(false));
+        QCOMPARE(html, control); // Same lexical content must not gain two layout-only blocks.
+        QTextDocument actualDocument, controlDocument;
+        actualDocument.setHtml(html); controlDocument.setHtml(control);
+        QCOMPARE(actualDocument.blockCount(), controlDocument.blockCount());
+        QCOMPARE(actualDocument.toPlainText(), controlDocument.toPlainText());
+        QCOMPARE(actualDocument.find(QStringLiteral("Heading")).charFormat().anchorHref(), QStringLiteral("dict:Lexical%20heading%20target"));
+        QVERIFY(actualDocument.toPlainText().contains(QStringLiteral("Actual lexical body")));
+        QCOMPARE(entry, original);
+
+        QJsonObject second = linked; second.insert(QStringLiteral("text"), QStringLiteral("Second"));
+        QJsonObject section{{QStringLiteral("level"), 2}, {QStringLiteral("title"), QStringLiteral("Heading\nSecond")},
+            {QStringLiteral("blocks"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("heading")},
+                {QStringLiteral("level"), 2}, {QStringLiteral("spans"), QJsonArray{linked, br, second, br}}}}}};
+        QJsonObject multiline = fixture(false); multiline.insert(QStringLiteral("sections"), QJsonArray{section});
+        const QString multilineHtml = window.entryHtml(multiline);
+        QCOMPARE(multilineHtml.count(QStringLiteral("<br>")), 1); // Internal authored line break survives.
+        QJsonObject pre{{QStringLiteral("kind"), QStringLiteral("preformatted")}, {QStringLiteral("spans"), QJsonArray{text(QStringLiteral("  "))}}};
+        QVERIFY(window.blockHtml(pre).contains(QStringLiteral("<pre>  </pre>")));
+        QJsonObject codeSpace = text(QStringLiteral(" ")); codeSpace.insert(QStringLiteral("code"), true);
+        QVERIFY(!window.blockHtml(paragraph(QJsonArray{codeSpace})).isEmpty());
+        QVERIFY(!window.blockHtml(paragraph(QJsonArray{text(QString(QChar(0x00a0)))})).isEmpty());
+        QJsonObject bidiSpace = text(QStringLiteral(" ")); bidiSpace.insert(QStringLiteral("direction"), QStringLiteral("rtl"));
+        QVERIFY(!window.blockHtml(paragraph(QJsonArray{bidiSpace})).isEmpty());
+        for (const QString &key : {QStringLiteral("list_path"), QStringLiteral("number"), QStringLiteral("level")}) {
+            QJsonObject metadata = paragraph(QJsonArray{text(QStringLiteral(" "))});
+            metadata.insert(key, key == QStringLiteral("level") ? QJsonValue(3) : QJsonValue(QStringLiteral("retained")));
+            QVERIFY2(!window.blockHtml(metadata).isEmpty(), qPrintable(key));
+        }
+    }
+
     void initTestCase() {
         QString source = qEnvironmentVariable("DICT_TEST_ROOT");
         if (source.isEmpty()) source = QFINDTESTDATA("fixtures");
@@ -219,17 +269,41 @@ private slots:
         QVERIFY(!window.language_->isEnabled());
         auto *library = window.findChild<QPushButton *>(QStringLiteral("openDictionaries"));
         QVERIFY(library && library->isEnabled());
-        // A missing or malformed nonempty root is still an opening error.
-        for (const bool missing : {true, false}) {
+        // Empty-library guidance must not conceal damaged or unrecognized roots.
+        for (const QString &problem : {QStringLiteral("missing"), QStringLiteral("unrecognized"),
+                QStringLiteral("manifest"), QStringLiteral("missing-language"), QStringLiteral("unfinished"),
+                QStringLiteral("raw"), QStringLiteral("compressed"), QStringLiteral("orphan"),
+                QStringLiteral("edition"), QStringLiteral("dangling-languages")}) {
             QTemporaryDir rejected(QDir::currentPath() + QStringLiteral("/.tmp/rejected-initial-root-XXXXXX"));
             QVERIFY(rejected.isValid());
             QString path = rejected.path();
-            if (missing) path += QStringLiteral("/missing");
-            else {
-                QFile manifest(path + QStringLiteral("/languages.tsv"));
-                QVERIFY(manifest.open(QIODevice::WriteOnly));
-                QCOMPARE(manifest.write("invalid manifest\n"), qint64(17));
-                manifest.close();
+            const auto write = [&](const QString &name, const QByteArray &bytes) {
+                QFile file(path + QChar('/') + name);
+                return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+            };
+            if (problem == QStringLiteral("missing")) path += QStringLiteral("/missing");
+            else if (problem == QStringLiteral("unrecognized")) {
+                QVERIFY(write(QStringLiteral("notes.txt"), QByteArrayLiteral("unrecognized folder")));
+            } else {
+                QVERIFY(write(QStringLiteral("languages.tsv"), problem == QStringLiteral("manifest")
+                    ? QByteArrayLiteral("invalid manifest\n") : problem == QStringLiteral("missing-language")
+                    ? QByteArrayLiteral("heading\nEnglish\n") : QByteArrayLiteral("heading\n")));
+                if (problem == QStringLiteral("unfinished")) QVERIFY(write(QStringLiteral(".incomplete"), {}));
+                if (problem == QStringLiteral("raw")) QVERIFY(write(QStringLiteral("supplemental.wikblb"), QByteArrayLiteral("broken")));
+                if (problem == QStringLiteral("compressed")) QVERIFY(write(QStringLiteral("supplemental.wikblb.xz"), QByteArrayLiteral("broken")));
+                if (problem == QStringLiteral("orphan")) {
+                    QVERIFY(QDir(path).mkpath(QStringLiteral("languages")));
+                    QVERIFY(write(QStringLiteral("languages/orphan.wikblb"), QByteArrayLiteral("broken")));
+                }
+                if (problem == QStringLiteral("dangling-languages")) {
+                    const QString target = path + QStringLiteral("/removed-languages");
+                    QVERIFY(QDir().mkdir(target));
+                    QVERIFY(QFile::link(target, path + QStringLiteral("/languages")));
+                    QVERIFY(QDir().rmdir(target));
+                    QVERIFY(QFileInfo(path + QStringLiteral("/languages")).isSymLink());
+                    QVERIFY(!QFileInfo::exists(path + QStringLiteral("/languages")));
+                }
+                if (problem == QStringLiteral("edition")) QVERIFY(write(QStringLiteral(".desktop-edition"), QByteArrayLiteral("invalid edition")));
             }
             MainWindow failed(path);
             failed.show();
@@ -1027,7 +1101,7 @@ private slots:
 
     void removingLastDictionaryClearsVisibleEntryAndSearchState_data() {
         QTest::addColumn<bool>("cancelReload");
-        QTest::newRow("reload-fails-empty") << false;
+        QTest::newRow("reload-managed-empty") << false;
         QTest::newRow("reload-cancelled-empty") << true;
     }
 
@@ -1123,6 +1197,20 @@ private slots:
             : QStringLiteral("No dictionary open"));
         QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Open Library")));
         QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        if (!cancelReload) {
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("No dictionaries are installed yet.")));
+            QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("Could not open")));
+            QVERIFY(QFileInfo::exists(root + QStringLiteral("/.desktop-library.json")));
+            QFile manifest(root + QStringLiteral("/languages.tsv"));
+            QVERIFY(manifest.open(QIODevice::ReadOnly));
+            QCOMPARE(manifest.readAll(), QByteArrayLiteral("heading\n"));
+            MainWindow reopened(root);
+            reopened.show();
+            QTRY_VERIFY_WITH_TIMEOUT(!reopened.loading_, 30000);
+            QVERIFY(!reopened.api_);
+            QVERIFY(reopened.reading_->toPlainText().contains(QStringLiteral("No dictionaries are installed yet.")));
+            QVERIFY(!reopened.reading_->toPlainText().contains(QStringLiteral("Could not open")));
+        }
         QStringList remainingHistory;
         for (const auto &entry : window.learning_.history()) remainingHistory.append(entry.key);
         QCOMPARE(remainingHistory, history);
@@ -1668,6 +1756,42 @@ private slots:
         window.jumpToFragment(QStringLiteral("Finnish"));
         QVERIFY(!window.collapsedSections_.contains(0));
         QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("See also: yya")));
+        for (int index : {2, 5, 6, 7}) window.collapsedSections_.insert(index);
+        window.refreshReading();
+        window.jumpToFragment(QStringLiteral("Etymology"));
+        QVERIFY(window.collapsedSections_.contains(2) && window.collapsedSections_.contains(5));
+        window.jumpToFragment(QStringLiteral("English"));
+        QVERIFY(window.collapsedSections_.contains(6) && window.collapsedSections_.contains(7));
+
+        // A same-label nested heading is not an equivalent owner-language destination.
+        QJsonObject nestedOwnerEntry = entry;
+        QJsonArray nestedOwnerSections = entry.value(QStringLiteral("sections")).toArray();
+        QJsonObject nestedOwnerSection = nestedOwnerSections[0].toObject();
+        QJsonArray nestedOwnerBlocks = overview;
+        nestedOwnerBlocks.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("heading")},
+            {QStringLiteral("level"), 3}, {QStringLiteral("spans"), QJsonArray{
+                QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), QStringLiteral("Finnish")}}}}});
+        nestedOwnerSection.insert(QStringLiteral("blocks"), nestedOwnerBlocks);
+        nestedOwnerSections[0] = nestedOwnerSection;
+        nestedOwnerEntry.insert(QStringLiteral("sections"), nestedOwnerSections);
+        response.insert(QStringLiteral("entries"), QJsonArray{nestedOwnerEntry});
+        window.renderResponse(QJsonDocument(response).toJson());
+        window.collapsedSections_.insert(0); window.collapsedSections_.insert(1);
+        window.refreshReading(); window.jumpToFragment(QStringLiteral("Finnish"));
+        QVERIFY(window.collapsedSections_.contains(0) && window.collapsedSections_.contains(1));
+
+        // A compiled owner heading is authoritative even when the menu coalesces owner labels.
+        QJsonArray explicitSections = entry.value(QStringLiteral("sections")).toArray();
+        QJsonObject actualOwnerHeading = explicitSections[1].toObject();
+        actualOwnerHeading.insert(QStringLiteral("anchor"), QStringLiteral("Finnish"));
+        explicitSections[1] = actualOwnerHeading;
+        entry.insert(QStringLiteral("sections"), explicitSections);
+        response.insert(QStringLiteral("entries"), QJsonArray{entry});
+        window.renderResponse(QJsonDocument(response).toJson());
+        window.collapsedSections_.insert(0); window.collapsedSections_.insert(1);
+        window.refreshReading(); window.jumpToFragment(QStringLiteral("Finnish"));
+        QVERIFY(window.collapsedSections_.contains(0));
+        QVERIFY(!window.collapsedSections_.contains(1));
     }
 
     void aliasOnlyFolderUsesNeutralCollection() {
@@ -2447,6 +2571,46 @@ private slots:
             QApplication::focusWidget()->isEnabled());
     }
 
+    void backAndForwardPreserveSelectedAliasIdentity() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-alias-back-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString root = QDir(directory.path()).absolutePath();
+        std::atomic_bool cancelled = false;
+        const auto progress = [](const QString &, qint64, qint64) {};
+        for (const QString &file : {
+                QStringLiteral("languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"),
+                QStringLiteral("alias-cases/aliases.wikblb")}) {
+            auto prepared = LibraryStorage::prepareImport(root, fixture_ + QChar('/') + file, {}, -1, cancelled, progress);
+            LibraryStorage::commitImport(root, *prepared);
+        }
+        MainWindow window(root); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QVERIFY(window.openWord(QStringLiteral("Loop A")));
+        QCOMPARE(title(window), QStringLiteral("Loop B"));
+        QVERIFY(window.openWord(QStringLiteral("dog")));
+        QTest::mouseClick(window.back_, Qt::LeftButton);
+        QTRY_COMPARE(title(window), QStringLiteral("Loop B"));
+        QCOMPARE(window.currentEntry_.value(QStringLiteral("kind")).toString(), QStringLiteral("alias"));
+        QCOMPARE(window.currentEntry_.value(QStringLiteral("redirect")).toObject().value(QStringLiteral("source_title")).toString(), QStringLiteral("Loop A"));
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        QTest::mouseClick(window.forward_, Qt::LeftButton);
+        QTRY_COMPARE(title(window), QStringLiteral("dog"));
+
+        QVERIFY(window.openWord(QStringLiteral("cat")));
+        const auto ordinaryVisits = window.visits_.size();
+        QVERIFY(window.openWord(QStringLiteral("Cats")));
+        QCOMPARE(title(window), QStringLiteral("cat"));
+        QCOMPARE(window.visits_.size(), ordinaryVisits + 1);
+        QVERIFY(window.openWord(QStringLiteral("Cats")));
+        QCOMPARE(window.visits_.size(), ordinaryVisits + 1);
+        QTest::mouseClick(window.back_, Qt::LeftButton);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QVERIFY(window.currentEntry_.value(QStringLiteral("redirect")).toObject().isEmpty());
+        QTest::mouseClick(window.forward_, Qt::LeftButton);
+        QTRY_COMPARE(window.currentEntry_.value(QStringLiteral("redirect")).toObject().value(QStringLiteral("source_title")).toString(), QStringLiteral("Cats"));
+        QCOMPARE(title(window), QStringLiteral("cat"));
+    }
+
     void backAndForwardRestoreScrollAndFolds() {
         QSettings().setValue(QStringLiteral("reader/pointSize"), 24);
         LearningStore defaults;
@@ -2502,6 +2666,128 @@ private slots:
         QVERIFY(window.back_->isEnabled());
         QTest::mouseClick(window.back_, Qt::LeftButton);
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
+    }
+
+    void compiledHeadingAnchorsSelectSectionAndStandaloneDestinations() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object();
+        QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+        const auto text = [](const QString &value) { return QJsonObject{
+            {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), value}}; };
+        const auto section = [&](const QString &anchor, const QString &body) { return QJsonObject{
+            {QStringLiteral("level"), 3}, {QStringLiteral("title"), QStringLiteral("Noun")}, {QStringLiteral("anchor"), anchor},
+            {QStringLiteral("blocks"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                {QStringLiteral("spans"), QJsonArray{text(body)}}}}}}; };
+        QJsonObject standalone{{QStringLiteral("kind"), QStringLiteral("heading")}, {QStringLiteral("level"), 4},
+            {QStringLiteral("anchor"), QStringLiteral("Noun_4")}, {QStringLiteral("spans"), QJsonArray{text(QStringLiteral("Noun"))}}};
+        QJsonObject owner = section(QStringLiteral("Noun_3"), QStringLiteral("THIRD SECTION BODY"));
+        QJsonArray blocks = owner.value(QStringLiteral("blocks")).toArray();
+        blocks.append(standalone);
+        blocks.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+            {QStringLiteral("spans"), QJsonArray{text(QStringLiteral("STANDALONE HEADING BODY"))}}});
+        owner.insert(QStringLiteral("blocks"), blocks);
+        QJsonObject second = section(QStringLiteral("Noun_2"), QStringLiteral("SECOND SECTION BODY"));
+        QJsonArray secondBlocks = second.value(QStringLiteral("blocks")).toArray();
+        secondBlocks.prepend(QJsonObject{{QStringLiteral("kind"), QStringLiteral("heading")}, {QStringLiteral("level"), 3},
+            {QStringLiteral("anchor"), QStringLiteral("Noun_2")}, {QStringLiteral("spans"), QJsonArray{QJsonObject{
+                {QStringLiteral("kind"), QStringLiteral("link")}, {QStringLiteral("text"), QStringLiteral("Noun")},
+                {QStringLiteral("target"), QStringLiteral("cat")}}}}});
+        second.insert(QStringLiteral("blocks"), secondBlocks);
+        entry.insert(QStringLiteral("sections"), QJsonArray{section(QStringLiteral("Noun"), QStringLiteral("FIRST SECTION BODY")), second, owner});
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")},
+            {QStringLiteral("text"), QStringLiteral("Second noun")}, {QStringLiteral("target"), QStringLiteral("#Noun_2")}}});
+        const auto publish = [&](const std::optional<QString> &fragment = std::nullopt) {
+            response.insert(QStringLiteral("entries"), QJsonArray{entry});
+            window.renderResponse(QJsonDocument(response).toJson(), true, fragment);
+        };
+        publish();
+        QCOMPARE(window.sections_->count(), 5); // Rich first companion shares its section row; standalone heading adds one.
+        window.collapsedSections_ = {0, 1, 2}; window.refreshReading();
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:%23Noun_2")));
+        QVERIFY(window.collapsedSections_.contains(0));
+        QVERIFY(!window.collapsedSections_.contains(1));
+        QVERIFY(window.collapsedSections_.contains(2));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("SECOND SECTION BODY")));
+
+        // openWord publishes an explicit cross-entry fragment through this boundary.
+        publish(QStringLiteral("Noun_4"));
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("block-2-1")));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("STANDALONE HEADING BODY")));
+        QCOMPARE(title(window), QStringLiteral("cat"));
+        QCOMPARE(window.sections_->itemData(4).toInt(), 2);
+        QCOMPARE(window.sections_->itemData(4, Qt::UserRole + 1).toInt(), 1);
+        window.collapsedSections_.insert(2); window.refreshReading();
+        QVERIFY(QMetaObject::invokeMethod(window.sections_, "activated", Qt::DirectConnection, Q_ARG(int, 4)));
+        QVERIFY(!window.collapsedSections_.contains(2));
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("block-2-1")));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("STANDALONE HEADING BODY")));
+
+        entry.insert(QStringLiteral("redirect"), QJsonObject{{QStringLiteral("source_title"), QStringLiteral("Alias cat")},
+            {QStringLiteral("target_title"), QStringLiteral("cat")}, {QStringLiteral("fragment"), QStringLiteral("Noun_2")},
+            {QStringLiteral("followed"), true}});
+        publish(); // The same compiled destination is inherited from an alias.
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("SECOND SECTION BODY")));
+        publish(QStringLiteral("Noun_4")); // An explicit fragment overrides the alias destination.
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("STANDALONE HEADING BODY")));
+
+        entry.remove(QStringLiteral("redirect"));
+        QJsonArray anchored = entry.value(QStringLiteral("sections")).toArray();
+        QJsonObject spaced = anchored[0].toObject(); spaced.insert(QStringLiteral("anchor"), QStringLiteral("Usage_notes"));
+        QJsonObject reference = anchored[1].toObject(); reference.insert(QStringLiteral("anchor"), QStringLiteral("reference-1"));
+        anchored[0] = spaced; anchored[1] = reference; entry.insert(QStringLiteral("sections"), anchored);
+        publish(); window.collapsedSections_ = {0, 1, 2}; window.refreshReading();
+        window.jumpToFragment(QStringLiteral("Usage notes"));
+        QVERIFY(!window.collapsedSections_.contains(0));
+        window.jumpToFragment(QStringLiteral("reference-1"));
+        QVERIFY(!window.collapsedSections_.contains(1)); // Authored identity precedes synthetic reference fallback.
+        QJsonArray legacy = entry.value(QStringLiteral("sections")).toArray();
+        for (qsizetype i = 0; i < legacy.size(); ++i) {
+            QJsonObject value = legacy[i].toObject(); value.remove(QStringLiteral("anchor"));
+            value.insert(QStringLiteral("blocks"), QJsonArray{}); legacy[i] = value;
+        }
+        entry.insert(QStringLiteral("sections"), legacy);
+        publish(); window.collapsedSections_ = {0, 1, 2}; window.refreshReading();
+        window.jumpToFragment(QStringLiteral("Noun"));
+        QCOMPARE(window.collapsedSections_, QSet<int>({0, 1, 2})); // Ambiguous legacy labels do not invent an identity.
+        QJsonObject unique = legacy[0].toObject(); unique.insert(QStringLiteral("title"), QStringLiteral("Usage notes"));
+        legacy[0] = unique; entry.insert(QStringLiteral("sections"), legacy);
+        publish(); window.collapsedSections_ = {0, 1, 2}; window.refreshReading();
+        window.jumpToFragment(QStringLiteral("Usage_notes"));
+        QVERIFY(!window.collapsedSections_.contains(0));
+
+        // Primary and fallback IDs share the producer's page-order collision namespace.
+        const QString umlaut(QChar(0x00e4));
+        QJsonObject unicode = section(umlaut, QStringLiteral("UNICODE HEADING BODY"));
+        unicode.insert(QStringLiteral("title"), umlaut);
+        unicode.insert(QStringLiteral("anchor_fallback"), QStringLiteral(".C3.A4"));
+        QJsonObject literal = section(QStringLiteral(".C3.A4_2"), QStringLiteral("LITERAL DOT HEADING BODY"));
+        literal.insert(QStringLiteral("title"), QStringLiteral(".C3.A4"));
+        QJsonObject repeated{{QStringLiteral("kind"), QStringLiteral("heading")}, {QStringLiteral("level"), 4},
+            {QStringLiteral("anchor"), umlaut + QStringLiteral("_2")},
+            {QStringLiteral("anchor_fallback"), QStringLiteral(".C3.A4_3")},
+            {QStringLiteral("spans"), QJsonArray{text(umlaut)}}};
+        QJsonObject blockOwner = section(QStringLiteral("Owner"), QStringLiteral("OWNER BODY"));
+        blockOwner.insert(QStringLiteral("title"), QStringLiteral("Owner"));
+        blockOwner.insert(QStringLiteral("blocks"), QJsonArray{repeated, QJsonObject{
+            {QStringLiteral("kind"), QStringLiteral("paragraph")},
+            {QStringLiteral("spans"), QJsonArray{text(QStringLiteral("REPEATED UNICODE BLOCK BODY"))}}}});
+        entry.insert(QStringLiteral("sections"), QJsonArray{unicode, literal, blockOwner});
+        publish();
+        const auto expectOwner = [&](const QString &fragment, int expected) {
+            window.collapsedSections_ = {0, 1, 2}; window.refreshReading();
+            window.jumpToFragment(fragment);
+            QSet<int> folded{0, 1, 2}; folded.remove(expected);
+            QCOMPARE(window.collapsedSections_, folded);
+        };
+        expectOwner(umlaut, 0);
+        expectOwner(QStringLiteral(".C3.A4"), 0); // Exact retained fallback, never reader unescaping.
+        expectOwner(QStringLiteral(".C3.A4_2"), 1); // Literal dot spelling owns the collision suffix.
+        expectOwner(umlaut + QStringLiteral("_2"), 2);
+        expectOwner(QStringLiteral(".C3.A4_3"), 2); // Standalone Block.anchor_fallback.
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("block-2-0")));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("REPEATED UNICODE BLOCK BODY")));
     }
 
     void sectionAndReferenceLinksReachVisibleTargets() {

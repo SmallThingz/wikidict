@@ -1,4 +1,4 @@
-import {renderEntry} from './renderer.js';
+import {renderEntry,revealFragment} from './renderer.js';
 import {entryClue as clue,hitKey as key,refreshSavedClue} from './preview.js';
 import {mediaView,trimMedia,clearMedia} from './media.js';
 const $=id=>document.getElementById(id),panel=$('panel'),entryView=$('entry');
@@ -22,14 +22,15 @@ function title(text){panel.append(node('h1',text));}
 function navigate(next){return performAction(()=>{page=next;renderVersion++;panel.replaceChildren();entryView.replaceChildren();status('');$('dock').classList.remove('away');document.querySelectorAll('[data-page]').forEach(b=>{const active=b.dataset.page===next||(next==='reading'&&b.dataset.page==='search')||(next==='dictionaries'&&b.dataset.page==='settings');b.setAttribute('aria-current',active?'page':'false');});window.scrollTo(0,0);speechSynthesis.cancel();
  if(next==='search')return search();else if(next==='history'||next==='saved')return wordList(next);else if(next==='learn')return learn();else if(next==='settings')return settings();else if(next==='dictionaries')return dictionaries();else if(next==='reading')return renderWord();
 });}
-async function open(hit){if(!hit)return;const version=++renderVersion;status('Opening…');const value=await readForView('read',hit,()=>version===renderVersion);if(version!==renderVersion)return;current=value;currentHit=hit;
+async function open(hit,fragment){if(!hit)return;const version=++renderVersion;status('Opening…');const value=await readForView('read',hit,()=>version===renderVersion);if(version!==renderVersion)return;current=value;currentHit=hit;
  const preview=clue(value),saved=refreshSavedClue(state.saved,hit,preview),savedChanged=saved!==state.saved;state.saved=saved;
  if(state.settings.historyLimit>0){const item={...hit,clue:preview,at:Date.now()};state.history=[item,...state.history.filter(x=>key(x)!==key(hit))].slice(0,state.settings.historyLimit);save();}
  if(savedChanged)await flushSave();
  if(version!==renderVersion)return;
  navigate('reading');
+ revealFragment(entryView,fragment===undefined?(value.redirect?.followed?value.redirect.fragment:''):fragment);
 }
-async function openLink(target){const [name,anchor]=target.split('#');if(name){const version=++renderVersion,isCurrent=()=>page==='reading'&&version===renderVersion;const hit=await readForView('exact',{title:name.replaceAll('_',' '),context:current?.navigation_context||currentHit?.context||currentHit?.dictionary},isCurrent);if(!isCurrent())return;if(!hit){status('Word is not installed in this dictionary.');return;}await open(hit);}if(anchor){const el=document.getElementById(anchor);if(el){if(el.tagName==='DETAILS')el.open=true;el.scrollIntoView({behavior:'smooth'});}}}
+async function openLink(target){const hash=target.indexOf('#'),name=hash<0?target:target.slice(0,hash),anchor=hash<0?undefined:target.slice(hash+1);if(name){const version=++renderVersion,isCurrent=()=>page==='reading'&&version===renderVersion;const hit=await readForView('exact',{title:name.replaceAll('_',' '),context:current?.navigation_context||currentHit?.context||currentHit?.dictionary},isCurrent);if(!isCurrent())return;if(!hit){status('Word is not installed in this dictionary.');return;}await open(hit,anchor);}else revealFragment(entryView,anchor);}
 function speak(){if(!current)return;const lang=current.language_code;if(!lang||lang==='und'){status('No language is identified for offline pronunciation.');return;}const voices=speechSynthesis.getVoices().filter(v=>v.localService&&v.lang.split('-')[0]===lang.split('-')[0]);const voice=voices.find(v=>v.default)||voices.find(v=>v.lang===navigator.language)||voices[0];if(!voice){status('No offline voice for this language is installed.');return;}speechSynthesis.cancel();const speech=new SpeechSynthesisUtterance(current.title);speech.voice=voice;speech.lang=voice.lang;speechSynthesis.speak(speech);}
 function renderWord(){
  if(!current){navigate('search');return;}

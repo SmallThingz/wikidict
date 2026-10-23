@@ -53,6 +53,84 @@ try{
  });
  assert.deepEqual(renderedTables.margins,[0,.9]);
  assert.deepEqual(renderedTables.captions,['Outer caption','Nested caption']);assert.equal(renderedTables.rows,2);
+ const automaticDirection=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture');
+  const sample='\u0645\u0631\u062d\u0628\u0627 123';
+  const entry={title:'Automatic direction',kind:'supplemental',sections:[{title:'Body',blocks:[
+   {kind:'paragraph',spans:[{kind:'text',text:'English '},{kind:'link',text:sample,target:'Arabic target',direction:'auto',bold:true},{kind:'text',text:' tail'}]}]}]};
+  const before=JSON.stringify(entry);
+  host.replaceChildren(WikidictRendererQA.renderEntry(entry,()=>{}, {collapseOtherSections:false}));
+  const link=host.querySelector('.block.paragraph a'),span=link.querySelector('span');
+  return {unchanged:before===JSON.stringify(entry),text:span.textContent,dir:span.dir,isolation:getComputedStyle(span).unicodeBidi,
+   direction:getComputedStyle(span).direction,href:link.getAttribute('href'),bold:!!link.querySelector('strong')};
+ });
+ assert.deepEqual(automaticDirection,{unchanged:true,text:'\u0645\u0631\u062d\u0628\u0627 123',dir:'auto',isolation:'isolate',direction:'rtl',href:'#Arabic%20target',bold:true});
+ await rendererPage.screenshot({path:path.join(report,'automatic-direction-renderer.png'),fullPage:true});
+ await writeFile(path.join(report,'automatic-direction-renderer.json'),JSON.stringify(automaticDirection,null,2)+'\n');
+
+ const compiledNavigation=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture');
+  const outside=document.createElement('div');outside.id='Toolbar collision';document.body.append(outside);
+  const heading={kind:'heading',level:3,anchor:'Usage_notes_2',anchor_fallback:'Usage.20notes_2',spans:[{kind:'text',text:'Usage notes'}]};
+  const entry={title:'Compiled navigation',sections:[
+   {title:'Noun',level:3,anchor:'Noun',anchor_fallback:'',blocks:[{kind:'definition',spans:[{text:'First meaning'}]}]},
+   {title:'Noun',level:3,anchor:'Noun_2',anchor_fallback:'',blocks:[{kind:'definition',spans:[{text:'Second meaning'}]},heading]},
+   {title:'Unicode heading',level:3,anchor:'\u00e4',anchor_fallback:'.C3.A4',blocks:[{kind:'heading',level:3,depth:1,anchor:'\u00e4',anchor_fallback:'.C3.A4',spans:[{text:'Unicode heading'}]}]}
+  ]};
+  const before=JSON.stringify(entry);host.replaceChildren(WikidictRendererQA.renderEntry(entry,()=>{}, {collapseOtherSections:true,collapseDetails:true}));
+  const ids=[...host.querySelectorAll('[id]')].map(el=>el.id);
+  const closedBefore=!host.querySelector('.sense-notes').open;
+  host.querySelector('[id="Noun_2"]').open=false;
+  const standalone=WikidictRendererQA.revealFragment(host,'Usage.20notes_2');
+  const notesOpen=host.querySelector('.sense-notes').open;
+  const sectionOpen=host.querySelector('[id="Noun_2"]').open;
+  const unicode=WikidictRendererQA.revealFragment(host,'.C3.A4'),unicodeOpen=host.querySelector('[id="\u00e4"]').open;
+  const second=WikidictRendererQA.revealFragment(host,'Noun_2'),focused=document.activeElement.id;
+  const scoped=!WikidictRendererQA.revealFragment(host,'Toolbar collision');outside.remove();
+  const blank={title:'Legacy title',anchor:'',anchor_fallback:'',blocks:[{kind:'paragraph',spans:[{text:'Body'}]}]};
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Legacy',sections:[blank]},()=>{}));
+  const legacy=!!host.querySelector('[id="Legacy_title"]');
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Anchored',presentation_version:'DPR5',sections:[blank]},()=>{}));
+  const noInventedID=!host.querySelector('[id]');
+  return {ids,closedBefore,standalone,notesOpen,sectionOpen,unicode,unicodeOpen,second,focused,scoped,legacy,noInventedID,unchanged:before===JSON.stringify(entry)};
+ });
+ assert.deepEqual(compiledNavigation,{ids:['Noun','Noun_2','Usage_notes_2','Usage.20notes_2','\u00e4','.C3.A4'],closedBefore:true,standalone:true,notesOpen:true,sectionOpen:true,unicode:true,unicodeOpen:true,second:true,focused:'Noun_2',scoped:true,legacy:true,noInventedID:true,unchanged:true});
+
+ const navigationResolution=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture');
+  const paragraph=text=>({kind:'paragraph',spans:[{text}]});
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Legacy destinations',sections:[
+   {title:'Repeated',blocks:[paragraph('First')]},{title:'Repeated',blocks:[paragraph('Second')]},
+   {title:'Section',blocks:[{kind:'heading',spans:[{text:'Section'}]},{kind:'heading',spans:[{text:'Heading Only'}]}]}
+  ]},()=>{}));
+  const legacyIDs=[...host.querySelectorAll('[id]')].map(el=>el.id);
+  const legacyHeading=WikidictRendererQA.revealFragment(host,'Heading Only');
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Exact before normalized',presentation_version:'DPR5',sections:[
+   {title:'Space',anchor:'A B',blocks:[paragraph('Literal space')]},
+   {title:'Underscore',anchor:'A_B',blocks:[paragraph('Literal underscore')]},
+   {title:'Mixed',anchor:'Usage_notes_2',blocks:[paragraph('Mixed separator')]}
+  ]},()=>{}));
+  WikidictRendererQA.revealFragment(host,'A B');const exact=document.activeElement.id;
+  WikidictRendererQA.revealFragment(host,'Usage notes_2');const normalized=document.activeElement.id;
+  const duplicate=document.createElement('span');duplicate.id='A B';host.append(duplicate);
+  const ambiguous=!WikidictRendererQA.revealFragment(host,'A B');
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Empty destinations',presentation_version:'DPR5',sections:[
+   {title:'English',anchor:'English',anchor_fallback:'English.20owner',blocks:[]},
+   {title:'Children',anchor:'Children',blocks:[{kind:'heading',anchor:'Empty_heading',anchor_fallback:'Empty.20heading',spans:[]}]}
+  ]},()=>{}));
+  const emptySection=WikidictRendererQA.revealFragment(host,'English'),emptySectionOpen=host.querySelector('[id="English"]').open;
+  const emptyHeading=WikidictRendererQA.revealFragment(host,'Empty.20heading');
+  window.headingCollisionLinks=[];
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Citation collision',presentation_version:'DPR5',sections:[
+   {title:'Links',anchor:'Links',blocks:[{kind:'paragraph',spans:[{kind:'link',text:'Authored heading',target:'#reference-1'}]}]},
+   {title:'Authored heading',anchor:'reference-1',blocks:[paragraph('Heading destination')]}
+  ],references:[{number:1,group_number:1,group:'',spans:[{text:'Generated citation'}]}]},target=>{window.headingCollisionLinks.push(target);WikidictRendererQA.revealFragment(host,target.slice(1));}));
+  host.querySelector('a').click();
+  const headingWins=document.activeElement.id==='reference-1'&&document.activeElement.tagName==='DETAILS';
+  const uniqueIDs=new Set([...host.querySelectorAll('[id]')].map(el=>el.id)).size===host.querySelectorAll('[id]').length;
+  return {legacyIDs,legacyHeading,exact,normalized,ambiguous,emptySection,emptySectionOpen,emptyHeading,headingWins,uniqueIDs,links:window.headingCollisionLinks};
+ });
+ assert.deepEqual(navigationResolution,{legacyIDs:['Heading_Only'],legacyHeading:true,exact:'A B',normalized:'Usage_notes_2',ambiguous:true,emptySection:true,emptySectionOpen:true,emptyHeading:true,headingWins:true,uniqueIDs:true,links:['#reference-1']});
 
  const referenceFixture=await rendererPage.evaluate(()=>{
   const host=document.getElementById('compiled-renderer-fixture');window.referenceNavigations=[];
@@ -148,12 +226,12 @@ try{
    section('EdgeBreak',[{kind:'line_break',text:'',trail:''},text('EdgeBreak',{explanation:'edge note'})])
   ]},target=>window.headingLinks.push(target),{collapseOtherSections:true}));
   return ['Explained','Linked','Plain','Mismatch','WrongLevel','Break','EdgeBreak'].map(id=>{
-   const el=host.querySelector('#'+id);return {id,summary:el.querySelector(':scope > summary').textContent.trim(),headingCount:el.querySelectorAll('.block.heading').length};
+   const el=[...host.querySelectorAll(':scope > details')].find(section=>section.querySelector(':scope > summary')?.textContent.trim()===id);return {id,summary:el.querySelector(':scope > summary').textContent.trim(),headingCount:el.querySelectorAll('.block.heading').length};
   });
  });
  assert.deepEqual(headingCoverage.map(x=>x.headingCount),[0,0,1,1,1,1,0]);
  assert.deepEqual(headingCoverage.map(x=>x.summary),['Explained','Linked','Plain','Mismatch','WrongLevel','Break','EdgeBreak']);
- const headingSection=rendererPage.locator('#Linked'),headingLink=headingSection.locator(':scope > summary a');
+ const headingSection=rendererPage.locator('#compiled-renderer-fixture > details').filter({has:rendererPage.getByRole('link',{name:'Linked',exact:true})}),headingLink=headingSection.locator(':scope > summary a');
  assert.equal(await headingSection.evaluate(el=>el.open),false);await headingLink.focus();await rendererPage.keyboard.press('Enter');
  assert.deepEqual(await rendererPage.evaluate(()=>window.headingLinks),['Heading target']);assert.equal(await headingSection.evaluate(el=>el.open),false);
  await headingSection.locator(':scope > summary').focus();await rendererPage.keyboard.press('Enter');assert.equal(await headingSection.evaluate(el=>el.open),true);
@@ -183,7 +261,7 @@ try{
   assert.equal(indentedHeading.duplicate,0);assert.equal(indentedHeading.margin,'0.45rem');assert.equal(indentedHeading.plainCount,1);
   assert.equal(indentedHeading.plainMargin,'0.45rem');assert.equal(indentedHeading.mismatch,1);
   assert.equal(indentedHeading.bold,true);assert.equal(indentedHeading.italic,true);assert.equal(indentedHeading.open,false);
-  const indentedSection=rendererPage.locator('#indented-heading-case');
+  const indentedSection=rendererPage.locator('#compiled-renderer-fixture > #indented-heading-case');
   await indentedSection.locator('summary a').focus();await rendererPage.keyboard.press('Enter');
   assert.deepEqual(await rendererPage.evaluate(()=>window.indentedHeadingLinks),['templlar/conj.BEN']);
   assert.equal(await indentedSection.evaluate(el=>el.open),false);
@@ -332,6 +410,49 @@ try{
  await page.getByRole('button',{name:'Search',exact:true}).click();
  await page.getByRole('searchbox').fill('APPENDIX:É');await page.getByRole('button',{name:'Open Appendix:école',exact:true}).click();
  await page.locator('#entry h1').filter({hasText:'Appendix:école'}).waitFor();
+ const navigationPage=await browser.newPage();navigationPage.on('pageerror',e=>errors.push(e.message));
+ const navU32=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n);return b;};
+ const navString=s=>{const b=Buffer.from(s);return Buffer.concat([navU32(b.length),b]);};
+ const navSpans=(text,target='')=>Buffer.concat([navU32(1),Buffer.from([target?1:0,0,0]),...[text,target,'','','','',''].map(navString),Buffer.from([0])]);
+ const navPresentation=sections=>Buffer.concat([Buffer.from('DPR5'),navU32(0),navU32(sections.length),...sections.map(([title,anchor,fallback,text,target=''])=>Buffer.concat([
+  Buffer.from([3]),navString(title),navString(anchor),navString(fallback),navU32(1),Buffer.from([0,0,0]),navSpans(text,target),Buffer.from([0]),navString(''),navString(''),Buffer.from([0]),navString(''),navString('')
+ ])),navU32(0),navU32(0),navU32(0),navU32(0),navU32(0)]);
+ const navPrefix='enwiktionary-20261002-',navAsset=navPrefix+createHash('sha256').update('English').digest('hex')+'.wikblb';
+ const navMain=dictionaryBlob(1,[
+  ['Start',navPresentation([['Links','Links','','Same entry','#Second'],['Second','Second','','Cross entry','Target#Noun_2']])],
+  ['Target',navPresentation([['Noun','Noun','','First noun'],['Noun','Noun_2','','Second noun'],['Unicode','\u00e4','.C3.A4','Alias override','Alias#Noun_2'],['Empty override','Empty','','Suppress alias fragment','Alias#']])]
+ ]);
+ const navAliases=dictionaryBlob(8,[['1\tAlias',aliasPayload({source:'Alias',target:'Target',fragment:'\u00e4'})]]);
+ await navigationPage.goto(`http://127.0.0.1:${server.address().port}`);
+ await navigationPage.getByRole('button',{name:'Import dictionary',exact:true}).waitFor();
+ await navigationPage.locator('#file').setInputFiles({name:navAsset,mimeType:'application/octet-stream',buffer:navMain});
+ await navigationPage.getByText(/English · 2 words/).waitFor();
+ await navigationPage.locator('#file').setInputFiles({name:navPrefix+'aliases.wikblb',mimeType:'application/octet-stream',buffer:navAliases});
+ await navigationPage.getByText(/alias · 1 words/).waitFor();
+ const navOpen=async title=>{await navigationPage.getByRole('button',{name:'Search',exact:true}).click();await navigationPage.getByRole('searchbox').fill(title);await navigationPage.getByRole('button',{name:'Open '+title,exact:true}).click();};
+ await navOpen('Start');await navigationPage.locator('#entry #Links > summary').click();
+ await navigationPage.getByRole('link',{name:'Same entry',exact:true}).click();
+ assert.equal(await navigationPage.locator('#entry #Second').evaluate(el=>el.open),true);
+ assert.equal(await navigationPage.evaluate(()=>document.activeElement.id),'Second');
+ await navigationPage.getByRole('link',{name:'Cross entry',exact:true}).click();
+ await navigationPage.locator('#entry h1').filter({hasText:/^Target$/}).waitFor();
+ assert.equal(await navigationPage.locator('#entry #Noun_2').evaluate(el=>el.open),true);
+ assert.equal(await navigationPage.locator('#entry #Noun').evaluate(el=>el.open),false);
+ await navOpen('Alias');await navigationPage.locator('.entry-redirect').filter({hasText:'Alias to Target#\u00e4'}).waitFor();
+ assert.equal(await navigationPage.locator('#entry [id="\u00e4"]').evaluate(el=>el.open),true);
+ assert.equal(await navigationPage.evaluate(()=>document.activeElement.id),'\u00e4');
+ await navigationPage.getByRole('link',{name:'Alias override',exact:true}).click();
+ await navigationPage.waitForFunction(()=>document.activeElement.id==='Noun_2');
+ assert.equal(await navigationPage.locator('#entry [id="\u00e4"]').evaluate(el=>el.open),false);
+ await navigationPage.locator('#entry #Empty > summary').click();
+ await navigationPage.getByRole('link',{name:'Suppress alias fragment',exact:true}).click();
+ await navigationPage.waitForFunction(()=>[...document.querySelectorAll('#entry details[id]')].every(el=>!el.open));
+ assert.equal(await navigationPage.locator('#entry [id="\u00e4"]').evaluate(el=>el.open),false);
+ await navigationPage.getByRole('button',{name:'History',exact:true}).click();
+ await navigationPage.getByRole('button',{name:'Open Alias',exact:true}).click();
+ await navigationPage.waitForFunction(()=>document.activeElement.id==='\u00e4');
+ await navigationPage.close();
+
  const aliases=await browser.newPage();aliases.on('pageerror',e=>errors.push(e.message));
  const prefix='enwiktionary-20261001-',english=dictionaryBlob(1,[['cat',presentation('English target definition')]]),german=dictionaryBlob(1,[['cat',presentation('German target definition')]],{language:'German',code:'de'});
  const aliasRaw=aliasCases(),aliasXZ=execFileSync('xz',['-1','-c'],{input:aliasRaw});

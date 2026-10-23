@@ -104,7 +104,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     let el = node('span', span.text || '');
     if(canonicalRGB(span.foreground))el.style.color=span.foreground;
     if (span.language) el.lang = span.language;
-    if (['rtl','ltr'].includes(span.direction)) { el.dir = span.direction; el.style.unicodeBidi = 'isolate'; }
+    if (['rtl','ltr','auto'].includes(span.direction)) { el.dir = span.direction; el.style.unicodeBidi = 'isolate'; }
     if (['label','citation','pronunciation','headword'].includes(span.role)) el.classList.add(span.role);
     for (const [flag, tag] of [['bold','strong'],['italic','em'],['code','code'],['small','small'],['superscript','sup'],['subscript','sub'],['strike','s'],['underline','u']]) {
       if (span[flag]) { const wrapper = node(tag); wrapper.append(el); el = wrapper; }
@@ -125,7 +125,49 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
   }
   return fragment;
 }
-function blockView(block, onLink, explanations) {
+// Resolve exact compiled IDs within the active entry, without CSS selector escaping.
+export function revealFragment(root, fragment) {
+  if (!fragment) return false;
+  const destinations = [...root.querySelectorAll('[id]')];
+  let matches = destinations.filter(el => el.id === fragment);
+  if (!matches.length) matches = destinations.filter(el => el.id === fragment.replaceAll(' ','_'));
+  if (matches.length !== 1) return false;
+  const target = matches[0];
+  for (let el = target; el && el !== root; el = el.parentElement)
+    if (el.tagName === 'DETAILS') el.open = true;
+  if (!target.hasAttribute('tabindex')) target.tabIndex = -1;
+  target.scrollIntoView({block:'center'});
+  target.focus({preventScroll:true});
+  return true;
+}
+function destination(el, value, legacy = '') {
+  const primary = value.anchor || legacy, fallback = value.anchor_fallback;
+  if (primary) el.id = primary;
+  if (fallback && fallback !== primary) {
+    const alias = node('span'); alias.id = fallback;
+    // Keep a details summary first while locating its alias at the heading.
+    (el.tagName === 'DETAILS' ? el.firstElementChild : el).prepend(alias);
+  }
+}
+function legacyDestinations(entry) {
+  const candidates = [], counts = new Map();
+  if (entry.presentation_version === 'DPR5') return new Map();
+  const add = (value, label) => {
+    if (value.anchor || value.anchor_fallback) return;
+    const id = label.replaceAll(' ','_');
+    if (id) { candidates.push([value,id]); counts.set(id,(counts.get(id)||0)+1); }
+  };
+  for (const section of entry.sections) {
+    add(section,section.title);
+    const companion = sectionHeadingCompanion(section);
+    for (const block of section.blocks.slice(companion?1:0)) if (block.kind === 'heading') {
+      const label = (block.spans||[]).map(span => span.kind === 'line_break'?'\n':(span.text||'')+(span.trail||'')).join('').trim();
+      add(block,label);
+    }
+  }
+  return new Map(candidates.filter(([,id]) => counts.get(id) === 1));
+}
+function blockView(block, onLink, explanations, legacy = '') {
   const margin = `${Math.min(Math.max(block.depth || 0,0),8)*.45}rem`;
   if (block.table) {
     const feature = block.feature;
@@ -153,6 +195,7 @@ function blockView(block, onLink, explanations) {
   const kind = allowed.has(block.kind) ? block.kind : 'paragraph';
   const el = node(kind === 'heading'?'h4':'div',null,'block '+kind);
   el.style.marginInlineStart = margin;
+  if (kind === 'heading') destination(el, block, legacy);
   const prefix = kind==='definition'?(block.number?`${block.number}.`:'•'):['example','quotation'].includes(kind)?'│':kind==='list_item'?(block.number?`${block.number}.`:'•'):kind==='list_detail'?'↳':'';
   if (prefix) el.append(node('span',prefix,'prefix'));
   const body = node('span',null,'body'); if(block.spans?.some(isPoem))body.style.flex='1'; body.append(spans(block.spans,onLink,false,explanations)); el.append(body); return el;
@@ -173,15 +216,21 @@ function sectionHeadingCompanion(section){
   return (navigable||explained||selfStyled||first.depth>0)&&trimmed===section.title?first:null;
 }
 export function renderEntry(entry, onLink, settings = {}, mediaView = () => null) {
-  const root = document.createDocumentFragment(), references = new Map();
+  const root = document.createDocumentFragment(), references = new Map(), legacy = legacyDestinations(entry);
+  const headingDestinations = new Set();
+  for (const section of entry.sections) for (const value of [section,...section.blocks.filter(block=>block.kind==='heading')])
+    for (const id of [value.anchor,value.anchor_fallback,legacy.get(value)]) if (id) headingDestinations.add(id);
   const explanationRows=[], explanationKeys=new Map();
   const explanations={add(label,explanation){
     const key=JSON.stringify([label,explanation]);
     if(explanationKeys.has(key))return explanationKeys.get(key);
-    const id='abbreviation-explanation-'+(++explanationSequence);
+    let id;do{id='abbreviation-explanation-'+(++explanationSequence);}while(headingDestinations.has(id));
     explanationKeys.set(key,id);explanationRows.push({id,label,explanation});return id;
   }};
   const followLink = target => {
+    const fragment = target.startsWith('#')?target.slice(1):null;
+    // Authored heading identities take precedence over generated citation IDs.
+    if (fragment && (headingDestinations.has(fragment)||headingDestinations.has(fragment.replaceAll(' ','_')))) { onLink(target); return; }
     const reference = references.get(target);
     if (!reference) { onLink(target); return; }
     for (let parent = reference.parentElement; parent; parent = parent.parentElement)
@@ -204,19 +253,20 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     const expanded=meaning || (section.title.startsWith('Pronunciation')?!settings.collapsePronunciation:section.title.startsWith('Etymology')?!settings.collapseEtymology:!settings.collapseOtherSections);
     const companion=sectionHeadingCompanion(section);
     const el=fold(section.title===entry.language?'Overview':section.title||'Notes',expanded,companion?.spans,companion?.depth);
-    el.classList.toggle('meaning',meaning);el.id=section.title.replaceAll(' ','_');
+    el.classList.toggle('meaning',meaning);destination(el,section,legacy.get(section)||'');
     const notes=[];
     for (const block of section.blocks.slice(companion?1:0)) {
-      if(block.kind==='blank'||(!block.table&&block.kind!=='rule'&&!block.spans?.some(s=>s.text?.trim()||s.trail?.trim())&&!block.spans?.some(isPoem)))continue;
-      const view=blockView(block,followLink,explanations);
+      if(block.kind==='blank'||(!block.table&&block.kind!=='rule'&&!block.spans?.some(s=>s.text?.trim()||s.trail?.trim())&&!block.spans?.some(isPoem)&&!(block.kind==='heading'&&(block.anchor||block.anchor_fallback))))continue;
+      const view=blockView(block,followLink,explanations,legacy.get(block)||'');
       if(meaning&&block.kind!=='definition')notes.push(view);else el.append(view);
     }
     if(notes.length){const details=fold('Examples & notes',!settings.collapseDetails);details.className='sense-notes';details.append(...notes);el.append(details);}
-    if(el.children.length>1||companion)root.append(el);
+    if(el.children.length>1||companion||section.anchor||section.anchor_fallback)root.append(el);
   }
   if (entry.references?.length) {
     const section=fold('References',!settings.collapseOtherSections);
-    for (const ref of entry.references) { const p=node('p',null,'reference'); p.id=`reference-${ref.number}`; p.tabIndex=-1; references.set(`#${p.id}`,p); p.append(node('span',`[${ref.group?ref.group+' ':''}${ref.group_number}]`)); const body=node('span'); body.append(spans(ref.spans,followLink,false,explanations)); p.append(body); section.append(p); } root.append(section);
+    const referenceIDs=new Set(headingDestinations);
+    for (const ref of entry.references) { const p=node('p',null,'reference'),target=`reference-${ref.number}`;let id=target;while(referenceIDs.has(id))id='citation-'+id;referenceIDs.add(id);p.id=id;p.tabIndex=-1;references.set(`#${target}`,p); p.append(node('span',`[${ref.group?ref.group+' ':''}${ref.group_number}]`)); const body=node('span'); body.append(spans(ref.spans,followLink,false,explanations)); p.append(body); section.append(p); } root.append(section);
   }
   if (entry.media?.length) { const section=fold('Images & sound',!settings.collapseOtherSections);for(const media of entry.media){const view=mediaView(media);if(view)section.append(view);}root.append(section); }
   if(explanationRows.length){
