@@ -81,19 +81,36 @@ try {
  for(const measured of contrastResults)assert.deepEqual(measured,{theme:measured.theme,pale:'rgb(0, 0, 0)',dark:'rgb(255, 255, 255)',authored:'rgb(18, 52, 86)',cellLink:'rgb(0, 0, 0)',cellPlain:'rgb(0, 0, 0)',override:'rgb(255, 255, 255)',underlined:true,themeUnchanged:true});
  await page.screenshot({path:path.join(report,'span-background-contrast-dark-768.png'),fullPage:true,animations:'disabled'});frames.push('span-background-contrast-dark-768.png');
  const nestedResults=[];
- for(const theme of ['light','dark']){
+ for(const theme of ['light','dark'])for(const width of [360,768]){
+ await page.setViewportSize({width,height:640});
  const nestedResult=await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;
   const child=()=>({caption:[{kind:'link',text:'Child caption',target:'#Forms'}],geometry:{border:1,cell_padding:2,width:{unit:'percent',value:100}},rows:[{cells:[{header:true,colspan:5,background:'#800080',spans:[]}]},{cells:Array.from({length:4},(_,i)=>({spans:[{kind:'link',text:'form '+i,target:'#Forms'}]}))}]});
   const entry={title:'Nested grid',presentation_version:'DPR7',sections:[{title:'Forms',anchor:'Forms',blocks:[{kind:'table',table:{geometry:{border:0,cell_spacing:15},rows:[{cells:Array.from({length:4},()=>({background:'#000000',spans:[],nested_table:child()}))}]}}]}]};
   const links=[];document.querySelector('main').replaceChildren(Renderer.renderEntry(entry,target=>links.push(target)));
   document.querySelector('table table a').click();
   const outer=document.querySelector('.table-scroll > table'),cells=[...outer.rows[0].cells],children=cells.map(td=>td.querySelector(':scope > table'));
-  return {links,outerCells:cells.length,totalTables:document.querySelectorAll('table').length,scrollRegions:document.querySelectorAll('.table-scroll').length,spacing:outer.style.borderSpacing,children:children.map(table=>({rows:table.rows.length,span:table.rows[0].cells[0].colSpan,empty:table.rows[0].cells[0].textContent,paint:getComputedStyle(table.rows[0].cells[0]).backgroundColor,padding:getComputedStyle(table.rows[0].cells[0]).padding,width:table.style.width,childPaint:table.rows[1].cells[0].style.backgroundColor,ink:getComputedStyle(table.rows[1].cells[0].querySelector('span')).color,captionInk:getComputedStyle(table.querySelector('caption span')).color,area:table.rows[0].cells[0].getBoundingClientRect().width*table.rows[0].cells[0].getBoundingClientRect().height>0}))};
- },theme);nestedResults.push(nestedResult);
+  const wrap=outer.parentElement;
+  const words=[...outer.querySelectorAll('td a span')].filter(el=>el.textContent.startsWith('form ')).map(el=>{
+   const range=document.createRange();range.setStart(el.firstChild,0);range.setEnd(el.firstChild,4);
+   const rects=[...range.getClientRects()].filter(r=>r.width>0&&r.height>0);
+   return {word:range.toString(),oneLine:rects.length>0&&rects.every(r=>Math.abs(r.top-rects[0].top)<.5)};
+  });
+  wrap.scrollLeft=wrap.scrollWidth;
+  const last=children.at(-1).rows[1].cells[3].getBoundingClientRect(),box=wrap.getBoundingClientRect();
+  const scroll={overflow:wrap.scrollWidth>wrap.clientWidth,moved:wrap.scrollLeft>0,
+   finalColumnVisible:last.left>=box.left+wrap.clientLeft-1&&last.right<=box.left+wrap.clientLeft+wrap.clientWidth+1};
+  wrap.scrollLeft=0;
+  return {words,scroll,links,outerCells:cells.length,totalTables:document.querySelectorAll('table').length,scrollRegions:document.querySelectorAll('.table-scroll').length,spacing:outer.style.borderSpacing,children:children.map(table=>({rows:table.rows.length,span:table.rows[0].cells[0].colSpan,empty:table.rows[0].cells[0].textContent,paint:getComputedStyle(table.rows[0].cells[0]).backgroundColor,padding:getComputedStyle(table.rows[0].cells[0]).padding,width:table.style.width,childPaint:table.rows[1].cells[0].style.backgroundColor,ink:getComputedStyle(table.rows[1].cells[0].querySelector('span')).color,captionInk:getComputedStyle(table.querySelector('caption span')).color,area:table.rows[0].cells[0].getBoundingClientRect().width*table.rows[0].cells[0].getBoundingClientRect().height>0}))};
+ },theme);nestedResults.push({theme,width,...nestedResult});
  assert.deepEqual(nestedResult.links,['#Forms']); assert.equal(nestedResult.outerCells,4);assert.equal(nestedResult.totalTables,5);assert.equal(nestedResult.scrollRegions,1);assert.equal(nestedResult.spacing,'15px');
  for(const child of nestedResult.children)assert.deepEqual(child,{rows:2,span:5,empty:'',paint:'rgb(128, 0, 128)',padding:'2px',width:'100%',childPaint:'rgb(0, 0, 0)',ink:'rgb(255, 255, 255)',captionInk:'rgb(255, 255, 255)',area:true});
+ assert.equal(nestedResult.words.length,16);
+ assert.ok(nestedResult.words.every(word=>word.word==='form'&&word.oneLine));
+ assert.equal(nestedResult.scroll.finalColumnVisible,true);
+ if(nestedResult.scroll.overflow)assert.equal(nestedResult.scroll.moved,true);
+ const name=`nested-grid-${theme}-${width}.png`;
+ await page.screenshot({path:path.join(report,name),fullPage:true,animations:'disabled'});frames.push(name);
  }
- await page.screenshot({path:path.join(report,'nested-grid-dark-768.png'),fullPage:true,animations:'disabled'});frames.push('nested-grid-dark-768.png');
  assert.deepEqual(errors,[]);
  await writeFile(path.join(report,'result.json'),JSON.stringify({passed:true,scope:'Focused compiled feature render, strict fallback, label accessibility, no focus stop, responsive bounds; synthetic typed input, not corpus import or public transport.',result,paintResult,contrastResults,nestedResults,accessibleSnapshot:snapshot,frames,errors},null,2)+'\n');
  console.log('WEB_COLOR_SWATCH_PASS');
