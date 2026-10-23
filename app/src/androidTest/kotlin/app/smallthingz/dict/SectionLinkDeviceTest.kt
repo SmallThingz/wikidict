@@ -8,6 +8,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.platform.app.InstrumentationRegistry
@@ -295,19 +296,48 @@ class SectionLinkDeviceTest {
                 learning.updateSettings { it.copy(collapseEtymology = true, collapseOtherSections = true, allowImages = false, allowAudio = false) }
                 compose.activity.setContent { MaterialTheme { DictApp(library, learning, {}) } }
             }
+            fun paragraphStarting(marker: String) = SemanticsMatcher("paragraph starts with $marker") { node ->
+                node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.any {
+                    it.text == marker || it.text.startsWith("$marker ")
+                } == true
+            }
+            fun journeyLink(label: String) = SemanticsMatcher("compiled link labeled $label") { node ->
+                node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.any { text ->
+                    text.getLinkAnnotations(0, text.length).any {
+                        it.item is androidx.compose.ui.text.LinkAnnotation.Clickable &&
+                            text.text.substring(it.start, it.end) == label
+                    }
+                } == true
+            }
+            fun touchJourneyLink(label: String) {
+                val node = compose.onNode(journeyLink(label), useUnmergedTree = true).assertIsDisplayed()
+                val layouts = mutableListOf<TextLayoutResult>()
+                node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val layout = layouts.single()
+                val text = layout.layoutInput.text
+                val links = text.getLinkAnnotations(0, text.length).filter {
+                    it.item is androidx.compose.ui.text.LinkAnnotation.Clickable &&
+                        text.text.substring(it.start, it.end) == label
+                }
+                assertEquals(1, links.size)
+                val link = links.single()
+                val offset = link.start + minOf(1, link.end - link.start - 1)
+                node.performTouchInput { click(layout.getBoundingBox(offset).center) }
+                compose.waitForIdle()
+            }
             fun waitForTitle(title: String) {
                 compose.waitUntil(10000) { compose.onAllNodes(hasTestTag("entry-title") and hasText(title)).fetchSemanticsNodes().isNotEmpty() }
             }
             fun assertDestinationOpen() {
                 // The destination title is intentionally offscreen after the anchor jump.
-                compose.waitUntil(10000) { compose.onAllNodesWithText("DESTINATION USAGE BODY").fetchSemanticsNodes().isNotEmpty() }
-                compose.onNodeWithText("DESTINATION USAGE BODY").assertIsDisplayed()
+                compose.waitUntil(10000) { compose.onAllNodes(paragraphStarting("DESTINATION USAGE BODY"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+                compose.onNode(paragraphStarting("DESTINATION USAGE BODY"), useUnmergedTree = true).assertIsDisplayed()
                 compose.onNodeWithContentDescription("Collapse Usage notes").assertIsDisplayed()
-                compose.onNodeWithText("PARENT SECTION REMAINS FOLDED").assertDoesNotExist()
+                compose.onNode(paragraphStarting("PARENT SECTION REMAINS FOLDED"), useUnmergedTree = true).assertDoesNotExist()
             }
             fun backToSource() {
-                compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Back to source"))
-                touchLink("Back to source")
+                compose.onNodeWithTag("entry-scroll").performScrollToNode(journeyLink("Back to source"))
+                touchJourneyLink("Back to source")
                 waitForTitle("Anchor source")
             }
             fun leaveAndReturn() {
@@ -331,49 +361,49 @@ class SectionLinkDeviceTest {
             compose.onAllNodes(sourceChoice).assertCountEquals(1).onFirst().performClick()
             waitForTitle("Anchor source")
             assertEquals(source.key, runBlocking { library.lastWord() }?.key)
-            touchLink("Read destination notes")
+            touchJourneyLink("Read destination notes")
             assertDestinationOpen()
             compose.onNodeWithContentDescription("Collapse Usage notes").performClick()
             leaveAndReturn()
             compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription("Expand Usage notes"))
             compose.onNodeWithContentDescription("Expand Usage notes").assertIsDisplayed()
-            compose.onNodeWithText("DESTINATION USAGE BODY").assertDoesNotExist()
+            compose.onNode(paragraphStarting("DESTINATION USAGE BODY"), useUnmergedTree = true).assertDoesNotExist()
             // A fresh request to the same word and anchor must still be applied.
-            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Read destination notes again"))
-            touchLink("Read destination notes again")
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(journeyLink("Read destination notes again"))
+            touchJourneyLink("Read destination notes again")
             assertDestinationOpen()
             backToSource()
-            touchLink("Read destination normally")
+            touchJourneyLink("Read destination normally")
             waitForTitle("Anchor destination")
-            compose.onNodeWithText("DESTINATION USAGE BODY").assertDoesNotExist()
+            compose.onNode(paragraphStarting("DESTINATION USAGE BODY"), useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithText("Earlier destination meaning 0").assertIsDisplayed()
             backToSource()
-            touchLink("Read missing anchor")
+            touchJourneyLink("Read missing anchor")
             waitForTitle("Anchor destination")
             compose.onNodeWithText("Earlier destination meaning 0").assertIsDisplayed()
-            compose.onNodeWithText("DESTINATION USAGE BODY").assertDoesNotExist()
+            compose.onNode(paragraphStarting("DESTINATION USAGE BODY"), useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithText("This word is not in your installed dictionaries.").assertDoesNotExist()
             leaveAndReturn()
-            compose.onNodeWithText("DESTINATION USAGE BODY").assertDoesNotExist()
+            compose.onNode(paragraphStarting("DESTINATION USAGE BODY"), useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithText("This word is not in your installed dictionaries.").assertDoesNotExist()
 
             // These assets come from the genuine Writer fixture, not hand-built EntryUi.
             // Each request crosses the actual import/search/read/DictApp route.
             fun touchSourceLink(label: String) {
-                compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText(label))
-                touchLink(label)
+                compose.onNodeWithTag("entry-scroll").performScrollToNode(journeyLink(label))
+                touchJourneyLink(label)
             }
             fun assertAnchorBody(body: String) {
-                compose.waitUntil(10000) { compose.onAllNodesWithText(body).fetchSemanticsNodes().isNotEmpty() }
+                compose.waitUntil(10000) { compose.onAllNodes(paragraphStarting(body), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
                 // Do not scroll to the expected body: the fragment must perform the jump.
-                compose.onNodeWithText(body).assertIsDisplayed()
+                compose.onNode(paragraphStarting(body), useUnmergedTree = true).assertIsDisplayed()
             }
             fun captureOwnedAnchorJourney(name: String, body: String) {
                 require(name in setOf("anchor-journey-samepage.png", "anchor-journey-crossentry.png",
                     "anchor-journey-alias.png", "anchor-journey-unicode.png"))
                 // Only the owned app root displaying this imported public Writer fixture.
                 // No system screenshot, clipboard surface or unrelated application tree.
-                compose.onNodeWithText(body).assertIsDisplayed()
+                compose.onNode(paragraphStarting(body), useUnmergedTree = true).assertIsDisplayed()
                 val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
                 try {
                     val files = instrumentation.targetContext.filesDir
@@ -388,7 +418,7 @@ class SectionLinkDeviceTest {
                 } finally { bitmap.recycle() }
             }
             backToSource()
-            compose.onNodeWithText("SOURCE SECOND NOUN BODY").assertIsNotDisplayed()
+            compose.onNode(paragraphStarting("SOURCE SECOND NOUN BODY"), useUnmergedTree = true).assertIsNotDisplayed()
             touchSourceLink("Read second local noun")
             assertAnchorBody("SOURCE SECOND NOUN BODY")
             assertEquals(source.key, library.lastWord()?.key)
@@ -405,7 +435,7 @@ class SectionLinkDeviceTest {
             backToSource()
             touchSourceLink("Read legacy Unicode heading")
             assertAnchorBody("UNICODE HEADING BODY")
-            compose.onNodeWithText("LITERAL DOT HEADING BODY").assertDoesNotExist()
+            compose.onNode(paragraphStarting("LITERAL DOT HEADING BODY"), useUnmergedTree = true).assertDoesNotExist()
             assertEquals(source.key, library.lastWord()?.key)
             captureOwnedAnchorJourney("anchor-journey-unicode.png", "UNICODE HEADING BODY")
         } finally {

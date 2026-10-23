@@ -1,6 +1,9 @@
 package app.smallthingz.dict
 
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.SemanticsActions
@@ -43,9 +46,11 @@ class HeadingAnchorDeviceTest {
         val request = mutableStateOf<EntryAnchorRequest?>(null)
         try {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent { MaterialTheme {
-                EntryView(entry, false, {}, onLink = { forwarded.add(it) },
-                    settings = AppSettings(collapseOtherSections = true, collapseDetails = true),
-                    anchorRequest = request.value, onAnchorConsumed = { if (request.value === it) request.value = null })
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    EntryView(entry, false, {}, onLink = { forwarded.add(it) },
+                        settings = AppSettings(collapseOtherSections = true, collapseDetails = true),
+                        anchorRequest = request.value, onAnchorConsumed = { if (request.value === it) request.value = null })
+                }
             } } }
             compose.onNodeWithText("SECOND NOUN BODY").assertDoesNotExist()
             compose.onNodeWithText("Authored reference heading").assertDoesNotExist()

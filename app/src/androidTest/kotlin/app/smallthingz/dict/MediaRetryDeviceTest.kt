@@ -1,6 +1,10 @@
 package app.smallthingz.dict
 
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Surface
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.test.platform.app.InstrumentationRegistry
@@ -58,8 +62,10 @@ class MediaRetryDeviceTest {
             compose.activityRule.scenario.onActivity { activity ->
                 activity.setContent {
                     DictTheme("light") {
-                        MediaView(Media("Retry.png", "image", "Synthetic retry image"),
-                            AppSettings(allowImages = true, mediaCacheMb = 1), cache = cache)
+                        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                            MediaView(Media("Retry.png", "image", "Synthetic retry image"),
+                                AppSettings(allowImages = true, mediaCacheMb = 1), cache = cache)
+                        }
                     }
                 }
             }

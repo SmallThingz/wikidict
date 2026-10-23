@@ -1,6 +1,9 @@
 package app.smallthingz.dict
 
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
@@ -26,8 +29,10 @@ class ReaderHeadingDeviceTest {
         try {
             compose.activityRule.scenario.onActivity { activity ->
                 activity.setContent { MaterialTheme {
-                    EntryView(entry, false, {}, settings = AppSettings(collapseOtherSections = true,
-                        allowImages = false, allowAudio = false))
+                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                        EntryView(entry, false, {}, settings = AppSettings(collapseOtherSections = true,
+                            allowImages = false, allowAudio = false))
+                    }
                 } }
             }
             for (label in listOf("About this entry", "Noun", "Usage notes", "References", "Media")) {
