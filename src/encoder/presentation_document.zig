@@ -823,7 +823,7 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
             explained = explained or span.explanation.len != 0;
             styled_self = styled_self or (span.self_link and span.text.len != 0);
             styled = styled or (span.kind == .text and span.text.len != 0 and span.target.len == 0 and
-                (@as(u8, @bitCast(span.flags)) != 0 or span.foreground != null or span.classes.len != 0 or
+                (@as(u8, @bitCast(span.flags)) != 0 or span.foreground != null or span.background != null or span.classes.len != 0 or
                     span.language.len != 0 or span.direction.len != 0 or span.role != .normal));
             if ((span.kind == .link or span.kind == .external_link) and span.target.len != 0 and span.text.len != 0) {
                 navigable = true;

@@ -14,6 +14,7 @@ pub const Span = struct {
     direction: []const u8 = "",
     explanation: []const u8 = "",
     foreground: ?[]const u8 = null,
+    background: ?[]const u8 = null,
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -23,6 +24,19 @@ pub const Span = struct {
     strike: bool = false,
     underline: bool = false,
     role: Role = .normal,
+
+    // Keep the established JSON shape when no new paint is present.
+    pub fn jsonStringify(self: Span, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(Span).@"struct".field_names) |field_name| {
+            const background_field = comptime std.mem.eql(u8, field_name, "background");
+            if (!background_field or self.background != null) {
+                try jw.objectField(field_name);
+                try jw.write(@field(self, field_name));
+            }
+        }
+        try jw.endObject();
+    }
 };
 pub const Feature = struct {
     kind: []const u8,
@@ -123,9 +137,10 @@ pub fn isCanonicalRgb(value: []const u8) bool {
 pub const ValidationError = error{InvalidPresentation};
 
 fn validateSpanColors(spans: []const Span) ValidationError!void {
-    for (spans) |span| if (span.foreground) |color| {
-        if (!isCanonicalRgb(color)) return error.InvalidPresentation;
-    };
+    for (spans) |span| {
+        if (span.foreground) |color| if (!isCanonicalRgb(color)) return error.InvalidPresentation;
+        if (span.background) |color| if (!isCanonicalRgb(color)) return error.InvalidPresentation;
+    }
 }
 
 fn blockIndexValid(indices: []const usize, block_count: usize) bool {

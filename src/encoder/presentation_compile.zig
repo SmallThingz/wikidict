@@ -497,6 +497,8 @@ pub const Style = struct {
     // Build-only presence: an explicit empty title must suppress inheritance.
     explanation_set: bool = false,
     foreground: ?[]const u8 = null,
+    // Concrete paint retained when nested cell content is flattened.
+    background: ?[]const u8 = null,
     foreground_set: bool = false,
     bold: bool = false,
     italic: bool = false,
@@ -565,6 +567,8 @@ pub const Span = struct {
     // Build-only scope provenance, omitted from both wire versions.
     explanation_set: bool = false,
     foreground: ?[]const u8 = null,
+    // Concrete paint retained when nested cell content is flattened.
+    background: ?[]const u8 = null,
     foreground_set: bool = false,
     flags: SpanFlags = .{},
     role: Role = .normal,
@@ -3011,7 +3015,7 @@ pub const Renderer = struct {
         }
         const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
         const inherited_flags: SpanFlags = @bitCast(@as(u8, @bitCast(flags)) | @as(u8, @bitCast(self.block_formatting)));
-        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .flags = inherited_flags, .role = s.role });
+        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .background = s.background, .flags = inherited_flags, .role = s.role });
     }
     pub fn lineBreak(self: *Renderer, s: Style) Error!void {
         var style = s;
@@ -4579,6 +4583,7 @@ pub const Renderer = struct {
         for (spans) |span| {
             var label_style = style;
             label_style.provenance = span.provenance;
+            label_style.background = span.background;
             // Authored captions retain visual semantics. Alt and filename
             // fallbacks keep their existing plain flattening and outer style.
             if (authored_caption) {
@@ -9722,7 +9727,16 @@ pub const Renderer = struct {
                     if (ri != 0 or table.caption.len != 0) try self.lineBreak(style);
                     for (row.cells, 0..) |cell, ci| {
                         if (ci != 0) try self.text(" · ", style);
-                        try self.spans.appendSlice(self.a, cell.spans);
+                        // Composite this cell's opaque paint onto its own runs;
+                        // deeper explicit paint wins. Captions and separators
+                        // stay outside the cell; empty geometry adds no text.
+                        if (cell.background) |background| {
+                            for (cell.spans) |span| {
+                                var painted = span;
+                                if (painted.background == null) painted.background = background;
+                                try self.spans.append(self.a, painted);
+                            }
+                        } else try self.spans.appendSlice(self.a, cell.spans);
                     }
                 }
             }
@@ -26844,4 +26858,42 @@ test "tracked body slices preserve missing coordinates and page heading IDs" {
     try std.testing.expectEqualStrings("Noun", observation.items[0].anchor);
     try std.testing.expectEqualStrings("Noun_2", observation.items[1].anchor);
     for (observation.items) |item| try std.testing.expectEqualStrings("", item.anchor_fallback);
+}
+
+test "flattened nested cells retain only their own opaque background runs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const first = [_]Span{
+        .{ .kind = .link, .text = "deep", .target = "Target", .background = "#0000ff", .flags = .{ .italic = true } },
+        .{ .text = "own" },
+    };
+    const second = [_]Span{.{ .text = "sibling" }};
+    const caption = [_]Span{.{ .text = "caption" }};
+    const cells = [_]Cell{
+        .{ .spans = &first, .background = "#ff0000" },
+        .{ .spans = &second, .background = "#008000" },
+        .{ .spans = &.{}, .background = "#123456" },
+    };
+    const rows = [_]Row{.{ .cells = &cells }};
+    const blocks = [_]Block{.{ .kind = .table, .table = .{ .caption = &caption, .rows = &rows } }};
+    try r.blocksInline(&blocks, .{});
+    var painted: usize = 0;
+    for (r.spans.items) |span| {
+        if (span.background != null) painted += 1;
+        if (std.mem.eql(u8, span.text, "deep")) {
+            try std.testing.expectEqualStrings("#0000ff", span.background.?);
+            try std.testing.expect(span.kind == .link and span.flags.italic);
+            try std.testing.expectEqualStrings("Target", span.target);
+        } else if (std.mem.eql(u8, span.text, "own")) {
+            try std.testing.expectEqualStrings("#ff0000", span.background.?);
+        } else if (std.mem.eql(u8, span.text, "sibling")) {
+            try std.testing.expectEqualStrings("#008000", span.background.?);
+        } else try std.testing.expect(span.background == null);
+    }
+    try std.testing.expectEqual(@as(usize, 3), painted);
+    try std.testing.expect(first[1].background == null and second[0].background == null);
+    // No dummy text or paint extent is invented for an empty colored cell.
+    try std.testing.expectEqualStrings("caption\ndeepown · sibling · ", try flattened(a, r.spans.items));
 }

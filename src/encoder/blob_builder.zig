@@ -8007,3 +8007,54 @@ test "page heading IDs survive actual language publication and repeated owner re
         try std.testing.expectEqual(case.english_ids.len, nouns);
     }
 }
+
+test "normal Writer preserves nested cell paint without promoting it to the outer cell" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TestLanguages.codes();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/painted", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const source = "==English==\n===Noun===\n<table><tr><td bgcolor=\"#aaaaaa\">\n{|\n|-\n| bgcolor=\"#ff0000\" | [[Red|red]]\n| bgcolor=\"#0000ff\" | [[Blue|blue]]\n|}\nouter [[Tail|tail]]\n</td></tr></table>\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "nested paint", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "English"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("nested paint")).?;
+    try std.testing.expectEqualStrings(blobs.presentation_codec.background_magic, record.payload[0..4]);
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    var red = false;
+    var blue = false;
+    var tail = false;
+    var outer_tables: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| if (block.table) |table| {
+        outer_tables += 1;
+        for (table.rows) |row| for (row.cells) |cell| {
+            try std.testing.expectEqualStrings("#aaaaaa", cell.background.?);
+            for (cell.spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Red")) {
+                    red = true;
+                    try std.testing.expectEqualStrings("red", span.text);
+                    try std.testing.expectEqualStrings("#ff0000", span.background.?);
+                } else if (span.kind == .link and std.mem.eql(u8, span.target, "Blue")) {
+                    blue = true;
+                    try std.testing.expectEqualStrings("blue", span.text);
+                    try std.testing.expectEqualStrings("#0000ff", span.background.?);
+                } else if (span.kind == .link and std.mem.eql(u8, span.target, "Tail")) {
+                    tail = true;
+                    try std.testing.expect(span.background == null);
+                } else if (std.mem.eql(u8, span.text, " · ")) try std.testing.expect(span.background == null);
+            }
+        };
+    };
+    try std.testing.expectEqual(@as(usize, 1), outer_tables);
+    try std.testing.expect(red and blue and tail);
+}
