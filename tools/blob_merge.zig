@@ -175,6 +175,7 @@ fn mergeOneMode(
 // caller and allow at most one additional worker to bound simultaneous IO.
 const LanguageMergePool = struct {
     io: std.Io,
+    allocator: std.mem.Allocator,
     language_root: []const u8,
     roots: []const []const u8,
     headings: []const []const u8,
@@ -211,10 +212,12 @@ const LanguageMergePool = struct {
                 paths[i] = try std.fs.path.join(a, &.{ root, catalog.language_directory, filename });
             }
             const output_path = try std.fs.path.join(a, &.{ self.pool.language_root, filename });
-            if (self.pool.compress_output) return mergeOneMode(self.pool.io, a, output_path, .language, paths, &xz_argv);
+            // Reader caches replace allocations while a heading is live; their frees
+            // require a reclaiming allocator rather than the path scratch arena.
+            if (self.pool.compress_output) return mergeOneMode(self.pool.io, self.pool.allocator, output_path, .language, paths, &xz_argv);
             const partial_path = try std.fmt.allocPrint(a, "{s}.part", .{output_path});
             errdefer std.Io.Dir.cwd().deleteFile(self.pool.io, partial_path) catch {};
-            const count = try mergeOne(self.pool.io, a, partial_path, .language, paths);
+            const count = try mergeOne(self.pool.io, self.pool.allocator, partial_path, .language, paths);
             // A manifest may list a heading absent from every shard blob. A
             // present zero-record blob still needs its header published.
             var partial_exists = true;
@@ -241,6 +244,7 @@ fn mergeLanguagesParallel(
     defer a.free(counts);
     var pool: LanguageMergePool = .{
         .io = io,
+        .allocator = a,
         .language_root = language_root,
         .roots = roots,
         .headings = headings,
@@ -486,4 +490,168 @@ test "streamed merge preserves per-input validation and mismatch precedence" {
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = right, .data = "WIKBLB08\x01fr\x00English\x00" });
     try std.testing.expectError(error.MetadataMismatch, mergeOne(io, a, out, .language, &.{ left, right }));
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, out, .{}));
+}
+
+test "language merge reclaims decoded blocks outside heading scratch arena" {
+    const Tracking = struct {
+        backing: std.mem.Allocator,
+        live: usize = 0,
+        peak: usize = 0,
+        block_allocations: usize = 0,
+        block_frees: usize = 0,
+        limit: usize = 1024 * 1024,
+
+        fn allocator(self: *@This()) std.mem.Allocator {
+            return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
+        }
+        fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            if (len > self.limit - self.live) return null;
+            const bytes = self.backing.rawAlloc(len, alignment, ra) orelse return null;
+            self.live += len;
+            if (len == 64 * 1024) self.block_allocations += 1;
+            self.peak = @max(self.peak, self.live);
+            return bytes;
+        }
+        fn resize(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+            return false;
+        }
+        fn remap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+            return null;
+        }
+        fn free(ctx: *anyopaque, bytes: []u8, alignment: std.mem.Alignment, ra: usize) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.backing.rawFree(bytes, alignment, ra);
+            self.live -= bytes.len;
+            if (bytes.len == 64 * 1024) self.block_frees += 1;
+        }
+    };
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const left_root = try std.fs.path.join(a, &.{ root, "left" });
+    defer a.free(left_root);
+    const right_root = try std.fs.path.join(a, &.{ root, "right" });
+    defer a.free(right_root);
+    const output_root = try std.fs.path.join(a, &.{ root, "output" });
+    defer a.free(output_root);
+    const roots = [_][]const u8{ left_root, right_root };
+    for (roots) |source_root| {
+        const languages = try std.fs.path.join(a, &.{ source_root, catalog.language_directory });
+        defer a.free(languages);
+        try std.Io.Dir.cwd().createDirPath(io, languages);
+    }
+    try std.Io.Dir.cwd().createDirPath(io, output_root);
+    // Small blocks force many payload cache replacements after preflight.
+    const payload = try a.alloc(u8, 512 * 1024 + 17);
+    defer a.free(payload);
+    for (payload, 0..) |*byte, i| byte.* = @truncate(i *% 17);
+    var tracked: Tracking = .{ .backing = a };
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    for ([_][]const u8{ "English", "Other" }, [_]bool{ false, true }) |heading, compress_output| {
+        const metadata = try format.buildLanguageMetadataAlloc(a, "", heading);
+        defer a.free(metadata);
+        const left_records = [_]format.RecordInput{
+            .{ .title = "a", .payload = payload }, .{ .title = "c", .payload = "LEFT_TAIL" },
+        };
+        const right_records = [_]format.RecordInput{
+            .{ .title = "b", .payload = payload }, .{ .title = "d", .payload = "RIGHT_TAIL" },
+        };
+        var filename_buffer: [catalog.language_blob_filename_len]u8 = undefined;
+        const filename = catalog.languageBlobFilename(heading, &filename_buffer);
+        for (roots, 0..) |source_root, index| {
+            const path = try std.fs.path.join(a, &.{ source_root, catalog.language_directory, filename });
+            defer a.free(path);
+            const bytes = try format.buildAlloc(a, .language, metadata, if (index == 0) &left_records else &right_records);
+            defer a.free(bytes);
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+            const compressed = try std.process.run(a, io, .{
+                .argv = &.{ "xz", "-0", "-c", "--threads=1", "--check=crc64", "--block-size=64KiB", path },
+                .stdout_limit = .limited(2 * 1024 * 1024),
+                .stderr_limit = .limited(4096),
+            });
+            defer a.free(compressed.stdout);
+            defer a.free(compressed.stderr);
+            try std.testing.expect(compressed.term.success());
+            const alternate = try std.fmt.allocPrint(a, "{s}.xz", .{path});
+            defer a.free(alternate);
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = alternate, .data = compressed.stdout });
+            try std.Io.Dir.cwd().deleteFile(io, path);
+        }
+        var pool: LanguageMergePool = .{
+            .io = io,
+            .allocator = tracked.allocator(),
+            .language_root = output_root,
+            .roots = &roots,
+            .headings = &.{},
+            .counts = &.{},
+            .compress_output = compress_output,
+        };
+        var worker: LanguageMergePool.Worker = .{ .pool = &pool };
+        try std.testing.expectEqual(@as(usize, 4), try worker.mergeHeading(scratch.allocator(), heading));
+        // Previously the Reader allocated blocks from scratch: old non-tail
+        // cache frees did nothing and decoded input accumulated for the heading.
+        try std.testing.expect(scratch.queryCapacity() < 256 * 1024);
+        try std.testing.expect(tracked.peak > 256 * 1024);
+        try std.testing.expect(tracked.peak <= tracked.limit);
+        try std.testing.expectEqual(@as(usize, 0), tracked.live);
+        try std.testing.expect(tracked.block_allocations >= 16);
+        try std.testing.expectEqual(tracked.block_allocations, tracked.block_frees);
+        const expected = try format.buildAlloc(a, .language, metadata, &.{ left_records[0], right_records[0], left_records[1], right_records[1] });
+        defer a.free(expected);
+        const output = try std.fs.path.join(a, &.{ output_root, filename });
+        defer a.free(output);
+        if (compress_output) {
+            const compressed_output = try std.fmt.allocPrint(a, "{s}.xz", .{output});
+            defer a.free(compressed_output);
+            const decoded = try std.process.run(a, io, .{
+                .argv = &.{ "xz", "--decompress", "--stdout", "--", compressed_output },
+                .stdout_limit = .limited(2 * 1024 * 1024),
+                .stderr_limit = .limited(4096),
+            });
+            defer a.free(decoded.stdout);
+            defer a.free(decoded.stderr);
+            try std.testing.expect(decoded.term.success());
+            try std.testing.expectEqualSlices(u8, expected, decoded.stdout);
+        } else {
+            const actual = try std.Io.Dir.cwd().readFileAlloc(io, output, a, .limited(2 * 1024 * 1024));
+            defer a.free(actual);
+            try std.testing.expectEqualSlices(u8, expected, actual);
+        }
+        _ = scratch.reset(.free_all);
+        tracked.peak = 0;
+        tracked.block_allocations = 0;
+        tracked.block_frees = 0;
+    }
+    // A small allocator refusal during Reader initialization must release the
+    // compressed map, owned alternate path and all prior Reader allocations.
+    var filename_buffer: [catalog.language_blob_filename_len]u8 = undefined;
+    const filename = catalog.languageBlobFilename("English", &filename_buffer);
+    const kept_path = try std.fs.path.join(a, &.{ output_root, filename });
+    defer a.free(kept_path);
+    const before = try std.Io.Dir.cwd().readFileAlloc(io, kept_path, a, .limited(2 * 1024 * 1024));
+    defer a.free(before);
+    var refused: Tracking = .{ .backing = a, .limit = 64 * 1024 };
+    var refused_pool: LanguageMergePool = .{
+        .io = io,
+        .allocator = refused.allocator(),
+        .language_root = output_root,
+        .roots = &roots,
+        .headings = &.{},
+        .counts = &.{},
+    };
+    var refused_worker: LanguageMergePool.Worker = .{ .pool = &refused_pool };
+    try std.testing.expectError(error.OutOfMemory, refused_worker.mergeHeading(scratch.allocator(), "English"));
+    try std.testing.expectEqual(@as(usize, 0), refused.live);
+    try std.testing.expect(scratch.queryCapacity() < 256 * 1024);
+    const after = try std.Io.Dir.cwd().readFileAlloc(io, kept_path, a, .limited(2 * 1024 * 1024));
+    defer a.free(after);
+    try std.testing.expectEqualSlices(u8, before, after);
+    const partial = try std.fmt.allocPrint(a, "{s}.part", .{kept_path});
+    defer a.free(partial);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, partial, .{}));
 }
