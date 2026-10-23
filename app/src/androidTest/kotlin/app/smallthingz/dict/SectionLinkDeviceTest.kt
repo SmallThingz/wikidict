@@ -309,8 +309,15 @@ class SectionLinkDeviceTest {
                     }
                 } == true
             }
-            fun touchJourneyLink(label: String) {
-                val node = compose.onNode(journeyLink(label), useUnmergedTree = true).assertIsDisplayed()
+            fun touchJourneyLink(label: String, repeatedTarget: String? = null) {
+                val node = if (repeatedTarget == null) {
+                    compose.onNode(journeyLink(label), useUnmergedTree = true)
+                } else {
+                    val candidates = compose.onAllNodes(journeyLink(label), useUnmergedTree = true)
+                    val count = candidates.fetchSemanticsNodes().size
+                    val displayed = (0 until count).map { candidates[it] }.firstOrNull { it.isDisplayed() }
+                    checkNotNull(displayed) { "No displayed compiled link labeled $label" }
+                }.assertIsDisplayed()
                 val layouts = mutableListOf<TextLayoutResult>()
                 node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
                 val layout = layouts.single()
@@ -321,6 +328,9 @@ class SectionLinkDeviceTest {
                 }
                 assertEquals(1, links.size)
                 val link = links.single()
+                if (repeatedTarget != null) {
+                    assertEquals(repeatedTarget, (link.item as androidx.compose.ui.text.LinkAnnotation.Clickable).tag)
+                }
                 val offset = link.start + minOf(1, link.end - link.start - 1)
                 node.performTouchInput { click(layout.getBoundingBox(offset).center) }
                 compose.waitForIdle()
@@ -337,7 +347,7 @@ class SectionLinkDeviceTest {
             }
             fun backToSource() {
                 compose.onNodeWithTag("entry-scroll").performScrollToNode(journeyLink("Back to source"))
-                touchJourneyLink("Back to source")
+                touchJourneyLink("Back to source", repeatedTarget = "Anchor source")
                 waitForTitle("Anchor source")
             }
             fun leaveAndReturn() {
