@@ -1892,11 +1892,44 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
     return out;
 
 }
-QString MainWindow::tableHtml(const QJsonObject &table, int depth) const {
+QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground) const {
+    if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
     const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
     QString out = QStringLiteral("<table cellspacing='0' cellpadding='5' style='border-collapse:collapse;margin:8px 0;margin-left:%1px'>").arg(indent);
+    const QJsonValue geometryValue = table.value(QStringLiteral("geometry"));
+    if (!geometryValue.isUndefined() && !geometryValue.isNull() && !geometryValue.isObject())
+        throw DictApiError("invalid table geometry object");
+    const QJsonObject geometry = geometryValue.toObject();
+    const auto dimension = [&](const QString &key, int fallback) {
+        const QJsonValue value = geometry.value(key);
+        if (value.isUndefined() || value.isNull()) return fallback;
+        if (!value.isDouble() || value.toDouble() < 0 || value.toDouble() > 65535 || std::floor(value.toDouble()) != value.toDouble())
+            throw DictApiError("invalid table geometry");
+        return value.toInt();
+    };
+    const int border = dimension(QStringLiteral("border"), 1);
+    const int spacing = dimension(QStringLiteral("cell_spacing"), 0);
+    const int padding = dimension(QStringLiteral("cell_padding"), 5);
+    if (!geometry.isEmpty() || tableDepth > 1) {
+        QString width;
+        const QJsonValue widthValue = geometry.value(QStringLiteral("width"));
+        if (!widthValue.isUndefined() && !widthValue.isNull()) {
+            const QJsonObject spec = widthValue.toObject();
+            const QString unit = spec.value(QStringLiteral("unit")).toString();
+            const QJsonValue value = spec.value(QStringLiteral("value"));
+            const double n = value.toDouble(-1);
+            if (!value.isDouble() || n < 0 || n > 4294967295.0 || std::floor(n) != n ||
+                (unit != QStringLiteral("px") && unit != QStringLiteral("percent")) || (unit == QStringLiteral("percent") && n > 100))
+                throw DictApiError("invalid table width");
+            width = QStringLiteral(" width='%1%2'").arg(quint64(n)).arg(unit == QStringLiteral("percent") ? QStringLiteral("%") : QString());
+        }
+        out = QStringLiteral("<table border='%1' cellspacing='%2' cellpadding='%3'%4 style='border-collapse:%5;margin:%6px 0;margin-left:%7px'>")
+            .arg(border).arg(spacing).arg(padding).arg(width)
+            .arg((!geometry.value(QStringLiteral("cell_spacing")).isUndefined() && !geometry.value(QStringLiteral("cell_spacing")).isNull()) ? QStringLiteral("separate") : QStringLiteral("collapse"))
+            .arg(tableDepth > 1 ? 0 : 8).arg(tableDepth > 1 ? 0 : indent);
+    }
     const QJsonArray caption = table.value(QStringLiteral("caption")).toArray();
-    if (!caption.isEmpty()) out += QStringLiteral("<caption>%1</caption>").arg(spansHtml(caption));
+    if (!caption.isEmpty()) out += QStringLiteral("<caption>%1</caption>").arg(spansHtml(caption, 0, {}, inheritedBackground));
     for (const QJsonValue &rowValue : table.value(QStringLiteral("rows")).toArray()) {
         out += QStringLiteral("<tr>");
         for (const QJsonValue &cellValue : rowValue.toObject().value(QStringLiteral("cells")).toArray()) {
@@ -1904,16 +1937,24 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth) const {
             const QString tag = cell.value(QStringLiteral("header")).toBool() ? QStringLiteral("th") : QStringLiteral("td");
             const int colspan = std::max(1, cell.value(QStringLiteral("colspan")).toInt(1));
             const int rowspan = std::max(1, cell.value(QStringLiteral("rowspan")).toInt(1));
-            QString style = QStringLiteral("border:1px solid %1").arg(palette().color(QPalette::Mid).name());
+            QString style = QStringLiteral("border:%1px solid %2").arg(border).arg(palette().color(QPalette::Mid).name());
             const QJsonValue backgroundValue = cell.value(QStringLiteral("background"));
             const QString background = backgroundValue.toString();
             bool canonicalBackground = backgroundValue.isString() && background.size() == 7 && background.startsWith(QChar('#'));
             for (const QChar digit : background.mid(1))
                 canonicalBackground = canonicalBackground && ((digit >= QChar('0') && digit <= QChar('9'))
                     || (digit >= QChar('a') && digit <= QChar('f')));
-            if (canonicalBackground) style += QStringLiteral(";background-color:") + background;
+            const QString effectiveBackground = canonicalBackground ? background : inheritedBackground;
+            if (!effectiveBackground.isEmpty()) style += QStringLiteral(";background-color:") + effectiveBackground;
+            const QJsonArray cellSpans = cell.value(QStringLiteral("spans")).toArray();
+            QString contents = spansHtml(cellSpans, 0, {}, effectiveBackground);
+            const QJsonValue child = cell.value(QStringLiteral("nested_table"));
+            if (!child.isUndefined() && !child.isNull()) {
+                if (!child.isObject() || !cellSpans.isEmpty()) throw DictApiError("invalid nested table cell");
+                contents = tableHtml(child.toObject(), 0, tableDepth + 1, effectiveBackground);
+            }
             out += QStringLiteral("<%1 colspan='%2' rowspan='%3' style='%4'>%5</%1>")
-                .arg(tag).arg(colspan).arg(rowspan).arg(style, spansHtml(cell.value(QStringLiteral("spans")).toArray(), 0, {}, canonicalBackground ? background : QString()));
+                .arg(tag).arg(colspan).arg(rowspan).arg(style, contents);
         }
         out += QStringLiteral("</tr>");
     }
@@ -2108,10 +2149,17 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                 const QJsonValue table = block.value(QStringLiteral("table"));
                 if (table.isObject()) {
                     const QJsonObject object = table.toObject();
-                    collectEmbeddedMedia(object.value(QStringLiteral("caption")).toArray());
-                    for (const QJsonValue &row : object.value(QStringLiteral("rows")).toArray())
-                        for (const QJsonValue &cell : row.toObject().value(QStringLiteral("cells")).toArray())
-                            collectEmbeddedMedia(cell.toObject().value(QStringLiteral("spans")).toArray());
+                    const auto collectTableMedia = [&](auto &&visit, const QJsonObject &nested, int tableDepth) -> void {
+                        if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+                        collectEmbeddedMedia(nested.value(QStringLiteral("caption")).toArray());
+                        for (const QJsonValue &row : nested.value(QStringLiteral("rows")).toArray())
+                            for (const QJsonValue &value : row.toObject().value(QStringLiteral("cells")).toArray()) {
+                                const QJsonObject cell = value.toObject();
+                                collectEmbeddedMedia(cell.value(QStringLiteral("spans")).toArray());
+                                if (cell.value(QStringLiteral("nested_table")).isObject()) visit(visit, cell.value(QStringLiteral("nested_table")).toObject(), tableDepth + 1);
+                            }
+                    };
+                    collectTableMedia(collectTableMedia, object, 1);
                 } else collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
             }
             if (kind == QStringLiteral("heading"))

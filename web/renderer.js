@@ -162,7 +162,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -177,6 +177,25 @@ function legacyDestinations(entry) {
     }
   }
   return new Map(candidates.filter(([,id]) => counts.get(id) === 1));
+}
+function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
+  if(depth>16)throw Error('Nested table depth exceeds limit');
+  if(value.geometry!=null&&(typeof value.geometry!=='object'||Array.isArray(value.geometry)))throw Error('Invalid table geometry object');
+  const table=node('table'),g=value.geometry||{};
+  const dimension=key=>{const n=g[key];if(n==null)return null;if(!Number.isInteger(n)||n<0||n>65535)throw Error('Invalid table geometry');return n;};
+  const border=dimension('border'),spacing=dimension('cell_spacing'),padding=dimension('cell_padding');
+  if(spacing!==null){table.style.borderCollapse='separate';table.style.borderSpacing=spacing+'px';}
+  if(g.width!=null){const {unit,value:n}=g.width;if(!['px','percent'].includes(unit)||!Number.isInteger(n)||n<0||n>4294967295||(unit==='percent'&&n>100))throw Error('Invalid table width');table.style.width=n+(unit==='percent'?'%':'px');}
+  if(value.caption?.length){const caption=node('caption');caption.append(spans(value.caption,onLink,false,explanations,false,inheritedBackground));table.append(caption);}
+  for(const row of value.rows){const tr=node('tr');for(const cell of row.cells){
+    const td=node(cell.header?'th':'td');td.colSpan=cell.colspan||1;td.rowSpan=cell.rowspan||1;
+    if(border!==null)td.style.border=border+'px solid currentColor';if(padding!==null)td.style.padding=padding+'px';
+    const effectiveBackground=canonicalRGB(cell.background)?cell.background:inheritedBackground;
+    if(canonicalRGB(effectiveBackground))td.style.backgroundColor=effectiveBackground;
+    if(cell.nested_table!=null){if(typeof cell.nested_table!=='object'||Array.isArray(cell.nested_table)||cell.spans?.length)throw Error('Invalid nested table cell');td.append(tableView(cell.nested_table,onLink,explanations,depth+1,effectiveBackground));}
+    else td.append(spans(cell.spans,onLink,false,explanations,false,effectiveBackground));
+    tr.append(td);
+  }table.append(tr);}return table;
 }
 function blockView(block, onLink, explanations, legacy = '') {
   const margin = `${Math.min(Math.max(block.depth || 0,0),8)*.45}rem`;
@@ -195,9 +214,7 @@ function blockView(block, onLink, explanations, legacy = '') {
       sample.append(chip, node('span', 'Color sample ' + feature.data));
       return sample;
     }
-    const wrap = node('div', null, 'table-scroll'), table = node('table'); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
-    if (block.table.caption?.length) { const caption = node('caption'); caption.append(spans(block.table.caption,onLink,false,explanations)); table.append(caption); }
-    for (const row of block.table.rows) { const tr = node('tr'); for (const cell of row.cells) { const td = node(cell.header?'th':'td'); td.colSpan = cell.colspan || 1; td.rowSpan = cell.rowspan || 1; if(canonicalRGB(cell.background))td.style.backgroundColor=cell.background; td.append(spans(cell.spans,onLink,false,explanations,false,cell.background)); tr.append(td); } table.append(tr); }
+    const wrap = node('div', null, 'table-scroll'), table = tableView(block.table,onLink,explanations); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
     wrap.append(table); return wrap;
   }
   if (block.kind === 'rule') return node('hr');

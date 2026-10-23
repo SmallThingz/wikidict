@@ -4490,6 +4490,65 @@ private slots:
         }
     }
 
+    void nestedSemanticTablesKeepOuterGridAndEmptyPaintedHeaders() {
+        MainWindow window{QString()};
+        QJsonArray outerCells;
+        for (int i = 0; i < 4; ++i) {
+            const QJsonObject emptyHeader{{QStringLiteral("header"), true}, {QStringLiteral("colspan"), 5},
+                {QStringLiteral("background"), QStringLiteral("#800080")}, {QStringLiteral("spans"), QJsonArray{}}};
+            QJsonArray cells;
+            for (int j = 0; j < 4; ++j) cells.append(QJsonObject{{QStringLiteral("spans"), QJsonArray{QJsonObject{
+                {QStringLiteral("kind"), QStringLiteral("link")}, {QStringLiteral("target"), QStringLiteral("dog")},
+                {QStringLiteral("text"), QStringLiteral("form %1 %2").arg(i).arg(j)}}}}});
+            const QJsonObject child{{QStringLiteral("geometry"), QJsonObject{{QStringLiteral("border"), 1}, {QStringLiteral("cell_padding"), 2},
+                {QStringLiteral("width"), QJsonObject{{QStringLiteral("unit"), QStringLiteral("percent")}, {QStringLiteral("value"), 100}}}}},
+                {QStringLiteral("caption"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")}, {QStringLiteral("target"), QStringLiteral("dog")},
+                    {QStringLiteral("text"), QStringLiteral("child caption %1").arg(i)}}}},
+                {QStringLiteral("rows"), QJsonArray{QJsonObject{{QStringLiteral("cells"), QJsonArray{emptyHeader}}}, QJsonObject{{QStringLiteral("cells"), cells}}}}};
+            outerCells.append(QJsonObject{{QStringLiteral("background"), QStringLiteral("#000000")}, {QStringLiteral("spans"), QJsonArray{}}, {QStringLiteral("nested_table"), child}});
+        }
+        const QJsonObject outer{{QStringLiteral("geometry"), QJsonObject{{QStringLiteral("border"), 0}, {QStringLiteral("cell_spacing"), 15}}},
+            {QStringLiteral("rows"), QJsonArray{QJsonObject{{QStringLiteral("cells"), outerCells}}}}};
+        for (const QString &theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+            window.learning_.setTheme(theme); window.applyTheme();
+            window.reading_->setHtml(window.tableHtml(outer, 0));
+            auto *grid = qobject_cast<QTextTable *>(window.reading_->document()->rootFrame()->childFrames().first());
+            QVERIFY(grid); QCOMPARE(grid->rows(), 1); QCOMPARE(grid->columns(), 4);
+            QCOMPARE(grid->format().cellSpacing(), qreal(15));
+            QCOMPARE(grid->childFrames().size(), 4);
+            for (auto *frame : grid->childFrames()) {
+                auto *child = qobject_cast<QTextTable *>(frame); QVERIFY(child);
+                QCOMPARE(child->rows(), 2); QCOMPARE(child->columns(), 5);
+                QCOMPARE(child->format().cellPadding(), qreal(2));
+                QCOMPARE(child->cellAt(0, 0).columnSpan(), 5);
+                QCOMPARE(child->cellAt(0, 0).format().background().color(), QColor(QStringLiteral("#800080")));
+                QTextCursor empty = child->cellAt(0, 0).firstCursorPosition();
+                QCOMPARE(empty.block().text(), QString());
+                const auto form = window.reading_->document()->find(QStringLiteral("form 0 0"));
+                QVERIFY(!form.isNull()); QVERIFY(form.charFormat().isAnchor());
+                QCOMPARE(form.charFormat().anchorHref(), QStringLiteral("dict:dog"));
+                QCOMPARE(form.charFormat().foreground().color(), QColor(QStringLiteral("#ffffff")));
+                QCOMPARE(child->cellAt(1, 0).format().background().color(), QColor(QStringLiteral("#000000")));
+                const auto caption = window.reading_->document()->find(QStringLiteral("child caption 0"));
+                QVERIFY(!caption.isNull()); QCOMPARE(caption.charFormat().foreground().color(), QColor(QStringLiteral("#ffffff")));
+                auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+                int start = -1, end = -1;
+                const QString attributes = accessible->textInterface()->attributes(form.selectionStart(), &start, &end);
+                QVERIFY(attributes.contains(QStringLiteral("background-color:rgb(0,0,0)")));
+            }
+        }
+        QJsonObject missingSpacing = outer;
+        QJsonObject geometry = outer.value(QStringLiteral("geometry")).toObject(); geometry.remove(QStringLiteral("cell_spacing"));
+        missingSpacing.insert(QStringLiteral("geometry"), geometry);
+        const QString absentHtml = window.tableHtml(missingSpacing, 0);
+        geometry.insert(QStringLiteral("cell_spacing"), QJsonValue::Null); missingSpacing.insert(QStringLiteral("geometry"), geometry);
+        QCOMPARE(window.tableHtml(missingSpacing, 0), absentHtml);
+        geometry.insert(QStringLiteral("cell_spacing"), 0); missingSpacing.insert(QStringLiteral("geometry"), geometry);
+        QVERIFY(window.tableHtml(missingSpacing, 0).contains(QStringLiteral("border-collapse:separate")));
+        missingSpacing.insert(QStringLiteral("geometry"), QStringLiteral("invalid"));
+        QVERIFY_EXCEPTION_THROWN(window.tableHtml(missingSpacing, 0), DictApiError);
+    }
+
     void typedColorSwatchRendersWithAccessibleTextAndKeepsFallback() {
         MainWindow window(fixture_, QStringLiteral("cat"));
         window.show();

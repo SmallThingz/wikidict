@@ -97,7 +97,7 @@ test('DPR2 and DPR3 use strict version framing in every serialized span containe
 });
 test('DPR3 refuses unknown versions incomplete strings UTF8 limits and trailing bytes',async()=>{
  const valid=explanationProtocolFixture('DPR3');
- for(const magic of ['DPR1','DPR7','XXXX']){
+ for(const magic of ['DPR1','DPR8','XXXX']){
   const invalid=Buffer.concat([Buffer.from(magic),valid.subarray(4)]);assert.throws(()=>decode(invalid,{}));
   await assert.rejects(()=>buildIndex(new RawSource(new Blob([dictionaryBlob(1,[['Bad',invalid]])]))));
  }
@@ -189,4 +189,72 @@ test('DPR6 span paint preserves every container, anchors and strict RGB framing'
  const variable=n=>{const bytes=[];do{let b=n&127;n=Math.floor(n/128);if(n)b|=128;bytes.push(b);}while(n);return Buffer.from(bytes);};
  const raw=Buffer.concat([Buffer.from('WIKBLB08'),Buffer.from([1]),Buffer.from('en\0English\0Paint\0'),variable(payload.length),payload]);
  const index=await buildIndex(new RawSource(new Blob([raw])));assert.equal(index.rows[0].title,'Paint');
+});
+
+test('DPR7 nested cell preserves authored geometry and empty painted grid',async()=>{
+ const u16=n=>Buffer.from([n&255,n>>8]);
+ const rgb=color=>color?Buffer.concat([Buffer.from([1]),testString(color)]):Buffer.from([0]);
+ const cell=(header,colspan,paint,child)=>Buffer.concat([Buffer.from([header]),u16(colspan),u16(1),rgb(paint),testU32(0),child||Buffer.from([0])]);
+ const table=(flags,geometry,rows)=>Buffer.concat([Buffer.from([1,flags]),geometry,testU32(0),testU32(rows.length),...rows.map(cells=>Buffer.concat([testU32(cells.length),...cells]))]);
+ const inner=table(13,Buffer.concat([u16(1),u16(2),Buffer.from([1]),testU32(100)]),[[cell(1,5,'#800080')],[...Array.from({length:4},()=>cell(0,1,null))]]);
+ const outer=table(3,Buffer.concat([u16(0),u16(15)]),[[...Array.from({length:4},()=>cell(0,1,null,inner))]]);
+ const block=Buffer.concat([Buffer.from([12,0,0]),testU32(0),Buffer.from([0]),testString(''),testString(''),outer,testString(''),testString('')]);
+ const payload=Buffer.concat([Buffer.from('DPR7'),testU32(0),testU32(1),Buffer.from([1]),testString('Grid'),testString('Grid'),testString(''),testU32(1),block,...Array.from({length:5},()=>testU32(0))]);
+ const entry=decode(payload,{}),grid=entry.sections[0].blocks[0].table;
+ assert.equal(grid.rows[0].cells.length,4);assert.deepEqual(grid.geometry,{border:0,cell_spacing:15});
+ for(const cell of grid.rows[0].cells){assert.equal(cell.spans.length,0);const child=cell.nested_table;assert.deepEqual(child.geometry,{border:1,cell_padding:2,width:{unit:'percent',value:100}});assert.equal(child.rows[0].cells[0].background,'#800080');assert.equal(child.rows[0].cells[0].colspan,5);assert.equal(child.rows[0].cells[0].spans.length,0);}
+ const index=await buildIndex(new RawSource(new Blob([dictionaryBlob(1,[['Grid',payload]])])));assert.equal(index.rows.length,1);
+ assert.throws(()=>decode(payload.subarray(0,-1),{}));
+ const at=payload.indexOf(outer);assert.ok(at>=0);
+ const withTable=value=>Buffer.concat([payload.subarray(0,at),value,payload.subarray(at+outer.length)]);
+ const unknownGeometry=outer.slice();unknownGeometry[1]=128;assert.throws(()=>decode(withTable(unknownGeometry),{}));
+ let deep=table(0,Buffer.alloc(0),[]);
+ for(let i=0;i<16;i++)deep=table(0,Buffer.alloc(0),[[cell(0,1,null,deep)]]);
+ assert.throws(()=>decode(withTable(deep),{}));
+ const badWidth=inner.slice();badWidth[6]=1;badWidth.writeUInt32LE(101,7);
+ assert.throws(()=>decode(withTable(table(0,Buffer.alloc(0),[[cell(0,1,null,badWidth)]])),{}));
+});
+
+// Explicit genuine-product conformance target. No fixture fallback or synthetic credit.
+if(process.env.WIKBLB_GEACEN_INTEROP==='1')test('genuine native geacen DPR7 matches core full semantic table graph',async()=>{
+ assert.ok(process.env.WIKBLB_FIXTURE,'WIKBLB_FIXTURE must name the genuine generated language blob');
+ assert.ok(process.env.WIKBLB_GEACEN_EXPORT,'WIKBLB_GEACEN_EXPORT must name qualified core CLI JSON');
+ const exported=JSON.parse(await readFile(process.env.WIKBLB_GEACEN_EXPORT,'utf8'));
+ assert.equal(exported.schema,'dict.results.v1');assert.equal(exported.entries.length,1);
+ const expected=exported.entries[0];assert.equal(expected.title,'geacen');
+ const source=new RawSource(new Blob([raw])),index=await buildIndex(source);
+ assert.equal(index.metadata.kind,'language');
+ const row=index.rows.find(value=>value.title===expected.title);assert.ok(row,'geacen record missing');
+ const payload=await source.read(row.offset,row.length);
+ assert.equal(new TextDecoder().decode(payload.subarray(0,4)),'DPR7');
+ const actual=decode(payload,{...index.metadata,title:row.title});
+ assert.equal(actual.language,expected.language);assert.equal(actual.language_code,expected.language_code);
+ const spanKeys=['kind','role','text','target','trail','language','classes','direction','explanation','foreground','background','bold','italic','code','small','superscript','subscript','strike','underline'];
+ const spans=values=>values.map(span=>Object.fromEntries(spanKeys.map(key=>{
+  // Core JSON omits only a null Span.background; the web decoder materializes it.
+  if(key==='background'&&!Object.hasOwn(span,key))return [key,null];
+  assert.ok(Object.hasOwn(span,key),`Serialized span field missing: ${key}`);return [key,span[key]];
+ })));
+ const geometry=value=>({border:value?.border??null,cell_spacing:value?.cell_spacing??null,cell_padding:value?.cell_padding??null,width:value?.width??null});
+ const table=value=>value==null?null:{geometry:geometry(value.geometry),caption:spans(value.caption),rows:value.rows.map(row=>({cells:row.cells.map(cell=>({header:cell.header,colspan:cell.colspan,rowspan:cell.rowspan,background:cell.background,spans:spans(cell.spans),nested_table:table(cell.nested_table)}))}))};
+ const graph=entry=>entry.sections.flatMap((section,section_index)=>section.blocks.flatMap((block,block_index)=>block.table?[{
+  section_index,block_index,section:{level:section.level,title:section.title,anchor:section.anchor,anchor_fallback:section.anchor_fallback},
+  block:{kind:block.kind,depth:block.depth,level:block.level,list_path:block.list_path??block.path,number:block.number,feature:block.feature??null,anchor:block.anchor,anchor_fallback:block.anchor_fallback,spans:spans(block.spans)},table:table(block.table)
+ }]:[]));
+ const actualGraph=graph(actual);assert.deepEqual(actualGraph,graph(expected));
+ assert.equal(actualGraph.length,1);assert.deepEqual([actualGraph[0].section_index,actualGraph[0].block_index],[3,0]);
+ const grid=actualGraph[0].table;assert.equal(grid.rows.length,1);assert.equal(grid.rows[0].cells.length,4);
+ assert.deepEqual(grid.geometry,{border:0,cell_spacing:15,cell_padding:null,width:null});
+ let authoredLeafCells=0,painted=0,emptyPainted=0;
+ for(const parent of grid.rows[0].cells){
+  assert.equal(parent.spans.length,0);const child=parent.nested_table;assert.ok(child);
+  assert.deepEqual(child.geometry,{border:1,cell_spacing:null,cell_padding:2,width:{unit:'percent',value:100}});
+  assert.deepEqual(child.rows.map(row=>row.cells.length),[1,4,4,4,4,4,4]);
+  assert.equal(child.rows[0].cells[0].colspan,5);
+  for(const row of child.rows)for(const cell of row.cells){
+   authoredLeafCells++;assert.equal(cell.nested_table,null);
+   if(cell.background!==null){painted++;if(cell.spans.length===0){emptyPainted++;assert.equal(cell.header,true);assert.equal(cell.background,'#efafef');}}
+  }
+ }
+ assert.equal(authoredLeafCells,100);assert.equal(painted,20);assert.equal(emptyPainted,4);
 });

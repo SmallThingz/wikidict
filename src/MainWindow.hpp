@@ -78,7 +78,7 @@ private:
     QString entryHtml(const QJsonObject &entry) const;
     QString blockHtml(const QJsonObject &block) const;
     QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}, const QString &cellBackground = {}) const;
-    QString tableHtml(const QJsonObject &table, int depth) const;
+    QString tableHtml(const QJsonObject &table, int depth, int tableDepth = 1, const QString &inheritedBackground = {}) const;
     SavedWord savedWord(const QJsonObject &entry) const;
     QString clueFor(const QJsonObject &entry) const;
     QVector<SavedWord> learningPool() const;
